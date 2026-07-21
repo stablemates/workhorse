@@ -311,12 +311,6 @@ export function createExecutionPlan(
   repetitions: number,
   seed: number,
 ): ExecutionPlanStep[] {
-  const pairs = workerConcurrency.flatMap((workers) =>
-    Array.from({ length: repetitions }, (_, index) => ({
-      workerConcurrency: workers,
-      repetition: index + 1,
-    })),
-  );
   let state = seed >>> 0;
   const random = (): number => {
     state += 0x6d2b79f5;
@@ -325,18 +319,22 @@ export function createExecutionPlan(
     value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
     return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
   };
+  const pairs = workerConcurrency.flatMap((workers) => {
+    const hybridFirst = random() < 0.5;
+    return Array.from({ length: repetitions }, (_, index) => ({
+      workerConcurrency: workers,
+      repetition: index + 1,
+      designOrder:
+        hybridFirst === (index % 2 === 0)
+          ? (["hybrid", "conventional"] as const)
+          : (["conventional", "hybrid"] as const),
+    }));
+  });
   for (let index = pairs.length - 1; index > 0; index -= 1) {
     const swap = Math.floor(random() * (index + 1));
     [pairs[index], pairs[swap]] = [pairs[swap]!, pairs[index]!];
   }
-  return pairs.map((pair, index) => ({
-    workerConcurrency: pair.workerConcurrency,
-    repetition: pair.repetition,
-    designOrder:
-      index % 2 === 0
-        ? (["hybrid", "conventional"] as const)
-        : (["conventional", "hybrid"] as const),
-  }));
+  return pairs;
 }
 
 export function summarizeComparativeRuns(
