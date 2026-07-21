@@ -117,23 +117,46 @@ describe("normalizeComparativeOptions", () => {
 });
 
 describe("seeded execution plan", () => {
-  it("is reproducible, shuffled, and alternates design order", () => {
+  it("balances first-design order within every worker group", () => {
+    for (const repetitions of [2, 3, 4, 5]) {
+      const plan = createExecutionPlan([1, 4, 8], repetitions, 123);
+
+      for (const workers of [1, 4, 8]) {
+        const group = plan.filter((step) => step.workerConcurrency === workers);
+        const hybridFirst = group.filter((step) => step.designOrder[0] === "hybrid").length;
+        const conventionalFirst = group.length - hybridFirst;
+
+        expect(new Set(group.map((step) => step.designOrder[0]))).toEqual(
+          new Set(["hybrid", "conventional"]),
+        );
+        expect(Math.abs(hybridFirst - conventionalFirst)).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it("is deterministic for the same seed and keeps pair execution shuffled", () => {
     const first = createExecutionPlan([1, 4], 3, 123);
     const second = createExecutionPlan([1, 4], 3, 123);
+
     expect(first).toEqual(second);
-    expect(first).not.toEqual(createExecutionPlan([1, 4], 3, 124));
     expect(first).toHaveLength(6);
-    expect(first.map((step) => step.designOrder)).toEqual([
-      ["hybrid", "conventional"],
-      ["conventional", "hybrid"],
-      ["hybrid", "conventional"],
-      ["conventional", "hybrid"],
-      ["hybrid", "conventional"],
-      ["conventional", "hybrid"],
-    ]);
     expect(new Set(first.map((step) => `${step.workerConcurrency}:${step.repetition}`)).size).toBe(
       6,
     );
+    expect(
+      first.map(({ workerConcurrency, repetition }) => [workerConcurrency, repetition]),
+    ).not.toEqual([
+      [1, 1],
+      [1, 2],
+      [1, 3],
+      [4, 1],
+      [4, 2],
+      [4, 3],
+    ]);
+  });
+
+  it("varies the seeded plan when the seed changes", () => {
+    expect(createExecutionPlan([1, 4], 3, 123)).not.toEqual(createExecutionPlan([1, 4], 3, 124));
   });
 });
 
