@@ -1,6 +1,6 @@
 # Ironshift MVP protocol
 
-This is the compact protocol reference. Read [architecture.md](architecture.md) for the design rationale and [benchmarking.md](benchmarking.md) for the evidence runbook.
+This is the compact protocol reference. Read [architecture.md](architecture.md) for the design rationale, [features.md](features.md) for current support status, and [benchmarking.md](benchmarking.md) for the evidence runbook.
 
 ## Storage model
 

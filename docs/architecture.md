@@ -588,6 +588,7 @@ The reset tool requires an explicit URL, a database name ending in `_test`, conf
 
 ## Further reading
 
+- [Feature support matrix](features.md)
 - [Protocol reference](mvp-protocol.md)
 - [Benchmark runbook](benchmarking.md)
 - [Product viability evaluation](research/postgres-queue-product-viability-evaluation.md)
