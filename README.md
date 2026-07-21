@@ -31,11 +31,21 @@ Requirements: Node.js 22+, pnpm, and a host PostgreSQL 15+ instance.
 
 ```bash
 pnpm install
-DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test pnpm db:reset
-DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test pnpm check
+pnpm db:reset:all
+pnpm check
 ```
 
-The reset command refuses to touch a database whose name does not end in `_test`. It drops and recreates the dedicated database, then installs the canonical `sql/schema.sql`. Run it after every schema change. The test suite also truncates Ironshift tables, so never point development commands at production.
+Local tooling keeps three databases separate:
+
+| Database          | Purpose                                      | Commands                                |
+| ----------------- | -------------------------------------------- | --------------------------------------- |
+| `ironshift_dev`   | Manual development and `pnpm health`         | `pnpm db:reset` or `pnpm db:reset:dev`  |
+| `ironshift_test`  | Automated integration tests only             | `pnpm db:reset:test`, `pnpm test`       |
+| `ironshift_bench` | Destructive benchmark runs and their history | `pnpm db:reset:bench`, `pnpm benchmark` |
+
+`pnpm db:reset:all` recreates all three and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, or `_bench` suffix, requires confirmation internally, and refuses remote hosts unless `IRONSHIFT_ALLOW_REMOTE_RESET=1` is deliberately set.
+
+The defaults use the local `ironshift` role. Override them independently with `IRONSHIFT_DEV_DATABASE_URL`, `IRONSHIFT_TEST_DATABASE_URL`, and `IRONSHIFT_BENCH_DATABASE_URL`. Purpose-specific reset, test, and benchmark workflows intentionally ignore generic `DATABASE_URL`, which remains the application runtime connection string and is accepted by the packaged health CLI.
 
 ## Minimal usage
 
@@ -64,10 +74,10 @@ To enqueue atomically with application writes, pass the active `PoolClient` as t
 ```bash
 pnpm benchmark -- --help
 
-DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test pnpm health
+pnpm health
 
-DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test \
-  pnpm benchmark -- --jobs 1000 --rounds 3 --output benchmark.json
+pnpm db:reset:bench
+pnpm benchmark -- --jobs 1000 --rounds 3 --output benchmark.json
 ```
 
 The benchmark retains terminal rows between rounds and reports throughput, p50/p95/p99 claim latency, relation size, estimated dead tuples, WAL bytes, and executable claim plans for both designs. The conventional prototype is currently a success-path baseline, not yet a fully semantics-equivalent lease/recovery implementation. Small runs are smoke tests only. They are not evidence of product superiority. The viability gate requires equivalent semantics, sustained runs at much larger scale, retained history, delayed cleanup horizons, production-shaped payloads, and published raw results.

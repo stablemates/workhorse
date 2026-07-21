@@ -2,9 +2,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { InjectedCrashError, installSchema, Queue, Worker } from "../src/index.js";
+import { assertLocalDatabasePurpose, localDatabaseUrl } from "../src/local-database.js";
 
-const databaseUrl =
-  process.env.DATABASE_URL ?? "postgres://ironshift:ironshift@localhost:5432/ironshift_test";
+const databaseUrl = localDatabaseUrl("test");
+assertLocalDatabasePurpose(databaseUrl, "test");
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 const queue = new Queue(pool);
 

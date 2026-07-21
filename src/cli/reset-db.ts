@@ -1,21 +1,26 @@
 #!/usr/bin/env node
 import { Pool } from "pg";
+import {
+  assertLocalDatabasePurpose,
+  databaseName,
+  isLocalDatabasePurpose,
+  localDatabaseUrl,
+} from "../local-database.js";
 import { installSchema } from "../schema.js";
 
-const databaseUrl = process.env.DATABASE_URL;
 // This command is intentionally harder to invoke than normal development commands because it
 // terminates connections and drops a database. Keep every guard when extending it.
-if (!databaseUrl) throw new Error("DATABASE_URL is required");
 if (!process.argv.includes("--yes")) throw new Error("Pass --yes to confirm the destructive reset");
-const target = new URL(databaseUrl);
-const databaseName = decodeURIComponent(target.pathname.slice(1));
-
-if (!databaseName.endsWith("_test")) {
-  throw new Error(
-    `Refusing to reset database ${JSON.stringify(databaseName)} because its name does not end in _test`,
-  );
+const purposeIndex = process.argv.indexOf("--database");
+const purpose = purposeIndex === -1 ? undefined : process.argv[purposeIndex + 1];
+if (!purpose || !isLocalDatabasePurpose(purpose)) {
+  throw new Error("Pass --database dev, --database test, or --database bench");
 }
-if (!databaseName) throw new Error("DATABASE_URL must include a database name");
+
+const databaseUrl = localDatabaseUrl(purpose);
+const target = new URL(databaseUrl);
+const targetDatabaseName = databaseName(databaseUrl);
+assertLocalDatabasePurpose(databaseUrl, purpose);
 if (
   target.hostname !== "localhost" &&
   target.hostname !== "127.0.0.1" &&
@@ -32,14 +37,14 @@ function identifier(value: string): string {
 const adminUrl = new URL(databaseUrl);
 adminUrl.pathname = "/postgres";
 console.log(
-  `Reset target: ${target.username}@${target.hostname}:${target.port || "5432"}/${databaseName}`,
+  `Reset ${purpose} target: ${target.username}@${target.hostname}:${target.port || "5432"}/${targetDatabaseName}`,
 );
 const admin = new Pool({ connectionString: adminUrl.toString(), max: 1 });
 try {
-  // FORCE terminates other sessions. The _test suffix, explicit URL, confirmation, and host guard
-  // above are the safety boundary around this destructive operation.
-  await admin.query(`DROP DATABASE IF EXISTS ${identifier(databaseName)} WITH (FORCE)`);
-  await admin.query(`CREATE DATABASE ${identifier(databaseName)}`);
+  // FORCE terminates other sessions. The purpose suffix, confirmation, and host guard above are
+  // the safety boundary around this destructive operation.
+  await admin.query(`DROP DATABASE IF EXISTS ${identifier(targetDatabaseName)} WITH (FORCE)`);
+  await admin.query(`CREATE DATABASE ${identifier(targetDatabaseName)}`);
 } finally {
   await admin.end();
 }
@@ -47,7 +52,7 @@ try {
 const database = new Pool({ connectionString: databaseUrl, max: 1 });
 try {
   await installSchema(database);
-  console.log(`Reset ${databaseName} and installed sql/schema.sql`);
+  console.log(`Reset ${targetDatabaseName} and installed sql/schema.sql`);
 } finally {
   await database.end();
 }

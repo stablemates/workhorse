@@ -2,11 +2,12 @@
 import { writeFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { runBenchmark } from "../../benchmarks/run.js";
+import { assertLocalDatabasePurpose, databaseName, localDatabaseUrl } from "../local-database.js";
 
 const help = `Ironshift benchmark
 
 Usage:
-  DATABASE_URL=postgres://... pnpm benchmark -- [options]
+  pnpm benchmark -- [options]
 
 Options:
   --jobs N       Jobs per design per round (default: 1000)
@@ -14,7 +15,8 @@ Options:
   --output PATH  Also write the JSON report to PATH
   --help          Show this help
 
-The benchmark truncates Ironshift and benchmark tables at startup. Use a dedicated test database.
+The benchmark truncates Ironshift and benchmark tables at startup. It only accepts a _bench database.
+Override the local default with IRONSHIFT_BENCH_DATABASE_URL.
 See docs/benchmarking.md for methodology, interpretation, scale runs, and limitations.`;
 
 function integerArgument(name: string, fallback: number): number {
@@ -25,19 +27,18 @@ function integerArgument(name: string, fallback: number): number {
   return value;
 }
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = localDatabaseUrl("bench");
 if (process.argv.includes("--help")) {
   console.log(help);
-} else if (!databaseUrl) {
-  console.error("DATABASE_URL is required");
-  process.exitCode = 1;
 } else {
+  assertLocalDatabasePurpose(databaseUrl, "bench");
   const jobs = integerArgument("--jobs", 1_000);
   const rounds = integerArgument("--rounds", 3);
   const outputIndex = process.argv.indexOf("--output");
   const output = outputIndex === -1 ? undefined : process.argv[outputIndex + 1];
   if (outputIndex !== -1 && (!output || output.startsWith("--")))
     throw new Error("--output requires a path");
+  console.error(`Benchmark target: ${databaseName(databaseUrl)}`);
   const pool = new Pool({ connectionString: databaseUrl, max: 10 });
   try {
     const report = {
