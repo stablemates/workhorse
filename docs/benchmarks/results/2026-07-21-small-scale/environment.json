@@ -1,0 +1,30 @@
+{
+  "capturedAt": "2026-07-21T22:09:33Z",
+  "gitCommit": "11ab33bbdafb73dba9709080da97a00367ae8947",
+  "node": "v24.15.0",
+  "pnpm": "10.18.3",
+  "kernel": "Linux bee 6.17.0-35-generic #35~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 19:30:42 UTC 2 x86_64 x86_64 x86_64 GNU/Linux",
+  "cpu": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+  "logicalCpus": 16,
+  "memoryBytes": 29191168000,
+  "postgres": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "postgresSettings": {
+    "autovacuum": "on",
+    "autovacuum_naptime": "60s",
+    "checkpoint_timeout": "300s",
+    "maintenance_work_mem": "65536kB",
+    "max_connections": "100",
+    "max_wal_size": "1024MB",
+    "shared_buffers": "163848kB",
+    "synchronous_commit": "on",
+    "work_mem": "4096kB"
+  },
+  "method": {
+    "jobScales": [25, 100, 500, 1000, 5000],
+    "roundsPerScale": 3,
+    "database": "ironshift_bench",
+    "resetBeforeEachScale": true,
+    "resetAfterLadder": true,
+    "clientConcurrency": 1
+  }
+}
