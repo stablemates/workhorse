@@ -1,17 +1,17 @@
-# Benchmark suite v2 runbook
+# Benchmark suite v3 runbook
 
 This runbook explains how to execute Ironshift's benchmark suite, preserve reproducible evidence, and interpret results without making unsupported performance claims.
 
 ## Recorded evidence
 
 - [2026-07-21 small-scale ladder](benchmarks/2026-07-21-small-scale-analysis.md): legacy v1 success-path results retained for historical comparison.
-- [`results/2026-07-21-v2-smoke.json`](benchmarks/results/2026-07-21-v2-smoke.json): fresh v2 smoke artifact covering comparative and lifecycle suites.
+- [`results/2026-07-21-v3-smoke.json`](benchmarks/results/2026-07-21-v3-smoke.json): fresh v2 smoke artifact covering comparative and lifecycle suites.
 - [`results/2026-07-21-v2-default.json`](benchmarks/results/2026-07-21-v2-default.json): fresh v2 default-profile artifact with three repetitions at 1/4/8 workers, concurrent churn, and all lifecycle scenarios.
 - [2026-07-21 v2 default-profile analysis](benchmarks/2026-07-21-v2-default-analysis.md): phase-level throughput diagnosis, paired comparisons, storage/WAL interpretation, churn limitations, and prioritized follow-up work.
 
-## What v2 measures
+## What v3 measures
 
-V2 has two suites.
+V3 has two suites.
 
 ### Comparative suite
 
@@ -20,10 +20,12 @@ The comparative suite runs equivalent queue lifecycle semantics through two stor
 1. **Conventional:** a mutable lifetime job table with ready, scheduled, and expired-lease indexes plus event and attempt history.
 2. **Hybrid:** immutable job identity, current-state projection, narrow ready/scheduled/lease projections, and append-only event and attempt history.
 
-For each worker-concurrency level and independent repetition, both designs are reset before measurement. The suite records:
+A seeded execution plan shuffles worker/repetition pairs and alternates which design runs first. The exact plan is recorded in `executionPlan`. For each pair, both designs are independently reset before measurement. The suite records:
 
-- enqueue, processing, and end-to-end duration;
+- configurable `enqueueMany` batch size and the exact enqueue request count;
+- enqueue, processing, and end-to-end duration plus phase-specific jobs/second;
 - completed jobs per second;
+- paired hybrid/conventional ratios and differences by worker level;
 - raw client-observed claim latency samples and p50/p95/p99;
 - Student-t 95% confidence intervals across independent repetitions;
 - WAL bytes;
@@ -34,7 +36,7 @@ For each worker-concurrency level and independent repetition, both designs are r
 - `pg_stat_io` deltas where supported;
 - `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` for the populated claim path.
 
-The suite also performs sustained producer-consumer churn. A producer continuously enqueues batches while concurrent workers claim and complete jobs; after the timed production window closes, workers drain the remaining backlog. Periodic relation, schema, and activity samples are captured while production and consumption overlap. The JSON records this as `workloadModel: "concurrent-producer-consumer"`.
+The suite also performs equal-load fixed-rate producer-consumer churn. Both designs receive the same exact `targetJobs` at the same `targetRatePerSecond`; concurrent workers drain every job before the run can pass. It records production and drain duration, producer scheduling-lag distribution, maximum observed backlog, and exact completion. Telemetry runs on an independent scheduled task, not in the producer loop, and every sample records its own `sampleDurationMs`.
 
 ### Lifecycle suite
 
@@ -77,26 +79,28 @@ pnpm benchmark -- --help
 
 Core options:
 
-| Option          | Values                            | Meaning                                      |
-| --------------- | --------------------------------- | -------------------------------------------- |
-| `--suite`       | `all`, `comparative`, `lifecycle` | Select the suite                             |
-| `--profile`     | `smoke`, `default`, `full`        | Select a bounded configuration               |
-| `--scenario`    | comma-separated scenario names    | Run a lifecycle subset                       |
-| `--jobs`        | positive integer                  | Override jobs per comparative run            |
-| `--repetitions` | positive integer                  | Override independent repetitions             |
-| `--rounds`      | positive integer                  | Legacy alias for `--repetitions`             |
-| `--workers`     | comma-separated integers          | Override the worker-concurrency sweep        |
-| `--churn-ms`    | positive integer                  | Override sustained churn duration            |
-| `--sample-ms`   | positive integer                  | Override churn sampling interval             |
-| `--output`      | path                              | Persist canonical JSON in addition to stdout |
+| Option            | Values                            | Meaning                                  |
+| ----------------- | --------------------------------- | ---------------------------------------- |
+| `--suite`         | `all`, `comparative`, `lifecycle` | Select the suite                         |
+| `--profile`       | `smoke`, `default`, `full`        | Select a bounded configuration           |
+| `--scenario`      | comma-separated names             | Run a lifecycle subset                   |
+| `--seed`          | non-negative integer              | Seed the deterministic shuffled plan     |
+| `--jobs`          | positive integer                  | Jobs per fixed comparative run           |
+| `--enqueue-batch` | positive integer                  | Jobs per `enqueueMany` request           |
+| `--repetitions`   | positive integer                  | Independent repetitions                  |
+| `--workers`       | comma-separated integers          | Worker-concurrency sweep                 |
+| `--churn-rate`    | positive integer                  | Producer target jobs per second          |
+| `--churn-jobs`    | positive integer                  | Exact churn jobs per design              |
+| `--sample-ms`     | positive integer                  | Independent telemetry interval           |
+| `--output`        | path                              | Persist canonical deterministic-key JSON |
 
 ## Profiles
 
-| Profile   | Intended use               | Comparative shape                                        |
-| --------- | -------------------------- | -------------------------------------------------------- |
-| `smoke`   | correctness and wiring     | 12 jobs, 2 repetitions, workers 1/2, 500 ms churn        |
-| `default` | local development evidence | 100 jobs, 3 repetitions, workers 1/4/8, 5 s churn        |
-| `full`    | controlled evidence runs   | 1,000 jobs, 5 repetitions, workers 1/4/16/32, 60 s churn |
+| Profile   | Intended use           | Fixed runs                                       | Equal-load churn    |
+| --------- | ---------------------- | ------------------------------------------------ | ------------------- |
+| `smoke`   | correctness and wiring | 12 jobs, batch 4, 2 reps, workers 1/2            | 20 jobs at 40/s     |
+| `default` | local evidence         | 100 jobs, batch 25, 3 reps, workers 1/4/8        | 500 jobs at 100/s   |
+| `full`    | controlled evidence    | 1,000 jobs, batch 100, 5 reps, workers 1/4/16/32 | 6,000 jobs at 100/s |
 
 Profile values are starting points, not universal publication standards. Use CLI overrides for the hardware and research question.
 
@@ -109,28 +113,28 @@ pnpm db:reset:bench
 pnpm benchmark -- \
   --profile smoke \
   --suite all \
-  --output docs/benchmarks/results/v2-smoke.json
+  --output docs/benchmarks/results/v3-smoke.json
 ```
 
-A valid artifact has `schemaVersion: 2`, comparative runs and summaries, two churn results, and all lifecycle scenario assertions passing.
+A valid artifact has `schemaVersion: 3`, comparative runs and summaries, two churn results, and all lifecycle scenario assertions passing.
 
 Useful checks:
 
 ```bash
-jq '{schemaVersion, suite, profile, environment}' docs/benchmarks/results/v2-smoke.json
+jq '{schemaVersion, suite, profile, environment}' docs/benchmarks/results/v3-smoke.json
 
 jq '.comparative.summaries[] | {
   design,
   workers: .workerConcurrency,
   throughput: .throughputPerSecond,
   claim_p95: .claimLatencyMs.perRunP95
-}' docs/benchmarks/results/v2-smoke.json
+}' docs/benchmarks/results/v3-smoke.json
 
 jq '.lifecycle.scenarios[] | {
   name,
   durationMs,
   assertions_passed: ([.assertions[].passed] | all)
-}' docs/benchmarks/results/v2-smoke.json
+}' docs/benchmarks/results/v3-smoke.json
 ```
 
 ## Focused runs
@@ -148,10 +152,13 @@ A worker sweep with custom churn:
 pnpm benchmark -- \
   --suite comparative \
   --profile smoke \
+  --seed 42 \
   --jobs 500 \
+  --enqueue-batch 50 \
   --repetitions 5 \
   --workers 1,4,16 \
-  --churn-ms 30000 \
+  --churn-rate 200 \
+  --churn-jobs 6000 \
   --sample-ms 1000 \
   --output worker-sweep.json
 ```
@@ -167,7 +174,7 @@ pnpm benchmark -- --suite lifecycle --profile smoke --scenario lease-expiry-reco
 
 Top-level fields:
 
-- `schemaVersion`: report contract version, currently `2`;
+- `schemaVersion`: report contract version, currently `3`;
 - `generatedAt`: client wall-clock timestamp;
 - `suite` and `profile`: resolved run selection;
 - `environment`: database name, PostgreSQL version, and material PostgreSQL settings;

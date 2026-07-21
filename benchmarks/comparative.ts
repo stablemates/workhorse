@@ -29,14 +29,17 @@ export type ComparativeDesign = "conventional" | "hybrid";
 export type JsonSafe = null | boolean | number | string | JsonSafe[] | { [key: string]: JsonSafe };
 
 export interface ChurnOptions {
-  durationMs: number;
+  targetJobs: number;
+  targetRatePerSecond: number;
   batchSize: number;
   sampleIntervalMs: number;
   workerConcurrency: number;
 }
 
 export interface ComparativeBenchmarkOptions {
+  seed: number;
   jobsPerRun: number;
+  enqueueBatchSize: number;
   repetitions: number;
   workerConcurrency: number[];
   queueName: string;
@@ -51,13 +54,16 @@ export type ComparativeBenchmarkOptionsInput = Partial<
 };
 
 export const smokeSafeComparativeDefaults: Readonly<ComparativeBenchmarkOptions> = Object.freeze({
+  seed: 1,
   jobsPerRun: 20,
+  enqueueBatchSize: 10,
   repetitions: 1,
   workerConcurrency: Object.freeze([1, 2]) as unknown as number[],
-  queueName: "comparative-v2",
+  queueName: "comparative-v3",
   leaseMs: 30_000,
   churn: Object.freeze({
-    durationMs: 1_000,
+    targetJobs: 100,
+    targetRatePerSecond: 100,
     batchSize: 10,
     sampleIntervalMs: 250,
     workerConcurrency: 2,
@@ -81,9 +87,14 @@ export interface ComparativeRunResult {
   repetition: number;
   workerConcurrency: number;
   jobs: number;
+  enqueueBatchSize: number;
+  enqueueRequests: number;
   enqueueDurationMs: number;
   processingDurationMs: number;
   totalDurationMs: number;
+  enqueueJobsPerSecond: number;
+  processingJobsPerSecond: number;
+  totalJobsPerSecond: number;
   throughputPerSecond: number;
   completedJobs: number;
   claimLatencySamplesMs: number[];
@@ -93,6 +104,7 @@ export interface ComparativeRunResult {
 
 export interface ChurnSample {
   elapsedMs: number;
+  sampleDurationMs: number;
   batches: number;
   enqueuedJobs: number;
   completedJobs: number;
@@ -104,14 +116,20 @@ export interface ChurnSample {
 export interface ChurnResult {
   design: ComparativeDesign;
   workloadModel: "concurrent-producer-consumer";
-  configuredDurationMs: number;
-  actualDurationMs: number;
+  targetJobs: number;
+  targetRatePerSecond: number;
+  productionDurationMs: number;
+  drainDurationMs: number;
+  totalDurationMs: number;
   batchSize: number;
   workerConcurrency: number;
   batches: number;
   enqueuedJobs: number;
   completedJobs: number;
   throughputPerSecond: number;
+  producerLagSamplesMs: number[];
+  producerLagMs: LatencySummary;
+  maxBacklog: number;
   claimLatencySamplesMs: number[];
   claimLatencyMs: LatencySummary;
   samples: ChurnSample[];
@@ -134,18 +152,41 @@ export interface ComparativeGroupSummary {
   };
 }
 
+export interface ExecutionPlanStep {
+  workerConcurrency: number;
+  repetition: number;
+  designOrder: readonly [ComparativeDesign, ComparativeDesign];
+}
+
+export interface PairedMetricSummary {
+  ratio: NumericSummary;
+  difference: NumericSummary;
+}
+
+export interface PairedComparativeSummary {
+  workerConcurrency: number;
+  pairs: number;
+  throughputPerSecond: PairedMetricSummary;
+  enqueueDurationMs: PairedMetricSummary;
+  processingDurationMs: PairedMetricSummary;
+  totalDurationMs: PairedMetricSummary;
+  walBytes: PairedMetricSummary;
+}
+
 export interface ComparativeBenchmarkResult {
-  version: 2;
+  version: 3;
   options: ComparativeBenchmarkOptions;
+  executionPlan: ExecutionPlanStep[];
   runs: ComparativeRunResult[];
   summaries: ComparativeGroupSummary[];
+  pairedSummaries: PairedComparativeSummary[];
   churn: ChurnResult[];
 }
 
 interface QueueAdapter {
   design: ComparativeDesign;
   schema: string;
-  enqueue(payload: Json): Promise<string>;
+  enqueueMany(requests: Array<{ type: string; payload: Json }>): Promise<unknown>;
   claim(workerId: string): Promise<unknown | null>;
   complete(job: unknown, workerId: string): Promise<boolean>;
   claimSql: string;
@@ -206,15 +247,24 @@ export function normalizeComparativeOptions(
 
   const churnInput = input.churn ?? {};
   return {
+    seed: nonNegativeInteger(input.seed ?? defaults.seed, "seed"),
     jobsPerRun: positiveInteger(input.jobsPerRun ?? defaults.jobsPerRun, "jobsPerRun"),
+    enqueueBatchSize: positiveInteger(
+      input.enqueueBatchSize ?? defaults.enqueueBatchSize,
+      "enqueueBatchSize",
+    ),
     repetitions: positiveInteger(input.repetitions ?? defaults.repetitions, "repetitions"),
     workerConcurrency,
     queueName: queueName.trim(),
     leaseMs: positiveInteger(input.leaseMs ?? defaults.leaseMs, "leaseMs"),
     churn: {
-      durationMs: nonNegativeInteger(
-        churnInput.durationMs ?? defaults.churn.durationMs,
-        "churn.durationMs",
+      targetJobs: positiveInteger(
+        churnInput.targetJobs ?? defaults.churn.targetJobs,
+        "churn.targetJobs",
+      ),
+      targetRatePerSecond: positiveInteger(
+        churnInput.targetRatePerSecond ?? defaults.churn.targetRatePerSecond,
+        "churn.targetRatePerSecond",
       ),
       batchSize: positiveInteger(
         churnInput.batchSize ?? defaults.churn.batchSize,
@@ -256,6 +306,39 @@ function walBytes(run: ComparativeRunResult): number {
   return typeof bytes === "number" ? bytes : Number(bytes ?? 0);
 }
 
+export function createExecutionPlan(
+  workerConcurrency: readonly number[],
+  repetitions: number,
+  seed: number,
+): ExecutionPlanStep[] {
+  const pairs = workerConcurrency.flatMap((workers) =>
+    Array.from({ length: repetitions }, (_, index) => ({
+      workerConcurrency: workers,
+      repetition: index + 1,
+    })),
+  );
+  let state = seed >>> 0;
+  const random = (): number => {
+    state += 0x6d2b79f5;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+  };
+  for (let index = pairs.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(random() * (index + 1));
+    [pairs[index], pairs[swap]] = [pairs[swap]!, pairs[index]!];
+  }
+  return pairs.map((pair, index) => ({
+    workerConcurrency: pair.workerConcurrency,
+    repetition: pair.repetition,
+    designOrder:
+      index % 2 === 0
+        ? (["hybrid", "conventional"] as const)
+        : (["conventional", "hybrid"] as const),
+  }));
+}
+
 export function summarizeComparativeRuns(
   runs: readonly ComparativeRunResult[],
 ): ComparativeGroupSummary[] {
@@ -294,6 +377,61 @@ export function summarizeComparativeRuns(
     }),
     (left, right) =>
       left.design.localeCompare(right.design) || left.workerConcurrency - right.workerConcurrency,
+  );
+}
+
+function pairedMetric(hybrid: number[], conventional: number[]): PairedMetricSummary {
+  return {
+    ratio: summarizeNumbers(hybrid.map((value, index) => value / conventional[index]!)),
+    difference: summarizeNumbers(hybrid.map((value, index) => value - conventional[index]!)),
+  };
+}
+
+export function summarizePairedRuns(
+  runs: readonly ComparativeRunResult[],
+): PairedComparativeSummary[] {
+  return sortedCopy(
+    [...new Set(runs.map((run) => run.workerConcurrency))].map((workerConcurrency) => {
+      const pairs = sortedCopy(
+        [
+          ...new Set(
+            runs
+              .filter((run) => run.workerConcurrency === workerConcurrency)
+              .map((run) => run.repetition),
+          ),
+        ],
+        (left, right) => left - right,
+      ).flatMap((repetition) => {
+        const hybrid = runs.find(
+          (run) =>
+            run.design === "hybrid" &&
+            run.workerConcurrency === workerConcurrency &&
+            run.repetition === repetition,
+        );
+        const conventional = runs.find(
+          (run) =>
+            run.design === "conventional" &&
+            run.workerConcurrency === workerConcurrency &&
+            run.repetition === repetition,
+        );
+        return hybrid && conventional ? [{ hybrid, conventional }] : [];
+      });
+      const metric = (select: (run: ComparativeRunResult) => number): PairedMetricSummary =>
+        pairedMetric(
+          pairs.map(({ hybrid }) => select(hybrid)),
+          pairs.map(({ conventional }) => select(conventional)),
+        );
+      return {
+        workerConcurrency,
+        pairs: pairs.length,
+        throughputPerSecond: metric((run) => run.throughputPerSecond),
+        enqueueDurationMs: metric((run) => run.enqueueDurationMs),
+        processingDurationMs: metric((run) => run.processingDurationMs),
+        totalDurationMs: metric((run) => run.totalDurationMs),
+        walBytes: metric(walBytes),
+      };
+    }),
+    (left, right) => left.workerConcurrency - right.workerConcurrency,
   );
 }
 
@@ -339,7 +477,7 @@ function createAdapters(pool: Pool, options: ComparativeBenchmarkOptions): Queue
     {
       design: "conventional",
       schema: conventionalSchema,
-      enqueue: (payload) => conventional.enqueue("comparative", payload),
+      enqueueMany: (requests) => conventional.enqueueMany(requests),
       claim: (workerId) => conventional.claim(workerId, { leaseMs: options.leaseMs }),
       complete: (job, workerId) =>
         conventional.complete(job as ConventionalClaimedJob<unknown>, workerId, { ok: true }),
@@ -348,7 +486,7 @@ function createAdapters(pool: Pool, options: ComparativeBenchmarkOptions): Queue
     {
       design: "hybrid",
       schema: "ironshift",
-      enqueue: (payload) => queue.enqueue("comparative", payload),
+      enqueueMany: (requests) => queue.enqueueMany(requests),
       claim: (workerId) => queue.claim(workerId, { leaseMs: options.leaseMs }),
       complete: (job, workerId) =>
         queue.complete(job as ClaimedJob<unknown>, workerId, { ok: true }),
@@ -357,10 +495,24 @@ function createAdapters(pool: Pool, options: ComparativeBenchmarkOptions): Queue
   ];
 }
 
-async function enqueueJobs(adapter: QueueAdapter, count: number, batch: number): Promise<void> {
-  await Promise.all(
-    Array.from({ length: count }, (_, index) => adapter.enqueue({ batch, sequence: index + 1 })),
-  );
+async function enqueueJobs(
+  adapter: QueueAdapter,
+  count: number,
+  batch: number,
+  enqueueBatchSize: number,
+): Promise<number> {
+  let requests = 0;
+  for (let offset = 0; offset < count; offset += enqueueBatchSize) {
+    const size = Math.min(enqueueBatchSize, count - offset);
+    await adapter.enqueueMany(
+      Array.from({ length: size }, (_, index) => ({
+        type: "comparative",
+        payload: { batch, sequence: offset + index + 1 },
+      })),
+    );
+    requests += 1;
+  }
+  return requests;
 }
 
 async function runWorkers(
@@ -493,7 +645,12 @@ async function prepareExplain(
   options: ComparativeBenchmarkOptions,
 ): Promise<JsonSafe> {
   await resetComparativeSchemas(pool);
-  await enqueueJobs(adapter, Math.max(options.jobsPerRun, options.churn.batchSize), -1);
+  await enqueueJobs(
+    adapter,
+    Math.max(options.jobsPerRun, options.churn.batchSize),
+    -1,
+    options.enqueueBatchSize,
+  );
   const plan = await captureClaimExplain(pool, adapter, options.queueName, options.leaseMs);
   await resetComparativeSchemas(pool);
   return plan;
@@ -510,7 +667,12 @@ async function runOnce(
   const before = await captureBefore(pool, adapter);
   const totalStarted = performance.now();
   const enqueueStarted = performance.now();
-  await enqueueJobs(adapter, options.jobsPerRun, repetition);
+  const enqueueRequests = await enqueueJobs(
+    adapter,
+    options.jobsPerRun,
+    repetition,
+    options.enqueueBatchSize,
+  );
   const enqueueDurationMs = performance.now() - enqueueStarted;
   const processingStarted = performance.now();
   const work = await runWorkers(
@@ -531,9 +693,16 @@ async function runOnce(
     repetition,
     workerConcurrency,
     jobs: options.jobsPerRun,
+    enqueueBatchSize: options.enqueueBatchSize,
+    enqueueRequests,
     enqueueDurationMs,
     processingDurationMs,
     totalDurationMs,
+    enqueueJobsPerSecond:
+      enqueueDurationMs === 0 ? 0 : (options.jobsPerRun / enqueueDurationMs) * 1_000,
+    processingJobsPerSecond:
+      processingDurationMs === 0 ? 0 : (work.completedJobs / processingDurationMs) * 1_000,
+    totalJobsPerSecond: totalDurationMs === 0 ? 0 : (work.completedJobs / totalDurationMs) * 1_000,
     throughputPerSecond: totalDurationMs === 0 ? 0 : (work.completedJobs / totalDurationMs) * 1_000,
     completedJobs: work.completedJobs,
     claimLatencySamplesMs,
@@ -550,6 +719,7 @@ async function captureChurnSample(
   enqueuedJobs: number,
   completedJobs: number,
 ): Promise<ChurnSample> {
+  const sampleStarted = performance.now();
   const [relations, schema, activity] = await Promise.all([
     captureRelationTelemetry(pool, adapter.schema),
     captureSchemaTotals(pool, adapter.schema),
@@ -557,6 +727,7 @@ async function captureChurnSample(
   ]);
   return {
     elapsedMs: performance.now() - started,
+    sampleDurationMs: performance.now() - sampleStarted,
     batches,
     enqueuedJobs,
     completedJobs,
@@ -574,10 +745,10 @@ async function runChurn(
   const claimExplain = await prepareExplain(pool, adapter, options);
   const before = await captureBefore(pool, adapter);
   const started = performance.now();
-  const deadline = started + options.churn.durationMs;
-  let nextSampleAt = started + options.churn.sampleIntervalMs;
   let batches = 0;
   let enqueuedJobs = 0;
+  let maxBacklog = 0;
+  const producerLagSamplesMs: number[] = [];
   const progress: ChurnProgress = {
     completedJobs: 0,
     claimLatencySamplesMs: [],
@@ -590,64 +761,87 @@ async function runChurn(
     `${adapter.design}-churn`,
     progress,
   );
+  const sampleTasks: Promise<void>[] = [];
+  let sampleInFlight = false;
+  const sampler = setInterval(() => {
+    if (sampleInFlight) return;
+    sampleInFlight = true;
+    const task = captureChurnSample(
+      pool,
+      adapter,
+      started,
+      batches,
+      enqueuedJobs,
+      progress.completedJobs,
+    )
+      .then((sample) => {
+        samples.push(sample);
+      })
+      .finally(() => {
+        sampleInFlight = false;
+      });
+    sampleTasks.push(task);
+  }, options.churn.sampleIntervalMs);
 
   try {
-    while (performance.now() < deadline) {
+    while (enqueuedJobs < options.churn.targetJobs) {
+      const scheduledAt = started + (enqueuedJobs / options.churn.targetRatePerSecond) * 1_000;
+      const waitMs = scheduledAt - performance.now();
+      if (waitMs > 0) await delay(waitMs);
+      producerLagSamplesMs.push(Math.max(0, performance.now() - scheduledAt));
+      const count = Math.min(options.churn.batchSize, options.churn.targetJobs - enqueuedJobs);
       batches += 1;
-      await enqueueJobs(adapter, options.churn.batchSize, batches);
-      enqueuedJobs += options.churn.batchSize;
-      if (performance.now() >= nextSampleAt) {
-        samples.push(
-          await captureChurnSample(
-            pool,
-            adapter,
-            started,
-            batches,
-            enqueuedJobs,
-            progress.completedJobs,
-          ),
-        );
-        nextSampleAt += options.churn.sampleIntervalMs;
-      }
+      await enqueueJobs(adapter, count, batches, count);
+      enqueuedJobs += count;
+      maxBacklog = Math.max(maxBacklog, enqueuedJobs - progress.completedJobs);
     }
   } finally {
     progress.producerRunning = false;
   }
+  const productionDurationMs = performance.now() - started;
+  const drainStarted = performance.now();
   await workers;
-
-  if (samples.length === 0 || samples.at(-1)!.batches !== batches) {
-    samples.push(
-      await captureChurnSample(
-        pool,
-        adapter,
-        started,
-        batches,
-        enqueuedJobs,
-        progress.completedJobs,
-      ),
+  const drainDurationMs = performance.now() - drainStarted;
+  const totalDurationMs = performance.now() - started;
+  clearInterval(sampler);
+  await Promise.all(sampleTasks);
+  samples.push(
+    await captureChurnSample(pool, adapter, started, batches, enqueuedJobs, progress.completedJobs),
+  );
+  if (progress.completedJobs !== options.churn.targetJobs) {
+    throw new Error(
+      `${adapter.design} completed ${progress.completedJobs} of ${options.churn.targetJobs} churn jobs`,
     );
   }
-
-  const actualDurationMs = performance.now() - started;
   const telemetry = await captureAfter(pool, adapter, before, claimExplain);
-  const sortedClaimLatencySamplesMs = sortedCopy(
+  const claimLatencySamplesMs = sortedCopy(
     progress.claimLatencySamplesMs,
+    (left, right) => left - right,
+  );
+  const sortedProducerLagSamplesMs = sortedCopy(
+    producerLagSamplesMs,
     (left, right) => left - right,
   );
   return {
     design: adapter.design,
     workloadModel: "concurrent-producer-consumer",
-    configuredDurationMs: options.churn.durationMs,
-    actualDurationMs,
+    targetJobs: options.churn.targetJobs,
+    targetRatePerSecond: options.churn.targetRatePerSecond,
+    productionDurationMs,
+    drainDurationMs,
+    totalDurationMs,
     batchSize: options.churn.batchSize,
     workerConcurrency: options.churn.workerConcurrency,
     batches,
     enqueuedJobs,
     completedJobs: progress.completedJobs,
     throughputPerSecond:
-      actualDurationMs === 0 ? 0 : (progress.completedJobs / actualDurationMs) * 1_000,
-    claimLatencySamplesMs: sortedClaimLatencySamplesMs,
-    claimLatencyMs: summarizeLatencies(sortedClaimLatencySamplesMs),
+      totalDurationMs === 0 ? 0 : (progress.completedJobs / totalDurationMs) * 1_000,
+    producerLagSamplesMs: sortedProducerLagSamplesMs,
+    producerLagMs: summarizeLatencies(sortedProducerLagSamplesMs),
+    maxBacklog,
+    claimLatencySamplesMs,
+    claimLatencyMs: summarizeLatencies(claimLatencySamplesMs),
     samples,
     telemetry,
   };
@@ -660,24 +854,43 @@ export async function runComparativeBenchmark(
   const options = normalizeComparativeOptions(input);
   await setupComparativeSchemas(pool);
   const adapters = createAdapters(pool, options);
+  const adaptersByDesign = new Map(adapters.map((adapter) => [adapter.design, adapter]));
+  const executionPlan = createExecutionPlan(
+    options.workerConcurrency,
+    options.repetitions,
+    options.seed,
+  );
   const runs: ComparativeRunResult[] = [];
 
-  for (const workerConcurrency of options.workerConcurrency) {
-    for (let repetition = 1; repetition <= options.repetitions; repetition += 1) {
-      for (const adapter of adapters) {
-        runs.push(await runOnce(pool, adapter, options, repetition, workerConcurrency));
-      }
+  for (const step of executionPlan) {
+    for (const design of step.designOrder) {
+      runs.push(
+        await runOnce(
+          pool,
+          adaptersByDesign.get(design)!,
+          options,
+          step.repetition,
+          step.workerConcurrency,
+        ),
+      );
     }
   }
 
   const churn: ChurnResult[] = [];
-  for (const adapter of adapters) churn.push(await runChurn(pool, adapter, options));
+  const churnOrder =
+    options.seed % 2 === 0
+      ? (["hybrid", "conventional"] as const)
+      : (["conventional", "hybrid"] as const);
+  for (const design of churnOrder)
+    churn.push(await runChurn(pool, adaptersByDesign.get(design)!, options));
 
   return {
-    version: 2,
+    version: 3,
     options,
+    executionPlan,
     runs,
     summaries: summarizeComparativeRuns(runs),
+    pairedSummaries: summarizePairedRuns(runs),
     churn,
   };
 }

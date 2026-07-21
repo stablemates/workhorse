@@ -29,8 +29,8 @@ export interface ResolvedBenchmarkRunOptions {
   operational: OperationalScenarioOptions;
 }
 
-export interface BenchmarkReportV2 {
-  schemaVersion: 2;
+export interface BenchmarkReportV3 {
+  schemaVersion: 3;
   generatedAt: string;
   suite: BenchmarkSuite;
   profile: BenchmarkProfileName;
@@ -92,7 +92,7 @@ function gitOutput(arguments_: string[]): string | null {
   }
 }
 
-export function captureBenchmarkProvenance(): BenchmarkReportV2["provenance"] {
+export function captureBenchmarkProvenance(): BenchmarkReportV3["provenance"] {
   const cpuList = cpus();
   const commit = gitOutput(["rev-parse", "HEAD"]);
   const status = gitOutput(["status", "--porcelain", "--untracked-files=no"]);
@@ -117,11 +117,19 @@ export function captureBenchmarkProvenance(): BenchmarkReportV2["provenance"] {
 export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkProfile>> = {
   smoke: {
     comparative: {
+      seed: 1,
       jobsPerRun: 12,
+      enqueueBatchSize: 4,
       repetitions: 2,
       workerConcurrency: [1, 2],
       leaseMs: 5_000,
-      churn: { durationMs: 500, batchSize: 4, sampleIntervalMs: 100, workerConcurrency: 2 },
+      churn: {
+        targetJobs: 20,
+        targetRatePerSecond: 40,
+        batchSize: 4,
+        sampleIntervalMs: 100,
+        workerConcurrency: 2,
+      },
     },
     operational: {
       jobCount: 6,
@@ -135,11 +143,19 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
   },
   default: {
     comparative: {
+      seed: 1,
       jobsPerRun: 100,
+      enqueueBatchSize: 25,
       repetitions: 3,
       workerConcurrency: [1, 4, 8],
       leaseMs: 30_000,
-      churn: { durationMs: 5_000, batchSize: 25, sampleIntervalMs: 500, workerConcurrency: 4 },
+      churn: {
+        targetJobs: 500,
+        targetRatePerSecond: 100,
+        batchSize: 25,
+        sampleIntervalMs: 500,
+        workerConcurrency: 4,
+      },
     },
     operational: {
       jobCount: 24,
@@ -153,11 +169,19 @@ export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkP
   },
   full: {
     comparative: {
+      seed: 1,
       jobsPerRun: 1_000,
+      enqueueBatchSize: 100,
       repetitions: 5,
       workerConcurrency: [1, 4, 16, 32],
       leaseMs: 30_000,
-      churn: { durationMs: 60_000, batchSize: 100, sampleIntervalMs: 1_000, workerConcurrency: 16 },
+      churn: {
+        targetJobs: 6_000,
+        targetRatePerSecond: 100,
+        batchSize: 100,
+        sampleIntervalMs: 1_000,
+        workerConcurrency: 16,
+      },
     },
     operational: {
       jobCount: 100,
@@ -217,7 +241,7 @@ export function resolveBenchmarkRunOptions(
 export async function runBenchmark(
   pool: Pool,
   input: BenchmarkRunOptions = {},
-): Promise<BenchmarkReportV2> {
+): Promise<BenchmarkReportV3> {
   const options = resolveBenchmarkRunOptions(input);
   const environment = await pool.query<{ database: string; version: string }>(
     "SELECT current_database() AS database, version() AS version",
@@ -232,8 +256,8 @@ export async function runBenchmark(
   const row = environment.rows[0];
   if (!row) throw new Error("Unable to read PostgreSQL benchmark environment");
 
-  const report: BenchmarkReportV2 = {
-    schemaVersion: 2,
+  const report: BenchmarkReportV3 = {
+    schemaVersion: 3,
     generatedAt: new Date().toISOString(),
     suite: options.suite,
     profile: options.profile,

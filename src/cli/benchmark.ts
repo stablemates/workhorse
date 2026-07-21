@@ -9,13 +9,14 @@ import {
   type BenchmarkRunOptions,
   type BenchmarkSuite,
 } from "../../benchmarks/run.js";
+import { toJsonSafe } from "../../benchmarks/comparative.js";
 import {
   operationalScenarioNames,
   type OperationalScenarioName,
 } from "../../benchmarks/scenarios.js";
 import { assertLocalDatabasePurpose, databaseName, localDatabaseUrl } from "../local-database.js";
 
-const help = `Ironshift benchmark suite v2
+const help = `Ironshift benchmark suite v3
 
 Usage:
   pnpm benchmark -- [options]
@@ -26,11 +27,14 @@ Suite selection:
   --scenario NAMES   Comma-separated lifecycle scenarios
 
 Comparative overrides:
+  --seed N           Non-negative deterministic execution-plan seed
   --jobs N           Jobs per independent run
+  --enqueue-batch N  Jobs per enqueueMany request
   --repetitions N    Independent reset-and-run repetitions
   --rounds N         Legacy alias for --repetitions
   --workers NAMES    Comma-separated worker sweep, for example 1,4,16
-  --churn-ms N       Sustained churn duration in milliseconds
+  --churn-rate N     Fixed producer target jobs per second
+  --churn-jobs N     Exact jobs produced and completed per design
   --sample-ms N      Churn telemetry sample interval in milliseconds
 
 Output:
@@ -54,6 +58,16 @@ function positiveInteger(name: string): number | undefined {
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${name} must be a positive safe integer`);
+  }
+  return value;
+}
+
+function nonNegativeInteger(name: string): number | undefined {
+  const raw = argument(name);
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative safe integer`);
   }
   return value;
 }
@@ -95,10 +109,13 @@ function scenarioList(): OperationalScenarioName[] | undefined {
 }
 
 function cliOptions(): BenchmarkRunOptions {
+  const seed = nonNegativeInteger("--seed");
   const jobsPerRun = positiveInteger("--jobs");
+  const enqueueBatchSize = positiveInteger("--enqueue-batch");
   const repetitions = positiveInteger("--repetitions") ?? positiveInteger("--rounds");
   const workerConcurrency = positiveIntegerList("--workers");
-  const durationMs = positiveInteger("--churn-ms");
+  const targetRatePerSecond = positiveInteger("--churn-rate");
+  const targetJobs = positiveInteger("--churn-jobs");
   const sampleIntervalMs = positiveInteger("--sample-ms");
   const scenarios = scenarioList();
 
@@ -106,14 +123,19 @@ function cliOptions(): BenchmarkRunOptions {
     suite: oneOf<BenchmarkSuite>("--suite", ["all", "comparative", "lifecycle"]),
     profile: oneOf<BenchmarkProfileName>("--profile", ["smoke", "default", "full"]),
     comparative: {
+      ...(seed === undefined ? {} : { seed }),
       ...(jobsPerRun === undefined ? {} : { jobsPerRun }),
+      ...(enqueueBatchSize === undefined ? {} : { enqueueBatchSize }),
       ...(repetitions === undefined ? {} : { repetitions }),
       ...(workerConcurrency === undefined ? {} : { workerConcurrency }),
-      ...(durationMs === undefined && sampleIntervalMs === undefined
+      ...(targetRatePerSecond === undefined &&
+      targetJobs === undefined &&
+      sampleIntervalMs === undefined
         ? {}
         : {
             churn: {
-              ...(durationMs === undefined ? {} : { durationMs }),
+              ...(targetRatePerSecond === undefined ? {} : { targetRatePerSecond }),
+              ...(targetJobs === undefined ? {} : { targetJobs }),
               ...(sampleIntervalMs === undefined ? {} : { sampleIntervalMs }),
             },
           }),
@@ -137,7 +159,7 @@ if (process.argv.includes("--help")) {
   );
   try {
     const report = await runBenchmark(pool, options);
-    const json = `${JSON.stringify(report, null, 2)}\n`;
+    const json = `${JSON.stringify(toJsonSafe(report), null, 2)}\n`;
     if (output) {
       await mkdir(dirname(output), { recursive: true });
       await writeFile(output, json);
