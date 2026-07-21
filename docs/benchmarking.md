@@ -9,6 +9,20 @@ Each round runs two designs against the same PostgreSQL database:
 1. **Conventional:** one mutable job table with a partial ready index. Claim and completion update the same lifetime row.
 2. **Hybrid:** immutable `job`, current projection, narrow `ready_job`, bounded `lease`, and append-only history.
 
+The benchmark-only `ironshift_benchmark_conventional.job` fields are:
+
+| Field         | PostgreSQL type             | Purpose                                                                                                                      |
+| ------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | `bigint` generated identity | Stable row identity and FIFO ordering key for the conventional claim.                                                        |
+| `queue_name`  | `text`                      | Queue predicate used by the partial ready index.                                                                             |
+| `payload`     | `jsonb`                     | Benchmark payload stored on the same mutable row, intentionally representing the conventional wide-table shape.              |
+| `status`      | `text`                      | Mutable state used by the partial ready index. The current workload writes `ready`, `active`, and `succeeded`.               |
+| `attempt`     | `integer`                   | Attempt counter placeholder, defaulting to `1`. The success-path baseline does not currently exercise conventional retries.  |
+| `fence_token` | `bigint`                    | Mutable ownership-generation placeholder incremented on claim. The baseline does not yet enforce full lease/fence semantics. |
+| `result`      | `jsonb`                     | Successful result written on the lifetime job row.                                                                           |
+| `created_at`  | `timestamptz`               | Row creation time.                                                                                                           |
+| `updated_at`  | `timestamptz`               | Last claim or completion mutation time.                                                                                      |
+
 For each design and round the report includes:
 
 - jobs completed per second;
@@ -19,6 +33,36 @@ For each design and round the report includes:
 - `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` for a populated ready-queue claim.
 
 Terminal rows and history are retained between rounds. This is intentional. It lets later rounds show whether claim latency, storage, plans, and dead tuples change as lifetime history grows.
+
+## Benchmark JSON field dictionary
+
+The top-level report contains:
+
+| Field             | Type            | Purpose                                                                                                             |
+| ----------------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `generatedAt`     | ISO 8601 string | Client wall-clock time when report construction began. Use it to correlate the run with system and PostgreSQL logs. |
+| `database`        | `string`        | Full result of PostgreSQL `version()`, including server version, platform, and compiler information.                |
+| `settings.jobs`   | `number`        | Jobs executed per design in each round.                                                                             |
+| `settings.rounds` | `number`        | Number of retained-history rounds requested.                                                                        |
+| `results`         | result array    | One result for each design in each round, ordered conventional then hybrid for round 1, then round 2, and so on.    |
+
+Every entry in `results` contains:
+
+| Field                 | Type                       | Purpose                                                                                                                                                                                                                                                |
+| --------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `design`              | `conventional \| hybrid`   | Workload implementation that produced this result.                                                                                                                                                                                                     |
+| `round`               | `number`                   | One-based retained-history round number. Rows from prior rounds still exist when this round runs.                                                                                                                                                      |
+| `jobs`                | `number`                   | Number of jobs enqueued, claimed, and completed by this design in this round.                                                                                                                                                                          |
+| `throughputPerSecond` | `number`                   | `jobs / elapsed wall-clock seconds` for enqueue, all claims, and all completions in the round. It is end-to-end round throughput, not claim-only throughput.                                                                                           |
+| `claimLatencyMs.p50`  | `number`                   | Nearest-rank 50th percentile of client-observed claim query durations.                                                                                                                                                                                 |
+| `claimLatencyMs.p95`  | `number`                   | Nearest-rank 95th percentile of client-observed claim query durations.                                                                                                                                                                                 |
+| `claimLatencyMs.p99`  | `number`                   | Nearest-rank 99th percentile of client-observed claim query durations. This is the primary long-tail dispatch signal.                                                                                                                                  |
+| `relationBytes`       | `number`                   | Sum of `pg_total_relation_size` for ordinary and partitioned relations in the design schema after the round. It includes heap, indexes, and auxiliary storage and can double-count parent metadata only where PostgreSQL reports non-zero parent size. |
+| `deadTuples`          | `number`                   | Sum of PostgreSQL's estimated `n_dead_tup` for design relations after forcing a statistics flush. It is approximate and may change after vacuum.                                                                                                       |
+| `walBytes`            | `number`                   | Difference between WAL locations at round start and end. Unrelated writes to the same PostgreSQL cluster contaminate this value.                                                                                                                       |
+| `claimPlan`           | PostgreSQL JSON plan array | Raw `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` output for a claim select while the ready set is populated. Its nested fields are PostgreSQL-version-specific and are intentionally preserved without reshaping.                                         |
+
+The benchmark currently stores percentile summaries, not every raw claim sample. A publication-grade harness should also persist raw or histogram latency data so percentiles can be recomputed independently.
 
 ## Important limitation
 
