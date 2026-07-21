@@ -1,11 +1,13 @@
 import type {
   ClaimedJob,
   EnqueueOptions,
+  EnqueueRequest,
   JobSnapshot,
   Json,
   Queryable,
   QueueHealth,
 } from "./types.js";
+import { MAX_ENQUEUE_BATCH_SIZE } from "./types.js";
 
 type ClaimRow = {
   job_id: string;
@@ -43,19 +45,31 @@ export class Queue {
     options: EnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<string> {
-    // Supplying an active PoolClient makes enqueue participate in the caller's application
-    // transaction. The function does not begin or commit a transaction on the caller's behalf.
+    return (await this.enqueueMany([{ type, payload, options }], transaction))[0]!;
+  }
+
+  async enqueueMany(
+    requests: readonly EnqueueRequest[],
+    transaction: Queryable = this.database,
+  ): Promise<string[]> {
+    if (requests.length === 0) return [];
+    if (requests.length > MAX_ENQUEUE_BATCH_SIZE) {
+      throw new RangeError(`enqueueMany accepts at most ${MAX_ENQUEUE_BATCH_SIZE} requests`);
+    }
+
+    // Supplying an active PoolClient makes the whole batch participate in the caller's transaction.
+    const input = requests.map(({ type, payload, options = {} }) => ({
+      queue: options.queue ?? this.defaultQueue,
+      type,
+      payload,
+      runAt: (options.runAt ?? new Date()).toISOString(),
+      maxAttempts: options.maxAttempts ?? 3,
+    }));
     const result = await transaction.query<{ job_id: string }>(
-      "SELECT ironshift.enqueue_v1($1, $2, $3::jsonb, $4, $5) AS job_id",
-      [
-        options.queue ?? this.defaultQueue,
-        type,
-        JSON.stringify(payload),
-        options.runAt ?? new Date(),
-        options.maxAttempts ?? 3,
-      ],
+      "SELECT job_id FROM ironshift.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+      [JSON.stringify(input)],
     );
-    return result.rows[0]!.job_id;
+    return result.rows.map((row) => row.job_id);
   }
 
   async promote(limit = 100): Promise<number> {

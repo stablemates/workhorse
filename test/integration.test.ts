@@ -1,7 +1,13 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { InjectedCrashError, installSchema, Queue, Worker } from "../src/index.js";
+import {
+  InjectedCrashError,
+  installSchema,
+  MAX_ENQUEUE_BATCH_SIZE,
+  Queue,
+  Worker,
+} from "../src/index.js";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../src/local-database.js";
 
 const databaseUrl = localDatabaseUrl("test");
@@ -26,6 +32,109 @@ afterAll(async () => {
 });
 
 describe("hybrid queue protocol", () => {
+  it("enqueues a mixed batch atomically while preserving result and ready FIFO order", async () => {
+    const runAt = new Date(Date.now() + 60_000);
+    const ids = await queue.enqueueMany([
+      { type: "first", payload: { order: 1 } },
+      { type: "later", payload: { order: 2 }, options: { runAt } },
+      { type: "third", payload: { order: 3 }, options: { maxAttempts: 5 } },
+    ]);
+
+    expect(ids).toHaveLength(3);
+    expect((await queue.getJob(ids[0]!))?.type).toBe("first");
+    expect((await queue.getJob(ids[1]!))?.state).toBe("scheduled");
+    expect((await queue.getJob(ids[2]!))?.maxAttempts).toBe(5);
+    expect((await queue.claim("worker-a"))?.id).toBe(ids[0]);
+    expect((await queue.claim("worker-b"))?.id).toBe(ids[2]);
+
+    const events = await pool.query<{ job_id: string; event_type: string }>(
+      "SELECT job_id, event_type FROM ironshift.job_event WHERE event_type = 'enqueued' ORDER BY event_id",
+    );
+    expect(events.rows).toEqual(ids.map((jobId) => ({ job_id: jobId, event_type: "enqueued" })));
+  });
+
+  it("treats an empty enqueue batch as a query-free no-op", async () => {
+    const transaction = { query: async () => Promise.reject(new Error("query must not run")) };
+    await expect(queue.enqueueMany([], transaction)).resolves.toEqual([]);
+  });
+
+  it("bounds batch size client-side and classifies a batch against one timestamp", async () => {
+    const transaction = { query: async () => Promise.reject(new Error("query must not run")) };
+    const tooMany = Array.from({ length: MAX_ENQUEUE_BATCH_SIZE + 1 }, () => ({
+      type: "bounded",
+      payload: {},
+    }));
+    await expect(queue.enqueueMany(tooMany, transaction)).rejects.toThrow(
+      `at most ${MAX_ENQUEUE_BATCH_SIZE}`,
+    );
+
+    const runAt = new Date(Date.now() + 20);
+    const ids = await queue.enqueueMany(
+      Array.from({ length: MAX_ENQUEUE_BATCH_SIZE }, (_, order) => ({
+        type: "same-boundary",
+        payload: { order },
+        options: { runAt },
+      })),
+    );
+    const states = await pool.query<{ state: string }>(
+      "SELECT DISTINCT state FROM ironshift.job_current WHERE job_id = ANY($1::uuid[])",
+      [ids],
+    );
+    expect(states.rows).toHaveLength(1);
+  });
+
+  it("rolls back the entire batch for invalid input and participates in caller transactions", async () => {
+    await expect(
+      queue.enqueueMany([
+        { type: "valid", payload: {} },
+        { type: "", payload: {} },
+      ]),
+    ).rejects.toThrow("each request requires");
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).rows[0].count,
+    ).toBe(0);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await queue.enqueueMany([{ type: "rolled-back", payload: {} }], client);
+      await client.query("ROLLBACK");
+    } finally {
+      client.release();
+    }
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).rows[0].count,
+    ).toBe(0);
+  });
+
+  it("notifies once per distinct queue containing ready jobs", async () => {
+    const alpha = "enqueue-many-integration-alpha";
+    const beta = "enqueue-many-integration-beta";
+    const listener = await pool.connect();
+    const notifications: string[] = [];
+    listener.on("notification", (message) => notifications.push(message.payload ?? ""));
+    try {
+      await listener.query("LISTEN ironshift_jobs");
+      await queue.enqueueMany([
+        { type: "a", payload: {}, options: { queue: alpha } },
+        { type: "b", payload: {}, options: { queue: alpha } },
+        { type: "c", payload: {}, options: { queue: beta } },
+        {
+          type: "later",
+          payload: {},
+          options: { queue: "scheduled-only", runAt: new Date(Date.now() + 60_000) },
+        },
+      ]);
+      await sleep(50);
+      const relevant = notifications.filter((payload) => payload === alpha || payload === beta);
+      expect(relevant).toHaveLength(2);
+      expect(new Set(relevant)).toEqual(new Set([alpha, beta]));
+    } finally {
+      await listener.query("UNLISTEN ironshift_jobs");
+      listener.release();
+    }
+  });
+
   it("participates in a caller transaction", async () => {
     const client = await pool.connect();
     try {

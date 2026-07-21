@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Json, Queryable } from "../src/types.js";
+import { MAX_ENQUEUE_BATCH_SIZE } from "../src/types.js";
+import type { EnqueueRequest, Json, Queryable } from "../src/types.js";
 
 export const conventionalSchema = "ironshift_benchmark_conventional";
 export const conventionalSqlFile = "benchmark-conventional.sql";
@@ -105,17 +106,29 @@ export class ConventionalQueue {
     options: ConventionalEnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<string> {
+    return (await this.enqueueMany([{ type, payload, options }], transaction))[0]!;
+  }
+
+  async enqueueMany(
+    requests: readonly EnqueueRequest[],
+    transaction: Queryable = this.database,
+  ): Promise<string[]> {
+    if (requests.length === 0) return [];
+    if (requests.length > MAX_ENQUEUE_BATCH_SIZE) {
+      throw new RangeError(`enqueueMany accepts at most ${MAX_ENQUEUE_BATCH_SIZE} requests`);
+    }
+    const input = requests.map(({ type, payload, options = {} }) => ({
+      queue: options.queue ?? this.defaultQueue,
+      type,
+      payload,
+      runAt: (options.runAt ?? new Date()).toISOString(),
+      maxAttempts: options.maxAttempts ?? 3,
+    }));
     const result = await transaction.query<{ job_id: string }>(
-      `SELECT ${conventionalSchema}.enqueue_v1($1, $2, $3::jsonb, $4, $5) AS job_id`,
-      [
-        options.queue ?? this.defaultQueue,
-        type,
-        JSON.stringify(payload),
-        options.runAt ?? new Date(),
-        options.maxAttempts ?? 3,
-      ],
+      `SELECT job_id FROM ${conventionalSchema}.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
+      [JSON.stringify(input)],
     );
-    return result.rows[0]!.job_id;
+    return result.rows.map((row) => row.job_id);
   }
 
   async promote(limit = 100): Promise<number> {

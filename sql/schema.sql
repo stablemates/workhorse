@@ -105,8 +105,90 @@ CREATE TABLE IF NOT EXISTS ironshift.attempt_history_default
 CREATE INDEX IF NOT EXISTS attempt_history_job_idx
   ON ironshift.attempt_history (job_id, attempt, occurred_at);
 
--- Accept a job atomically with its initial current state, dispatch projection, and audit event.
--- When called through an existing application transaction, enqueue commits or rolls back with it.
+-- Accept up to 1,000 jobs through one JSONB argument and one data-modifying CTE statement. Array
+-- ordinality is retained through identity allocation and the returned rows, preserving input FIFO.
+CREATE OR REPLACE FUNCTION ironshift.enqueue_many_v1(p_requests jsonb)
+RETURNS TABLE (ordinal integer, job_id uuid)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_count integer;
+  v_now timestamptz := clock_timestamp();
+BEGIN
+  IF p_requests IS NULL OR jsonb_typeof(p_requests) <> 'array' THEN
+    RAISE EXCEPTION 'requests must be a JSON array';
+  END IF;
+  v_count := jsonb_array_length(p_requests);
+  IF v_count > 1000 THEN
+    RAISE EXCEPTION 'enqueue batch exceeds maximum size of 1000';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(p_requests) request
+    WHERE COALESCE(request->>'queue', '') = ''
+       OR COALESCE(request->>'type', '') = ''
+       OR COALESCE((request->>'maxAttempts')::integer, 3) NOT BETWEEN 1 AND 100
+       OR request->>'runAt' IS NULL
+  ) THEN
+    RAISE EXCEPTION 'each request requires non-empty queue/type/runAt and maxAttempts between 1 and 100';
+  END IF;
+
+  RETURN QUERY
+  WITH parsed AS MATERIALIZED (
+    SELECT ordinality::integer AS ordinal,
+           gen_random_uuid() AS job_id,
+           request->>'queue' AS queue_name,
+           request->>'type' AS job_type,
+           COALESCE(request->'payload', 'null'::jsonb) AS payload,
+           (request->>'runAt')::timestamptz AS run_at,
+           COALESCE((request->>'maxAttempts')::integer, 3) AS max_attempts,
+           CASE WHEN (request->>'runAt')::timestamptz <= v_now
+             THEN 'ready' ELSE 'scheduled' END AS state
+    FROM jsonb_array_elements(p_requests) WITH ORDINALITY input(request, ordinality)
+  ), inserted_jobs AS (
+    INSERT INTO ironshift.job(id, queue_name, job_type, payload, max_attempts)
+      SELECT p.job_id, p.queue_name, p.job_type, p.payload, p.max_attempts
+      FROM parsed p ORDER BY p.ordinal
+    RETURNING id
+  ), inserted_current AS (
+    INSERT INTO ironshift.job_current AS current_job(job_id, state, run_at)
+      SELECT p.job_id, p.state, p.run_at
+      FROM parsed p JOIN inserted_jobs j ON j.id = p.job_id
+      ORDER BY p.ordinal
+    RETURNING current_job.job_id
+  ), inserted_ready AS (
+    INSERT INTO ironshift.ready_job AS ready_job(job_id, queue_name, attempt)
+      SELECT p.job_id, p.queue_name, 1
+      FROM parsed p JOIN inserted_current c ON c.job_id = p.job_id
+      WHERE p.state = 'ready' ORDER BY p.ordinal
+    RETURNING ready_job.job_id, ready_job.queue_name
+  ), inserted_scheduled AS (
+    INSERT INTO ironshift.scheduled_job AS scheduled_job(job_id, queue_name, attempt, run_at)
+      SELECT p.job_id, p.queue_name, 1, p.run_at
+      FROM parsed p JOIN inserted_current c ON c.job_id = p.job_id
+      WHERE p.state = 'scheduled' ORDER BY p.ordinal
+    RETURNING scheduled_job.job_id
+  ), inserted_events AS (
+    INSERT INTO ironshift.job_event AS job_event(job_id, event_type, details)
+      SELECT p.job_id, 'enqueued', jsonb_build_object('state', p.state, 'run_at', p.run_at)
+      FROM parsed p JOIN inserted_current c ON c.job_id = p.job_id
+      ORDER BY p.ordinal
+    RETURNING job_event.job_id
+  ), notifications AS MATERIALIZED (
+    SELECT pg_notify('ironshift_jobs', queue_name)
+    FROM (SELECT DISTINCT queue_name FROM inserted_ready) ready_queues
+  )
+  SELECT p.ordinal, p.job_id
+  FROM parsed p
+  WHERE (SELECT count(*) FROM inserted_scheduled) >= 0
+    AND (SELECT count(*) FROM inserted_events) >= 0
+    AND (SELECT count(*) FROM notifications) >= 0
+  ORDER BY p.ordinal;
+END;
+$$;
+
+-- The single-row API delegates to the batch core so validation, events, FIFO, and notifications
+-- cannot drift between enqueue entry points.
 CREATE OR REPLACE FUNCTION ironshift.enqueue_v1(
   p_queue_name text,
   p_job_type text,
@@ -114,42 +196,18 @@ CREATE OR REPLACE FUNCTION ironshift.enqueue_v1(
   p_run_at timestamptz DEFAULT clock_timestamp(),
   p_max_attempts integer DEFAULT 3
 ) RETURNS uuid
-LANGUAGE plpgsql
+LANGUAGE sql
 AS $$
-DECLARE
-  v_job_id uuid;
-  v_now timestamptz := clock_timestamp();
-  v_state text;
-BEGIN
-  IF p_queue_name IS NULL OR p_queue_name = '' THEN
-    RAISE EXCEPTION 'queue_name must not be empty';
-  END IF;
-  IF p_job_type IS NULL OR p_job_type = '' THEN
-    RAISE EXCEPTION 'job_type must not be empty';
-  END IF;
-  IF p_max_attempts NOT BETWEEN 1 AND 100 THEN
-    RAISE EXCEPTION 'max_attempts must be between 1 and 100';
-  END IF;
-
-  v_state := CASE WHEN p_run_at <= v_now THEN 'ready' ELSE 'scheduled' END;
-  INSERT INTO ironshift.job(queue_name, job_type, payload, max_attempts)
-    VALUES (p_queue_name, p_job_type, COALESCE(p_payload, 'null'::jsonb), p_max_attempts)
-    RETURNING id INTO v_job_id;
-  INSERT INTO ironshift.job_current(job_id, state, run_at)
-    VALUES (v_job_id, v_state, p_run_at);
-  IF v_state = 'ready' THEN
-    INSERT INTO ironshift.ready_job(job_id, queue_name, attempt)
-      VALUES (v_job_id, p_queue_name, 1);
-    -- NOTIFY is delivered after commit and is only a wake hint. The ready row is the durable fact.
-    PERFORM pg_notify('ironshift_jobs', p_queue_name);
-  ELSE
-    INSERT INTO ironshift.scheduled_job(job_id, queue_name, attempt, run_at)
-      VALUES (v_job_id, p_queue_name, 1, p_run_at);
-  END IF;
-  INSERT INTO ironshift.job_event(job_id, event_type, details)
-    VALUES (v_job_id, 'enqueued', jsonb_build_object('state', v_state, 'run_at', p_run_at));
-  RETURN v_job_id;
-END;
+  SELECT job_id
+  FROM ironshift.enqueue_many_v1(jsonb_build_array(jsonb_build_object(
+    'queue', p_queue_name,
+    'type', p_job_type,
+    'payload', COALESCE(p_payload, 'null'::jsonb),
+    'runAt', p_run_at,
+    'maxAttempts', p_max_attempts
+  )))
+  ORDER BY ordinal
+  LIMIT 1;
 $$;
 
 -- Move a bounded due batch from scheduled to ready. SKIP LOCKED lets many promoters cooperate
