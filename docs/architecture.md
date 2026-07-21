@@ -556,14 +556,23 @@ These are diagnostic signals, not alert thresholds. Long-run validation must rec
 
 ## Development database lifecycle
 
-There is no incremental migration system during this validation phase. `sql/schema.sql` is canonical. After a schema change, recreate the dedicated database:
+There is no incremental migration system during this validation phase. `sql/schema.sql` is canonical. Repository tooling separates mutable local workloads by purpose so a test or benchmark cannot inherit an application's generic `DATABASE_URL`.
+
+| Configuration field            | Default database                  | Purpose                                                                                                                                     |
+| ------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                 | `ironshift_dev` in `.env.example` | Application-owned runtime connection string. The library and packaged health CLI may use it. Purpose-specific repository scripts ignore it. |
+| `IRONSHIFT_DEV_DATABASE_URL`   | `ironshift_dev`                   | Manual development and queue-health inspection. `pnpm db:reset` is an alias for this role's reset.                                          |
+| `IRONSHIFT_TEST_DATABASE_URL`  | `ironshift_test`                  | Integration-suite isolation. Tests drop the `ironshift` schema and truncate queue tables only in this database.                             |
+| `IRONSHIFT_BENCH_DATABASE_URL` | `ironshift_bench`                 | Benchmark isolation. The harness truncates queue and baseline tables at startup, so it must never share the development database.           |
+| `IRONSHIFT_ALLOW_REMOTE_RESET` | unset                             | Escape hatch for an intentional remote reset. Only the exact value `1` bypasses the localhost guard. Purpose suffix checks still apply.     |
+
+After a schema change, recreate all local databases:
 
 ```bash
-export DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test
-pnpm db:reset
+pnpm db:reset:all
 ```
 
-The reset tool requires an explicit URL, a database name ending in `_test`, confirmation from the package script, and localhost unless `IRONSHIFT_ALLOW_REMOTE_RESET=1` is deliberately set.
+Individual resets are available as `pnpm db:reset:dev`, `pnpm db:reset:test`, and `pnpm db:reset:bench`. The reset CLI requires an explicit `--database` purpose and internal `--yes` confirmation. It then verifies the matching `_dev`, `_test`, or `_bench` database-name suffix before terminating connections or issuing `DROP DATABASE`. Local URLs have safe defaults, while each purpose can be overridden independently through the field above.
 
 ## Architectural invariants
 

@@ -23,14 +23,19 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:integration": "vitest run test/integration.test.ts",
-    "health": "tsx src/cli/health.ts",
+    "health": "tsx src/cli/health.ts --database dev",
+    "health:bench": "tsx src/cli/health.ts --database bench",
     "benchmark": "tsx src/cli/benchmark.ts",
     "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin src test benchmarks vitest.config.ts",
     "lint:fix": "oxlint --fix --import-plugin --vitest-plugin src test benchmarks vitest.config.ts",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
-    "db:reset": "tsx src/cli/reset-db.ts --yes"
+    "db:reset": "pnpm db:reset:dev",
+    "db:reset:dev": "tsx src/cli/reset-db.ts --database dev --yes",
+    "db:reset:test": "tsx src/cli/reset-db.ts --database test --yes",
+    "db:reset:bench": "tsx src/cli/reset-db.ts --database bench --yes",
+    "db:reset:all": "pnpm db:reset:dev && pnpm db:reset:test && pnpm db:reset:bench"
   },
   "dependencies": {
     "pg": "^8.16.3"

@@ -1,0 +1,66 @@
+/** Local database roles used by repository tooling. Application code may still use DATABASE_URL. */
+export type LocalDatabasePurpose = "dev" | "test" | "bench";
+
+interface LocalDatabaseDefinition {
+  /** Environment override dedicated to this database role. */
+  environmentVariable: string;
+  /** Required database-name suffix, used to prevent destructive cross-purpose commands. */
+  suffix: string;
+  /** Zero-configuration URL matching the local role documented in the README. */
+  defaultUrl: string;
+}
+
+const localDatabaseDefinitions: Record<LocalDatabasePurpose, LocalDatabaseDefinition> = {
+  dev: {
+    environmentVariable: "IRONSHIFT_DEV_DATABASE_URL",
+    suffix: "_dev",
+    defaultUrl: "postgres://ironshift:ironshift@localhost:5432/ironshift_dev",
+  },
+  test: {
+    environmentVariable: "IRONSHIFT_TEST_DATABASE_URL",
+    suffix: "_test",
+    defaultUrl: "postgres://ironshift:ironshift@localhost:5432/ironshift_test",
+  },
+  bench: {
+    environmentVariable: "IRONSHIFT_BENCH_DATABASE_URL",
+    suffix: "_bench",
+    defaultUrl: "postgres://ironshift:ironshift@localhost:5432/ironshift_bench",
+  },
+};
+
+/** Resolve a repository-tooling URL without allowing one purpose to inherit another's URL. */
+export function localDatabaseUrl(
+  purpose: LocalDatabasePurpose,
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const definition = localDatabaseDefinitions[purpose];
+  return environment[definition.environmentVariable] ?? definition.defaultUrl;
+}
+
+/** Decode the database component once so guards and status messages agree on its name. */
+export function databaseName(databaseUrl: string): string {
+  const name = decodeURIComponent(new URL(databaseUrl).pathname.slice(1));
+  if (!name) throw new Error("Database URL must include a database name");
+  return name;
+}
+
+/**
+ * Protect destructive tooling from crossing database roles. A custom URL is allowed, but its
+ * database name must retain the role suffix so intent remains visible to operators and scripts.
+ */
+export function assertLocalDatabasePurpose(
+  databaseUrl: string,
+  purpose: LocalDatabasePurpose,
+): void {
+  const name = databaseName(databaseUrl);
+  const suffix = localDatabaseDefinitions[purpose].suffix;
+  if (!name.endsWith(suffix)) {
+    throw new Error(
+      `Refusing to use database ${JSON.stringify(name)} for ${purpose}: its name must end in ${suffix}`,
+    );
+  }
+}
+
+export function isLocalDatabasePurpose(value: string): value is LocalDatabasePurpose {
+  return value === "dev" || value === "test" || value === "bench";
+}

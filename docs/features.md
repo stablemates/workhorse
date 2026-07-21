@@ -134,7 +134,8 @@ This document is the authoritative snapshot of what the Ironshift validation MVP
 | PostgreSQL as the only durable dependency | Supported     | Queue identity, dispatch, leases, and history live in PostgreSQL.                                                                              |
 | PostgreSQL 15+ development target         | Partial       | The schema is designed for PostgreSQL 15+, but the current validation ran on PostgreSQL 18 and no version matrix exists.                       |
 | Canonical schema installation             | Supported     | `sql/schema.sql` creates the validation schema and versioned transition functions.                                                             |
-| Guarded test database reset               | Supported     | `pnpm db:reset` requires an explicit URL, `_test` database suffix, confirmation, and localhost unless explicitly overridden.                   |
+| Purpose-isolated local databases          | Supported     | Development, integration tests, and destructive benchmarks default to separate `_dev`, `_test`, and `_bench` databases and environment fields. |
+| Guarded database reset                    | Supported     | Reset commands require a declared purpose, matching database suffix, confirmation, and localhost unless explicitly overridden.                 |
 | Incremental production migrations         | Not supported | Development recreates the database after schema changes. There is no upgrade/downgrade migration chain.                                        |
 | `pg` Pool and PoolClient                  | Supported     | The TypeScript client uses a minimal `Queryable` compatible with node-postgres pools and transaction clients.                                  |
 | ORM transaction adapters                  | Not supported | No Prisma, Drizzle, Kysely, Knex, or Sequelize package exists. A compatible raw query handle may work but is not a supported adapter.          |

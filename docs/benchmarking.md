@@ -76,13 +76,13 @@ The conventional implementation is currently a success-path baseline. It does no
 - an `ironshift` login role that can create databases
 - enough free disk and WAL capacity for the selected workload
 
-Set one connection string for all commands:
+The benchmark defaults to its isolated local database. Override only that role when needed:
 
 ```bash
-export DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test
+export IRONSHIFT_BENCH_DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_bench
 ```
 
-The benchmark is destructive to Ironshift and benchmark tables in that database. Use a dedicated database only.
+The benchmark is destructive to Ironshift and benchmark tables in that database. It rejects database names that do not end in `_bench`. It does not read `DATABASE_URL`, `IRONSHIFT_DEV_DATABASE_URL`, or `IRONSHIFT_TEST_DATABASE_URL`.
 
 ## Discover CLI options
 
@@ -103,7 +103,7 @@ Options:
 Reset the database after any schema change, then run a small workload:
 
 ```bash
-pnpm db:reset
+pnpm db:reset:bench
 pnpm benchmark -- --jobs 25 --rounds 1 --output benchmark-smoke.json
 ```
 
@@ -124,7 +124,7 @@ jq '.results[] | {
 Use enough rounds to retain visible history without committing to a long run:
 
 ```bash
-pnpm db:reset
+pnpm db:reset:bench
 pnpm benchmark -- --jobs 1000 --rounds 5 --output benchmark-dev.json
 ```
 
@@ -159,7 +159,7 @@ Look for the slope across rounds, not just the fastest single result:
 Start conservatively and monitor disk/WAL usage in another terminal:
 
 ```bash
-pnpm db:reset
+pnpm db:reset:bench
 pnpm benchmark -- --jobs 100000 --rounds 10 --output benchmark-churn-100k-x10.json
 ```
 
@@ -167,7 +167,7 @@ Monitor PostgreSQL while it runs. Stop the loop with Ctrl-C:
 
 ```bash
 while true; do
-  psql "$DATABASE_URL" -x <<'SQL'
+  psql "$IRONSHIFT_BENCH_DATABASE_URL" -x <<'SQL'
 SELECT now(),
        pg_size_pretty(pg_database_size(current_database())) AS database_size,
        pg_notification_queue_usage() AS notification_queue_usage;
@@ -195,8 +195,8 @@ node --version > benchmark-artifacts/node-version.txt
 pnpm --version > benchmark-artifacts/pnpm-version.txt
 uname -a > benchmark-artifacts/uname.txt
 lscpu > benchmark-artifacts/lscpu.txt
-psql "$DATABASE_URL" -Atc "SELECT version()" > benchmark-artifacts/postgres-version.txt
-psql "$DATABASE_URL" -Atc "SELECT name || '=' || setting || COALESCE(unit, '')
+psql "$IRONSHIFT_BENCH_DATABASE_URL" -Atc "SELECT version()" > benchmark-artifacts/postgres-version.txt
+psql "$IRONSHIFT_BENCH_DATABASE_URL" -Atc "SELECT name || '=' || setting || COALESCE(unit, '')
   FROM pg_settings
   WHERE name IN (
     'shared_buffers', 'work_mem', 'maintenance_work_mem',
@@ -230,15 +230,15 @@ The hybrid claim should use `ready_job_claim_idx`. The conventional claim should
 Before and after a benchmark:
 
 ```bash
-pnpm exec tsx src/cli/health.ts > health-before.json
+pnpm exec tsx src/cli/health.ts --database bench > health-before.json
 pnpm benchmark -- --jobs 1000 --rounds 5 --output benchmark-dev.json
-pnpm exec tsx src/cli/health.ts > health-after.json
+pnpm exec tsx src/cli/health.ts --database bench > health-after.json
 ```
 
-`pnpm health` is convenient for humans, but pnpm prints its package script banner. Use the executable directly when stdout must contain only JSON:
+`pnpm health:bench` is convenient for humans, but pnpm prints its package script banner. Use the executable directly when stdout must contain only JSON:
 
 ```bash
-pnpm exec tsx src/cli/health.ts > health.json
+pnpm exec tsx src/cli/health.ts --database bench > health.json
 ```
 
 Compare relation churn:
@@ -261,7 +261,7 @@ jq '.relations[] | {
 Rounds inside one run intentionally retain history. Separate experiments should begin from a clean database:
 
 ```bash
-pnpm db:reset
+pnpm db:reset:bench
 ```
 
 Do not reset between rounds. Doing so removes the retained-history effect the benchmark is intended to observe.
@@ -286,17 +286,17 @@ Until these exist, the harness validates mechanics and produces development evid
 
 ## Troubleshooting
 
-### `DATABASE_URL is required`
+### Override points at the wrong database
 
-Export it in the current shell:
+Use the benchmark-specific variable and preserve the `_bench` suffix:
 
 ```bash
-export DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test
+export IRONSHIFT_BENCH_DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/custom_bench
 ```
 
 ### Reset refuses the database
 
-The database name must end in `_test`. Remote resets also require `IRONSHIFT_ALLOW_REMOTE_RESET=1`. These guards are intentional.
+The benchmark database name must end in `_bench`. The reset command additionally requires the purpose to match that suffix. Remote resets also require `IRONSHIFT_ALLOW_REMOTE_RESET=1`. These guards are intentional.
 
 ### Permission denied for `pg_current_wal_lsn` or statistics
 
@@ -304,7 +304,7 @@ Run with a local development role that can read the required PostgreSQL statisti
 
 ### `actual_rows` is zero
 
-Make sure the schema is current with `pnpm db:reset`, use at least one job, and check whether the claim predicate or queue name changed.
+Make sure the schema is current with `pnpm db:reset:bench`, use at least one job, and check whether the claim predicate or queue name changed.
 
 ### Results vary between runs
 
