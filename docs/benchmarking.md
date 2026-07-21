@@ -32,7 +32,7 @@ For each worker-concurrency level and independent repetition, both designs are r
 - `pg_stat_io` deltas where supported;
 - `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` for the populated claim path.
 
-The suite also performs sustained closed-loop churn. It repeatedly enqueues a batch, drains it with concurrent workers, and captures periodic relation, schema, and activity samples.
+The suite also performs sustained producer-consumer churn. A producer continuously enqueues batches while concurrent workers claim and complete jobs; after the timed production window closes, workers drain the remaining backlog. Periodic relation, schema, and activity samples are captured while production and consumption overlap. The JSON records this as `workloadModel: "concurrent-producer-consumer"`.
 
 ### Lifecycle suite
 
@@ -42,7 +42,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | --------------------------- | -------------------------------------------------------------------- |
 | `scheduled-promotion-drift` | bounded promotion batches and due-time drift distribution            |
 | `heartbeat-fencing`         | accepted heartbeat cost and stale-fence rejection cost               |
-| `crash-before-completion`   | durable active lease after an injected worker crash                  |
+| `crash-before-completion`   | durable state at all five worker crash boundaries                    |
 | `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection  |
 | `retry-paths`               | immediate, delayed, promoted, and terminal retry transitions         |
 | `retention-pruning`         | bounded history retention behavior and retained job identity         |
@@ -168,7 +168,8 @@ Top-level fields:
 - `schemaVersion`: report contract version, currently `2`;
 - `generatedAt`: client wall-clock timestamp;
 - `suite` and `profile`: resolved run selection;
-- `environment`: database name and PostgreSQL version;
+- `environment`: database name, PostgreSQL version, and material PostgreSQL settings;
+- `provenance`: exact command arguments, Node/OS/CPU/memory runtime metadata, source commit, and dirty-tree state;
 - `configuration`: comparative and lifecycle inputs;
 - `comparative`: independent runs, confidence summaries, and churn telemetry when selected;
 - `lifecycle`: scenario metrics and assertions when selected.

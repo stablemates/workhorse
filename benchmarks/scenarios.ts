@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { InjectedCrashError, Queue, Worker } from "../src/index.js";
-import type { Queryable, QueueHealth } from "../src/index.js";
+import type { Failpoint, Queryable, QueueHealth } from "../src/index.js";
 
 export const operationalScenarioNames = [
   "scheduled-promotion-drift",
@@ -56,7 +56,7 @@ export interface OperationalScenarioOptions {
   leaseMs?: number;
   /** Delayed retry interval. */
   retryDelayMs?: number;
-  /** Historical rows requested from prune_history_v1 per call. */
+  /** Upper bound on terminal jobs seeded for the monthly retirement scenario. */
   pruneLimit?: number;
   /** Queue prefix. Every scenario appends its stable scenario name. */
   queuePrefix?: string;
@@ -124,13 +124,13 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   },
   {
     name: "crash-before-completion",
-    purpose: "Model deterministic process disappearance after claim and handler execution.",
+    purpose: "Model deterministic process disappearance at every worker crash boundary.",
     invariants: [
-      "the beforeComplete failpoint raises InjectedCrashError",
-      "the claimed job remains active with one durable lease",
-      "no attempt is closed by the simulated crash",
+      "every configured failpoint raises InjectedCrashError",
+      "pre-completion crashes retain an active durable lease without closing the attempt",
+      "an afterComplete crash preserves the succeeded state and closed attempt",
     ],
-    metrics: ["handlerRuns", "activeLeases", "attemptHistoryRows"],
+    metrics: ["boundaries", "handlerRuns", "activeCrashes", "completedCrashes"],
   },
   {
     name: "lease-expiry-recovery",
@@ -154,11 +154,11 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   },
   {
     name: "retention-pruning",
-    purpose: "Measure bounded history retention through the versioned prune_history_v1 protocol.",
+    purpose: "Measure completed-month history retirement through the versioned partition protocol.",
     invariants: [
-      "seeded terminal jobs create event and attempt history",
-      "prune_history_v1 reports bounded removals",
-      "history older than the cutoff is removed without deleting current job identity",
+      "seeded terminal jobs create event and attempt history in a completed month",
+      "retiring the completed month removes its history partitions",
+      "history retirement does not delete current job identity",
     ],
     metrics: ["seededJobs", "historyBefore", "pruned", "historyAfter", "retainedJobs"],
   },
@@ -168,6 +168,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     invariants: [
       "ready and scheduled depths match the seed",
       "one active lease is expired",
+      "the expired lease explicitly marks the snapshot as degraded",
       "state counts and protocol version remain internally consistent",
     ],
     metrics: [
@@ -175,6 +176,8 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "scheduledDepth",
       "activeLeases",
       "expiredLeases",
+      "degraded",
+      "degradationReason",
       "schemaVersion",
       "snapshotMs",
     ],
@@ -428,44 +431,125 @@ async function crashBeforeCompletion(
   await reset(context.pool);
   const queue = new Queue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
+  const boundaries: readonly {
+    failpoint: Failpoint;
+    expectedHandlerRuns: number;
+    expectedState: "active" | "succeeded";
+    expectedLeases: number;
+    expectedAttemptHistory: number;
+  }[] = [
+    {
+      failpoint: "afterClaim",
+      expectedHandlerRuns: 0,
+      expectedState: "active",
+      expectedLeases: 1,
+      expectedAttemptHistory: 0,
+    },
+    {
+      failpoint: "beforeHandler",
+      expectedHandlerRuns: 0,
+      expectedState: "active",
+      expectedLeases: 1,
+      expectedAttemptHistory: 0,
+    },
+    {
+      failpoint: "afterHandler",
+      expectedHandlerRuns: 1,
+      expectedState: "active",
+      expectedLeases: 1,
+      expectedAttemptHistory: 0,
+    },
+    {
+      failpoint: "beforeComplete",
+      expectedHandlerRuns: 1,
+      expectedState: "active",
+      expectedLeases: 1,
+      expectedAttemptHistory: 0,
+    },
+    {
+      failpoint: "afterComplete",
+      expectedHandlerRuns: 1,
+      expectedState: "succeeded",
+      expectedLeases: 0,
+      expectedAttemptHistory: 1,
+    },
+  ];
   let handlerRuns = 0;
-  const jobId = await queue.enqueue("crash", { value: 1 }, { maxAttempts: 2 });
-  const worker = new Worker(queue, {
-    queue: context.queueName,
-    workerId: "crash-worker",
-    leaseMs: context.options.leaseMs,
-    heartbeatMs: Math.max(1, Math.floor(context.options.leaseMs / 2)),
-    pollMs: 1,
-    failpoint: "beforeComplete",
-  }).handle("crash", () => {
-    handlerRuns += 1;
-    return { ok: true };
-  });
+  let activeCrashes = 0;
+  let completedCrashes = 0;
 
-  let crash: unknown;
-  try {
-    await worker.runOnce();
-  } catch (error) {
-    crash = error;
+  for (const boundary of boundaries) {
+    const jobId = await queue.enqueue(
+      "crash",
+      { failpoint: boundary.failpoint },
+      { maxAttempts: 2 },
+    );
+    let boundaryHandlerRuns = 0;
+    const worker = new Worker(queue, {
+      queue: context.queueName,
+      workerId: `crash-${boundary.failpoint}`,
+      leaseMs: context.options.leaseMs,
+      heartbeatMs: Math.max(1, Math.floor(context.options.leaseMs / 2)),
+      pollMs: 1,
+      failpoint: boundary.failpoint,
+    }).handle("crash", () => {
+      handlerRuns += 1;
+      boundaryHandlerRuns += 1;
+      return { ok: true };
+    });
+
+    let crash: unknown;
+    try {
+      await worker.runOnce();
+    } catch (error) {
+      crash = error;
+    }
+    const snapshot = await queue.getJob(jobId);
+    const leases = await rowCount(context.pool, "lease", jobId);
+    const attemptHistoryRows = await rowCount(context.pool, "attempt_history", jobId);
+    recordInvariant(
+      assertions,
+      `${boundary.failpoint} crash was injected`,
+      crash instanceof InjectedCrashError && crash.failpoint === boundary.failpoint,
+      true,
+    );
+    recordInvariant(
+      assertions,
+      `${boundary.failpoint} handler runs`,
+      boundaryHandlerRuns,
+      boundary.expectedHandlerRuns,
+    );
+    recordInvariant(
+      assertions,
+      `${boundary.failpoint} durable state`,
+      snapshot?.state,
+      boundary.expectedState,
+    );
+    recordInvariant(
+      assertions,
+      `${boundary.failpoint} durable leases`,
+      leases,
+      boundary.expectedLeases,
+    );
+    recordInvariant(
+      assertions,
+      `${boundary.failpoint} attempt history`,
+      attemptHistoryRows,
+      boundary.expectedAttemptHistory,
+    );
+    if (boundary.expectedState === "active") activeCrashes += 1;
+    else completedCrashes += 1;
   }
-  const snapshot = await queue.getJob(jobId);
-  const activeLeases = await rowCount(context.pool, "lease", jobId);
-  const attemptHistoryRows = await rowCount(context.pool, "attempt_history", jobId);
-  recordInvariant(
-    assertions,
-    "beforeComplete crash was injected",
-    crash instanceof InjectedCrashError && crash.failpoint === "beforeComplete",
-    true,
-  );
-  recordInvariant(assertions, "handler ran exactly once", handlerRuns, 1);
-  recordInvariant(assertions, "crashed job remains active", snapshot?.state, "active");
-  recordInvariant(assertions, "crashed claim retains its lease", activeLeases, 1);
-  recordInvariant(assertions, "crash does not close an attempt", attemptHistoryRows, 0);
 
   return {
     name: "crash-before-completion",
     durationMs: 0,
-    metrics: { handlerRuns, activeLeases, attemptHistoryRows },
+    metrics: {
+      boundaries: boundaries.length,
+      handlerRuns,
+      activeCrashes,
+      completedCrashes,
+    },
     assertions,
   };
 }
@@ -664,6 +748,7 @@ function assertHealthSnapshot(
   recordInvariant(assertions, "health scheduled depth", health.scheduledDepth, scheduledCount);
   recordInvariant(assertions, "health active leases", health.activeLeases, 1);
   recordInvariant(assertions, "health expired leases", health.expiredLeases, 1);
+  recordInvariant(assertions, "health snapshot is degraded", health.expiredLeases > 0, true);
   recordInvariant(assertions, "health active state count", health.counts.active, 1);
   recordInvariant(
     assertions,
@@ -695,6 +780,8 @@ async function healthSnapshot(
   );
   const [health, snapshotMs] = await measured(context.now, () => queue.health());
   assertHealthSnapshot(assertions, health, readyCount, scheduledCount);
+  const degraded = health.expiredLeases > 0;
+  const degradationReason = degraded ? "expired-leases" : null;
 
   return {
     name: "health-snapshot",
@@ -704,6 +791,8 @@ async function healthSnapshot(
       scheduledDepth: health.scheduledDepth,
       activeLeases: health.activeLeases,
       expiredLeases: health.expiredLeases,
+      degraded,
+      degradationReason,
       schemaVersion: health.schemaVersion,
       snapshotMs,
     },

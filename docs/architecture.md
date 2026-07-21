@@ -26,18 +26,22 @@ PostgreSQL is the durable authority. The TypeScript process never owns a job mer
 
 ## Repository map
 
-| Path                       | Responsibility                                                                     |
-| -------------------------- | ---------------------------------------------------------------------------------- |
-| `sql/schema.sql`           | Canonical clean-database schema and all correctness-sensitive transition functions |
-| `src/schema.ts`            | Loads the canonical schema for tests and explicit installation                     |
-| `src/queue.ts`             | Thin typed client over versioned SQL transitions and read models                   |
-| `src/worker.ts`            | Polling, heartbeats, handler dispatch, retries, shutdown, and crash injection      |
-| `src/types.ts`             | Public protocol and diagnostics types                                              |
-| `src/cli/reset-db.ts`      | Guarded development-only database recreation                                       |
-| `src/cli/health.ts`        | Machine-readable queue and PostgreSQL diagnostics                                  |
-| `benchmarks/run.ts`        | Conventional-table and hybrid-projection workload implementations                  |
-| `src/cli/benchmark.ts`     | Benchmark argument parsing and JSON report writing                                 |
-| `test/integration.test.ts` | Live-PostgreSQL correctness and crash-boundary contract                            |
+| Path                         | Responsibility                                                                     |
+| ---------------------------- | ---------------------------------------------------------------------------------- |
+| `sql/schema.sql`             | Canonical clean-database schema and all correctness-sensitive transition functions |
+| `src/schema.ts`              | Loads the canonical schema for tests and explicit installation                     |
+| `src/queue.ts`               | Thin typed client over versioned SQL transitions and read models                   |
+| `src/worker.ts`              | Polling, heartbeats, handler dispatch, retries, shutdown, and crash injection      |
+| `src/types.ts`               | Public protocol and diagnostics types                                              |
+| `src/cli/reset-db.ts`        | Guarded development-only database recreation                                       |
+| `src/cli/health.ts`          | Machine-readable queue and PostgreSQL diagnostics                                  |
+| `benchmarks/run.ts`          | Benchmark profile resolution, provenance capture, and suite orchestration          |
+| `benchmarks/comparative.ts`  | Comparative workload adapters, repetitions, worker sweeps, churn, and summaries    |
+| `benchmarks/conventional.ts` | Typed client for the benchmark-only conventional queue protocol                    |
+| `benchmarks/scenarios.ts`    | Deterministic operational and failure scenario implementations                     |
+| `benchmarks/telemetry.ts`    | PostgreSQL WAL, relation, I/O, activity, vacuum, and plan telemetry                |
+| `src/cli/benchmark.ts`       | Benchmark argument parsing and JSON report writing                                 |
+| `test/integration.test.ts`   | Live-PostgreSQL correctness and crash-boundary contract                            |
 
 The TypeScript client deliberately does not reproduce transition logic. It calls PostgreSQL functions so every client uses the same locking, fencing, event, and state rules.
 
@@ -591,7 +595,7 @@ Individual resets are available as `pnpm db:reset:dev`, `pnpm db:reset:test`, an
 - No enqueue idempotency key is implemented yet.
 - Ready ordering is FIFO per queue. Priority is not implemented.
 - Retention functions exist, but no scheduler invokes them.
-- The conventional benchmark prototype covers the success path and is not fully semantics-equivalent.
+- The conventional benchmark protocol implements the lifecycle semantics exercised by suite v2, but remains a purpose-built comparator rather than an independently supported production queue.
 - There is no dedicated notification listener, multi-process scheduler leader, UI, OpenTelemetry package, or framework integration.
 - The reset-and-install workflow is suitable for validation, not production schema evolution.
 

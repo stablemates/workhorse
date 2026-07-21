@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { benchmarkProfiles, resolveBenchmarkRunOptions } from "../benchmarks/run.js";
+import {
+  benchmarkProfiles,
+  captureBenchmarkProvenance,
+  resolveBenchmarkRunOptions,
+} from "../benchmarks/run.js";
 
 describe("benchmark v2 profiles", () => {
   it("resolves the default full-suite profile", () => {
@@ -41,5 +45,16 @@ describe("benchmark v2 profiles", () => {
     first.comparative.workerConcurrency?.push(99);
     const second = resolveBenchmarkRunOptions({ profile: "full" });
     expect(second.comparative.workerConcurrency).toEqual([1, 4, 16, 32]);
+  });
+
+  it("captures reproducibility provenance without exposing environment variables", () => {
+    const provenance = captureBenchmarkProvenance();
+    expect(provenance.command).toEqual(process.argv);
+    expect(provenance.runtime.nodeVersion).toBe(process.version);
+    expect(provenance.runtime.architecture).toBe(process.arch);
+    expect(provenance.runtime.logicalCpuCount).toBeGreaterThan(0);
+    expect(provenance.runtime.totalMemoryBytes).toBeGreaterThan(0);
+    expect(provenance.source.commit === null || provenance.source.commit.length >= 7).toBe(true);
+    expect(provenance).not.toHaveProperty("environment");
   });
 });

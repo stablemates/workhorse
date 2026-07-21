@@ -104,24 +104,24 @@ describe("normalizeComparativeOptions", () => {
 describe("summarizeComparativeRuns", () => {
   it("groups by design and concurrency and uses 95% CI number summaries", () => {
     const summaries = summarizeComparativeRuns([
-      run("queue", 2, 1, 100, [1, 2], 1_000),
+      run("hybrid", 2, 1, 100, [1, 2], 1_000),
       run("conventional", 1, 1, 50, [5], 500),
-      run("queue", 2, 2, 200, [3, 4], 3_000),
+      run("hybrid", 2, 2, 200, [3, 4], 3_000),
     ]);
 
     expect(summaries.map(({ design, workerConcurrency }) => [design, workerConcurrency])).toEqual([
       ["conventional", 1],
-      ["queue", 2],
+      ["hybrid", 2],
     ]);
-    const queue = summaries[1]!;
-    expect(queue.repetitions).toBe(2);
-    expect(queue.throughputPerSecond.mean).toBe(150);
-    expect(queue.throughputPerSecond.confidenceInterval95.confidenceLevel).toBe(0.95);
-    expect(queue.throughputPerSecond.confidenceInterval95.marginOfError).toBeCloseTo(635.3, 8);
-    expect(queue.walBytes.mean).toBe(2_000);
-    expect(queue.claimLatencyMs).toMatchObject({ p50: 2, p95: 4, p99: 4 });
-    expect(queue.claimLatencyMs.samples.mean).toBe(2.5);
-    expect(queue.claimLatencyMs.perRunP95.mean).toBe(3);
+    const hybrid = summaries[1]!;
+    expect(hybrid.repetitions).toBe(2);
+    expect(hybrid.throughputPerSecond.mean).toBe(150);
+    expect(hybrid.throughputPerSecond.confidenceInterval95.confidenceLevel).toBe(0.95);
+    expect(hybrid.throughputPerSecond.confidenceInterval95.marginOfError).toBeCloseTo(635.3, 8);
+    expect(hybrid.walBytes.mean).toBe(2_000);
+    expect(hybrid.claimLatencyMs).toMatchObject({ p50: 2, p95: 4, p99: 4 });
+    expect(hybrid.claimLatencyMs.samples.mean).toBe(2.5);
+    expect(hybrid.claimLatencyMs.perRunP95.mean).toBe(3);
   });
 
   it("returns an empty deterministic summary for no runs", () => {
