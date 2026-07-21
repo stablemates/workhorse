@@ -1,0 +1,51 @@
+{
+  "name": "ironshift",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Evidence-first PostgreSQL durable job queue validation MVP",
+  "bin": {
+    "ironshift-bench": "./dist/src/cli/benchmark.js",
+    "ironshift-health": "./dist/src/cli/health.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && rm -rf dist/sql && cp -R sql dist/sql",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run test/integration.test.ts",
+    "health": "tsx src/cli/health.ts",
+    "benchmark": "tsx src/cli/benchmark.ts",
+    "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin src test benchmarks vitest.config.ts",
+    "lint:fix": "oxlint --fix --import-plugin --vitest-plugin src test benchmarks vitest.config.ts",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "db:reset": "tsx src/cli/reset-db.ts --yes"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.1.0",
+    "@types/pg": "^8.15.5",
+    "oxfmt": "^0.59.0",
+    "oxlint": "^1.74.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.18.3"
+}

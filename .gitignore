@@ -1,1 +1,6 @@
 docs/research
+node_modules/
+dist/
+.env
+*.tgz
+benchmark*.json
