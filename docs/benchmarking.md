@@ -2,6 +2,10 @@
 
 This runbook explains how to execute the Ironshift benchmark, preserve reproducible results, and interpret them without making unsupported performance claims.
 
+## Recorded evidence
+
+- [2026-07-21 small-scale ladder](benchmarks/2026-07-21-small-scale-analysis.md): 25 through 5,000 jobs per round, three retained-history rounds, raw JSON, normalized CSV, environment metadata, and analysis.
+
 ## What the current benchmark measures
 
 Each round runs two designs against the same PostgreSQL database:
