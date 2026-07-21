@@ -2,11 +2,14 @@ BEGIN;
 
 CREATE SCHEMA IF NOT EXISTS ironshift;
 
+-- This file is the canonical schema for the validation phase. Development resets the entire test
+-- database after schema changes, so this is not an incremental or production-safe migration.
 CREATE TABLE IF NOT EXISTS ironshift.schema_version (
   version integer PRIMARY KEY,
   installed_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Immutable accepted-job facts. Dispatch never scans this payload-bearing table.
 CREATE TABLE IF NOT EXISTS ironshift.job (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   queue_name text NOT NULL CHECK (queue_name <> ''),
@@ -16,6 +19,8 @@ CREATE TABLE IF NOT EXISTS ironshift.job (
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+-- One operator-facing current-state row per retained job. The version column stores the active
+-- fence token, but this table is intentionally absent from the claim path.
 CREATE TABLE IF NOT EXISTS ironshift.job_current (
   job_id uuid PRIMARY KEY REFERENCES ironshift.job(id) ON DELETE CASCADE,
   state text NOT NULL CHECK (state IN ('scheduled', 'ready', 'active', 'succeeded', 'failed')),
@@ -29,6 +34,8 @@ CREATE TABLE IF NOT EXISTS ironshift.job_current (
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Narrow runnable projection. Deleting on claim keeps this relation proportional to current ready
+-- depth instead of lifetime completed work.
 CREATE TABLE IF NOT EXISTS ironshift.ready_job (
   job_id uuid PRIMARY KEY REFERENCES ironshift.job(id) ON DELETE CASCADE,
   queue_name text NOT NULL,
@@ -39,6 +46,8 @@ CREATE TABLE IF NOT EXISTS ironshift.ready_job (
 CREATE INDEX IF NOT EXISTS ready_job_claim_idx
   ON ironshift.ready_job (queue_name, sequence, job_id);
 
+-- Future work is physically separated so a large delayed backlog cannot precede runnable rows in
+-- the ready claim index.
 CREATE TABLE IF NOT EXISTS ironshift.scheduled_job (
   job_id uuid PRIMARY KEY REFERENCES ironshift.job(id) ON DELETE CASCADE,
   queue_name text NOT NULL,
@@ -48,6 +57,8 @@ CREATE TABLE IF NOT EXISTS ironshift.scheduled_job (
 CREATE INDEX IF NOT EXISTS scheduled_job_due_idx
   ON ironshift.scheduled_job (run_at, job_id);
 
+-- Fence tokens are globally monotonic ownership generations. Expiry handles abandonment; fencing
+-- prevents an old worker from committing after recovery and reclamation.
 CREATE SEQUENCE IF NOT EXISTS ironshift.fence_token_seq;
 CREATE TABLE IF NOT EXISTS ironshift.lease (
   job_id uuid PRIMARY KEY REFERENCES ironshift.job(id) ON DELETE CASCADE,
@@ -60,6 +71,8 @@ CREATE TABLE IF NOT EXISTS ironshift.lease (
 ) WITH (fillfactor = 70);
 CREATE INDEX IF NOT EXISTS lease_expiry_idx ON ironshift.lease (expires_at, job_id);
 
+-- Append-only lifecycle audit. Time partitioning allows bulk history retirement without DELETE
+-- churn on the dispatch relations.
 CREATE TABLE IF NOT EXISTS ironshift.job_event (
   event_id bigint GENERATED ALWAYS AS IDENTITY,
   job_id uuid NOT NULL,
@@ -73,6 +86,8 @@ CREATE TABLE IF NOT EXISTS ironshift.job_event_default
 CREATE INDEX IF NOT EXISTS job_event_job_time_idx
   ON ironshift.job_event (job_id, occurred_at, event_id);
 
+-- One immutable row for every closed attempt, including retries and lease expiry. A retry creates a
+-- new attempt number rather than mutating this historical outcome.
 CREATE TABLE IF NOT EXISTS ironshift.attempt_history (
   attempt_id bigint GENERATED ALWAYS AS IDENTITY,
   job_id uuid NOT NULL,
@@ -90,6 +105,8 @@ CREATE TABLE IF NOT EXISTS ironshift.attempt_history_default
 CREATE INDEX IF NOT EXISTS attempt_history_job_idx
   ON ironshift.attempt_history (job_id, attempt, occurred_at);
 
+-- Accept a job atomically with its initial current state, dispatch projection, and audit event.
+-- When called through an existing application transaction, enqueue commits or rolls back with it.
 CREATE OR REPLACE FUNCTION ironshift.enqueue_v1(
   p_queue_name text,
   p_job_type text,
@@ -123,6 +140,7 @@ BEGIN
   IF v_state = 'ready' THEN
     INSERT INTO ironshift.ready_job(job_id, queue_name, attempt)
       VALUES (v_job_id, p_queue_name, 1);
+    -- NOTIFY is delivered after commit and is only a wake hint. The ready row is the durable fact.
     PERFORM pg_notify('ironshift_jobs', p_queue_name);
   ELSE
     INSERT INTO ironshift.scheduled_job(job_id, queue_name, attempt, run_at)
@@ -134,6 +152,8 @@ BEGIN
 END;
 $$;
 
+-- Move a bounded due batch from scheduled to ready. SKIP LOCKED lets many promoters cooperate
+-- without moving one scheduled row twice or waiting behind another promoter's batch.
 CREATE OR REPLACE FUNCTION ironshift.promote_v1(p_limit integer DEFAULT 100)
 RETURNS integer
 LANGUAGE plpgsql
@@ -176,6 +196,8 @@ BEGIN
 END;
 $$;
 
+-- Claim exactly one FIFO row for a queue. Ownership, current projection, and the claim event commit
+-- before the payload is returned, so handler execution never spans this transaction.
 CREATE OR REPLACE FUNCTION ironshift.claim_v1(
   p_queue_name text,
   p_worker_id text,
@@ -203,6 +225,7 @@ BEGIN
     RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
   END IF;
 
+  -- Locked rows are skipped rather than waited on, allowing independent workers to make progress.
   SELECT r.* INTO v_ready
   FROM ironshift.ready_job r
   WHERE r.queue_name = p_queue_name
@@ -214,6 +237,7 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Removing the ready projection and inserting the lease happen in the same function transaction.
   DELETE FROM ironshift.ready_job r WHERE r.job_id = v_ready.job_id;
   v_fence := nextval('ironshift.fence_token_seq');
   v_expires := clock_timestamp() + make_interval(secs => p_lease_ms::double precision / 1000.0);
@@ -235,6 +259,7 @@ BEGIN
 END;
 $$;
 
+-- Extend only the exact current, unexpired lease. False tells the runtime it no longer owns the job.
 CREATE OR REPLACE FUNCTION ironshift.heartbeat_v1(
   p_job_id uuid,
   p_worker_id text,
@@ -256,6 +281,8 @@ BEGIN
 END;
 $$;
 
+-- Finalize success only for the matching unexpired worker/fence pair. The current-projection check
+-- is a second invariant guard; a mismatch raises and rolls back the consumed lease.
 CREATE OR REPLACE FUNCTION ironshift.complete_v1(
   p_job_id uuid,
   p_worker_id text,
@@ -290,6 +317,8 @@ BEGIN
 END;
 $$;
 
+-- Close a failed attempt and either create the next attempt or enter terminal failure. Projection,
+-- history, and lease changes are one transaction, so a fence mismatch rolls everything back.
 CREATE OR REPLACE FUNCTION ironshift.fail_v1(
   p_job_id uuid,
   p_worker_id text,
@@ -330,6 +359,7 @@ BEGIN
     UPDATE ironshift.job_current c
       SET state = v_state, run_at = v_run_at, error = p_error, updated_at = clock_timestamp()
       WHERE c.job_id = p_job_id AND c.version = p_fence_token;
+    -- Do not commit a retry projection unless the lease token is still the current generation.
     IF NOT FOUND THEN
       RAISE EXCEPTION 'current state fence mismatch for job %', p_job_id;
     END IF;
@@ -355,6 +385,8 @@ BEGIN
 END;
 $$;
 
+-- Recover abandoned work in bounded, cooperative batches. The expired lease is locked before it is
+-- consumed, so heartbeat/completion/failure cannot race through the same ownership generation.
 CREATE OR REPLACE FUNCTION ironshift.recover_expired_v1(
   p_limit integer DEFAULT 100,
   p_retry_delay_ms integer DEFAULT 0
@@ -375,6 +407,7 @@ BEGIN
     FOR UPDATE SKIP LOCKED
     LIMIT GREATEST(1, LEAST(p_limit, 10000))
   LOOP
+    -- The row remains locked from selection through deletion and requeue inside this transaction.
     DELETE FROM ironshift.lease l
       WHERE l.job_id = v_lease.job_id AND l.fence_token = v_lease.fence_token;
     IF NOT FOUND THEN CONTINUE; END IF;
@@ -422,6 +455,8 @@ BEGIN
 END;
 $$;
 
+-- Pre-create monthly partitions. If the default partition already contains rows in this range,
+-- PostgreSQL will reject attachment until those rows are moved, which is preferable to overlap.
 CREATE OR REPLACE FUNCTION ironshift.create_history_partitions_v1(p_month date)
 RETURNS void
 LANGUAGE plpgsql
@@ -440,6 +475,8 @@ BEGIN
 END;
 $$;
 
+-- Bulk-retire completed history by dropping both month partitions. Current/future months are
+-- rejected to reduce accidental removal of active operational history.
 CREATE OR REPLACE FUNCTION ironshift.retire_history_month_v1(p_month date)
 RETURNS void
 LANGUAGE plpgsql

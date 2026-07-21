@@ -4,6 +4,12 @@ Ironshift is an evidence-first prototype for the hybrid PostgreSQL durable-job a
 
 This is deliberately **not** a general-purpose queue product. Its purpose is to validate transactional enqueue, narrow ready/scheduled/lease projections, fenced ownership, immutable attempt history, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
 
+## Documentation
+
+- [`docs/architecture.md`](docs/architecture.md): system boundaries, module ownership, data model, lifecycle, transactions, fencing, crash semantics, health model, and invariants.
+- [`docs/mvp-protocol.md`](docs/mvp-protocol.md): concise table and SQL transition reference.
+- [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
+
 ## Included scope
 
 - enqueue inside an existing `pg` transaction;
@@ -55,6 +61,8 @@ To enqueue atomically with application writes, pass the active `PoolClient` as t
 ## Diagnostics and evidence
 
 ```bash
+pnpm benchmark -- --help
+
 DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test pnpm health
 
 DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test \
@@ -62,6 +70,8 @@ DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_test \
 ```
 
 The benchmark retains terminal rows between rounds and reports throughput, p50/p95/p99 claim latency, relation size, estimated dead tuples, WAL bytes, and executable claim plans for both designs. The conventional prototype is currently a success-path baseline, not yet a fully semantics-equivalent lease/recovery implementation. Small runs are smoke tests only. They are not evidence of product superiority. The viability gate requires equivalent semantics, sustained runs at much larger scale, retained history, delayed cleanup horizons, production-shaped payloads, and published raw results.
+
+Follow the complete [benchmark runbook](docs/benchmarking.md) before running or interpreting anything beyond a smoke test.
 
 ## Correctness contract
 
@@ -72,4 +82,4 @@ The benchmark retains terminal rows between rounds and reports throughput, p50/p
 - A stale worker cannot commit queue completion after recovery.
 - PostgreSQL cannot make HTTP calls, emails, payments, or other external effects exactly once. Use stable external idempotency keys, an outbox/inbox, or compensation.
 
-See [`docs/mvp-protocol.md`](docs/mvp-protocol.md) for the storage and transition model.
+See [`docs/architecture.md`](docs/architecture.md) for the full design and [`docs/mvp-protocol.md`](docs/mvp-protocol.md) for the compact transition reference.

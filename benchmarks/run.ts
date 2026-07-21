@@ -20,6 +20,9 @@ export interface RoundResult {
   claimPlan: unknown;
 }
 
+// The conventional design is intentionally isolated in another schema so relation statistics and
+// storage can be attributed separately. It is a mutable-table success-path baseline, not yet a
+// complete semantic peer for hybrid retries, leases, and history.
 const conventionalSetup = `
 CREATE SCHEMA IF NOT EXISTS ironshift_benchmark_conventional;
 CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.job (
@@ -39,12 +42,16 @@ ALTER TABLE ironshift_benchmark_conventional.job RESET (autovacuum_enabled);
 `;
 
 function percentile(sorted: number[], value: number): number {
+  // Use a nearest-rank percentile. Keeping raw client-observed samples avoids assuming a latency
+  // distribution, which is especially important for the long tail.
   if (sorted.length === 0) return 0;
   const index = Math.min(sorted.length - 1, Math.ceil(value * sorted.length) - 1);
   return sorted[index] ?? 0;
 }
 
 async function walPosition(pool: Pool): Promise<string> {
+  // WAL is measured around one design round. Other database activity will contaminate this value,
+  // so published runs must use an otherwise idle database.
   const result = await pool.query<{ lsn: string }>("SELECT pg_current_wal_lsn() AS lsn");
   return result.rows[0]!.lsn;
 }
@@ -61,6 +68,8 @@ async function stats(
   pool: Pool,
   schema: string,
 ): Promise<{ relationBytes: number; deadTuples: number }> {
+  // Force this backend's statistics snapshot to refresh before reading estimates. n_dead_tup remains
+  // an estimate and should be interpreted as a trend rather than an exact row count.
   await pool.query("SELECT pg_stat_force_next_flush()");
   const result = await pool.query<{ bytes: string; dead: string }>(
     `
@@ -75,6 +84,8 @@ async function stats(
 }
 
 async function plan(pool: Pool, sql: string, values: unknown[]): Promise<unknown> {
+  // Capture an executable plan while the ready set is populated. A plain EXPLAIN after draining the
+  // queue would hide visibility and buffer behavior of the actual claim path.
   const result = await pool.query<{ "QUERY PLAN": unknown }>(
     `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`,
     values,
@@ -129,6 +140,8 @@ async function conventionalRound(
     WHERE queue_name = $1 AND status = 'ready' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1`,
     [queueName],
   );
+  // Claims and completions are deliberately sequential. This scenario isolates steady churn and
+  // plan stability; a separate contention scenario should own concurrent worker measurements.
   const latencies: number[] = [];
   for (let index = 0; index < jobs; index += 1) {
     const claimStarted = performance.now();
@@ -182,6 +195,8 @@ async function hybridRound(
     WHERE queue_name = $1 ORDER BY sequence, job_id FOR UPDATE SKIP LOCKED LIMIT 1`,
     [queueName],
   );
+  // Measure only the claim call. Completion remains inside total throughput and WAL measurements,
+  // while claim percentiles stay comparable to the dispatch-path latency objective.
   const latencies: number[] = [];
   for (let index = 0; index < jobs; index += 1) {
     const claimStarted = performance.now();
@@ -209,6 +224,8 @@ export async function runBenchmark(pool: Pool, options: BenchmarkOptions): Promi
   if (!Number.isInteger(options.rounds) || options.rounds < 1)
     throw new Error("rounds must be a positive integer");
   await pool.query(conventionalSetup);
+  // Reset once per experiment, not once per round. Terminal rows and append-only history must remain
+  // present so later rounds expose lifetime-history effects.
   await pool.query("TRUNCATE ironshift_benchmark_conventional.job RESTART IDENTITY");
   await pool.query(`TRUNCATE ironshift.job_event, ironshift.attempt_history, ironshift.lease,
     ironshift.ready_job, ironshift.scheduled_job, ironshift.job_current, ironshift.job RESTART IDENTITY CASCADE`);
