@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { cpus, platform, release, totalmem } from "node:os";
 import type { Pool } from "pg";
 import {
   runComparativeBenchmark,
@@ -35,6 +37,23 @@ export interface BenchmarkReportV2 {
   environment: {
     database: string;
     postgresVersion: string;
+    settings: Record<string, string>;
+  };
+  provenance: {
+    command: string[];
+    runtime: {
+      nodeVersion: string;
+      platform: string;
+      release: string;
+      architecture: string;
+      cpuModel: string | null;
+      logicalCpuCount: number;
+      totalMemoryBytes: number;
+    };
+    source: {
+      commit: string | null;
+      dirty: boolean | null;
+    };
   };
   configuration: {
     comparative: ComparativeBenchmarkOptionsInput;
@@ -47,6 +66,52 @@ export interface BenchmarkReportV2 {
 interface BenchmarkProfile {
   comparative: ComparativeBenchmarkOptionsInput;
   operational: OperationalScenarioOptions;
+}
+
+const recordedPostgresSettings = [
+  "autovacuum",
+  "autovacuum_naptime",
+  "checkpoint_timeout",
+  "maintenance_work_mem",
+  "max_connections",
+  "max_wal_size",
+  "shared_buffers",
+  "synchronous_commit",
+  "work_mem",
+] as const;
+
+function gitOutput(arguments_: string[]): string | null {
+  try {
+    return execFileSync("git", arguments_, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+export function captureBenchmarkProvenance(): BenchmarkReportV2["provenance"] {
+  const cpuList = cpus();
+  const commit = gitOutput(["rev-parse", "HEAD"]);
+  const status = gitOutput(["status", "--porcelain", "--untracked-files=no"]);
+  return {
+    command: [...process.argv],
+    runtime: {
+      nodeVersion: process.version,
+      platform: platform(),
+      release: release(),
+      architecture: process.arch,
+      cpuModel: cpuList[0]?.model ?? null,
+      logicalCpuCount: cpuList.length,
+      totalMemoryBytes: totalmem(),
+    },
+    source: {
+      commit: commit === "" ? null : commit,
+      dirty: status === null ? null : status !== "",
+    },
+  };
 }
 
 export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkProfile>> = {
@@ -157,6 +222,13 @@ export async function runBenchmark(
   const environment = await pool.query<{ database: string; version: string }>(
     "SELECT current_database() AS database, version() AS version",
   );
+  const settings = await pool.query<{ name: string; value: string }>(
+    `SELECT name, setting || COALESCE(unit, '') AS value
+       FROM pg_settings
+      WHERE name = ANY($1::text[])
+      ORDER BY name`,
+    [[...recordedPostgresSettings]],
+  );
   const row = environment.rows[0];
   if (!row) throw new Error("Unable to read PostgreSQL benchmark environment");
 
@@ -165,7 +237,12 @@ export async function runBenchmark(
     generatedAt: new Date().toISOString(),
     suite: options.suite,
     profile: options.profile,
-    environment: { database: row.database, postgresVersion: row.version },
+    environment: {
+      database: row.database,
+      postgresVersion: row.version,
+      settings: Object.fromEntries(settings.rows.map(({ name, value }) => [name, value])),
+    },
+    provenance: captureBenchmarkProvenance(),
     configuration: {
       comparative: options.comparative,
       operational: options.operational,

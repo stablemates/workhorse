@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Pool, PoolClient } from "pg";
 import { Queue, installSchema } from "../src/index.js";
 import type { ClaimedJob, Json, Queryable } from "../src/types.js";
@@ -24,7 +25,7 @@ import {
   explainAnalyzeBuffersJson,
 } from "./telemetry.js";
 
-export type ComparativeDesign = "conventional" | "queue";
+export type ComparativeDesign = "conventional" | "hybrid";
 export type JsonSafe = null | boolean | number | string | JsonSafe[] | { [key: string]: JsonSafe };
 
 export interface ChurnOptions {
@@ -102,6 +103,7 @@ export interface ChurnSample {
 
 export interface ChurnResult {
   design: ComparativeDesign;
+  workloadModel: "concurrent-producer-consumer";
   configuredDurationMs: number;
   actualDurationMs: number;
   batchSize: number;
@@ -152,6 +154,10 @@ interface QueueAdapter {
 interface WorkResult {
   completedJobs: number;
   claimLatencySamplesMs: number[];
+}
+
+interface ChurnProgress extends WorkResult {
+  producerRunning: boolean;
 }
 
 const resetLockKey = 7_349_221_042;
@@ -340,7 +346,7 @@ function createAdapters(pool: Pool, options: ComparativeBenchmarkOptions): Queue
       claimSql: `SELECT * FROM ${conventionalSchema}.claim_v1($1, $2, $3)`,
     },
     {
-      design: "queue",
+      design: "hybrid",
       schema: "ironshift",
       enqueue: (payload) => queue.enqueue("comparative", payload),
       claim: (workerId) => queue.claim(workerId, { leaseMs: options.leaseMs }),
@@ -382,6 +388,33 @@ async function runWorkers(
   );
 
   return { completedJobs, claimLatencySamplesMs };
+}
+
+async function runChurnWorkers(
+  adapter: QueueAdapter,
+  concurrency: number,
+  workerPrefix: string,
+  progress: ChurnProgress,
+): Promise<void> {
+  await Promise.all(
+    Array.from({ length: concurrency }, async (_, workerIndex) => {
+      const workerId = `${workerPrefix}-${workerIndex + 1}`;
+      while (true) {
+        const claimStarted = performance.now();
+        const job = await adapter.claim(workerId);
+        const claimDurationMs = performance.now() - claimStarted;
+        if (job === null) {
+          if (!progress.producerRunning) return;
+          await delay(1);
+          continue;
+        }
+        progress.claimLatencySamplesMs.push(claimDurationMs);
+        const accepted = await adapter.complete(job, workerId);
+        if (!accepted) throw new Error(`${adapter.design} rejected completion for ${workerId}`);
+        progress.completedJobs += 1;
+      }
+    }),
+  );
 }
 
 async function captureClaimExplain(
@@ -545,51 +578,74 @@ async function runChurn(
   let nextSampleAt = started + options.churn.sampleIntervalMs;
   let batches = 0;
   let enqueuedJobs = 0;
-  let completedJobs = 0;
-  const claimLatencySamplesMs: number[] = [];
+  const progress: ChurnProgress = {
+    completedJobs: 0,
+    claimLatencySamplesMs: [],
+    producerRunning: true,
+  };
   const samples: ChurnSample[] = [];
+  const workers = runChurnWorkers(
+    adapter,
+    options.churn.workerConcurrency,
+    `${adapter.design}-churn`,
+    progress,
+  );
 
-  while (performance.now() < deadline) {
-    batches += 1;
-    await enqueueJobs(adapter, options.churn.batchSize, batches);
-    enqueuedJobs += options.churn.batchSize;
-    const work = await runWorkers(
-      adapter,
-      options.churn.workerConcurrency,
-      `${adapter.design}-churn-b${batches}`,
-    );
-    completedJobs += work.completedJobs;
-    claimLatencySamplesMs.push(...work.claimLatencySamplesMs);
-    if (performance.now() >= nextSampleAt) {
-      samples.push(
-        await captureChurnSample(pool, adapter, started, batches, enqueuedJobs, completedJobs),
-      );
-      nextSampleAt += options.churn.sampleIntervalMs;
+  try {
+    while (performance.now() < deadline) {
+      batches += 1;
+      await enqueueJobs(adapter, options.churn.batchSize, batches);
+      enqueuedJobs += options.churn.batchSize;
+      if (performance.now() >= nextSampleAt) {
+        samples.push(
+          await captureChurnSample(
+            pool,
+            adapter,
+            started,
+            batches,
+            enqueuedJobs,
+            progress.completedJobs,
+          ),
+        );
+        nextSampleAt += options.churn.sampleIntervalMs;
+      }
     }
+  } finally {
+    progress.producerRunning = false;
   }
+  await workers;
 
   if (samples.length === 0 || samples.at(-1)!.batches !== batches) {
     samples.push(
-      await captureChurnSample(pool, adapter, started, batches, enqueuedJobs, completedJobs),
+      await captureChurnSample(
+        pool,
+        adapter,
+        started,
+        batches,
+        enqueuedJobs,
+        progress.completedJobs,
+      ),
     );
   }
 
   const actualDurationMs = performance.now() - started;
   const telemetry = await captureAfter(pool, adapter, before, claimExplain);
   const sortedClaimLatencySamplesMs = sortedCopy(
-    claimLatencySamplesMs,
+    progress.claimLatencySamplesMs,
     (left, right) => left - right,
   );
   return {
     design: adapter.design,
+    workloadModel: "concurrent-producer-consumer",
     configuredDurationMs: options.churn.durationMs,
     actualDurationMs,
     batchSize: options.churn.batchSize,
     workerConcurrency: options.churn.workerConcurrency,
     batches,
     enqueuedJobs,
-    completedJobs,
-    throughputPerSecond: actualDurationMs === 0 ? 0 : (completedJobs / actualDurationMs) * 1_000,
+    completedJobs: progress.completedJobs,
+    throughputPerSecond:
+      actualDurationMs === 0 ? 0 : (progress.completedJobs / actualDurationMs) * 1_000,
     claimLatencySamplesMs: sortedClaimLatencySamplesMs,
     claimLatencyMs: summarizeLatencies(sortedClaimLatencySamplesMs),
     samples,
