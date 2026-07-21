@@ -59,6 +59,7 @@ const studentTCritical95ByDegreesOfFreedom = new Map<number, number>([
 ]);
 
 function sortedFiniteNumbers(values: readonly number[]): number[] {
+  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
   return [...values].filter(Number.isFinite).sort((left, right) => left - right);
 }
 
@@ -74,7 +75,10 @@ function studentTCritical95(sampleCount: number): number {
   return 1.96;
 }
 
-export function nearestRankPercentile(values: readonly number[], percentile: number): number | null {
+export function nearestRankPercentile(
+  values: readonly number[],
+  percentile: number,
+): number | null {
   if (!Number.isFinite(percentile) || percentile < 0 || percentile > 1) {
     throw new RangeError("Percentile must be a finite number between 0 and 1.");
   }
@@ -98,7 +102,12 @@ export function summarizeNumbers(values: readonly number[]): NumericSummary {
       max: null,
       mean: null,
       sampleStandardDeviation: null,
-      confidenceInterval95: { confidenceLevel: 0.95, lower: null, upper: null, marginOfError: null },
+      confidenceInterval95: {
+        confidenceLevel: 0.95,
+        lower: null,
+        upper: null,
+        marginOfError: null,
+      },
     };
   }
 
@@ -113,9 +122,13 @@ export function summarizeNumbers(values: readonly number[]): NumericSummary {
   }
 
   const mean = sum / count;
-  const sumSquaredDifferences = finiteValues.reduce((total, value) => total + (value - mean) ** 2, 0);
+  const sumSquaredDifferences = finiteValues.reduce(
+    (total, value) => total + (value - mean) ** 2,
+    0,
+  );
   const sampleStandardDeviation = count > 1 ? Math.sqrt(sumSquaredDifferences / (count - 1)) : 0;
-  const marginOfError = count > 1 ? studentTCritical95(count) * (sampleStandardDeviation / Math.sqrt(count)) : 0;
+  const marginOfError =
+    count > 1 ? studentTCritical95(count) * (sampleStandardDeviation / Math.sqrt(count)) : 0;
 
   return {
     count,

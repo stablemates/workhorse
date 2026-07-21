@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { nearestRankPercentile, summarizeLatencies, summarizeNumbers } from "../benchmarks/statistics.js";
+import {
+  nearestRankPercentile,
+  summarizeLatencies,
+  summarizeNumbers,
+} from "../benchmarks/statistics.js";
 
 describe("nearestRankPercentile", () => {
   it("uses nearest-rank percentiles on a sorted copy", () => {
@@ -54,7 +58,12 @@ describe("summarizeNumbers", () => {
       max: null,
       mean: null,
       sampleStandardDeviation: null,
-      confidenceInterval95: { confidenceLevel: 0.95, lower: null, upper: null, marginOfError: null },
+      confidenceInterval95: {
+        confidenceLevel: 0.95,
+        lower: null,
+        upper: null,
+        marginOfError: null,
+      },
     });
   });
 
