@@ -178,7 +178,7 @@ Top-level fields:
 - `generatedAt`: client wall-clock timestamp;
 - `suite` and `profile`: resolved run selection;
 - `environment`: database name, PostgreSQL version, and material PostgreSQL settings;
-- `provenance`: exact command arguments, Node/OS/CPU/memory runtime metadata, source commit, and dirty-tree state;
+- `provenance`: exact command arguments, Node/OS/CPU/memory runtime metadata, source commit, and dirty state across benchmark-affecting source/configuration paths, including untracked files but excluding generated result artifacts;
 - `configuration`: comparative and lifecycle inputs;
 - `comparative`: independent runs, confidence summaries, and churn telemetry when selected;
 - `lifecycle`: scenario metrics and assertions when selected.
