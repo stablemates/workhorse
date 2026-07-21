@@ -5,9 +5,11 @@ export type { Failpoint, Handler, WorkerOptions } from "./worker.js";
 export type {
   ClaimedJob,
   EnqueueOptions,
+  EnqueueRequest,
   JobSnapshot,
   JobState,
   Json,
   Queryable,
   QueueHealth,
 } from "./types.js";
+export { MAX_ENQUEUE_BATCH_SIZE } from "./types.js";

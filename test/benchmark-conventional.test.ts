@@ -36,6 +36,78 @@ afterAll(async () => {
 });
 
 describe("conventional benchmark SQL", () => {
+  it("batch enqueues mixed work with ordered ids, FIFO, events, and atomic validation", async () => {
+    const ids = await queue.enqueueMany([
+      { type: "first", payload: { order: 1 } },
+      {
+        type: "later",
+        payload: { order: 2 },
+        options: { runAt: new Date(Date.now() + 60_000) },
+      },
+      { type: "third", payload: { order: 3 }, options: { maxAttempts: 4 } },
+    ]);
+
+    expect((await queue.claim("worker-a"))?.id).toBe(ids[0]);
+    expect((await queue.claim("worker-b"))?.id).toBe(ids[2]);
+    expect(
+      (
+        await pool.query<{ job_id: string }>(
+          `SELECT job_id FROM ${conventionalSchema}.job_event WHERE event_type = 'enqueued' ORDER BY event_id`,
+        )
+      ).rows.map((row) => row.job_id),
+    ).toEqual(ids);
+
+    await expect(
+      queue.enqueueMany([
+        { type: "valid", payload: {} },
+        { type: "", payload: {} },
+      ]),
+    ).rejects.toThrow("each request requires");
+    expect(
+      (
+        await pool.query<{ count: number }>(
+          `SELECT count(*)::integer AS count FROM ${conventionalSchema}.job`,
+        )
+      ).rows[0]!.count,
+    ).toBe(3);
+  });
+
+  it("supports empty batches, caller transactions, and one notification per ready queue", async () => {
+    const alpha = "enqueue-many-conventional-alpha";
+    const beta = "enqueue-many-conventional-beta";
+    const noQuery = { query: async () => Promise.reject(new Error("query must not run")) };
+    await expect(queue.enqueueMany([], noQuery)).resolves.toEqual([]);
+
+    const listener = await pool.connect();
+    const notifications: string[] = [];
+    listener.on("notification", (message) => notifications.push(message.payload ?? ""));
+    try {
+      await listener.query("LISTEN ironshift_jobs");
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await queue.enqueueMany(
+          [
+            { type: "a", payload: {}, options: { queue: alpha } },
+            { type: "b", payload: {}, options: { queue: alpha } },
+            { type: "c", payload: {}, options: { queue: beta } },
+          ],
+          client,
+        );
+        await client.query("COMMIT");
+      } finally {
+        client.release();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const relevant = notifications.filter((payload) => payload === alpha || payload === beta);
+      expect(relevant).toHaveLength(2);
+      expect(new Set(relevant)).toEqual(new Set([alpha, beta]));
+    } finally {
+      await listener.query("UNLISTEN ironshift_jobs");
+      listener.release();
+    }
+  });
+
   it("defines the resettable enqueue sequence in the ready claim path", () => {
     expect(conventionalSql).toContain(
       "CREATE SEQUENCE IF NOT EXISTS ironshift_benchmark_conventional.enqueue_sequence_seq",

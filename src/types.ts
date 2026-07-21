@@ -17,6 +17,19 @@ export interface EnqueueOptions {
   maxAttempts?: number;
 }
 
+/** One job accepted by {@link Queue.enqueueMany}, with the same semantics as `Queue.enqueue`. */
+export interface EnqueueRequest<TPayload extends Json = Json> {
+  type: string;
+  payload: TPayload;
+  options?: EnqueueOptions;
+}
+
+/**
+ * Maximum supported requests per `enqueueMany` call. This bounds JSON parsing, statement memory,
+ * identity allocation, and notification work inside one PostgreSQL transaction.
+ */
+export const MAX_ENQUEUE_BATCH_SIZE = 1_000;
+
 export interface ClaimedJob<TPayload = Json> {
   /** Stable job identity across all attempts. */
   id: string;

@@ -20,13 +20,19 @@ The default history partitions prevent inserts from failing if monthly partition
 
 All correctness-sensitive transitions are versioned PostgreSQL functions:
 
-1. `enqueue_v1` inserts immutable identity, current projection, initial event, and ready or scheduled work in the caller transaction.
+1. `enqueue_many_v1` accepts a JSONB array and inserts immutable identity, current projection, initial event, and ready or scheduled work in one data-modifying CTE statement. It returns job IDs in input order, assigns ready FIFO sequence in that order, and atomically rejects the whole batch if any request is invalid. `enqueue_v1` delegates to this batch core.
 2. `promote_v1` moves a bounded, locked due set from scheduled to ready.
 3. `claim_v1` locks one ready row with `SKIP LOCKED`, removes it, allocates a global fence, creates a lease, and appends the claim event.
 4. `heartbeat_v1` extends only the matching unexpired worker/fence lease.
 5. `complete_v1` consumes only the matching unexpired lease, finalizes current state, and appends attempt/event history.
 6. `fail_v1` immutably closes the current attempt and either creates a new ready/scheduled attempt or terminally fails the job.
 7. `recover_expired_v1` locks expired leases in bounded batches, closes each attempt, and requeues or terminally fails it. The old fence can no longer complete.
+
+### Batch enqueue contract
+
+`Queue.enqueueMany(requests, transaction?)` accepts up to **1,000 requests** per call. This is the documented safe maximum to bound JSONB parsing, statement memory, identity allocation, event writes, and notification work in one transaction. Larger producer buffers should be split into ordered chunks of at most 1,000 jobs.
+
+Each JSONB request contains `queue`, `type`, `payload`, ISO-8601 `runAt`, and `maxAttempts`. Ready and scheduled requests may be mixed. The returned UUID array matches input order, an empty input returns immediately without querying PostgreSQL, and an optional active `PoolClient` makes the complete batch commit or roll back with the caller transaction. Every accepted job receives exactly one `enqueued` event. `NOTIFY ironshift_jobs` remains a commit-delivered wake hint and is coalesced to one notification per distinct queue that gained ready work. Scheduled-only queues are not notified until promotion.
 
 ## Crash harness
 
