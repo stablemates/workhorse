@@ -7,6 +7,7 @@ This is deliberately **not** a general-purpose queue product. Its purpose is to 
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md): system boundaries, module ownership, data model, field-by-field database and API dictionaries, lifecycle, transactions, fencing, crash semantics, health model, and invariants.
+- [`docs/features.md`](docs/features.md): authoritative Supported, Partial, and Not Supported feature matrix.
 - [`docs/mvp-protocol.md`](docs/mvp-protocol.md): concise table and SQL transition reference.
 - [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
 
