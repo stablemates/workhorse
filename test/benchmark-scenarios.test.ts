@@ -1,0 +1,199 @@
+import type { QueryResult, QueryResultRow } from "pg";
+import { describe, expect, it } from "vitest";
+import {
+  mean,
+  operationalScenarioContracts,
+  operationalScenarioNames,
+  percentile,
+  pruneHistoryV1Sql,
+  recordInvariant,
+  resetIronshiftStateSql,
+  resolveOperationalScenarioOptions,
+  runOperationalScenarios,
+} from "../benchmarks/scenarios.js";
+import type {
+  OperationalScenarioName,
+  OperationalScenarioRunner,
+  ScenarioAssertion,
+} from "../benchmarks/scenarios.js";
+import type { Queryable } from "../src/index.js";
+
+const unusedPool: Queryable = {
+  query<R extends QueryResultRow>(): Promise<QueryResult<R>> {
+    throw new Error("mocked scenario runners must not query PostgreSQL");
+  },
+};
+
+function passingRunner(name: OperationalScenarioName, calls: string[]): OperationalScenarioRunner {
+  return async (context) => {
+    calls.push(`${name}:${context.queueName}:${context.options.jobCount}`);
+    return {
+      name,
+      durationMs: 0,
+      metrics: { mocked: true },
+      assertions: [{ name: "mock invariant", passed: true, expected: true, actual: true }],
+    };
+  };
+}
+
+describe("operational scenario contracts", () => {
+  it("defines one stable, unique contract for every scenario", () => {
+    expect(operationalScenarioContracts.map((contract) => contract.name)).toEqual(
+      operationalScenarioNames,
+    );
+    expect(new Set(operationalScenarioContracts.map((contract) => contract.name)).size).toBe(
+      operationalScenarioNames.length,
+    );
+    for (const contract of operationalScenarioContracts) {
+      expect(contract.purpose.length).toBeGreaterThan(20);
+      expect(contract.invariants.length).toBeGreaterThan(0);
+      expect(contract.metrics.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("uses explicit reset and versioned pruning SQL contracts", () => {
+    expect(resetIronshiftStateSql).toContain("TRUNCATE ironshift.job_event");
+    expect(resetIronshiftStateSql).toContain("ALTER SEQUENCE ironshift.fence_token_seq");
+    expect(pruneHistoryV1Sql).toContain("ironshift.prune_history_v1");
+    expect(pruneHistoryV1Sql).toContain("$1::timestamptz");
+    expect(pruneHistoryV1Sql).toContain("$2::integer");
+  });
+});
+
+describe("resolveOperationalScenarioOptions", () => {
+  it("provides smoke-safe defaults and canonical scenario ordering", () => {
+    const resolved = resolveOperationalScenarioOptions();
+
+    expect(resolved.jobCount).toBeGreaterThan(0);
+    expect(resolved.jobCount).toBeLessThanOrEqual(20);
+    expect(resolved.heartbeatCount).toBeLessThanOrEqual(resolved.jobCount);
+    expect(resolved.scheduleDelayMs).toBeLessThanOrEqual(100);
+    expect(resolved.leaseMs).toBeLessThanOrEqual(100);
+    expect(resolved.scenarios).toEqual(operationalScenarioNames);
+  });
+
+  it("normalizes custom counts and preserves contract order for a subset", () => {
+    expect(
+      resolveOperationalScenarioOptions({
+        jobCount: 3,
+        heartbeatCount: 2,
+        batchSize: 2,
+        scheduleDelayMs: 5,
+        leaseMs: 6,
+        retryDelayMs: 7,
+        pruneLimit: 8,
+        queuePrefix: " smoke ",
+        scenarios: ["health-snapshot", "heartbeat-fencing"],
+      }),
+    ).toEqual({
+      jobCount: 3,
+      heartbeatCount: 2,
+      batchSize: 2,
+      scheduleDelayMs: 5,
+      leaseMs: 6,
+      retryDelayMs: 7,
+      pruneLimit: 8,
+      queuePrefix: "smoke",
+      scenarios: ["heartbeat-fencing", "health-snapshot"],
+    });
+  });
+
+  it("rejects unsafe numeric values, blank prefixes, and duplicate scenarios", () => {
+    expect(() => resolveOperationalScenarioOptions({ jobCount: 0 })).toThrow(RangeError);
+    expect(() => resolveOperationalScenarioOptions({ leaseMs: 1.5 })).toThrow(RangeError);
+    expect(() => resolveOperationalScenarioOptions({ queuePrefix: "  " })).toThrow(RangeError);
+    expect(() =>
+      resolveOperationalScenarioOptions({
+        scenarios: ["retry-paths", "retry-paths"],
+      }),
+    ).toThrow("must not contain duplicates");
+  });
+});
+
+describe("scenario metric helpers", () => {
+  it("calculates nearest-rank percentiles without mutating samples", () => {
+    const samples = [8, 2, Number.NaN, 4, 6];
+
+    expect(percentile(samples, 0)).toBe(2);
+    expect(percentile(samples, 0.5)).toBe(4);
+    expect(percentile(samples, 0.95)).toBe(8);
+    expect(percentile(samples, 1)).toBe(8);
+    expect(samples).toEqual([8, 2, Number.NaN, 4, 6]);
+  });
+
+  it("handles empty samples and validates percentile bounds", () => {
+    expect(percentile([], 0.5)).toBeNull();
+    expect(percentile([Number.NaN], 0.5)).toBeNull();
+    expect(() => percentile([1], -0.1)).toThrow(RangeError);
+    expect(() => percentile([1], 1.1)).toThrow(RangeError);
+  });
+
+  it("calculates a finite-only arithmetic mean", () => {
+    expect(mean([1, 2, 3, Number.NaN, Infinity])).toBe(2);
+    expect(mean([])).toBeNull();
+  });
+
+  it("records passing invariants and throws immediately on failure", () => {
+    const assertions: ScenarioAssertion[] = [];
+    recordInvariant(assertions, "equal", 2, 2);
+    expect(assertions).toEqual([{ name: "equal", passed: true, expected: 2, actual: 2 }]);
+
+    expect(() => recordInvariant(assertions, "broken", 1, 2)).toThrow(
+      "Operational scenario invariant failed: broken",
+    );
+    expect(assertions.at(-1)?.passed).toBe(false);
+  });
+});
+
+describe("runOperationalScenarios", () => {
+  it("runs a selected subset in contract order with deterministic queue names and timings", async () => {
+    const calls: string[] = [];
+    const ticks = [100, 101, 104, 105, 111, 112];
+    const now = () => ticks.shift() ?? 112;
+    const report = await runOperationalScenarios(unusedPool, {
+      jobCount: 3,
+      queuePrefix: "test",
+      scenarios: ["health-snapshot", "retry-paths"],
+      now,
+      scenarioImplementations: {
+        "retry-paths": passingRunner("retry-paths", calls),
+        "health-snapshot": passingRunner("health-snapshot", calls),
+      },
+    });
+
+    expect(calls).toEqual([
+      "retry-paths:test-retry-paths:3",
+      "health-snapshot:test-health-snapshot:3",
+    ]);
+    expect(report.scenarios.map(({ name, durationMs }) => ({ name, durationMs }))).toEqual([
+      { name: "retry-paths", durationMs: 3 },
+      { name: "health-snapshot", durationMs: 6 },
+    ]);
+    expect(report.totalDurationMs).toBe(12);
+  });
+
+  it("throws if a runner returns the wrong contract or a failed invariant", async () => {
+    await expect(
+      runOperationalScenarios(unusedPool, {
+        scenarios: ["retry-paths"],
+        scenarioImplementations: {
+          "retry-paths": passingRunner("health-snapshot", []),
+        },
+      }),
+    ).rejects.toThrow("returned result for health-snapshot");
+
+    await expect(
+      runOperationalScenarios(unusedPool, {
+        scenarios: ["retry-paths"],
+        scenarioImplementations: {
+          "retry-paths": async () => ({
+            name: "retry-paths",
+            durationMs: 0,
+            metrics: {},
+            assertions: [{ name: "failed", passed: false, expected: true, actual: false }],
+          }),
+        },
+      }),
+    ).rejects.toThrow("returned a failed invariant");
+  });
+});
