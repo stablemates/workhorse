@@ -77,11 +77,11 @@ pnpm benchmark -- --help
 pnpm health
 
 pnpm db:reset:bench
-pnpm benchmark -- --profile smoke --suite all --output benchmark-v2-smoke.json
-pnpm benchmark -- --profile default --suite comparative --output benchmark-v2-comparative.json
+pnpm benchmark -- --profile smoke --suite all --output benchmark-v3-smoke.json
+pnpm benchmark -- --profile default --suite comparative --output benchmark-v3-comparative.json
 ```
 
-Benchmark suite v2 compares a purpose-built mutable-table protocol implementing the measured lifecycle semantics with the hybrid projection design across independent repetitions, Student-t 95% confidence intervals, worker-concurrency sweeps, concurrent producer-consumer churn, relation-level storage, WAL, vacuum, I/O, activity, and executable claim plans. Its lifecycle suite also asserts scheduled promotion, heartbeat fencing, all worker crash boundaries, lease recovery, retries, monthly history retirement, and explicitly degraded health snapshots. Small runs are smoke tests only. They are not evidence of product superiority. Publication-grade evidence still requires larger retained-history horizons, production-shaped payloads, stable hardware, reference systems, and preserved raw results.
+Benchmark suite v3 compares a purpose-built mutable-table protocol implementing the measured lifecycle semantics with the hybrid projection design across a seeded shuffled execution plan, alternating paired design order, batched enqueue metrics, paired ratios/differences, fixed-rate equal-load producer-consumer churn, relation-level storage, WAL, vacuum, I/O, activity, and executable claim plans. Its lifecycle suite also asserts scheduled promotion, heartbeat fencing, all worker crash boundaries, lease recovery, retries, monthly history retirement, and explicitly degraded health snapshots. Small runs are smoke tests only. They are not evidence of product superiority. Publication-grade evidence still requires larger retained-history horizons, production-shaped payloads, stable hardware, reference systems, and preserved raw results.
 
 Follow the complete [benchmark runbook](docs/benchmarking.md) before running or interpreting anything beyond a smoke test.
 
