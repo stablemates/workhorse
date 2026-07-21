@@ -1,5 +1,7 @@
 # Ironshift MVP protocol
 
+This is the compact protocol reference. Read [architecture.md](architecture.md) for the design rationale and [benchmarking.md](benchmarking.md) for the evidence runbook.
+
 ## Storage model
 
 | Relation          | Role                                                  | Mutation model                                          |
@@ -37,5 +39,5 @@ All correctness-sensitive transitions are versioned PostgreSQL functions:
 - The worker uses indexed polling. `NOTIFY` is emitted as a wake hint, but a dedicated listener is intentionally postponed.
 - Retry delay is caller supplied. Backoff and jitter policy are not productized.
 - History partition creation and bulk retirement functions exist, but scheduling and retention policy are intentionally left to the validation environment.
-- The health command reports table/index size, live/dead tuples, autovacuum observations, queue depth, expired leases, oldest ready age, and oldest open transaction. WAL rate, lock waits, and provider-specific restrictions require further validation.
+- The health command reports table/index size, live/dead tuples, HOT ratio, vacuum timestamps, queue depth, expired leases, oldest ready age, oldest open transaction, lock waits, and notification usage. WAL rate, vacuum duration/I/O, historical growth, and provider-specific restrictions require further validation.
 - Benchmark semantics cover independent enqueue, claim, and completion. The conventional prototype is a success-path baseline and must gain equivalent lease/history/recovery semantics before comparative product claims. The harness does not yet model PgQue separately, replication horizons, dashboard load, high contention, or 100 million transitions.

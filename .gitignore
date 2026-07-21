@@ -4,3 +4,5 @@ dist/
 .env
 *.tgz
 benchmark*.json
+benchmark-artifacts/
+health*.json

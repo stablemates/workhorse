@@ -1,6 +1,7 @@
 import type { QueryResult, QueryResultRow } from "pg";
 
 export interface Queryable {
+  /** Minimal structural contract shared by pg Pool and PoolClient. */
   query<R extends QueryResultRow = QueryResultRow>(
     text: string,
     values?: readonly unknown[],
@@ -9,6 +10,7 @@ export interface Queryable {
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+/** Options persisted as part of the accepted job definition or initial dispatch projection. */
 export interface EnqueueOptions {
   queue?: string;
   runAt?: Date;
@@ -16,12 +18,16 @@ export interface EnqueueOptions {
 }
 
 export interface ClaimedJob<TPayload = Json> {
+  /** Stable job identity across all attempts. */
   id: string;
   type: string;
   payload: TPayload;
+  /** One-based attempt number. Recovery and retry always create the next number. */
   attempt: number;
   maxAttempts: number;
+  /** Ownership generation that must accompany heartbeat, completion, and failure. */
   fenceToken: bigint;
+  /** Client-visible expiry snapshot. PostgreSQL remains authoritative. */
   leaseExpiresAt: Date;
 }
 
@@ -35,6 +41,7 @@ export interface JobSnapshot<TResult = Json> {
   state: JobState;
   currentAttempt: number;
   maxAttempts: number;
+  /** Current ownership generation, or zero before the first claim. */
   fenceToken: bigint;
   runAt: Date;
   result: TResult | null;
@@ -44,6 +51,7 @@ export interface JobSnapshot<TResult = Json> {
 }
 
 export interface QueueHealth {
+  /** Canonical schema protocol version installed in this database. */
   schemaVersion: number | null;
   counts: Record<JobState, number>;
   readyDepth: number;
@@ -51,6 +59,7 @@ export interface QueueHealth {
   activeLeases: number;
   expiredLeases: number;
   oldestReadyAgeMs: number | null;
+  /** PostgreSQL relation statistics are estimates and may lag until stats flush. */
   relations: Array<{
     relation: string;
     totalBytes: number;
@@ -59,11 +68,14 @@ export interface QueueHealth {
     liveTuples: number;
     deadTuples: number;
     modificationsSinceAnalyze: number;
+    /** HOT updates divided by all updates, or null when no updates were observed. */
     hotUpdateRatio: number | null;
     lastVacuum: Date | null;
     lastAutovacuum: Date | null;
   }>;
   oldestTransactionAgeMs: number | null;
+  /** Sessions currently waiting on PostgreSQL locks, excluding the health query itself. */
   lockWaitCount: number;
+  /** Fraction of PostgreSQL's global async notification queue currently occupied. */
   notificationQueueUsage: number;
 }

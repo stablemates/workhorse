@@ -3,6 +3,8 @@ import { Pool } from "pg";
 import { installSchema } from "../schema.js";
 
 const databaseUrl = process.env.DATABASE_URL;
+// This command is intentionally harder to invoke than normal development commands because it
+// terminates connections and drops a database. Keep every guard when extending it.
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 if (!process.argv.includes("--yes")) throw new Error("Pass --yes to confirm the destructive reset");
 const target = new URL(databaseUrl);
@@ -34,6 +36,8 @@ console.log(
 );
 const admin = new Pool({ connectionString: adminUrl.toString(), max: 1 });
 try {
+  // FORCE terminates other sessions. The _test suffix, explicit URL, confirmation, and host guard
+  // above are the safety boundary around this destructive operation.
   await admin.query(`DROP DATABASE IF EXISTS ${identifier(databaseName)} WITH (FORCE)`);
   await admin.query(`CREATE DATABASE ${identifier(databaseName)}`);
 } finally {

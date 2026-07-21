@@ -18,12 +18,19 @@ type ClaimRow = {
 };
 
 function errorEnvelope(error: unknown): Json {
+  // Persist a bounded JSON representation instead of relying on Error's non-enumerable fields.
   if (error instanceof Error) {
     return { name: error.name, message: error.message, stack: error.stack ?? null };
   }
   return { name: "NonErrorThrown", message: String(error) };
 }
 
+/**
+ * Thin TypeScript facade over the versioned PostgreSQL protocol.
+ *
+ * Correctness lives in SQL functions. Keeping this layer thin prevents each runtime client from
+ * inventing its own locking, fencing, or history behavior.
+ */
 export class Queue {
   constructor(
     private readonly database: Queryable,
@@ -36,6 +43,8 @@ export class Queue {
     options: EnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<string> {
+    // Supplying an active PoolClient makes enqueue participate in the caller's application
+    // transaction. The function does not begin or commit a transaction on the caller's behalf.
     const result = await transaction.query<{ job_id: string }>(
       "SELECT ironshift.enqueue_v1($1, $2, $3::jsonb, $4, $5) AS job_id",
       [
@@ -50,6 +59,7 @@ export class Queue {
   }
 
   async promote(limit = 100): Promise<number> {
+    // Promotion is bounded so a large delayed backlog cannot create one long lock transaction.
     const result = await this.database.query<{ count: number }>(
       "SELECT ironshift.promote_v1($1) AS count",
       [limit],
@@ -61,6 +71,8 @@ export class Queue {
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedJob<TPayload> | null> {
+    // claim_v1 commits ownership before returning the payload. Handler code must run only after
+    // this query resolves so no row lock or claim transaction spans user code.
     const result = await this.database.query<ClaimRow>(
       "SELECT * FROM ironshift.claim_v1($1, $2, $3)",
       [options.queue ?? this.defaultQueue, workerId, options.leaseMs ?? 30_000],
@@ -79,6 +91,8 @@ export class Queue {
   }
 
   async heartbeat(job: ClaimedJob<unknown>, workerId: string, leaseMs = 30_000): Promise<boolean> {
+    // False means the worker/fence is stale or the lease already expired. The caller must stop
+    // treating the job as owned even if local handler code is still running.
     const result = await this.database.query<{ accepted: boolean }>(
       "SELECT ironshift.heartbeat_v1($1, $2, $3, $4) AS accepted",
       [job.id, workerId, job.fenceToken.toString(), leaseMs],
@@ -91,6 +105,8 @@ export class Queue {
     workerId: string,
     result: TResult,
   ): Promise<boolean> {
+    // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
+    // rather than overwriting the result of a recovered attempt.
     const query = await this.database.query<{ accepted: boolean }>(
       "SELECT ironshift.complete_v1($1, $2, $3, $4::jsonb) AS accepted",
       [job.id, workerId, job.fenceToken.toString(), JSON.stringify(result)],
@@ -104,6 +120,8 @@ export class Queue {
     error: unknown,
     retryDelayMs = 0,
   ): Promise<"ready" | "scheduled" | "failed" | "stale"> {
+    // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
+    // creating the next projection. retryDelayMs selects ready versus scheduled placement.
     const result = await this.database.query<{ state: "ready" | "scheduled" | "failed" | "stale" }>(
       "SELECT ironshift.fail_v1($1, $2, $3, $4::jsonb, $5) AS state",
       [
@@ -118,6 +136,8 @@ export class Queue {
   }
 
   async recoverExpired(limit = 100, retryDelayMs = 0): Promise<number> {
+    // Recovery may be called by many workers. SKIP LOCKED inside the function partitions work
+    // between callers while fence checks prevent an old lease from recovering a newer attempt.
     const result = await this.database.query<{ count: number }>(
       "SELECT ironshift.recover_expired_v1($1, $2) AS count",
       [limit, retryDelayMs],
@@ -126,6 +146,8 @@ export class Queue {
   }
 
   async getJob<TResult = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
+    // Operator reads join immutable identity with the current projection. This query is never used
+    // by dispatch, so adding operator-facing fields does not expand the ready index.
     const result = await this.database.query<{
       id: string;
       queue_name: string;
@@ -167,6 +189,8 @@ export class Queue {
   }
 
   async health(): Promise<QueueHealth> {
+    // Run independent read-only diagnostics concurrently. PostgreSQL statistics are observations,
+    // not transactional facts, and can lag until the statistics collector flushes.
     const [version, counts, depths, relations, activity, notification] = await Promise.all([
       this.database.query<{ version: number }>(
         "SELECT max(version)::integer AS version FROM ironshift.schema_version",
