@@ -7,6 +7,7 @@ This runbook explains how to execute Ironshift's benchmark suite, preserve repro
 - [2026-07-21 small-scale ladder](benchmarks/2026-07-21-small-scale-analysis.md): legacy v1 success-path results retained for historical comparison.
 - [`results/2026-07-21-v2-smoke.json`](benchmarks/results/2026-07-21-v2-smoke.json): fresh v2 smoke artifact covering comparative and lifecycle suites.
 - [`results/2026-07-21-v2-default.json`](benchmarks/results/2026-07-21-v2-default.json): fresh v2 default-profile artifact with three repetitions at 1/4/8 workers, concurrent churn, and all lifecycle scenarios.
+- [2026-07-21 v2 default-profile analysis](benchmarks/2026-07-21-v2-default-analysis.md): phase-level throughput diagnosis, paired comparisons, storage/WAL interpretation, churn limitations, and prioritized follow-up work.
 
 ## What v2 measures
 
