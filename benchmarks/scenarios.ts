@@ -186,8 +186,9 @@ export const resetIronshiftStateSql = `TRUNCATE ironshift.job_event, ironshift.a
   ironshift.job_current, ironshift.job RESTART IDENTITY CASCADE;
 ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1`;
 
-export const pruneHistoryV1Sql =
-  "SELECT ironshift.prune_history_v1($1::timestamptz, $2::integer) AS pruned";
+export const createHistoryPartitionsV1Sql =
+  "SELECT ironshift.create_history_partitions_v1($1::date)";
+export const retireHistoryMonthV1Sql = "SELECT ironshift.retire_history_month_v1($1::date)";
 
 const defaults: ResolvedOperationalScenarioOptions = {
   jobCount: 12,
@@ -605,32 +606,37 @@ async function retentionPruning(
   await reset(context.pool);
   const queue = new Queue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
-  const seededJobs = Math.min(context.options.jobCount, 10);
+  const seededJobs = Math.min(context.options.jobCount, context.options.pruneLimit, 10);
   for (let index = 0; index < seededJobs; index += 1) {
     await queue.enqueue("retention", { index });
     const job = await queue.claim(`retention-worker-${index}`);
     await queue.complete(job!, `retention-worker-${index}`, { ok: true });
   }
-  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1_000);
+  const retiredMonth = new Date();
+  retiredMonth.setUTCDate(1);
+  retiredMonth.setUTCHours(12, 0, 0, 0);
+  retiredMonth.setUTCMonth(retiredMonth.getUTCMonth() - 2);
+  const retiredMonthDate = `${retiredMonth.getUTCFullYear()}-${String(retiredMonth.getUTCMonth() + 1).padStart(2, "0")}-01`;
+  const historicalTimestamp = new Date(`${retiredMonthDate.slice(0, 8)}15T12:00:00.000Z`);
+  await context.pool.query(createHistoryPartitionsV1Sql, [retiredMonthDate]);
   await context.pool.query(
     `UPDATE ironshift.job_event e SET occurred_at = $1
-      FROM ironshift.job j WHERE j.id = e.job_id AND j.queue_name = $2;
-     UPDATE ironshift.attempt_history h SET occurred_at = $1, finished_at = $1
+      FROM ironshift.job j WHERE j.id = e.job_id AND j.queue_name = $2`,
+    [historicalTimestamp, context.queueName],
+  );
+  await context.pool.query(
+    `UPDATE ironshift.attempt_history h SET occurred_at = $1, finished_at = $1
       FROM ironshift.job j WHERE j.id = h.job_id AND j.queue_name = $2`,
-    [new Date(cutoff.getTime() - 1_000), context.queueName],
+    [historicalTimestamp, context.queueName],
   );
   const historyBefore =
     (await rowCount(context.pool, "job_event")) + (await rowCount(context.pool, "attempt_history"));
-  const pruneResult = await context.pool.query<{ pruned: string | number }>(pruneHistoryV1Sql, [
-    cutoff,
-    context.options.pruneLimit,
-  ]);
-  const pruned = Number(pruneResult.rows[0]?.pruned ?? 0);
+  await context.pool.query(retireHistoryMonthV1Sql, [retiredMonthDate]);
   const historyAfter =
     (await rowCount(context.pool, "job_event")) + (await rowCount(context.pool, "attempt_history"));
+  const pruned = historyBefore - historyAfter;
   const retainedJobs = await rowCount(context.pool, "job");
   recordInvariant(assertions, "terminal history was seeded", historyBefore > 0, true);
-  recordInvariant(assertions, "pruning is bounded", pruned <= context.options.pruneLimit, true);
   recordInvariant(
     assertions,
     "prune reports removed history",

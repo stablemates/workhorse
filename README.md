@@ -77,10 +77,11 @@ pnpm benchmark -- --help
 pnpm health
 
 pnpm db:reset:bench
-pnpm benchmark -- --jobs 1000 --rounds 3 --output benchmark.json
+pnpm benchmark -- --profile smoke --suite all --output benchmark-v2-smoke.json
+pnpm benchmark -- --profile default --suite comparative --output benchmark-v2-comparative.json
 ```
 
-The benchmark retains terminal rows between rounds and reports throughput, p50/p95/p99 claim latency, relation size, estimated dead tuples, WAL bytes, and executable claim plans for both designs. The conventional prototype is currently a success-path baseline, not yet a fully semantics-equivalent lease/recovery implementation. Small runs are smoke tests only. They are not evidence of product superiority. The viability gate requires equivalent semantics, sustained runs at much larger scale, retained history, delayed cleanup horizons, production-shaped payloads, and published raw results.
+Benchmark suite v2 compares a semantics-equivalent mutable-table queue with the hybrid projection design across independent repetitions, Student-t 95% confidence intervals, worker-concurrency sweeps, sustained churn samples, relation-level storage, WAL, vacuum, I/O, activity, and executable claim plans. Its lifecycle suite also asserts scheduled promotion, heartbeat fencing, crash durability, lease recovery, retries, monthly history retirement, and degraded health snapshots. Small runs are smoke tests only. They are not evidence of product superiority. Publication-grade evidence still requires larger retained-history horizons, production-shaped payloads, stable hardware, reference systems, and preserved raw results.
 
 Follow the complete [benchmark runbook](docs/benchmarking.md) before running or interpreting anything beyond a smoke test.
 

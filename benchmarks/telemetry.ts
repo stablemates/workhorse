@@ -2,7 +2,14 @@ import { performance } from "node:perf_hooks";
 import type { QueryResult } from "pg";
 import type { Queryable } from "../src/types.js";
 
-export type RelationKind = "table" | "partitioned_table" | "materialized_view" | "index" | "partitioned_index" | "toast" | "other";
+export type RelationKind =
+  | "table"
+  | "partitioned_table"
+  | "materialized_view"
+  | "index"
+  | "partitioned_index"
+  | "toast"
+  | "other";
 
 export interface WalLsnStart {
   lsn: string;
@@ -161,7 +168,10 @@ export async function captureWalLsnStart(db: Queryable): Promise<WalLsnStart> {
   return { lsn: row.lsn, capturedAt: dateFromPg(row.captured_at)! };
 }
 
-export async function captureWalLsnDifference(db: Queryable, start: WalLsnStart | string): Promise<WalLsnDifference> {
+export async function captureWalLsnDifference(
+  db: Queryable,
+  start: WalLsnStart | string,
+): Promise<WalLsnDifference> {
   const startLsn = typeof start === "string" ? start : start.lsn;
   const result = await db.query<{ end_lsn: string; bytes: string; captured_at: Date }>(
     `SELECT pg_current_wal_lsn()::text AS end_lsn,
@@ -179,7 +189,10 @@ export async function captureWalLsnDifference(db: Queryable, start: WalLsnStart 
   };
 }
 
-export async function captureRelationTelemetry(db: Queryable, schema: string): Promise<RelationTelemetry[]> {
+export async function captureRelationTelemetry(
+  db: Queryable,
+  schema: string,
+): Promise<RelationTelemetry[]> {
   await db.query("SELECT pg_stat_force_next_flush()");
   const result = await db.query<{
     schema_name: string;
@@ -320,7 +333,8 @@ export async function captureActivitySnapshot(db: Queryable): Promise<ActivitySn
     idleInTransactionConnections: numberFromPg(row.idle_in_transaction_connections),
     lockWaits: numberFromPg(row.lock_waits),
     oldestTransaction: dateFromPg(row.oldest_transaction),
-    oldestTransactionAgeMs: row.oldest_transaction_age_ms === null ? null : Number(row.oldest_transaction_age_ms),
+    oldestTransactionAgeMs:
+      row.oldest_transaction_age_ms === null ? null : Number(row.oldest_transaction_age_ms),
   };
 }
 
@@ -329,7 +343,9 @@ export async function explainAnalyzeBuffersJson(
   sql: string,
   values: readonly unknown[] = [],
 ): Promise<unknown> {
-  const result = (await db.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, [...values])) as QueryResult<{
+  const result = (await db.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, [
+    ...values,
+  ])) as QueryResult<{
     "QUERY PLAN": unknown;
   }>;
   return result.rows[0]?.["QUERY PLAN"] ?? null;
@@ -354,8 +370,18 @@ export async function vacuumAnalyzeRelation(
 }
 
 export async function capturePgStatIoSnapshot(db: Queryable): Promise<PgStatIoSnapshot | null> {
-  const available = await db.query<{ exists: boolean }>("SELECT to_regclass('pg_catalog.pg_stat_io') IS NOT NULL AS exists");
-  if (!available.rows[0]?.exists) return null;
+  const available = await db.query<{ column_name: string }>(
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema = 'pg_catalog' AND table_name = 'pg_stat_io'`,
+  );
+  if (available.rows.length === 0) return null;
+  const columns = new Set(available.rows.map((row) => row.column_name));
+  // PostgreSQL 18 replaced the single op_bytes column with per-operation byte counters.
+  // Preserve one stable cross-version field by summing those counters when necessary.
+  const operationBytesExpression = columns.has("op_bytes")
+    ? "op_bytes"
+    : "COALESCE(read_bytes, 0) + COALESCE(write_bytes, 0) + COALESCE(extend_bytes, 0)";
 
   try {
     const result = await db.query<{
@@ -391,7 +417,7 @@ export async function capturePgStatIoSnapshot(db: Queryable): Promise<PgStatIoSn
               writeback_time::text,
               extends::text,
               extend_time::text,
-              op_bytes::text,
+              (${operationBytesExpression})::text AS op_bytes,
               hits::text,
               evictions::text,
               reuses::text,
@@ -426,7 +452,13 @@ export async function capturePgStatIoSnapshot(db: Queryable): Promise<PgStatIoSn
       })),
     };
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "42P01") return null;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error.code === "42P01" || error.code === "42703")
+    )
+      return null;
     throw error;
   }
 }
@@ -436,12 +468,19 @@ export function diffPgStatIoSnapshots(
   end: PgStatIoSnapshot | null,
 ): PgStatIoDelta | null {
   if (start === null || end === null) return null;
-  const startEntries = new Map(start.entries.map((entry) => [`${entry.backendType}\0${entry.object}\0${entry.context}`, entry]));
+  const startEntries = new Map(
+    start.entries.map((entry) => [
+      `${entry.backendType}\0${entry.object}\0${entry.context}`,
+      entry,
+    ]),
+  );
   return {
     startCapturedAt: start.capturedAt,
     endCapturedAt: end.capturedAt,
     entries: end.entries.map((entry) => {
-      const startEntry = startEntries.get(`${entry.backendType}\0${entry.object}\0${entry.context}`);
+      const startEntry = startEntries.get(
+        `${entry.backendType}\0${entry.object}\0${entry.context}`,
+      );
       return {
         backendType: entry.backendType,
         object: entry.object,

@@ -179,7 +179,13 @@ export class ConventionalQueue {
   ): Promise<ConventionalFailState> {
     const result = await this.database.query<{ state: ConventionalFailState }>(
       `SELECT ${conventionalSchema}.fail_v1($1, $2, $3, $4::jsonb, $5) AS state`,
-      [job.id, workerId, job.fenceToken.toString(), JSON.stringify(errorEnvelope(error)), retryDelayMs],
+      [
+        job.id,
+        workerId,
+        job.fenceToken.toString(),
+        JSON.stringify(errorEnvelope(error)),
+        retryDelayMs,
+      ],
     );
     return result.rows[0]!.state;
   }

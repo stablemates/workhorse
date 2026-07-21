@@ -1,241 +1,183 @@
-import { performance } from "node:perf_hooks";
 import type { Pool } from "pg";
-import { Queue } from "../src/index.js";
+import {
+  runComparativeBenchmark,
+  type ComparativeBenchmarkOptionsInput,
+  type ComparativeBenchmarkResult,
+} from "./comparative.js";
+import {
+  runOperationalScenarios,
+  type OperationalScenarioOptions,
+  type OperationalScenarioReport,
+} from "./scenarios.js";
 
-export interface BenchmarkOptions {
-  jobs: number;
-  rounds: number;
-  queue?: string;
+export type BenchmarkSuite = "all" | "comparative" | "lifecycle";
+export type BenchmarkProfileName = "smoke" | "default" | "full";
+
+export interface BenchmarkRunOptions {
+  suite?: BenchmarkSuite;
+  profile?: BenchmarkProfileName;
+  comparative?: ComparativeBenchmarkOptionsInput;
+  operational?: OperationalScenarioOptions;
 }
 
-export interface RoundResult {
-  design: "conventional" | "hybrid";
-  round: number;
-  jobs: number;
-  throughputPerSecond: number;
-  claimLatencyMs: { p50: number; p95: number; p99: number };
-  relationBytes: number;
-  deadTuples: number;
-  walBytes: number;
-  claimPlan: unknown;
+export interface ResolvedBenchmarkRunOptions {
+  suite: BenchmarkSuite;
+  profile: BenchmarkProfileName;
+  comparative: ComparativeBenchmarkOptionsInput;
+  operational: OperationalScenarioOptions;
 }
 
-// The conventional design is intentionally isolated in another schema so relation statistics and
-// storage can be attributed separately. It is a mutable-table success-path baseline, not yet a
-// complete semantic peer for hybrid retries, leases, and history.
-const conventionalSetup = `
-CREATE SCHEMA IF NOT EXISTS ironshift_benchmark_conventional;
-CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.job (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  queue_name text NOT NULL,
-  payload jsonb NOT NULL,
-  status text NOT NULL,
-  attempt integer NOT NULL DEFAULT 1,
-  fence_token bigint NOT NULL DEFAULT 0,
-  result jsonb,
-  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
-);
-CREATE INDEX IF NOT EXISTS conventional_claim_idx
-  ON ironshift_benchmark_conventional.job (queue_name, id) WHERE status = 'ready';
-ALTER TABLE ironshift_benchmark_conventional.job RESET (autovacuum_enabled);
-`;
-
-function percentile(sorted: number[], value: number): number {
-  // Use a nearest-rank percentile. Keeping raw client-observed samples avoids assuming a latency
-  // distribution, which is especially important for the long tail.
-  if (sorted.length === 0) return 0;
-  const index = Math.min(sorted.length - 1, Math.ceil(value * sorted.length) - 1);
-  return sorted[index] ?? 0;
+export interface BenchmarkReportV2 {
+  schemaVersion: 2;
+  generatedAt: string;
+  suite: BenchmarkSuite;
+  profile: BenchmarkProfileName;
+  environment: {
+    database: string;
+    postgresVersion: string;
+  };
+  configuration: {
+    comparative: ComparativeBenchmarkOptionsInput;
+    operational: OperationalScenarioOptions;
+  };
+  comparative?: ComparativeBenchmarkResult;
+  lifecycle?: OperationalScenarioReport;
 }
 
-async function walPosition(pool: Pool): Promise<string> {
-  // WAL is measured around one design round. Other database activity will contaminate this value,
-  // so published runs must use an otherwise idle database.
-  const result = await pool.query<{ lsn: string }>("SELECT pg_current_wal_lsn() AS lsn");
-  return result.rows[0]!.lsn;
+interface BenchmarkProfile {
+  comparative: ComparativeBenchmarkOptionsInput;
+  operational: OperationalScenarioOptions;
 }
 
-async function walDifference(pool: Pool, start: string): Promise<number> {
-  const result = await pool.query<{ bytes: string }>(
-    "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), $1)::text AS bytes",
-    [start],
-  );
-  return Number(result.rows[0]!.bytes);
-}
-
-async function stats(
-  pool: Pool,
-  schema: string,
-): Promise<{ relationBytes: number; deadTuples: number }> {
-  // Force this backend's statistics snapshot to refresh before reading estimates. n_dead_tup remains
-  // an estimate and should be interpreted as a trend rather than an exact row count.
-  await pool.query("SELECT pg_stat_force_next_flush()");
-  const result = await pool.query<{ bytes: string; dead: string }>(
-    `
-    SELECT COALESCE(sum(pg_total_relation_size(c.oid)), 0)::text AS bytes,
-           COALESCE(sum(s.n_dead_tup), 0)::text AS dead
-      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-     WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')`,
-    [schema],
-  );
-  return { relationBytes: Number(result.rows[0]!.bytes), deadTuples: Number(result.rows[0]!.dead) };
-}
-
-async function plan(pool: Pool, sql: string, values: unknown[]): Promise<unknown> {
-  // Capture an executable plan while the ready set is populated. A plain EXPLAIN after draining the
-  // queue would hide visibility and buffer behavior of the actual claim path.
-  const result = await pool.query<{ "QUERY PLAN": unknown }>(
-    `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`,
-    values,
-  );
-  return result.rows[0]?.["QUERY PLAN"] ?? null;
-}
-
-function summarize(
-  design: RoundResult["design"],
-  round: number,
-  jobs: number,
-  elapsedMs: number,
-  latencies: number[],
-  relation: { relationBytes: number; deadTuples: number },
-  walBytes: number,
-  claimPlan: unknown,
-): RoundResult {
-  latencies.sort((a, b) => a - b);
-  return {
-    design,
-    round,
-    jobs,
-    throughputPerSecond: (jobs / elapsedMs) * 1000,
-    claimLatencyMs: {
-      p50: percentile(latencies, 0.5),
-      p95: percentile(latencies, 0.95),
-      p99: percentile(latencies, 0.99),
+export const benchmarkProfiles: Readonly<Record<BenchmarkProfileName, BenchmarkProfile>> = {
+  smoke: {
+    comparative: {
+      jobsPerRun: 12,
+      repetitions: 2,
+      workerConcurrency: [1, 2],
+      leaseMs: 5_000,
+      churn: { durationMs: 500, batchSize: 4, sampleIntervalMs: 100, workerConcurrency: 2 },
     },
-    ...relation,
-    walBytes,
-    claimPlan,
+    operational: {
+      jobCount: 6,
+      heartbeatCount: 3,
+      batchSize: 3,
+      scheduleDelayMs: 30,
+      leaseMs: 100,
+      retryDelayMs: 30,
+      pruneLimit: 100,
+    },
+  },
+  default: {
+    comparative: {
+      jobsPerRun: 100,
+      repetitions: 3,
+      workerConcurrency: [1, 4, 8],
+      leaseMs: 30_000,
+      churn: { durationMs: 5_000, batchSize: 25, sampleIntervalMs: 500, workerConcurrency: 4 },
+    },
+    operational: {
+      jobCount: 24,
+      heartbeatCount: 8,
+      batchSize: 8,
+      scheduleDelayMs: 75,
+      leaseMs: 150,
+      retryDelayMs: 75,
+      pruneLimit: 1_000,
+    },
+  },
+  full: {
+    comparative: {
+      jobsPerRun: 1_000,
+      repetitions: 5,
+      workerConcurrency: [1, 4, 16, 32],
+      leaseMs: 30_000,
+      churn: { durationMs: 60_000, batchSize: 100, sampleIntervalMs: 1_000, workerConcurrency: 16 },
+    },
+    operational: {
+      jobCount: 100,
+      heartbeatCount: 32,
+      batchSize: 25,
+      scheduleDelayMs: 100,
+      leaseMs: 200,
+      retryDelayMs: 100,
+      pruneLimit: 10_000,
+    },
+  },
+};
+
+function cloneComparativeOptions(
+  options: ComparativeBenchmarkOptionsInput,
+): ComparativeBenchmarkOptionsInput {
+  return {
+    ...options,
+    workerConcurrency: options.workerConcurrency ? [...options.workerConcurrency] : undefined,
+    churn: options.churn ? { ...options.churn } : undefined,
   };
 }
 
-async function conventionalRound(
-  pool: Pool,
-  round: number,
-  jobs: number,
-  queueName: string,
-): Promise<RoundResult> {
-  const walStart = await walPosition(pool);
-  const started = performance.now();
-  await pool.query(
-    `INSERT INTO ironshift_benchmark_conventional.job(queue_name, payload, status)
-    SELECT $1, jsonb_build_object('n', n), 'ready'
-      FROM generate_series(1, $2::integer) AS n`,
-    [queueName, jobs],
-  );
-  const claimPlan = await plan(
-    pool,
-    `SELECT id FROM ironshift_benchmark_conventional.job
-    WHERE queue_name = $1 AND status = 'ready' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1`,
-    [queueName],
-  );
-  // Claims and completions are deliberately sequential. This scenario isolates steady churn and
-  // plan stability; a separate contention scenario should own concurrent worker measurements.
-  const latencies: number[] = [];
-  for (let index = 0; index < jobs; index += 1) {
-    const claimStarted = performance.now();
-    const claimed = await pool.query<{ id: string }>(
-      `WITH selected AS (
-      SELECT id FROM ironshift_benchmark_conventional.job
-       WHERE queue_name = $1 AND status = 'ready' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1
-    ) UPDATE ironshift_benchmark_conventional.job j
-         SET status = 'active', fence_token = fence_token + 1, updated_at = clock_timestamp()
-        FROM selected s WHERE j.id = s.id RETURNING j.id`,
-      [queueName],
-    );
-    latencies.push(performance.now() - claimStarted);
-    await pool.query(
-      `UPDATE ironshift_benchmark_conventional.job
-      SET status = 'succeeded', result = '{"ok":true}'::jsonb, updated_at = clock_timestamp()
-      WHERE id = $1`,
-      [claimed.rows[0]!.id],
-    );
-  }
-  const elapsed = performance.now() - started;
-  return summarize(
-    "conventional",
-    round,
-    jobs,
-    elapsed,
-    latencies,
-    await stats(pool, "ironshift_benchmark_conventional"),
-    await walDifference(pool, walStart),
-    claimPlan,
-  );
+function cloneOperationalOptions(options: OperationalScenarioOptions): OperationalScenarioOptions {
+  return {
+    ...options,
+    scenarios: options.scenarios ? [...options.scenarios] : undefined,
+  };
 }
 
-async function hybridRound(
-  pool: Pool,
-  round: number,
-  jobs: number,
-  queueName: string,
-): Promise<RoundResult> {
-  const queue = new Queue(pool, queueName);
-  const walStart = await walPosition(pool);
-  const started = performance.now();
-  await pool.query(
-    `SELECT ironshift.enqueue_v1($1, 'benchmark', jsonb_build_object('n', n), clock_timestamp(), 1)
-    FROM generate_series(1, $2::integer) AS n`,
-    [queueName, jobs],
-  );
-  const claimPlan = await plan(
-    pool,
-    `SELECT job_id FROM ironshift.ready_job
-    WHERE queue_name = $1 ORDER BY sequence, job_id FOR UPDATE SKIP LOCKED LIMIT 1`,
-    [queueName],
-  );
-  // Measure only the claim call. Completion remains inside total throughput and WAL measurements,
-  // while claim percentiles stay comparable to the dispatch-path latency objective.
-  const latencies: number[] = [];
-  for (let index = 0; index < jobs; index += 1) {
-    const claimStarted = performance.now();
-    const claimed = await queue.claim("benchmark-worker", { queue: queueName });
-    latencies.push(performance.now() - claimStarted);
-    if (!claimed) throw new Error(`Hybrid claim returned no job at index ${index}`);
-    await queue.complete(claimed, "benchmark-worker", { ok: true });
-  }
-  const elapsed = performance.now() - started;
-  return summarize(
-    "hybrid",
-    round,
-    jobs,
-    elapsed,
-    latencies,
-    await stats(pool, "ironshift"),
-    await walDifference(pool, walStart),
-    claimPlan,
-  );
+export function resolveBenchmarkRunOptions(
+  input: BenchmarkRunOptions = {},
+): ResolvedBenchmarkRunOptions {
+  const profile = input.profile ?? "default";
+  const suite = input.suite ?? "all";
+  const selected = benchmarkProfiles[profile];
+  const comparative = cloneComparativeOptions(selected.comparative);
+  const operational = cloneOperationalOptions(selected.operational);
+
+  return {
+    suite,
+    profile,
+    comparative: {
+      ...comparative,
+      ...input.comparative,
+      workerConcurrency: input.comparative?.workerConcurrency ?? comparative.workerConcurrency,
+      churn: { ...comparative.churn, ...input.comparative?.churn },
+    },
+    operational: {
+      ...operational,
+      ...input.operational,
+      scenarios: input.operational?.scenarios ?? operational.scenarios,
+    },
+  };
 }
 
-export async function runBenchmark(pool: Pool, options: BenchmarkOptions): Promise<RoundResult[]> {
-  if (!Number.isInteger(options.jobs) || options.jobs < 1)
-    throw new Error("jobs must be a positive integer");
-  if (!Number.isInteger(options.rounds) || options.rounds < 1)
-    throw new Error("rounds must be a positive integer");
-  await pool.query(conventionalSetup);
-  // Reset once per experiment, not once per round. Terminal rows and append-only history must remain
-  // present so later rounds expose lifetime-history effects.
-  await pool.query("TRUNCATE ironshift_benchmark_conventional.job RESTART IDENTITY");
-  await pool.query(`TRUNCATE ironshift.job_event, ironshift.attempt_history, ironshift.lease,
-    ironshift.ready_job, ironshift.scheduled_job, ironshift.job_current, ironshift.job RESTART IDENTITY CASCADE`);
-  await pool.query("ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1");
+export async function runBenchmark(
+  pool: Pool,
+  input: BenchmarkRunOptions = {},
+): Promise<BenchmarkReportV2> {
+  const options = resolveBenchmarkRunOptions(input);
+  const environment = await pool.query<{ database: string; version: string }>(
+    "SELECT current_database() AS database, version() AS version",
+  );
+  const row = environment.rows[0];
+  if (!row) throw new Error("Unable to read PostgreSQL benchmark environment");
 
-  const results: RoundResult[] = [];
-  const queueName = options.queue ?? "benchmark";
-  for (let round = 1; round <= options.rounds; round += 1) {
-    results.push(await conventionalRound(pool, round, options.jobs, queueName));
-    results.push(await hybridRound(pool, round, options.jobs, queueName));
+  const report: BenchmarkReportV2 = {
+    schemaVersion: 2,
+    generatedAt: new Date().toISOString(),
+    suite: options.suite,
+    profile: options.profile,
+    environment: { database: row.database, postgresVersion: row.version },
+    configuration: {
+      comparative: options.comparative,
+      operational: options.operational,
+    },
+  };
+
+  if (options.suite === "all" || options.suite === "comparative") {
+    report.comparative = await runComparativeBenchmark(pool, options.comparative);
   }
-  return results;
+  if (options.suite === "all" || options.suite === "lifecycle") {
+    report.lifecycle = await runOperationalScenarios(pool, options.operational);
+  }
+
+  return report;
 }
