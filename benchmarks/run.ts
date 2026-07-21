@@ -80,6 +80,18 @@ const recordedPostgresSettings = [
   "work_mem",
 ] as const;
 
+const benchmarkSourcePaths = [
+  "benchmarks",
+  "src",
+  "sql",
+  "test",
+  "package.json",
+  "pnpm-lock.yaml",
+  "tsconfig.json",
+  "tsconfig.build.json",
+  "vitest.config.ts",
+] as const;
+
 function gitOutput(arguments_: string[]): string | null {
   try {
     return execFileSync("git", arguments_, {
@@ -95,7 +107,15 @@ function gitOutput(arguments_: string[]): string | null {
 export function captureBenchmarkProvenance(): BenchmarkReportV3["provenance"] {
   const cpuList = cpus();
   const commit = gitOutput(["rev-parse", "HEAD"]);
-  const status = gitOutput(["status", "--porcelain", "--untracked-files=no"]);
+  // Include untracked executable inputs while excluding generated result artifacts and unrelated
+  // workspace files. Otherwise an untracked benchmark module could silently produce a "clean" run.
+  const status = gitOutput([
+    "status",
+    "--porcelain",
+    "--untracked-files=all",
+    "--",
+    ...benchmarkSourcePaths,
+  ]);
   return {
     command: [...process.argv],
     runtime: {
