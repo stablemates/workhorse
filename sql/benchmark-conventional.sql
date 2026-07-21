@@ -6,6 +6,7 @@ CREATE SCHEMA IF NOT EXISTS ironshift_benchmark_conventional;
 -- ironshift schema. The dispatch path scans and mutates one lifetime table so benchmark scenarios can
 -- compare the conventional design against Ironshift's split-projection protocol.
 CREATE SEQUENCE IF NOT EXISTS ironshift_benchmark_conventional.fence_token_seq;
+CREATE SEQUENCE IF NOT EXISTS ironshift_benchmark_conventional.enqueue_sequence_seq;
 
 CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.job (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.job (
   state text NOT NULL CHECK (state IN ('scheduled', 'ready', 'active', 'succeeded', 'failed')),
   current_attempt integer NOT NULL DEFAULT 0 CHECK (current_attempt >= 0),
   max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
+  enqueue_sequence bigint,
   fence_token bigint NOT NULL DEFAULT 0 CHECK (fence_token >= 0),
   worker_id text,
   run_at timestamptz NOT NULL,
@@ -29,8 +31,12 @@ CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.job (
   CHECK ((state = 'active') = (worker_id IS NOT NULL AND lease_expires_at IS NOT NULL))
 ) WITH (fillfactor = 70);
 
-CREATE INDEX IF NOT EXISTS conventional_job_claim_idx
-  ON ironshift_benchmark_conventional.job (queue_name, created_at, id)
+ALTER TABLE ironshift_benchmark_conventional.job
+  ADD COLUMN IF NOT EXISTS enqueue_sequence bigint;
+
+DROP INDEX IF EXISTS ironshift_benchmark_conventional.conventional_job_claim_idx;
+CREATE INDEX conventional_job_claim_idx
+  ON ironshift_benchmark_conventional.job (queue_name, enqueue_sequence, id)
   WHERE state = 'ready';
 CREATE INDEX IF NOT EXISTS conventional_job_scheduled_idx
   ON ironshift_benchmark_conventional.job (run_at, id)
@@ -75,6 +81,7 @@ BEGIN
            ironshift_benchmark_conventional.job
     RESTART IDENTITY;
   ALTER SEQUENCE ironshift_benchmark_conventional.fence_token_seq RESTART WITH 1;
+  ALTER SEQUENCE ironshift_benchmark_conventional.enqueue_sequence_seq RESTART WITH 1;
 END;
 $$;
 
@@ -104,9 +111,14 @@ BEGIN
 
   v_state := CASE WHEN p_run_at <= v_now THEN 'ready' ELSE 'scheduled' END;
   INSERT INTO ironshift_benchmark_conventional.job(
-    queue_name, job_type, payload, state, max_attempts, run_at
+    queue_name, job_type, payload, state, max_attempts, enqueue_sequence, run_at
   ) VALUES (
-    p_queue_name, p_job_type, COALESCE(p_payload, 'null'::jsonb), v_state, p_max_attempts, p_run_at
+    p_queue_name, p_job_type, COALESCE(p_payload, 'null'::jsonb), v_state, p_max_attempts,
+    CASE WHEN v_state = 'ready'
+      THEN nextval('ironshift_benchmark_conventional.enqueue_sequence_seq')
+      ELSE NULL
+    END,
+    p_run_at
   ) RETURNING id INTO v_job_id;
 
   INSERT INTO ironshift_benchmark_conventional.job_event(job_id, event_type, details)
@@ -131,7 +143,9 @@ BEGIN
      LIMIT GREATEST(1, LEAST(p_limit, 10000))
   ), updated AS (
     UPDATE ironshift_benchmark_conventional.job j
-       SET state = 'ready', updated_at = clock_timestamp()
+       SET state = 'ready',
+           enqueue_sequence = nextval('ironshift_benchmark_conventional.enqueue_sequence_seq'),
+           updated_at = clock_timestamp()
       FROM due
      WHERE j.id = due.id
      RETURNING j.id
@@ -175,7 +189,7 @@ BEGIN
   SELECT * INTO v_job
     FROM ironshift_benchmark_conventional.job
    WHERE queue_name = p_queue_name AND state = 'ready'
-   ORDER BY created_at, id
+   ORDER BY enqueue_sequence, id
    FOR UPDATE SKIP LOCKED
    LIMIT 1;
 
@@ -187,7 +201,8 @@ BEGIN
   v_expires := clock_timestamp() + make_interval(secs => p_lease_ms::double precision / 1000.0);
 
   UPDATE ironshift_benchmark_conventional.job j
-     SET state = 'active', current_attempt = v_job.current_attempt + 1, fence_token = v_fence,
+     SET state = 'active', current_attempt = v_job.current_attempt + 1,
+         enqueue_sequence = NULL, fence_token = v_fence,
          worker_id = p_worker_id, started_at = clock_timestamp(), heartbeat_at = clock_timestamp(),
          lease_expires_at = v_expires, finished_at = NULL, result = NULL, error = NULL,
          updated_at = clock_timestamp()
@@ -304,6 +319,10 @@ BEGIN
 
   UPDATE ironshift_benchmark_conventional.job
      SET state = v_next_state, worker_id = NULL, lease_expires_at = NULL,
+         enqueue_sequence = CASE WHEN v_next_state = 'ready'
+           THEN nextval('ironshift_benchmark_conventional.enqueue_sequence_seq')
+           ELSE NULL
+         END,
          run_at = v_next_run_at, finished_at = CASE WHEN v_next_state = 'failed' THEN clock_timestamp() ELSE NULL END,
          error = COALESCE(p_error, '{}'::jsonb), updated_at = clock_timestamp()
    WHERE id = p_job_id;
@@ -350,6 +369,11 @@ BEGIN
            END,
            worker_id = NULL,
            lease_expires_at = NULL,
+           enqueue_sequence = CASE
+             WHEN j.current_attempt < j.max_attempts AND p_retry_delay_ms <= 0
+               THEN nextval('ironshift_benchmark_conventional.enqueue_sequence_seq')
+             ELSE NULL
+           END,
            run_at = CASE
              WHEN j.current_attempt < j.max_attempts THEN clock_timestamp() + make_interval(secs => GREATEST(p_retry_delay_ms, 0)::double precision / 1000.0)
              ELSE j.run_at
