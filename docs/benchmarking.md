@@ -258,7 +258,7 @@ pnpm benchmark:competitors -- --profile default --output docs/benchmarks/results
 | pg-boss         | 12.26.2            | `pgboss_competitor`          | `insert`, `createQueue`, `work`, graceful `stop`                 | retained (`deleteAfterSeconds: 0`) |
 | Graphile Worker | 0.17.3             | `graphile_worker_competitor` | `makeWorkerUtils().migrate/addJobs`, `run`, graceful `stop`      | deleted on success                 |
 
-All targets use a 32-connection ceiling. pg-boss is configured with `retryLimit: 0`, `deleteAfterSeconds: 0`, `notify: true`, `useListenNotify: true`, and a per-job `batchSize: 1`; worker concurrency is supplied as `localConcurrency`. Graphile jobs use `maxAttempts: 1`, and `run()` receives the task list and concurrency without local claim batching. Ironshift jobs use one attempt and a 30-second lease.
+All targets use a 32-connection ceiling. pg-boss is configured with `retryLimit: 0`, `deleteAfterSeconds: 0`, `notify: true`, `useListenNotify: true`, a per-job `batchSize: 1`, and `burstWhenBatchFull: true` so a preloaded backlog is not artificially delayed by the polling interval; worker concurrency is supplied as `localConcurrency`. Graphile jobs use `maxAttempts: 1`, and `run()` receives the task list and concurrency without local claim batching. Ironshift jobs use one attempt and a 30-second lease.
 
 The common target interface is workload-level: `reset/setup`, batched enqueue, start consumers, observe the exact expected completion set, stop, close, and expose schema metadata/capabilities. This deliberately hides native worker-loop differences while preserving them in target notes.
 
