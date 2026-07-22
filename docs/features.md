@@ -7,8 +7,9 @@ This is the authoritative implementation snapshot for schema version 2. “Suppo
 | Supported core                                 | Partial today                          | Not supported today                            |
 | ---------------------------------------------- | -------------------------------------- | ---------------------------------------------- |
 | Transactional immediate/delayed batch enqueue  | One-handler-at-a-time worker instances | Priorities and enqueue idempotency             |
-| FIFO `SKIP LOCKED` claims                      | Polling despite `NOTIFY` hints         | Cron, cancellation, deadlines, progress        |
+| FIFO `SKIP LOCKED` claims                      | Polling despite `NOTIFY` hints         | Cancellation, deadlines, progress              |
 | Leases, heartbeats, fencing, recovery          | Manual partition lifecycle             | Concurrency policies and rate limiting         |
+| Deploy-synchronized pg_cron schedules          | One-handler-at-a-time worker instances | Arbitrary scheduled SQL                        |
 | Immediate/delayed retries and terminal failure | Point-in-time health snapshot          | Dead letters, redrive, dependencies, workflows |
 | Live runtime plus immutable outcomes           | Success-path comparative baseline      | UI, RBAC, OpenTelemetry, framework adapters    |
 | Append-only events and attempt history         | Clean-install schema only              | Online production migration guarantees         |
@@ -29,24 +30,28 @@ This is the authoritative implementation snapshot for schema version 2. “Suppo
 | Multi-worker claim                | Supported     | `claim_v1` locks one FIFO ready runtime and changes it to active with one state update.                                                   |
 | Single mutable live row           | Supported     | Scheduled, ready, and active state are mutually exclusive shapes in `job_runtime`.                                                        |
 | Selective dispatch indexes        | Supported     | Separate partial indexes cover ready, scheduled, and active-expiry access paths.                                                          |
+| Declarative recurring jobs        | Supported     | Namespaced definitions synchronize into pg_cron and enqueue through the normal Ironshift protocol.                                        |
+| Schedule revision fencing         | Supported     | Changed definitions increment a revision; stale cron commands become no-ops instead of running new payloads at an old cadence.            |
+| Schedule occurrence deduplication | Supported     | One durable `(namespace, schedule, second)` key prevents duplicate enqueue for the same supplied or observed fire second.                 |
 | Priorities                        | Not supported | Ordering is FIFO only.                                                                                                                    |
 | Enqueue idempotency               | Not supported | Repeating enqueue creates another identity.                                                                                               |
 
 ## Ownership, retry, and failure
 
-| Feature                            | Status        | Current behavior and limits                                                                       |
-| ---------------------------------- | ------------- | ------------------------------------------------------------------------------------------------- |
-| Lease ownership                    | Supported     | Active runtime stores worker, fence, acquisition, heartbeat, and expiry.                          |
-| Global fencing                     | Supported     | Each claim allocates a monotonic fence; stale generations cannot mutate a newer lifecycle.        |
-| Heartbeat                          | Supported     | CAS update requires job, active state, worker, fence, and unexpired ownership.                    |
-| Expiry recovery                    | Supported     | Bounded cooperative recovery locks expired active runtimes and requeues or terminally fails them. |
-| Immediate/delayed retry            | Supported     | `fail_v1` increments attempt and CAS-updates the same runtime to ready or scheduled.              |
-| Retry budget                       | Supported     | Exhaustion atomically removes runtime and creates failed outcome.                                 |
-| Terminal success                   | Supported     | Completion atomically removes runtime and creates succeeded outcome plus attempt/event history.   |
-| Terminal failure                   | Supported     | Handler exhaustion or lease exhaustion creates immutable failed outcome.                          |
-| Immutable terminal materialization | Supported     | Terminal jobs occupy `job_outcome`, not dispatch indexes.                                         |
-| Dead-letter queue and redrive      | Not supported | Failed outcomes are queryable but no DLQ projection or redrive API exists.                        |
-| Backoff policy                     | Partial       | Caller supplies retry delay; exponential backoff and jitter are not productized.                  |
+| Feature                            | Status        | Current behavior and limits                                                                                                    |
+| ---------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Lease ownership                    | Supported     | Active runtime stores worker, fence, acquisition, heartbeat, and expiry.                                                       |
+| Global fencing                     | Supported     | Each claim allocates a monotonic fence; stale generations cannot mutate a newer lifecycle.                                     |
+| Heartbeat                          | Supported     | CAS update requires job, active state, worker, fence, and unexpired ownership.                                                 |
+| Expiry recovery                    | Supported     | Bounded cooperative recovery locks expired active runtimes and requeues or terminally fails them.                              |
+| Centralized maintenance            | Supported     | A pg_cron-owned `maintain_v1` call promotes due jobs, recovers expired leases, and prunes old occurrence keys outside workers. |
+| Immediate/delayed retry            | Supported     | `fail_v1` increments attempt and CAS-updates the same runtime to ready or scheduled.                                           |
+| Retry budget                       | Supported     | Exhaustion atomically removes runtime and creates failed outcome.                                                              |
+| Terminal success                   | Supported     | Completion atomically removes runtime and creates succeeded outcome plus attempt/event history.                                |
+| Terminal failure                   | Supported     | Handler exhaustion or lease exhaustion creates immutable failed outcome.                                                       |
+| Immutable terminal materialization | Supported     | Terminal jobs occupy `job_outcome`, not dispatch indexes.                                                                      |
+| Dead-letter queue and redrive      | Not supported | Failed outcomes are queryable but no DLQ projection or redrive API exists.                                                     |
+| Backoff policy                     | Partial       | Caller supplies retry delay; exponential backoff and jitter are not productized.                                               |
 
 ## History, reads, and observability
 
@@ -64,14 +69,16 @@ This is the authoritative implementation snapshot for schema version 2. “Suppo
 
 ## Runtime and product boundaries
 
-| Feature                                     | Status        | Current behavior and limits                                                                   |
-| ------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
-| TypeScript Queue/Worker API                 | Supported     | Existing public interfaces remain stable across the architecture pivot.                       |
-| Versioned SQL API                           | Supported     | Existing `_v1` function names and signatures remain stable; installed schema version is 2.    |
-| Graceful worker stop                        | Supported     | Stop prevents further claims and waits for in-flight work.                                    |
-| Worker concurrency                          | Partial       | One worker runs one handler at a time; scale with multiple instances.                         |
-| Online v1 to v2 migration                   | Not supported | The canonical schema is clean-install only. Operators need a separately engineered migration. |
-| Compatibility write views                   | Not supported | Legacy write relations are intentionally absent to avoid dual-write semantics.                |
-| Exactly-once effects                        | Not supported | Delivery is at least once; applications need idempotency or outbox/inbox patterns.            |
-| Cron, workflows, dependencies, cancellation | Not supported | No stable contracts exist.                                                                    |
-| UI, RBAC, multi-tenancy                     | Not supported | The validation MVP exposes database and TypeScript protocols only.                            |
+| Feature                               | Status        | Current behavior and limits                                                                    |
+| ------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------- |
+| TypeScript Queue/Worker API           | Supported     | Queue/Worker remain thin protocol clients; workers default to external pg_cron maintenance.    |
+| TypeScript pg_cron scheduler API      | Supported     | `sync()` reconciles owned schedules; `status()` exposes occurrences and latest pg_cron runs.   |
+| Versioned SQL API                     | Supported     | Existing `_v1` function names and signatures remain stable; installed schema version is 2.     |
+| Graceful worker stop                  | Supported     | Stop prevents further claims and waits for in-flight work.                                     |
+| Worker concurrency                    | Partial       | One worker runs one handler at a time; scale with multiple instances.                          |
+| Online v1 to v2 migration             | Not supported | The canonical schema is clean-install only. Operators need a separately engineered migration.  |
+| Compatibility write views             | Not supported | Legacy write relations are intentionally absent to avoid dual-write semantics.                 |
+| Exactly-once effects                  | Not supported | Delivery is at least once; applications need idempotency or outbox/inbox patterns.             |
+| Cron                                  | Supported     | pg_cron 1.6+ is a first-class production requirement; definitions enqueue typed jobs, not SQL. |
+| Workflows, dependencies, cancellation | Not supported | No stable contracts exist.                                                                     |
+| UI, RBAC, multi-tenancy               | Not supported | The validation MVP exposes database and TypeScript protocols only.                             |

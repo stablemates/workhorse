@@ -1,4 +1,21 @@
 export { installSchema } from "./schema.js";
+export {
+  inspectPgCronRequirements,
+  PgCronScheduler,
+  unscheduleIronshiftTarget,
+} from "./pg-cron-scheduler.js";
+export type {
+  CronJobDefinition,
+  CronScheduleDefinition,
+  PgCronMaintenanceOptions,
+  PgCronMaintenanceStatus,
+  PgCronRequirements,
+  PgCronRunStatus,
+  PgCronScheduleStatus,
+  PgCronSchedulerOptions,
+  PgCronSyncOptions,
+  PgCronSyncResult,
+} from "./pg-cron-scheduler.js";
 export { Queue } from "./queue.js";
 export { InjectedCrashError, Worker } from "./worker.js";
 export type { Failpoint, Handler, WorkerOptions } from "./worker.js";

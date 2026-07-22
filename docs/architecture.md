@@ -18,7 +18,10 @@ No compatibility write views are installed for the version 1 projection tables.
 ```mermaid
 flowchart LR
   App[Application transaction] -->|enqueue_many_v1 / enqueue_v1| PG[(PostgreSQL)]
-  Worker[TypeScript Worker] -->|promote / claim / heartbeat / recover| PG
+  Deploy[Deployment] -->|PgCronScheduler.sync| PG
+  Deploy -->|schedule_in_database / prune| Cron[(postgres.cron)]
+  Cron -->|fire_schedule_v1 / maintain_v1| PG
+  Worker[TypeScript Worker] -->|claim / heartbeat| PG
   PG -->|payload + attempt + fence| Worker
   Worker -->|handler outside SQL transaction| Effects[External effects]
   Worker -->|complete_v1 / fail_v1| PG
@@ -35,6 +38,8 @@ erDiagram
   job ||--o| job_outcome : "terminal lifecycle"
   job ||--o{ job_event : "emits"
   job ||--o{ attempt_history : "closes attempts"
+  schedule_definition ||--o{ schedule_occurrence : "fires"
+  schedule_occurrence }o--o| job : "enqueues"
 
   job {
     uuid id PK
@@ -63,6 +68,21 @@ erDiagram
     jsonb result
     jsonb error
     timestamptz finished_at
+  }
+  schedule_definition {
+    text namespace PK
+    text schedule_name PK
+    text cron_expression
+    text queue_name
+    text job_type
+    jsonb payload
+    boolean enabled
+  }
+  schedule_occurrence {
+    text namespace PK
+    text schedule_name PK
+    timestamptz occurrence_at PK
+    uuid job_id UK
   }
 ```
 
@@ -100,6 +120,14 @@ Insert-only terminal state. Completion or terminal failure deletes the active ru
 
 `job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed attempt, including retry, lease expiry, success, and terminal failure. Both remain range-partitioned by month with default partitions and the existing partition create/retire functions.
 
+### Declarative schedules
+
+`schedule_definition` is the target database's desired-state record for one deployment namespace. It stores validated cron text, a typed Ironshift job definition, and a monotonically increasing revision, never arbitrary SQL. Removed definitions are disabled rather than deleted so occurrence history remains attributable.
+
+`schedule_occurrence` provides one durable key per `(namespace, schedule_name, occurrence_at)` second. `fire_schedule_v1` inserts that key and enqueues through `enqueue_v1` in one transaction. A repeated fire for the same second returns the existing job ID instead of creating another job.
+
+pg_cron metadata remains in the cluster's configured `postgres` database. Its generated commands contain only revision-fenced calls to `fire_schedule_v1` or bounded calls to `maintain_v1`. Names include target database and namespace, allowing deploy synchronization and reset tooling to prune only entries they own.
+
 ## Atomic lifecycle
 
 ```mermaid
@@ -122,6 +150,8 @@ stateDiagram-v2
 ### Promotion
 
 `promote_v1` locks a bounded due set with `FOR UPDATE SKIP LOCKED`, updates those runtime rows from scheduled to ready, assigns new FIFO sequences, appends events, and emits a wake hint.
+
+Production promotion is coordinated by a namespaced pg_cron maintenance job. `maintain_v1` calls bounded promotion, bounded expired-lease recovery, and bounded schedule-occurrence retention once per configured interval. Workers default to external maintenance and therefore issue only the claim query; `maintenance: "worker"` retains the old cooperative behavior as an explicit fallback.
 
 ### Claim
 
@@ -149,10 +179,30 @@ stateDiagram-v2
 
 Ironshift provides durable at-least-once execution. A process can die after an external effect but before completion commits, or after completion commits but before observing the response. Applications must use idempotency keys or transactional outbox/inbox patterns for non-idempotent effects.
 
+Schedule occurrence deduplication prevents duplicate enqueue for one supplied occurrence second. pg_cron-generated calls use the observed execution second because pg_cron does not expose its planned slot to the target command. This does not change handler delivery semantics: a scheduled job can still execute more than once after a worker crash.
+
+## Deployment synchronization
+
+`PgCronScheduler.sync()` is a desired-state reconciler:
+
+1. It validates stable namespace and schedule names plus queue job definitions.
+2. It preflights extension, schema, metadata-read, scheduling, and unscheduling privileges.
+3. It atomically upserts target definitions and optionally deactivates omitted names.
+4. It holds a target-wide metadata-database session lock and target namespace lock across the full reconciliation, then transactionally creates or updates named pg_cron jobs.
+5. It prunes only current-role jobs with the exact target-database and namespace prefix.
+
+Target and cron metadata databases cannot share one PostgreSQL transaction. The target definition commits first; cron reconciliation then converges. Every material definition change increments a revision embedded in the generated command. A failed cron update therefore leaves accepted desired state while the old command becomes a no-op, which is safe to retry on the next deployment. Definition row locking also makes a disable deployment wait for a fire that already began before returning.
+
 ## Operational limits
 
 - The canonical schema is a clean-install artifact, not an online version 1 to version 2 migration.
+- pg_cron 1.6+ must be installed and preloaded in the cluster's configured metadata database.
+- The deploy role needs `USAGE` and metadata reads on `cron`, plus execution of `schedule_in_database` and `unschedule(bigint)`.
+- pg_cron must be able to authenticate as the target role; suspended serverless compute pauses schedules.
+- `schedule_occurrence` defaults to 30-day retention with at most 10,000 deletions per maintenance run; pg_cron run-history retention remains administrator-owned.
+- Provider-specific setup and compatibility requirements are documented in `docs/pg-cron-requirements.md` and checked by `pnpm pg-cron:check`.
+- Schedules have one-second precision and use the cluster-wide pg_cron timezone, for which UTC is recommended.
 - Runtime updates centralize churn in one relation and require vacuum and HOT-update validation under sustained heartbeat load.
 - `NOTIFY` is a wake hint. Polling remains the correctness mechanism.
-- History partition maintenance must be scheduled operationally.
+- History partition creation and retirement remain an explicit policy even though runtime maintenance is scheduled.
 - Retention for immutable `job` and `job_outcome` is not automated.

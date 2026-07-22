@@ -104,6 +104,189 @@ CREATE TABLE IF NOT EXISTS ironshift.attempt_history_default
 CREATE INDEX IF NOT EXISTS attempt_history_job_idx
   ON ironshift.attempt_history (job_id, attempt, occurred_at);
 
+-- Declarative schedules are synchronized from application code. pg_cron stores only a call to the
+-- stable fire function; payloads and queue semantics remain owned by the Ironshift protocol.
+CREATE TABLE IF NOT EXISTS ironshift.schedule_definition (
+  namespace text NOT NULL CHECK (namespace <> ''),
+  schedule_name text NOT NULL CHECK (schedule_name <> ''),
+  cron_expression text NOT NULL CHECK (cron_expression <> ''),
+  queue_name text NOT NULL CHECK (queue_name <> ''),
+  job_type text NOT NULL CHECK (job_type <> ''),
+  payload jsonb NOT NULL,
+  max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
+  enabled boolean NOT NULL DEFAULT true,
+  revision bigint NOT NULL DEFAULT 1 CHECK (revision > 0),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (namespace, schedule_name)
+);
+
+-- One durable row per supplied occurrence second prevents deploy races or duplicate invocations
+-- from enqueueing the same observed occurrence twice. pg_cron does not expose its planned slot to
+-- the target command, so its generated calls use the execution second. Definitions are deactivated
+-- rather than deleted so historical occurrence ownership remains explainable.
+CREATE TABLE IF NOT EXISTS ironshift.schedule_occurrence (
+  namespace text NOT NULL,
+  schedule_name text NOT NULL,
+  occurrence_at timestamptz NOT NULL,
+  job_id uuid UNIQUE REFERENCES ironshift.job(id) ON DELETE SET NULL,
+  fired_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (namespace, schedule_name, occurrence_at),
+  FOREIGN KEY (namespace, schedule_name)
+    REFERENCES ironshift.schedule_definition(namespace, schedule_name)
+);
+CREATE INDEX IF NOT EXISTS schedule_occurrence_time_idx
+  ON ironshift.schedule_occurrence (namespace, schedule_name, occurrence_at DESC);
+CREATE INDEX IF NOT EXISTS schedule_occurrence_retention_idx
+  ON ironshift.schedule_occurrence (occurrence_at);
+
+CREATE OR REPLACE FUNCTION ironshift.sync_schedule_definitions_v1(
+  p_namespace text, p_definitions jsonb, p_prune boolean DEFAULT true
+) RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF COALESCE(p_namespace, '') = '' THEN RAISE EXCEPTION 'namespace must not be empty'; END IF;
+  IF p_definitions IS NULL OR jsonb_typeof(p_definitions) <> 'array' THEN
+    RAISE EXCEPTION 'schedule definitions must be a JSON array';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(p_definitions) definition
+     WHERE COALESCE(definition->>'name', '') = ''
+        OR COALESCE(definition->>'schedule', '') = ''
+        OR COALESCE(definition->>'queue', '') = ''
+        OR COALESCE(definition->>'type', '') = ''
+        OR COALESCE((definition->>'maxAttempts')::integer, 3) NOT BETWEEN 1 AND 100
+  ) THEN
+    RAISE EXCEPTION 'each schedule requires non-empty name/schedule/queue/type and maxAttempts between 1 and 100';
+  END IF;
+  IF (
+    SELECT count(*) FROM jsonb_array_elements(p_definitions)
+  ) <> (
+    SELECT count(DISTINCT definition->>'name') FROM jsonb_array_elements(p_definitions) definition
+  ) THEN
+    RAISE EXCEPTION 'schedule names must be unique within a namespace';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended('ironshift:schedules:' || p_namespace, 0));
+
+  INSERT INTO ironshift.schedule_definition AS existing(
+    namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts, enabled
+  )
+  SELECT p_namespace, definition->>'name', definition->>'schedule', definition->>'queue',
+         definition->>'type', COALESCE(definition->'payload', 'null'::jsonb),
+         COALESCE((definition->>'maxAttempts')::integer, 3),
+         COALESCE((definition->>'enabled')::boolean, true)
+    FROM jsonb_array_elements(p_definitions) definition
+  ON CONFLICT (namespace, schedule_name) DO UPDATE
+    SET revision = existing.revision + CASE WHEN ROW(
+          existing.cron_expression, existing.queue_name, existing.job_type, existing.payload,
+          existing.max_attempts, existing.enabled
+        ) IS DISTINCT FROM ROW(
+          EXCLUDED.cron_expression, EXCLUDED.queue_name, EXCLUDED.job_type, EXCLUDED.payload,
+          EXCLUDED.max_attempts, EXCLUDED.enabled
+        ) THEN 1 ELSE 0 END,
+        cron_expression = EXCLUDED.cron_expression,
+        queue_name = EXCLUDED.queue_name,
+        job_type = EXCLUDED.job_type,
+        payload = EXCLUDED.payload,
+        max_attempts = EXCLUDED.max_attempts,
+        enabled = EXCLUDED.enabled,
+        updated_at = clock_timestamp();
+
+  IF p_prune THEN
+    UPDATE ironshift.schedule_definition definition
+       SET enabled = false, revision = definition.revision + 1, updated_at = clock_timestamp()
+     WHERE definition.namespace = p_namespace
+       AND definition.enabled
+       AND NOT EXISTS (
+         SELECT 1 FROM jsonb_array_elements(p_definitions) desired
+          WHERE desired->>'name' = definition.schedule_name
+       );
+  END IF;
+END;
+$$;
+
+DROP FUNCTION IF EXISTS ironshift.fire_schedule_v1(text, text, timestamptz);
+CREATE OR REPLACE FUNCTION ironshift.fire_schedule_v1(
+  p_namespace text,
+  p_schedule_name text,
+  p_expected_revision bigint,
+  p_occurrence_at timestamptz DEFAULT date_trunc('second', clock_timestamp())
+) RETURNS uuid
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_definition ironshift.schedule_definition%ROWTYPE;
+  v_job_id uuid;
+BEGIN
+  SELECT * INTO v_definition
+    FROM ironshift.schedule_definition definition
+   WHERE definition.namespace = p_namespace
+     AND definition.schedule_name = p_schedule_name
+     AND definition.enabled
+     AND definition.revision = p_expected_revision
+   FOR UPDATE;
+  IF NOT FOUND THEN RETURN NULL; END IF;
+
+  INSERT INTO ironshift.schedule_occurrence(namespace, schedule_name, occurrence_at)
+    VALUES (p_namespace, p_schedule_name, date_trunc('second', p_occurrence_at))
+  ON CONFLICT DO NOTHING
+  RETURNING job_id INTO v_job_id;
+
+  IF NOT FOUND THEN
+    SELECT occurrence.job_id INTO v_job_id
+      FROM ironshift.schedule_occurrence occurrence
+     WHERE occurrence.namespace = p_namespace
+       AND occurrence.schedule_name = p_schedule_name
+       AND occurrence.occurrence_at = date_trunc('second', p_occurrence_at);
+    RETURN v_job_id;
+  END IF;
+
+  v_job_id := ironshift.enqueue_v1(
+    v_definition.queue_name,
+    v_definition.job_type,
+    v_definition.payload,
+    clock_timestamp(),
+    v_definition.max_attempts
+  );
+  UPDATE ironshift.schedule_occurrence occurrence
+     SET job_id = v_job_id
+   WHERE occurrence.namespace = p_namespace
+     AND occurrence.schedule_name = p_schedule_name
+     AND occurrence.occurrence_at = date_trunc('second', p_occurrence_at);
+  RETURN v_job_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION ironshift.prune_schedule_occurrences_v1(
+  p_before timestamptz, p_limit integer DEFAULT 10000
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  IF p_before IS NULL THEN RAISE EXCEPTION 'occurrence retention cutoff is required'; END IF;
+  IF p_limit NOT BETWEEN 1 AND 100000 THEN
+    RAISE EXCEPTION 'occurrence prune limit must be between 1 and 100000';
+  END IF;
+
+  WITH victims AS MATERIALIZED (
+    SELECT occurrence.ctid
+      FROM ironshift.schedule_occurrence occurrence
+     WHERE occurrence.occurrence_at < p_before
+     ORDER BY occurrence.occurrence_at
+     LIMIT p_limit
+     FOR UPDATE SKIP LOCKED
+  )
+  DELETE FROM ironshift.schedule_occurrence occurrence
+   USING victims
+   WHERE occurrence.ctid = victims.ctid;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
 -- Accept up to 1,000 jobs atomically. One timestamp classifies the whole batch, ordinality preserves
 -- returned IDs and ready FIFO, and notifications are coalesced by ready queue.
 CREATE OR REPLACE FUNCTION ironshift.enqueue_many_v1(p_requests jsonb)
@@ -414,6 +597,26 @@ BEGIN
   END LOOP;
   IF v_count > 0 THEN PERFORM pg_notify('ironshift_jobs', '*'); END IF;
   RETURN v_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION ironshift.maintain_v1(p_promote_limit integer DEFAULT 1000,
+  p_recover_limit integer DEFAULT 1000, p_occurrence_retention_days integer DEFAULT 30,
+  p_occurrence_prune_limit integer DEFAULT 10000)
+RETURNS TABLE (promoted integer, recovered integer, occurrences_pruned integer)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF p_occurrence_retention_days NOT BETWEEN 1 AND 3650 THEN
+    RAISE EXCEPTION 'occurrence retention days must be between 1 and 3650';
+  END IF;
+  promoted := ironshift.promote_v1(p_promote_limit);
+  recovered := ironshift.recover_expired_v1(p_recover_limit);
+  occurrences_pruned := ironshift.prune_schedule_occurrences_v1(
+    clock_timestamp() - make_interval(days => p_occurrence_retention_days),
+    p_occurrence_prune_limit
+  );
+  RETURN NEXT;
 END;
 $$;
 

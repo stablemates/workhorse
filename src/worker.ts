@@ -31,6 +31,11 @@ export interface WorkerOptions {
   heartbeatMs?: number;
   /** Idle polling delay. Polling is always the durable fallback even when NOTIFY is added later. */
   pollMs?: number;
+  /**
+   * Maintenance ownership. pg_cron is the default coordinator; `worker` is a portability fallback
+   * that promotes due jobs and recovers expired leases before every claim attempt.
+   */
+  maintenance?: "external" | "worker";
   /** Delay before the next attempt, either fixed or derived from the one-based attempt number. */
   retryDelayMs?: number | ((attempt: number) => number);
   /** Test-only crash hook. Injected crashes deliberately bypass normal fail/retry handling. */
@@ -84,10 +89,12 @@ export class Worker {
   }
 
   async runOnce(): Promise<boolean> {
-    // Maintenance precedes claim so a worker can make due or abandoned work eligible without a
-    // separate scheduler process. Both operations are bounded inside PostgreSQL.
-    await this.queue.promote(100);
-    await this.queue.recoverExpired(100);
+    // Production deployments centralize maintenance through PgCronScheduler. The explicit worker
+    // fallback preserves portability without charging every normal claim two extra round trips.
+    if (this.options.maintenance === "worker") {
+      await this.queue.promote(100);
+      await this.queue.recoverExpired(100);
+    }
     const job = await this.queue.claim(this.workerId, {
       queue: this.queueName,
       leaseMs: this.leaseMs,

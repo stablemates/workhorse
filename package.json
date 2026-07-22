@@ -6,7 +6,8 @@
   "bin": {
     "ironshift-bench": "./dist/src/cli/benchmark.js",
     "ironshift-bench-competitors": "./dist/src/cli/benchmark-competitors.js",
-    "ironshift-health": "./dist/src/cli/health.js"
+    "ironshift-health": "./dist/src/cli/health.js",
+    "ironshift-pg-cron-check": "./dist/src/cli/check-pg-cron.js"
   },
   "files": [
     "dist",
@@ -26,6 +27,7 @@
     "test:integration": "vitest run test/integration.test.ts",
     "health": "tsx src/cli/health.ts --database dev",
     "health:bench": "tsx src/cli/health.ts --database bench",
+    "pg-cron:check": "tsx src/cli/check-pg-cron.ts",
     "benchmark": "tsx src/cli/benchmark.ts",
     "benchmark:competitors": "tsx src/cli/benchmark-competitors.ts",
     "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin src test benchmarks vitest.config.ts",
