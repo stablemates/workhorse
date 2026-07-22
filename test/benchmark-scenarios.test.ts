@@ -1,14 +1,14 @@
 import type { QueryResult, QueryResultRow } from "pg";
 import { describe, expect, it } from "vitest";
 import {
-  createHistoryPartitionsV1Sql,
+  createHistoryWeekV1Sql,
   mean,
   operationalScenarioContracts,
   operationalScenarioNames,
   percentile,
   recordInvariant,
   resetIronshiftStateSql,
-  retireHistoryMonthV1Sql,
+  retireHistoryWeekV1Sql,
   resolveOperationalScenarioOptions,
   runOperationalScenarios,
 } from "../benchmarks/scenarios.js";
@@ -55,9 +55,9 @@ describe("operational scenario contracts", () => {
   it("uses explicit reset and versioned partition-retirement SQL contracts", () => {
     expect(resetIronshiftStateSql).toContain("TRUNCATE ironshift.job_event");
     expect(resetIronshiftStateSql).toContain("ALTER SEQUENCE ironshift.fence_token_seq");
-    expect(createHistoryPartitionsV1Sql).toContain("ironshift.create_history_partitions_v1");
-    expect(retireHistoryMonthV1Sql).toContain("ironshift.retire_history_month_v1");
-    expect(retireHistoryMonthV1Sql).toContain("$1::date");
+    expect(createHistoryWeekV1Sql).toContain("ironshift.create_history_week_v1");
+    expect(retireHistoryWeekV1Sql).toContain("ironshift.retire_history_week_v1");
+    expect(retireHistoryWeekV1Sql).toContain("$1::date");
   });
 });
 

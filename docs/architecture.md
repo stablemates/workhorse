@@ -118,7 +118,7 @@ Insert-only terminal state. Completion or terminal failure deletes the active ru
 
 ### History
 
-`job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed attempt, including retry, lease expiry, success, and terminal failure. Both remain range-partitioned by month with default partitions and the existing partition create/retire functions.
+`job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed attempt, including retry, lease expiry, success, and terminal failure. Both use Monday-aligned weekly range partitions with default fallbacks. Clean installation creates the current week plus four future weeks, and `maintain_v1` continuously replenishes that horizon. Explicit week creation and completed-week retirement functions support operator-driven retention.
 
 ### Declarative schedules
 

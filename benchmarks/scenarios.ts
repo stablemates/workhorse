@@ -56,7 +56,7 @@ export interface OperationalScenarioOptions {
   leaseMs?: number;
   /** Delayed retry interval. */
   retryDelayMs?: number;
-  /** Upper bound on terminal jobs seeded for the monthly retirement scenario. */
+  /** Upper bound on terminal jobs seeded for the weekly retirement scenario. */
   pruneLimit?: number;
   /** Queue prefix. Every scenario appends its stable scenario name. */
   queuePrefix?: string;
@@ -154,10 +154,10 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   },
   {
     name: "retention-pruning",
-    purpose: "Measure completed-month history retirement through the versioned partition protocol.",
+    purpose: "Measure completed-week history retirement through the versioned partition protocol.",
     invariants: [
-      "seeded terminal jobs create event and attempt history in a completed month",
-      "retiring the completed month removes its history partitions",
+      "seeded terminal jobs create event and attempt history in a completed week",
+      "retiring the completed week removes its history partitions",
       "history retirement does not delete current job identity",
     ],
     metrics: ["seededJobs", "historyBefore", "pruned", "historyAfter", "retainedJobs"],
@@ -189,9 +189,8 @@ export const resetIronshiftStateSql = `TRUNCATE ironshift.job_event, ironshift.a
 ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1;
 ALTER SEQUENCE ironshift.ready_sequence_seq RESTART WITH 1`;
 
-export const createHistoryPartitionsV1Sql =
-  "SELECT ironshift.create_history_partitions_v1($1::date)";
-export const retireHistoryMonthV1Sql = "SELECT ironshift.retire_history_month_v1($1::date)";
+export const createHistoryWeekV1Sql = "SELECT ironshift.create_history_week_v1($1::date)";
+export const retireHistoryWeekV1Sql = "SELECT ironshift.retire_history_week_v1($1::date)";
 
 const defaults: ResolvedOperationalScenarioOptions = {
   jobCount: 12,
@@ -694,13 +693,12 @@ async function retentionPruning(
     const job = await queue.claim(`retention-worker-${index}`);
     await queue.complete(job!, `retention-worker-${index}`, { ok: true });
   }
-  const retiredMonth = new Date();
-  retiredMonth.setUTCDate(1);
-  retiredMonth.setUTCHours(12, 0, 0, 0);
-  retiredMonth.setUTCMonth(retiredMonth.getUTCMonth() - 2);
-  const retiredMonthDate = `${retiredMonth.getUTCFullYear()}-${String(retiredMonth.getUTCMonth() + 1).padStart(2, "0")}-01`;
-  const historicalTimestamp = new Date(`${retiredMonthDate.slice(0, 8)}15T12:00:00.000Z`);
-  await context.pool.query(createHistoryPartitionsV1Sql, [retiredMonthDate]);
+  const retiredWeek = new Date();
+  retiredWeek.setUTCHours(12, 0, 0, 0);
+  retiredWeek.setUTCDate(retiredWeek.getUTCDate() - ((retiredWeek.getUTCDay() + 6) % 7) - 14);
+  const retiredWeekDate = retiredWeek.toISOString().slice(0, 10);
+  const historicalTimestamp = new Date(`${retiredWeekDate}T12:00:00.000Z`);
+  await context.pool.query(createHistoryWeekV1Sql, [retiredWeekDate]);
   await context.pool.query(
     `UPDATE ironshift.job_event e SET occurred_at = $1
       FROM ironshift.job j WHERE j.id = e.job_id AND j.queue_name = $2`,
@@ -713,7 +711,7 @@ async function retentionPruning(
   );
   const historyBefore =
     (await rowCount(context.pool, "job_event")) + (await rowCount(context.pool, "attempt_history"));
-  await context.pool.query(retireHistoryMonthV1Sql, [retiredMonthDate]);
+  await context.pool.query(retireHistoryWeekV1Sql, [retiredWeekDate]);
   const historyAfter =
     (await rowCount(context.pool, "job_event")) + (await rowCount(context.pool, "attempt_history"));
   const pruned = historyBefore - historyAfter;

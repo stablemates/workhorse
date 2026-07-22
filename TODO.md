@@ -35,13 +35,13 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Define expand/contract rules for changes that span application deployments.
 - [ ] Add upgrade tests from every supported released schema version.
 - [ ] Provide backup, rollback, and failed-migration recovery guidance.
-- [ ] Design and test a separately gated version 1 to version 2 migration path.
+- [ ] Design and test separately gated migration paths from legacy schema versions 1 and 2 to version 3.
 
 ### [ ] P0-02 Automated history retention
 
 **Depends on:** P0-01
 
-- [ ] Add policies for creating future `job_event` and `attempt_history` partitions.
+- [x] Precreate weekly `job_event` and `attempt_history` partitions four weeks ahead through `maintain_v1`.
 - [ ] Add bounded retirement or archival of completed history partitions.
 - [ ] Define independent retention for job identity, terminal outcomes, events, attempts, and
       schedule occurrences.

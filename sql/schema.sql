@@ -610,6 +610,20 @@ BEGIN
   IF p_occurrence_retention_days NOT BETWEEN 1 AND 3650 THEN
     RAISE EXCEPTION 'occurrence retention days must be between 1 and 3650';
   END IF;
+  IF EXISTS (
+    SELECT 1
+      FROM generate_series(0, 4) AS weeks(week_offset)
+      CROSS JOIN LATERAL (
+        SELECT to_char(
+          date_trunc('week', current_date + make_interval(weeks => week_offset)), 'IYYY"w"IW'
+        ) AS suffix
+      ) expected
+     WHERE to_regclass(format('ironshift.%I', 'job_event_' || suffix)) IS NULL
+        OR to_regclass(format('ironshift.%I', 'attempt_history_' || suffix)) IS NULL
+  ) THEN
+    PERFORM ironshift.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
+      FROM generate_series(0, 4) AS weeks(week_offset);
+  END IF;
   promoted := ironshift.promote_v1(p_promote_limit);
   recovered := ironshift.recover_expired_v1(p_recover_limit);
   occurrences_pruned := ironshift.prune_schedule_occurrences_v1(
@@ -620,42 +634,75 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift.create_history_partitions_v1(p_month date)
+CREATE OR REPLACE FUNCTION ironshift.create_history_week_v1(p_week date)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_start date := date_trunc('month', p_month)::date;
-  v_end date := (date_trunc('month', p_month) + interval '1 month')::date;
-  v_suffix text := to_char(v_start, 'YYYYMM');
+  v_start date := date_trunc('week', p_week)::date;
+  v_end date := (date_trunc('week', p_week) + interval '1 week')::date;
+  v_suffix text := to_char(v_start, 'IYYY"w"IW');
+  v_event_partition text := 'job_event_' || v_suffix;
+  v_attempt_partition text := 'attempt_history_' || v_suffix;
+  v_event_staging text := 'ironshift_job_event_' || v_suffix;
+  v_attempt_staging text := 'ironshift_attempt_history_' || v_suffix;
+  v_event_exists boolean;
+  v_attempt_exists boolean;
 BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('ironshift:history-week:' || v_start, 0));
+  v_event_exists := to_regclass(format('ironshift.%I', v_event_partition)) IS NOT NULL;
+  v_attempt_exists := to_regclass(format('ironshift.%I', v_attempt_partition)) IS NOT NULL;
+  IF v_event_exists AND v_attempt_exists THEN RETURN; END IF;
+  IF v_event_exists <> v_attempt_exists THEN
+    RAISE EXCEPTION 'history week % is only partially partitioned', v_start;
+  END IF;
+
+  LOCK TABLE ironshift.job_event_default, ironshift.attempt_history_default IN ACCESS EXCLUSIVE MODE;
+  EXECUTE format(
+    'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM ironshift.job_event_default WHERE occurred_at >= %L AND occurred_at < %L',
+    v_event_staging, v_start, v_end);
+  EXECUTE format(
+    'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM ironshift.attempt_history_default WHERE occurred_at >= %L AND occurred_at < %L',
+    v_attempt_staging, v_start, v_end);
+  DELETE FROM ironshift.job_event_default WHERE occurred_at >= v_start AND occurred_at < v_end;
+  DELETE FROM ironshift.attempt_history_default WHERE occurred_at >= v_start AND occurred_at < v_end;
+
   EXECUTE format(
     'CREATE TABLE IF NOT EXISTS ironshift.%I PARTITION OF ironshift.job_event FOR VALUES FROM (%L) TO (%L)',
-    'job_event_' || v_suffix, v_start, v_end);
+    v_event_partition, v_start, v_end);
   EXECUTE format(
     'CREATE TABLE IF NOT EXISTS ironshift.%I PARTITION OF ironshift.attempt_history FOR VALUES FROM (%L) TO (%L)',
-    'attempt_history_' || v_suffix, v_start, v_end);
+    v_attempt_partition, v_start, v_end);
+  EXECUTE format(
+    'INSERT INTO ironshift.%I (event_id, job_id, attempt, event_type, details, occurred_at) OVERRIDING SYSTEM VALUE SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM %I',
+    v_event_partition, v_event_staging);
+  EXECUTE format(
+    'INSERT INTO ironshift.%I (attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, finished_at, error, occurred_at) OVERRIDING SYSTEM VALUE SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, finished_at, error, occurred_at FROM %I',
+    v_attempt_partition, v_attempt_staging);
+  EXECUTE format('DROP TABLE %I', v_event_staging);
+  EXECUTE format('DROP TABLE %I', v_attempt_staging);
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift.retire_history_month_v1(p_month date)
+CREATE OR REPLACE FUNCTION ironshift.retire_history_week_v1(p_week date)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_start date := date_trunc('month', p_month)::date;
-  v_suffix text := to_char(v_start, 'YYYYMM');
+  v_start date := date_trunc('week', p_week)::date;
+  v_suffix text := to_char(v_start, 'IYYY"w"IW');
 BEGIN
-  IF v_start >= date_trunc('month', current_date)::date THEN
-    RAISE EXCEPTION 'only completed history months can be retired';
+  IF v_start >= date_trunc('week', current_date)::date THEN
+    RAISE EXCEPTION 'only completed history weeks can be retired';
   END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('ironshift:history-week:' || v_start, 0));
   EXECUTE format('DROP TABLE IF EXISTS ironshift.%I', 'job_event_' || v_suffix);
   EXECUTE format('DROP TABLE IF EXISTS ironshift.%I', 'attempt_history_' || v_suffix);
 END;
 $$;
 
-INSERT INTO ironshift.schema_version(version) VALUES (2) ON CONFLICT DO NOTHING;
-SELECT ironshift.create_history_partitions_v1(current_date);
-SELECT ironshift.create_history_partitions_v1((current_date + interval '1 month')::date);
+INSERT INTO ironshift.schema_version(version) VALUES (3) ON CONFLICT DO NOTHING;
+SELECT ironshift.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
+  FROM generate_series(0, 4) AS weeks(week_offset);
 
 COMMIT;

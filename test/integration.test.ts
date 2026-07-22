@@ -48,11 +48,25 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v2 without compatibility write tables", async () => {
+  it("installs schema v3 without compatibility write tables", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM ironshift.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(2);
+    expect(version.rows[0]?.version).toBe(3);
+
+    const historyPartitions = await pool.query<{ parent: string; partitions: number }>(`
+      SELECT parent.relname AS parent, count(*)::integer AS partitions
+        FROM pg_inherits inheritance
+        JOIN pg_class parent ON parent.oid = inheritance.inhparent
+        JOIN pg_namespace namespace ON namespace.oid = parent.relnamespace
+       WHERE namespace.nspname = 'ironshift'
+         AND parent.relname IN ('job_event', 'attempt_history')
+       GROUP BY parent.relname
+       ORDER BY parent.relname`);
+    expect(historyPartitions.rows).toEqual([
+      { parent: "attempt_history", partitions: 6 },
+      { parent: "job_event", partitions: 6 },
+    ]);
 
     const relations = await pool.query<{ relname: string }>(
       `
@@ -532,7 +546,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE ironshift.schema_version (version integer PRIMARY KEY);
         INSERT INTO ironshift.schema_version(version) VALUES (1);
         CREATE TABLE ironshift.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v2 or mixed ironshift schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v3 or mixed ironshift schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM ironshift.schema_version",
       );
@@ -900,7 +914,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(2);
+    expect(health.schemaVersion).toBe(3);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(1);
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
@@ -908,17 +922,94 @@ describe("live-runtime queue protocol", () => {
     expect(health.notificationQueueUsage).toBeGreaterThanOrEqual(0);
   });
 
-  it("retires completed history partitions in bulk", async () => {
-    const oldMonth = "2020-01-01";
-    await pool.query("SELECT ironshift.create_history_partitions_v1($1)", [oldMonth]);
+  it("creates and retires completed weekly history partitions", async () => {
+    const oldWeek = "2020-01-06";
+    const historicalTimestamp = "2020-01-08T12:00:00.000Z";
+    const historicalJobId = "00000000-0000-4000-8000-000000000001";
+    await pool.query(
+      `INSERT INTO ironshift.job_event(job_id, event_type, occurred_at)
+       VALUES ($1, 'fallback', $2)`,
+      [historicalJobId, historicalTimestamp],
+    );
+    await pool.query(
+      `INSERT INTO ironshift.attempt_history(
+         job_id, attempt, fence_token, worker_id, outcome, started_at, finished_at, occurred_at
+       ) VALUES ($1, 1, 1, 'fallback-worker', 'succeeded', $2, $2, $2)`,
+      [historicalJobId, historicalTimestamp],
+    );
+    const fallbackRelations = await pool.query<{ relation: string }>(
+      `
+      SELECT tableoid::regclass::text AS relation FROM ironshift.job_event WHERE job_id = $1
+      UNION ALL
+      SELECT tableoid::regclass::text FROM ironshift.attempt_history WHERE job_id = $1
+      ORDER BY relation`,
+      [historicalJobId],
+    );
+    expect(fallbackRelations.rows).toEqual([
+      { relation: "attempt_history_default" },
+      { relation: "job_event_default" },
+    ]);
+
+    await pool.query("SELECT ironshift.create_history_week_v1($1)", [oldWeek]);
     expect(
-      (await pool.query("SELECT to_regclass('ironshift.job_event_202001') AS relation")).rows[0]
+      (await pool.query("SELECT to_regclass('ironshift.job_event_2020w02') AS relation")).rows[0]
         .relation,
     ).not.toBeNull();
-    await pool.query("SELECT ironshift.retire_history_month_v1($1)", [oldMonth]);
     expect(
-      (await pool.query("SELECT to_regclass('ironshift.job_event_202001') AS relation")).rows[0]
+      (await pool.query("SELECT to_regclass('ironshift.attempt_history_2020w02') AS relation"))
+        .rows[0].relation,
+    ).not.toBeNull();
+    const migratedRelations = await pool.query<{ relation: string }>(
+      `
+      SELECT tableoid::regclass::text AS relation FROM ironshift.job_event WHERE job_id = $1
+      UNION ALL
+      SELECT tableoid::regclass::text FROM ironshift.attempt_history WHERE job_id = $1
+      ORDER BY relation`,
+      [historicalJobId],
+    );
+    expect(migratedRelations.rows).toEqual([
+      { relation: "attempt_history_2020w02" },
+      { relation: "job_event_2020w02" },
+    ]);
+    await pool.query("SELECT ironshift.retire_history_week_v1($1)", [oldWeek]);
+    expect(
+      (await pool.query("SELECT to_regclass('ironshift.job_event_2020w02') AS relation")).rows[0]
         .relation,
     ).toBeNull();
+    await expect(
+      pool.query("SELECT ironshift.retire_history_week_v1(current_date)"),
+    ).rejects.toThrow(/only completed history weeks can be retired/);
+  });
+
+  it("replenishes the four-week history partition horizon during maintenance", async () => {
+    await pool.query(`
+      DO $$
+      DECLARE week_offset integer;
+      DECLARE suffix text;
+      BEGIN
+        FOR week_offset IN 2..3 LOOP
+          suffix := to_char(
+            date_trunc('week', current_date + make_interval(weeks => week_offset)),
+            'IYYY"w"IW'
+          );
+          EXECUTE format('DROP TABLE ironshift.%I', 'job_event_' || suffix);
+          EXECUTE format('DROP TABLE ironshift.%I', 'attempt_history_' || suffix);
+        END LOOP;
+      END
+      $$`);
+    await pool.query("SELECT * FROM ironshift.maintain_v1()");
+    const horizon = await pool.query<{ missing: number }>(`
+      SELECT count(*) FILTER (
+               WHERE to_regclass(format('ironshift.%I', 'job_event_' || suffix)) IS NULL
+                  OR to_regclass(format('ironshift.%I', 'attempt_history_' || suffix)) IS NULL
+             )::integer AS missing
+        FROM (
+          SELECT to_char(
+                   date_trunc('week', current_date + make_interval(weeks => week_offset)),
+                   'IYYY"w"IW'
+                 ) AS suffix
+            FROM generate_series(0, 4) AS weeks(week_offset)
+        ) expected`);
+    expect(horizon.rows[0]?.missing).toBe(0);
   });
 });
