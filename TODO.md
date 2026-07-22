@@ -18,28 +18,17 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P0-01 Schema migration framework**
-2. **P0-02 Automated history retention**
-3. **P0-03 Production telemetry**
-4. **P0-04 Configurable worker concurrency**
-5. **P0-05 Notification-assisted dispatch**
+1. **P0-01 Automated history retention**
+2. **P0-02 Production telemetry**
+3. **P0-03 Configurable worker concurrency**
+4. **P0-04 Notification-assisted dispatch**
+5. **P0-05 Built-in retry policies**
 
 ## P0: production hardening
 
-### [ ] P0-01 Schema migration framework
+### [ ] P0-01 Automated history retention
 
 **Depends on:** none
-
-- [ ] Replace clean-install-only schema management with ordered, transactional migrations.
-- [ ] Record installed migration and protocol versions independently.
-- [ ] Define expand/contract rules for changes that span application deployments.
-- [ ] Add upgrade tests from every supported released schema version.
-- [ ] Provide backup, rollback, and failed-migration recovery guidance.
-- [ ] Design and test a separately gated version 1 to version 2 migration path.
-
-### [ ] P0-02 Automated history retention
-
-**Depends on:** P0-01
 
 - [x] Precreate weekly `job_event` and `attempt_history` partitions four weeks ahead through `maintain_v1`.
 - [ ] Add bounded retirement or archival of completed history partitions.
@@ -49,7 +38,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Report retention lag, default-partition usage, and the oldest retained boundary in health
       output.
 
-### [ ] P0-03 Production telemetry
+### [ ] P0-02 Production telemetry
 
 **Depends on:** none
 
@@ -61,9 +50,9 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Propagate caller trace context through job metadata without mutating the job payload.
 - [ ] Document dashboards and alert thresholds for stalled queues and degraded maintenance.
 
-### [ ] P0-04 Configurable worker concurrency
+### [ ] P0-03 Configurable worker concurrency
 
-**Depends on:** P0-03
+**Depends on:** P0-02
 
 - [ ] Allow one worker process to execute a bounded number of jobs concurrently.
 - [ ] Preserve per-job heartbeat and fence ownership while handlers overlap.
@@ -72,9 +61,9 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Benchmark throughput, connection use, lease safety, and shutdown behavior across concurrency
       levels.
 
-### [ ] P0-05 Notification-assisted dispatch
+### [ ] P0-04 Notification-assisted dispatch
 
-**Depends on:** P0-04
+**Depends on:** P0-03
 
 - [ ] Listen to `ironshift_jobs` notifications as wake hints while retaining polling as the source
       of truth.
@@ -82,7 +71,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Bound idle polling so lost notifications cannot strand ready work.
 - [ ] Measure idle database load and enqueue-to-claim latency against polling-only behavior.
 
-### [ ] P0-06 Built-in retry policies
+### [ ] P0-05 Built-in retry policies
 
 **Depends on:** none
 
@@ -92,18 +81,18 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Cap delays and reject overflow or invalid policy configuration.
 - [ ] Add deterministic tests for delay sequences and terminal exhaustion.
 
-### [ ] P0-07 Consistent operational snapshots
+### [ ] P0-06 Consistent operational snapshots
 
-**Depends on:** P0-03
+**Depends on:** P0-02
 
 - [ ] Provide a transactionally consistent queue-health snapshot for correctness-sensitive counts.
 - [ ] Separate exact transactional values from lagging PostgreSQL statistics.
 - [ ] Add health budgets and machine-readable degraded reasons.
 - [ ] Keep snapshot latency bounded on large runtime and history relations.
 
-### [ ] P0-08 Release and compatibility matrix
+### [ ] P0-07 Release and compatibility matrix
 
-**Depends on:** P0-01
+**Depends on:** none
 
 - [ ] Test supported Node.js, PostgreSQL, and pg_cron versions in CI.
 - [ ] Publish package provenance, changelog, upgrade notes, and protocol compatibility guarantees.
@@ -114,7 +103,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ### [ ] P1-01 Enqueue idempotency keys
 
-**Depends on:** P0-01
+**Depends on:** none
 
 - [ ] Support caller-scoped idempotency keys with an explicit retention window.
 - [ ] Return the existing job identity when the same key and equivalent request are repeated.
@@ -124,7 +113,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ### [ ] P1-02 Cancellation
 
-**Depends on:** P0-01, P0-04
+**Depends on:** P0-03
 
 - [ ] Add fenced cancellation transitions for scheduled, ready, and active jobs.
 - [ ] Define cooperative cancellation delivery to active handlers.
@@ -154,7 +143,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ### [ ] P1-05 Priority queues
 
-**Depends on:** P0-01
+**Depends on:** none
 
 - [ ] Add a bounded priority range with FIFO ordering inside each priority.
 - [ ] Preserve selective ready indexes and live-work claim scaling.
@@ -164,7 +153,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ### [ ] P1-06 Queue concurrency policies
 
-**Depends on:** P0-04
+**Depends on:** P0-03
 
 - [ ] Limit active jobs by queue and optionally by an application-defined concurrency key.
 - [ ] Make admission atomic across competing workers.
@@ -184,7 +173,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ### [ ] P1-08 Payload contracts and limits
 
-**Depends on:** P0-01
+**Depends on:** none
 
 - [ ] Support optional per-job-type payload and result validators.
 - [ ] Enforce configurable payload and result size limits before durable writes.
@@ -193,7 +182,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ### [ ] P1-09 Progress and job metadata
 
-**Depends on:** P0-03, P1-02
+**Depends on:** P0-02, P1-02
 
 - [ ] Add fenced, bounded progress updates for active jobs.
 - [ ] Keep mutable progress out of immutable payload and outcome fields.
@@ -204,7 +193,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ### [ ] P2-01 Query and listing API
 
-**Depends on:** P0-02, P1-04
+**Depends on:** P0-01, P1-04
 
 - [ ] Add cursor-based listing by queue, type, lifecycle state, and time range.
 - [ ] Keep operational reads away from claim-critical indexes.
@@ -231,7 +220,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ### [ ] P2-04 Authentication, RBAC, and audit log
 
-**Depends on:** P0-01
+**Depends on:** none
 
 - [ ] Define read-only, operator, scheduler-deployer, and administrator roles.
 - [ ] Enforce authorization outside claim-critical SQL paths.
@@ -249,12 +238,26 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ### [ ] P2-06 Framework adapters
 
-**Depends on:** P0-08, P1-01
+**Depends on:** P0-07, P1-01
 
 - [ ] Add a stable adapter interface without moving lifecycle correctness out of SQL.
 - [ ] Provide transactional enqueue examples for common PostgreSQL clients and ORMs.
 - [ ] Test transaction ownership, connection pooling, shutdown, and error translation.
 - [ ] Keep the core package free of framework dependencies.
+
+### [ ] P2-07 Schema migration framework
+
+**Depends on:** P0-07
+
+**Start when:** the core SQL and TypeScript contracts have shipped in at least one supported release
+and the compatibility policy is stable enough to define a real upgrade boundary.
+
+- [ ] Replace clean-install-only schema management with ordered, transactional migrations.
+- [ ] Record installed migration and protocol versions independently.
+- [ ] Define expand/contract rules for changes that span application deployments.
+- [ ] Add upgrade tests from every supported released schema version.
+- [ ] Provide backup, rollback, and failed-migration recovery guidance.
+- [ ] Define the supported upgrade window only after real released versions require it.
 
 ## P3: orchestration
 
