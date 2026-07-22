@@ -4,6 +4,10 @@ This runbook explains how to execute Ironshift's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-07-22 performance pivot and competitor analysis](benchmarks/2026-07-22-performance-pivot-competitor-analysis.md): architecture pivot result, controlled Graphile Worker/pg-boss baseline, pg-boss batching sensitivity, resource costs, and supported product claims.
+- [`results/2026-07-22-competitor-default.json`](benchmarks/results/2026-07-22-competitor-default.json): controlled per-job competitor baseline with six repetitions at 1/4/16 workers.
+- [`results/2026-07-22-competitor-pgboss-batched-default.json`](benchmarks/results/2026-07-22-competitor-pgboss-batched-default.json): explicitly non-equivalent pg-boss batch-size sensitivity.
+- [`results/2026-07-22-runtime-pivot-v3-default.json`](benchmarks/results/2026-07-22-runtime-pivot-v3-default.json): prior v3 harness rerun against the live-runtime/cold-outcome schema.
 - [2026-07-21 small-scale ladder](benchmarks/2026-07-21-small-scale-analysis.md): legacy v1 success-path results retained for historical comparison.
 - [`results/2026-07-21-v3-smoke.json`](benchmarks/results/2026-07-21-v3-smoke.json): fresh v3 smoke artifact covering comparative and lifecycle suites.
 - [`results/2026-07-21-v3-default.json`](benchmarks/results/2026-07-21-v3-default.json): clean-source v3 default artifact with batched ingress, counterbalanced paired runs, equal-load churn, and all lifecycle scenarios.
@@ -20,7 +24,7 @@ V3 has two suites.
 The comparative suite runs equivalent queue lifecycle semantics through two storage designs:
 
 1. **Conventional:** a mutable lifetime job table with ready, scheduled, and expired-lease indexes plus event and attempt history.
-2. **Hybrid:** immutable job identity, current-state projection, narrow ready/scheduled/lease projections, and append-only event and attempt history.
+2. **Hybrid/runtime:** immutable job identity, one live-only mutable runtime row, immutable terminal outcome, and append-only event and attempt history.
 
 A seeded execution plan shuffles worker/repetition pairs and alternates which design runs first. The exact plan is recorded in `executionPlan`. For each pair, both designs are independently reset before measurement. The suite records:
 
