@@ -22,7 +22,7 @@ export class PgBossTarget extends CompletionTarget {
       useListenNotify: true,
       databasePoolMax: 32,
       enqueue: "insert() batching",
-      workers: "work() localConcurrency, batchSize 1",
+      workers: "work() localConcurrency, batchSize 1, burstWhenBatchFull",
       stop: "graceful",
     },
     capabilities: {
@@ -83,6 +83,7 @@ export class PgBossTarget extends CompletionTarget {
       {
         localConcurrency: concurrency,
         batchSize: 1,
+        burstWhenBatchFull: true,
         pollingIntervalSeconds: 0.5,
         notifyPollingIntervalSeconds: 0.5,
       },
