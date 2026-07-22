@@ -18,13 +18,28 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P0-01 Automated history retention**
-2. **P0-02 Production telemetry**
-3. **P0-03 Configurable worker concurrency**
-4. **P0-04 Notification-assisted dispatch**
-5. **P0-05 Built-in retry policies**
+1. **P0-00 Demo application using the current feature set**
+2. **P0-01 Automated history retention**
+3. **P0-02 Production telemetry**
+4. **P0-03 Configurable worker concurrency**
+5. **P0-04 Notification-assisted dispatch**
+6. **P0-05 Built-in retry policies**
 
 ## P0: production hardening
+
+### [ ] P0-00 Demo application using the current feature set
+
+**Depends on:** none
+
+**Do this before adding new product features.** The first demo should validate that the existing
+core is understandable, installable, and useful before the roadmap expands its surface area.
+
+- [ ] Build one small end-to-end application in `examples/` using only currently supported APIs.
+- [ ] Demonstrate installation, schema setup, enqueueing, worker execution, retries, recurring jobs,
+      and basic operational inspection.
+- [ ] Make the demo runnable locally with one documented command and minimal prerequisites.
+- [ ] Use the demo to identify API, documentation, packaging, and developer-experience gaps.
+- [ ] Add a smoke test that proves the documented demo path works from a clean checkout.
 
 ### [ ] P0-01 Automated history retention
 
@@ -200,7 +215,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Support lifecycle timeline retrieval from events and attempt history.
 - [ ] Define bounded payload inclusion and redaction controls.
 
-### [ ] P2-02 Administrative CLI
+### [ ] P2-02 Administrative CLI and TUI
 
 **Depends on:** P2-01
 
@@ -208,12 +223,16 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Add guarded cancellation, redrive, pause, and resume operations as those APIs become stable.
 - [ ] Require explicit target environment and confirmation for destructive operations.
 - [ ] Provide JSON output for automation and human-readable output for operators.
+- [ ] Build a TUI application with basic job, queue, schedule, failure, worker, and health views.
+- [ ] Reuse the same administrative client and safety checks across the non-interactive CLI and TUI.
 
 ### [ ] P2-03 Web operator console
 
 **Depends on:** P2-01, P2-02, P2-04
 
 - [ ] Build queue, job, schedule, worker, failure, and health views.
+- [ ] Use shadcn/ui as the component foundation for the generic dashboard.
+- [ ] Use oRPC for the dashboard's typed API boundary.
 - [ ] Stream or efficiently refresh active state without polling every row.
 - [ ] Include full audit context for every mutating operator action.
 - [ ] Keep the UI optional. Core queue operation must not depend on it.
@@ -236,12 +255,20 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Prevent cross-tenant reads and operator actions.
 - [ ] Benchmark high-tenant-cardinality index and planning behavior.
 
-### [ ] P2-06 Framework adapters
+### [ ] P2-06 ORM and framework integration packages
 
 **Depends on:** P0-07, P1-01
 
 - [ ] Add a stable adapter interface without moving lifecycle correctness out of SQL.
-- [ ] Provide transactional enqueue examples for common PostgreSQL clients and ORMs.
+- [ ] Support a small initial set of popular TypeScript ORM providers, with transactional enqueue
+      support and provider-specific integration tests.
+- [ ] Select and document the initial ORM support matrix before implementation. Prisma, Drizzle,
+      and TypeORM are candidates rather than commitments until the adapter contract is validated.
+- [ ] Ship each ORM provider and framework integration as a separate optional package rather than
+      adding ecosystem dependencies to the core package.
+- [ ] Select a small initial framework matrix and validate lifecycle, dependency injection,
+      configuration, startup, and graceful shutdown behavior for each package.
+- [ ] Provide transactional enqueue examples for common PostgreSQL clients and supported ORMs.
 - [ ] Test transaction ownership, connection pooling, shutdown, and error translation.
 - [ ] Keep the core package free of framework dependencies.
 
@@ -258,6 +285,17 @@ and the compatibility policy is stable enough to define a real upgrade boundary.
 - [ ] Add upgrade tests from every supported released schema version.
 - [ ] Provide backup, rollback, and failed-migration recovery guidance.
 - [ ] Define the supported upgrade window only after real released versions require it.
+
+### [ ] P2-08 Example application suite
+
+**Depends on:** P0-00, P2-06
+
+- [ ] Expand `examples/` from the initial demo into real, runnable sample applications.
+- [ ] Include at least one core-only example, one example per supported ORM provider, and one example
+      per supported framework integration package.
+- [ ] Keep examples focused on realistic application flows rather than isolated API snippets.
+- [ ] Run example smoke tests in CI so package releases cannot silently break documented setups.
+- [ ] Link every integration package to its corresponding example and setup guide.
 
 ## P3: orchestration
 
