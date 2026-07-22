@@ -18,23 +18,41 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P0-00 Demo application using the current feature set**
-2. **P0-01 Automated history retention**
-3. **P0-02 Production telemetry**
-4. **P0-03 Configurable worker concurrency**
-5. **P0-04 Notification-assisted dispatch**
-6. **P0-05 Built-in retry policies**
+1. **P0-00A Drizzle and Hono integration packages**
+2. **P0-00B Demo application built with Drizzle and Hono**
+3. **P0-01 Automated history retention**
+4. **P0-02 Production telemetry**
+5. **P0-03 Configurable worker concurrency**
+6. **P0-04 Notification-assisted dispatch**
+7. **P0-05 Built-in retry policies**
 
-## P0: production hardening
+## P0: demo vertical slice and production hardening
 
-### [ ] P0-00 Demo application using the current feature set
+### [ ] P0-00A Drizzle and Hono integration packages
 
 **Depends on:** none
 
-**Do this before adding new product features.** The first demo should validate that the existing
-core is understandable, installable, and useful before the roadmap expands its surface area.
+These are the minimum ecosystem packages required by the first demo, not the start of broad
+provider coverage.
 
-- [ ] Build one small end-to-end application in `examples/` using only currently supported APIs.
+- [ ] Define the stable adapter boundary needed by both ORM providers and framework integrations.
+- [ ] Ship a separate Drizzle ORM provider package with caller-owned transaction support.
+- [ ] Ship a separate Hono integration package with configuration, startup, and graceful shutdown
+      behavior.
+- [ ] Keep Drizzle and Hono dependencies out of the core package.
+- [ ] Add packed-package integration tests for transaction ownership, pooling, error translation,
+      worker lifecycle, and shutdown.
+
+### [ ] P0-00B Demo application built with Drizzle and Hono
+
+**Depends on:** P0-00A
+
+**Do this before adding unrelated product features.** The first demo should validate that the core
+and its intended integration experience are understandable, installable, and useful.
+
+- [ ] Build one small end-to-end Hono application in `examples/` using the Drizzle provider and Hono
+      integration packages.
+- [ ] Demonstrate transactional enqueue from a realistic Hono request handled through Drizzle.
 - [ ] Demonstrate installation, schema setup, enqueueing, worker execution, retries, recurring jobs,
       and basic operational inspection.
 - [ ] Make the demo runnable locally with one documented command and minimal prerequisites.
@@ -255,18 +273,19 @@ core is understandable, installable, and useful before the roadmap expands its s
 - [ ] Prevent cross-tenant reads and operator actions.
 - [ ] Benchmark high-tenant-cardinality index and planning behavior.
 
-### [ ] P2-06 ORM and framework integration packages
+### [ ] P2-06 Additional ORM and framework integration packages
 
-**Depends on:** P0-07, P1-01
+**Depends on:** P0-00A, P0-07, P1-01
 
-- [ ] Add a stable adapter interface without moving lifecycle correctness out of SQL.
-- [ ] Support a small initial set of popular TypeScript ORM providers, with transactional enqueue
-      support and provider-specific integration tests.
-- [ ] Select and document the initial ORM support matrix before implementation. Prisma, Drizzle,
-      and TypeORM are candidates rather than commitments until the adapter contract is validated.
+- [ ] Evolve the adapter interface validated by Drizzle and Hono without moving lifecycle
+      correctness out of SQL.
+- [ ] Expand beyond Drizzle to a small set of popular TypeScript ORM providers, with transactional
+      enqueue support and provider-specific integration tests.
+- [ ] Select and document the next ORM support matrix before implementation. Prisma and TypeORM are
+      candidates rather than commitments until the initial adapter contract is validated.
 - [ ] Ship each ORM provider and framework integration as a separate optional package rather than
       adding ecosystem dependencies to the core package.
-- [ ] Select a small initial framework matrix and validate lifecycle, dependency injection,
+- [ ] Expand beyond Hono to a small framework matrix and validate lifecycle, dependency injection,
       configuration, startup, and graceful shutdown behavior for each package.
 - [ ] Provide transactional enqueue examples for common PostgreSQL clients and supported ORMs.
 - [ ] Test transaction ownership, connection pooling, shutdown, and error translation.
@@ -288,7 +307,7 @@ and the compatibility policy is stable enough to define a real upgrade boundary.
 
 ### [ ] P2-08 Example application suite
 
-**Depends on:** P0-00, P2-06
+**Depends on:** P0-00B, P2-06
 
 - [ ] Expand `examples/` from the initial demo into real, runnable sample applications.
 - [ ] Include at least one core-only example, one example per supported ORM provider, and one example
