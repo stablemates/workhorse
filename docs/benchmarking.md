@@ -248,6 +248,8 @@ The competitor suite compares the common **successful immediate-job workload**, 
 pnpm db:reset:bench
 pnpm benchmark:competitors -- --profile smoke --output docs/benchmarks/results/competitor-smoke.json
 pnpm benchmark:competitors -- --profile default --output docs/benchmarks/results/competitor-default.json
+pnpm benchmark:competitors -- --profile default --pg-boss-batch-size 10 \
+  --output docs/benchmarks/results/competitor-pgboss-batched-default.json
 ```
 
 ### Targets and isolation
@@ -267,6 +269,8 @@ The common target interface is workload-level: `reset/setup`, batched enqueue, s
 Both profiles run fixed batched burn-downs and one equal-offered-load producer/consumer churn per target. The plan uses deterministic shuffled three-target blocks. Within every worker/repetition block each target appears once, and repetitions rotate the three positions so position counts are balanced when repetitions are a multiple of three. Smoke uses three repetitions for this reason. Churn has only one observation per target and is exploratory; it cannot support a confidence-backed ranking.
 
 The controlled default remains deliberately bounded at 100 jobs per fixed run and 600 churn jobs. pg-boss intentionally waits between single-job fetches from a preloaded backlog, and increasing `batchSize` would change the handler contract. Large native-throughput studies therefore require a separate configuration matrix with each product's batching behavior labeled explicitly.
+
+`--pg-boss-batch-size N` runs that explicit sensitivity. Values above one enable pg-boss's full-batch burst behavior and must not be presented as a common per-job ranking.
 
 Each run records enqueue, processing, and total phases; churn also records production, drain, sampled backlog, and maximum backlog. Exact completion is mandatory. Database evidence includes WAL bytes, schema totals/growth, and per-relation telemetry before and after the workload.
 

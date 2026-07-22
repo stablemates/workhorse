@@ -17,7 +17,7 @@ function argument(name: string): string | undefined {
   if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
   return value;
 }
-const help = `Standalone competitor baseline\n\nUsage:\n  pnpm benchmark:competitors -- --profile smoke|default --output PATH\n\nThe command only accepts the configured _bench database and resets the isolated schemas ironshift, pgboss_competitor, and graphile_worker_competitor.`;
+const help = `Standalone competitor baseline\n\nUsage:\n  pnpm benchmark:competitors -- --profile smoke|default --output PATH [--pg-boss-batch-size N]\n\nThe command only accepts the configured _bench database and resets the isolated schemas ironshift, pgboss_competitor, and graphile_worker_competitor. The controlled baseline uses pg-boss batch size 1; larger values are separately labeled sensitivity runs.`;
 async function main(): Promise<void> {
   if (process.argv.includes("--help")) {
     console.log(help);
@@ -27,6 +27,8 @@ async function main(): Promise<void> {
   if (!(["smoke", "default"] as const).includes(profile))
     throw new Error("--profile must be smoke or default");
   const output = argument("--output");
+  const pgBossBatchSizeValue = argument("--pg-boss-batch-size");
+  const pgBossBatchSize = pgBossBatchSizeValue === undefined ? 1 : Number(pgBossBatchSizeValue);
   const url = localDatabaseUrl("bench");
   if (!databaseName(url).endsWith("_bench"))
     throw new Error("competitor benchmark requires a database name ending in _bench");
@@ -40,7 +42,10 @@ async function main(): Promise<void> {
     });
   });
   try {
-    const report = await runCompetitorBaseline(pool, normalizeCompetitorOptions({ profile }));
+    const report = await runCompetitorBaseline(
+      pool,
+      normalizeCompetitorOptions({ profile, pgBossBatchSize }),
+    );
     const json = stringifyCompetitorReport(report);
     if (output) {
       await mkdir(dirname(output), { recursive: true });

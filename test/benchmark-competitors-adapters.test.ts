@@ -44,6 +44,26 @@ describe("pg-boss competitor adapter", () => {
     expect(boss.stop).toHaveBeenCalledWith({ graceful: true });
     await expect(handler([{ data: items[0] }])).rejects.toThrow(/more than once/);
   });
+
+  it("labels and enables the explicit handler-batching sensitivity", async () => {
+    const boss = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      createQueue: vi.fn(),
+      insert: vi.fn(),
+      work: vi.fn(),
+    };
+    const target = new PgBossTarget(pool, async () => boss, 10);
+    await target.setup();
+    await target.startConsumers(4);
+    expect(boss.work).toHaveBeenCalledWith(
+      "competitor_baseline",
+      expect.objectContaining({ localConcurrency: 4, batchSize: 10, burstWhenBatchFull: true }),
+      expect.any(Function),
+    );
+    expect(target.metadata.notes.join(" ")).toMatch(/sensitivity/);
+    await target.stop();
+  });
 });
 
 describe("Graphile Worker competitor adapter", () => {

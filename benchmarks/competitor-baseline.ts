@@ -30,6 +30,7 @@ export interface CompetitorOptions {
   churnBatchSize: number;
   sampleIntervalMs: number;
   completionTimeoutMs: number;
+  pgBossBatchSize: number;
 }
 export type CompetitorOptionsInput = Partial<CompetitorOptions>;
 export const competitorProfiles: Readonly<Record<CompetitorProfileName, CompetitorOptions>> =
@@ -46,6 +47,7 @@ export const competitorProfiles: Readonly<Record<CompetitorProfileName, Competit
       churnBatchSize: 10,
       sampleIntervalMs: 100,
       completionTimeoutMs: 30_000,
+      pgBossBatchSize: 1,
     }),
     default: Object.freeze({
       profile: "default",
@@ -59,6 +61,7 @@ export const competitorProfiles: Readonly<Record<CompetitorProfileName, Competit
       churnBatchSize: 10,
       sampleIntervalMs: 250,
       completionTimeoutMs: 120_000,
+      pgBossBatchSize: 1,
     }),
   });
 export interface ExecutionPlanStep {
@@ -162,6 +165,7 @@ export function normalizeCompetitorOptions(input: CompetitorOptionsInput = {}): 
     "churnBatchSize",
     "sampleIntervalMs",
     "completionTimeoutMs",
+    "pgBossBatchSize",
   ] as const)
     positive(key, result[key]);
   for (const value of result.workerConcurrency) positive("workerConcurrency", value);
@@ -406,7 +410,9 @@ export async function runCompetitorBaseline(
   input: CompetitorOptionsInput = {},
 ): Promise<CompetitorReport> {
   const options = normalizeCompetitorOptions(input);
-  const targets = await createCompetitorTargets(pool);
+  const targets = await createCompetitorTargets(pool, {
+    pgBossBatchSize: options.pgBossBatchSize,
+  });
   const byName = new Map(targets.map((t) => [t.metadata.name, t]));
   const plan = createCompetitorExecutionPlan(
     options.workerConcurrency,
@@ -443,7 +449,9 @@ export async function runCompetitorBaseline(
         "End-to-end spans the first enqueue call through the final successful handler completion.",
         "Graceful worker shutdown and post-run telemetry are excluded from timed phases.",
         "Framework-owned durable settlement may finish after the handler returns; exact completion is therefore handler-observed rather than a cross-product durable-settlement oracle.",
-        "The common baseline invokes handlers per job; product-specific claim or handler batching belongs in a separately labeled optimized profile.",
+        options.pgBossBatchSize === 1
+          ? "The controlled baseline invokes handlers per job; product-specific claim or handler batching belongs in a separately labeled sensitivity run."
+          : `This sensitivity run lets pg-boss invoke handlers in batches of ${options.pgBossBatchSize}; it is not a common per-job throughput ranking.`,
         "Equal-offered-load churn has one observation per target and is exploratory, not a confidence-backed ranking.",
         "WAL and storage describe each product's declared native retention behavior and are not retention-normalized.",
       ],
