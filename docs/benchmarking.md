@@ -258,13 +258,13 @@ pnpm benchmark:competitors -- --profile default --output docs/benchmarks/results
 | pg-boss         | 12.26.2            | `pgboss_competitor`          | `insert`, `createQueue`, `work`, graceful `stop`                 | retained (`deleteAfterSeconds: 0`) |
 | Graphile Worker | 0.17.3             | `graphile_worker_competitor` | `makeWorkerUtils().migrate/addJobs`, `run`, graceful `stop`      | deleted on success                 |
 
-pg-boss is configured with `retryLimit: 0`, `deleteAfterSeconds: 0`, and `notify: true`; worker concurrency is supplied as `localConcurrency`. Graphile jobs use `maxAttempts: 1`, and `run()` receives the task list and concurrency. Ironshift jobs use one attempt and a 30-second lease.
+All targets use a 32-connection ceiling. pg-boss is configured with `retryLimit: 0`, `deleteAfterSeconds: 0`, `notify: true`, `useListenNotify: true`, and a per-job `batchSize: 1`; worker concurrency is supplied as `localConcurrency`. Graphile jobs use `maxAttempts: 1`, and `run()` receives the task list and concurrency without local claim batching. Ironshift jobs use one attempt and a 30-second lease.
 
 The common target interface is workload-level: `reset/setup`, batched enqueue, start consumers, observe the exact expected completion set, stop, close, and expose schema metadata/capabilities. This deliberately hides native worker-loop differences while preserving them in target notes.
 
 ### Workloads and ordering
 
-Both profiles run fixed batched burn-downs and one equal-offered-load producer/consumer churn per target. The plan uses deterministic shuffled three-target blocks. Within every worker/repetition block each target appears once, and repetitions rotate the three positions so position counts are balanced when repetitions are a multiple of three. Smoke uses three repetitions for this reason.
+Both profiles run fixed batched burn-downs and one equal-offered-load producer/consumer churn per target. The plan uses deterministic shuffled three-target blocks. Within every worker/repetition block each target appears once, and repetitions rotate the three positions so position counts are balanced when repetitions are a multiple of three. Smoke uses three repetitions for this reason. Churn has only one observation per target and is exploratory; it cannot support a confidence-backed ranking.
 
 Each run records enqueue, processing, and total phases; churn also records production, drain, sampled backlog, and maximum backlog. Exact completion is mandatory. Database evidence includes WAL bytes, schema totals/growth, and per-relation telemetry before and after the workload.
 
@@ -273,9 +273,11 @@ Each run records enqueue, processing, and total phases; churn also records produ
 The JSON root is `artifactVersion: 1`, `contract: "common-success-path-v1"`, and `semanticEquivalence: false`. It contains:
 
 - normalized profile configuration and deterministic execution plan;
-- provenance: command, git SHA, Node/platform, database name and PostgreSQL version;
+- provenance: command, git SHA, source dirty state, Node/platform, database name and PostgreSQL version;
 - target package versions, schema/queue configuration, capability flags, retention behavior, and semantic notes;
 - per-run offered/enqueued/completed counts, exact-completion flag, position, phase durations, rates, load samples, WAL, schema growth, and relation telemetry;
 - summaries grouped by target, workload kind, and concurrency.
 
 Do not compare Graphile's post-success schema size as if it retained completed jobs. Do not interpret pg-boss or Graphile handler timing as directly comparable manual claim latency, and do not infer fencing guarantees from this suite. Ironshift exposes public claim/fence operations; both competitor worker APIs own claiming internally.
+
+The timed end point is successful completion of every task handler. Framework-owned durable settlement can finish after a handler returns, so the suite does not claim a cross-product durable-settlement latency. Graceful shutdown and telemetry collection are outside timed phases. Product-specific handler/claim batching must be reported in a separately labeled optimized profile rather than mixed into this common per-job baseline.

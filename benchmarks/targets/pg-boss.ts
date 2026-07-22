@@ -19,9 +19,10 @@ export class PgBossTarget extends CompletionTarget {
       retryLimit: 0,
       deleteAfterSeconds: 0,
       notify: true,
+      useListenNotify: true,
       databasePoolMax: 32,
       enqueue: "insert() batching",
-      workers: "work() localConcurrency, batchSize 10, burstWhenBatchFull",
+      workers: "work() localConcurrency, batchSize 1",
       stop: "graceful",
     },
     capabilities: {
@@ -51,6 +52,7 @@ export class PgBossTarget extends CompletionTarget {
       connectionString: this.pool.options.connectionString,
       schema: this.metadata.schema,
       max: 32,
+      useListenNotify: true,
     });
   }
   async reset(): Promise<void> {
@@ -80,8 +82,7 @@ export class PgBossTarget extends CompletionTarget {
       this.metadata.queue,
       {
         localConcurrency: concurrency,
-        batchSize: 10,
-        burstWhenBatchFull: true,
+        batchSize: 1,
         pollingIntervalSeconds: 0.5,
         notifyPollingIntervalSeconds: 0.5,
       },
@@ -90,7 +91,7 @@ export class PgBossTarget extends CompletionTarget {
         for (const raw of jobs as Array<{ data?: WorkItem }>) {
           const item = raw.data;
           if (!item?.id) throw new Error("pg-boss handler received a job without benchmark id");
-          this.completed.add(item.id);
+          this.recordCompletion(item.id);
         }
       },
     );

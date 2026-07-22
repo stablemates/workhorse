@@ -115,11 +115,11 @@ Publish at least one **controlled baseline**. Optional optimized profiles must b
 | Payload | Identical JSON object | Identical JSON object | Identical JSON object |
 | Retries in success run | Configured but not exercised | Declare `retryLimit`; no failures injected | Declare `maxAttempts`; no failures injected |
 | Scheduling | Immediate only | No `startAfter` | No future `runAt` |
-| Notification/polling baseline | Existing declared behavior | `useListenNotify: false`, queue `notify: false`; declare polling intervals | Declare `pollInterval`; notification behavior remains product-owned |
+| Notification/polling baseline | Existing declared behavior | `useListenNotify: true`, queue `notify: true`, with declared polling fallback | Declare `pollInterval`; notification behavior remains product-owned |
 | Product batching | Adapter ingress batches only | `batchSize: 1`, no handler batch settlement | Disable `localQueue` and settlement delays for controlled baseline |
 | Maintenance | Product default unless it contaminates timing; record all changes | Keep normal supervision/migrations outside timed setup | Run migrations outside timing; otherwise default maintenance |
 
-For pg-boss, run the controlled baseline with polling settings declared. A second profile may enable `useListenNotify: true` and queue `notify: true`, because the docs define it as an optional latency optimization with polling fallback.[^pgboss-constructor][^pgboss-queues] Do not mix those results.
+For pg-boss, the controlled baseline enables its documented notification wake-up with polling fallback, matching Graphile Worker's and Ironshift's low-latency wake-up intent. A separately labeled polling-only profile may disable both `useListenNotify` and queue notifications. Do not mix those results.
 
 For Graphile Worker, the controlled baseline disables local queueing and completion/failure delays. A separately labeled optimized profile may follow the official starting guidance, such as `localQueue.size = concurrentJobs + 1` and declared settlement delays.[^graphile-performance] Local claim batching changes crash exposure and database round trips, so it cannot silently replace the baseline.
 

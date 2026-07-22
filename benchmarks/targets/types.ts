@@ -36,6 +36,11 @@ export interface CompetitorTarget {
 export abstract class CompletionTarget implements CompetitorTarget {
   abstract metadata: TargetMetadata;
   protected completed = new Set<string>();
+  protected recordCompletion(id: string): void {
+    if (this.completed.has(id))
+      throw new Error(`${this.metadata.name} executed benchmark job ${id} more than once`);
+    this.completed.add(id);
+  }
   abstract reset(): Promise<void>;
   abstract setup(): Promise<void>;
   abstract enqueueMany(items: readonly WorkItem[]): Promise<void>;
