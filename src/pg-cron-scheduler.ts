@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Json, Queryable } from "./types.js";
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -83,7 +84,7 @@ export interface PgCronSyncResult {
 }
 
 export interface PgCronRequirements {
-  ready: boolean;
+  metadataReady: boolean;
   extensionVersion: string | null;
   supportedVersion: boolean;
   metadataDatabase: string;
@@ -93,6 +94,12 @@ export interface PgCronRequirements {
   canReadRuns: boolean;
   canScheduleInDatabase: boolean;
   canUnschedule: boolean;
+}
+
+export interface PgCronExecutionCheck {
+  executionReady: boolean;
+  status: string | null;
+  message: string | null;
 }
 
 type TargetContext = { database_name: string; database_user: string };
@@ -208,7 +215,7 @@ export async function inspectPgCronRequirements(cronDatabase: Pool): Promise<PgC
   const row = identity.rows[0]!;
   if (!row.extension_version) {
     return {
-      ready: false,
+      metadataReady: false,
       extensionVersion: null,
       supportedVersion: false,
       metadataDatabase: row.metadata_database,
@@ -240,7 +247,7 @@ export async function inspectPgCronRequirements(cronDatabase: Pool): Promise<PgC
     .slice(0, 2)
     .map((part) => Number.parseInt(part, 10));
   const supportedVersion = major > 1 || (major === 1 && minor >= 6);
-  const ready =
+  const metadataReady =
     supportedVersion &&
     access.schema_usage &&
     access.can_read_jobs &&
@@ -248,7 +255,7 @@ export async function inspectPgCronRequirements(cronDatabase: Pool): Promise<PgC
     access.can_schedule &&
     access.can_unschedule;
   return {
-    ready,
+    metadataReady,
     extensionVersion: row.extension_version,
     supportedVersion,
     metadataDatabase: row.metadata_database,
@@ -259,6 +266,47 @@ export async function inspectPgCronRequirements(cronDatabase: Pool): Promise<PgC
     canScheduleInDatabase: access.can_schedule,
     canUnschedule: access.can_unschedule,
   };
+}
+
+/** Schedule a temporary SELECT 1 and require the pg_cron daemon to execute it in the target DB. */
+export async function verifyPgCronExecution(
+  cronDatabase: Pool,
+  targetDatabase: string,
+  timeoutMs = 5_000,
+): Promise<PgCronExecutionCheck> {
+  const jobName = `ironshift-preflight/${targetDatabase}/${process.pid}-${Date.now()}`;
+  const scheduled = await cronDatabase.query<{ job_id: string }>(
+    "SELECT cron.schedule_in_database($1, '1 second', 'SELECT 1', $2, NULL, true)::text AS job_id",
+    [jobName, targetDatabase],
+  );
+  const jobId = scheduled.rows[0]!.job_id;
+  try {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const run = await cronDatabase.query<{ status: string; return_message: string | null }>(
+        `SELECT status, return_message
+           FROM cron.job_run_details
+          WHERE jobid = $1::bigint
+          ORDER BY runid DESC LIMIT 1`,
+        [jobId],
+      );
+      const latest = run.rows[0];
+      if (latest?.status === "succeeded") {
+        return { executionReady: true, status: latest.status, message: latest.return_message };
+      }
+      if (latest?.status === "failed") {
+        return { executionReady: false, status: latest.status, message: latest.return_message };
+      }
+      await sleep(100);
+    }
+    return {
+      executionReady: false,
+      status: null,
+      message: `no pg_cron execution completed within ${timeoutMs}ms`,
+    };
+  } finally {
+    await cronDatabase.query("SELECT cron.unschedule($1::bigint)", [jobId]).catch(() => undefined);
+  }
 }
 
 /**

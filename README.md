@@ -66,6 +66,8 @@ Local tooling keeps three databases separate:
 
 The defaults use the local `ironshift` role. Override them independently with `IRONSHIFT_DEV_DATABASE_URL`, `IRONSHIFT_TEST_DATABASE_URL`, and `IRONSHIFT_BENCH_DATABASE_URL`. Purpose-specific reset, test, and benchmark workflows intentionally ignore generic `DATABASE_URL`, which remains the application runtime connection string and is accepted by the packaged health CLI.
 
+`pnpm pg-cron:check` schedules a temporary `SELECT 1` in the target database and waits for the daemon result, so `ready: true` proves grants plus target authentication and execution. Use `-- --database test` or `bench` for an isolated local target, or set `DATABASE_URL` and `CRON_DATABASE_URL` for a deployed environment.
+
 ## Minimal usage
 
 ```ts

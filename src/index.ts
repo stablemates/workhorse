@@ -3,6 +3,7 @@ export {
   inspectPgCronRequirements,
   PgCronScheduler,
   unscheduleIronshiftTarget,
+  verifyPgCronExecution,
 } from "./pg-cron-scheduler.js";
 export type {
   CronJobDefinition,
@@ -10,6 +11,7 @@ export type {
   PgCronMaintenanceOptions,
   PgCronMaintenanceStatus,
   PgCronRequirements,
+  PgCronExecutionCheck,
   PgCronRunStatus,
   PgCronScheduleStatus,
   PgCronSchedulerOptions,

@@ -28,14 +28,25 @@ GRANT EXECUTE ON FUNCTION cron.unschedule(bigint) TO ironshift;
 The function grant is required in addition to schema usage. Validate the exact runtime role and metadata connection before deploying:
 
 ```bash
-CRON_DATABASE_URL='postgres://ironshift:...@host:5432/postgres' pnpm pg-cron:check
+DATABASE_URL='postgres://ironshift:...@host:5432/app' \
+CRON_DATABASE_URL='postgres://ironshift:...@host:5432/postgres' \
+pnpm pg-cron:check
 ```
 
-A successful result has `"ready": true`. The command exits nonzero if the extension or any required grant is missing.
+A successful result has `"ready": true`, `"metadataReady": true`, and `"executionReady": true`. The command creates a temporary one-second `SELECT 1` job, waits for pg_cron to execute it in the target database, then unschedules it. It exits nonzero for missing metadata privileges, daemon connection/authentication failure, or execution timeout. For isolated local databases, use `pnpm pg-cron:check -- --database test` or `bench`.
 
 ## Authentication and capacity
 
 When `cron.use_background_workers` is off, pg_cron opens a PostgreSQL connection for each run. Configure `pg_hba.conf` and a password source such as `.pgpass` for the deployment role. When background workers are enabled, ensure `max_worker_processes` exceeds the expected pg_cron concurrency and `cron.max_running_jobs`.
+
+If the live preflight returns `status: "failed"` and `message: "connection failed"`, metadata grants are correct but the daemon cannot authenticate to the target database. Prefer background workers when the provider supports them:
+
+```sql
+ALTER SYSTEM SET cron.use_background_workers = 'on';
+ALTER SYSTEM SET cron.max_running_jobs = '4'; -- keep below available max_worker_processes
+```
+
+Restart PostgreSQL after changing background-worker mode. Otherwise install a server-side `.pgpass` owned by the PostgreSQL operating-system account with mode `0600`, or add a narrowly scoped `pg_hba.conf` rule. An application user's local `.pgpass` is not read by the server-side pg_cron process.
 
 Ironshift's maintenance job runs every second by default. Keep its batch size bounded and monitor duration. pg_cron serializes overlapping executions of the same job, so a maintenance job that consistently exceeds its interval accumulates delay rather than concurrent copies.
 
@@ -56,7 +67,7 @@ pg_cron 1.6 creates only a primary-key index on `runid`. Ironshift's status quer
 | [Neon](https://neon.com/docs/extensions/pg_cron)                                                                                                          | Set `cron.database_name` through endpoint settings, restart compute, then create the extension.                                                                                                                | Disable scale to zero or use an always-active compute. Jobs run only while compute is active.                                                            |
 | [Azure Database for PostgreSQL Flexible Server](https://learn.microsoft.com/en-us/azure/postgresql/extensions/concepts-extensions-considerations#pg_cron) | Allowlist pg_cron, add it to `shared_preload_libraries`, restart, and create the extension. Azure supports `schedule_in_database` but does not support selecting a non-NULL target username.                   | Compatible because Ironshift uses the same role for both pools and passes NULL as the target username.                                                   |
 
-Provider support is necessary but not sufficient. Run `pnpm pg-cron:check`, synchronize a one-second test schedule, and confirm a `succeeded` row in `cron.job_run_details` before enabling production schedules.
+Provider support is necessary but not sufficient. Run `pnpm pg-cron:check` and require `ready: true` before enabling production schedules.
 
 ## Deployment and failure behavior
 
