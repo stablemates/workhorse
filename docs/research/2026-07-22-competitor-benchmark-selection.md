@@ -1,366 +1,199 @@
-# PostgreSQL job-queue competitor selection for Ironshift benchmarks
+# Competitor benchmark selection
 
 **Date:** 2026-07-22
-**Scope:** current first-party documentation and source only
-**Decision:** benchmark **pg-boss 12.26.2**, **Graphile Worker 0.17.3**, and **River 0.40.0**. Exclude **PGMQ 1.12.0** and **PgQue 0.2.0** from the primary job-queue comparison because their message/log semantics require Ironshift's worker, retry, scheduling, and completion lifecycle to be reimplemented in the benchmark harness.
+**Decision:** use **pg-boss 12.26.2** and **Graphile Worker 0.17.3** as the first direct product competitors. Keep Ironshift's **internal conventional SQL model** as a non-product architecture reference. Do not include River, PGMQ, or PgQue in the first headline baseline.
 
-## Executive recommendation
+## Decision summary
 
-The most defensible primary set is:
+The first baseline should answer a narrow question: how does Ironshift compare with established job-queue implementations that run in the same TypeScript/Node.js and PostgreSQL environment under a common success-path workload?
 
-1. **pg-boss 12.26.2**: the closest Node.js/PostgreSQL framework comparison and the cleanest adapter to Ironshift's existing `enqueueMany -> claim -> complete` benchmark seam.
-2. **Graphile Worker 0.17.3**: a mature Node.js/PostgreSQL worker framework with a first-party bulk enqueue function, `LISTEN/NOTIFY` plus polling, configurable worker concurrency, automatic retry, cron, and explicit high-throughput batching controls.
-3. **River 0.40.0**: the strongest third competitor. It is a full job framework with transactional and `COPY FROM` batch enqueue, bounded worker concurrency, retries, scheduled and periodic jobs, maintenance, retention, `LISTEN/NOTIFY` fallback polling, and its own first-party burn-down/continuous benchmark modes. Its Go runtime is a confounder, but its lifecycle is materially fairer than PGMQ or PgQue.
+| Candidate | First-baseline role | Reason |
+|---|---|---|
+| pg-boss `12.26.2` | Direct competitor | Node.js/PostgreSQL job framework with public bulk insertion, managed workers, completion, retries, queues, retention, and operational APIs. |
+| Graphile Worker `0.17.3` | Direct competitor | TypeScript/Node.js/PostgreSQL job framework with public `run()` and `addJobs()` APIs, managed concurrency, retries, scheduling, and documented performance controls. |
+| Conventional SQL model | Non-product reference | Internal mutable-table implementation that isolates Ironshift's hybrid storage design from product/runtime differences. It is not an external competitor and must never appear in a market ranking. |
+| River | Excluded now; future matrix target | TypeScript can enqueue, but official workers execute in Go. That runtime difference confounds the first Node.js comparison. River is the strongest future native cross-language matrix target. |
+| PGMQ | Excluded | PostgreSQL message-queue primitive with no background worker. A benchmark adapter would have to invent the job runtime and lifecycle. |
+| PgQue | Excluded | Snapshot-batched durable event stream with independent consumer cursors and tick-based visibility, closer to Kafka than a task queue. Its semantics and latency model are intentionally different. |
 
-Use all three for **public job-framework throughput and latency comparisons**, but preserve two qualifications:
+This selection is not a claim that the excluded systems are inferior. It is a control decision that minimizes runtime and semantic confounders in the first published baseline.
 
-- pg-boss and River retain finalized rows until cleanup, while Graphile Worker deletes a job on successful completion. Storage/WAL results therefore describe the products' real default lifecycle, not identical physical retention.
-- River's public API owns claiming inside its worker loop. Measure handler-start and completion events rather than pretending a public manual `claim()` call exists.
+## Evidence and version pins
 
-Do **not** include PGMQ or PgQue in the main ranking. They can support a separate future study explicitly labeled **PostgreSQL message/log primitives**, not a job-framework benchmark.
+The repository already pins both direct competitors exactly in `package.json` and `pnpm-lock.yaml`: `pg-boss: 12.26.2` and `graphile-worker: 0.17.3`. The installed package metadata agrees with those pins. pg-boss declares Node `>=22.12.0`, while Ironshift declares Node `>=22`; the benchmark environment must therefore use Node `>=22.12.0`.[^pgboss-package] Graphile Worker 0.17.3 declares Node `>=14`, so the same Node 22 process is supported.[^graphile-package]
 
-## Method and selection criteria
+The installed declarations are also the implementation contract for adapters:
 
-The review first used the required Context7 flow for pg-boss and Graphile Worker, resolving `/timgit/pg-boss` and `/graphile/worker`, then querying installation, enqueue, work, completion, retry, scheduling, cleanup, and polling behavior. Every conclusion below was then checked against current official documentation, release metadata, or source.
+- `node_modules/pg-boss/dist/index.d.ts` exports `PgBoss`, its string/options constructors, `insert()`, `work()`, `complete()`, `fail()`, queue management, and operational methods. `dist/types.d.ts` supplies the corresponding constructor, job, worker, queue, and retention types.
+- `node_modules/graphile-worker/dist/index.d.ts` exports `run`, `runMigrations`, `makeWorkerUtils`, and the public interfaces. `dist/interfaces.d.ts` defines `AddJobsFunction`, `WorkerUtils`, task handlers, jobs, runner options, and worker events.
 
-A primary competitor had to provide first-party equivalents for most of this lifecycle:
+These checks matter because documentation can describe multiple releases. Benchmark code must compile against the installed declarations, and citations must be pinned to the selected releases where possible.
 
-1. deterministic installation and schema reset;
-2. immediate and transactional enqueue;
-3. true multi-job enqueue;
-4. competing worker claim semantics;
-5. success completion and failure transitions;
-6. configurable concurrency;
-7. bounded attempts and retry delay;
-8. delayed and recurring scheduling;
-9. cleanup or retention behavior;
-10. documented notification/polling behavior and observable benchmark boundaries.
+## Repository-organization findings
 
-That matches Ironshift's comparative suite, which separates enqueue, processing, and end-to-end time, sweeps worker concurrency, records claim latency, and also runs equal-load producer/consumer churn.[^ironshift-runbook]
+The competitor adapters should fit Ironshift's existing benchmark organization rather than become separate ad hoc programs:
 
-## Version pins and reproducible installation
+- `benchmarks/comparative.ts` defines the current fixed-run and producer/consumer result shapes, timing phases, concurrency sweep, counters, latency samples, telemetry, counterbalanced execution plan, and paired summaries.
+- `benchmarks/conventional.ts` plus `sql/benchmark-conventional.sql` implement the internal conventional reference behind the same `enqueueMany -> claim -> complete` seam.
+- `benchmarks/telemetry.ts` owns WAL, relation, schema, activity, I/O, and query-plan collection.
+- `docs/benchmarking.md` defines the existing reproducibility and claim discipline.
 
-| System          | Pin for benchmark        | Install                                                                                                                                                                                                                      | Dedicated-database setup                                                                                                                                                                | Full reset between independent runs                                                                                                                                                                    |
-| --------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| pg-boss         | `pg-boss@12.26.2`        | `npm install --save-exact pg-boss@12.26.2`                                                                                                                                                                                   | Start `PgBoss` and allow its default migration, or use the CLI `migrate`; create the named queue explicitly. Default schema is `pgboss`.[^pgboss-release][^pgboss-install][^pgboss-cli] | Stop all instances, `DROP SCHEMA pgboss CASCADE`, then rerun migration/start and `createQueue`. This is the documented uninstall path.[^pgboss-install]                                                |
-| Graphile Worker | `graphile-worker@0.17.3` | `npm install --save-exact graphile-worker@0.17.3`                                                                                                                                                                            | `npx graphile-worker -c "$DATABASE_URL" --schema-only`, or `await workerUtils.migrate()`. Default schema is `graphile_worker`.[^graphile-package][^graphile-install][^graphile-queue]   | Scale workers to zero, `DROP SCHEMA graphile_worker CASCADE`, then rerun migrations. The docs warn that `CASCADE` can remove dependent objects, so use a benchmark-only database.[^graphile-uninstall] |
-| River           | Go modules at `v0.40.0`  | `go get github.com/riverqueue/river@v0.40.0` and the selected driver, normally `github.com/riverqueue/river/riverdriver/riverpgxv5@v0.40.0`; install the CLI with `go install github.com/riverqueue/river/cmd/river@v0.40.0` | `river migrate-up --line main --database-url "$DATABASE_URL"`.[^river-release][^river-start][^river-migrations]                                                                         | Stop clients, then `river migrate-down --line main --database-url "$DATABASE_URL" --max-steps 10` followed by `migrate-up`. The down migration is explicitly destructive.[^river-migrations]           |
+The upstream repositories support public-adapter implementations. pg-boss publishes compiled declarations and schema artifacts from `dist`, with its APIs documented by constructor, jobs, workers, operations, and queues pages.[^pgboss-constructor][^pgboss-jobs][^pgboss-workers][^pgboss-ops][^pgboss-queues] Graphile Worker 0.17.3 is organized around `src`, generated/bundled `sql`, `perfTest`, tests, and `website`, and publishes `dist` plus `sql`; its package scripts expose the upstream performance harness and SQL build.[^graphile-repo][^graphile-package] This supports using public library/SQL APIs while forbidding dependencies on either project's private tables or unexported modules.
 
-Pin container images, transitive lockfiles, PostgreSQL version, and source revisions in the result artifact. Do not use `@latest` in benchmark automation even where first-party getting-started docs use it.
+## Why these are the two direct competitors
 
-## Capability matrix
+### pg-boss 12.26.2
 
-| Dimension                    | pg-boss 12.26.2                                                                                                                                                                                                                                    | Graphile Worker 0.17.3                                                                                                                                                                                                                                             | River 0.40.0                                                                                                                                                                                                                          |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Schema setup                 | Automatic dedicated-schema creation/migration by default; migration CLI and SQL plans are available.[^pgboss-install][^pgboss-cli]                                                                                                                 | CLI `--schema-only`, `runMigrations()`, or `WorkerUtils.migrate()`.[^graphile-queue][^graphile-run]                                                                                                                                                                | Versioned CLI migrations, down migrations, list, and SQL export.[^river-migrations]                                                                                                                                                   |
-| Transactional enqueue        | `send()`/`insert()` accept a custom `db` adapter; official ORM transaction adapters are provided. The caller owns the surrounding transaction when supplying the adapter.[^pgboss-jobs][^pgboss-adapters]                                          | The SQL functions `graphile_worker.add_job()` and `add_jobs()` can be invoked on the application's existing PostgreSQL transaction. The normal JS convenience methods acquire their own pool client.[^graphile-add-job][^graphile-add-jobs][^graphile-sql-add-job] | First-class `InsertTx` and `InsertManyTx`; uncommitted jobs are not worked and rollback removes them.[^river-start][^river-batch]                                                                                                     |
-| Batch enqueue                | `insert(name, Job[], options)` creates multiple jobs in one request.[^pgboss-jobs]                                                                                                                                                                 | `addJobs(jobSpecs)` defers to the set-oriented SQL `add_jobs()` function. This is distinct from a single “batch job” whose payload is an array.[^graphile-add-jobs][^graphile-add-job]                                                                             | `InsertMany`/`InsertManyTx`; `InsertManyFast`/`InsertManyFastTx` use PostgreSQL `COPY FROM` with documented limitations.[^river-batch]                                                                                                |
-| Claim/work                   | Public `fetch(name, { batchSize })` enables a direct claim seam; `work()` provides managed polling workers and batch handlers.[^pgboss-jobs][^pgboss-workers]                                                                                      | Managed runner owns claim and dispatch. `concurrentJobs` sets pool width; optional `localQueue` prefetches/locks multiple jobs.[^graphile-run][^graphile-config][^graphile-performance]                                                                            | Managed `Client.Start()` owns fetch/dispatch. Queue `MaxWorkers` controls worker goroutines; no public manual-claim benchmark API should be invented.[^river-start][^river-client-source]                                             |
-| Completion/failure           | Manual `complete()`, `fail()`, and `deleteJob()` support scalar or ID-array settlement; `work()` automatically completes on return and fails on throw.[^pgboss-jobs][^pgboss-workers]                                                              | Task return completes; throw fails. Completion deletes the job. Optional completion/failure batching coalesces releases into fewer round trips.[^graphile-errors][^graphile-admin][^graphile-performance]                                                          | Returning `nil` completes; errors retry or eventually discard. `JobCompleteTx` atomically completes with application changes. Public subscriptions expose completed events.[^river-retries][^river-complete-tx][^river-subscriptions] |
-| Concurrency                  | `localConcurrency` creates per-process workers; `batchSize` controls jobs per fetch. Group concurrency features exist but should be disabled for the baseline.[^pgboss-workers]                                                                    | `concurrentJobs` defaults to 1 and scales per process; multiple processes provide horizontal scaling. `localQueue` changes prefetch/lock behavior and must be a declared benchmark profile.[^graphile-config][^graphile-performance]                               | Per-queue `MaxWorkers`; multiple clients compete through PostgreSQL. Use the same total worker count as other systems.[^river-start][^river-client-source]                                                                            |
-| Retry                        | Default `retryLimit: 2`, configurable fixed or exponential backoff, max delay, expiry, heartbeat, and dead-letter queue.[^pgboss-jobs][^pgboss-queues]                                                                                             | Default `maxAttempts: 25`; failures use exponential backoff `exp(least(10, attempt))`. Forceful shutdown fails running work for later retry.[^graphile-add-job][^graphile-errors][^graphile-backoff]                                                               | Default 25 attempts; default delay is `attempts^4` seconds with ±10% jitter, customizable per client or worker.[^river-retries]                                                                                                       |
-| Delayed/recurring scheduling | `startAfter`/`sendAfter`; `schedule()` uses cron. Schedules are checked every 30 seconds by default and at least one instance must run.[^pgboss-jobs][^pgboss-scheduling]                                                                          | `runAt` for delay; distributed crontab with ACID duplicate prevention and optional backfill.[^graphile-add-job][^graphile-cron]                                                                                                                                    | `ScheduledAt` moves jobs through scheduled state, generally within 5 seconds after due; in-memory periodic/cron jobs are leader-owned and have documented restart/election caveats.[^river-scheduled][^river-periodic]                |
-| Cleanup/retention            | Per-job/queue `retentionSeconds` and `deleteAfterSeconds`; default completed retention is 7 days. Daily maintenance drops eligible queued/completed jobs by default.[^pgboss-jobs][^pgboss-constructor]                                            | Successful jobs are deleted immediately. Permanently failed jobs remain until operator cleanup; `cleanup()` can delete permafailed jobs and garbage-collect unused queue/task identifiers.[^graphile-scaling][^graphile-admin]                                     | Cleaner retains completed/cancelled jobs for 24 hours and discarded jobs for 7 days by default, all configurable.[^river-maintenance][^river-client-source]                                                                           |
-| Notification/polling         | Polling defaults to 2 seconds. New in the pinned release, opt-in `useListenNotify` plus queue `notify: true` wakes workers, with a 30-second polling backstop while the listener is active.[^pgboss-workers][^pgboss-constructor][^pgboss-release] | Workers `LISTEN` on `jobs:insert` and also poll; current default `pollInterval` is 2,000 ms. The listener uses a dedicated pool client and reconnects with backoff.[^graphile-config-source][^graphile-main-source]                                                | `LISTEN/NOTIFY` normally wakes fetchers; `FetchCooldown` defaults to 100 ms and fallback `FetchPollInterval` to 1 second. `PollOnly` disables listeners for transaction-pooling compatibility.[^river-client-source]                  |
-| Native benchmark seam        | Best direct fit: `insert()` for ingress, `fetch()` timestamped per call for claim latency, `complete(ids)` for settlement, or `work()` for framework-realistic throughput.                                                                         | Use `addJobs()` for ingress and the normal runner for processing. Timestamp `job:start`/`job:success` worker events or task entry/completion, not private SQL claim functions. Declare batching profile.                                                           | Use `InsertMany` or `InsertManyFast`, task-entry timestamp, and completion subscriptions. River's own `bench` command confirms burn-down and continuous modes but should not replace the common Ironshift harness.[^river-bench]      |
+pg-boss is the closest direct match to Ironshift's current product boundary. The official constructor accepts a PostgreSQL connection string or options, controls pool size and schema, and documents supervision, migration, scheduling, and optional `LISTEN/NOTIFY` layered over polling.[^pgboss-constructor] The jobs API provides immediate/deferred submission, bulk `insert()`, retries, expiration, completed-job retention, explicit operations, and transaction adapters.[^pgboss-jobs][^pgboss-ops] The workers API owns polling and handler settlement through `work()`, with configurable `batchSize` and `pollingIntervalSeconds`.[^pgboss-workers] Queues make retry, retention, policy, partition, and notification choices explicit.[^pgboss-queues]
 
-## Candidate-specific benchmark designs
+That is enough public surface to implement enqueue, managed processing, success completion, scheduling, and cleanup without reproducing the product in the harness.
 
-### 1. pg-boss: include
+### Graphile Worker 0.17.3
 
-#### Defensible baseline
+Graphile Worker is also a direct TypeScript/Node.js/PostgreSQL job framework. The official `run()` API accepts a task list, connection/pool, concurrency, polling, schema, events, and shutdown controls.[^graphile-run] The official `addJobs()` API efficiently inserts immediate or delayed jobs as distinct records and delegates to the public SQL function.[^graphile-addjobs] Its performance documentation separates default behavior from optional local claim and settlement batching, and provides concrete configuration guidance rather than a single universal optimum.[^graphile-performance]
 
-```ts
-const boss = new PgBoss({
-  connectionString,
-  schema: "pgboss_bench",
-  supervise: true,
-  schedule: false,
-  useListenNotify: false,
-});
-await boss.start();
-await boss.createQueue(queueName);
-```
+The schema documentation explicitly says private tables are not a public interface and notes that successfully completed jobs are deleted.[^graphile-schema] The adapter must therefore use exported library APIs, documented SQL functions, events, and permitted views only.
 
-Use a unique benchmark schema if the harness supports parameterized resets. Keep queue policy `standard`, no uniqueness, no priority variation, no dead-letter queue, no heartbeat, and a payload equivalent to Ironshift's synthetic payload.
+## Why the other candidates are outside the first baseline
 
-#### Enqueue-only seam
+### River: runtime mismatch now, cross-language target later
 
-Call one `boss.insert(queueName, jobs)` per configured Ironshift enqueue batch. Keep `returnId` disabled unless IDs are required because the docs state IDs are otherwise not returned by default. Record request count exactly.[^pgboss-jobs]
+River is a full job framework and is more semantically comparable than PGMQ or PgQue. However, River's official TypeScript client is an insertion client: the documentation says TypeScript inserts jobs that are **worked in Go**.[^river-typescript] A first-run comparison would therefore combine queue architecture with Node-versus-Go handler, scheduler, driver, process, and instrumentation effects.
 
-For the transactional scenario, pass the official `db` adapter bound to the harness transaction and verify rollback leaves zero jobs. Do not time ORM setup inside the enqueue phase.
+Exclude River from the first direct TypeScript baseline. Add it later as the first **native cross-language matrix** target, using River's TypeScript producer with its Go worker and labeling the result accordingly. That future matrix can answer a different product question: how do native runtimes interact through one PostgreSQL job protocol? It must not be merged silently into the same-runtime headline ranking.
 
-#### Claim/completion seam
+### PGMQ: lifecycle mismatch
 
-Two useful profiles should not be mixed:
+PGMQ describes itself as a lightweight SQS-like PostgreSQL message queue with no background worker; messages remain until explicitly removed, and delivery uses a visibility timeout.[^pgmq-readme] Its SQL primitives can support enqueue, read, archive/delete, and visibility-timeout redelivery, but the benchmark harness would have to supply worker concurrency, task dispatch, retry/backoff policy, terminal failure, recurring scheduling, and cleanup policy.
 
-- **Primitive lifecycle:** `fetch(queueName, { batchSize: 1 })`, timestamp each call, then `complete(queueName, id)` or array completion. This maps most closely to Ironshift's current adapter.
-- **Framework-realistic:** `work(queueName, { localConcurrency: N, batchSize: 1 }, handler)`. Timestamp the first handler instruction and handler resolution. This includes pg-boss polling, dispatch, and automatic settlement.
+That would benchmark an Ironshift-authored runtime around PGMQ, not an equivalent PGMQ product lifecycle. PGMQ belongs in a separate future **message-primitive** study with a shared client-side worker loop and narrower claims.
 
-The primary public result should use framework-realistic processing. Keep primitive claim microbenchmarks as diagnostic evidence.
+### PgQue: consumption and latency mismatch
 
-#### Notification profile
+PgQue 0.2.0 describes itself as a durable event stream closer to Kafka than ActiveMQ or RabbitMQ, using a shared event log, independent consumer cursors, snapshot-based batching, table rotation, and periodic ticks.[^pgque-readme] Its default end-to-end visibility is intentionally tied to tick cadence, and acknowledgement advances consumer progress rather than completing one exclusively claimed task in the same sense as the selected job frameworks.
 
-The pinned 12.26.2 release added first-party `LISTEN/NOTIFY` support. Benchmark the default polling profile separately from `useListenNotify: true` plus queue `notify: true`; never silently enable it for only one competitor. Future-scheduled pg-boss jobs do not emit immediate notifications and mature through polling.[^pgboss-workers][^pgboss-queues]
+Forcing PgQue into `enqueue -> exclusive claim -> successful job deletion/completion` would erase the architecture being evaluated. It belongs in a future **durable event-stream and sustained-churn** study, not the first job-framework baseline.
 
-### 2. Graphile Worker: include
+## Common success-path benchmark contract
 
-#### Defensible baseline
+Only behavior all four implementations can represent without private APIs enters the common score: Ironshift, pg-boss, Graphile Worker, and the conventional SQL reference.
 
-```ts
-const preset = {
-  worker: {
-    connectionString,
-    schema: "graphile_worker_bench",
-    concurrentJobs: workers,
-    pollInterval: 2000,
-    localQueue: { size: -1 },
-    completeJobBatchDelay: -1,
-    failJobBatchDelay: -1,
-  },
-};
-```
+### Workload
 
-Run migrations before timing. Supply an in-memory `taskList` with one no-op task. The no-batching profile above is the cleanest semantic baseline, but it is not Graphile Worker's recommended high-throughput configuration.
+1. Run on the same dedicated PostgreSQL server/database class, Node version, machine, payload bytes, task code, and client instrumentation.
+2. Use one logical task type and independent jobs with unique IDs. The handler performs the same bounded no-op or deterministic payload check and no application I/O.
+3. Pre-create/migrate schemas and queues before timing. Reset only the implementation under test between independent repetitions.
+4. Use the same job counts, enqueue batch sizes, concurrency levels, repetition count, deterministic counterbalanced order, warm-up policy, and timeout.
+5. Require exact success: every accepted job starts once in the measured success run, every handler resolves successfully, and the implementation reports or permits observation of durable completion. Any missing, duplicate, failed, or timed-out job invalidates the run.
 
-Therefore publish a second declared **optimized** profile using the project's starting guidance: `localQueue.size = concurrentJobs + 1` and nonnegative completion/failure batch delays. The official performance page warns that local queueing checks out extra jobs and that delayed settlement changes crash exposure.[^graphile-performance]
+### Timing boundaries
 
-#### Enqueue-only seam
+| Metric | Common boundary |
+|---|---|
+| Enqueue duration | Immediately before the first public batch enqueue call through completion of the final public batch enqueue call. |
+| Start latency | Successful enqueue-call completion for each batch/job to the first instruction in that job's handler. Report p50/p95/p99 and samples. Do not call this manual claim latency for managed-worker products. |
+| Processing duration | Worker availability/start signal to observation that all accepted jobs have completed successfully. |
+| End-to-end duration | Immediately before first enqueue to observation of final successful completion. |
+| Throughput | Exact successfully completed jobs divided by the declared processing or end-to-end interval. Keep both denominators named. |
 
-Use one `workerUtils.addJobs(jobSpecs)` call per configured batch. Do not represent many benchmark jobs as one Graphile “batch job” with an array payload, because that changes job identity and retry semantics.[^graphile-add-job][^graphile-add-jobs]
+Handler return alone is not sufficient if a framework settles completion afterward. The adapter must use the strongest public completion observation available, then document any residual observation delay. Post-run table counts cannot be the shared completion oracle because Graphile Worker deletes successful jobs.
 
-For transactional enqueue, issue `SELECT graphile_worker.add_jobs(...)` through the harness's existing `pg` transaction. This uses the documented public SQL API and avoids relying on private tables.
+### Common telemetry
 
-#### Work/completion seam
+Collect PostgreSQL WAL bytes, implementation schema/relation sizes, dead/live tuples, vacuum/analyze counters, database activity, and `pg_stat_io` where available. Query plans may be collected only through public/documented functions or permitted views. Graphile Worker's private tables are explicitly out of bounds. Telemetry queries must not run inside timed transactions or block workers.
 
-Start the normal runner with `concurrentJobs = N`. Count a job as claimed when its task handler begins and complete when the handler resolves or the `job:success` event is observed. Do not call private `get_jobs` SQL directly merely to force Graphile into Ironshift's manual-claim interface.
+## Configuration choices
 
-Graphile completion deletes rows. Accordingly:
+Publish at least one **controlled baseline**. Optional optimized profiles must be named and reported separately.
 
-- completed count should come from harness events/counters, not post-run job-table rows;
-- relation/WAL measurements remain valuable but must be described as product-default lifecycle cost;
-- retention-pruning is not equivalent to Ironshift's retained identity/history scenario and should be marked **not comparable**, rather than forcing permanent-failure cleanup into the success path.
+| Choice | Ironshift / conventional | pg-boss 12.26.2 | Graphile Worker 0.17.3 |
+|---|---|---|---|
+| Runtime | Same Node process/version | Same Node process/version | Same Node process/version |
+| Queue | One ordinary queue | Explicit `createQueue`, standard policy | Jobs without `queueName`; a Graphile queue name serializes work and would defeat global concurrency |
+| Concurrency | `N` competing worker loops | `N` `work()` registrations, `batchSize: 1` | `run()` with `concurrency: N` and one in-memory task handler |
+| Ingress | Public `enqueueMany` | Public `insert(name, jobs)` | Public `workerUtils.addJobs(specs)` |
+| Payload | Identical JSON object | Identical JSON object | Identical JSON object |
+| Retries in success run | Configured but not exercised | Declare `retryLimit`; no failures injected | Declare `maxAttempts`; no failures injected |
+| Scheduling | Immediate only | No `startAfter` | No future `runAt` |
+| Notification/polling baseline | Existing declared behavior | `useListenNotify: false`, queue `notify: false`; declare polling intervals | Declare `pollInterval`; notification behavior remains product-owned |
+| Product batching | Adapter ingress batches only | `batchSize: 1`, no handler batch settlement | Disable `localQueue` and settlement delays for controlled baseline |
+| Maintenance | Product default unless it contaminates timing; record all changes | Keep normal supervision/migrations outside timed setup | Run migrations outside timing; otherwise default maintenance |
 
-### 3. River: include as the third competitor
+For pg-boss, run the controlled baseline with polling settings declared. A second profile may enable `useListenNotify: true` and queue `notify: true`, because the docs define it as an optional latency optimization with polling fallback.[^pgboss-constructor][^pgboss-queues] Do not mix those results.
 
-River is a full lifecycle match. It supports transactional enqueue, batch and `COPY FROM` enqueue, managed competing workers, configurable attempts/backoff, scheduled jobs, periodic/cron jobs, stuck-job rescue, retention cleanup, and notification-backed fetch. Its own benchmark utility explicitly implements fixed burn-down and continuous producer/consumer modes, which closely resemble Ironshift's two comparative workload shapes.[^river-bench]
+For Graphile Worker, the controlled baseline disables local queueing and completion/failure delays. A separately labeled optimized profile may follow the official starting guidance, such as `localQueue.size = concurrentJobs + 1` and declared settlement delays.[^graphile-performance] Local claim batching changes crash exposure and database round trips, so it cannot silently replace the baseline.
 
-#### Defensible baseline
+## Retention and physical-cost interpretation
 
-Build a small pinned Go benchmark adapter using `riverpgxv5` and a single no-op worker kind:
+Successful completion does not leave equivalent physical state:
 
-```go
-client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
-    Queues: map[string]river.QueueConfig{
-        river.QueueDefault: {MaxWorkers: workers},
-    },
-    Workers: workersBundle,
-})
-```
+- Ironshift and the conventional reference retain job identity/history according to their configured retention model.
+- pg-boss retains completed jobs until `deleteAfterSeconds`; its documented default is seven days, and `0` means never delete.[^pgboss-jobs]
+- Graphile Worker deletes successfully completed jobs and recommends an application shadow table when completed-job tracking is required.[^graphile-schema]
 
-Use default listener/polling behavior and default completion path. Disable periodic jobs and do not use Pro-only batching or concurrency-limit features.
+Therefore:
 
-#### Enqueue-only seam
+1. throughput and start/end-to-end latency may be compared under the common success contract;
+2. WAL, relation growth, dead tuples, and cleanup work must be reported as **product lifecycle cost under the stated retention configuration**, not as a normalized storage-efficiency ranking;
+3. do not force immediate pg-boss deletion or add a Graphile shadow-history table in the baseline merely to imitate Ironshift;
+4. add a separate retention-normalized experiment only if every transformation is explicit and the default-lifecycle results remain available.
 
-Use `InsertMany` for the main cross-product comparison because it returns inserted job results and has conventional multi-row semantics. Add `InsertManyFast` as an explicitly optimized ingress profile. It uses `COPY FROM`, does not return inserted rows, and handles uniqueness conflicts differently, so it must not silently replace the normal profile.[^river-batch]
+## Non-comparable features
 
-Use `InsertManyTx` for rollback/commit correctness. River documents that jobs are not worked until commit and disappear on rollback.[^river-batch]
+The following remain feature/scenario evidence, not inputs to the common throughput score:
 
-#### Work/completion seam
+- Ironshift fencing tokens, stale-heartbeat/stale-completion rejection, explicit lease renewal, append-only events/attempts, partition retirement, and health snapshot;
+- pg-boss queue policies, dead-letter/redrive, throttling/debounce, group concurrency, flows, and explicit administrative operations;
+- Graphile Worker job keys, flags, named-queue serialization, cron behavior, private local-queue crash semantics, and successful-row deletion;
+- any product's retry/backoff, delayed scheduling, cron, failure, cancellation, cleanup, or crash-recovery behavior until a separate scenario defines equivalent outcomes;
+- the conventional model's architecture results as evidence of market-product maturity, operability, or feature completeness.
 
-River intentionally owns fetch/claim. Timestamp:
+These may receive dedicated scenario tables with pass/fail invariants and implementation-specific notes. They must not be collapsed into a single synthetic score.
 
-1. immediately before batch insert;
-2. the first instruction in `Work()` for per-job enqueue-to-handler latency;
-3. handler return;
-4. `EventKindJobCompleted` subscription receipt for durable completion observation.
+## Claim rules
 
-Treat subscription delay as a separate observation if it is included. Throughput completion should be based on River completion events or a final state query, not merely handler returns.
+Every published conclusion must follow these rules:
 
-River does not provide Ironshift-style fencing tokens in the public worker API. Its crash/stuck-job recovery can be studied, but the exact stale-completion rejection lifecycle scenario is not a direct equivalence and should not enter the common throughput score.
+1. **Name the exact versions, commit/document pins, environment, PostgreSQL/Node versions, configuration, workload, and sample count.**
+2. **Separate measured fact from explanation.** A latency or WAL difference does not prove its architectural cause without additional evidence.
+3. **Use paired, counterbalanced repetitions and report distributions/confidence intervals.** Do not rank products from one run or only the fastest run.
+4. **Use precise scopes:** “in this benchmark,” “on this machine,” “under this success-path configuration,” and “with product-default retention,” as applicable.
+5. **Do not claim equivalence from a non-significant difference.** State that the experiment did not resolve a difference and report the interval/power limitation.
+6. **Do not compare upstream marketing numbers with local results.** Upstream performance pages inform configuration and follow-up tests only.
+7. **Do not call handler-start latency `claim latency` across managed-worker products.** The shared measure is enqueue-to-handler-start latency.
+8. **Do not normalize away real lifecycle behavior without a separate profile.** Default-retention and normalized-retention results require distinct labels.
+9. **Do not describe the conventional SQL model as a competitor or product.** It is an internal storage-control reference.
+10. **Do not generalize exclusions into quality judgments.** River, PGMQ, and PgQue are excluded because the first baseline controls runtime and semantics, not because they are unsuitable in their intended categories.
+11. **Do not make a headline winner claim unless exact completion invariants pass and the advantage persists across declared scales, repetitions, and relevant latency percentiles.**
+12. **Preserve artifacts.** Publish raw run JSON, environment metadata, adapter/configuration source revision, schema reset procedure, and analysis beside any summary.
 
-## Why PGMQ is excluded from the primary benchmark
+## Resulting baseline plan
 
-PGMQ 1.12.0 is a well-defined PostgreSQL message queue, but its own first-party description says it has **no background worker**, messages remain until explicitly removed, and retry is visibility-timeout redelivery.[^pgmq-release][^pgmq-readme]
+The first deliverable is a three-column implementation study plus Ironshift:
 
-Its primitive mapping would be:
+1. Ironshift hybrid model;
+2. internal conventional SQL reference, clearly marked non-product;
+3. pg-boss 12.26.2;
+4. Graphile Worker 0.17.3.
 
-- enqueue: `pgmq.send_batch()`;
-- claim: `pgmq.read(queue_name, vt, qty)`;
-- success: `pgmq.delete()` or `pgmq.archive()`;
-- recovery: allow the visibility timeout to expire.
+Run the common immediate-success workload first. Then add separately labeled product-default notification and optimized-batching profiles. Keep failure, retry, scheduling, crash recovery, retention normalization, and very-long-churn experiments outside the headline score until each has a fair semantic contract.
 
-That is useful for an SQS-style primitive benchmark, but the harness would have to invent:
+After the same-runtime baseline is stable, add River as the first native cross-language matrix target. Study PGMQ as a message primitive and PgQue as a durable event stream only in category-appropriate suites.
 
-- worker lifecycle and concurrency management;
-- max-attempt and backoff policy;
-- terminal failure/dead-letter behavior;
-- recurring scheduling;
-- automatic retention cleanup;
-- notification behavior, because the core model is application polling.
+## Sources
 
-The resulting score would measure Ironshift's benchmark adapter around PGMQ as much as PGMQ itself. It would also compare a job framework against a lower-level queue primitive whose absence of worker and maintenance writes is part of its category, not an optimization of equivalent semantics. Exclude it from the headline comparison.
-
-A future **primitive queue** appendix could fairly compare Ironshift's low-level SQL operations with PGMQ `send_batch/read/delete`, using identical client-side worker loops and clearly limiting claims to immediate jobs, visibility timeout, and explicit delete/archive.
-
-## Why PgQue is excluded from the primary benchmark
-
-PgQue 0.2.0 is even less semantically aligned. Its official README explicitly describes it as a durable shared event stream “closer to Kafka” than a task queue and explicitly categorizes River, pg-boss, and Graphile Worker as job frameworks while PgQue is an event/message queue.[^pgque-release][^pgque-readme]
-
-Its architecture uses snapshot batches, independent consumer cursors, ticks, and table rotation. The documented default ticker runs every 100 ms, and delivery requires `pg_cron`, `pg_timetable`, or an application-driven ticker. Its own comparison notes that job queues are preferable for per-job lifecycle, priority, cron scheduling, and low dispatch latency.[^pgque-readme]
-
-Including it would change all of these semantics:
-
-- one shared event can be observed by multiple independent consumers rather than claimed by exactly one competing worker;
-- receive/ack operates at consumer batch/cursor boundaries;
-- delivery latency includes configurable tick cadence by design;
-- its zero-bloat claim rests on log rotation rather than mutable per-job state;
-- retry, acknowledgement, and dead-letter behavior are event-consumer mechanics, not Ironshift's leased job attempt/fencing model.
-
-PgQue is an interesting architecture reference for Ironshift, especially for sustained-load storage behavior, but not a defensible third entry in a job-framework throughput ranking. A separate event-stream benchmark would need fan-out, cursor lag, tick cadence, batch acknowledgement, and long-running rotation as first-class workload dimensions.
-
-## Fairness rules for implementation
-
-1. **Pin exact versions** listed above and save lockfiles/module sums.
-2. **Use a dedicated database or schema per system** and fully reset it before each independent repetition.
-3. **Counterbalance execution order** using Ironshift's existing seeded plan.
-4. **Use the same payload bytes, job count, batch size, producer rate, total worker concurrency, PostgreSQL instance, and connection budget.**
-5. **Separate baseline and optimized profiles.** In particular, do not compare default Graphile Worker without batching against River `InsertManyFast` or pg-boss notification mode and call it a product ranking.
-6. **Measure framework-realistic processing for the headline result.** Manual claim APIs may be secondary diagnostics only.
-7. **Record completion semantics.** Graphile deletes on completion; pg-boss and River retain finalized rows until cleanup. Do not normalize this away with private-table mutations.
-8. **Disable scheduling during immediate-job throughput runs.** Preserve separate delayed/recurring correctness tests.
-9. **Keep retries off the success-path throughput test** by setting equivalent max attempts without inducing failures. Run retry behavior as a separate deterministic lifecycle scenario.
-10. **Do not use private tables or private SQL claim functions** to make adapters look uniform. Use public APIs and record where observability differs.
-11. **Keep notification profiles explicit.** Default polling and notification-assisted dispatch answer different latency questions.
-12. **Report runtime cost honestly.** pg-boss and Graphile run in Node.js; River runs in Go. Database telemetry is directly comparable, while client CPU/memory and handler dispatch include runtime differences.
-13. **Do not reuse vendor benchmark claims as Ironshift evidence.** River and Graphile publish benchmark utilities/results, but both caution that environment and configuration dominate. Run the common harness on the same machine.[^river-bench][^graphile-performance]
-
-## Proposed adapter contract
-
-Ironshift's current internal adapter assumes a public manual claim. A competitor harness should use a slightly deeper interface so managed-worker frameworks are not penalized or accessed through private APIs:
-
-```ts
-interface CompetitorAdapter {
-  name: "pg-boss" | "graphile-worker" | "river";
-  version: string;
-  reset(): Promise<void>;
-  install(): Promise<void>;
-  enqueueMany(jobs: BenchmarkJob[]): Promise<void>;
-  startWorkers(options: {
-    concurrency: number;
-    onStart(jobId: string, enqueuedAt: number): void;
-    onComplete(jobId: string): void;
-  }): Promise<{ stop(): Promise<void> }>;
-  countCompleted(): Promise<number>;
-  relationScope(): Promise<string[]>;
-}
-```
-
-Optional diagnostic capability:
-
-```ts
-interface ManualClaimAdapter {
-  claimOne(): Promise<ClaimedJob | null>;
-  completeOne(job: ClaimedJob): Promise<void>;
-}
-```
-
-Only pg-boss cleanly implements the optional interface through documented public methods. The common score should use `startWorkers()` for all three.
-
-## Final decision
-
-| Candidate              | Decision                 | Confidence | Reason                                                                                                           |
-| ---------------------- | ------------------------ | ---------- | ---------------------------------------------------------------------------------------------------------------- |
-| pg-boss 12.26.2        | **Include**              | High       | Closest ecosystem and excellent public benchmark seams; full job lifecycle.                                      |
-| Graphile Worker 0.17.3 | **Include**              | High       | Mature, semantically complete worker framework; bulk SQL API and well-documented performance profiles.           |
-| River 0.40.0           | **Include as third**     | High       | Strongest lifecycle match and benchmark maturity. Go runtime is a disclosed confounder, not a semantic mismatch. |
-| PGMQ 1.12.0            | **Exclude from primary** | High       | SQS-like message primitive without managed workers, retry policy, scheduling, or automatic lifecycle cleanup.    |
-| PgQue 0.2.0            | **Exclude from primary** | High       | Shared event-log/cursor/tick architecture explicitly positioned as a different category from job frameworks.     |
-
-## First-party sources
-
-[^ironshift-runbook]: Ironshift, [Benchmark suite v3 runbook](../benchmarking.md).
-
-[^pgboss-release]: pg-boss, [release 12.26.2](https://github.com/timgit/pg-boss/releases/tag/12.26.2) and [package manifest at that tag](https://github.com/timgit/pg-boss/blob/12.26.2/package.json).
-
-[^pgboss-install]: pg-boss, [database install and uninstall](https://github.com/timgit/pg-boss/blob/12.26.2/docs/install.md).
-
-[^pgboss-cli]: pg-boss, [migration CLI](https://github.com/timgit/pg-boss/blob/12.26.2/docs/cli.md).
-
-[^pgboss-jobs]: pg-boss, [jobs API: send, insert, fetch, complete, fail, delete, retry, retention](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/jobs.md).
-
-[^pgboss-adapters]: pg-boss, [ORM transaction adapters](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/adapters.md).
-
-[^pgboss-workers]: pg-boss, [workers, concurrency, batch handling, polling, and LISTEN/NOTIFY](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/workers.md).
-
-[^pgboss-queues]: pg-boss, [queue policies, dead letters, and notify option](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/queues.md).
-
-[^pgboss-scheduling]: pg-boss, [cron scheduling](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/scheduling.md).
-
-[^pgboss-constructor]: pg-boss, [constructor, migration, supervision, maintenance, and notification options](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/constructor.md).
-
-[^graphile-package]: Graphile Worker, [official npm registry metadata for 0.17.3](https://registry.npmjs.org/graphile-worker/0.17.3) and [package manifest](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/package.json).
-
-[^graphile-install]: Graphile Worker, [installation](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/installation.md).
-
-[^graphile-queue]: Graphile Worker, [queueing and migrations with WorkerUtils](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/library/queue.md).
-
-[^graphile-run]: Graphile Worker, [library runner, runOnce, and runMigrations](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/library/run.md).
-
-[^graphile-add-job]: Graphile Worker, [`addJob()` and batch-job payload semantics](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/library/add-job.md).
-
-[^graphile-add-jobs]: Graphile Worker, [`addJobs()` bulk enqueue](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/library/add-jobs.md).
-
-[^graphile-sql-add-job]: Graphile Worker, [public SQL `add_job` and `add_jobs` APIs](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/sql-add-job.md).
-
-[^graphile-config]: Graphile Worker, [worker configuration](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/config.md).
-
-[^graphile-performance]: Graphile Worker, [performance and batching](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/performance.md).
-
-[^graphile-errors]: Graphile Worker, [failure, retry, and shutdown behavior](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/error-handling.md).
-
-[^graphile-backoff]: Graphile Worker, [exponential backoff formula](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/exponential-backoff.md).
-
-[^graphile-cron]: Graphile Worker, [distributed crontab and backfill](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/cron.md).
-
-[^graphile-admin]: Graphile Worker, [administrative completion, failure, unlock, and cleanup](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/admin-functions.md).
-
-[^graphile-scaling]: Graphile Worker, [successful-job deletion and permafailed-job cleanup guidance](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/scaling.md).
-
-[^graphile-uninstall]: Graphile Worker, [uninstall/reset](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/website/docs/uninstall.md).
-
-[^graphile-config-source]: Graphile Worker, [default poll interval and concurrency source](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/src/config.ts).
-
-[^graphile-main-source]: Graphile Worker, [LISTEN/NOTIFY listener and reconnect source](https://github.com/graphile/worker/blob/ca2cef1c8c6bf9d9c818d19f194f596971c212df/src/main.ts).
-
-[^river-release]: River, [release v0.40.0](https://github.com/riverqueue/river/releases/tag/v0.40.0).
-
-[^river-start]: River, [getting started](https://riverqueue.com/docs).
-
-[^river-migrations]: River, [migrations](https://riverqueue.com/docs/migrations).
-
-[^river-batch]: River, [inserting many jobs](https://riverqueue.com/docs/batch-job-insertion).
-
-[^river-retries]: River, [job retries](https://riverqueue.com/docs/job-retries).
-
-[^river-scheduled]: River, [scheduled jobs](https://riverqueue.com/docs/scheduled-jobs).
-
-[^river-periodic]: River, [periodic and cron jobs](https://riverqueue.com/docs/periodic-jobs).
-
-[^river-maintenance]: River, [maintenance services and retention](https://riverqueue.com/docs/maintenance-services).
-
-[^river-complete-tx]: River, [transactional job completion](https://riverqueue.com/docs/transactional-job-completion).
-
-[^river-subscriptions]: River, [subscriptions](https://riverqueue.com/docs/subscriptions).
-
-[^river-bench]: River, [official benchmark utility and workload modes](https://riverqueue.com/docs/benchmarks).
-
-[^river-client-source]: River v0.40.0, [`Config` defaults for workers, retention, fetch cooldown, polling, and LISTEN/NOTIFY](https://github.com/riverqueue/river/blob/v0.40.0/client.go).
-
-[^pgmq-release]: PGMQ, [release v1.12.0](https://github.com/pgmq/pgmq/releases/tag/v1.12.0) and [extension version](https://github.com/pgmq/pgmq/blob/v1.12.0/pgmq-extension/pgmq.control).
-
-[^pgmq-readme]: PGMQ, [official README: no worker, visibility timeout, send/read/delete/archive](https://github.com/pgmq/pgmq/blob/v1.12.0/pgmq-extension/README.md) and [installation/reset](https://github.com/pgmq/pgmq/blob/v1.12.0/INSTALLATION.md).
-
-[^pgque-release]: PgQue, [release v0.2.0](https://github.com/NikolayS/PgQue/releases/tag/v0.2.0).
-
-[^pgque-readme]: PgQue, [official README: event-log category, tick architecture, install, and comparison](https://github.com/NikolayS/PgQue/blob/v0.2.0/README.md).
+[^pgboss-package]: pg-boss 12.26.2, [`package.json`](https://github.com/timgit/pg-boss/blob/12.26.2/package.json).
+[^pgboss-constructor]: pg-boss 12.26.2, [Constructor](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/constructor.md).
+[^pgboss-jobs]: pg-boss 12.26.2, [Jobs](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/jobs.md).
+[^pgboss-workers]: pg-boss 12.26.2, [Workers](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/workers.md).
+[^pgboss-ops]: pg-boss 12.26.2, [Operations](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/ops.md).
+[^pgboss-queues]: pg-boss 12.26.2, [Queues](https://github.com/timgit/pg-boss/blob/12.26.2/docs/api/queues.md).
+[^graphile-package]: Graphile Worker 0.17.3, [`package.json`](https://github.com/graphile/worker/blob/v0.17.3/package.json).
+[^graphile-repo]: Graphile Worker 0.17.3, [repository tree](https://github.com/graphile/worker/tree/v0.17.3).
+[^graphile-run]: Graphile Worker, [Library: running jobs](https://worker.graphile.org/docs/library/run).
+[^graphile-addjobs]: Graphile Worker, [`addJobs()`](https://worker.graphile.org/docs/library/add-jobs).
+[^graphile-performance]: Graphile Worker, [Performance](https://worker.graphile.org/docs/performance).
+[^graphile-schema]: Graphile Worker, [Database schema](https://worker.graphile.org/docs/schema).
+[^river-typescript]: River, [Inserting jobs from TypeScript](https://riverqueue.com/docs/typescript).
+[^pgmq-readme]: PGMQ 1.12.0, [official extension README](https://github.com/pgmq/pgmq/blob/v1.12.0/pgmq-extension/README.md).
+[^pgque-readme]: PgQue 0.2.0, [official README](https://github.com/NikolayS/PgQue/blob/v0.2.0/README.md).
