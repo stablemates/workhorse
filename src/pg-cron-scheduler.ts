@@ -274,16 +274,34 @@ export async function verifyPgCronExecution(
   targetDatabase: string,
   timeoutMs = 5_000,
 ): Promise<PgCronExecutionCheck> {
-  const jobName = `ironshift-preflight/${targetDatabase}/${process.pid}-${Date.now()}`;
-  const scheduled = await cronDatabase.query<{ job_id: string }>(
-    "SELECT cron.schedule_in_database($1, '1 second', 'SELECT 1', $2, NULL, true)::text AS job_id",
-    [jobName, targetDatabase],
-  );
-  const jobId = scheduled.rows[0]!.job_id;
+  const prefix = `ironshift-preflight/${targetDatabase}/`;
+  const jobName = `${prefix}${process.pid}-${Date.now()}`;
+  const lockKey = `ironshift:pg_cron-preflight:${targetDatabase}`;
+  const client = await cronDatabase.connect();
+  let scheduled = false;
+  let result: PgCronExecutionCheck | undefined;
+  let operationError: unknown;
   try {
+    await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [lockKey]);
+    const stale = await client.query<{ jobid: string }>(
+      `SELECT jobid::text
+         FROM cron.job
+        WHERE username = current_user AND left(jobname, length($1)) = $1`,
+      [prefix],
+    );
+    for (const job of stale.rows) {
+      await client.query("SELECT cron.unschedule($1::bigint)", [job.jobid]);
+    }
+
+    const created = await client.query<{ job_id: string }>(
+      "SELECT cron.schedule_in_database($1, '1 second', 'SELECT 1', $2, NULL, true)::text AS job_id",
+      [jobName, targetDatabase],
+    );
+    const jobId = created.rows[0]!.job_id;
+    scheduled = true;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const run = await cronDatabase.query<{ status: string; return_message: string | null }>(
+      const run = await client.query<{ status: string; return_message: string | null }>(
         `SELECT status, return_message
            FROM cron.job_run_details
           WHERE jobid = $1::bigint
@@ -292,21 +310,60 @@ export async function verifyPgCronExecution(
       );
       const latest = run.rows[0];
       if (latest?.status === "succeeded") {
-        return { executionReady: true, status: latest.status, message: latest.return_message };
+        result = { executionReady: true, status: latest.status, message: latest.return_message };
+        break;
       }
       if (latest?.status === "failed") {
-        return { executionReady: false, status: latest.status, message: latest.return_message };
+        result = { executionReady: false, status: latest.status, message: latest.return_message };
+        break;
       }
       await sleep(100);
     }
-    return {
+    result ??= {
       executionReady: false,
       status: null,
       message: `no pg_cron execution completed within ${timeoutMs}ms`,
     };
-  } finally {
-    await cronDatabase.query("SELECT cron.unschedule($1::bigint)", [jobId]).catch(() => undefined);
+  } catch (error) {
+    operationError = error;
   }
+
+  let cleanupError: unknown;
+  try {
+    if (scheduled) {
+      const cleanup = await client.query<{ unscheduled: boolean }>(
+        "SELECT cron.unschedule($1::text) AS unscheduled",
+        [jobName],
+      );
+      if (!cleanup.rows[0]?.unscheduled) {
+        throw new Error(`failed to unschedule pg_cron readiness probe ${jobName}`);
+      }
+      const remaining = await client.query<{ exists: boolean }>(
+        "SELECT EXISTS (SELECT 1 FROM cron.job WHERE jobname = $1 AND username = current_user) AS exists",
+        [jobName],
+      );
+      if (remaining.rows[0]?.exists) {
+        throw new Error(`pg_cron readiness probe remained scheduled after cleanup: ${jobName}`);
+      }
+    }
+  } catch (error) {
+    cleanupError = error;
+  } finally {
+    await client
+      .query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockKey])
+      .catch(() => undefined);
+    client.release();
+  }
+
+  if (operationError && cleanupError) {
+    throw new AggregateError(
+      [operationError, cleanupError],
+      "pg_cron readiness probe and cleanup failed",
+    );
+  }
+  if (cleanupError) throw cleanupError;
+  if (operationError) throw operationError;
+  return result!;
 }
 
 /**
