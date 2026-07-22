@@ -8,6 +8,7 @@ import {
   PgCronScheduler,
   Queue,
   unscheduleIronshiftTarget,
+  verifyPgCronExecution,
   Worker,
 } from "../src/index.js";
 import { unscheduleIronshiftTargetWhileLocked } from "../src/pg-cron-scheduler.js";
@@ -485,6 +486,22 @@ describe("live-runtime queue protocol", () => {
 
     expect(job).toMatchObject({ type: "cron-tick", payload: { source: "pg_cron" } });
     expect(await queue.complete(job!, "cron-observer", { observed: true })).toBe(true);
+  });
+
+  it("verifies daemon execution without leaving a recurring preflight job", async () => {
+    await expect(verifyPgCronExecution(cronPool, databaseName(databaseUrl))).resolves.toMatchObject(
+      {
+        executionReady: true,
+        status: "succeeded",
+      },
+    );
+    const remaining = await cronPool.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM cron.job
+        WHERE jobname LIKE $1 AND username = current_user`,
+      [`ironshift-preflight/${databaseName(databaseUrl)}/%`],
+    );
+    expect(remaining.rows[0]?.count).toBe("0");
   });
 
   it("lets centralized pg_cron maintenance promote due work for ordinary workers", async () => {
