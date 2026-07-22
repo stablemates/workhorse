@@ -63,6 +63,28 @@ describe("live-runtime queue protocol", () => {
     ]);
   });
 
+  it("refuses to turn an existing v1 schema into a mixed installation", async () => {
+    await pool.query("DROP SCHEMA ironshift CASCADE");
+    try {
+      await pool.query(`
+        CREATE SCHEMA ironshift;
+        CREATE TABLE ironshift.schema_version (version integer PRIMARY KEY);
+        INSERT INTO ironshift.schema_version(version) VALUES (1);
+        CREATE TABLE ironshift.job_current (id uuid PRIMARY KEY)`);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v2 or mixed ironshift schema/);
+      const version = await pool.query<{ version: number }>(
+        "SELECT version FROM ironshift.schema_version",
+      );
+      expect(version.rows).toEqual([{ version: 1 }]);
+      expect(
+        (await pool.query("SELECT to_regclass('ironshift.job_runtime') AS relation")).rows[0],
+      ).toEqual({ relation: null });
+    } finally {
+      await pool.query("DROP SCHEMA IF EXISTS ironshift CASCADE");
+      await installSchema(pool);
+    }
+  });
+
   it("enqueues a mixed batch atomically while preserving result and ready FIFO order", async () => {
     const runAt = new Date(Date.now() + 60_000);
     const ids = await queue.enqueueMany([
@@ -201,6 +223,7 @@ describe("live-runtime queue protocol", () => {
     expect(await queue.claim("worker-b", { leaseMs: 100 })).toBeNull();
     await sleep(130);
     expect(await queue.recoverExpired()).toBe(1);
+    expect((await queue.getJob(id))?.fenceToken).toBe(0n);
     const second = await queue.claim("worker-b", { leaseMs: 1_000 });
     expect(second?.attempt).toBe(2);
     expect(second!.fenceToken).toBeGreaterThan(first!.fenceToken);
@@ -243,6 +266,7 @@ describe("live-runtime queue protocol", () => {
     const id = await queue.enqueue("email", { to: "a@example.com" }, { maxAttempts: 2 });
     const first = await queue.claim("worker-a");
     expect(await queue.fail(first!, "worker-a", new Error("temporary"))).toBe("ready");
+    expect((await queue.getJob(id))?.fenceToken).toBe(0n);
     const second = await queue.claim("worker-a");
     expect(second?.attempt).toBe(2);
     expect(await queue.complete(second!, "worker-a", { ok: true })).toBe(true);

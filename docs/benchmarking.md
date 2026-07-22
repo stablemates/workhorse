@@ -192,7 +192,7 @@ Raw claim samples and raw PostgreSQL plans are intentionally retained so derived
 - Compare distributions and confidence intervals, not the single fastest run.
 - Treat WAL as cluster-wide. Other database writes contaminate the delta.
 - Treat tuple statistics as estimates that may lag or change after vacuum.
-- Confirm claim plans use `conventional_job_claim_idx` and `ready_job_claim_idx` before comparing latency.
+- Confirm claim plans use `conventional_job_claim_idx` and `job_runtime_ready_idx` before comparing latency.
 - A smoke run proves wiring and invariants, not production scalability.
 - Run publication-grade tests on stable hardware without unrelated load and preserve raw JSON plus environment metadata.
 - External side effects remain at least once. Queue benchmark success does not prove exactly-once delivery to HTTP, email, or payment providers.

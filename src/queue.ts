@@ -212,7 +212,19 @@ export class Queue {
     // not transactional facts, and can lag until the statistics collector flushes.
     const [version, counts, depths, relations, activity, notification] = await Promise.all([
       this.database.query<{ version: number }>(
-        "SELECT max(version)::integer AS version FROM ironshift.schema_version",
+        `SELECT CASE
+                  WHEN count(*) = 1
+                   AND min(version) = max(version)
+                   AND NOT EXISTS (
+                     SELECT 1
+                       FROM unnest(ARRAY['job_current', 'ready_job', 'scheduled_job', 'lease'])
+                         AS legacy(relation_name)
+                      WHERE to_regclass(format('ironshift.%I', relation_name)) IS NOT NULL
+                   )
+                  THEN min(version)::integer
+                  ELSE NULL
+                END AS version
+           FROM ironshift.schema_version`,
       ),
       this.database.query<{ state: JobSnapshot["state"]; count: string }>(
         `SELECT state, count(*)::text AS count
