@@ -160,8 +160,7 @@ export class Queue {
   }
 
   async getJob<TResult = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
-    // Operator reads join immutable identity with the current projection. This query is never used
-    // by dispatch, so adding operator-facing fields does not expand the ready index.
+    // A job exists in exactly one lifecycle relation: runtime while live, outcome when terminal.
     const result = await this.database.query<{
       id: string;
       queue_name: string;
@@ -177,9 +176,15 @@ export class Queue {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT j.id, j.queue_name, j.job_type, j.payload, c.state, c.current_attempt,
-              j.max_attempts, c.version, c.run_at, c.result, c.error, j.created_at, c.updated_at
-         FROM ironshift.job j JOIN ironshift.job_current c ON c.job_id = j.id
+      `SELECT j.id, j.queue_name, j.job_type, j.payload, COALESCE(r.state, o.state) AS state,
+              COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
+              j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
+              COALESCE(r.run_at, o.run_at) AS run_at, o.result,
+              COALESCE(r.error, o.error) AS error, j.created_at,
+              COALESCE(r.updated_at, o.updated_at) AS updated_at
+         FROM ironshift.job j
+         LEFT JOIN ironshift.job_runtime r ON r.job_id = j.id
+         LEFT JOIN ironshift.job_outcome o ON o.job_id = j.id
         WHERE j.id = $1`,
       [id],
     );
@@ -210,7 +215,10 @@ export class Queue {
         "SELECT max(version)::integer AS version FROM ironshift.schema_version",
       ),
       this.database.query<{ state: JobSnapshot["state"]; count: string }>(
-        "SELECT state, count(*)::text AS count FROM ironshift.job_current GROUP BY state",
+        `SELECT state, count(*)::text AS count
+           FROM (SELECT state FROM ironshift.job_runtime UNION ALL
+                 SELECT state FROM ironshift.job_outcome) lifecycle
+          GROUP BY state`,
       ),
       this.database.query<{
         ready: string;
@@ -219,11 +227,13 @@ export class Queue {
         expired: string;
         oldest_ready_age_ms: number | null;
       }>(`
-        SELECT (SELECT count(*) FROM ironshift.ready_job)::text AS ready,
-               (SELECT count(*) FROM ironshift.scheduled_job)::text AS scheduled,
-               (SELECT count(*) FROM ironshift.lease)::text AS active,
-               (SELECT count(*) FROM ironshift.lease WHERE expires_at <= clock_timestamp())::text AS expired,
-               (SELECT extract(epoch FROM clock_timestamp() - min(enqueued_at)) * 1000 FROM ironshift.ready_job) AS oldest_ready_age_ms`),
+        SELECT count(*) FILTER (WHERE state = 'ready')::text AS ready,
+               count(*) FILTER (WHERE state = 'scheduled')::text AS scheduled,
+               count(*) FILTER (WHERE state = 'active')::text AS active,
+               count(*) FILTER (WHERE state = 'active' AND expires_at <= clock_timestamp())::text AS expired,
+               extract(epoch FROM clock_timestamp() - min(ready_at) FILTER (WHERE state = 'ready')) * 1000
+                 AS oldest_ready_age_ms
+          FROM ironshift.job_runtime`),
       this.database.query<{
         relation: string;
         total_bytes: string;

@@ -185,9 +185,9 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 ] as const;
 
 export const resetIronshiftStateSql = `TRUNCATE ironshift.job_event, ironshift.attempt_history,
-  ironshift.lease, ironshift.ready_job, ironshift.scheduled_job,
-  ironshift.job_current, ironshift.job RESTART IDENTITY CASCADE;
-ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1`;
+  ironshift.job_outcome, ironshift.job_runtime, ironshift.job RESTART IDENTITY CASCADE;
+ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1;
+ALTER SEQUENCE ironshift.ready_sequence_seq RESTART WITH 1`;
 
 export const createHistoryPartitionsV1Sql =
   "SELECT ironshift.create_history_partitions_v1($1::date)";
@@ -329,11 +329,9 @@ async function scheduledPromotionDrift(
     if (count === 0) break;
   }
   const driftRows = await context.pool.query<{ drift_ms: number }>(
-    `SELECT extract(epoch FROM (r.enqueued_at - c.run_at)) * 1000 AS drift_ms
-       FROM ironshift.ready_job r
-       JOIN ironshift.job_current c ON c.job_id = r.job_id
-       JOIN ironshift.job j ON j.id = r.job_id
-      WHERE j.queue_name = $1 ORDER BY r.sequence`,
+    `SELECT extract(epoch FROM (r.ready_at - r.run_at)) * 1000 AS drift_ms
+       FROM ironshift.job_runtime r
+      WHERE r.queue_name = $1 AND r.state = 'ready' ORDER BY r.sequence`,
     [context.queueName],
   );
   const drifts = driftRows.rows.map((row) => Math.max(0, Number(row.drift_ms)));
@@ -505,7 +503,7 @@ async function crashBeforeCompletion(
       crash = error;
     }
     const snapshot = await queue.getJob(jobId);
-    const leases = await rowCount(context.pool, "lease", jobId);
+    const leases = await rowCount(context.pool, "job_runtime", jobId);
     const attemptHistoryRows = await rowCount(context.pool, "attempt_history", jobId);
     recordInvariant(
       assertions,
@@ -775,7 +773,9 @@ async function healthSnapshot(
   const expired = await queue.claim("health-expired", { leaseMs: context.options.leaseMs * 4 });
   recordInvariant(assertions, "health expired seed claimed", expired !== null, true);
   await context.pool.query(
-    "UPDATE ironshift.lease SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
+    `UPDATE ironshift.job_runtime
+        SET expires_at = clock_timestamp() - interval '1 millisecond'
+      WHERE job_id = $1 AND state = 'active'`,
     [expired!.id],
   );
   const [health, snapshotMs] = await measured(context.now, () => queue.health());

@@ -22,8 +22,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await pool.query(`TRUNCATE ironshift.job_event, ironshift.attempt_history,
-    ironshift.lease, ironshift.ready_job, ironshift.scheduled_job,
-    ironshift.job_current, ironshift.job RESTART IDENTITY CASCADE`);
+    ironshift.job_outcome, ironshift.job_runtime, ironshift.job RESTART IDENTITY CASCADE`);
   await pool.query("ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1");
 });
 
@@ -31,7 +30,39 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe("hybrid queue protocol", () => {
+describe("live-runtime queue protocol", () => {
+  it("installs schema v2 without compatibility write tables", async () => {
+    const version = await pool.query<{ version: number }>(
+      "SELECT max(version)::integer AS version FROM ironshift.schema_version",
+    );
+    expect(version.rows[0]?.version).toBe(2);
+
+    const relations = await pool.query<{ relname: string }>(
+      `
+      SELECT c.relname
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'ironshift'
+         AND c.relname = ANY($1::text[])
+         AND c.relkind IN ('r', 'p', 'v', 'm')`,
+      [["job_current", "ready_job", "scheduled_job", "lease"]],
+    );
+    expect(relations.rows).toEqual([]);
+
+    const indexes = await pool.query<{ indexname: string }>(
+      `
+      SELECT indexname FROM pg_indexes
+       WHERE schemaname = 'ironshift'
+         AND indexname = ANY($1::text[])
+       ORDER BY indexname`,
+      [["job_runtime_expired_active_idx", "job_runtime_ready_idx", "job_runtime_scheduled_idx"]],
+    );
+    expect(indexes.rows.map((row) => row.indexname)).toEqual([
+      "job_runtime_expired_active_idx",
+      "job_runtime_ready_idx",
+      "job_runtime_scheduled_idx",
+    ]);
+  });
+
   it("enqueues a mixed batch atomically while preserving result and ready FIFO order", async () => {
     const runAt = new Date(Date.now() + 60_000);
     const ids = await queue.enqueueMany([
@@ -77,7 +108,7 @@ describe("hybrid queue protocol", () => {
       })),
     );
     const states = await pool.query<{ state: string }>(
-      "SELECT DISTINCT state FROM ironshift.job_current WHERE job_id = ANY($1::uuid[])",
+      "SELECT DISTINCT state FROM ironshift.job_runtime WHERE job_id = ANY($1::uuid[])",
       [ids],
     );
     expect(states.rows).toHaveLength(1);
@@ -178,6 +209,26 @@ describe("hybrid queue protocol", () => {
     expect((await queue.getJob<{ delivered: boolean }>(id))?.result).toEqual({ delivered: true });
   });
 
+  it("terminally fails an exhausted expired attempt without retaining runtime", async () => {
+    const id = await queue.enqueue("email", {}, { maxAttempts: 1 });
+    await queue.claim("worker-a", { leaseMs: 100 });
+    await sleep(130);
+    expect(await queue.recoverExpired()).toBe(1);
+    expect((await queue.getJob(id))?.state).toBe("failed");
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0].count,
+    ).toBe(0);
+    expect(
+      (await pool.query("SELECT state FROM ironshift.job_outcome WHERE job_id = $1", [id])).rows[0]
+        .state,
+    ).toBe("failed");
+  });
+
   it("heartbeats only the current fenced lease", async () => {
     await queue.enqueue("email", { to: "a@example.com" });
     const job = await queue.claim("worker-a", { leaseMs: 1_000 });
@@ -215,6 +266,18 @@ describe("hybrid queue protocol", () => {
       "claimed",
       "succeeded",
     ]);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0].count,
+    ).toBe(0);
+    expect(
+      (await pool.query("SELECT state, result FROM ironshift.job_outcome WHERE job_id = $1", [id]))
+        .rows[0],
+    ).toEqual({ state: "succeeded", result: { ok: true } });
   });
 
   it("moves a terminal handler failure to failed", async () => {
@@ -222,41 +285,67 @@ describe("hybrid queue protocol", () => {
     const job = await queue.claim("worker-a");
     expect(await queue.fail(job!, "worker-a", new Error("permanent"))).toBe("failed");
     expect((await queue.getJob(id))?.state).toBe("failed");
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0].count,
+    ).toBe(0);
+    expect(
+      (await pool.query("SELECT state FROM ironshift.job_outcome WHERE job_id = $1", [id])).rows[0]
+        .state,
+    ).toBe("failed");
   });
 
-  it("rolls back retry when the current projection fence is inconsistent", async () => {
+  it("rejects retry when the live runtime fence is inconsistent", async () => {
     await queue.enqueue("work", {}, { maxAttempts: 2 });
     const job = await queue.claim("worker-a");
-    await pool.query("UPDATE ironshift.job_current SET version = version + 1 WHERE job_id = $1", [
-      job!.id,
-    ]);
-    await expect(queue.fail(job!, "worker-a", new Error("retry"))).rejects.toThrow(
-      "current state fence mismatch",
+    await pool.query(
+      "UPDATE ironshift.job_runtime SET fence_token = fence_token + 1 WHERE job_id = $1",
+      [job!.id],
     );
+    await expect(queue.fail(job!, "worker-a", new Error("retry"))).resolves.toBe("stale");
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM ironshift.lease")).rows[0].count,
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE state = 'active'",
+        )
+      ).rows[0].count,
     ).toBe(1);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM ironshift.ready_job")).rows[0]
-        .count,
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE state = 'ready'",
+        )
+      ).rows[0].count,
     ).toBe(0);
   });
 
-  it("rolls back recovery when the current projection fence is inconsistent", async () => {
+  it("recovery CAS skips a runtime whose active fence changed", async () => {
     await queue.enqueue("work", {}, { maxAttempts: 2 });
     const job = await queue.claim("worker-a", { leaseMs: 100 });
-    await pool.query("UPDATE ironshift.job_current SET version = version + 1 WHERE job_id = $1", [
-      job!.id,
-    ]);
+    await pool.query(
+      "UPDATE ironshift.job_runtime SET fence_token = fence_token + 1 WHERE job_id = $1",
+      [job!.id],
+    );
     await sleep(130);
-    await expect(queue.recoverExpired()).rejects.toThrow("current state fence mismatch");
+    await expect(queue.recoverExpired()).resolves.toBe(1);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM ironshift.lease")).rows[0].count,
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE state = 'ready'",
+        )
+      ).rows[0].count,
     ).toBe(1);
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM ironshift.ready_job")).rows[0]
-        .count,
-    ).toBe(0);
+      (
+        await pool.query("SELECT current_attempt FROM ironshift.job_runtime WHERE job_id = $1", [
+          job!.id,
+        ])
+      ).rows[0].current_attempt,
+    ).toBe(2);
   });
 
   it("runs a registered handler end to end", async () => {
@@ -303,10 +392,10 @@ describe("hybrid queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(1);
+    expect(health.schemaVersion).toBe(2);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(1);
-    expect(health.relations.some((relation) => relation.relation === "ready_job")).toBe(true);
+    expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
     expect(health.lockWaitCount).toBeGreaterThanOrEqual(0);
     expect(health.notificationQueueUsage).toBeGreaterThanOrEqual(0);
   });
