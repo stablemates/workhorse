@@ -701,7 +701,7 @@ BEGIN
 END;
 $$;
 
-INSERT INTO ironshift.schema_version(version) VALUES (3) ON CONFLICT DO NOTHING;
+INSERT INTO ironshift.schema_version(version) VALUES (2) ON CONFLICT DO NOTHING;
 SELECT ironshift.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
   FROM generate_series(0, 4) AS weeks(week_offset);
 

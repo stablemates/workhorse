@@ -1,6 +1,6 @@
 # Feature support matrix
 
-This is the authoritative implementation snapshot for schema version 3. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
+This is the authoritative implementation snapshot for schema version 2. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
 
 ## At a glance
 
@@ -61,7 +61,7 @@ This is the authoritative implementation snapshot for schema version 3. “Suppo
 | Closed attempt history             | Supported     | Success, terminal failure, retry, and lease expiry append immutable `attempt_history`.                                                                                         |
 | Weekly history partitions          | Supported     | Monday-aligned partitions are precreated four weeks ahead and replenished by maintenance, with explicit create and completed-week retirement functions plus default fallbacks. |
 | Current/terminal lookup            | Supported     | `Queue.getJob(id)` coalesces the sole live runtime or terminal outcome into the stable `JobSnapshot` shape.                                                                    |
-| Queue health                       | Supported     | Reports schema version 3; live and terminal state counts; runtime depths; expired active rows; oldest ready age; relation and PostgreSQL diagnostics.                          |
+| Queue health                       | Supported     | Reports schema version 2; live and terminal state counts; runtime depths; expired active rows; oldest ready age; relation and PostgreSQL diagnostics.                          |
 | Crash-boundary harness             | Supported     | Worker failpoints model process loss before and after handler/completion boundaries.                                                                                           |
 | Job/outcome retention              | Not supported | Immutable identity and terminal outcomes are not automatically archived or deleted.                                                                                            |
 | Consistent health snapshot         | Partial       | Diagnostics are independent read-only queries and statistics can lag.                                                                                                          |

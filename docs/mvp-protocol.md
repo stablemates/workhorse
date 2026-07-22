@@ -1,6 +1,6 @@
 # Ironshift MVP protocol
 
-This is the compact schema version 3 protocol reference. Public TypeScript `Queue`/`Worker` methods and the existing `_v1` lifecycle SQL signatures remain stable unless explicitly replaced by the weekly history lifecycle functions.
+This is the compact schema version 2 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema now uses the weekly history lifecycle functions documented below.
 
 ## Storage model
 

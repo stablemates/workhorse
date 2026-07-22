@@ -35,7 +35,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 - [ ] Define expand/contract rules for changes that span application deployments.
 - [ ] Add upgrade tests from every supported released schema version.
 - [ ] Provide backup, rollback, and failed-migration recovery guidance.
-- [ ] Design and test separately gated migration paths from legacy schema versions 1 and 2 to version 3.
+- [ ] Design and test a separately gated version 1 to version 2 migration path.
 
 ### [ ] P0-02 Automated history retention
 
