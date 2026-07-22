@@ -41,8 +41,15 @@ export class PgBossTarget extends CompletionTarget {
   constructor(
     private readonly pool: Pool,
     private readonly factory?: () => Promise<PgBossLike>,
+    private readonly batchSize = 1,
   ) {
     super();
+    this.metadata.configuration.workers = `work() localConcurrency, batchSize ${batchSize}`;
+    this.metadata.configuration.handlerBatchSize = batchSize;
+    if (batchSize > 1)
+      this.metadata.notes.push(
+        `Handler batches of ${batchSize} are a product-specific sensitivity, not the controlled per-job contract.`,
+      );
   }
   private async create(): Promise<PgBossLike> {
     if (this.factory) return this.factory();
@@ -82,7 +89,8 @@ export class PgBossTarget extends CompletionTarget {
       this.metadata.queue,
       {
         localConcurrency: concurrency,
-        batchSize: 1,
+        batchSize: this.batchSize,
+        ...(this.batchSize > 1 ? { burstWhenBatchFull: true } : {}),
         pollingIntervalSeconds: 0.5,
         notifyPollingIntervalSeconds: 0.5,
       },
