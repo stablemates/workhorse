@@ -5,6 +5,7 @@
   "description": "Evidence-first PostgreSQL durable job queue validation MVP",
   "bin": {
     "ironshift-bench": "./dist/src/cli/benchmark.js",
+    "ironshift-bench-competitors": "./dist/src/cli/benchmark-competitors.js",
     "ironshift-health": "./dist/src/cli/health.js"
   },
   "files": [
@@ -26,6 +27,7 @@
     "health": "tsx src/cli/health.ts --database dev",
     "health:bench": "tsx src/cli/health.ts --database bench",
     "benchmark": "tsx src/cli/benchmark.ts",
+    "benchmark:competitors": "tsx src/cli/benchmark-competitors.ts",
     "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin src test benchmarks vitest.config.ts",
     "lint:fix": "oxlint --fix --import-plugin --vitest-plugin src test benchmarks vitest.config.ts",
     "format": "oxfmt --write .",

@@ -95,3 +95,14 @@ Follow the complete [benchmark runbook](docs/benchmarking.md) before running or 
 - PostgreSQL cannot make HTTP calls, emails, payments, or other external effects exactly once. Use stable external idempotency keys, an outbox/inbox, or compensation.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design and [`docs/mvp-protocol.md`](docs/mvp-protocol.md) for the compact transition reference.
+
+## Competitor baseline
+
+Run the standalone, success-path-only baseline against Ironshift, pg-boss 12.26.2, and Graphile Worker 0.17.3:
+
+```bash
+pnpm db:reset:bench
+pnpm benchmark:competitors -- --profile smoke --output docs/benchmarks/results/competitor-smoke.json
+```
+
+The suite uses isolated schemas and reports native retention differences. It does not claim full semantic equivalence. See [docs/benchmarking.md](docs/benchmarking.md#standalone-competitor-baseline).
