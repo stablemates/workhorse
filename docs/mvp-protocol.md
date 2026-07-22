@@ -1,6 +1,6 @@
 # Ironshift MVP protocol
 
-This is the compact schema version 2 protocol reference. Public TypeScript `Queue`/`Worker` methods and the existing `_v1` SQL function signatures remain stable.
+This is the compact schema version 3 protocol reference. Public TypeScript `Queue`/`Worker` methods and the existing `_v1` lifecycle SQL signatures remain stable unless explicitly replaced by the weekly history lifecycle functions.
 
 ## Storage model
 
@@ -9,8 +9,8 @@ This is the compact schema version 2 protocol reference. Public TypeScript `Queu
 | `job`                 | Immutable identity, queue, type, payload, retry limit | Insert once                                                             |
 | `job_runtime`         | Sole live row for scheduled, ready, or active work    | Insert at enqueue; CAS-update while live; delete at terminal transition |
 | `job_outcome`         | Terminal success or failure                           | Insert once after runtime deletion                                      |
-| `job_event`           | Lifecycle audit                                       | Append-only, monthly range partitions                                   |
-| `attempt_history`     | Closed attempt records                                | Append-only, monthly range partitions                                   |
+| `job_event`           | Lifecycle audit                                       | Append-only, weekly range partitions                                    |
+| `attempt_history`     | Closed attempt records                                | Append-only, weekly range partitions                                    |
 | `schedule_definition` | Namespaced recurring-job desired state                | Deploy upsert; omitted definitions are disabled                         |
 | `schedule_occurrence` | Deduplicated schedule fire mapped to a job            | Insert once per schedule second; job ID populated atomically            |
 
@@ -79,7 +79,7 @@ Delivery is at least once. External effects require application-level idempotenc
 
 ## History and retention
 
-The default partitions keep history inserts available if maintenance is late. `create_history_partitions_v1(month)` creates explicit event and attempt partitions. `retire_history_month_v1(month)` drops both completed-month partitions and rejects current/future months.
+The default partitions keep history inserts available if maintenance is late. `create_history_week_v1(week)` normalizes its argument to Monday, serializes creation for that boundary, and moves matching fallback rows into the new event and attempt partitions. `retire_history_week_v1(week)` drops both partitions only after the week is complete. Clean installation precreates the current week and four future weeks, while each `maintain_v1` call repairs and replenishes the four-week horizon when its edge is missing.
 
 Schedule occurrence keys older than 30 days are pruned in bounded batches by default. No automatic retention exists for `job` or `job_outcome`, and `cron.job_run_details` retention remains administrator-owned.
 
