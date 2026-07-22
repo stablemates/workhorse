@@ -22,6 +22,7 @@ export class GraphileWorkerTarget extends CompletionTarget {
     queue: "competitor_baseline",
     configuration: {
       maxAttempts: 1,
+      databasePoolMax: 32,
       enqueue: "makeWorkerUtils().addJobs",
       workers: "run() taskList/concurrency",
       stop: "graceful runner.stop()",

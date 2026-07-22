@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   const url = localDatabaseUrl("bench");
   if (!databaseName(url).endsWith("_bench"))
     throw new Error("competitor benchmark requires a database name ending in _bench");
-  const pool = new Pool({ connectionString: url });
+  const pool = new Pool({ connectionString: url, max: 32 });
   pool.on("error", (error) => {
     console.error("Unexpected competitor benchmark pool error", error);
   });

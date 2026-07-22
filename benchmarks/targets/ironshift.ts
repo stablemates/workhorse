@@ -10,7 +10,12 @@ export class IronshiftTarget extends CompletionTarget {
     version: "0.1.0",
     schema: "ironshift",
     queue: "competitor_baseline",
-    configuration: { maxAttempts: 1, leaseMs: 30_000, polling: "public Queue claim loop" },
+    configuration: {
+      maxAttempts: 1,
+      leaseMs: 30_000,
+      databasePoolMax: 32,
+      polling: "public Queue claim loop",
+    },
     capabilities: {
       bulkEnqueue: true,
       nativeWorkerLoop: false,
