@@ -1,8 +1,8 @@
 # Ironshift validation MVP
 
-Ironshift is an evidence-first prototype for the hybrid PostgreSQL durable-job architecture described in [`docs/research/postgres-queue-product-viability-evaluation.md`](docs/research/postgres-queue-product-viability-evaluation.md).
+Ironshift is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, immutable history, and a live-only dispatch relation.
 
-This is deliberately **not** a general-purpose queue product. Its purpose is to validate transactional enqueue, narrow ready/scheduled/lease projections, fenced ownership, immutable attempt history, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
+The current implementation remains an evidence-first validation release rather than a production-support promise. Its purpose is to validate transactional enqueue, declarative pg_cron scheduling, fenced ownership, immutable attempt history, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
 
 ## Documentation
 
@@ -10,27 +10,46 @@ This is deliberately **not** a general-purpose queue product. Its purpose is to 
 - [`docs/features.md`](docs/features.md): authoritative Supported, Partial, and Not Supported feature matrix.
 - [`docs/mvp-protocol.md`](docs/mvp-protocol.md): concise table and SQL transition reference.
 - [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
+- [`docs/pg-cron-requirements.md`](docs/pg-cron-requirements.md): administrator grants, executable preflight, provider compatibility, authentication, capacity, and retention.
 
 ## Included scope
 
 - enqueue inside an existing `pg` transaction;
-- separate ready and scheduled projections;
+- one live-only runtime relation with selective ready, scheduled, and expired-lease indexes;
 - `FOR UPDATE SKIP LOCKED` claims with monotonically increasing fence tokens;
 - fenced heartbeat, completion, retry, and expired-lease recovery;
 - append-only, time-partitioned lifecycle events and finalized attempts;
+- namespaced declarative recurring jobs synchronized into pg_cron during deployment;
+- centralized pg_cron promotion and lease recovery outside the worker claim path;
 - a single TypeScript `pg` client and worker runtime;
 - deterministic worker crash failpoints;
 - a JSON PostgreSQL queue-health command;
-- a reproducible conventional-table versus hybrid-projection benchmark.
+- a reproducible conventional-table versus live-runtime benchmark.
 
-Explicitly excluded: cron, workflows, UI, ORM/framework adapters, RBAC, cancellation, rate limits, concurrency policies, signals, child jobs, and performance claims.
+Explicitly excluded: workflows, UI, ORM/framework adapters, RBAC, cancellation, rate limits, concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
 
 ## Development
 
-Requirements: Node.js 22+, pnpm, and a host PostgreSQL 15+ instance.
+Requirements: Node.js 22+, pnpm, PostgreSQL 15+, and pg_cron 1.6+ installed in the cluster's `postgres` database.
+
+pg_cron must be preloaded and configured by a database administrator. Exact provider controls differ, but a self-hosted setup is equivalent to:
+
+```sql
+-- Set shared_preload_libraries = 'pg_cron' and cron.database_name = 'postgres', then restart.
+\c postgres
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+GRANT USAGE ON SCHEMA cron TO ironshift;
+GRANT SELECT ON cron.job, cron.job_run_details TO ironshift;
+GRANT EXECUTE ON FUNCTION
+  cron.schedule_in_database(text, text, text, text, text, boolean) TO ironshift;
+GRANT EXECUTE ON FUNCTION cron.unschedule(bigint) TO ironshift;
+```
+
+The target and metadata pools must use the same deployment role. That role also needs `CONNECT` to the target database and normal access to the installed `ironshift` schema. pg_cron must be able to authenticate as that role when it connects to the target database. When `cron.use_background_workers` is disabled, configure PostgreSQL host authentication and a password source such as `.pgpass`; when it is enabled, size `max_worker_processes` for `cron.max_running_jobs`. Keep serverless database compute active or schedules will pause while it is suspended. Use UTC for `cron.timezone` unless every schedule deliberately follows another cluster-wide timezone. Configure operator-owned retention for `cron.job_run_details`; Ironshift reads that history but does not delete cluster-wide pg_cron records.
 
 ```bash
 pnpm install
+pnpm pg-cron:check
 pnpm db:reset:all
 pnpm check
 ```
@@ -43,7 +62,7 @@ Local tooling keeps three databases separate:
 | `ironshift_test`  | Automated integration tests only             | `pnpm db:reset:test`, `pnpm test`       |
 | `ironshift_bench` | Destructive benchmark runs and their history | `pnpm db:reset:bench`, `pnpm benchmark` |
 
-`pnpm db:reset:all` recreates all three and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, or `_bench` suffix, requires confirmation internally, and refuses remote hosts unless `IRONSHIFT_ALLOW_REMOTE_RESET=1` is deliberately set.
+`pnpm db:reset:all` unschedules Ironshift-owned pg_cron entries, recreates all three databases, and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, or `_bench` suffix, requires confirmation internally, and refuses remote hosts unless `IRONSHIFT_ALLOW_REMOTE_RESET=1` is deliberately set.
 
 The defaults use the local `ironshift` role. Override them independently with `IRONSHIFT_DEV_DATABASE_URL`, `IRONSHIFT_TEST_DATABASE_URL`, and `IRONSHIFT_BENCH_DATABASE_URL`. Purpose-specific reset, test, and benchmark workflows intentionally ignore generic `DATABASE_URL`, which remains the application runtime connection string and is accepted by the packaged health CLI.
 
@@ -51,10 +70,27 @@ The defaults use the local `ironshift` role. Override them independently with `I
 
 ```ts
 import { Pool } from "pg";
-import { installSchema, Queue, Worker } from "ironshift";
+import { installSchema, PgCronScheduler, Queue, Worker } from "ironshift";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Use the same deployment role against the cluster's configured pg_cron metadata database.
+const cronPool = new Pool({ connectionString: process.env.CRON_DATABASE_URL });
 await installSchema(pool);
+
+// Run this during every deployment. Only this namespace's removed entries are pruned.
+const scheduler = new PgCronScheduler(pool, cronPool, { namespace: "billing-production" });
+await scheduler.sync([
+  {
+    name: "daily-invoices",
+    schedule: "0 6 * * *",
+    job: {
+      type: "generate-invoices",
+      queue: "billing",
+      payload: { scope: "daily" },
+      maxAttempts: 5,
+    },
+  },
+]);
 
 const queue = new Queue(pool);
 await queue.enqueue("email", { to: "person@example.com" }, { maxAttempts: 3 });
@@ -69,6 +105,10 @@ await worker.runOnce();
 
 To enqueue atomically with application writes, pass the active `PoolClient` as the fourth argument to `enqueue`.
 
+`scheduler.sync()` also installs one bounded maintenance job, every second by default, for due-job promotion, expired-lease recovery, and deletion of at most 10,000 occurrence keys older than 30 days. Workers therefore default to external maintenance and do not pay those two database round trips before every claim. Deployments without pg_cron can explicitly use `new Worker(queue, { maintenance: "worker" })` as a portability fallback.
+
+Definitions contain typed Ironshift jobs rather than arbitrary SQL. pg_cron stores only revision-fenced calls to stable `ironshift.fire_schedule_v1` and `ironshift.maintain_v1` functions. Schedule names are stable deployment identities; synchronization updates changed definitions, disables omitted definitions, and prunes only pg_cron jobs owned by the same target database and namespace. A stale cron entry cannot execute a newly committed payload at its old cadence.
+
 ## Diagnostics and evidence
 
 ```bash
@@ -81,7 +121,7 @@ pnpm benchmark -- --profile smoke --suite all --output benchmark-v3-smoke.json
 pnpm benchmark -- --profile default --suite comparative --output benchmark-v3-comparative.json
 ```
 
-Benchmark suite v3 compares a purpose-built mutable-table protocol implementing the measured lifecycle semantics with the hybrid projection design across a seeded shuffled execution plan, alternating paired design order, batched enqueue metrics, paired ratios/differences, fixed-rate equal-load producer-consumer churn, relation-level storage, WAL, vacuum, I/O, activity, and executable claim plans. Its lifecycle suite also asserts scheduled promotion, heartbeat fencing, all worker crash boundaries, lease recovery, retries, monthly history retirement, and explicitly degraded health snapshots. Small runs are smoke tests only. They are not evidence of product superiority. Publication-grade evidence still requires larger retained-history horizons, production-shaped payloads, stable hardware, reference systems, and preserved raw results.
+Benchmark suite v3 compares a purpose-built mutable-table protocol implementing the measured lifecycle semantics with the live-runtime/cold-outcome design across a seeded shuffled execution plan, alternating paired design order, batched enqueue metrics, paired ratios/differences, fixed-rate equal-load producer-consumer churn, relation-level storage, WAL, vacuum, I/O, activity, and executable claim plans. Its lifecycle suite also asserts scheduled promotion, heartbeat fencing, all worker crash boundaries, lease recovery, retries, monthly history retirement, and explicitly degraded health snapshots. Small runs are smoke tests only. They are not evidence of product superiority. Publication-grade evidence still requires larger retained-history horizons, production-shaped payloads, stable hardware, reference systems, and preserved raw results.
 
 Follow the complete [benchmark runbook](docs/benchmarking.md) before running or interpreting anything beyond a smoke test.
 
