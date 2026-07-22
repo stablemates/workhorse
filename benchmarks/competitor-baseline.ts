@@ -122,11 +122,13 @@ export interface CompetitorReport {
   provenance: {
     command: string;
     gitSha: string | null;
+    sourceDirty: boolean | null;
     node: string;
     platform: string;
     database: Record<string, unknown>;
   };
   targets: TargetMetadata[];
+  measurementNotes: string[];
   executionPlan: ExecutionPlanStep[];
   runs: CompetitorRunResult[];
   summaries: CompetitorSummary[];
@@ -222,6 +224,35 @@ export function summarizeCompetitorRuns(runs: readonly CompetitorRunResult[]): C
 export function stringifyCompetitorReport(report: CompetitorReport): string {
   return `${JSON.stringify(report, (_key, value) => (value instanceof Date ? value.toISOString() : typeof value === "bigint" ? value.toString() : value), 2)}\n`;
 }
+function gitOutput(arguments_: string[]): string | null {
+  try {
+    return execFileSync("git", arguments_, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+function benchmarkSourceDirty(): boolean | null {
+  const status = gitOutput([
+    "status",
+    "--porcelain",
+    "--untracked-files=all",
+    "--",
+    "benchmarks",
+    "src",
+    "sql",
+    "test",
+    "package.json",
+    "pnpm-lock.yaml",
+    "tsconfig.json",
+    "tsconfig.build.json",
+    "vitest.config.ts",
+  ]);
+  return status === null ? null : status !== "";
+}
 const now = () => performance.now();
 const rate = (jobs: number, ms: number) => (ms <= 0 ? 0 : jobs / (ms / 1000));
 async function telemetryStart(pool: Pool, target: CompetitorTarget) {
@@ -278,8 +309,8 @@ async function fixedRun(
   await target.startConsumers(step.workerConcurrency);
   await target.observeExactCompletions(all.length, options.completionTimeoutMs);
   const processingMs = now() - processStart;
-  await target.stop();
   const totalMs = now() - totalStart;
+  await target.stop();
   const completedJobs = target.completedCount();
   return {
     kind: "fixed-batch",
@@ -347,8 +378,8 @@ async function churnRun(
   const drainStart = now();
   await target.observeExactCompletions(options.churnJobs, options.completionTimeoutMs);
   const drainMs = now() - drainStart;
-  await target.stop();
   const totalMs = now() - start;
+  await target.stop();
   const completedJobs = target.completedCount();
   return {
     kind: "equal-offered-load-churn",
@@ -391,10 +422,7 @@ export async function runCompetitorBaseline(
       runs.push(await churnRun(pool, target, options, position + 1));
     const database =
       (await pool.query("SELECT current_database() AS name, version() AS version")).rows[0] ?? {};
-    let gitSha: string | null = null;
-    try {
-      gitSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    } catch {}
+    const gitSha = gitOutput(["rev-parse", "HEAD"]);
     return {
       artifactVersion: 1,
       generatedAt: new Date(),
@@ -404,11 +432,19 @@ export async function runCompetitorBaseline(
       provenance: {
         command: `pnpm benchmark:competitors -- --profile ${options.profile}`,
         gitSha,
+        sourceDirty: benchmarkSourceDirty(),
         node: process.version,
         platform: `${platform()} ${process.arch}`,
         database,
       },
       targets: targets.map((t) => t.metadata),
+      measurementNotes: [
+        "Processing ends when every public task handler has completed successfully.",
+        "End-to-end spans the first enqueue call through the final successful handler completion.",
+        "Graceful worker shutdown and post-run telemetry are excluded from timed phases.",
+        "Framework-owned durable settlement may finish after the handler returns; exact completion is therefore handler-observed rather than a cross-product durable-settlement oracle.",
+        "WAL and storage describe each product's declared native retention behavior and are not retention-normalized.",
+      ],
       executionPlan: plan,
       runs,
       summaries: summarizeCompetitorRuns(runs),
