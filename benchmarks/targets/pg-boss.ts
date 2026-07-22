@@ -19,6 +19,7 @@ export class PgBossTarget extends CompletionTarget {
       retryLimit: 0,
       deleteAfterSeconds: 0,
       notify: true,
+      databasePoolMax: 32,
       enqueue: "insert() batching",
       workers: "work() localConcurrency, batchSize 10, burstWhenBatchFull",
       stop: "graceful",
@@ -49,6 +50,7 @@ export class PgBossTarget extends CompletionTarget {
     return new PgBoss({
       connectionString: this.pool.options.connectionString,
       schema: this.metadata.schema,
+      max: 32,
     });
   }
   async reset(): Promise<void> {
