@@ -73,7 +73,7 @@ export class IronshiftTarget extends CompletionTarget {
         ok: true,
       });
       if (!accepted) throw new Error("Ironshift rejected completion");
-      this.completed.add(job.payload.id);
+      this.recordCompletion(job.payload.id);
     }
   }
   async stop(): Promise<void> {

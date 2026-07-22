@@ -87,7 +87,7 @@ export class GraphileWorkerTarget extends CompletionTarget {
       taskList: {
         [this.metadata.queue]: async (payload: WorkItem) => {
           if (!payload.id) throw new Error("Graphile task received no benchmark id");
-          this.completed.add(payload.id);
+          this.recordCompletion(payload.id);
         },
       },
     });

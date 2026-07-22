@@ -443,6 +443,8 @@ export async function runCompetitorBaseline(
         "End-to-end spans the first enqueue call through the final successful handler completion.",
         "Graceful worker shutdown and post-run telemetry are excluded from timed phases.",
         "Framework-owned durable settlement may finish after the handler returns; exact completion is therefore handler-observed rather than a cross-product durable-settlement oracle.",
+        "The common baseline invokes handlers per job; product-specific claim or handler batching belongs in a separately labeled optimized profile.",
+        "Equal-offered-load churn has one observation per target and is exploratory, not a confidence-backed ranking.",
         "WAL and storage describe each product's declared native retention behavior and are not retention-normalized.",
       ],
       executionPlan: plan,
