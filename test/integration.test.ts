@@ -48,11 +48,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v3 without compatibility write tables", async () => {
+  it("installs schema v2 without compatibility write tables", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM ironshift.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(3);
+    expect(version.rows[0]?.version).toBe(2);
 
     const historyPartitions = await pool.query<{ parent: string; partitions: number }>(`
       SELECT parent.relname AS parent, count(*)::integer AS partitions
@@ -546,7 +546,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE ironshift.schema_version (version integer PRIMARY KEY);
         INSERT INTO ironshift.schema_version(version) VALUES (1);
         CREATE TABLE ironshift.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v3 or mixed ironshift schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v2 or mixed ironshift schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM ironshift.schema_version",
       );
@@ -914,7 +914,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(3);
+    expect(health.schemaVersion).toBe(2);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(1);
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
