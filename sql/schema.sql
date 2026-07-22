@@ -326,7 +326,8 @@ BEGIN
     v_run_at := clock_timestamp() + make_interval(secs => GREATEST(0, p_retry_delay_ms)::double precision / 1000.0);
     v_state := CASE WHEN p_retry_delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
     UPDATE ironshift.job_runtime r
-       SET state = v_state, current_attempt = r.current_attempt + 1, run_at = v_run_at,
+       SET state = v_state, current_attempt = r.current_attempt + 1, fence_token = 0,
+           run_at = v_run_at,
            ready_at = CASE WHEN v_state = 'ready' THEN clock_timestamp() END,
            sequence = CASE WHEN v_state = 'ready' THEN nextval('ironshift.ready_sequence_seq') END,
            worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
@@ -384,7 +385,8 @@ BEGIN
       v_run_at := clock_timestamp() + make_interval(secs => GREATEST(0, p_retry_delay_ms)::double precision / 1000.0);
       v_state := CASE WHEN p_retry_delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
       UPDATE ironshift.job_runtime r
-         SET state = v_state, current_attempt = r.current_attempt + 1, run_at = v_run_at,
+         SET state = v_state, current_attempt = r.current_attempt + 1, fence_token = 0,
+             run_at = v_run_at,
              ready_at = CASE WHEN v_state = 'ready' THEN clock_timestamp() END,
              sequence = CASE WHEN v_state = 'ready' THEN nextval('ironshift.ready_sequence_seq') END,
              worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
