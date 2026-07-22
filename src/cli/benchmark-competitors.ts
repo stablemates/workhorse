@@ -34,6 +34,11 @@ async function main(): Promise<void> {
   pool.on("error", (error) => {
     console.error("Unexpected competitor benchmark pool error", error);
   });
+  pool.on("connect", (client) => {
+    client.on("error", (error) => {
+      console.error("Unexpected competitor benchmark client error", error);
+    });
+  });
   try {
     const report = await runCompetitorBaseline(pool, normalizeCompetitorOptions({ profile }));
     const json = stringifyCompetitorReport(report);
