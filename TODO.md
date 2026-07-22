@@ -52,6 +52,8 @@ and its intended integration experience are understandable, installable, and use
 
 - [ ] Build one small end-to-end Hono application in `examples/` using the Drizzle provider and Hono
       integration packages.
+- [ ] Build the demo frontend with shadcn/ui so the first runnable vertical slice validates the
+      intended component foundation before the operator console.
 - [ ] Demonstrate transactional enqueue from a realistic Hono request handled through Drizzle.
 - [ ] Demonstrate installation, schema setup, enqueueing, worker execution, retries, recurring jobs,
       and basic operational inspection.
