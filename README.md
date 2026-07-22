@@ -6,6 +6,7 @@ The current implementation remains an evidence-first validation release rather t
 
 ## Documentation
 
+- [`TODO.md`](TODO.md): prioritized, dependency-aware roadmap for future feature development.
 - [`docs/architecture.md`](docs/architecture.md): system boundaries, module ownership, data model, field-by-field database and API dictionaries, lifecycle, transactions, fencing, crash semantics, health model, and invariants.
 - [`docs/features.md`](docs/features.md): authoritative Supported, Partial, and Not Supported feature matrix.
 - [`docs/mvp-protocol.md`](docs/mvp-protocol.md): concise table and SQL transition reference.
