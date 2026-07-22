@@ -43,8 +43,10 @@
   "devDependencies": {
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.5",
+    "graphile-worker": "0.17.3",
     "oxfmt": "^0.59.0",
     "oxlint": "^1.74.0",
+    "pg-boss": "12.26.2",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
