@@ -34,6 +34,7 @@
     "lint:fix": "oxlint --fix --import-plugin --vitest-plugin src test benchmarks vitest.config.ts",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
+    "hooks:install": "lefthook install",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "db:reset": "pnpm db:reset:dev",
     "db:reset:dev": "tsx src/cli/reset-db.ts --database dev --yes",
@@ -48,6 +49,7 @@
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.5",
     "graphile-worker": "0.17.3",
+    "lefthook": "^2.1.10",
     "oxfmt": "^0.59.0",
     "oxlint": "^1.74.0",
     "pg-boss": "12.26.2",
@@ -58,5 +60,10 @@
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "pnpm@10.18.3"
+  "packageManager": "pnpm@10.18.3",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "lefthook"
+    ]
+  }
 }
