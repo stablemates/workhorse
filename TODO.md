@@ -19,7 +19,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 ## Recommended next sequence
 
 1. **P0-00A Drizzle and Hono integration packages**
-2. **P0-00B Demo application built with Drizzle and Hono**
+2. **P0-00B Demo application and complete dashboard built with Drizzle and Hono**
 3. **P0-01 Automated history retention**
 4. **P0-02 Production telemetry**
 5. **P0-03 Configurable worker concurrency**
@@ -43,20 +43,25 @@ provider coverage.
 - [x] Add packed-package integration tests for transaction ownership, pooling, error translation,
       worker lifecycle, and shutdown.
 
-### [ ] P0-00B Demo application built with Drizzle and Hono
+### [ ] P0-00B Demo application and complete dashboard built with Drizzle and Hono
 
 **Depends on:** P0-00A
 
-**Do this before adding unrelated product features.** The first demo should validate that the core
-and its intended integration experience are understandable, installable, and useful.
+**Do this before adding unrelated product features.** The first demo should validate that the core,
+its intended integration experience, and its complete initial operator dashboard are
+understandable, installable, and useful.
 
 - [ ] Build one small end-to-end Hono application in `examples/` using the Drizzle provider and Hono
       integration packages.
-- [ ] Build the demo frontend with shadcn/ui so the first runnable vertical slice validates the
-      intended component foundation before the operator console.
+- [ ] Build a complete dashboard with queue, job, schedule, worker, failure, and health views.
+- [ ] Use shadcn/ui as the component foundation for the dashboard.
+- [ ] Use oRPC for the dashboard's typed API boundary.
+- [ ] Stream or efficiently refresh active state without polling every row.
+- [ ] Include full audit context for every mutating operator action supported by the product.
+- [ ] Keep the dashboard optional. Core queue operation must not depend on it.
 - [ ] Demonstrate transactional enqueue from a realistic Hono request handled through Drizzle.
 - [ ] Demonstrate installation, schema setup, enqueueing, worker execution, retries, recurring jobs,
-      and basic operational inspection.
+      and complete operational inspection through the dashboard.
 - [ ] Make the demo runnable locally with one documented command and minimal prerequisites.
 - [ ] Use the demo to identify API, documentation, packaging, and developer-experience gaps.
 - [ ] Add a smoke test that proves the documented demo path works from a clean checkout.
@@ -246,16 +251,11 @@ and its intended integration experience are understandable, installable, and use
 - [ ] Build a TUI application with basic job, queue, schedule, failure, worker, and health views.
 - [ ] Reuse the same administrative client and safety checks across the non-interactive CLI and TUI.
 
-### [ ] P2-03 Web operator console
+### P2-03 Web operator console (moved to P0-00B)
 
-**Depends on:** P2-01, P2-02, P2-04
-
-- [ ] Build queue, job, schedule, worker, failure, and health views.
-- [ ] Use shadcn/ui as the component foundation for the generic dashboard.
-- [ ] Use oRPC for the dashboard's typed API boundary.
-- [ ] Stream or efficiently refresh active state without polling every row.
-- [ ] Include full audit context for every mutating operator action.
-- [ ] Keep the UI optional. Core queue operation must not depend on it.
+The complete dashboard scope was moved into the first demo so the product's operator experience is
+validated before unrelated feature expansion. The P2-03 identifier remains here only to preserve
+roadmap references; all implementation requirements now live under P0-00B.
 
 ### [ ] P2-04 Authentication, RBAC, and audit log
 
