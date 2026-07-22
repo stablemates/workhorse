@@ -1,0 +1,38 @@
+{
+  "name": "@ironshift/drizzle",
+  "version": "0.1.0",
+  "description": "Drizzle ORM provider for Ironshift",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5",
+    "drizzle-orm": "^0.45.2",
+    "ironshift": "workspace:*",
+    "pg": "^8.16.3"
+  },
+  "peerDependencies": {
+    "drizzle-orm": ">=0.45.0 <1",
+    "ironshift": ">=0.1.0 <1",
+    "pg": ">=8.13 <9"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
