@@ -1,3 +1,5 @@
+export { createIronshiftAdapter } from "./adapter.js";
+export type { IronshiftAdapter, IronshiftAdapterOptions } from "./adapter.js";
 export { installSchema } from "./schema.js";
 export {
   inspectPgCronRequirements,

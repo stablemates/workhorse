@@ -1,0 +1,37 @@
+{
+  "name": "@ironshift/hono",
+  "version": "0.1.0",
+  "description": "Hono lifecycle integration for Ironshift",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^2.0.11",
+    "hono": "^4.12.31",
+    "ironshift": "workspace:*"
+  },
+  "peerDependencies": {
+    "@hono/node-server": ">=2 <3",
+    "hono": ">=4.10 <5",
+    "ironshift": ">=0.1.0 <1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

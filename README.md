@@ -23,11 +23,12 @@ The current implementation remains an evidence-first validation release rather t
 - namespaced declarative recurring jobs synchronized into pg_cron during deployment;
 - centralized pg_cron promotion and lease recovery outside the worker claim path;
 - a single TypeScript `pg` client and worker runtime;
+- separate `@ironshift/drizzle` and `@ironshift/hono` integration packages;
 - deterministic worker crash failpoints;
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.
 
-Explicitly excluded: workflows, UI, ORM/framework adapters, RBAC, cancellation, rate limits, concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
+Explicitly excluded: workflows, UI, additional ORM/framework adapters, RBAC, cancellation, rate limits, concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
 
 ## Development
 
@@ -107,6 +108,29 @@ await worker.runOnce();
 ```
 
 To enqueue atomically with application writes, pass the active `PoolClient` as the fourth argument to `enqueue`.
+
+### Drizzle and Hono packages
+
+`@ironshift/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
+adding Drizzle to the core package:
+
+```ts
+import { createDrizzleAdapter } from "@ironshift/drizzle";
+import { drizzle } from "drizzle-orm/node-postgres";
+
+const db = drizzle({ client: pool });
+const ironshift = createDrizzleAdapter(db);
+
+await db.transaction(async (tx) => {
+  await tx.insert(account).values({ id: accountId });
+  await ironshift.forTransaction(tx).enqueue("account.created", { accountId });
+});
+```
+
+`@ironshift/hono` exposes the queue through typed middleware, starts configured workers once, and
+provides a Node server handle whose idempotent shutdown stops new claims, drains in-flight handlers
+and requests, then closes explicitly provider-owned resources. See the package READMEs for complete
+configuration and ownership behavior.
 
 `scheduler.sync()` also installs one bounded maintenance job, every second by default, for due-job promotion, expired-lease recovery, and deletion of at most 10,000 occurrence keys older than 30 days. Workers therefore default to external maintenance and do not pay those two database round trips before every claim. Deployments without pg_cron can explicitly use `new Worker(queue, { maintenance: "worker" })` as a portability fallback.
 

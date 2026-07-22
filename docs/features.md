@@ -4,15 +4,16 @@ This is the authoritative implementation snapshot for schema version 2. “Suppo
 
 ## At a glance
 
-| Supported core                                 | Partial today                          | Not supported today                            |
-| ---------------------------------------------- | -------------------------------------- | ---------------------------------------------- |
-| Transactional immediate/delayed batch enqueue  | One-handler-at-a-time worker instances | Priorities and enqueue idempotency             |
-| FIFO `SKIP LOCKED` claims                      | Polling despite `NOTIFY` hints         | Cancellation, deadlines, progress              |
-| Leases, heartbeats, fencing, recovery          | Manual partition lifecycle             | Concurrency policies and rate limiting         |
-| Deploy-synchronized pg_cron schedules          | One-handler-at-a-time worker instances | Arbitrary scheduled SQL                        |
-| Immediate/delayed retries and terminal failure | Point-in-time health snapshot          | Dead letters, redrive, dependencies, workflows |
-| Live runtime plus immutable outcomes           | Success-path comparative baseline      | UI, RBAC, OpenTelemetry, framework adapters    |
-| Append-only events and attempt history         | Clean-install schema only              | Online production migration guarantees         |
+| Supported core                                 | Partial today                          | Not supported today                              |
+| ---------------------------------------------- | -------------------------------------- | ------------------------------------------------ |
+| Transactional immediate/delayed batch enqueue  | One-handler-at-a-time worker instances | Priorities and enqueue idempotency               |
+| FIFO `SKIP LOCKED` claims                      | Polling despite `NOTIFY` hints         | Cancellation, deadlines, progress                |
+| Leases, heartbeats, fencing, recovery          | Manual partition lifecycle             | Concurrency policies and rate limiting           |
+| Deploy-synchronized pg_cron schedules          | One-handler-at-a-time worker instances | Arbitrary scheduled SQL                          |
+| Immediate/delayed retries and terminal failure | Point-in-time health snapshot          | Dead letters, redrive, dependencies, workflows   |
+| Drizzle provider and Hono lifecycle package    | Success-path comparative baseline      | UI, RBAC, OpenTelemetry, additional integrations |
+| Live runtime plus immutable outcomes           | Clean-install schema only              | Online production migration guarantees           |
+| Append-only events and attempt history         |                                        |                                                  |
 
 ## Core job and dispatch
 
@@ -69,16 +70,19 @@ This is the authoritative implementation snapshot for schema version 2. “Suppo
 
 ## Runtime and product boundaries
 
-| Feature                               | Status        | Current behavior and limits                                                                    |
-| ------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------- |
-| TypeScript Queue/Worker API           | Supported     | Queue/Worker remain thin protocol clients; workers default to external pg_cron maintenance.    |
-| TypeScript pg_cron scheduler API      | Supported     | `sync()` reconciles owned schedules; `status()` exposes occurrences and latest pg_cron runs.   |
-| Versioned SQL API                     | Supported     | Existing `_v1` function names and signatures remain stable; installed schema version is 2.     |
-| Graceful worker stop                  | Supported     | Stop prevents further claims and waits for in-flight work.                                     |
-| Worker concurrency                    | Partial       | One worker runs one handler at a time; scale with multiple instances.                          |
-| Online v1 to v2 migration             | Not supported | The canonical schema is clean-install only. Operators need a separately engineered migration.  |
-| Compatibility write views             | Not supported | Legacy write relations are intentionally absent to avoid dual-write semantics.                 |
-| Exactly-once effects                  | Not supported | Delivery is at least once; applications need idempotency or outbox/inbox patterns.             |
-| Cron                                  | Supported     | pg_cron 1.6+ is a first-class production requirement; definitions enqueue typed jobs, not SQL. |
-| Workflows, dependencies, cancellation | Not supported | No stable contracts exist.                                                                     |
-| UI, RBAC, multi-tenancy               | Not supported | The validation MVP exposes database and TypeScript protocols only.                             |
+| Feature                               | Status        | Current behavior and limits                                                                                           |
+| ------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------- |
+| TypeScript Queue/Worker API           | Supported     | Queue/Worker remain thin protocol clients; workers default to external pg_cron maintenance.                           |
+| Drizzle ORM provider                  | Supported     | Separate package adapts node-postgres Drizzle databases and caller-owned transactions without adding Drizzle to core. |
+| Hono lifecycle integration            | Supported     | Separate package provides typed middleware, explicit worker startup, and idempotent graceful Node server shutdown.    |
+| TypeScript pg_cron scheduler API      | Supported     | `sync()` reconciles owned schedules; `status()` exposes occurrences and latest pg_cron runs.                          |
+| Versioned SQL API                     | Supported     | Existing `_v1` function names and signatures remain stable; installed schema version is 2.                            |
+| Graceful worker stop                  | Supported     | Stop prevents further claims and waits for in-flight work.                                                            |
+| Worker concurrency                    | Partial       | One worker runs one handler at a time; scale with multiple instances.                                                 |
+| Additional ORM/framework integrations | Not supported | The adapter boundary is validated by Drizzle and Hono; broader provider coverage remains roadmap work.                |
+| Online v1 to v2 migration             | Not supported | The canonical schema is clean-install only. Operators need a separately engineered migration.                         |
+| Compatibility write views             | Not supported | Legacy write relations are intentionally absent to avoid dual-write semantics.                                        |
+| Exactly-once effects                  | Not supported | Delivery is at least once; applications need idempotency or outbox/inbox patterns.                                    |
+| Cron                                  | Supported     | pg_cron 1.6+ is a first-class production requirement; definitions enqueue typed jobs, not SQL.                        |
+| Workflows, dependencies, cancellation | Not supported | No stable contracts exist.                                                                                            |
+| UI, RBAC, multi-tenancy               | Not supported | The validation MVP exposes database and TypeScript protocols only.                                                    |

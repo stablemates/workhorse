@@ -28,19 +28,19 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## P0: demo vertical slice and production hardening
 
-### [ ] P0-00A Drizzle and Hono integration packages
+### [x] P0-00A Drizzle and Hono integration packages
 
 **Depends on:** none
 
 These are the minimum ecosystem packages required by the first demo, not the start of broad
 provider coverage.
 
-- [ ] Define the stable adapter boundary needed by both ORM providers and framework integrations.
-- [ ] Ship a separate Drizzle ORM provider package with caller-owned transaction support.
-- [ ] Ship a separate Hono integration package with configuration, startup, and graceful shutdown
+- [x] Define the stable adapter boundary needed by both ORM providers and framework integrations.
+- [x] Ship a separate Drizzle ORM provider package with caller-owned transaction support.
+- [x] Ship a separate Hono integration package with configuration, startup, and graceful shutdown
       behavior.
-- [ ] Keep Drizzle and Hono dependencies out of the core package.
-- [ ] Add packed-package integration tests for transaction ownership, pooling, error translation,
+- [x] Keep Drizzle and Hono dependencies out of the core package.
+- [x] Add packed-package integration tests for transaction ownership, pooling, error translation,
       worker lifecycle, and shutdown.
 
 ### [ ] P0-00B Demo application built with Drizzle and Hono
