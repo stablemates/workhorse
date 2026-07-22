@@ -38,7 +38,7 @@ describe("pg-boss competitor adapter", () => {
     expect(boss.insert).toHaveBeenCalledTimes(1);
     expect(boss.work).toHaveBeenCalledWith(
       "competitor_baseline",
-      expect.objectContaining({ localConcurrency: 4, batchSize: 1, burstWhenBatchFull: true }),
+      expect.objectContaining({ localConcurrency: 4, batchSize: 1 }),
       expect.any(Function),
     );
     expect(boss.stop).toHaveBeenCalledWith({ graceful: true });

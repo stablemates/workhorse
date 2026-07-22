@@ -258,13 +258,15 @@ pnpm benchmark:competitors -- --profile default --output docs/benchmarks/results
 | pg-boss         | 12.26.2            | `pgboss_competitor`          | `insert`, `createQueue`, `work`, graceful `stop`                 | retained (`deleteAfterSeconds: 0`) |
 | Graphile Worker | 0.17.3             | `graphile_worker_competitor` | `makeWorkerUtils().migrate/addJobs`, `run`, graceful `stop`      | deleted on success                 |
 
-All targets use a 32-connection ceiling. pg-boss is configured with `retryLimit: 0`, `deleteAfterSeconds: 0`, `notify: true`, `useListenNotify: true`, a per-job `batchSize: 1`, and `burstWhenBatchFull: true` so a preloaded backlog is not artificially delayed by the polling interval; worker concurrency is supplied as `localConcurrency`. Graphile jobs use `maxAttempts: 1`, and `run()` receives the task list and concurrency without local claim batching. Ironshift jobs use one attempt and a 30-second lease.
+All targets use a 32-connection ceiling. pg-boss is configured with `retryLimit: 0`, `deleteAfterSeconds: 0`, `notify: true`, `useListenNotify: true`, and a per-job `batchSize: 1`; worker concurrency is supplied as `localConcurrency`. Graphile jobs use `maxAttempts: 1`, and `run()` receives the task list and concurrency without local claim batching. Ironshift jobs use one attempt and a 30-second lease.
 
 The common target interface is workload-level: `reset/setup`, batched enqueue, start consumers, observe the exact expected completion set, stop, close, and expose schema metadata/capabilities. This deliberately hides native worker-loop differences while preserving them in target notes.
 
 ### Workloads and ordering
 
 Both profiles run fixed batched burn-downs and one equal-offered-load producer/consumer churn per target. The plan uses deterministic shuffled three-target blocks. Within every worker/repetition block each target appears once, and repetitions rotate the three positions so position counts are balanced when repetitions are a multiple of three. Smoke uses three repetitions for this reason. Churn has only one observation per target and is exploratory; it cannot support a confidence-backed ranking.
+
+The controlled default remains deliberately bounded at 100 jobs per fixed run and 600 churn jobs. pg-boss intentionally waits between single-job fetches from a preloaded backlog, and increasing `batchSize` would change the handler contract. Large native-throughput studies therefore require a separate configuration matrix with each product's batching behavior labeled explicitly.
 
 Each run records enqueue, processing, and total phases; churn also records production, drain, sampled backlog, and maximum backlog. Exact completion is mandatory. Database evidence includes WAL bytes, schema totals/growth, and per-relation telemetry before and after the workload.
 
