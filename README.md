@@ -12,6 +12,8 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/mvp-protocol.md`](docs/mvp-protocol.md): concise table and SQL transition reference.
 - [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
 - [`docs/pg-cron-requirements.md`](docs/pg-cron-requirements.md): administrator grants, executable preflight, provider compatibility, authentication, capacity, and retention.
+- [`docs/demo-findings.md`](docs/demo-findings.md): API, packaging, documentation, and developer-experience gaps found by the end-to-end demo.
+- [`examples/hono-drizzle/README.md`](examples/hono-drizzle/README.md): runnable Hono, Drizzle, worker, retry, recurring-job, and dashboard walkthrough.
 
 ## Included scope
 
@@ -24,11 +26,12 @@ The current implementation remains an evidence-first validation release rather t
 - centralized pg_cron promotion and lease recovery outside the worker claim path;
 - a single TypeScript `pg` client and worker runtime;
 - separate `@ironshift/drizzle` and `@ironshift/hono` integration packages;
+- an optional read-only React operator dashboard with a typed oRPC boundary;
 - deterministic worker crash failpoints;
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.
 
-Explicitly excluded: workflows, UI, additional ORM/framework adapters, RBAC, cancellation, rate limits, concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
+Explicitly excluded: workflows, additional ORM/framework adapters, RBAC, mutating operator actions, rate limits, concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
 
 ## Development
 
@@ -56,19 +59,40 @@ pnpm db:reset:all
 pnpm check
 ```
 
-Local tooling keeps three databases separate:
+`pnpm check` finishes by exporting only tracked files to a temporary clean checkout, installing the
+frozen lockfile, running `pnpm demo`, and exercising the dashboard snapshot, recurring schedule
+synchronization, transactional order, worker, retry, and terminal-failure paths.
+
+Local tooling keeps four databases separate:
 
 | Database          | Purpose                                      | Commands                                |
 | ----------------- | -------------------------------------------- | --------------------------------------- |
 | `ironshift_dev`   | Manual development and `pnpm health`         | `pnpm db:reset` or `pnpm db:reset:dev`  |
 | `ironshift_test`  | Automated integration tests only             | `pnpm db:reset:test`, `pnpm test`       |
 | `ironshift_bench` | Destructive benchmark runs and their history | `pnpm db:reset:bench`, `pnpm benchmark` |
+| `ironshift_demo`  | Reproducible local demo data                 | `pnpm db:reset:demo`, `pnpm demo`       |
 
-`pnpm db:reset:all` unschedules Ironshift-owned pg_cron entries, recreates all three databases, and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, or `_bench` suffix, requires confirmation internally, and refuses remote hosts unless `IRONSHIFT_ALLOW_REMOTE_RESET=1` is deliberately set.
+`pnpm db:reset:all` unschedules Ironshift-owned pg_cron entries, recreates all four databases, and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, `_bench`, or `_demo` suffix, requires confirmation internally, and refuses remote hosts unless `IRONSHIFT_ALLOW_REMOTE_RESET=1` is deliberately set.
 
-The defaults use the local `ironshift` role. Override them independently with `IRONSHIFT_DEV_DATABASE_URL`, `IRONSHIFT_TEST_DATABASE_URL`, and `IRONSHIFT_BENCH_DATABASE_URL`. Purpose-specific reset, test, and benchmark workflows intentionally ignore generic `DATABASE_URL`, which remains the application runtime connection string and is accepted by the packaged health CLI.
+The defaults use the local `ironshift` role. Override them independently with `IRONSHIFT_DEV_DATABASE_URL`, `IRONSHIFT_TEST_DATABASE_URL`, `IRONSHIFT_BENCH_DATABASE_URL`, and `IRONSHIFT_DEMO_DATABASE_URL`. Purpose-specific destructive reset, test, and benchmark tooling intentionally ignores generic `DATABASE_URL`. Application runtimes may still accept `DATABASE_URL`; the demo otherwise inherits `IRONSHIFT_DEMO_DATABASE_URL`.
 
 `pnpm pg-cron:check` schedules a temporary `SELECT 1` in the target database and waits for the daemon result, so `ready: true` proves grants plus target authentication and execution. Use `-- --database test` or `bench` for an isolated local target, or set `DATABASE_URL` and `CRON_DATABASE_URL` for a deployed environment.
+
+## Run the demo
+
+After `pnpm install`, the demo needs only PostgreSQL 15+ and the local `ironshift` role described above.
+One command safely recreates the purpose-guarded `ironshift_demo` database, builds every workspace
+package, installs the application schema, starts the Hono worker, and serves the dashboard:
+
+```bash
+pnpm demo
+```
+
+Open `http://localhost:3000/`; it redirects to the operator dashboard. The default startup seeds successful, retried, and failed jobs
+so the operational views are populated; set `SEED_DEMO_DATA=false` for an empty console. pg_cron is
+optional for the base queue and retry walkthrough. Set `CRON_DATABASE_URL` when running the command to
+synchronize the recurring heartbeat demonstration. See the example README for curl requests and
+connection overrides.
 
 ## Minimal usage
 

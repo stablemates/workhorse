@@ -1,5 +1,5 @@
 /** Local database roles used by repository tooling. Application code may still use DATABASE_URL. */
-export type LocalDatabasePurpose = "dev" | "test" | "bench";
+export type LocalDatabasePurpose = "dev" | "test" | "bench" | "demo";
 
 interface LocalDatabaseDefinition {
   /** Environment override dedicated to this database role. */
@@ -25,6 +25,11 @@ const localDatabaseDefinitions: Record<LocalDatabasePurpose, LocalDatabaseDefini
     environmentVariable: "IRONSHIFT_BENCH_DATABASE_URL",
     suffix: "_bench",
     defaultUrl: "postgres://ironshift:ironshift@localhost:5432/ironshift_bench",
+  },
+  demo: {
+    environmentVariable: "IRONSHIFT_DEMO_DATABASE_URL",
+    suffix: "_demo",
+    defaultUrl: "postgres://ironshift:ironshift@localhost:5432/ironshift_demo",
   },
 };
 
@@ -62,5 +67,5 @@ export function assertLocalDatabasePurpose(
 }
 
 export function isLocalDatabasePurpose(value: string): value is LocalDatabasePurpose {
-  return value === "dev" || value === "test" || value === "bench";
+  return value === "dev" || value === "test" || value === "bench" || value === "demo";
 }
