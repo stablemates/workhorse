@@ -43,7 +43,7 @@ provider coverage.
 - [x] Add packed-package integration tests for transaction ownership, pooling, error translation,
       worker lifecycle, and shutdown.
 
-### [ ] P0-00B Demo application and complete dashboard built with Drizzle and Hono
+### [x] P0-00B Demo application and complete dashboard built with Drizzle and Hono
 
 **Depends on:** P0-00A
 
@@ -51,20 +51,20 @@ provider coverage.
 its intended integration experience, and its complete initial operator dashboard are
 understandable, installable, and useful.
 
-- [ ] Build one small end-to-end Hono application in `examples/` using the Drizzle provider and Hono
+- [x] Build one small end-to-end Hono application in `examples/` using the Drizzle provider and Hono
       integration packages.
-- [ ] Build a complete dashboard with queue, job, schedule, worker, failure, and health views.
-- [ ] Use shadcn/ui as the component foundation for the dashboard.
-- [ ] Use oRPC for the dashboard's typed API boundary.
-- [ ] Stream or efficiently refresh active state without polling every row.
-- [ ] Include full audit context for every mutating operator action supported by the product.
-- [ ] Keep the dashboard optional. Core queue operation must not depend on it.
-- [ ] Demonstrate transactional enqueue from a realistic Hono request handled through Drizzle.
-- [ ] Demonstrate installation, schema setup, enqueueing, worker execution, retries, recurring jobs,
+- [x] Build a complete dashboard with queue, job, schedule, worker, failure, and health views.
+- [x] Use shadcn/ui as the component foundation for the dashboard.
+- [x] Use oRPC for the dashboard's typed API boundary.
+- [x] Stream or efficiently refresh active state without polling every row.
+- [x] Include full audit context for every mutating operator action supported by the product.
+- [x] Keep the dashboard optional. Core queue operation must not depend on it.
+- [x] Demonstrate transactional enqueue from a realistic Hono request handled through Drizzle.
+- [x] Demonstrate installation, schema setup, enqueueing, worker execution, retries, recurring jobs,
       and complete operational inspection through the dashboard.
-- [ ] Make the demo runnable locally with one documented command and minimal prerequisites.
-- [ ] Use the demo to identify API, documentation, packaging, and developer-experience gaps.
-- [ ] Add a smoke test that proves the documented demo path works from a clean checkout.
+- [x] Make the demo runnable locally with one documented command and minimal prerequisites.
+- [x] Use the demo to identify API, documentation, packaging, and developer-experience gaps.
+- [x] Add a smoke test that proves the documented demo path works from a clean checkout.
 
 ### [ ] P0-01 Automated history retention
 

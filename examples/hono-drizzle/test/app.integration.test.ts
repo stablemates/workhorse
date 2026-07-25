@@ -1,0 +1,601 @@
+import { setTimeout as sleep } from "node:timers/promises";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import type { RouterClient } from "@orpc/server";
+import { installSchema, PgCronScheduler } from "ironshift";
+import { Pool } from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../../src/local-database.js";
+import {
+  createDemoApplication,
+  createDemoDatabase,
+  createLocalOperator,
+  createLocalScheduleController,
+  createPgCronSchedulerStatusProvider,
+  DEMO_MAINTENANCE,
+  DEMO_SCHEDULE_NAMESPACE,
+  DEMO_WORKER_POLL_MS,
+  HEARTBEAT_SCHEDULE_NAME,
+  installDemoSchema,
+  seedDemoData,
+  syncDemoSchedules,
+} from "../src/app.js";
+import type { CreateDemoApplicationOptions } from "../src/app.js";
+import type { DashboardRouter } from "../src/rpc.js";
+
+const databaseUrl = localDatabaseUrl("test");
+assertLocalDatabasePurpose(databaseUrl, "test");
+const pool = new Pool({ connectionString: databaseUrl, max: 4 });
+const database = createDemoDatabase(pool);
+
+function createTestApplication(options: CreateDemoApplicationOptions = {}) {
+  return createDemoApplication(database, { workerPollMs: 15, ...options });
+}
+
+beforeAll(async () => {
+  await installSchema(pool);
+  await installDemoSchema(database);
+});
+
+beforeEach(async () => {
+  await pool.query(`TRUNCATE public.ironshift_demo_audit, public.ironshift_demo_seed, public.ironshift_demo_order, ironshift.job_event,
+    ironshift.attempt_history, ironshift.schedule_occurrence, ironshift.schedule_definition,
+    ironshift.job_outcome, ironshift.job_runtime, ironshift.job RESTART IDENTITY CASCADE`);
+});
+
+afterAll(async () => {
+  await pool.query("DROP TABLE IF EXISTS public.ironshift_demo_order");
+  await pool.query("DROP TABLE IF EXISTS public.ironshift_demo_seed");
+  await pool.query("DROP TABLE IF EXISTS public.ironshift_demo_audit");
+  await pool.end();
+});
+
+function dashboardClient(
+  app: ReturnType<typeof createDemoApplication>["app"],
+): RouterClient<DashboardRouter> {
+  return createORPCClient(
+    new RPCLink({ url: "http://demo.test/rpc", fetch: (request) => app.request(request) }),
+  );
+}
+
+describe("Hono and Drizzle demo", () => {
+  it("uses a conservative worker polling interval for the demo", () => {
+    expect(DEMO_WORKER_POLL_MS).toBe(15_000);
+  });
+
+  it("seeds representative dashboard data exactly once", async () => {
+    const { app } = createTestApplication();
+
+    expect(await seedDemoData(database, app)).toMatchObject({
+      seeded: true,
+      jobIds: [expect.any(String), expect.any(String), expect.any(String), expect.any(String)],
+    });
+    expect(await seedDemoData(database, app)).toEqual({ seeded: false, jobIds: [] });
+    expect(
+      await pool.query("SELECT count(*)::integer AS count FROM public.ironshift_demo_order"),
+    ).toMatchObject({ rows: [{ count: 1 }] });
+    expect(await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).toMatchObject({
+      rows: [{ count: 4 }],
+    });
+    const client = dashboardClient(app);
+    await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
+      all: 4,
+      scheduled: 1,
+      queued: 3,
+    });
+    const firstPage = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 2 });
+    const secondPage = await client.dashboard.tasks({ filter: "all", page: 2, pageSize: 2 });
+    expect(firstPage).toMatchObject({
+      filter: "all",
+      page: 1,
+      pageSize: 2,
+      total: 4,
+      counts: { all: 4, scheduled: 1, queued: 3 },
+    });
+    expect(firstPage.jobs).toHaveLength(2);
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 2, total: 4 });
+    expect(secondPage.jobs).toHaveLength(2);
+    expect(
+      await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 10 }),
+    ).toMatchObject({
+      filter: "scheduled",
+      total: 1,
+      jobs: [{ state: "scheduled", payload: { source: "scheduled-seed" } }],
+    });
+    expect(
+      await pool.query(
+        `SELECT runtime.state, job.payload, runtime.run_at > clock_timestamp() AS is_future
+           FROM ironshift.job job
+           JOIN ironshift.job_runtime runtime ON runtime.job_id = job.id
+          WHERE job.payload->>'source' = 'scheduled-seed'`,
+      ),
+    ).toMatchObject({
+      rows: [{ state: "scheduled", payload: { source: "scheduled-seed" }, is_future: true }],
+    });
+  });
+
+  it("creates an application row and job atomically, then processes and exposes both", async () => {
+    const workerErrors: unknown[] = [];
+    const refreshReasons: string[] = [];
+    const { app, ironshift, dashboardRefresh } = createTestApplication({
+      onWorkerError: (error) => workerErrors.push(error),
+    });
+    const unsubscribe = dashboardRefresh.subscribe((event) => refreshReasons.push(event.reason));
+    ironshift.start();
+
+    try {
+      const rootResponse = await app.request("/");
+      expect(rootResponse.status).toBe(302);
+      expect(rootResponse.headers.get("location")).toBe("/tasks");
+      expect(await (await app.request("/api")).json()).toMatchObject({
+        name: "Ironshift Hono + Drizzle demo",
+      });
+      const response = await app.request("/orders", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          customerEmail: "operator@example.com",
+          description: "Validate the end-to-end demo",
+        }),
+      });
+      expect(response.status).toBe(202);
+      const accepted = (await response.json()) as { orderId: string; jobId: string };
+      const transactionIds = await pool.query<{
+        order_transaction: string;
+        job_transaction: string;
+      }>(
+        `SELECT application_order.xmin::text AS order_transaction,
+                accepted_job.xmin::text AS job_transaction
+           FROM public.ironshift_demo_order application_order
+           JOIN ironshift.job accepted_job ON accepted_job.id = $2
+          WHERE application_order.id = $1`,
+        [accepted.orderId, accepted.jobId],
+      );
+      expect(transactionIds.rows[0]!.order_transaction).toBe(
+        transactionIds.rows[0]!.job_transaction,
+      );
+
+      let orderStatus = "queued";
+      let job: { state: string; result: unknown } | undefined;
+      for (let attempt = 0; attempt < 40 && job?.state !== "succeeded"; attempt += 1) {
+        await sleep(25);
+        const orderResponse = await app.request(`/orders/${accepted.orderId}`);
+        const body = (await orderResponse.json()) as { order: { status: string } };
+        orderStatus = body.order.status;
+        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
+        job = ((await jobResponse.json()) as { job: typeof job }).job;
+      }
+
+      expect(orderStatus).toBe("processed");
+      const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
+      expect(jobResponse.status).toBe(200);
+      expect(await jobResponse.json()).toMatchObject({
+        job: { id: accepted.jobId, state: "succeeded", result: { processed: true } },
+      });
+      const client = dashboardClient(app);
+      expect(await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 10 })).toMatchObject({
+        filter: "all",
+        page: 1,
+        total: 1,
+        jobs: [
+          {
+            id: accepted.jobId,
+            state: "succeeded",
+            payload: { orderId: accepted.orderId },
+            createdAt: expect.any(String),
+          },
+        ],
+        counts: { all: 1, completed: 1 },
+      });
+      expect(await client.dashboard.workers()).toMatchObject({
+        workers: [
+          { id: "demo-worker-1", status: expect.stringMatching(/idle|recent|busy/) },
+          { id: "demo-worker-2", status: expect.stringMatching(/idle|recent|busy/) },
+        ],
+      });
+      expect(await client.dashboard.system()).toMatchObject({
+        failures: [],
+        health: { schemaVersion: 2, counts: { succeeded: 1 } },
+      });
+      const detail = await client.dashboard.jobDetail({ id: accepted.jobId });
+      expect(detail).toMatchObject({
+        identity: { id: accepted.jobId, state: "succeeded" },
+        payload: { orderId: accepted.orderId },
+        current: { outcome: { state: "succeeded", result: { processed: true } } },
+        attempts: [{ attempt: 1, outcome: "succeeded" }],
+      });
+      expect(detail.events).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "enqueued" })]),
+      );
+      expect(refreshReasons).toEqual(expect.arrayContaining(["enqueue", "worker"]));
+      expect(workerErrors).toEqual([]);
+    } finally {
+      unsubscribe();
+      await ironshift.stop();
+    }
+  });
+
+  it("rejects malformed order requests without writing an order or job", async () => {
+    const { app } = createTestApplication();
+    const response = await app.request("/orders", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ customerEmail: "invalid" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(
+      await pool.query("SELECT count(*)::integer AS count FROM public.ironshift_demo_order"),
+    ).toMatchObject({ rows: [{ count: 0 }] });
+    expect(await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).toMatchObject({
+      rows: [{ count: 0 }],
+    });
+  });
+
+  it("retries an intentional handler failure and exposes both attempts in the dashboard", async () => {
+    const { app, ironshift } = createTestApplication();
+    ironshift.start();
+
+    try {
+      const response = await app.request("/demo/retries", { method: "POST" });
+      expect(response.status).toBe(202);
+      const accepted = (await response.json()) as { jobId: string; expectedAttempts: number };
+      expect(accepted.expectedAttempts).toBe(2);
+
+      let job: { state: string; currentAttempt: number; result: unknown } | undefined;
+      for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
+        await sleep(25);
+        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
+        job = ((await jobResponse.json()) as { job: typeof job }).job;
+      }
+
+      expect(job).toMatchObject({
+        state: "succeeded",
+        currentAttempt: 2,
+        result: { recovered: true, attempt: 2 },
+      });
+      expect(
+        (
+          await pool.query(
+            "SELECT attempt, outcome FROM ironshift.attempt_history WHERE job_id = $1 ORDER BY attempt",
+            [accepted.jobId],
+          )
+        ).rows,
+      ).toEqual([
+        { attempt: 1, outcome: "retry" },
+        { attempt: 2, outcome: "succeeded" },
+      ]);
+
+      const client = dashboardClient(app);
+      expect(
+        await client.dashboard.tasks({ filter: "retried", page: 1, pageSize: 10 }),
+      ).toMatchObject({
+        filter: "retried",
+        total: 1,
+        jobs: [{ id: accepted.jobId, state: "succeeded", attempt: 2 }],
+        counts: { all: 1, retried: 1, completed: 1 },
+      });
+      expect(await client.dashboard.workers()).toMatchObject({
+        workers: [{ id: "demo-worker-1" }, { id: "demo-worker-2" }],
+      });
+      expect(await client.dashboard.system()).toMatchObject({
+        failures: [],
+      });
+    } finally {
+      await ironshift.stop();
+    }
+  });
+
+  it("records an intentional terminal failure and exposes it in the dashboard", async () => {
+    const { app, ironshift } = createTestApplication();
+    ironshift.start();
+
+    try {
+      const response = await app.request("/demo/failures", { method: "POST" });
+      expect(response.status).toBe(202);
+      const accepted = (await response.json()) as { jobId: string; expectedOutcome: string };
+      expect(accepted.expectedOutcome).toBe("failed");
+
+      let state: string | undefined;
+      for (let attempt = 0; attempt < 40 && state !== "failed"; attempt += 1) {
+        await sleep(25);
+        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
+        state = ((await jobResponse.json()) as { job: { state: string } }).job.state;
+      }
+      expect(state).toBe("failed");
+
+      const client = dashboardClient(app);
+      expect(
+        await client.dashboard.tasks({ filter: "discarded", page: 1, pageSize: 10 }),
+      ).toMatchObject({
+        filter: "discarded",
+        total: 1,
+        jobs: [{ id: accepted.jobId, type: "demo.failure", state: "failed" }],
+        counts: { all: 1, discarded: 1 },
+      });
+      expect(await client.dashboard.system()).toMatchObject({
+        failures: [{ id: accepted.jobId, type: "demo.failure", attempt: 1 }],
+        health: { counts: { failed: 1 } },
+      });
+    } finally {
+      await ironshift.stop();
+    }
+  });
+
+  it("fires a recurring definition and exposes its occurrence and job in the dashboard", async () => {
+    const cronDatabaseUrl = new URL(databaseUrl);
+    cronDatabaseUrl.pathname = "/postgres";
+    const cronPool = new Pool({ connectionString: cronDatabaseUrl.toString(), max: 2 });
+    const scheduler = new PgCronScheduler(pool, cronPool, {
+      namespace: "ironshift-hono-drizzle-test",
+    });
+    const { app, ironshift } = createTestApplication();
+    ironshift.start();
+
+    try {
+      const synchronized = await scheduler.sync(
+        [
+          {
+            name: "heartbeat",
+            schedule: "* * * * *",
+            job: {
+              type: "demo.recurring",
+              queue: "demo",
+              payload: { source: "integration-test" },
+            },
+          },
+        ],
+        { maintenance: false },
+      );
+      expect(synchronized.schedules).toMatchObject([
+        { name: "heartbeat", enabled: true, cronActive: true },
+      ]);
+      const jobId = await scheduler.trigger("heartbeat", new Date("2026-07-22T20:00:00.000Z"));
+      expect(jobId).not.toBeNull();
+
+      let state: string | undefined;
+      for (let attempt = 0; attempt < 40 && state !== "succeeded"; attempt += 1) {
+        await sleep(25);
+        state = (await ironshift.context.queue.getJob(jobId!))?.state;
+      }
+      expect(state).toBe("succeeded");
+
+      const client = dashboardClient(app);
+      expect(await client.dashboard.cron()).toMatchObject({
+        schedules: [
+          {
+            namespace: "ironshift-hono-drizzle-test",
+            name: "heartbeat",
+            occurrenceCount: 1,
+          },
+        ],
+      });
+      expect(
+        await client.dashboard.tasks({ filter: "completed", page: 1, pageSize: 10 }),
+      ).toMatchObject({
+        total: 1,
+        jobs: [{ id: jobId, type: "demo.recurring", state: "succeeded" }],
+      });
+    } finally {
+      await ironshift.stop();
+      await scheduler.sync([], { maintenance: false });
+      await cronPool.end();
+    }
+  });
+
+  it("keeps default dashboard operator read-only", async () => {
+    const { app } = createTestApplication();
+    const client = dashboardClient(app);
+
+    await expect(
+      client.dashboard.enqueueTest({
+        kind: "success",
+        audit: { actor: "test", reason: "verify read-only", requestId: "readonly-enqueue" },
+      }),
+    ).rejects.toThrow(/read-only|FORBIDDEN/i);
+    await expect(
+      client.dashboard.setScheduleEnabled({
+        name: HEARTBEAT_SCHEDULE_NAME,
+        enabled: false,
+        audit: { actor: "test", reason: "verify read-only", requestId: "readonly-toggle" },
+      }),
+    ).rejects.toThrow(/read-only|FORBIDDEN/i);
+    expect(
+      await pool.query("SELECT count(*)::integer AS count FROM public.ironshift_demo_audit"),
+    ).toMatchObject({
+      rows: [{ count: 0 }],
+    });
+  });
+
+  it("supports audited local enqueue and schedule toggles", async () => {
+    await pool.query(
+      `INSERT INTO ironshift.schedule_definition
+        (namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts)
+       VALUES ($1, $2, '* * * * *', 'demo', 'demo.recurring', '{"source":"test"}'::jsonb, 3)`,
+      [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
+    );
+    const { app } = createTestApplication({
+      operator: createLocalOperator(database),
+      scheduleController: createLocalScheduleController(database),
+    });
+    const client = dashboardClient(app);
+
+    const enqueued = await client.dashboard.enqueueTest({
+      kind: "success",
+      audit: { actor: "operator", reason: "smoke enqueue", requestId: "audit-enqueue" },
+    });
+    expect(enqueued.jobId).toEqual(expect.any(String));
+    expect(await client.dashboard.jobDetail({ id: enqueued.jobId })).toMatchObject({
+      identity: { id: enqueued.jobId, state: "ready" },
+      payload: { source: "operator" },
+    });
+    expect(
+      await client.dashboard.setScheduleEnabled({
+        name: HEARTBEAT_SCHEDULE_NAME,
+        enabled: false,
+        audit: { actor: "operator", reason: "pause schedule", requestId: "audit-toggle" },
+      }),
+    ).toEqual({ enabled: false });
+    expect(
+      (
+        await pool.query(
+          "SELECT action, target, actor, reason, status FROM public.ironshift_demo_audit ORDER BY id",
+        )
+      ).rows,
+    ).toEqual([
+      {
+        action: "enqueueTest",
+        target: "job:success",
+        actor: "operator",
+        reason: "smoke enqueue",
+        status: "succeeded",
+      },
+      {
+        action: "setScheduleEnabled",
+        target: "schedule:heartbeat",
+        actor: "operator",
+        reason: "pause schedule",
+        status: "succeeded",
+      },
+    ]);
+  });
+
+  it("reconciles local schedule toggles with pg_cron", async () => {
+    const cronDatabaseUrl = new URL(databaseUrl);
+    cronDatabaseUrl.pathname = "/postgres";
+    const cronPool = new Pool({ connectionString: cronDatabaseUrl.toString(), max: 2 });
+    const { scheduler } = await syncDemoSchedules(pool, cronPool);
+    const { app } = createTestApplication({
+      operator: createLocalOperator(database),
+      scheduleController: createLocalScheduleController(database, scheduler),
+      schedulerStatusProvider: createPgCronSchedulerStatusProvider(scheduler),
+    });
+    const client = dashboardClient(app);
+
+    try {
+      expect(await client.dashboard.cron()).toMatchObject({
+        schedules: [
+          {
+            kind: "system",
+            identity: {
+              kind: "system",
+              namespace: DEMO_SCHEDULE_NAMESPACE,
+              name: "maintenance",
+            },
+            name: "maintenance",
+            cron: DEMO_MAINTENANCE.schedule,
+            active: true,
+            type: "ironshift.maintain_v1",
+            maintenance: {
+              batchSize: DEMO_MAINTENANCE.batchSize,
+              occurrenceRetentionDays: DEMO_MAINTENANCE.occurrenceRetentionDays,
+              occurrencePruneLimit: DEMO_MAINTENANCE.occurrencePruneLimit,
+            },
+            lastRun: null,
+          },
+          {
+            kind: "user",
+            identity: {
+              kind: "user",
+              namespace: DEMO_SCHEDULE_NAMESPACE,
+              name: HEARTBEAT_SCHEDULE_NAME,
+            },
+            name: HEARTBEAT_SCHEDULE_NAME,
+            active: true,
+          },
+        ],
+      });
+
+      await client.dashboard.setScheduleEnabled({
+        name: HEARTBEAT_SCHEDULE_NAME,
+        enabled: false,
+        audit: { actor: "operator", reason: "pause cron", requestId: "cron-disable" },
+      });
+      expect((await scheduler.status()).schedules).toMatchObject([
+        { name: HEARTBEAT_SCHEDULE_NAME, enabled: false, cronActive: false },
+      ]);
+      expect((await scheduler.status()).maintenance).toMatchObject({
+        active: true,
+        schedule: DEMO_MAINTENANCE.schedule,
+        batchSize: DEMO_MAINTENANCE.batchSize,
+        occurrenceRetentionDays: DEMO_MAINTENANCE.occurrenceRetentionDays,
+        occurrencePruneLimit: DEMO_MAINTENANCE.occurrencePruneLimit,
+      });
+
+      await client.dashboard.setScheduleEnabled({
+        name: HEARTBEAT_SCHEDULE_NAME,
+        enabled: true,
+        audit: { actor: "operator", reason: "resume cron", requestId: "cron-enable" },
+      });
+      expect((await scheduler.status()).schedules).toMatchObject([
+        { name: HEARTBEAT_SCHEDULE_NAME, enabled: true, cronActive: true },
+      ]);
+      expect((await scheduler.status()).maintenance).toMatchObject({ active: true });
+    } finally {
+      await scheduler.sync([], { maintenance: false });
+      await cronPool.end();
+    }
+  });
+
+  it("keeps worker maintenance fallback when pg_cron status is unavailable", async () => {
+    await pool.query(
+      `INSERT INTO ironshift.schedule_definition
+        (namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts)
+       VALUES ($1, $2, '* * * * *', 'demo', 'demo.recurring', '{"source":"test"}'::jsonb, 3)`,
+      [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
+    );
+    const { app } = createTestApplication({
+      operator: createLocalOperator(database),
+      scheduleController: createLocalScheduleController(database),
+      schedulerStatusProvider: async () => null,
+    });
+    const snapshot = await dashboardClient(app).dashboard.cron();
+
+    expect(snapshot.schedules).toMatchObject([
+      {
+        kind: "user",
+        identity: {
+          kind: "user",
+          namespace: DEMO_SCHEDULE_NAMESPACE,
+          name: HEARTBEAT_SCHEDULE_NAME,
+        },
+        name: HEARTBEAT_SCHEDULE_NAME,
+        active: true,
+        maintenance: null,
+      },
+    ]);
+    expect(snapshot.schedules.some((schedule) => schedule.kind === "system")).toBe(false);
+
+    await expect(
+      dashboardClient(app).dashboard.setScheduleEnabled({
+        name: HEARTBEAT_SCHEDULE_NAME,
+        enabled: false,
+        audit: { actor: "operator", reason: "fallback pause", requestId: "fallback-toggle" },
+      }),
+    ).resolves.toEqual({ enabled: false });
+  });
+
+  it("runs core Hono and worker flows without mounting dashboard routes", async () => {
+    const { app, ironshift } = createTestApplication({ dashboard: false });
+    ironshift.start();
+
+    try {
+      expect(await (await app.request("/")).json()).toMatchObject({
+        name: "Ironshift Hono + Drizzle demo",
+      });
+      expect((await app.request("/rpc/dashboard/tasks")).status).toBe(404);
+      expect((await app.request("/dashboard/events")).status).toBe(404);
+      const response = await app.request("/orders", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          customerEmail: "headless@example.com",
+          description: "Run without the optional dashboard",
+        }),
+      });
+      expect(response.status).toBe(202);
+    } finally {
+      await ironshift.stop();
+    }
+  });
+});

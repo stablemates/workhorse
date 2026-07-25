@@ -15,7 +15,7 @@ if (!process.argv.includes("--yes")) throw new Error("Pass --yes to confirm the 
 const purposeIndex = process.argv.indexOf("--database");
 const purpose = purposeIndex === -1 ? undefined : process.argv[purposeIndex + 1];
 if (!purpose || !isLocalDatabasePurpose(purpose)) {
-  throw new Error("Pass --database dev, --database test, or --database bench");
+  throw new Error("Pass --database dev, --database test, --database bench, or --database demo");
 }
 
 const databaseUrl = localDatabaseUrl(purpose);
