@@ -642,7 +642,10 @@ export function Dashboard() {
 
       <AppShell.Navbar p="md">
         <AppShell.Section grow component={ScrollArea}>
-          <Stack gap={2} mb="sm">
+          <Stack gap={2}>
+            <Text c="dimmed" fw={600} size="xs" px="sm" mb={4}>
+              Tasks
+            </Text>
             {taskFilters.map((filter) => {
               const href = taskHref(filter.value);
               const count = taskCounts?.[filter.value];
@@ -668,36 +671,39 @@ export function Dashboard() {
               );
             })}
           </Stack>
-          <NavLink
-            component="a"
-            href="/cron"
-            active={location.route === "/cron"}
-            label="Schedules"
-            leftSection={<CalendarDots size={18} />}
-            variant="light"
-            mb={4}
-            onClick={(event) => handleLink(event, "/cron")}
-          />
-          <NavLink
-            component="a"
-            href="/system"
-            active={location.route === "/system"}
-            label="System Health"
-            leftSection={<Pulse size={18} />}
-            variant="light"
-            mb={4}
-            onClick={(event) => handleLink(event, "/system")}
-          />
-          <NavLink
-            component="a"
-            href="/workers"
-            active={location.route === "/workers"}
-            label="Workers"
-            leftSection={<Robot size={18} />}
-            variant="light"
-            mb={4}
-            onClick={(event) => handleLink(event, "/workers")}
-          />
+          <Divider my="sm" />
+          <Stack gap={2}>
+            <Text c="dimmed" fw={600} size="xs" px="sm" mb={4}>
+              Operations
+            </Text>
+            <NavLink
+              component="a"
+              href="/cron"
+              active={location.route === "/cron"}
+              label="Schedules"
+              leftSection={<CalendarDots size={18} />}
+              variant="light"
+              onClick={(event) => handleLink(event, "/cron")}
+            />
+            <NavLink
+              component="a"
+              href="/system"
+              active={location.route === "/system"}
+              label="System Health"
+              leftSection={<Pulse size={18} />}
+              variant="light"
+              onClick={(event) => handleLink(event, "/system")}
+            />
+            <NavLink
+              component="a"
+              href="/workers"
+              active={location.route === "/workers"}
+              label="Workers"
+              leftSection={<Robot size={18} />}
+              variant="light"
+              onClick={(event) => handleLink(event, "/workers")}
+            />
+          </Stack>
         </AppShell.Section>
       </AppShell.Navbar>
 
