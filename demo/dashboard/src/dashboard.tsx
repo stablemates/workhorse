@@ -8,8 +8,10 @@ import {
   Center,
   Code,
   Divider,
+  Drawer,
   Group,
   Loader,
+  Menu,
   NavLink,
   Pagination,
   Paper,
@@ -41,6 +43,7 @@ import {
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type {
   DashboardCronPage,
+  DashboardJobDetail,
   DashboardSystemPage,
   DashboardTaskCounts,
   DashboardTaskFilter,
@@ -50,6 +53,7 @@ import type {
 import { rpcClient } from "../lib/rpc";
 
 type PageRoute = "/tasks" | "/cron" | "/system" | "/workers";
+type DemoJobKind = "success" | "retry" | "failure" | "long-running";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
   | { route: "/cron"; value: DashboardCronPage }
@@ -168,9 +172,17 @@ function EmptyState({ children }: { children: ReactNode }) {
 function TasksPage({
   data,
   navigate,
+  runDemoJob,
+  runningDemoJob,
+  actionError,
+  inspectJob,
 }: {
   data: DashboardTasksPage;
   navigate: (href: string) => void;
+  runDemoJob: (kind: DemoJobKind) => Promise<void>;
+  runningDemoJob: DemoJobKind | null;
+  actionError: string | null;
+  inspectJob: (id: string) => void;
 }) {
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
   const pagination = (
@@ -187,8 +199,57 @@ function TasksPage({
     <Stack gap="xl">
       <Paper withBorder>
         <Group justify="flex-end" p="md">
+          <Menu position="bottom-start" withinPortal>
+            <Menu.Target>
+              <Button
+                variant="default"
+                size="xs"
+                radius="xl"
+                leftSection={<PlayCircle size={16} />}
+                loading={runningDemoJob !== null}
+              >
+                enqueue test job
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Label>Execution path</Menu.Label>
+              <Menu.Item
+                leftSection={<CheckCircle size={16} />}
+                onClick={() => void runDemoJob("success")}
+              >
+                Successful job
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<ArrowCounterClockwise size={16} />}
+                onClick={() => void runDemoJob("retry")}
+              >
+                Retry once
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<XCircle size={16} />}
+                color="red"
+                onClick={() => void runDemoJob("failure")}
+              >
+                Terminal failure
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<Clock size={16} />}
+                onClick={() => void runDemoJob("long-running")}
+              >
+                Long-running · 20s
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
           {pagination}
         </Group>
+        {actionError ? (
+          <>
+            <Divider />
+            <Text c="red" size="sm" px="md" py="sm">
+              {actionError}
+            </Text>
+          </>
+        ) : null}
         <Divider />
         <ScrollArea>
           <Table striped highlightOnHover verticalSpacing="md" horizontalSpacing="lg" miw={760}>
@@ -216,9 +277,15 @@ function TasksPage({
                 data.jobs.map((job) => (
                   <Table.Tr key={job.id}>
                     <Table.Td>
-                      <Text fw={600} size="sm">
+                      <Button
+                        variant="subtle"
+                        color="dark"
+                        size="compact-sm"
+                        px={0}
+                        onClick={() => inspectJob(job.id)}
+                      >
                         {job.type}
-                      </Text>
+                      </Button>
                       <Code fz="xs">{job.id}</Code>
                     </Table.Td>
                     <Table.Td>{job.queue}</Table.Td>
@@ -438,6 +505,11 @@ export function Dashboard() {
     error: null,
   });
   const [taskCounts, setTaskCounts] = useState<DashboardTaskCounts | null>(null);
+  const [runningDemoJob, setRunningDemoJob] = useState<DemoJobKind | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [selectedJob, setSelectedJob] = useState<DashboardJobDetail | null>(null);
+  const [jobDetailError, setJobDetailError] = useState<string | null>(null);
   const requestId = useRef(0);
 
   const navigate = useCallback(
@@ -511,6 +583,41 @@ export function Dashboard() {
     }
   }, []);
 
+  const runDemoJob = useCallback(
+    async (kind: DemoJobKind) => {
+      setRunningDemoJob(kind);
+      setActionError(null);
+      try {
+        await rpcClient.dashboard.enqueueTest({
+          kind,
+          audit: {
+            actor: "local-demo",
+            reason: `Demonstrate the ${kind} execution path`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        if (location.filter !== "all" || location.page !== 1) navigate("/tasks");
+        await loadPage();
+      } catch (cause) {
+        setActionError(cause instanceof Error ? cause.message : "Unable to enqueue the demo job");
+      } finally {
+        setRunningDemoJob(null);
+      }
+    },
+    [loadPage, location.filter, location.page, navigate],
+  );
+
+  const inspectJob = useCallback(async (id: string) => {
+    setSelectedJobId(id);
+    setSelectedJob(null);
+    setJobDetailError(null);
+    try {
+      setSelectedJob(await rpcClient.dashboard.jobDetail({ id }));
+    } catch (cause) {
+      setJobDetailError(cause instanceof Error ? cause.message : "Unable to load the task");
+    }
+  }, []);
+
   useEffect(() => {
     const onPopState = () => {
       setLocation(readLocation());
@@ -530,9 +637,15 @@ export function Dashboard() {
     events.addEventListener("refresh", () => {
       void loadPage();
       if (location.route !== "/tasks") void loadTaskCounts();
+      if (selectedJobId) {
+        void rpcClient.dashboard
+          .jobDetail({ id: selectedJobId })
+          .then(setSelectedJob)
+          .catch(() => undefined);
+      }
     });
     return () => events.close();
-  }, [loadPage, loadTaskCounts, location.route]);
+  }, [loadPage, loadTaskCounts, location.route, selectedJobId]);
 
   const connected = loadState.status !== "error" && loadState.data !== null;
   const loading = loadState.status === "loading";
@@ -565,7 +678,16 @@ export function Dashboard() {
       </Center>
     );
   } else if (loadState.data?.route === "/tasks") {
-    content = <TasksPage data={loadState.data.value} navigate={navigate} />;
+    content = (
+      <TasksPage
+        data={loadState.data.value}
+        navigate={navigate}
+        runDemoJob={runDemoJob}
+        runningDemoJob={runningDemoJob}
+        actionError={actionError}
+        inspectJob={(id) => void inspectJob(id)}
+      />
+    );
   } else if (loadState.data?.route === "/cron") {
     content = <CronPage data={loadState.data.value} />;
   } else if (loadState.data?.route === "/system") {
@@ -604,7 +726,7 @@ export function Dashboard() {
                 Ironshift
               </Text>
               <Text c="dimmed" size="xs">
-                Hono + Drizzle
+                Live queue demo
               </Text>
             </Box>
           </Group>
@@ -710,6 +832,74 @@ export function Dashboard() {
       <AppShell.Main>
         <Box w="100%">{content}</Box>
       </AppShell.Main>
+      <Drawer
+        opened={selectedJobId !== null}
+        onClose={() => {
+          setSelectedJobId(null);
+          setSelectedJob(null);
+          setJobDetailError(null);
+        }}
+        title="Task details"
+        position="right"
+        size="lg"
+      >
+        {jobDetailError ? (
+          <Text c="red" size="sm">
+            {jobDetailError}
+          </Text>
+        ) : selectedJob ? (
+          <Stack gap="lg">
+            <Box>
+              <Group justify="space-between">
+                <Text fw={700}>{selectedJob.identity.type}</Text>
+                <StatusBadge state={selectedJob.identity.state} />
+              </Group>
+              <Code fz="xs">{selectedJob.identity.id}</Code>
+            </Box>
+            <Box>
+              <Text fw={600} size="sm" mb="xs">
+                Payload
+              </Text>
+              <Code block>{JSON.stringify(selectedJob.payload, null, 2)}</Code>
+            </Box>
+            <Box>
+              <Text fw={600} size="sm" mb="xs">
+                Attempt history
+              </Text>
+              {selectedJob.attempts.length === 0 ? (
+                <Text c="dimmed" size="sm">
+                  No attempt has finished yet.
+                </Text>
+              ) : (
+                <Stack gap="sm">
+                  {selectedJob.attempts.map((attempt) => (
+                    <Paper key={attempt.attempt} withBorder p="sm">
+                      <Group justify="space-between">
+                        <Text fw={600} size="sm">
+                          Attempt {attempt.attempt}
+                        </Text>
+                        <StatusBadge state={attempt.outcome} />
+                      </Group>
+                      <Text c="dimmed" size="xs" mt={4}>
+                        {attempt.workerId} · {formatDuration(attempt.durationMs)}
+                      </Text>
+                      {attempt.error ? (
+                        <Code block mt="sm">
+                          {JSON.stringify(attempt.error, null, 2)}
+                        </Code>
+                      ) : null}
+                    </Paper>
+                  ))}
+                </Stack>
+              )}
+            </Box>
+          </Stack>
+        ) : (
+          <Center mih={200}>
+            <Loader size="sm" />
+          </Center>
+        )}
+      </Drawer>
     </AppShell>
   );
 }

@@ -50,7 +50,7 @@ const tasksInput = z.object({
   pageSize: z.number().int().min(1).max(100).default(10),
 });
 const enqueueTestInput = z.object({
-  kind: z.enum(["success", "retry", "failure"]),
+  kind: z.enum(["success", "retry", "failure", "long-running"]),
   audit: auditSchema,
 });
 const setScheduleEnabledInput = z.object({

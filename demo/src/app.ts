@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createDrizzleAdapter } from "@ironshift/drizzle";
 import { HonoIronshift } from "@ironshift/hono";
 import { RPCHandler } from "@orpc/server/fetch";
@@ -16,11 +17,13 @@ import { orders } from "./schema.js";
 const ORDER_JOB_TYPE = "order.process";
 const RETRY_JOB_TYPE = "demo.retry";
 const FAILURE_JOB_TYPE = "demo.failure";
+const LONG_RUNNING_JOB_TYPE = "demo.long-running";
 const RECURRING_JOB_TYPE = "demo.recurring";
 const DEMO_QUEUE = "demo";
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
 export const DEMO_WORKER_POLL_MS = 15_000;
-export const DEMO_SCHEDULE_NAMESPACE = "ironshift-hono-drizzle-demo";
+export const DEMO_LONG_RUNNING_MS = 20_000;
+export const DEMO_SCHEDULE_NAMESPACE = "ironshift-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
 export const DEMO_MAINTENANCE = {
   schedule: "1 second",
@@ -29,7 +32,7 @@ export const DEMO_MAINTENANCE = {
   occurrencePruneLimit: 10_000,
 } as const;
 const DEMO_INDEX = {
-  name: "Ironshift Hono + Drizzle demo",
+  name: "Ironshift demo",
   endpoints: [
     "POST /orders",
     "POST /demo/retries",
@@ -55,6 +58,7 @@ export interface CreateDemoApplicationOptions {
   schedulerStatusProvider?: SchedulerStatusProvider;
   workerMaintenance?: "worker" | "external";
   workerPollMs?: number;
+  longRunningJobMs?: number;
 }
 
 export interface AuditContext {
@@ -67,7 +71,7 @@ export interface AuditContext {
 export interface DashboardOperator {
   mode: "read-only" | "local";
   enqueueTest?: (
-    kind: "success" | "retry" | "failure",
+    kind: "success" | "retry" | "failure" | "long-running",
     audit: AuditContext,
   ) => Promise<{ jobId: string }>;
 }
@@ -182,12 +186,12 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
       const target = `job:${kind}`;
       return database.transaction(async (transaction) => {
         const ironshift = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
-        const type =
-          kind === "success"
-            ? RECURRING_JOB_TYPE
-            : kind === "failure"
-              ? FAILURE_JOB_TYPE
-              : RETRY_JOB_TYPE;
+        const type = {
+          success: RECURRING_JOB_TYPE,
+          retry: RETRY_JOB_TYPE,
+          failure: FAILURE_JOB_TYPE,
+          "long-running": LONG_RUNNING_JOB_TYPE,
+        }[kind];
         const maxAttempts = kind === "failure" ? 1 : 3;
         const payload: Json =
           kind === "success" ? { source: "operator" } : { label: `operator-${kind}` };
@@ -303,6 +307,13 @@ export function createDemoApplication(
         });
         worker.handle(FAILURE_JOB_TYPE, () => {
           throw new Error("Intentional terminal demo failure");
+        });
+        worker.handle(LONG_RUNNING_JOB_TYPE, async () => {
+          dashboardRefresh.publish("worker");
+          const durationMs = options.longRunningJobMs ?? DEMO_LONG_RUNNING_MS;
+          await sleep(durationMs);
+          dashboardRefresh.publish("worker");
+          return { completed: true, durationMs };
         });
       },
     })),

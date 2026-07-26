@@ -191,7 +191,7 @@ try {
     !tasksText.includes(retry.jobId) ||
     !tasksText.includes(failure.jobId) ||
     !cronResponse.ok ||
-    !cronText.includes("ironshift-hono-drizzle-demo")
+    !cronText.includes("ironshift-demo")
   ) {
     throw new Error(`Dashboard readers omitted smoke data: ${tasksText}\n${cronText}`);
   }

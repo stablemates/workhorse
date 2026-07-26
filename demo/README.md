@@ -1,16 +1,16 @@
-# Ironshift Hono + Drizzle demo
+# Ironshift demo
 
-This example is the first end-to-end application for Ironshift. It combines:
+This is the end-to-end product demo for Ironshift. It lets you create live jobs, watch workers process
+them, inspect retries and terminal failures, and observe recurring work and queue health from the
+operator dashboard.
 
-- a Hono HTTP application;
-- a Drizzle-owned PostgreSQL pool and application table;
-- transactional creation of an order and its durable Ironshift job;
-- two named Hono-managed workers that process queued orders;
-- an intentional retry flow and optional pg_cron-backed recurring job; and
-- complete operational inspection through the dashboard.
+The demo application uses Hono and Drizzle to exercise both integration packages in a realistic setup.
+An order and its durable job are committed in one Drizzle transaction, two Hono-managed workers process
+the queue, and optional pg_cron scheduling drives recurring work. Those frameworks support the demo;
+Ironshift's durable execution model is what the demo is designed to show.
 
 The implementation findings and remaining product gaps are recorded in
-[`docs/demo-findings.md`](../../docs/demo-findings.md).
+[`docs/demo-findings.md`](../docs/demo-findings.md).
 
 Prerequisites are Node.js 22+, pnpm 10+, workspace dependencies installed with `pnpm install`, and
 PostgreSQL 15+ with the local `ironshift` role described in the root README. pg_cron is optional unless
@@ -28,9 +28,11 @@ proxy. The JSON API index remains available at `http://localhost:3000/api`. Set
 `IRONSHIFT_API_PORT` if the default internal Hono port `3001` is unavailable, or
 `IRONSHIFT_WORKER_POLL_MS` to override the workers' 15-second idle polling delay.
 Startup seeds one successful transactional order, one recoverable retry, one terminal failure, and one
-future scheduled job, so the Jobs, Cron, Workers, and Health views are useful immediately. The local
-dashboard can also enqueue audited success, retry, and failure jobs. Set `SEED_DEMO_DATA=false` to start
-with an empty dashboard instead. The versioned seed marker makes direct application restarts idempotent.
+future scheduled job, so Tasks, Schedules, Workers, and System Health are useful immediately. Use the
+dashboard's **enqueue test job** menu to create fresh success, retry, failure, and 20-second long-running
+paths, then open a task to inspect its payload and immutable attempt history. The long-running case gives
+the Running and Workers views enough time to show an active lease. Set `SEED_DEMO_DATA=false` to start
+empty instead. The versioned seed marker makes direct application restarts idempotent.
 
 Create an order:
 
@@ -92,7 +94,7 @@ must match `DATABASE_URL`:
 
 ```bash
 CRON_DATABASE_URL=postgresql://ironshift:ironshift@localhost:5432/postgres \
-  pnpm --filter @ironshift/example-hono-drizzle start
+  pnpm --filter @ironshift/demo start
 ```
 
 Startup reconciles a namespaced one-minute schedule plus Ironshift's centralized maintenance registration

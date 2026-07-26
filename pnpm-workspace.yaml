@@ -1,6 +1,6 @@
 packages:
   - packages/*
-  - examples/*
+  - demo
 
 onlyBuiltDependencies:
   - lefthook

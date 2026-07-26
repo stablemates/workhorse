@@ -13,7 +13,7 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
 - [`docs/pg-cron-requirements.md`](docs/pg-cron-requirements.md): administrator grants, executable preflight, provider compatibility, authentication, capacity, and retention.
 - [`docs/demo-findings.md`](docs/demo-findings.md): API, packaging, documentation, and developer-experience gaps found by the end-to-end demo.
-- [`examples/hono-drizzle/README.md`](examples/hono-drizzle/README.md): runnable Hono, Drizzle, worker, retry, recurring-job, and dashboard walkthrough.
+- [`demo/README.md`](demo/README.md): interactive Ironshift demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
 
 ## Included scope
 
@@ -91,7 +91,7 @@ pnpm demo
 Open `http://localhost:3000/`; it redirects to the operator dashboard. The default startup seeds successful, retried, and failed jobs
 so the operational views are populated; set `SEED_DEMO_DATA=false` for an empty console. pg_cron is
 optional for the base queue and retry walkthrough. Set `CRON_DATABASE_URL` when running the command to
-synchronize the recurring heartbeat demonstration. See the example README for curl requests and
+synchronize the recurring heartbeat demonstration. See the demo README for curl requests and
 connection overrides.
 
 ## Minimal usage
