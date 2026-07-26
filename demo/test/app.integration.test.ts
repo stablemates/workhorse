@@ -5,13 +5,14 @@ import type { RouterClient } from "@orpc/server";
 import { installSchema, PgCronScheduler } from "ironshift";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../../src/local-database.js";
+import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../src/local-database.js";
 import {
   createDemoApplication,
   createDemoDatabase,
   createLocalOperator,
   createLocalScheduleController,
   createPgCronSchedulerStatusProvider,
+  DEMO_LONG_RUNNING_MS,
   DEMO_MAINTENANCE,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_POLL_MS,
@@ -29,7 +30,7 @@ const pool = new Pool({ connectionString: databaseUrl, max: 4 });
 const database = createDemoDatabase(pool);
 
 function createTestApplication(options: CreateDemoApplicationOptions = {}) {
-  return createDemoApplication(database, { workerPollMs: 15, ...options });
+  return createDemoApplication(database, { workerPollMs: 15, longRunningJobMs: 25, ...options });
 }
 
 beforeAll(async () => {
@@ -58,9 +59,10 @@ function dashboardClient(
   );
 }
 
-describe("Hono and Drizzle demo", () => {
+describe("Ironshift demo", () => {
   it("uses a conservative worker polling interval for the demo", () => {
     expect(DEMO_WORKER_POLL_MS).toBe(15_000);
+    expect(DEMO_LONG_RUNNING_MS).toBe(20_000);
   });
 
   it("seeds representative dashboard data exactly once", async () => {
@@ -128,7 +130,7 @@ describe("Hono and Drizzle demo", () => {
       expect(rootResponse.status).toBe(302);
       expect(rootResponse.headers.get("location")).toBe("/tasks");
       expect(await (await app.request("/api")).json()).toMatchObject({
-        name: "Ironshift Hono + Drizzle demo",
+        name: "Ironshift demo",
       });
       const response = await app.request("/orders", {
         method: "POST",
@@ -327,7 +329,7 @@ describe("Hono and Drizzle demo", () => {
     cronDatabaseUrl.pathname = "/postgres";
     const cronPool = new Pool({ connectionString: cronDatabaseUrl.toString(), max: 2 });
     const scheduler = new PgCronScheduler(pool, cronPool, {
-      namespace: "ironshift-hono-drizzle-test",
+      namespace: "ironshift-demo-test",
     });
     const { app, ironshift } = createTestApplication();
     ironshift.start();
@@ -364,7 +366,7 @@ describe("Hono and Drizzle demo", () => {
       expect(await client.dashboard.cron()).toMatchObject({
         schedules: [
           {
-            namespace: "ironshift-hono-drizzle-test",
+            namespace: "ironshift-demo-test",
             name: "heartbeat",
             occurrenceCount: 1,
           },
@@ -405,6 +407,48 @@ describe("Hono and Drizzle demo", () => {
     ).toMatchObject({
       rows: [{ count: 0 }],
     });
+  });
+
+  it("keeps a long-running test job active for the configured duration", async () => {
+    const { app, ironshift } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+      longRunningJobMs: 250,
+    });
+    const client = dashboardClient(app);
+    ironshift.start();
+
+    try {
+      const enqueued = await client.dashboard.enqueueTest({
+        kind: "long-running",
+        audit: {
+          actor: "operator",
+          reason: "observe active work",
+          requestId: "audit-long-running",
+        },
+      });
+
+      let observedRunning = false;
+      for (let attempt = 0; attempt < 40 && !observedRunning; attempt += 1) {
+        await sleep(10);
+        observedRunning = (
+          await client.dashboard.tasks({ filter: "running", page: 1, pageSize: 10 })
+        ).jobs.some((job) => job.id === enqueued.jobId);
+      }
+      expect(observedRunning).toBe(true);
+
+      let detail = await client.dashboard.jobDetail({ id: enqueued.jobId });
+      for (let attempt = 0; attempt < 40 && detail.identity.state !== "succeeded"; attempt += 1) {
+        await sleep(10);
+        detail = await client.dashboard.jobDetail({ id: enqueued.jobId });
+      }
+      expect(detail).toMatchObject({
+        identity: { id: enqueued.jobId, type: "demo.long-running", state: "succeeded" },
+        current: { outcome: { result: { completed: true, durationMs: 250 } } },
+      });
+    } finally {
+      await ironshift.stop();
+    }
   });
 
   it("supports audited local enqueue and schedule toggles", async () => {
@@ -581,7 +625,7 @@ describe("Hono and Drizzle demo", () => {
 
     try {
       expect(await (await app.request("/")).json()).toMatchObject({
-        name: "Ironshift Hono + Drizzle demo",
+        name: "Ironshift demo",
       });
       expect((await app.request("/rpc/dashboard/tasks")).status).toBe(404);
       expect((await app.request("/dashboard/events")).status).toBe(404);

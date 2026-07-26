@@ -43,17 +43,17 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)
 
-  examples/hono-drizzle:
+  demo:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.11
         version: 2.0.11(hono@4.12.31)
       '@ironshift/drizzle':
         specifier: workspace:*
-        version: link:../../packages/drizzle
+        version: link:../packages/drizzle
       '@ironshift/hono':
         specifier: workspace:*
-        version: link:../../packages/hono
+        version: link:../packages/hono
       '@mantine/core':
         specifier: ^8.3.14
         version: 8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -77,7 +77,7 @@ importers:
         version: 4.12.31
       ironshift:
         specifier: workspace:*
-        version: link:../..
+        version: link:..
       pg:
         specifier: ^8.16.3
         version: 8.22.0

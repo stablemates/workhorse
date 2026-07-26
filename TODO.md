@@ -51,7 +51,7 @@ provider coverage.
 its intended integration experience, and its complete initial operator dashboard are
 understandable, installable, and useful.
 
-- [x] Build one small end-to-end Hono application in `examples/` using the Drizzle provider and Hono
+- [x] Build one end-to-end Ironshift application in `demo/`, using the Drizzle and Hono integrations
       integration packages.
 - [x] Build a complete dashboard with queue, job, schedule, worker, failure, and health views.
 - [x] Use shadcn/ui as the component foundation for the dashboard.
@@ -311,7 +311,7 @@ and the compatibility policy is stable enough to define a real upgrade boundary.
 
 **Depends on:** P0-00B, P2-06
 
-- [ ] Expand `examples/` from the initial demo into real, runnable sample applications.
+- [ ] Add focused, runnable examples alongside the full product demo.
 - [ ] Include at least one core-only example, one example per supported ORM provider, and one example
       per supported framework integration package.
 - [ ] Keep examples focused on realistic application flows rather than isolated API snippets.

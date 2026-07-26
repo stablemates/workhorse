@@ -1,8 +1,10 @@
 # Demo findings and follow-up gaps
 
-The Hono and Drizzle demo was built as a vertical-slice test of Ironshift's installation, transactional
-enqueue, worker lifecycle, retry behavior, recurring scheduling, and operator inspection. This document
-records what the implementation proved, what it forced the repository to fix, and which gaps remain.
+The Ironshift demo is a vertical slice of the project: transactional enqueue, worker lifecycle, retry
+behavior, recurring scheduling, and operator inspection. It uses Hono and Drizzle to prove the supported
+integrations in a realistic application, but those libraries are implementation details rather than the
+subject of the demo. This document records what the implementation proved, what it forced the repository
+to fix, and which gaps remain.
 
 ## Validation performed
 
@@ -21,7 +23,7 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 | Area        | Finding                                                                                                       | Resolution                                                                                                    |
 | ----------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | DX          | Reusing `ironshift_dev` made the documented command fail when that database contained an old or mixed schema. | Added the suffix-guarded `ironshift_demo` database and made `pnpm demo` recreate only that disposable target. |
-| Packaging   | Starting the source example without building workspace package outputs depended on stale local `dist` files.  | Made `pnpm demo` build core, integrations, and the example before startup.                                    |
+| Packaging   | Starting the source demo without building workspace package outputs depended on stale local `dist` files.     | Made `pnpm demo` build core, integrations, and the demo before startup.                                       |
 | Integration | A dashboard coupled to process startup would make the queue unusable in API-only deployments.                 | Added `{ dashboard: false }` and an integration test that proves workers and Hono routes remain functional.   |
 | Correctness | Transactional enqueue was documented but not demonstrated through an ORM-owned request transaction.           | Added a test comparing PostgreSQL `xmin` for the application row and accepted job.                            |
 | Operations  | Browser polling would repeatedly read queue tables even when nothing changed.                                 | Added coalesced SSE invalidation hints backed by local events, PostgreSQL `LISTEN`, and a bounded fallback.   |
@@ -89,7 +91,7 @@ matrix**. Existing package tests cover important pieces, but not the complete da
 
 ### P2. Dashboard asset serving assumes a package working directory
 
-`serveStatic({ root: "./dist" })` is simple for the example, but production launchers, containers, and
+`serveStatic({ root: "./dist" })` is simple for the demo, but production launchers, containers, and
 bundlers may use another current directory. The dashboard also has no standalone package or asset
 manifest contract.
 
@@ -128,7 +130,7 @@ protocol documentation rather than duplicating invariants.
 
 ### X1. Dashboard refresh is application plumbing
 
-The example owns a dedicated PostgreSQL client, `LISTEN` reconnect/error behavior, an in-process refresh
+The demo owns a dedicated PostgreSQL client, `LISTEN` reconnect/error behavior, an in-process refresh
 hub, SSE serialization, coalescing, and a safety timer. PostgreSQL notifications are hints, but Ironshift
 does not expose a reusable invalidation stream or complete notification contract.
 
