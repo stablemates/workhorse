@@ -16,7 +16,7 @@ import {
 } from "../../benchmarks/scenarios.js";
 import { assertLocalDatabasePurpose, databaseName, localDatabaseUrl } from "../local-database.js";
 
-const help = `Ironshift benchmark suite v3
+const help = `Workhorse benchmark suite v3
 
 Usage:
   pnpm benchmark -- [options]
@@ -41,8 +41,8 @@ Output:
   --output PATH      Also write the canonical versioned JSON report to PATH
   --help             Show this help
 
-The suite resets Ironshift and benchmark-only tables while running. It only accepts a _bench database.
-Override the local default with IRONSHIFT_BENCH_DATABASE_URL. See docs/benchmarking.md.`;
+The suite resets Workhorse and benchmark-only tables while running. It only accepts a _bench database.
+Override the local default with WORKHORSE_BENCH_DATABASE_URL. See docs/benchmarking.md.`;
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);

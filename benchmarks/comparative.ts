@@ -439,12 +439,12 @@ async function resetSchemasInTransaction(client: PoolClient): Promise<void> {
     await client.query("SELECT pg_advisory_xact_lock($1)", [resetLockKey]);
     await client.query(`SELECT ${conventionalSchema}.reset_v1()`);
     await client.query(`
-      TRUNCATE ironshift.job,
-               ironshift.job_event,
-               ironshift.attempt_history
+      TRUNCATE workhorse.job,
+               workhorse.job_event,
+               workhorse.attempt_history
         RESTART IDENTITY CASCADE
     `);
-    await client.query("ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1");
+    await client.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -483,12 +483,12 @@ function createAdapters(pool: Pool, options: ComparativeBenchmarkOptions): Queue
     },
     {
       design: "hybrid",
-      schema: "ironshift",
+      schema: "workhorse",
       enqueueMany: (requests) => queue.enqueueMany(requests),
       claim: (workerId) => queue.claim(workerId, { leaseMs: options.leaseMs }),
       complete: (job, workerId) =>
         queue.complete(job as ClaimedJob<unknown>, workerId, { ok: true }),
-      claimSql: "SELECT * FROM ironshift.claim_v1($1, $2, $3)",
+      claimSql: "SELECT * FROM workhorse.claim_v1($1, $2, $3)",
     },
   ];
 }

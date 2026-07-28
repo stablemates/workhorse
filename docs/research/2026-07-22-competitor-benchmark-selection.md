@@ -1,17 +1,17 @@
 # Competitor benchmark selection
 
 **Date:** 2026-07-22
-**Decision:** use **pg-boss 12.26.2** and **Graphile Worker 0.17.3** as the first direct product competitors. Keep Ironshift's **internal conventional SQL model** as a non-product architecture reference. Do not include River, PGMQ, or PgQue in the first headline baseline.
+**Decision:** use **pg-boss 12.26.2** and **Graphile Worker 0.17.3** as the first direct product competitors. Keep Workhorse's **internal conventional SQL model** as a non-product architecture reference. Do not include River, PGMQ, or PgQue in the first headline baseline.
 
 ## Decision summary
 
-The first baseline should answer a narrow question: how does Ironshift compare with established job-queue implementations that run in the same TypeScript/Node.js and PostgreSQL environment under a common success-path workload?
+The first baseline should answer a narrow question: how does Workhorse compare with established job-queue implementations that run in the same TypeScript/Node.js and PostgreSQL environment under a common success-path workload?
 
 | Candidate | First-baseline role | Reason |
 |---|---|---|
 | pg-boss `12.26.2` | Direct competitor | Node.js/PostgreSQL job framework with public bulk insertion, managed workers, completion, retries, queues, retention, and operational APIs. |
 | Graphile Worker `0.17.3` | Direct competitor | TypeScript/Node.js/PostgreSQL job framework with public `run()` and `addJobs()` APIs, managed concurrency, retries, scheduling, and documented performance controls. |
-| Conventional SQL model | Non-product reference | Internal mutable-table implementation that isolates Ironshift's hybrid storage design from product/runtime differences. It is not an external competitor and must never appear in a market ranking. |
+| Conventional SQL model | Non-product reference | Internal mutable-table implementation that isolates Workhorse's hybrid storage design from product/runtime differences. It is not an external competitor and must never appear in a market ranking. |
 | River | Excluded now; future matrix target | TypeScript can enqueue, but official workers execute in Go. That runtime difference confounds the first Node.js comparison. River is the strongest future native cross-language matrix target. |
 | PGMQ | Excluded | PostgreSQL message-queue primitive with no background worker. A benchmark adapter would have to invent the job runtime and lifecycle. |
 | PgQue | Excluded | Snapshot-batched durable event stream with independent consumer cursors and tick-based visibility, closer to Kafka than a task queue. Its semantics and latency model are intentionally different. |
@@ -20,7 +20,7 @@ This selection is not a claim that the excluded systems are inferior. It is a co
 
 ## Evidence and version pins
 
-The repository already pins both direct competitors exactly in `package.json` and `pnpm-lock.yaml`: `pg-boss: 12.26.2` and `graphile-worker: 0.17.3`. The installed package metadata agrees with those pins. pg-boss declares Node `>=22.12.0`, while Ironshift declares Node `>=22`; the benchmark environment must therefore use Node `>=22.12.0`.[^pgboss-package] Graphile Worker 0.17.3 declares Node `>=14`, so the same Node 22 process is supported.[^graphile-package]
+The repository already pins both direct competitors exactly in `package.json` and `pnpm-lock.yaml`: `pg-boss: 12.26.2` and `graphile-worker: 0.17.3`. The installed package metadata agrees with those pins. pg-boss declares Node `>=22.12.0`, while Workhorse declares Node `>=22`; the benchmark environment must therefore use Node `>=22.12.0`.[^pgboss-package] Graphile Worker 0.17.3 declares Node `>=14`, so the same Node 22 process is supported.[^graphile-package]
 
 The installed declarations are also the implementation contract for adapters:
 
@@ -31,7 +31,7 @@ These checks matter because documentation can describe multiple releases. Benchm
 
 ## Repository-organization findings
 
-The competitor adapters should fit Ironshift's existing benchmark organization rather than become separate ad hoc programs:
+The competitor adapters should fit Workhorse's existing benchmark organization rather than become separate ad hoc programs:
 
 - `benchmarks/comparative.ts` defines the current fixed-run and producer/consumer result shapes, timing phases, concurrency sweep, counters, latency samples, telemetry, counterbalanced execution plan, and paired summaries.
 - `benchmarks/conventional.ts` plus `sql/benchmark-conventional.sql` implement the internal conventional reference behind the same `enqueueMany -> claim -> complete` seam.
@@ -44,7 +44,7 @@ The upstream repositories support public-adapter implementations. pg-boss publis
 
 ### pg-boss 12.26.2
 
-pg-boss is the closest direct match to Ironshift's current product boundary. The official constructor accepts a PostgreSQL connection string or options, controls pool size and schema, and documents supervision, migration, scheduling, and optional `LISTEN/NOTIFY` layered over polling.[^pgboss-constructor] The jobs API provides immediate/deferred submission, bulk `insert()`, retries, expiration, completed-job retention, explicit operations, and transaction adapters.[^pgboss-jobs][^pgboss-ops] The workers API owns polling and handler settlement through `work()`, with configurable `batchSize` and `pollingIntervalSeconds`.[^pgboss-workers] Queues make retry, retention, policy, partition, and notification choices explicit.[^pgboss-queues]
+pg-boss is the closest direct match to Workhorse's current product boundary. The official constructor accepts a PostgreSQL connection string or options, controls pool size and schema, and documents supervision, migration, scheduling, and optional `LISTEN/NOTIFY` layered over polling.[^pgboss-constructor] The jobs API provides immediate/deferred submission, bulk `insert()`, retries, expiration, completed-job retention, explicit operations, and transaction adapters.[^pgboss-jobs][^pgboss-ops] The workers API owns polling and handler settlement through `work()`, with configurable `batchSize` and `pollingIntervalSeconds`.[^pgboss-workers] Queues make retry, retention, policy, partition, and notification choices explicit.[^pgboss-queues]
 
 That is enough public surface to implement enqueue, managed processing, success completion, scheduling, and cleanup without reproducing the product in the harness.
 
@@ -66,7 +66,7 @@ Exclude River from the first direct TypeScript baseline. Add it later as the fir
 
 PGMQ describes itself as a lightweight SQS-like PostgreSQL message queue with no background worker; messages remain until explicitly removed, and delivery uses a visibility timeout.[^pgmq-readme] Its SQL primitives can support enqueue, read, archive/delete, and visibility-timeout redelivery, but the benchmark harness would have to supply worker concurrency, task dispatch, retry/backoff policy, terminal failure, recurring scheduling, and cleanup policy.
 
-That would benchmark an Ironshift-authored runtime around PGMQ, not an equivalent PGMQ product lifecycle. PGMQ belongs in a separate future **message-primitive** study with a shared client-side worker loop and narrower claims.
+That would benchmark an Workhorse-authored runtime around PGMQ, not an equivalent PGMQ product lifecycle. PGMQ belongs in a separate future **message-primitive** study with a shared client-side worker loop and narrower claims.
 
 ### PgQue: consumption and latency mismatch
 
@@ -76,7 +76,7 @@ Forcing PgQue into `enqueue -> exclusive claim -> successful job deletion/comple
 
 ## Common success-path benchmark contract
 
-Only behavior all four implementations can represent without private APIs enters the common score: Ironshift, pg-boss, Graphile Worker, and the conventional SQL reference.
+Only behavior all four implementations can represent without private APIs enters the common score: Workhorse, pg-boss, Graphile Worker, and the conventional SQL reference.
 
 ### Workload
 
@@ -106,7 +106,7 @@ Collect PostgreSQL WAL bytes, implementation schema/relation sizes, dead/live tu
 
 Publish at least one **controlled baseline**. Optional optimized profiles must be named and reported separately.
 
-| Choice | Ironshift / conventional | pg-boss 12.26.2 | Graphile Worker 0.17.3 |
+| Choice | Workhorse / conventional | pg-boss 12.26.2 | Graphile Worker 0.17.3 |
 |---|---|---|---|
 | Runtime | Same Node process/version | Same Node process/version | Same Node process/version |
 | Queue | One ordinary queue | Explicit `createQueue`, standard policy | Jobs without `queueName`; a Graphile queue name serializes work and would defeat global concurrency |
@@ -119,7 +119,7 @@ Publish at least one **controlled baseline**. Optional optimized profiles must b
 | Product batching | Adapter ingress batches only | `batchSize: 1`, no handler batch settlement | Disable `localQueue` and settlement delays for controlled baseline |
 | Maintenance | Product default unless it contaminates timing; record all changes | Keep normal supervision/migrations outside timed setup | Run migrations outside timing; otherwise default maintenance |
 
-For pg-boss, the controlled baseline enables its documented notification wake-up with polling fallback, matching Graphile Worker's and Ironshift's low-latency wake-up intent. A separately labeled polling-only profile may disable both `useListenNotify` and queue notifications. Do not mix those results.
+For pg-boss, the controlled baseline enables its documented notification wake-up with polling fallback, matching Graphile Worker's and Workhorse's low-latency wake-up intent. A separately labeled polling-only profile may disable both `useListenNotify` and queue notifications. Do not mix those results.
 
 For Graphile Worker, the controlled baseline disables local queueing and completion/failure delays. A separately labeled optimized profile may follow the official starting guidance, such as `localQueue.size = concurrentJobs + 1` and declared settlement delays.[^graphile-performance] Local claim batching changes crash exposure and database round trips, so it cannot silently replace the baseline.
 
@@ -127,7 +127,7 @@ For Graphile Worker, the controlled baseline disables local queueing and complet
 
 Successful completion does not leave equivalent physical state:
 
-- Ironshift and the conventional reference retain job identity/history according to their configured retention model.
+- Workhorse and the conventional reference retain job identity/history according to their configured retention model.
 - pg-boss retains completed jobs until `deleteAfterSeconds`; its documented default is seven days, and `0` means never delete.[^pgboss-jobs]
 - Graphile Worker deletes successfully completed jobs and recommends an application shadow table when completed-job tracking is required.[^graphile-schema]
 
@@ -135,14 +135,14 @@ Therefore:
 
 1. throughput and start/end-to-end latency may be compared under the common success contract;
 2. WAL, relation growth, dead tuples, and cleanup work must be reported as **product lifecycle cost under the stated retention configuration**, not as a normalized storage-efficiency ranking;
-3. do not force immediate pg-boss deletion or add a Graphile shadow-history table in the baseline merely to imitate Ironshift;
+3. do not force immediate pg-boss deletion or add a Graphile shadow-history table in the baseline merely to imitate Workhorse;
 4. add a separate retention-normalized experiment only if every transformation is explicit and the default-lifecycle results remain available.
 
 ## Non-comparable features
 
 The following remain feature/scenario evidence, not inputs to the common throughput score:
 
-- Ironshift fencing tokens, stale-heartbeat/stale-completion rejection, explicit lease renewal, append-only events/attempts, partition retirement, and health snapshot;
+- Workhorse fencing tokens, stale-heartbeat/stale-completion rejection, explicit lease renewal, append-only events/attempts, partition retirement, and health snapshot;
 - pg-boss queue policies, dead-letter/redrive, throttling/debounce, group concurrency, flows, and explicit administrative operations;
 - Graphile Worker job keys, flags, named-queue serialization, cron behavior, private local-queue crash semantics, and successful-row deletion;
 - any product's retry/backoff, delayed scheduling, cron, failure, cancellation, cleanup, or crash-recovery behavior until a separate scenario defines equivalent outcomes;
@@ -169,9 +169,9 @@ Every published conclusion must follow these rules:
 
 ## Resulting baseline plan
 
-The first deliverable is a three-column implementation study plus Ironshift:
+The first deliverable is a three-column implementation study plus Workhorse:
 
-1. Ironshift hybrid model;
+1. Workhorse hybrid model;
 2. internal conventional SQL reference, clearly marked non-product;
 3. pg-boss 12.26.2;
 4. Graphile Worker 0.17.3.

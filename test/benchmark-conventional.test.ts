@@ -82,7 +82,7 @@ describe("conventional benchmark SQL", () => {
     const notifications: string[] = [];
     listener.on("notification", (message) => notifications.push(message.payload ?? ""));
     try {
-      await listener.query("LISTEN ironshift_jobs");
+      await listener.query("LISTEN workhorse_jobs");
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -103,14 +103,14 @@ describe("conventional benchmark SQL", () => {
       expect(relevant).toHaveLength(2);
       expect(new Set(relevant)).toEqual(new Set([alpha, beta]));
     } finally {
-      await listener.query("UNLISTEN ironshift_jobs");
+      await listener.query("UNLISTEN workhorse_jobs");
       listener.release();
     }
   });
 
   it("defines the resettable enqueue sequence in the ready claim path", () => {
     expect(conventionalSql).toContain(
-      "CREATE SEQUENCE IF NOT EXISTS ironshift_benchmark_conventional.enqueue_sequence_seq",
+      "CREATE SEQUENCE IF NOT EXISTS workhorse_benchmark_conventional.enqueue_sequence_seq",
     );
     expect(conventionalSql).toContain("(queue_name, enqueue_sequence, id)");
     expect(conventionalSql).toContain("ORDER BY enqueue_sequence, id");

@@ -36,7 +36,7 @@ export class GraphileWorkerTarget extends CompletionTarget {
     },
     notes: [
       "Successful jobs are deleted, so storage and WAL describe Graphile Worker's native retention semantics.",
-      "run() owns claiming; claim latency and Ironshift fence-token behavior are not directly comparable.",
+      "run() owns claiming; claim latency and Workhorse fence-token behavior are not directly comparable.",
     ],
   };
   private utils: WorkerUtilsLike | null = null;

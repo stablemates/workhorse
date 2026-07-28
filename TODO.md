@@ -51,7 +51,7 @@ provider coverage.
 its intended integration experience, and its complete initial operator dashboard are
 understandable, installable, and useful.
 
-- [x] Build one end-to-end Ironshift application in `demo/`, using the Drizzle and Hono integrations
+- [x] Build one end-to-end Workhorse application in `demo/`, using the Drizzle and Hono integrations
       integration packages.
 - [x] Build a complete dashboard with queue, job, schedule, worker, failure, and health views.
 - [x] Use shadcn/ui as the component foundation for the dashboard.
@@ -105,7 +105,7 @@ understandable, installable, and useful.
 
 **Depends on:** P0-03
 
-- [ ] Listen to `ironshift_jobs` notifications as wake hints while retaining polling as the source
+- [ ] Listen to `workhorse_jobs` notifications as wake hints while retaining polling as the source
       of truth.
 - [ ] Coalesce wakeups and reconnect safely after PostgreSQL connection loss.
 - [ ] Bound idle polling so lost notifications cannot strand ready work.
@@ -361,7 +361,7 @@ operator tooling have stable contracts.
 
 ## Deferred or rejected
 
-- [ ] Reconsider arbitrary scheduled SQL only if Ironshift intentionally expands beyond typed job
+- [ ] Reconsider arbitrary scheduled SQL only if Workhorse intentionally expands beyond typed job
       orchestration. It is not part of the current product direction.
 - [ ] Reconsider compatibility write views only with a proven single-authority migration design.
       Dual-write compatibility is explicitly rejected.

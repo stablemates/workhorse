@@ -31,7 +31,7 @@ This is the authoritative implementation snapshot for schema version 2. “Suppo
 | Multi-worker claim                | Supported     | `claim_v1` locks one FIFO ready runtime and changes it to active with one state update.                                                   |
 | Single mutable live row           | Supported     | Scheduled, ready, and active state are mutually exclusive shapes in `job_runtime`.                                                        |
 | Selective dispatch indexes        | Supported     | Separate partial indexes cover ready, scheduled, and active-expiry access paths.                                                          |
-| Declarative recurring jobs        | Supported     | Namespaced definitions synchronize into pg_cron and enqueue through the normal Ironshift protocol.                                        |
+| Declarative recurring jobs        | Supported     | Namespaced definitions synchronize into pg_cron and enqueue through the normal Workhorse protocol.                                        |
 | Schedule revision fencing         | Supported     | Changed definitions increment a revision; stale cron commands become no-ops instead of running new payloads at an old cadence.            |
 | Schedule occurrence deduplication | Supported     | One durable `(namespace, schedule, second)` key prevents duplicate enqueue for the same supplied or observed fire second.                 |
 | Priorities                        | Not supported | Ordering is FIFO only.                                                                                                                    |

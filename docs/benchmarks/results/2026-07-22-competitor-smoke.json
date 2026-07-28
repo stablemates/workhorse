@@ -29,10 +29,10 @@
   },
   "targets": [
     {
-      "name": "ironshift",
-      "packageName": "ironshift",
+      "name": "workhorse",
+      "packageName": "workhorse",
       "version": "0.1.0",
-      "schema": "ironshift",
+      "schema": "workhorse",
       "queue": "competitor_baseline",
       "configuration": {
         "maxAttempts": 1,
@@ -119,38 +119,38 @@
     {
       "workerConcurrency": 1,
       "repetition": 3,
-      "targetOrder": ["ironshift", "pg-boss", "graphile-worker"]
+      "targetOrder": ["workhorse", "pg-boss", "graphile-worker"]
     },
     {
       "workerConcurrency": 2,
       "repetition": 3,
-      "targetOrder": ["pg-boss", "ironshift", "graphile-worker"]
+      "targetOrder": ["pg-boss", "workhorse", "graphile-worker"]
     },
     {
       "workerConcurrency": 2,
       "repetition": 2,
-      "targetOrder": ["graphile-worker", "pg-boss", "ironshift"]
+      "targetOrder": ["graphile-worker", "pg-boss", "workhorse"]
     },
     {
       "workerConcurrency": 2,
       "repetition": 1,
-      "targetOrder": ["ironshift", "graphile-worker", "pg-boss"]
+      "targetOrder": ["workhorse", "graphile-worker", "pg-boss"]
     },
     {
       "workerConcurrency": 1,
       "repetition": 2,
-      "targetOrder": ["graphile-worker", "ironshift", "pg-boss"]
+      "targetOrder": ["graphile-worker", "workhorse", "pg-boss"]
     },
     {
       "workerConcurrency": 1,
       "repetition": 1,
-      "targetOrder": ["pg-boss", "graphile-worker", "ironshift"]
+      "targetOrder": ["pg-boss", "graphile-worker", "workhorse"]
     }
   ],
   "runs": [
     {
       "kind": "fixed-batch",
-      "target": "ironshift",
+      "target": "workhorse",
       "workerConcurrency": 1,
       "repetition": 3,
       "position": 1,
@@ -178,7 +178,7 @@
       "telemetry": {
         "walBytes": 84480,
         "schemaBefore": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 81920,
           "indexBytes": 114688,
@@ -192,7 +192,7 @@
           "hotUpdateRatio": null
         },
         "schemaAfter": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 155648,
           "indexBytes": 172032,
@@ -208,7 +208,7 @@
         "schemaGrowthBytes": 131072,
         "relationsBefore": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -229,7 +229,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -250,7 +250,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -271,7 +271,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -292,7 +292,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 8192,
@@ -313,7 +313,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -334,7 +334,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -355,7 +355,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -376,7 +376,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -397,7 +397,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 8192,
@@ -418,7 +418,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 8192,
@@ -439,7 +439,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -462,7 +462,7 @@
         ],
         "relationsAfter": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -483,7 +483,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 16384,
@@ -504,7 +504,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -525,7 +525,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -546,7 +546,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 16384,
@@ -567,7 +567,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -588,7 +588,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 49152,
@@ -609,7 +609,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -630,7 +630,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -651,7 +651,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 16384,
@@ -672,7 +672,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 16384,
@@ -693,7 +693,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -2128,7 +2128,7 @@
     },
     {
       "kind": "fixed-batch",
-      "target": "ironshift",
+      "target": "workhorse",
       "workerConcurrency": 2,
       "repetition": 3,
       "position": 2,
@@ -2156,7 +2156,7 @@
       "telemetry": {
         "walBytes": 84536,
         "schemaBefore": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 81920,
           "indexBytes": 114688,
@@ -2170,7 +2170,7 @@
           "hotUpdateRatio": 0
         },
         "schemaAfter": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 163840,
           "indexBytes": 172032,
@@ -2186,7 +2186,7 @@
         "schemaGrowthBytes": 139264,
         "relationsBefore": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -2207,7 +2207,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -2228,7 +2228,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -2249,7 +2249,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -2270,7 +2270,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 8192,
@@ -2291,7 +2291,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -2312,7 +2312,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -2333,7 +2333,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -2354,7 +2354,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -2375,7 +2375,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 8192,
@@ -2396,7 +2396,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 8192,
@@ -2417,7 +2417,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -2440,7 +2440,7 @@
         ],
         "relationsAfter": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -2461,7 +2461,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 16384,
@@ -2482,7 +2482,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -2503,7 +2503,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -2524,7 +2524,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 16384,
@@ -2545,7 +2545,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -2566,7 +2566,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 57344,
@@ -2587,7 +2587,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -2608,7 +2608,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -2629,7 +2629,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 16384,
@@ -2650,7 +2650,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 16384,
@@ -2671,7 +2671,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -3812,7 +3812,7 @@
     },
     {
       "kind": "fixed-batch",
-      "target": "ironshift",
+      "target": "workhorse",
       "workerConcurrency": 2,
       "repetition": 2,
       "position": 3,
@@ -3840,7 +3840,7 @@
       "telemetry": {
         "walBytes": 84480,
         "schemaBefore": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 81920,
           "indexBytes": 114688,
@@ -3854,7 +3854,7 @@
           "hotUpdateRatio": 0
         },
         "schemaAfter": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 163840,
           "indexBytes": 172032,
@@ -3870,7 +3870,7 @@
         "schemaGrowthBytes": 139264,
         "relationsBefore": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -3891,7 +3891,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -3912,7 +3912,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -3933,7 +3933,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -3954,7 +3954,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 8192,
@@ -3975,7 +3975,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -3996,7 +3996,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -4017,7 +4017,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -4038,7 +4038,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -4059,7 +4059,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 8192,
@@ -4080,7 +4080,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 8192,
@@ -4101,7 +4101,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -4124,7 +4124,7 @@
         ],
         "relationsAfter": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -4145,7 +4145,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 16384,
@@ -4166,7 +4166,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -4187,7 +4187,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -4208,7 +4208,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 16384,
@@ -4229,7 +4229,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -4250,7 +4250,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 57344,
@@ -4271,7 +4271,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -4292,7 +4292,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -4313,7 +4313,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 16384,
@@ -4334,7 +4334,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 16384,
@@ -4355,7 +4355,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -4380,7 +4380,7 @@
     },
     {
       "kind": "fixed-batch",
-      "target": "ironshift",
+      "target": "workhorse",
       "workerConcurrency": 2,
       "repetition": 1,
       "position": 1,
@@ -4408,7 +4408,7 @@
       "telemetry": {
         "walBytes": 84568,
         "schemaBefore": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 81920,
           "indexBytes": 114688,
@@ -4422,7 +4422,7 @@
           "hotUpdateRatio": 0
         },
         "schemaAfter": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 163840,
           "indexBytes": 172032,
@@ -4438,7 +4438,7 @@
         "schemaGrowthBytes": 139264,
         "relationsBefore": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -4459,7 +4459,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -4480,7 +4480,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -4501,7 +4501,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -4522,7 +4522,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 8192,
@@ -4543,7 +4543,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -4564,7 +4564,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -4585,7 +4585,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -4606,7 +4606,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -4627,7 +4627,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 8192,
@@ -4648,7 +4648,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 8192,
@@ -4669,7 +4669,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -4692,7 +4692,7 @@
         ],
         "relationsAfter": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -4713,7 +4713,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 16384,
@@ -4734,7 +4734,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -4755,7 +4755,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -4776,7 +4776,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 16384,
@@ -4797,7 +4797,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -4818,7 +4818,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 57344,
@@ -4839,7 +4839,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -4860,7 +4860,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -4881,7 +4881,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 16384,
@@ -4902,7 +4902,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 16384,
@@ -4923,7 +4923,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -6064,7 +6064,7 @@
     },
     {
       "kind": "fixed-batch",
-      "target": "ironshift",
+      "target": "workhorse",
       "workerConcurrency": 1,
       "repetition": 2,
       "position": 2,
@@ -6092,7 +6092,7 @@
       "telemetry": {
         "walBytes": 84472,
         "schemaBefore": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 81920,
           "indexBytes": 114688,
@@ -6106,7 +6106,7 @@
           "hotUpdateRatio": 0
         },
         "schemaAfter": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 155648,
           "indexBytes": 172032,
@@ -6122,7 +6122,7 @@
         "schemaGrowthBytes": 131072,
         "relationsBefore": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -6143,7 +6143,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -6164,7 +6164,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -6185,7 +6185,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -6206,7 +6206,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 8192,
@@ -6227,7 +6227,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -6248,7 +6248,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -6269,7 +6269,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -6290,7 +6290,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -6311,7 +6311,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 8192,
@@ -6332,7 +6332,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 8192,
@@ -6353,7 +6353,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -6376,7 +6376,7 @@
         ],
         "relationsAfter": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -6397,7 +6397,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 16384,
@@ -6418,7 +6418,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -6439,7 +6439,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -6460,7 +6460,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 16384,
@@ -6481,7 +6481,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -6502,7 +6502,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 49152,
@@ -6523,7 +6523,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -6544,7 +6544,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -6565,7 +6565,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 16384,
@@ -6586,7 +6586,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 16384,
@@ -6607,7 +6607,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -8042,7 +8042,7 @@
     },
     {
       "kind": "fixed-batch",
-      "target": "ironshift",
+      "target": "workhorse",
       "workerConcurrency": 1,
       "repetition": 1,
       "position": 3,
@@ -8070,7 +8070,7 @@
       "telemetry": {
         "walBytes": 84432,
         "schemaBefore": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 81920,
           "indexBytes": 114688,
@@ -8084,7 +8084,7 @@
           "hotUpdateRatio": 0
         },
         "schemaAfter": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 155648,
           "indexBytes": 172032,
@@ -8100,7 +8100,7 @@
         "schemaGrowthBytes": 131072,
         "relationsBefore": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -8121,7 +8121,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -8142,7 +8142,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -8163,7 +8163,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -8184,7 +8184,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 8192,
@@ -8205,7 +8205,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -8226,7 +8226,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -8247,7 +8247,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -8268,7 +8268,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -8289,7 +8289,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 8192,
@@ -8310,7 +8310,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 8192,
@@ -8331,7 +8331,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -8354,7 +8354,7 @@
         ],
         "relationsAfter": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -8375,7 +8375,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 16384,
@@ -8396,7 +8396,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -8417,7 +8417,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -8438,7 +8438,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 16384,
@@ -8459,7 +8459,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -8480,7 +8480,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 49152,
@@ -8501,7 +8501,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -8522,7 +8522,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -8543,7 +8543,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 16384,
@@ -8564,7 +8564,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 16384,
@@ -8585,7 +8585,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -8610,7 +8610,7 @@
     },
     {
       "kind": "equal-offered-load-churn",
-      "target": "ironshift",
+      "target": "workhorse",
       "workerConcurrency": 2,
       "repetition": 1,
       "position": 1,
@@ -8699,7 +8699,7 @@
       "telemetry": {
         "walBytes": 176960,
         "schemaBefore": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 81920,
           "indexBytes": 114688,
@@ -8713,7 +8713,7 @@
           "hotUpdateRatio": 0
         },
         "schemaAfter": {
-          "schema": "ironshift",
+          "schema": "workhorse",
           "relationCount": 12,
           "tableBytes": 278528,
           "indexBytes": 172032,
@@ -8729,7 +8729,7 @@
         "schemaGrowthBytes": 253952,
         "relationsBefore": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -8750,7 +8750,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -8771,7 +8771,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -8792,7 +8792,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -8813,7 +8813,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 8192,
@@ -8834,7 +8834,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -8855,7 +8855,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 8192,
@@ -8876,7 +8876,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -8897,7 +8897,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -8918,7 +8918,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 8192,
@@ -8939,7 +8939,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 8192,
@@ -8960,7 +8960,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -8983,7 +8983,7 @@
         ],
         "relationsAfter": [
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -9004,7 +9004,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202607",
             "kind": "table",
             "tableBytes": 16384,
@@ -9025,7 +9025,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -9046,7 +9046,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "attempt_history_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -9067,7 +9067,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job",
             "kind": "table",
             "tableBytes": 65536,
@@ -9088,7 +9088,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event",
             "kind": "partitioned_table",
             "tableBytes": 0,
@@ -9109,7 +9109,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202607",
             "kind": "table",
             "tableBytes": 73728,
@@ -9130,7 +9130,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_202608",
             "kind": "table",
             "tableBytes": 8192,
@@ -9151,7 +9151,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_event_default",
             "kind": "table",
             "tableBytes": 8192,
@@ -9172,7 +9172,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_outcome",
             "kind": "table",
             "tableBytes": 16384,
@@ -9193,7 +9193,7 @@
             "autoanalyzeCount": 0
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "job_runtime",
             "kind": "table",
             "tableBytes": 65536,
@@ -9214,7 +9214,7 @@
             "autoanalyzeCount": 1
           },
           {
-            "schema": "ironshift",
+            "schema": "workhorse",
             "relation": "schema_version",
             "kind": "table",
             "tableBytes": 8192,
@@ -10489,7 +10489,7 @@
       }
     },
     {
-      "target": "ironshift",
+      "target": "workhorse",
       "kind": "equal-offered-load-churn",
       "workerConcurrency": 2,
       "repetitions": 1,
@@ -10586,7 +10586,7 @@
       }
     },
     {
-      "target": "ironshift",
+      "target": "workhorse",
       "kind": "fixed-batch",
       "workerConcurrency": 1,
       "repetitions": 3,
@@ -10683,7 +10683,7 @@
       }
     },
     {
-      "target": "ironshift",
+      "target": "workhorse",
       "kind": "fixed-batch",
       "workerConcurrency": 2,
       "repetitions": 3,

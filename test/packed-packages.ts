@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const repository = path.resolve(import.meta.dirname, "..");
 const scratchRoot = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
-const scratch = await mkdtemp(path.join(scratchRoot, "ironshift-packed-"));
+const scratch = await mkdtemp(path.join(scratchRoot, "workhorse-packed-"));
 
 async function run(command: string, args: string[], cwd = repository): Promise<string> {
   const { stdout, stderr } = await exec(command, args, {
@@ -45,9 +45,9 @@ try {
   ]);
   await run("pnpm", ["--silent", "--dir", "packages/hono", "pack", "--pack-destination", tarballs]);
 
-  const coreTarball = path.join(tarballs, "ironshift-0.1.0.tgz");
-  const drizzleTarball = path.join(tarballs, "ironshift-drizzle-0.1.0.tgz");
-  const honoTarball = path.join(tarballs, "ironshift-hono-0.1.0.tgz");
+  const coreTarball = path.join(tarballs, "workhorse-0.1.0.tgz");
+  const drizzleTarball = path.join(tarballs, "workhorse-drizzle-0.1.0.tgz");
+  const honoTarball = path.join(tarballs, "workhorse-hono-0.1.0.tgz");
   const extracted = path.join(scratch, "core");
   await mkdir(extracted);
   await run("tar", ["-xzf", coreTarball, "-C", extracted]);
@@ -77,13 +77,13 @@ try {
     path.join(consumer, "package.json"),
     JSON.stringify(
       {
-        name: "ironshift-packed-consumer",
+        name: "workhorse-packed-consumer",
         private: true,
         type: "module",
         dependencies: {
-          ironshift: `file:${coreTarball}`,
-          "@ironshift/drizzle": `file:${drizzleTarball}`,
-          "@ironshift/hono": `file:${honoTarball}`,
+          workhorse: `file:${coreTarball}`,
+          "@workhorse/drizzle": `file:${drizzleTarball}`,
+          "@workhorse/hono": `file:${honoTarball}`,
           "@hono/node-server": "2.0.11",
           "drizzle-orm": "0.45.2",
           hono: "4.12.31",
@@ -117,15 +117,15 @@ try {
   );
   await writeFile(
     path.join(consumer, "type-smoke.ts"),
-    `import { createDrizzleAdapter } from "@ironshift/drizzle";
-import { HonoIronshift } from "@ironshift/hono";
+    `import { createDrizzleAdapter } from "@workhorse/drizzle";
+import { HonoWorkhorse } from "@workhorse/hono";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
 const pool = new Pool();
 const db = drizzle({ client: pool });
 const adapter = createDrizzleAdapter(db);
-const integration = new HonoIronshift(adapter);
+const integration = new HonoWorkhorse(adapter);
 void integration.context.queue;
 void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { ok: true }));
 `,

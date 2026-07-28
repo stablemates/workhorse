@@ -3,12 +3,12 @@ import { Queue, installSchema } from "../../src/index.js";
 import type { ClaimedJob, Json } from "../../src/types.js";
 import { CompletionTarget, type TargetMetadata, type WorkItem } from "./types.js";
 
-export class IronshiftTarget extends CompletionTarget {
+export class WorkhorseTarget extends CompletionTarget {
   metadata: TargetMetadata = {
-    name: "ironshift",
-    packageName: "ironshift",
+    name: "workhorse",
+    packageName: "@workhorse/core",
     version: "0.1.0",
-    schema: "ironshift",
+    schema: "workhorse",
     queue: "competitor_baseline",
     configuration: {
       maxAttempts: 1,
@@ -39,9 +39,9 @@ export class IronshiftTarget extends CompletionTarget {
     await this.stop();
     await installSchema(this.pool);
     await this.pool.query(
-      "TRUNCATE ironshift.job, ironshift.job_event, ironshift.attempt_history RESTART IDENTITY CASCADE",
+      "TRUNCATE workhorse.job, workhorse.job_event, workhorse.attempt_history RESTART IDENTITY CASCADE",
     );
-    await this.pool.query("ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1");
+    await this.pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
     this.completed.clear();
   }
   async setup(): Promise<void> {
@@ -59,7 +59,7 @@ export class IronshiftTarget extends CompletionTarget {
   async startConsumers(concurrency: number): Promise<void> {
     this.stopping = false;
     this.workers = Array.from({ length: concurrency }, (_, index) =>
-      this.work(`ironshift-${index + 1}`),
+      this.work(`workhorse-${index + 1}`),
     );
   }
   private async work(workerId: string): Promise<void> {
@@ -72,7 +72,7 @@ export class IronshiftTarget extends CompletionTarget {
       const accepted = await this.queue.complete(job as ClaimedJob<unknown>, workerId, {
         ok: true,
       });
-      if (!accepted) throw new Error("Ironshift rejected completion");
+      if (!accepted) throw new Error("Workhorse rejected completion");
       this.recordCompletion(job.payload.id);
     }
   }

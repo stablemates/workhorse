@@ -1,6 +1,6 @@
 # Benchmark suite v3 runbook
 
-This runbook explains how to execute Ironshift's benchmark suite, preserve reproducible evidence, and interpret results without making unsupported performance claims.
+This runbook explains how to execute Workhorse's benchmark suite, preserve reproducible evidence, and interpret results without making unsupported performance claims.
 
 ## Recorded evidence
 
@@ -69,13 +69,13 @@ Requirements:
 - PostgreSQL 15 or newer;
 - enough free disk and WAL capacity for the chosen profile.
 
-The suite defaults to `ironshift_bench` and rejects database names without the `_bench` suffix. Override only with a benchmark-specific URL:
+The suite defaults to `workhorse_bench` and rejects database names without the `_bench` suffix. Override only with a benchmark-specific URL:
 
 ```bash
-export IRONSHIFT_BENCH_DATABASE_URL=postgres://ironshift:ironshift@localhost:5432/ironshift_bench
+export WORKHORSE_BENCH_DATABASE_URL=postgres://workhorse:workhorse@localhost:5432/workhorse_bench
 ```
 
-The benchmark resets Ironshift and benchmark-only tables while running. Never point it at production.
+The benchmark resets Workhorse and benchmark-only tables while running. Never point it at production.
 
 ## Discover options
 
@@ -210,8 +210,8 @@ node --version
 pnpm --version
 uname -a
 lscpu
-psql "$IRONSHIFT_BENCH_DATABASE_URL" -Atc "SELECT version()"
-psql "$IRONSHIFT_BENCH_DATABASE_URL" -Atc "SELECT name || '=' || setting || COALESCE(unit, '')
+psql "$WORKHORSE_BENCH_DATABASE_URL" -Atc "SELECT version()"
+psql "$WORKHORSE_BENCH_DATABASE_URL" -Atc "SELECT name || '=' || setting || COALESCE(unit, '')
   FROM pg_settings
   WHERE name IN (
     'shared_buffers', 'work_mem', 'maintenance_work_mem',
@@ -230,7 +230,7 @@ V2 closes the original equivalent-semantics, confidence interval, concurrency, c
 
 ### Reset or benchmark refuses the database
 
-Preserve the `_bench` suffix. Remote resets additionally require `IRONSHIFT_ALLOW_REMOTE_RESET=1`.
+Preserve the `_bench` suffix. Remote resets additionally require `WORKHORSE_ALLOW_REMOTE_RESET=1`.
 
 ### PostgreSQL statistics are unavailable
 
@@ -260,11 +260,11 @@ pnpm benchmark:competitors -- --profile default --pg-boss-batch-size 10 \
 
 | Target          | Version            | Schema                       | Public APIs                                                      | Success retention                  |
 | --------------- | ------------------ | ---------------------------- | ---------------------------------------------------------------- | ---------------------------------- |
-| Ironshift       | repository version | `ironshift`                  | `Queue.enqueueMany`, `claim`, `complete`; installed SQL protocol | retained with history              |
+| Workhorse       | repository version | `workhorse`                  | `Queue.enqueueMany`, `claim`, `complete`; installed SQL protocol | retained with history              |
 | pg-boss         | 12.26.2            | `pgboss_competitor`          | `insert`, `createQueue`, `work`, graceful `stop`                 | retained (`deleteAfterSeconds: 0`) |
 | Graphile Worker | 0.17.3             | `graphile_worker_competitor` | `makeWorkerUtils().migrate/addJobs`, `run`, graceful `stop`      | deleted on success                 |
 
-All targets use a 32-connection ceiling. pg-boss is configured with `retryLimit: 0`, `deleteAfterSeconds: 0`, `notify: true`, `useListenNotify: true`, and a per-job `batchSize: 1`; worker concurrency is supplied as `localConcurrency`. Graphile jobs use `maxAttempts: 1`, and `run()` receives the task list and concurrency without local claim batching. Ironshift jobs use one attempt and a 30-second lease.
+All targets use a 32-connection ceiling. pg-boss is configured with `retryLimit: 0`, `deleteAfterSeconds: 0`, `notify: true`, `useListenNotify: true`, and a per-job `batchSize: 1`; worker concurrency is supplied as `localConcurrency`. Graphile jobs use `maxAttempts: 1`, and `run()` receives the task list and concurrency without local claim batching. Workhorse jobs use one attempt and a 30-second lease.
 
 The common target interface is workload-level: `reset/setup`, batched enqueue, start consumers, observe the exact expected completion set, stop, close, and expose schema metadata/capabilities. This deliberately hides native worker-loop differences while preserving them in target notes.
 
@@ -288,6 +288,6 @@ The JSON root is `artifactVersion: 1`, `contract: "common-success-path-v1"`, and
 - per-run offered/enqueued/completed counts, exact-completion flag, position, phase durations, rates, load samples, WAL, schema growth, and relation telemetry;
 - summaries grouped by target, workload kind, and concurrency.
 
-Do not compare Graphile's post-success schema size as if it retained completed jobs. Do not interpret pg-boss or Graphile handler timing as directly comparable manual claim latency, and do not infer fencing guarantees from this suite. Ironshift exposes public claim/fence operations; both competitor worker APIs own claiming internally.
+Do not compare Graphile's post-success schema size as if it retained completed jobs. Do not interpret pg-boss or Graphile handler timing as directly comparable manual claim latency, and do not infer fencing guarantees from this suite. Workhorse exposes public claim/fence operations; both competitor worker APIs own claiming internally.
 
 The timed end point is successful completion of every task handler. Framework-owned durable settlement can finish after a handler returns, so the suite does not claim a cross-product durable-settlement latency. Graceful shutdown and telemetry collection are outside timed phases. Product-specific handler/claim batching must be reported in a separately labeled optimized profile rather than mixed into this common per-job baseline.

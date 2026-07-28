@@ -1,5 +1,5 @@
 import { ORPCError, os } from "@orpc/server";
-import type { Queue } from "ironshift";
+import type { Queue } from "@workhorse/core";
 import { z } from "zod";
 import type {
   AuditContext,

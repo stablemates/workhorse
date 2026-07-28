@@ -1,29 +1,29 @@
 import { Hono } from "hono";
-import type { IronshiftAdapter, Queryable, Worker } from "ironshift";
-import { Queue as IronshiftQueue } from "ironshift";
+import type { WorkhorseAdapter, Queryable, Worker } from "@workhorse/core";
+import { Queue as WorkhorseQueue } from "@workhorse/core";
 import { describe, expect, it, vi } from "vitest";
-import { HonoIronshift, serveWithIronshift } from "../src/index.js";
+import { HonoWorkhorse, serveWithWorkhorse } from "../src/index.js";
 
-function adapter(overrides: Partial<IronshiftAdapter<{ transaction: true }>> = {}) {
-  const queue = new IronshiftQueue({
+function adapter(overrides: Partial<WorkhorseAdapter<{ transaction: true }>> = {}) {
+  const queue = new WorkhorseQueue({
     query: vi.fn<Queryable["query"]>(),
   } as unknown as Queryable);
   return {
     queue,
-    forTransaction: vi.fn<IronshiftAdapter<{ transaction: true }>["forTransaction"]>(() => queue),
-    createWorker: vi.fn<IronshiftAdapter<{ transaction: true }>["createWorker"]>(),
+    forTransaction: vi.fn<WorkhorseAdapter<{ transaction: true }>["forTransaction"]>(() => queue),
+    createWorker: vi.fn<WorkhorseAdapter<{ transaction: true }>["createWorker"]>(),
     close: vi.fn<() => Promise<void>>(async () => undefined),
     ...overrides,
-  } as unknown as IronshiftAdapter<{ transaction: true }>;
+  } as unknown as WorkhorseAdapter<{ transaction: true }>;
 }
 
-describe("HonoIronshift", () => {
+describe("HonoWorkhorse", () => {
   it("provides the adapter queue and transaction bridge through typed middleware", async () => {
     const runtimeAdapter = adapter();
-    const integration = new HonoIronshift(runtimeAdapter);
+    const integration = new HonoWorkhorse(runtimeAdapter);
     const app = new Hono().use(integration.middleware()).get("/", (context) => {
-      const transactional = context.var.ironshift.forTransaction({ transaction: true });
-      return context.json({ sameQueue: transactional === context.var.ironshift.queue });
+      const transactional = context.var.workhorse.forTransaction({ transaction: true });
+      return context.json({ sameQueue: transactional === context.var.workhorse.queue });
     });
 
     const response = await app.request("/");
@@ -44,7 +44,7 @@ describe("HonoIronshift", () => {
     const worker = { run, stop, handle: vi.fn<() => void>() } as unknown as Worker;
     const runtimeAdapter = adapter({ createWorker: vi.fn<() => Worker>(() => worker) });
     const configure = vi.fn<(worker: Worker) => void>();
-    const integration = new HonoIronshift(runtimeAdapter, { workers: [{ configure }] });
+    const integration = new HonoWorkhorse(runtimeAdapter, { workers: [{ configure }] });
 
     integration.start();
     integration.start();
@@ -62,12 +62,12 @@ describe("HonoIronshift", () => {
 
   it("starts an ephemeral Hono server and shuts it down idempotently", async () => {
     const runtimeAdapter = adapter();
-    const integration = new HonoIronshift(runtimeAdapter);
+    const integration = new HonoWorkhorse(runtimeAdapter);
     const app = new Hono().get("/health", (context) => context.text("ok"));
     const listening = new Promise<number>((resolve) => {
-      void serveWithIronshift({
+      void serveWithWorkhorse({
         fetch: app.fetch,
-        ironshift: integration,
+        workhorse: integration,
         port: 0,
         onListen: (info) => resolve(info.port),
       }).then(async (running) => {
@@ -96,7 +96,7 @@ describe("HonoIronshift", () => {
       handle: vi.fn<() => void>(),
     } as unknown as Worker;
     const runtimeAdapter = adapter({ createWorker: vi.fn<() => Worker>(() => worker) });
-    const integration = new HonoIronshift(runtimeAdapter, {
+    const integration = new HonoWorkhorse(runtimeAdapter, {
       workers: [
         { configure: vi.fn<(worker: Worker) => void>() },
         {
@@ -109,7 +109,7 @@ describe("HonoIronshift", () => {
     const app = new Hono();
 
     await expect(
-      serveWithIronshift({ fetch: app.fetch, ironshift: integration, port: 0 }),
+      serveWithWorkhorse({ fetch: app.fetch, workhorse: integration, port: 0 }),
     ).rejects.toThrow("invalid worker configuration");
 
     expect(worker.stop).toHaveBeenCalledTimes(1);

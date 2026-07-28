@@ -1,14 +1,14 @@
 BEGIN;
 
-CREATE SCHEMA IF NOT EXISTS ironshift_benchmark_conventional;
+CREATE SCHEMA IF NOT EXISTS workhorse_benchmark_conventional;
 
 -- Benchmark-only mutable-table queue baseline. This intentionally does not touch the production
--- ironshift schema. The dispatch path scans and mutates one lifetime table so benchmark scenarios can
--- compare the conventional design against Ironshift's split-projection protocol.
-CREATE SEQUENCE IF NOT EXISTS ironshift_benchmark_conventional.fence_token_seq;
-CREATE SEQUENCE IF NOT EXISTS ironshift_benchmark_conventional.enqueue_sequence_seq;
+-- workhorse schema. The dispatch path scans and mutates one lifetime table so benchmark scenarios can
+-- compare the conventional design against Workhorse's split-projection protocol.
+CREATE SEQUENCE IF NOT EXISTS workhorse_benchmark_conventional.fence_token_seq;
+CREATE SEQUENCE IF NOT EXISTS workhorse_benchmark_conventional.enqueue_sequence_seq;
 
-CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.job (
+CREATE TABLE IF NOT EXISTS workhorse_benchmark_conventional.job (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   queue_name text NOT NULL CHECK (queue_name <> ''),
   job_type text NOT NULL CHECK (job_type <> ''),
@@ -31,21 +31,21 @@ CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.job (
   CHECK ((state = 'active') = (worker_id IS NOT NULL AND lease_expires_at IS NOT NULL))
 ) WITH (fillfactor = 70);
 
-ALTER TABLE ironshift_benchmark_conventional.job
+ALTER TABLE workhorse_benchmark_conventional.job
   ADD COLUMN IF NOT EXISTS enqueue_sequence bigint;
 
-DROP INDEX IF EXISTS ironshift_benchmark_conventional.conventional_job_claim_idx;
+DROP INDEX IF EXISTS workhorse_benchmark_conventional.conventional_job_claim_idx;
 CREATE INDEX conventional_job_claim_idx
-  ON ironshift_benchmark_conventional.job (queue_name, enqueue_sequence, id)
+  ON workhorse_benchmark_conventional.job (queue_name, enqueue_sequence, id)
   WHERE state = 'ready';
 CREATE INDEX IF NOT EXISTS conventional_job_scheduled_idx
-  ON ironshift_benchmark_conventional.job (run_at, id)
+  ON workhorse_benchmark_conventional.job (run_at, id)
   WHERE state = 'scheduled';
 CREATE INDEX IF NOT EXISTS conventional_job_expired_lease_idx
-  ON ironshift_benchmark_conventional.job (lease_expires_at, id)
+  ON workhorse_benchmark_conventional.job (lease_expires_at, id)
   WHERE state = 'active';
 
-CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.job_event (
+CREATE TABLE IF NOT EXISTS workhorse_benchmark_conventional.job_event (
   event_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   job_id uuid NOT NULL,
   attempt integer,
@@ -54,9 +54,9 @@ CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.job_event (
   occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX IF NOT EXISTS conventional_job_event_job_time_idx
-  ON ironshift_benchmark_conventional.job_event (job_id, occurred_at, event_id);
+  ON workhorse_benchmark_conventional.job_event (job_id, occurred_at, event_id);
 
-CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.attempt_history (
+CREATE TABLE IF NOT EXISTS workhorse_benchmark_conventional.attempt_history (
   attempt_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   job_id uuid NOT NULL,
   attempt integer NOT NULL CHECK (attempt >= 1),
@@ -69,23 +69,23 @@ CREATE TABLE IF NOT EXISTS ironshift_benchmark_conventional.attempt_history (
   occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX IF NOT EXISTS conventional_attempt_history_job_idx
-  ON ironshift_benchmark_conventional.attempt_history (job_id, attempt, occurred_at);
+  ON workhorse_benchmark_conventional.attempt_history (job_id, attempt, occurred_at);
 
-CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.reset_v1()
+CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.reset_v1()
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  TRUNCATE ironshift_benchmark_conventional.attempt_history,
-           ironshift_benchmark_conventional.job_event,
-           ironshift_benchmark_conventional.job
+  TRUNCATE workhorse_benchmark_conventional.attempt_history,
+           workhorse_benchmark_conventional.job_event,
+           workhorse_benchmark_conventional.job
     RESTART IDENTITY;
-  ALTER SEQUENCE ironshift_benchmark_conventional.fence_token_seq RESTART WITH 1;
-  ALTER SEQUENCE ironshift_benchmark_conventional.enqueue_sequence_seq RESTART WITH 1;
+  ALTER SEQUENCE workhorse_benchmark_conventional.fence_token_seq RESTART WITH 1;
+  ALTER SEQUENCE workhorse_benchmark_conventional.enqueue_sequence_seq RESTART WITH 1;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.enqueue_many_v1(p_requests jsonb)
+CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.enqueue_many_v1(p_requests jsonb)
 RETURNS TABLE (ordinal integer, job_id uuid)
 LANGUAGE plpgsql
 AS $$
@@ -123,23 +123,23 @@ BEGIN
              THEN 'ready' ELSE 'scheduled' END AS state
     FROM jsonb_array_elements(p_requests) WITH ORDINALITY input(request, ordinality)
   ), inserted_jobs AS (
-    INSERT INTO ironshift_benchmark_conventional.job(
+    INSERT INTO workhorse_benchmark_conventional.job(
       id, queue_name, job_type, payload, state, max_attempts, enqueue_sequence, run_at
     )
     SELECT p.job_id, p.queue_name, p.job_type, p.payload, p.state, p.max_attempts,
            CASE WHEN p.state = 'ready'
-             THEN nextval('ironshift_benchmark_conventional.enqueue_sequence_seq') ELSE NULL END,
+             THEN nextval('workhorse_benchmark_conventional.enqueue_sequence_seq') ELSE NULL END,
            p.run_at
     FROM parsed p ORDER BY p.ordinal
     RETURNING id, queue_name, state
   ), inserted_events AS (
-    INSERT INTO ironshift_benchmark_conventional.job_event AS job_event(job_id, event_type, details)
+    INSERT INTO workhorse_benchmark_conventional.job_event AS job_event(job_id, event_type, details)
       SELECT p.job_id, 'enqueued', jsonb_build_object('state', p.state, 'run_at', p.run_at)
       FROM parsed p JOIN inserted_jobs j ON j.id = p.job_id
       ORDER BY p.ordinal
     RETURNING job_event.job_id
   ), notifications AS MATERIALIZED (
-    SELECT pg_notify('ironshift_jobs', queue_name)
+    SELECT pg_notify('workhorse_jobs', queue_name)
     FROM (SELECT DISTINCT queue_name FROM inserted_jobs WHERE state = 'ready') ready_queues
   )
   SELECT p.ordinal, p.job_id
@@ -150,7 +150,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.enqueue_v1(
+CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.enqueue_v1(
   p_queue_name text,
   p_job_type text,
   p_payload jsonb,
@@ -160,7 +160,7 @@ CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.enqueue_v1(
 LANGUAGE sql
 AS $$
   SELECT job_id
-  FROM ironshift_benchmark_conventional.enqueue_many_v1(jsonb_build_array(jsonb_build_object(
+  FROM workhorse_benchmark_conventional.enqueue_many_v1(jsonb_build_array(jsonb_build_object(
     'queue', p_queue_name,
     'type', p_job_type,
     'payload', COALESCE(p_payload, 'null'::jsonb),
@@ -171,7 +171,7 @@ AS $$
   LIMIT 1;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.promote_v1(p_limit integer DEFAULT 100)
+CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.promote_v1(p_limit integer DEFAULT 100)
 RETURNS integer
 LANGUAGE plpgsql
 AS $$
@@ -180,21 +180,21 @@ DECLARE
 BEGIN
   WITH due AS (
     SELECT id
-      FROM ironshift_benchmark_conventional.job
+      FROM workhorse_benchmark_conventional.job
      WHERE state = 'scheduled' AND run_at <= clock_timestamp()
      ORDER BY run_at, id
      FOR UPDATE SKIP LOCKED
      LIMIT GREATEST(1, LEAST(p_limit, 10000))
   ), updated AS (
-    UPDATE ironshift_benchmark_conventional.job j
+    UPDATE workhorse_benchmark_conventional.job j
        SET state = 'ready',
-           enqueue_sequence = nextval('ironshift_benchmark_conventional.enqueue_sequence_seq'),
+           enqueue_sequence = nextval('workhorse_benchmark_conventional.enqueue_sequence_seq'),
            updated_at = clock_timestamp()
       FROM due
      WHERE j.id = due.id
      RETURNING j.id
   ), events AS (
-    INSERT INTO ironshift_benchmark_conventional.job_event(job_id, event_type)
+    INSERT INTO workhorse_benchmark_conventional.job_event(job_id, event_type)
       SELECT id, 'promoted' FROM updated
     RETURNING 1
   )
@@ -203,7 +203,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.claim_v1(
+CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.claim_v1(
   p_queue_name text,
   p_worker_id text,
   p_lease_ms integer DEFAULT 30000
@@ -219,7 +219,7 @@ CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.claim_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_job ironshift_benchmark_conventional.job%ROWTYPE;
+  v_job workhorse_benchmark_conventional.job%ROWTYPE;
   v_fence bigint;
   v_expires timestamptz;
 BEGIN
@@ -231,7 +231,7 @@ BEGIN
   END IF;
 
   SELECT * INTO v_job
-    FROM ironshift_benchmark_conventional.job
+    FROM workhorse_benchmark_conventional.job
    WHERE queue_name = p_queue_name AND state = 'ready'
    ORDER BY enqueue_sequence, id
    FOR UPDATE SKIP LOCKED
@@ -241,10 +241,10 @@ BEGIN
     RETURN;
   END IF;
 
-  v_fence := nextval('ironshift_benchmark_conventional.fence_token_seq');
+  v_fence := nextval('workhorse_benchmark_conventional.fence_token_seq');
   v_expires := clock_timestamp() + make_interval(secs => p_lease_ms::double precision / 1000.0);
 
-  UPDATE ironshift_benchmark_conventional.job j
+  UPDATE workhorse_benchmark_conventional.job j
      SET state = 'active', current_attempt = v_job.current_attempt + 1,
          enqueue_sequence = NULL, fence_token = v_fence,
          worker_id = p_worker_id, started_at = clock_timestamp(), heartbeat_at = clock_timestamp(),
@@ -252,7 +252,7 @@ BEGIN
          updated_at = clock_timestamp()
    WHERE j.id = v_job.id;
 
-  INSERT INTO ironshift_benchmark_conventional.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse_benchmark_conventional.job_event(job_id, attempt, event_type, details)
     VALUES (v_job.id, v_job.current_attempt + 1, 'claimed',
       jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence, 'expires_at', v_expires));
 
@@ -262,7 +262,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.heartbeat_v1(
+CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.heartbeat_v1(
   p_job_id uuid,
   p_worker_id text,
   p_fence_token bigint,
@@ -273,7 +273,7 @@ AS $$
 DECLARE
   v_updated integer;
 BEGIN
-  UPDATE ironshift_benchmark_conventional.job
+  UPDATE workhorse_benchmark_conventional.job
      SET heartbeat_at = clock_timestamp(),
          lease_expires_at = clock_timestamp() + make_interval(secs => p_lease_ms::double precision / 1000.0),
          updated_at = clock_timestamp()
@@ -287,7 +287,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.complete_v1(
+CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.complete_v1(
   p_job_id uuid,
   p_worker_id text,
   p_fence_token bigint,
@@ -296,10 +296,10 @@ CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.complete_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_job ironshift_benchmark_conventional.job%ROWTYPE;
+  v_job workhorse_benchmark_conventional.job%ROWTYPE;
 BEGIN
   SELECT * INTO v_job
-    FROM ironshift_benchmark_conventional.job
+    FROM workhorse_benchmark_conventional.job
    WHERE id = p_job_id
      AND state = 'active'
      AND worker_id = p_worker_id
@@ -310,21 +310,21 @@ BEGIN
     RETURN false;
   END IF;
 
-  UPDATE ironshift_benchmark_conventional.job
+  UPDATE workhorse_benchmark_conventional.job
      SET state = 'succeeded', worker_id = NULL, lease_expires_at = NULL,
          finished_at = clock_timestamp(), result = COALESCE(p_result, 'null'::jsonb),
          updated_at = clock_timestamp()
    WHERE id = p_job_id;
-  INSERT INTO ironshift_benchmark_conventional.attempt_history(
+  INSERT INTO workhorse_benchmark_conventional.attempt_history(
     job_id, attempt, fence_token, worker_id, outcome, started_at
   ) VALUES (v_job.id, v_job.current_attempt, v_job.fence_token, v_job.worker_id, 'succeeded', v_job.started_at);
-  INSERT INTO ironshift_benchmark_conventional.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse_benchmark_conventional.job_event(job_id, attempt, event_type, details)
     VALUES (v_job.id, v_job.current_attempt, 'completed', jsonb_build_object('fence_token', v_job.fence_token));
   RETURN true;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.fail_v1(
+CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.fail_v1(
   p_job_id uuid,
   p_worker_id text,
   p_fence_token bigint,
@@ -334,13 +334,13 @@ CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.fail_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_job ironshift_benchmark_conventional.job%ROWTYPE;
+  v_job workhorse_benchmark_conventional.job%ROWTYPE;
   v_next_state text;
   v_next_run_at timestamptz;
   v_outcome text;
 BEGIN
   SELECT * INTO v_job
-    FROM ironshift_benchmark_conventional.job
+    FROM workhorse_benchmark_conventional.job
    WHERE id = p_job_id
      AND state = 'active'
      AND worker_id = p_worker_id
@@ -361,26 +361,26 @@ BEGIN
     v_outcome := 'failed';
   END IF;
 
-  UPDATE ironshift_benchmark_conventional.job
+  UPDATE workhorse_benchmark_conventional.job
      SET state = v_next_state, worker_id = NULL, lease_expires_at = NULL,
          enqueue_sequence = CASE WHEN v_next_state = 'ready'
-           THEN nextval('ironshift_benchmark_conventional.enqueue_sequence_seq')
+           THEN nextval('workhorse_benchmark_conventional.enqueue_sequence_seq')
            ELSE NULL
          END,
          run_at = v_next_run_at, finished_at = CASE WHEN v_next_state = 'failed' THEN clock_timestamp() ELSE NULL END,
          error = COALESCE(p_error, '{}'::jsonb), updated_at = clock_timestamp()
    WHERE id = p_job_id;
-  INSERT INTO ironshift_benchmark_conventional.attempt_history(
+  INSERT INTO workhorse_benchmark_conventional.attempt_history(
     job_id, attempt, fence_token, worker_id, outcome, started_at, error
   ) VALUES (v_job.id, v_job.current_attempt, v_job.fence_token, v_job.worker_id, v_outcome, v_job.started_at, p_error);
-  INSERT INTO ironshift_benchmark_conventional.job_event(job_id, attempt, event_type, details)
+  INSERT INTO workhorse_benchmark_conventional.job_event(job_id, attempt, event_type, details)
     VALUES (v_job.id, v_job.current_attempt, 'failed',
       jsonb_build_object('state', v_next_state, 'retry_delay_ms', p_retry_delay_ms, 'fence_token', v_job.fence_token));
   RETURN v_next_state;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION ironshift_benchmark_conventional.recover_expired_v1(
+CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.recover_expired_v1(
   p_limit integer DEFAULT 100,
   p_retry_delay_ms integer DEFAULT 0
 ) RETURNS integer
@@ -391,13 +391,13 @@ DECLARE
 BEGIN
   WITH expired AS (
     SELECT *
-      FROM ironshift_benchmark_conventional.job
+      FROM workhorse_benchmark_conventional.job
      WHERE state = 'active' AND lease_expires_at <= clock_timestamp()
      ORDER BY lease_expires_at, id
      FOR UPDATE SKIP LOCKED
      LIMIT GREATEST(1, LEAST(p_limit, 10000))
   ), history AS (
-    INSERT INTO ironshift_benchmark_conventional.attempt_history(
+    INSERT INTO workhorse_benchmark_conventional.attempt_history(
       job_id, attempt, fence_token, worker_id, outcome, started_at, error
     )
       SELECT id, current_attempt, fence_token, worker_id, 'lease_expired', started_at,
@@ -405,7 +405,7 @@ BEGIN
         FROM expired
     RETURNING job_id
   ), updated AS (
-    UPDATE ironshift_benchmark_conventional.job j
+    UPDATE workhorse_benchmark_conventional.job j
        SET state = CASE
              WHEN j.current_attempt < j.max_attempts AND p_retry_delay_ms <= 0 THEN 'ready'
              WHEN j.current_attempt < j.max_attempts THEN 'scheduled'
@@ -415,7 +415,7 @@ BEGIN
            lease_expires_at = NULL,
            enqueue_sequence = CASE
              WHEN j.current_attempt < j.max_attempts AND p_retry_delay_ms <= 0
-               THEN nextval('ironshift_benchmark_conventional.enqueue_sequence_seq')
+               THEN nextval('workhorse_benchmark_conventional.enqueue_sequence_seq')
              ELSE NULL
            END,
            run_at = CASE
@@ -429,7 +429,7 @@ BEGIN
      WHERE j.id = e.id
      RETURNING j.id, j.current_attempt, j.state
   ), events AS (
-    INSERT INTO ironshift_benchmark_conventional.job_event(job_id, attempt, event_type, details)
+    INSERT INTO workhorse_benchmark_conventional.job_event(job_id, attempt, event_type, details)
       SELECT id, current_attempt, 'lease_expired', jsonb_build_object('state', state) FROM updated
     RETURNING 1
   )

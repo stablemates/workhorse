@@ -48,12 +48,6 @@ importers:
       '@hono/node-server':
         specifier: ^2.0.11
         version: 2.0.11(hono@4.12.31)
-      '@ironshift/drizzle':
-        specifier: workspace:*
-        version: link:../packages/drizzle
-      '@ironshift/hono':
-        specifier: workspace:*
-        version: link:../packages/hono
       '@mantine/core':
         specifier: ^8.3.14
         version: 8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -69,15 +63,21 @@ importers:
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@workhorse/core':
+        specifier: workspace:*
+        version: link:..
+      '@workhorse/drizzle':
+        specifier: workspace:*
+        version: link:../packages/drizzle
+      '@workhorse/hono':
+        specifier: workspace:*
+        version: link:../packages/hono
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/pg@8.20.0)(pg@8.22.0)
       hono:
         specifier: ^4.12.31
         version: 4.12.31
-      ironshift:
-        specifier: workspace:*
-        version: link:..
       pg:
         specifier: ^8.16.3
         version: 8.22.0
@@ -121,12 +121,12 @@ importers:
       '@types/pg':
         specifier: ^8.15.5
         version: 8.20.0
+      '@workhorse/core':
+        specifier: workspace:*
+        version: link:../..
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/pg@8.20.0)(pg@8.22.0)
-      ironshift:
-        specifier: workspace:*
-        version: link:../..
       pg:
         specifier: ^8.16.3
         version: 8.22.0
@@ -136,12 +136,12 @@ importers:
       '@hono/node-server':
         specifier: ^2.0.11
         version: 2.0.11(hono@4.12.31)
+      '@workhorse/core':
+        specifier: workspace:*
+        version: link:../..
       hono:
         specifier: ^4.12.31
         version: 4.12.31
-      ironshift:
-        specifier: workspace:*
-        version: link:../..
 
 packages:
 

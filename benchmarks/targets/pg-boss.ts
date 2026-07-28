@@ -33,7 +33,7 @@ export class PgBossTarget extends CompletionTarget {
       successRetention: "retained",
     },
     notes: [
-      "Public work() owns claim and completion, so manual claim latency and Ironshift fencing are not directly comparable.",
+      "Public work() owns claim and completion, so manual claim latency and Workhorse fencing are not directly comparable.",
       "deleteAfterSeconds 0 disables age-based deletion for benchmark retention.",
     ],
   };

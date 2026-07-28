@@ -7,11 +7,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const scratchRoot = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
 await mkdir(scratchRoot, { recursive: true });
-const checkout = await mkdtemp(join(scratchRoot, "ironshift-demo-smoke-"));
+const checkout = await mkdtemp(join(scratchRoot, "workhorse-demo-smoke-"));
 const port = 31_000 + Math.floor(Math.random() * 1_000);
 const demoDatabaseUrl =
-  process.env.IRONSHIFT_DEMO_DATABASE_URL ??
-  "postgresql://ironshift:ironshift@localhost:5432/ironshift_demo";
+  process.env.WORKHORSE_DEMO_DATABASE_URL ??
+  "postgresql://workhorse:workhorse@localhost:5432/workhorse_demo";
 const derivedCronDatabaseUrl = new URL(demoDatabaseUrl);
 derivedCronDatabaseUrl.pathname = "/postgres";
 const cronDatabaseUrl = process.env.CRON_DATABASE_URL ?? derivedCronDatabaseUrl.toString();
@@ -102,10 +102,10 @@ try {
     env: {
       ...process.env,
       PORT: String(port),
-      IRONSHIFT_API_PORT: String(port + 1),
+      WORKHORSE_API_PORT: String(port + 1),
       DATABASE_URL: demoDatabaseUrl,
       CRON_DATABASE_URL: cronDatabaseUrl,
-      IRONSHIFT_WORKER_POLL_MS: "15",
+      WORKHORSE_WORKER_POLL_MS: "15",
     },
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
@@ -191,7 +191,7 @@ try {
     !tasksText.includes(retry.jobId) ||
     !tasksText.includes(failure.jobId) ||
     !cronResponse.ok ||
-    !cronText.includes("ironshift-demo")
+    !cronText.includes("workhorse-demo")
   ) {
     throw new Error(`Dashboard readers omitted smoke data: ${tasksText}\n${cronText}`);
   }

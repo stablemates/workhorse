@@ -17,7 +17,7 @@ function argument(name: string): string | undefined {
   if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
   return value;
 }
-const help = `Standalone competitor baseline\n\nUsage:\n  pnpm benchmark:competitors -- --profile smoke|default --output PATH [--pg-boss-batch-size N]\n\nThe command only accepts the configured _bench database and resets the isolated schemas ironshift, pgboss_competitor, and graphile_worker_competitor. The controlled baseline uses pg-boss batch size 1; larger values are separately labeled sensitivity runs.`;
+const help = `Standalone competitor baseline\n\nUsage:\n  pnpm benchmark:competitors -- --profile smoke|default --output PATH [--pg-boss-batch-size N]\n\nThe command only accepts the configured _bench database and resets the isolated schemas workhorse, pgboss_competitor, and graphile_worker_competitor. The controlled baseline uses pg-boss batch size 1; larger values are separately labeled sensitivity runs.`;
 async function main(): Promise<void> {
   if (process.argv.includes("--help")) {
     console.log(help);

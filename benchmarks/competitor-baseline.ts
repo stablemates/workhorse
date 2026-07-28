@@ -16,7 +16,7 @@ import {
   type WorkItem,
 } from "./targets/index.js";
 
-export type CompetitorTargetName = "ironshift" | "pg-boss" | "graphile-worker";
+export type CompetitorTargetName = "workhorse" | "pg-boss" | "graphile-worker";
 export type CompetitorProfileName = "smoke" | "default";
 export interface CompetitorOptions {
   profile: CompetitorProfileName;
@@ -188,7 +188,7 @@ export function createCompetitorExecutionPlan(
   repetitions: number,
   seed: number,
 ): ExecutionPlanStep[] {
-  const targets = ["ironshift", "pg-boss", "graphile-worker"] as const;
+  const targets = ["workhorse", "pg-boss", "graphile-worker"] as const;
   const next = random(seed);
   const steps: ExecutionPlanStep[] = [];
   for (const workerConcurrency of workers) {

@@ -1,6 +1,6 @@
-# Ironshift architecture
+# Workhorse architecture
 
-Ironshift is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
+Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
 ## Design objective
 
@@ -122,7 +122,7 @@ Insert-only terminal state. Completion or terminal failure deletes the active ru
 
 ### Declarative schedules
 
-`schedule_definition` is the target database's desired-state record for one deployment namespace. It stores validated cron text, a typed Ironshift job definition, and a monotonically increasing revision, never arbitrary SQL. Removed definitions are disabled rather than deleted so occurrence history remains attributable.
+`schedule_definition` is the target database's desired-state record for one deployment namespace. It stores validated cron text, a typed Workhorse job definition, and a monotonically increasing revision, never arbitrary SQL. Removed definitions are disabled rather than deleted so occurrence history remains attributable.
 
 `schedule_occurrence` provides one durable key per `(namespace, schedule_name, occurrence_at)` second. `fire_schedule_v1` inserts that key and enqueues through `enqueue_v1` in one transaction. A repeated fire for the same second returns the existing job ID instead of creating another job.
 
@@ -145,7 +145,7 @@ stateDiagram-v2
 
 ### Enqueue
 
-`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp. One statement inserts `job`, `job_runtime`, and `enqueued` events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY ironshift_jobs` is coalesced to one notification per distinct queue that gained ready work.
+`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp. One statement inserts `job`, `job_runtime`, and `enqueued` events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
 
 ### Promotion
 
@@ -177,7 +177,7 @@ Production promotion is coordinated by a namespaced pg_cron maintenance job. `ma
 
 ## Delivery semantics
 
-Ironshift provides durable at-least-once execution. A process can die after an external effect but before completion commits, or after completion commits but before observing the response. Applications must use idempotency keys or transactional outbox/inbox patterns for non-idempotent effects.
+Workhorse provides durable at-least-once execution. A process can die after an external effect but before completion commits, or after completion commits but before observing the response. Applications must use idempotency keys or transactional outbox/inbox patterns for non-idempotent effects.
 
 Schedule occurrence deduplication prevents duplicate enqueue for one supplied occurrence second. pg_cron-generated calls use the observed execution second because pg_cron does not expose its planned slot to the target command. This does not change handler delivery semantics: a scheduled job can still execute more than once after a worker crash.
 

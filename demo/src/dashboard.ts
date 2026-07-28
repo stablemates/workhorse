@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import type { Queue } from "ironshift";
+import type { Queue } from "@workhorse/core";
 import type { DashboardOperator, DemoDatabase, SchedulerStatusProvider } from "./app.js";
 
 export interface DashboardQueueRow {
@@ -241,9 +241,9 @@ export async function readDashboardTaskCounts(
     WITH tasks AS (
       SELECT COALESCE(r.state, o.state) AS state,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt
-        FROM ironshift.job j
-        LEFT JOIN ironshift.job_runtime r ON r.job_id = j.id
-        LEFT JOIN ironshift.job_outcome o ON o.job_id = j.id
+        FROM workhorse.job j
+        LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+        LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
     )
     SELECT count(*)::integer AS all_count,
            count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
@@ -293,9 +293,9 @@ export async function readDashboardTasks(
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                j.max_attempts, j.payload, j.created_at,
                COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
-          FROM ironshift.job j
-          LEFT JOIN ironshift.job_runtime r ON r.job_id = j.id
-          LEFT JOIN ironshift.job_outcome o ON o.job_id = j.id
+          FROM workhorse.job j
+          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+          LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
       )
       SELECT *
         FROM tasks
@@ -349,8 +349,8 @@ export async function readDashboardCron(
              d.revision::text AS revision, d.updated_at,
              count(o.occurrence_at)::integer AS occurrence_count,
              max(o.fired_at) AS last_fired_at
-        FROM ironshift.schedule_definition d
-        LEFT JOIN ironshift.schedule_occurrence o
+        FROM workhorse.schedule_definition d
+        LEFT JOIN workhorse.schedule_occurrence o
           ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
        GROUP BY d.namespace, d.schedule_name
        ORDER BY d.namespace, d.schedule_name
@@ -374,7 +374,7 @@ export async function readDashboardCron(
           name: "maintenance",
           cron: schedulerStatus.maintenance.schedule,
           queue: null,
-          type: "ironshift.maintain_v1",
+          type: "workhorse.maintain_v1",
           enabled: schedulerStatus.maintenance.active,
           active: schedulerStatus.maintenance.active,
           revision: schedulerStatus.maintenance.cronJobId,
@@ -447,7 +447,7 @@ export async function readDashboardSystem(
       SELECT queue_name AS queue, state, count(*)::integer AS count,
              extract(epoch FROM clock_timestamp() - min(COALESCE(ready_at, run_at))) * 1000
                AS oldest_ms
-        FROM ironshift.job_runtime
+        FROM workhorse.job_runtime
        GROUP BY queue_name, state
        ORDER BY queue_name, state
     `),
@@ -461,8 +461,8 @@ export async function readDashboardSystem(
     }>(sql`
       SELECT j.id, j.queue_name AS queue, j.job_type AS type,
              o.current_attempt AS attempt, o.finished_at, o.error
-        FROM ironshift.job_outcome o
-        JOIN ironshift.job j ON j.id = o.job_id
+        FROM workhorse.job_outcome o
+        JOIN workhorse.job j ON j.id = o.job_id
        WHERE o.state = 'failed'
        ORDER BY o.finished_at DESC, j.id DESC
        LIMIT 50
@@ -506,13 +506,13 @@ export async function readDashboardWorkers(
     ), observed AS (
       SELECT worker_id AS id, count(*)::integer AS active_jobs, 0::integer AS completed_attempts,
              max(heartbeat_at) AS last_seen_at
-        FROM ironshift.job_runtime
+        FROM workhorse.job_runtime
        WHERE state = 'active' AND worker_id IN (SELECT id FROM configured)
        GROUP BY worker_id
       UNION ALL
       SELECT worker_id AS id, 0::integer AS active_jobs,
              count(*)::integer AS completed_attempts, max(finished_at) AS last_seen_at
-        FROM ironshift.attempt_history
+        FROM workhorse.attempt_history
        WHERE occurred_at >= clock_timestamp() - interval '5 minutes'
          AND worker_id IN (SELECT id FROM configured)
        GROUP BY worker_id
@@ -570,7 +570,7 @@ export async function readDashboardSnapshot(
         SELECT queue_name AS queue, state, count(*)::integer AS count,
                extract(epoch FROM clock_timestamp() - min(COALESCE(ready_at, run_at))) * 1000
                  AS oldest_ms
-          FROM ironshift.job_runtime
+          FROM workhorse.job_runtime
          GROUP BY queue_name, state
          ORDER BY queue_name, state
       `),
@@ -590,9 +590,9 @@ export async function readDashboardSnapshot(
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                j.max_attempts, j.payload, j.created_at,
                COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
-          FROM ironshift.job j
-          LEFT JOIN ironshift.job_runtime r ON r.job_id = j.id
-          LEFT JOIN ironshift.job_outcome o ON o.job_id = j.id
+          FROM workhorse.job j
+          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+          LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
          ORDER BY COALESCE(r.updated_at, o.updated_at, j.created_at) DESC, j.id DESC
          LIMIT 50
       `),
@@ -613,8 +613,8 @@ export async function readDashboardSnapshot(
                d.revision::text AS revision, d.updated_at,
                count(o.occurrence_at)::integer AS occurrence_count,
                max(o.fired_at) AS last_fired_at
-          FROM ironshift.schedule_definition d
-          LEFT JOIN ironshift.schedule_occurrence o
+          FROM workhorse.schedule_definition d
+          LEFT JOIN workhorse.schedule_occurrence o
             ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
          GROUP BY d.namespace, d.schedule_name
          ORDER BY d.namespace, d.schedule_name
@@ -631,13 +631,13 @@ export async function readDashboardSnapshot(
         ), observed AS (
           SELECT worker_id AS id, count(*)::integer AS active_jobs, 0::integer AS completed_attempts,
                  max(heartbeat_at) AS last_seen_at
-            FROM ironshift.job_runtime
+            FROM workhorse.job_runtime
            WHERE state = 'active' AND worker_id IN (SELECT id FROM configured)
            GROUP BY worker_id
           UNION ALL
           SELECT worker_id AS id, 0::integer AS active_jobs,
                  count(*)::integer AS completed_attempts, max(finished_at) AS last_seen_at
-            FROM ironshift.attempt_history
+            FROM workhorse.attempt_history
            WHERE occurred_at >= clock_timestamp() - interval '5 minutes'
              AND worker_id IN (SELECT id FROM configured)
            GROUP BY worker_id
@@ -660,8 +660,8 @@ export async function readDashboardSnapshot(
     }>(sql`
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                o.current_attempt AS attempt, o.finished_at, o.error
-          FROM ironshift.job_outcome o
-          JOIN ironshift.job j ON j.id = o.job_id
+          FROM workhorse.job_outcome o
+          JOIN workhorse.job j ON j.id = o.job_id
          WHERE o.state = 'failed'
          ORDER BY o.finished_at DESC, j.id DESC
          LIMIT 50
@@ -684,7 +684,7 @@ export async function readDashboardSnapshot(
         ), events AS (
           SELECT date_bin('30 seconds', occurred_at, timestamp with time zone '2000-01-01') AS bucket_start,
                  count(*) FILTER (WHERE event_type = 'enqueued')::integer AS enqueued
-            FROM ironshift.job_event
+            FROM workhorse.job_event
            WHERE occurred_at >= clock_timestamp() - interval '2 hours'
            GROUP BY 1
         ), attempts AS (
@@ -693,13 +693,13 @@ export async function readDashboardSnapshot(
                  count(*) FILTER (WHERE outcome = 'failed')::integer AS failed,
                  count(*) FILTER (WHERE outcome = 'retry')::integer AS retried,
                  avg(extract(epoch FROM finished_at - started_at) * 1000)::double precision AS average_duration_ms
-            FROM ironshift.attempt_history
+            FROM workhorse.attempt_history
            WHERE finished_at >= clock_timestamp() - interval '2 hours'
            GROUP BY 1
         ), active AS (
           SELECT date_bin('30 seconds', acquired_at, timestamp with time zone '2000-01-01') AS bucket_start,
                  count(*)::integer AS active
-            FROM ironshift.job_runtime
+            FROM workhorse.job_runtime
            WHERE state = 'active' AND acquired_at >= clock_timestamp() - interval '2 hours'
            GROUP BY 1
         )
@@ -736,7 +736,7 @@ export async function readDashboardSnapshot(
           name: "maintenance",
           cron: schedulerStatus.maintenance.schedule,
           queue: null,
-          type: "ironshift.maintain_v1",
+          type: "workhorse.maintain_v1",
           enabled: schedulerStatus.maintenance.active,
           active: schedulerStatus.maintenance.active,
           revision: schedulerStatus.maintenance.cronJobId,
@@ -878,9 +878,9 @@ export async function readDashboardJobDetail(
              r.worker_id, r.heartbeat_at, r.error AS runtime_error,
              o.state AS outcome_state, o.current_attempt AS outcome_attempt, o.finished_at,
              o.result, o.error AS outcome_error
-        FROM ironshift.job j
-        LEFT JOIN ironshift.job_runtime r ON r.job_id = j.id
-        LEFT JOIN ironshift.job_outcome o ON o.job_id = j.id
+        FROM workhorse.job j
+        LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+        LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
        WHERE j.id = ${id}
     `),
     database.execute<{
@@ -894,7 +894,7 @@ export async function readDashboardJobDetail(
     }>(sql`
       SELECT attempt, worker_id, outcome, started_at, finished_at,
              extract(epoch FROM finished_at - started_at) * 1000 AS duration_ms, error
-        FROM ironshift.attempt_history
+        FROM workhorse.attempt_history
        WHERE job_id = ${id}
        ORDER BY attempt, attempt_id
     `),
@@ -906,7 +906,7 @@ export async function readDashboardJobDetail(
       occurred_at: Date | string;
     }>(sql`
       SELECT event_id::text, attempt, event_type, details, occurred_at
-        FROM ironshift.job_event
+        FROM workhorse.job_event
        WHERE job_id = ${id}
        ORDER BY occurred_at, event_id
     `),

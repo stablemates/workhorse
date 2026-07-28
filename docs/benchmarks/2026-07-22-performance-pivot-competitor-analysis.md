@@ -5,21 +5,21 @@
 
 ## Executive conclusion
 
-The architecture pivot is **worth keeping for write-path efficiency and operational isolation**, but it did **not** make Ironshift categorically faster.
+The architecture pivot is **worth keeping for write-path efficiency and operational isolation**, but it did **not** make Workhorse categorically faster.
 
 Against the previous v3 architecture, the new live-runtime/cold-outcome model reduced hybrid enqueue time by roughly **7–12%** and fixed-run WAL by roughly **8–13%**. At one and four workers it brought hybrid WAL to about **1.02×** the internal conventional reference. Processing throughput was essentially unchanged at one and four workers and **8.5% lower** in the separate eight-worker run. The pivot therefore improves write amplification and hot-state boundedness, not proven dispatch speed.
 
 Against external products under a controlled per-job handler contract:
 
-- Ironshift measured **84–86% of Graphile Worker throughput** at one and four workers.
-- At 16 workers, Ironshift's mean was **12% higher**, but the confidence intervals were wide and overlapped substantially. Superiority is not established.
+- Workhorse measured **84–86% of Graphile Worker throughput** at one and four workers.
+- At 16 workers, Workhorse's mean was **12% higher**, but the confidence intervals were wide and overlapped substantially. Superiority is not established.
 - pg-boss's per-job worker configuration drained a preloaded queue at only **2–40 jobs/s** because its worker loop waits between single-job fetches. This is a product configuration characteristic, not evidence that its SQL engine is intrinsically slow.
 - Enabling pg-boss's native ten-job handler batching changed its measured mean to **6,020–15,156 jobs/s**. Because that changes handler invocation and settlement semantics, it is a sensitivity result, not a common-contract ranking.
 - At an offered load of 60 jobs/s, all three products completed all 600 jobs with maximum observed backlog 1. This workload was below capacity and does not distinguish overload behavior.
 
-The defensible position is not “Ironshift is faster.” It is:
+The defensible position is not “Workhorse is faster.” It is:
 
-> Ironshift is a correctness-first PostgreSQL execution protocol with explicit fencing and crash semantics, bounded live dispatch state, immutable operational history, and PostgreSQL-aware diagnostics. Its current per-job throughput is competitive with Graphile Worker on this small local test, while its retained audit model costs materially more WAL and storage.
+> Workhorse is a correctness-first PostgreSQL execution protocol with explicit fencing and crash semantics, bounded live dispatch state, immutable operational history, and PostgreSQL-aware diagnostics. Its current per-job throughput is competitive with Graphile Worker on this small local test, while its retained audit model costs materially more WAL and storage.
 
 ## Evidence artifacts
 
@@ -82,21 +82,21 @@ The controlled baseline uses:
 - graceful shutdown and telemetry outside timed phases;
 - explicit acknowledgement that handler completion is not a cross-product durable-settlement oracle.
 
-The products are not semantically equivalent. Ironshift retains job identity, outcomes, events, and attempts. pg-boss retains successful jobs in this run. Graphile Worker deletes successful jobs. WAL and storage are therefore native lifecycle costs, not retention-normalized rankings.
+The products are not semantically equivalent. Workhorse retains job identity, outcomes, events, and attempts. pg-boss retains successful jobs in this run. Graphile Worker deletes successful jobs. WAL and storage are therefore native lifecycle costs, not retention-normalized rankings.
 
 ### Fixed-run processing throughput
 
 Mean jobs/s with 95% Student-t confidence intervals across six repetitions:
 
-| Workers |            Ironshift |      Graphile Worker | Ironshift / Graphile |      pg-boss per-job |
+| Workers |            Workhorse |      Graphile Worker | Workhorse / Graphile |      pg-boss per-job |
 | ------: | -------------------: | -------------------: | -------------------: | -------------------: |
 |       1 |       747 [726, 767] |       891 [833, 949] |                83.8% |    2.04 [2.03, 2.05] |
 |       4 | 2,060 [1,949, 2,172] | 2,387 [1,783, 2,991] |                86.3% |    8.69 [8.68, 8.69] |
 |      16 | 4,164 [3,297, 5,031] | 3,703 [2,186, 5,220] |               112.4% | 39.81 [39.73, 39.90] |
 
-Ironshift and Graphile overlap at 16 workers and the environment variance is large. The safe conclusion is that Ironshift is in the same local order of magnitude, not that it wins.
+Workhorse and Graphile overlap at 16 workers and the environment variance is large. The safe conclusion is that Workhorse is in the same local order of magnitude, not that it wins.
 
-The pg-boss result needs special interpretation. With `batchSize: 1`, pg-boss intentionally does not hot-loop on every successful single-job fetch. A preloaded no-op queue therefore exposes polling cadence rather than maximum SQL throughput. The value is useful as a controlled per-job product-runtime result, but it is not a fair basis for claiming Ironshift is hundreds of times faster.
+The pg-boss result needs special interpretation. With `batchSize: 1`, pg-boss intentionally does not hot-loop on every successful single-job fetch. A preloaded no-op queue therefore exposes polling cadence rather than maximum SQL throughput. The value is useful as a controlled per-job product-runtime result, but it is not a fair basis for claiming Workhorse is hundreds of times faster.
 
 ### pg-boss batching sensitivity
 
@@ -114,13 +114,13 @@ This inversion is one of the most important results. For no-op work, runtime con
 
 Controlled mean enqueue durations for 100 jobs were:
 
-| Workers | Ironshift | Graphile Worker | pg-boss |
+| Workers | Workhorse | Graphile Worker | pg-boss |
 | ------: | --------: | --------------: | ------: |
 |       1 |   6.72 ms |         5.91 ms | 6.69 ms |
 |       4 |   6.81 ms |         6.14 ms | 6.62 ms |
 |      16 |   6.57 ms |         5.72 ms | 6.80 ms |
 
-Ironshift ingress was roughly 11–15% slower than Graphile Worker in this run and close to pg-boss. The difference is small in absolute terms and does not establish a practical user-visible disadvantage without larger payload and transaction tests.
+Workhorse ingress was roughly 11–15% slower than Graphile Worker in this run and close to pg-boss. The difference is small in absolute terms and does not establish a practical user-visible disadvantage without larger payload and transaction tests.
 
 ### Churn
 
@@ -128,13 +128,13 @@ At 60 offered jobs/s and 16 workers:
 
 | Target          | Completion rate | Max backlog |   Drain |         WAL | Schema growth |
 | --------------- | --------------: | ----------: | ------: | ----------: | ------------: |
-| Ironshift       |    59.98 jobs/s |           1 | 1.83 ms | 2,190,480 B |   1,376,256 B |
+| Workhorse       |    59.98 jobs/s |           1 | 1.83 ms | 2,190,480 B |   1,376,256 B |
 | pg-boss         |    59.96 jobs/s |           1 | 3.81 ms |   808,168 B |     303,104 B |
 | Graphile Worker |    59.97 jobs/s |           1 | 2.54 ms |   684,168 B |     196,608 B |
 
 All targets kept up. This is a below-capacity correctness result, not a saturation ranking. Churn has one observation per target, so no confidence-backed claim is justified.
 
-The resource cost is nevertheless visible under an equal-duration workload. Ironshift emitted about **2.7× pg-boss WAL** and **3.2× Graphile WAL**, with about **4.5× pg-boss** and **7.0× Graphile** schema growth. Much of this is the chosen retained identity/outcome/event/attempt model. The result is a cost that must be justified by operational value.
+The resource cost is nevertheless visible under an equal-duration workload. Workhorse emitted about **2.7× pg-boss WAL** and **3.2× Graphile WAL**, with about **4.5× pg-boss** and **7.0× Graphile** schema growth. Much of this is the chosen retained identity/outcome/event/attempt model. The result is a cost that must be justified by operational value.
 
 ## Supported selling points
 
@@ -153,11 +153,11 @@ These are supported by implementation, tests, and the current evidence:
 
 Do not claim:
 
-- that Ironshift is generally faster than Graphile Worker or pg-boss;
+- that Workhorse is generally faster than Graphile Worker or pg-boss;
 - that the 16-worker Graphile result proves superiority;
 - that controlled pg-boss per-job throughput represents its optimized capacity;
 - that pg-boss batch-10 throughput is semantically equivalent to per-job handlers;
-- that Ironshift is storage-efficient relative to products that delete successful jobs or retain less audit state;
+- that Workhorse is storage-efficient relative to products that delete successful jobs or retain less audit state;
 - that the queue is stable under saturation, overload, long retained history, held snapshots, or replication lag;
 - exactly-once external effects;
 - production readiness or a current cross-language runtime.
@@ -175,4 +175,4 @@ The next performance work should target round trips rather than another table-la
 5. run saturation sweeps and long retained-history tests at 10k, 100k, and 1M completed jobs;
 6. measure p95/p99 start latency, vacuum work, dead tuples, and claim-plan stability while cleanup is blocked.
 
-The commercial decision remains gated. Ironshift should proceed as a narrow correctness and operability core only if design partners value fencing, crash evidence, retained history, and PostgreSQL diagnostics enough to accept the measured write/storage premium. If buyers mainly want raw no-op throughput, pg-boss batching and mature incumbents are the stronger starting point.
+The commercial decision remains gated. Workhorse should proceed as a narrow correctness and operability core only if design partners value fencing, crash evidence, retained history, and PostgreSQL diagnostics enough to accept the measured write/storage premium. If buyers mainly want raw no-op throughput, pg-boss batching and mature incumbents are the stronger starting point.

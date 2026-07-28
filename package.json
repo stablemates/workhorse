@@ -1,13 +1,13 @@
 {
-  "name": "ironshift",
+  "name": "@workhorse/core",
   "version": "0.1.0",
   "private": false,
   "description": "Evidence-first PostgreSQL durable job queue validation MVP",
   "bin": {
-    "ironshift-bench": "./dist/src/cli/benchmark.js",
-    "ironshift-bench-competitors": "./dist/src/cli/benchmark-competitors.js",
-    "ironshift-health": "./dist/src/cli/health.js",
-    "ironshift-pg-cron-check": "./dist/src/cli/check-pg-cron.js"
+    "workhorse-bench": "./dist/src/cli/benchmark.js",
+    "workhorse-bench-competitors": "./dist/src/cli/benchmark-competitors.js",
+    "workhorse-health": "./dist/src/cli/health.js",
+    "workhorse-pg-cron-check": "./dist/src/cli/check-pg-cron.js"
   },
   "files": [
     "dist",
@@ -20,12 +20,16 @@
       "import": "./dist/src/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
-    "build": "pnpm build:runtime && pnpm --filter @ironshift/demo build",
+    "build": "pnpm build:runtime && pnpm --filter @workhorse/demo build",
     "build:runtime": "pnpm build:core && pnpm --filter './packages/*' build",
-    "demo": "pnpm db:reset:demo && pnpm build:runtime && pnpm --filter @ironshift/demo dev",
+    "demo": "pnpm db:reset:demo && pnpm build:runtime && pnpm --filter @workhorse/demo dev",
     "build:core": "tsc -p tsconfig.build.json && rm -rf dist/sql && cp -R sql dist/sql",
-    "typecheck": "pnpm typecheck:core && pnpm build:core && pnpm --filter './packages/*' typecheck && pnpm --filter @ironshift/demo typecheck",
+    "typecheck": "pnpm typecheck:core && pnpm build:core && pnpm --filter './packages/*' typecheck && pnpm --filter @workhorse/demo typecheck",
     "typecheck:core": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:integration": "vitest run test/integration.test.ts",

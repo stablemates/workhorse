@@ -1,12 +1,12 @@
-# `@ironshift/hono`
+# `@workhorse/hono`
 
-Hono middleware and Node.js lifecycle integration for Ironshift.
+Hono middleware and Node.js lifecycle integration for Workhorse.
 
 ```ts
-import { HonoIronshift, serveWithIronshift } from "@ironshift/hono";
+import { HonoWorkhorse, serveWithWorkhorse } from "@workhorse/hono";
 import { Hono } from "hono";
 
-const ironshift = new HonoIronshift(adapter, {
+const workhorse = new HonoWorkhorse(adapter, {
   workers: [
     {
       configure(worker) {
@@ -16,12 +16,12 @@ const ironshift = new HonoIronshift(adapter, {
   ],
 });
 
-const app = new Hono().use(ironshift.middleware()).post("/jobs", async (c) => {
-  const id = await c.var.ironshift.queue.enqueue("email.send", await c.req.json());
+const app = new Hono().use(workhorse.middleware()).post("/jobs", async (c) => {
+  const id = await c.var.workhorse.queue.enqueue("email.send", await c.req.json());
   return c.json({ id }, 202);
 });
 
-const server = await serveWithIronshift({ fetch: app.fetch, ironshift, port: 3000 });
+const server = await serveWithWorkhorse({ fetch: app.fetch, workhorse, port: 3000 });
 process.once("SIGTERM", () => void server.shutdown());
 ```
 
