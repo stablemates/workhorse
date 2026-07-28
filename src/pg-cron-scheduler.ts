@@ -274,9 +274,9 @@ export async function verifyPgCronExecution(
   targetDatabase: string,
   timeoutMs = 5_000,
 ): Promise<PgCronExecutionCheck> {
-  const prefix = `ironshift-preflight/${targetDatabase}/`;
+  const prefix = `workhorse-preflight/${targetDatabase}/`;
   const jobName = `${prefix}${process.pid}-${Date.now()}`;
-  const lockKey = `ironshift:pg_cron-preflight:${targetDatabase}`;
+  const lockKey = `workhorse:pg_cron-preflight:${targetDatabase}`;
   const client = await cronDatabase.connect();
   let scheduled = false;
   let result: PgCronExecutionCheck | undefined;
@@ -367,10 +367,10 @@ export async function verifyPgCronExecution(
 }
 
 /**
- * Reconciles declarative Ironshift schedules into pg_cron.
+ * Reconciles declarative Workhorse schedules into pg_cron.
  *
  * The target database owns payloads, occurrence deduplication, and queue semantics. The pg_cron
- * metadata database stores only generated calls to stable Ironshift SQL functions. Synchronization
+ * metadata database stores only generated calls to stable Workhorse SQL functions. Synchronization
  * is convergent across the two databases: revision-fenced target definitions commit first, then
  * namespaced cron jobs are transactionally updated and pruned under target-wide and namespace locks.
  */
@@ -396,7 +396,7 @@ export class PgCronScheduler {
     await this.assertCronRequirements();
     const targetClient = await this.database.connect();
     let cronClient: PoolClient | undefined;
-    const namespaceLockKey = `ironshift:schedules:${this.namespace}`;
+    const namespaceLockKey = `workhorse:schedules:${this.namespace}`;
     let targetLockKey: string | undefined;
     try {
       cronClient = await this.cronDatabase.connect();
@@ -414,7 +414,7 @@ export class PgCronScheduler {
           "the target and pg_cron metadata connections must use the same deployment role",
         );
       }
-      targetLockKey = `ironshift:pg_cron-target:${context.database_name}`;
+      targetLockKey = `workhorse:pg_cron-target:${context.database_name}`;
       await cronClient.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [targetLockKey]);
       await targetClient.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [
         namespaceLockKey,
@@ -429,7 +429,7 @@ export class PgCronScheduler {
         enabled: definition.enabled ?? true,
       }));
 
-      await targetClient.query("SELECT ironshift.sync_schedule_definitions_v1($1, $2::jsonb, $3)", [
+      await targetClient.query("SELECT workhorse.sync_schedule_definitions_v1($1, $2::jsonb, $3)", [
         this.namespace,
         JSON.stringify(serialized),
         prune,
@@ -437,7 +437,7 @@ export class PgCronScheduler {
 
       const revisions = await targetClient.query<{ schedule_name: string; revision: string }>(
         `SELECT schedule_name, revision::text
-           FROM ironshift.schedule_definition
+           FROM workhorse.schedule_definition
           WHERE namespace = $1 AND schedule_name = ANY($2::text[])`,
         [this.namespace, definitions.map((definition) => definition.name)],
       );
@@ -454,7 +454,7 @@ export class PgCronScheduler {
         return {
           jobName: `${prefix}${definition.name}`,
           schedule: definition.schedule,
-          command: `SELECT ironshift.fire_schedule_v1(${sqlLiteral(this.namespace)}, ${sqlLiteral(definition.name)}, ${revision})`,
+          command: `SELECT workhorse.fire_schedule_v1(${sqlLiteral(this.namespace)}, ${sqlLiteral(definition.name)}, ${revision})`,
           active: definition.enabled ?? true,
         };
       });
@@ -462,7 +462,7 @@ export class PgCronScheduler {
         desired.push({
           jobName: `${prefix}${MAINTENANCE_NAME}`,
           schedule: maintenance.schedule,
-          command: `SELECT * FROM ironshift.maintain_v1(${maintenance.batchSize}, ${maintenance.batchSize}, ${maintenance.occurrenceRetentionDays}, ${maintenance.occurrencePruneLimit})`,
+          command: `SELECT * FROM workhorse.maintain_v1(${maintenance.batchSize}, ${maintenance.batchSize}, ${maintenance.occurrenceRetentionDays}, ${maintenance.occurrencePruneLimit})`,
           active: true,
         });
       }
@@ -493,8 +493,8 @@ export class PgCronScheduler {
   async trigger(name: string, occurrenceAt = new Date()): Promise<string | null> {
     validateName(name, "schedule name");
     const result = await this.database.query<{ job_id: string | null }>(
-      `SELECT ironshift.fire_schedule_v1($1, $2, definition.revision, $3) AS job_id
-         FROM ironshift.schedule_definition definition
+      `SELECT workhorse.fire_schedule_v1($1, $2, definition.revision, $3) AS job_id
+         FROM workhorse.schedule_definition definition
         WHERE definition.namespace = $1 AND definition.schedule_name = $2`,
       [this.namespace, name, occurrenceAt.toISOString()],
     );
@@ -546,7 +546,7 @@ export class PgCronScheduler {
   }
 
   private jobPrefix(targetDatabase: string): string {
-    return `ironshift/${targetDatabase}/${this.namespace}/`;
+    return `workhorse/${targetDatabase}/${this.namespace}/`;
   }
 
   private async syncCronJobs(
@@ -572,7 +572,7 @@ export class PgCronScheduler {
         throw new Error("the deployment role requires USAGE on the cron schema");
       }
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-        `ironshift:pg_cron:${context.database_name}:${this.namespace}`,
+        `workhorse:pg_cron:${context.database_name}:${this.namespace}`,
       ]);
 
       const before = await client.query<ExistingCronJobRow>(
@@ -639,10 +639,10 @@ export class PgCronScheduler {
         `SELECT definition.schedule_name, definition.revision::text,
                 definition.cron_expression, definition.enabled,
                 latest.occurrence_at AS last_occurrence_at, latest.job_id AS last_job_id
-           FROM ironshift.schedule_definition definition
+           FROM workhorse.schedule_definition definition
            LEFT JOIN LATERAL (
              SELECT occurrence.occurrence_at, occurrence.job_id
-               FROM ironshift.schedule_occurrence occurrence
+               FROM workhorse.schedule_occurrence occurrence
               WHERE occurrence.namespace = definition.namespace
                 AND occurrence.schedule_name = definition.schedule_name
               ORDER BY occurrence.occurrence_at DESC LIMIT 1
@@ -719,7 +719,7 @@ export class PgCronScheduler {
   }
 }
 
-async function unscheduleIronshiftTargetLocked(
+async function unscheduleWorkhorseTargetLocked(
   client: PoolClient,
   targetDatabase: string,
 ): Promise<number> {
@@ -731,7 +731,7 @@ async function unscheduleIronshiftTargetLocked(
     "SELECT jobid::text, jobname FROM cron.job WHERE database = $1 AND username = current_user",
     [targetDatabase],
   );
-  const owned = jobs.rows.filter((job) => job.jobname.startsWith(`ironshift/${targetDatabase}/`));
+  const owned = jobs.rows.filter((job) => job.jobname.startsWith(`workhorse/${targetDatabase}/`));
   for (const job of owned) {
     await client.query("SELECT cron.unschedule($1::bigint)", [job.jobid]);
   }
@@ -739,13 +739,13 @@ async function unscheduleIronshiftTargetLocked(
 }
 
 /** Internal coordination seam used by reset tooling to keep the lock through DROP and CREATE. */
-export async function withIronshiftTargetCronLock<T>(
+export async function withWorkhorseTargetCronLock<T>(
   cronDatabase: Pool,
   targetDatabase: string,
   action: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   const client = await cronDatabase.connect();
-  const lockKey = `ironshift:pg_cron-target:${targetDatabase}`;
+  const lockKey = `workhorse:pg_cron-target:${targetDatabase}`;
   try {
     await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [lockKey]);
     return await action(client);
@@ -758,23 +758,23 @@ export async function withIronshiftTargetCronLock<T>(
 }
 
 /** Remove every pg_cron job owned by the current role for one target database. */
-export async function unscheduleIronshiftTarget(
+export async function unscheduleWorkhorseTarget(
   cronDatabase: Pool,
   targetDatabase: string,
 ): Promise<number> {
-  return withIronshiftTargetCronLock(cronDatabase, targetDatabase, (client) =>
-    unscheduleIronshiftTargetLocked(client, targetDatabase),
+  return withWorkhorseTargetCronLock(cronDatabase, targetDatabase, (client) =>
+    unscheduleWorkhorseTargetLocked(client, targetDatabase),
   );
 }
 
 /** Reset-only helper that keeps cleanup and the caller's destructive action under one lock. */
-export async function unscheduleIronshiftTargetWhileLocked(
+export async function unscheduleWorkhorseTargetWhileLocked(
   cronDatabase: Pool,
   targetDatabase: string,
   action: (client: PoolClient, unscheduled: number) => Promise<void>,
 ): Promise<number> {
-  return withIronshiftTargetCronLock(cronDatabase, targetDatabase, async (client) => {
-    const unscheduled = await unscheduleIronshiftTargetLocked(client, targetDatabase);
+  return withWorkhorseTargetCronLock(cronDatabase, targetDatabase, async (client) => {
+    const unscheduled = await unscheduleWorkhorseTargetLocked(client, targetDatabase);
     await action(client, unscheduled);
     return unscheduled;
   });

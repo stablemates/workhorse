@@ -12,24 +12,24 @@ interface LocalDatabaseDefinition {
 
 const localDatabaseDefinitions: Record<LocalDatabasePurpose, LocalDatabaseDefinition> = {
   dev: {
-    environmentVariable: "IRONSHIFT_DEV_DATABASE_URL",
+    environmentVariable: "WORKHORSE_DEV_DATABASE_URL",
     suffix: "_dev",
-    defaultUrl: "postgres://ironshift:ironshift@localhost:5432/ironshift_dev",
+    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_dev",
   },
   test: {
-    environmentVariable: "IRONSHIFT_TEST_DATABASE_URL",
+    environmentVariable: "WORKHORSE_TEST_DATABASE_URL",
     suffix: "_test",
-    defaultUrl: "postgres://ironshift:ironshift@localhost:5432/ironshift_test",
+    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_test",
   },
   bench: {
-    environmentVariable: "IRONSHIFT_BENCH_DATABASE_URL",
+    environmentVariable: "WORKHORSE_BENCH_DATABASE_URL",
     suffix: "_bench",
-    defaultUrl: "postgres://ironshift:ironshift@localhost:5432/ironshift_bench",
+    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_bench",
   },
   demo: {
-    environmentVariable: "IRONSHIFT_DEMO_DATABASE_URL",
+    environmentVariable: "WORKHORSE_DEMO_DATABASE_URL",
     suffix: "_demo",
-    defaultUrl: "postgres://ironshift:ironshift@localhost:5432/ironshift_demo",
+    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_demo",
   },
 };
 

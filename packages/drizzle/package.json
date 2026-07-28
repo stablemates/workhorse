@@ -1,7 +1,7 @@
 {
-  "name": "@ironshift/drizzle",
+  "name": "@workhorse/drizzle",
   "version": "0.1.0",
-  "description": "Drizzle ORM provider for Ironshift",
+  "description": "Drizzle ORM provider for Workhorse",
   "files": [
     "dist",
     "README.md"
@@ -23,13 +23,13 @@
   },
   "devDependencies": {
     "@types/pg": "^8.15.5",
+    "@workhorse/core": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "ironshift": "workspace:*",
     "pg": "^8.16.3"
   },
   "peerDependencies": {
+    "@workhorse/core": ">=0.1.0 <1",
     "drizzle-orm": ">=0.45.0 <1",
-    "ironshift": ">=0.1.0 <1",
     "pg": ">=8.13 <9"
   },
   "engines": {

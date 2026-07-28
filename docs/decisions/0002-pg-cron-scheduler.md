@@ -8,19 +8,19 @@
 
 Workers previously called due-job promotion and expired-lease recovery before every claim attempt. The partial indexes make empty scans selective, but the design still adds two sequential database round trips per processed job and duplicates maintenance work across worker instances.
 
-Ironshift also needs recurring jobs that can be defined in application code, reviewed with a deployment, and synchronized without granting applications arbitrary SQL scheduling.
+Workhorse also needs recurring jobs that can be defined in application code, reviewed with a deployment, and synchronized without granting applications arbitrary SQL scheduling.
 
 ## Decision
 
-Make pg_cron a first-class Ironshift platform requirement for production scheduling and maintenance.
+Make pg_cron a first-class Workhorse platform requirement for production scheduling and maintenance.
 
 `PgCronScheduler` synchronizes a namespaced desired state during deployment:
 
-1. Schedule definitions and payloads are stored in the target database's `ironshift.schedule_definition` table.
-2. pg_cron stores only generated calls to `ironshift.fire_schedule_v1(namespace, name, revision)` in its configured metadata database.
-3. A durable `schedule_occurrence` key deduplicates a supplied occurrence second before normal Ironshift enqueue semantics run. Generated pg_cron calls use their observed execution second because pg_cron does not expose the planned slot to the target command.
+1. Schedule definitions and payloads are stored in the target database's `workhorse.schedule_definition` table.
+2. pg_cron stores only generated calls to `workhorse.fire_schedule_v1(namespace, name, revision)` in its configured metadata database.
+3. A durable `schedule_occurrence` key deduplicates a supplied occurrence second before normal Workhorse enqueue semantics run. Generated pg_cron calls use their observed execution second because pg_cron does not expose the planned slot to the target command.
 4. One namespaced maintenance job calls `maintain_v1`, which promotes due jobs, recovers expired leases, and prunes old occurrence keys in bounded batches.
-5. Removed definitions are deactivated and their owned pg_cron entries are pruned. Other namespaces and non-Ironshift cron jobs are never touched.
+5. Removed definitions are deactivated and their owned pg_cron entries are pruned. Other namespaces and non-Workhorse cron jobs are never touched.
 6. A target-wide metadata session lock coordinates sync with reset cleanup, while a target namespace lock and pg_cron transaction lock serialize reconciliation. Material definition changes increment a revision embedded in generated commands. If target state commits before cron metadata fails, the old command becomes a no-op rather than executing the new payload at the old cadence.
 
 Workers default to externally coordinated maintenance and execute only the claim path. `maintenance: "worker"` remains an explicit compatibility fallback.
@@ -29,11 +29,11 @@ Workers default to externally coordinated maintenance and execute only the claim
 
 - Synchronization uses the same least-privilege role for the target and pg_cron metadata connections.
 - Schedule names and namespaces use a restricted identifier vocabulary.
-- Users declare Ironshift jobs, not arbitrary SQL commands.
-- Generated cron commands contain only validated identifiers and stable Ironshift functions.
+- Users declare Workhorse jobs, not arbitrary SQL commands.
+- Generated cron commands contain only validated identifiers and stable Workhorse functions.
 - The cron job name includes target database, namespace, and schedule name.
-- Synchronization prunes only jobs owned by the current role with the exact Ironshift target/namespace prefix.
-- Database reset tooling unschedules all Ironshift-owned jobs targeting the database before dropping it.
+- Synchronization prunes only jobs owned by the current role with the exact Workhorse target/namespace prefix.
+- Database reset tooling unschedules all Workhorse-owned jobs targeting the database before dropping it.
 - Stale, disabled, or pruned definitions make `fire_schedule_v1` a no-op; definition row locking makes disable wait for an already-started fire before returning.
 - Schedule occurrence insertion and enqueue are one target-database transaction.
 
@@ -65,11 +65,11 @@ Portable, but it imposes avoidable query and connection-pool load and multiplies
 
 ### Store arbitrary SQL in application schedule definitions
 
-More flexible, but it creates a broad database-execution product and expands injection, privilege, review, and portability risk. Ironshift schedules enqueue typed jobs instead.
+More flexible, but it creates a broad database-execution product and expands injection, privilege, review, and portability risk. Workhorse schedules enqueue typed jobs instead.
 
 ### Require an external scheduler service
 
-Avoids a PostgreSQL extension, but adds another control plane and weakens Ironshift's same-database operational model.
+Avoids a PostgreSQL extension, but adds another control plane and weakens Workhorse's same-database operational model.
 
 ## Validation
 

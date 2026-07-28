@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { createIronshiftAdapter } from "../src/adapter.js";
+import { createWorkhorseAdapter } from "../src/adapter.js";
 import type { Queryable } from "../src/types.js";
 
 function queryable(): Queryable {
   return { query: vi.fn<Queryable["query"]>() } as unknown as Queryable;
 }
 
-describe("createIronshiftAdapter", () => {
+describe("createWorkhorseAdapter", () => {
   it("creates queues for provider-owned transactions without changing the default queue", async () => {
     const database = queryable();
     const transactionDatabase = queryable();
@@ -14,7 +14,7 @@ describe("createIronshiftAdapter", () => {
     const adaptTransaction = vi.fn<(transaction: { id: string }) => Queryable>(
       () => transactionDatabase,
     );
-    const adapter = createIronshiftAdapter<{ id: string }>({
+    const adapter = createWorkhorseAdapter<{ id: string }>({
       database,
       adaptTransaction,
       defaultQueue: "mail",
@@ -29,7 +29,7 @@ describe("createIronshiftAdapter", () => {
 
   it("creates workers from the shared queue and closes provider resources once", async () => {
     const close = vi.fn<() => Promise<void>>(async () => undefined);
-    const adapter = createIronshiftAdapter({
+    const adapter = createWorkhorseAdapter({
       database: queryable(),
       adaptTransaction: (transaction: Queryable) => transaction,
       close,

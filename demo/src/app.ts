@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createDrizzleAdapter } from "@ironshift/drizzle";
-import { HonoIronshift } from "@ironshift/hono";
+import { createDrizzleAdapter } from "@workhorse/drizzle";
+import { HonoWorkhorse } from "@workhorse/hono";
 import { RPCHandler } from "@orpc/server/fetch";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { PgCronScheduler, type Json, type PgCronSyncResult } from "ironshift";
+import { PgCronScheduler, type Json, type PgCronSyncResult } from "@workhorse/core";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { DashboardRefreshHub } from "./dashboard-refresh.js";
@@ -23,7 +23,7 @@ const DEMO_QUEUE = "demo";
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
 export const DEMO_WORKER_POLL_MS = 15_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
-export const DEMO_SCHEDULE_NAMESPACE = "ironshift-demo";
+export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
 export const DEMO_MAINTENANCE = {
   schedule: "1 second",
@@ -32,7 +32,7 @@ export const DEMO_MAINTENANCE = {
   occurrencePruneLimit: 10_000,
 } as const;
 const DEMO_INDEX = {
-  name: "Ironshift demo",
+  name: "Workhorse demo",
   endpoints: [
     "POST /orders",
     "POST /demo/retries",
@@ -116,7 +116,7 @@ function heartbeatSchedule(enabled = true) {
 
 export async function installDemoSchema(database: DemoDatabase): Promise<void> {
   await database.execute(sql`
-    CREATE TABLE IF NOT EXISTS public.ironshift_demo_order (
+    CREATE TABLE IF NOT EXISTS public.workhorse_demo_order (
       id uuid PRIMARY KEY,
       customer_email text NOT NULL,
       description text NOT NULL,
@@ -126,17 +126,17 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
     )
   `);
   await database.execute(sql`
-    CREATE INDEX IF NOT EXISTS ironshift_demo_order_created_at_idx
-    ON public.ironshift_demo_order (created_at DESC)
+    CREATE INDEX IF NOT EXISTS workhorse_demo_order_created_at_idx
+    ON public.workhorse_demo_order (created_at DESC)
   `);
   await database.execute(sql`
-    CREATE TABLE IF NOT EXISTS public.ironshift_demo_seed (
+    CREATE TABLE IF NOT EXISTS public.workhorse_demo_seed (
       name text PRIMARY KEY,
       created_at timestamptz NOT NULL DEFAULT clock_timestamp()
     )
   `);
   await database.execute(sql`
-    CREATE TABLE IF NOT EXISTS public.ironshift_demo_audit (
+    CREATE TABLE IF NOT EXISTS public.workhorse_demo_audit (
       id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       actor text NOT NULL CHECK (actor <> ''),
       reason text NOT NULL CHECK (reason <> ''),
@@ -150,8 +150,8 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
     )
   `);
   await database.execute(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS ironshift_demo_audit_request_id_idx
-    ON public.ironshift_demo_audit (request_id)
+    CREATE UNIQUE INDEX IF NOT EXISTS workhorse_demo_audit_request_id_idx
+    ON public.workhorse_demo_audit (request_id)
   `);
 }
 
@@ -185,7 +185,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
     async enqueueTest(kind, audit) {
       const target = `job:${kind}`;
       return database.transaction(async (transaction) => {
-        const ironshift = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
         const type = {
           success: RECURRING_JOB_TYPE,
           retry: RETRY_JOB_TYPE,
@@ -195,9 +195,9 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
         const maxAttempts = kind === "failure" ? 1 : 3;
         const payload: Json =
           kind === "success" ? { source: "operator" } : { label: `operator-${kind}` };
-        const jobId = await ironshift.queue.enqueue(type, payload, { maxAttempts });
+        const jobId = await workhorse.queue.enqueue(type, payload, { maxAttempts });
         await transaction.execute(sql`
-          INSERT INTO public.ironshift_demo_audit
+          INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
@@ -220,7 +220,7 @@ export function createLocalScheduleController(
         throw new Error(`Schedule ${name} is not controlled here`);
       if (scheduler) {
         const before = await database.execute<{ enabled: boolean }>(sql`
-          SELECT enabled FROM ironshift.schedule_definition
+          SELECT enabled FROM workhorse.schedule_definition
            WHERE namespace = ${DEMO_SCHEDULE_NAMESPACE} AND schedule_name = ${name}
         `);
         if (before.rows.length === 0) throw new Error(`Schedule ${name} not found`);
@@ -229,7 +229,7 @@ export function createLocalScheduleController(
           prune: false,
         });
         await database.execute(sql`
-          INSERT INTO public.ironshift_demo_audit
+          INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
@@ -240,19 +240,19 @@ export function createLocalScheduleController(
       }
       const rows = await database.transaction(async (transaction) => {
         const before = await transaction.execute<{ enabled: boolean }>(sql`
-          SELECT enabled FROM ironshift.schedule_definition
+          SELECT enabled FROM workhorse.schedule_definition
            WHERE namespace = ${DEMO_SCHEDULE_NAMESPACE} AND schedule_name = ${name}
            FOR UPDATE
         `);
         if (before.rows.length === 0) throw new Error(`Schedule ${name} not found`);
         const updated = await transaction.execute<{ enabled: boolean }>(sql`
-          UPDATE ironshift.schedule_definition
+          UPDATE workhorse.schedule_definition
              SET enabled = ${enabled}, revision = revision + 1, updated_at = clock_timestamp()
            WHERE namespace = ${DEMO_SCHEDULE_NAMESPACE} AND schedule_name = ${name}
            RETURNING enabled
         `);
         await transaction.execute(sql`
-          INSERT INTO public.ironshift_demo_audit
+          INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
@@ -275,7 +275,7 @@ export function createDemoApplication(
     defaultQueue: DEMO_QUEUE,
     close: options.close,
   });
-  const ironshift = new HonoIronshift(adapter, {
+  const workhorse = new HonoWorkhorse(adapter, {
     workers: DEMO_WORKERS.map((workerId) => ({
       options: {
         queue: DEMO_QUEUE,
@@ -324,7 +324,7 @@ export function createDemoApplication(
   const rpcHandler = new RPCHandler(dashboardRouter);
 
   const app = new Hono()
-    .use("*", ironshift.middleware())
+    .use("*", workhorse.middleware())
     .get("/", (context) =>
       options.dashboard === false ? context.json(DEMO_INDEX) : context.redirect("/tasks"),
     )
@@ -343,7 +343,7 @@ export function createDemoApplication(
           description: request.description,
           status: "queued",
         });
-        return context.var.ironshift
+        return context.var.workhorse
           .forTransaction(transaction)
           .enqueue(ORDER_JOB_TYPE, { orderId }, { maxAttempts: 3 });
       });
@@ -352,7 +352,7 @@ export function createDemoApplication(
       return context.json({ orderId, jobId, status: "queued" }, 202);
     })
     .post("/demo/retries", async (context) => {
-      const jobId = await context.var.ironshift.queue.enqueue(
+      const jobId = await context.var.workhorse.queue.enqueue(
         RETRY_JOB_TYPE,
         { label: "recover-after-one-failure" },
         { maxAttempts: 3 },
@@ -361,7 +361,7 @@ export function createDemoApplication(
       return context.json({ jobId, status: "queued", expectedAttempts: 2 }, 202);
     })
     .post("/demo/failures", async (context) => {
-      const jobId = await context.var.ironshift.queue.enqueue(
+      const jobId = await context.var.workhorse.queue.enqueue(
         FAILURE_JOB_TYPE,
         { label: "terminal-failure" },
         { maxAttempts: 1 },
@@ -377,12 +377,12 @@ export function createDemoApplication(
       return context.json({ order });
     })
     .get("/jobs/:id", async (context) => {
-      const job = await context.var.ironshift.queue.getJob(context.req.param("id"));
+      const job = await context.var.workhorse.queue.getJob(context.req.param("id"));
       if (!job) return context.json({ error: "Job not found" }, 404);
       return context.json({ job: { ...job, fenceToken: job.fenceToken.toString() } });
     })
     .get("/health", async (context) =>
-      context.json({ status: "ok", ironshift: await context.var.ironshift.queue.health() }),
+      context.json({ status: "ok", workhorse: await context.var.workhorse.queue.health() }),
     );
 
   if (options.dashboard !== false) {
@@ -391,7 +391,7 @@ export function createDemoApplication(
         prefix: "/rpc",
         context: {
           database,
-          queue: context.var.ironshift.queue,
+          queue: context.var.workhorse.queue,
           configuredWorkers: DEMO_WORKERS,
           operator: options.operator ?? createReadOnlyOperator(),
           scheduleController: options.scheduleController,
@@ -429,7 +429,7 @@ export function createDemoApplication(
     );
   }
 
-  return { app, ironshift, dashboardRefresh };
+  return { app, workhorse, dashboardRefresh };
 }
 
 export async function seedDemoData(
@@ -437,7 +437,7 @@ export async function seedDemoData(
   app: ReturnType<typeof createDemoApplication>["app"],
 ) {
   const marker = await database.execute<{ name: string }>(sql`
-    INSERT INTO public.ironshift_demo_seed (name)
+    INSERT INTO public.workhorse_demo_seed (name)
     VALUES ('default-dashboard-v2')
     ON CONFLICT (name) DO NOTHING
     RETURNING name
@@ -465,8 +465,8 @@ export async function seedDemoData(
     const order = (await orderResponse.json()) as { jobId: string };
     const retry = (await retryResponse.json()) as { jobId: string };
     const failure = (await failureResponse.json()) as { jobId: string };
-    const ironshift = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
-    const scheduledJobId = await ironshift.queue.enqueue(
+    const workhorse = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
+    const scheduledJobId = await workhorse.queue.enqueue(
       RECURRING_JOB_TYPE,
       { source: "scheduled-seed" },
       { runAt: new Date(Date.now() + 24 * 60 * 60 * 1_000) },
@@ -474,7 +474,7 @@ export async function seedDemoData(
     return { seeded: true, jobIds: [order.jobId, retry.jobId, failure.jobId, scheduledJobId] };
   } catch (error) {
     await database.execute(sql`
-      DELETE FROM public.ironshift_demo_seed WHERE name = 'default-dashboard-v2'
+      DELETE FROM public.workhorse_demo_seed WHERE name = 'default-dashboard-v2'
     `);
     throw error;
   }

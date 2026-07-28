@@ -6,7 +6,7 @@ import {
   isLocalDatabasePurpose,
   localDatabaseUrl,
 } from "../local-database.js";
-import { unscheduleIronshiftTargetWhileLocked } from "../pg-cron-scheduler.js";
+import { unscheduleWorkhorseTargetWhileLocked } from "../pg-cron-scheduler.js";
 import { installSchema } from "../schema.js";
 
 // This command is intentionally harder to invoke than normal development commands because it
@@ -26,9 +26,9 @@ if (
   target.hostname !== "localhost" &&
   target.hostname !== "127.0.0.1" &&
   target.hostname !== "::1" &&
-  process.env.IRONSHIFT_ALLOW_REMOTE_RESET !== "1"
+  process.env.WORKHORSE_ALLOW_REMOTE_RESET !== "1"
 ) {
-  throw new Error("Refusing to reset a remote database without IRONSHIFT_ALLOW_REMOTE_RESET=1");
+  throw new Error("Refusing to reset a remote database without WORKHORSE_ALLOW_REMOTE_RESET=1");
 }
 
 function identifier(value: string): string {
@@ -42,11 +42,11 @@ console.log(
 );
 const admin = new Pool({ connectionString: adminUrl.toString(), max: 1 });
 try {
-  await unscheduleIronshiftTargetWhileLocked(
+  await unscheduleWorkhorseTargetWhileLocked(
     admin,
     targetDatabaseName,
     async (client, unscheduled) => {
-      if (unscheduled > 0) console.log(`Unscheduled ${unscheduled} Ironshift pg_cron jobs`);
+      if (unscheduled > 0) console.log(`Unscheduled ${unscheduled} Workhorse pg_cron jobs`);
       // FORCE terminates other sessions. The purpose suffix, confirmation, and host guard above are
       // the safety boundary around this destructive operation.
       await client.query(`DROP DATABASE IF EXISTS ${identifier(targetDatabaseName)} WITH (FORCE)`);

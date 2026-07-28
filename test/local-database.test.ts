@@ -7,20 +7,20 @@ import {
 
 describe("local database roles", () => {
   it.each([
-    ["dev", "ironshift_dev"],
-    ["test", "ironshift_test"],
-    ["bench", "ironshift_bench"],
-    ["demo", "ironshift_demo"],
+    ["dev", "workhorse_dev"],
+    ["test", "workhorse_test"],
+    ["bench", "workhorse_bench"],
+    ["demo", "workhorse_demo"],
   ] as const)("resolves the %s role independently", (purpose, expectedName) => {
     expect(databaseName(localDatabaseUrl(purpose, {}))).toBe(expectedName);
   });
 
   it("uses only the environment override for the requested role", () => {
     const environment = {
-      IRONSHIFT_DEV_DATABASE_URL: "postgres://localhost/custom_dev",
-      IRONSHIFT_TEST_DATABASE_URL: "postgres://localhost/custom_test",
-      IRONSHIFT_BENCH_DATABASE_URL: "postgres://localhost/custom_bench",
-      IRONSHIFT_DEMO_DATABASE_URL: "postgres://localhost/custom_demo",
+      WORKHORSE_DEV_DATABASE_URL: "postgres://localhost/custom_dev",
+      WORKHORSE_TEST_DATABASE_URL: "postgres://localhost/custom_test",
+      WORKHORSE_BENCH_DATABASE_URL: "postgres://localhost/custom_bench",
+      WORKHORSE_DEMO_DATABASE_URL: "postgres://localhost/custom_demo",
       DATABASE_URL: "postgres://localhost/ignored",
     };
 
@@ -31,7 +31,7 @@ describe("local database roles", () => {
   });
 
   it("rejects cross-purpose destructive targets", () => {
-    expect(() => assertLocalDatabasePurpose("postgres://localhost/ironshift_dev", "bench")).toThrow(
+    expect(() => assertLocalDatabasePurpose("postgres://localhost/workhorse_dev", "bench")).toThrow(
       "must end in _bench",
     );
   });

@@ -7,11 +7,11 @@ import {
   MAX_ENQUEUE_BATCH_SIZE,
   PgCronScheduler,
   Queue,
-  unscheduleIronshiftTarget,
+  unscheduleWorkhorseTarget,
   verifyPgCronExecution,
   Worker,
 } from "../src/index.js";
-import { unscheduleIronshiftTargetWhileLocked } from "../src/pg-cron-scheduler.js";
+import { unscheduleWorkhorseTargetWhileLocked } from "../src/pg-cron-scheduler.js";
 import {
   assertLocalDatabasePurpose,
   databaseName,
@@ -28,21 +28,21 @@ const queue = new Queue(pool);
 const scheduler = new PgCronScheduler(pool, cronPool, { namespace: "integration" });
 
 beforeAll(async () => {
-  await unscheduleIronshiftTarget(cronPool, databaseName(databaseUrl));
-  await pool.query("DROP SCHEMA IF EXISTS ironshift CASCADE");
+  await unscheduleWorkhorseTarget(cronPool, databaseName(databaseUrl));
+  await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
   await installSchema(pool);
 });
 
 beforeEach(async () => {
-  await unscheduleIronshiftTarget(cronPool, databaseName(databaseUrl));
-  await pool.query(`TRUNCATE ironshift.job_event, ironshift.attempt_history,
-    ironshift.schedule_occurrence, ironshift.schedule_definition,
-    ironshift.job_outcome, ironshift.job_runtime, ironshift.job RESTART IDENTITY CASCADE`);
-  await pool.query("ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1");
+  await unscheduleWorkhorseTarget(cronPool, databaseName(databaseUrl));
+  await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
+    workhorse.schedule_occurrence, workhorse.schedule_definition,
+    workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE`);
+  await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
 });
 
 afterAll(async () => {
-  await unscheduleIronshiftTarget(cronPool, databaseName(databaseUrl));
+  await unscheduleWorkhorseTarget(cronPool, databaseName(databaseUrl));
   await cronPool.end();
   await pool.end();
 });
@@ -50,7 +50,7 @@ afterAll(async () => {
 describe("live-runtime queue protocol", () => {
   it("installs schema v2 without compatibility write tables", async () => {
     const version = await pool.query<{ version: number }>(
-      "SELECT max(version)::integer AS version FROM ironshift.schema_version",
+      "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
     expect(version.rows[0]?.version).toBe(2);
 
@@ -59,7 +59,7 @@ describe("live-runtime queue protocol", () => {
         FROM pg_inherits inheritance
         JOIN pg_class parent ON parent.oid = inheritance.inhparent
         JOIN pg_namespace namespace ON namespace.oid = parent.relnamespace
-       WHERE namespace.nspname = 'ironshift'
+       WHERE namespace.nspname = 'workhorse'
          AND parent.relname IN ('job_event', 'attempt_history')
        GROUP BY parent.relname
        ORDER BY parent.relname`);
@@ -72,7 +72,7 @@ describe("live-runtime queue protocol", () => {
       `
       SELECT c.relname
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = 'ironshift'
+       WHERE n.nspname = 'workhorse'
          AND c.relname = ANY($1::text[])
          AND c.relkind IN ('r', 'p', 'v', 'm')`,
       [["job_current", "ready_job", "scheduled_job", "lease"]],
@@ -82,7 +82,7 @@ describe("live-runtime queue protocol", () => {
     const indexes = await pool.query<{ indexname: string }>(
       `
       SELECT indexname FROM pg_indexes
-       WHERE schemaname = 'ironshift'
+       WHERE schemaname = 'workhorse'
          AND indexname = ANY($1::text[])
        ORDER BY indexname`,
       [["job_runtime_expired_active_idx", "job_runtime_ready_idx", "job_runtime_scheduled_idx"]],
@@ -173,10 +173,10 @@ describe("live-runtime queue protocol", () => {
 
   it("serializes target cleanup behind the same metadata lock used by deploy sync", async () => {
     const blocker = await cronPool.connect();
-    const lockKey = `ironshift:pg_cron-target:${databaseName(databaseUrl)}`;
+    const lockKey = `workhorse:pg_cron-target:${databaseName(databaseUrl)}`;
     await blocker.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [lockKey]);
     let cleaned = false;
-    const cleanup = unscheduleIronshiftTarget(cronPool, databaseName(databaseUrl)).then((count) => {
+    const cleanup = unscheduleWorkhorseTarget(cronPool, databaseName(databaseUrl)).then((count) => {
       cleaned = true;
       return count;
     });
@@ -197,7 +197,7 @@ describe("live-runtime queue protocol", () => {
     const actionStarted = new Promise<void>((resolve) => {
       signalActionStarted = resolve;
     });
-    const resetting = unscheduleIronshiftTargetWhileLocked(
+    const resetting = unscheduleWorkhorseTargetWhileLocked(
       cronPool,
       databaseName(databaseUrl),
       async () => {
@@ -211,7 +211,7 @@ describe("live-runtime queue protocol", () => {
     let contenderEntered = false;
     const competing = contender
       .query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [
-        `ironshift:pg_cron-target:${databaseName(databaseUrl)}`,
+        `workhorse:pg_cron-target:${databaseName(databaseUrl)}`,
       ])
       .then(() => {
         contenderEntered = true;
@@ -224,7 +224,7 @@ describe("live-runtime queue protocol", () => {
     await competing;
     expect(contenderEntered).toBe(true);
     await contender.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [
-      `ironshift:pg_cron-target:${databaseName(databaseUrl)}`,
+      `workhorse:pg_cron-target:${databaseName(databaseUrl)}`,
     ]);
     contender.release();
   });
@@ -281,7 +281,7 @@ describe("live-runtime queue protocol", () => {
         WHERE database = $1 AND jobname = $2`,
       [
         databaseName(databaseUrl),
-        `ironshift/${databaseName(databaseUrl)}/integration/revision-fence`,
+        `workhorse/${databaseName(databaseUrl)}/integration/revision-fence`,
       ],
     );
 
@@ -299,7 +299,7 @@ describe("live-runtime queue protocol", () => {
 
     const stale = await pool.query<Record<string, string | null>>(oldCron.rows[0]!.command);
     expect(Object.values(stale.rows[0]!)[0]).toBeNull();
-    expect(await pool.query("SELECT id FROM ironshift.job")).toHaveProperty("rowCount", 0);
+    expect(await pool.query("SELECT id FROM workhorse.job")).toHaveProperty("rowCount", 0);
   });
 
   it("makes the old command harmless when cron reconciliation fails after target commit", async () => {
@@ -317,7 +317,7 @@ describe("live-runtime queue protocol", () => {
       "SELECT command FROM cron.job WHERE database = $1 AND jobname = $2",
       [
         databaseName(databaseUrl),
-        `ironshift/${databaseName(databaseUrl)}/integration/partial-deploy`,
+        `workhorse/${databaseName(databaseUrl)}/integration/partial-deploy`,
       ],
     );
 
@@ -336,7 +336,7 @@ describe("live-runtime queue protocol", () => {
 
     const accepted = await pool.query<{ revision: string; payload: { release: string } }>(
       `SELECT revision::text, payload
-         FROM ironshift.schedule_definition
+         FROM workhorse.schedule_definition
         WHERE namespace = 'integration' AND schedule_name = 'partial-deploy'`,
     );
     expect(accepted.rows[0]).toEqual({ revision: "2", payload: { release: "new" } });
@@ -380,7 +380,7 @@ describe("live-runtime queue protocol", () => {
     const revision = synchronized.schedules[0]!.revision;
     const firing = await pool.connect();
     await firing.query("BEGIN");
-    await firing.query("SELECT ironshift.fire_schedule_v1($1, $2, $3, $4)", [
+    await firing.query("SELECT workhorse.fire_schedule_v1($1, $2, $3, $4)", [
       "integration",
       "disable-race",
       revision,
@@ -450,30 +450,30 @@ describe("live-runtime queue protocol", () => {
       state: "ready",
     });
     const jobs = await pool.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM ironshift.job WHERE job_type = 'rollup'",
+      "SELECT count(*)::text AS count FROM workhorse.job WHERE job_type = 'rollup'",
     );
     expect(jobs.rows[0]?.count).toBe("1");
   });
 
   it("prunes old occurrence rows in bounded maintenance batches", async () => {
     await pool.query(
-      `INSERT INTO ironshift.schedule_definition(
+      `INSERT INTO workhorse.schedule_definition(
          namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts
        ) VALUES ('integration', 'retention', '0 * * * *', 'default', 'retention', 'null', 3)`,
     );
     await pool.query(
-      `INSERT INTO ironshift.schedule_occurrence(namespace, schedule_name, occurrence_at)
+      `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at)
        VALUES ('integration', 'retention', clock_timestamp() - interval '40 days'),
               ('integration', 'retention', clock_timestamp() - interval '35 days'),
               ('integration', 'retention', clock_timestamp() - interval '5 days')`,
     );
 
     const maintained = await pool.query<{ occurrences_pruned: number }>(
-      "SELECT occurrences_pruned FROM ironshift.maintain_v1(1, 1, 30, 1)",
+      "SELECT occurrences_pruned FROM workhorse.maintain_v1(1, 1, 30, 1)",
     );
     expect(maintained.rows[0]?.occurrences_pruned).toBe(1);
     const remaining = await pool.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM ironshift.schedule_occurrence",
+      "SELECT count(*)::text AS count FROM workhorse.schedule_occurrence",
     );
     expect(remaining.rows[0]?.count).toBe("2");
   });
@@ -513,7 +513,7 @@ describe("live-runtime queue protocol", () => {
       `SELECT count(*)::text AS count
          FROM cron.job
         WHERE jobname LIKE $1 AND username = current_user`,
-      [`ironshift-preflight/${databaseName(databaseUrl)}/%`],
+      [`workhorse-preflight/${databaseName(databaseUrl)}/%`],
     );
     expect(remaining.rows[0]?.count).toBe("0");
   });
@@ -539,23 +539,23 @@ describe("live-runtime queue protocol", () => {
   });
 
   it("refuses to turn an existing v1 schema into a mixed installation", async () => {
-    await pool.query("DROP SCHEMA ironshift CASCADE");
+    await pool.query("DROP SCHEMA workhorse CASCADE");
     try {
       await pool.query(`
-        CREATE SCHEMA ironshift;
-        CREATE TABLE ironshift.schema_version (version integer PRIMARY KEY);
-        INSERT INTO ironshift.schema_version(version) VALUES (1);
-        CREATE TABLE ironshift.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v2 or mixed ironshift schema/);
+        CREATE SCHEMA workhorse;
+        CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
+        INSERT INTO workhorse.schema_version(version) VALUES (1);
+        CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v2 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
-        "SELECT version FROM ironshift.schema_version",
+        "SELECT version FROM workhorse.schema_version",
       );
       expect(version.rows).toEqual([{ version: 1 }]);
       expect(
-        (await pool.query("SELECT to_regclass('ironshift.job_runtime') AS relation")).rows[0],
+        (await pool.query("SELECT to_regclass('workhorse.job_runtime') AS relation")).rows[0],
       ).toEqual({ relation: null });
     } finally {
-      await pool.query("DROP SCHEMA IF EXISTS ironshift CASCADE");
+      await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
       await installSchema(pool);
     }
   });
@@ -576,7 +576,7 @@ describe("live-runtime queue protocol", () => {
     expect((await queue.claim("worker-b"))?.id).toBe(ids[2]);
 
     const events = await pool.query<{ job_id: string; event_type: string }>(
-      "SELECT job_id, event_type FROM ironshift.job_event WHERE event_type = 'enqueued' ORDER BY event_id",
+      "SELECT job_id, event_type FROM workhorse.job_event WHERE event_type = 'enqueued' ORDER BY event_id",
     );
     expect(events.rows).toEqual(ids.map((jobId) => ({ job_id: jobId, event_type: "enqueued" })));
   });
@@ -605,7 +605,7 @@ describe("live-runtime queue protocol", () => {
       })),
     );
     const states = await pool.query<{ state: string }>(
-      "SELECT DISTINCT state FROM ironshift.job_runtime WHERE job_id = ANY($1::uuid[])",
+      "SELECT DISTINCT state FROM workhorse.job_runtime WHERE job_id = ANY($1::uuid[])",
       [ids],
     );
     expect(states.rows).toHaveLength(1);
@@ -619,7 +619,7 @@ describe("live-runtime queue protocol", () => {
       ]),
     ).rejects.toThrow("each request requires");
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).rows[0].count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0].count,
     ).toBe(0);
 
     const client = await pool.connect();
@@ -631,7 +631,7 @@ describe("live-runtime queue protocol", () => {
       client.release();
     }
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).rows[0].count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0].count,
     ).toBe(0);
   });
 
@@ -642,7 +642,7 @@ describe("live-runtime queue protocol", () => {
     const notifications: string[] = [];
     listener.on("notification", (message) => notifications.push(message.payload ?? ""));
     try {
-      await listener.query("LISTEN ironshift_jobs");
+      await listener.query("LISTEN workhorse_jobs");
       await queue.enqueueMany([
         { type: "a", payload: {}, options: { queue: alpha } },
         { type: "b", payload: {}, options: { queue: alpha } },
@@ -658,7 +658,7 @@ describe("live-runtime queue protocol", () => {
       expect(relevant).toHaveLength(2);
       expect(new Set(relevant)).toEqual(new Set([alpha, beta]));
     } finally {
-      await listener.query("UNLISTEN ironshift_jobs");
+      await listener.query("UNLISTEN workhorse_jobs");
       listener.release();
     }
   });
@@ -673,7 +673,7 @@ describe("live-runtime queue protocol", () => {
       client.release();
     }
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).rows[0].count,
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0].count,
     ).toBe(0);
   });
 
@@ -739,13 +739,13 @@ describe("live-runtime queue protocol", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE job_id = $1",
           [id],
         )
       ).rows[0].count,
     ).toBe(0);
     expect(
-      (await pool.query("SELECT state FROM ironshift.job_outcome WHERE job_id = $1", [id])).rows[0]
+      (await pool.query("SELECT state FROM workhorse.job_outcome WHERE job_id = $1", [id])).rows[0]
         .state,
     ).toBe("failed");
   });
@@ -770,7 +770,7 @@ describe("live-runtime queue protocol", () => {
     expect(await queue.complete(second!, "worker-a", { ok: true })).toBe(true);
 
     const attempts = await pool.query(
-      "SELECT attempt, outcome FROM ironshift.attempt_history WHERE job_id = $1 ORDER BY attempt",
+      "SELECT attempt, outcome FROM workhorse.attempt_history WHERE job_id = $1 ORDER BY attempt",
       [id],
     );
     expect(attempts.rows).toEqual([
@@ -778,7 +778,7 @@ describe("live-runtime queue protocol", () => {
       { attempt: 2, outcome: "succeeded" },
     ]);
     const events = await pool.query(
-      "SELECT event_type FROM ironshift.job_event WHERE job_id = $1 ORDER BY event_id",
+      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
       [id],
     );
     expect(events.rows.map((row) => row.event_type)).toEqual([
@@ -791,13 +791,13 @@ describe("live-runtime queue protocol", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE job_id = $1",
           [id],
         )
       ).rows[0].count,
     ).toBe(0);
     expect(
-      (await pool.query("SELECT state, result FROM ironshift.job_outcome WHERE job_id = $1", [id]))
+      (await pool.query("SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1", [id]))
         .rows[0],
     ).toEqual({ state: "succeeded", result: { ok: true } });
   });
@@ -810,13 +810,13 @@ describe("live-runtime queue protocol", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE job_id = $1",
+          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE job_id = $1",
           [id],
         )
       ).rows[0].count,
     ).toBe(0);
     expect(
-      (await pool.query("SELECT state FROM ironshift.job_outcome WHERE job_id = $1", [id])).rows[0]
+      (await pool.query("SELECT state FROM workhorse.job_outcome WHERE job_id = $1", [id])).rows[0]
         .state,
     ).toBe("failed");
   });
@@ -825,21 +825,21 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("work", {}, { maxAttempts: 2 });
     const job = await queue.claim("worker-a");
     await pool.query(
-      "UPDATE ironshift.job_runtime SET fence_token = fence_token + 1 WHERE job_id = $1",
+      "UPDATE workhorse.job_runtime SET fence_token = fence_token + 1 WHERE job_id = $1",
       [job!.id],
     );
     await expect(queue.fail(job!, "worker-a", new Error("retry"))).resolves.toBe("stale");
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE state = 'active'",
+          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE state = 'active'",
         )
       ).rows[0].count,
     ).toBe(1);
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE state = 'ready'",
+          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE state = 'ready'",
         )
       ).rows[0].count,
     ).toBe(0);
@@ -849,7 +849,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("work", {}, { maxAttempts: 2 });
     const job = await queue.claim("worker-a", { leaseMs: 100 });
     await pool.query(
-      "UPDATE ironshift.job_runtime SET fence_token = fence_token + 1 WHERE job_id = $1",
+      "UPDATE workhorse.job_runtime SET fence_token = fence_token + 1 WHERE job_id = $1",
       [job!.id],
     );
     await sleep(130);
@@ -857,13 +857,13 @@ describe("live-runtime queue protocol", () => {
     expect(
       (
         await pool.query(
-          "SELECT count(*)::integer AS count FROM ironshift.job_runtime WHERE state = 'ready'",
+          "SELECT count(*)::integer AS count FROM workhorse.job_runtime WHERE state = 'ready'",
         )
       ).rows[0].count,
     ).toBe(1);
     expect(
       (
-        await pool.query("SELECT current_attempt FROM ironshift.job_runtime WHERE job_id = $1", [
+        await pool.query("SELECT current_attempt FROM workhorse.job_runtime WHERE job_id = $1", [
           job!.id,
         ])
       ).rows[0].current_attempt,
@@ -927,21 +927,21 @@ describe("live-runtime queue protocol", () => {
     const historicalTimestamp = "2020-01-08T12:00:00.000Z";
     const historicalJobId = "00000000-0000-4000-8000-000000000001";
     await pool.query(
-      `INSERT INTO ironshift.job_event(job_id, event_type, occurred_at)
+      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
        VALUES ($1, 'fallback', $2)`,
       [historicalJobId, historicalTimestamp],
     );
     await pool.query(
-      `INSERT INTO ironshift.attempt_history(
+      `INSERT INTO workhorse.attempt_history(
          job_id, attempt, fence_token, worker_id, outcome, started_at, finished_at, occurred_at
        ) VALUES ($1, 1, 1, 'fallback-worker', 'succeeded', $2, $2, $2)`,
       [historicalJobId, historicalTimestamp],
     );
     const fallbackRelations = await pool.query<{ relation: string }>(
       `
-      SELECT tableoid::regclass::text AS relation FROM ironshift.job_event WHERE job_id = $1
+      SELECT tableoid::regclass::text AS relation FROM workhorse.job_event WHERE job_id = $1
       UNION ALL
-      SELECT tableoid::regclass::text FROM ironshift.attempt_history WHERE job_id = $1
+      SELECT tableoid::regclass::text FROM workhorse.attempt_history WHERE job_id = $1
       ORDER BY relation`,
       [historicalJobId],
     );
@@ -950,20 +950,20 @@ describe("live-runtime queue protocol", () => {
       { relation: "job_event_default" },
     ]);
 
-    await pool.query("SELECT ironshift.create_history_week_v1($1)", [oldWeek]);
+    await pool.query("SELECT workhorse.create_history_week_v1($1)", [oldWeek]);
     expect(
-      (await pool.query("SELECT to_regclass('ironshift.job_event_2020w02') AS relation")).rows[0]
+      (await pool.query("SELECT to_regclass('workhorse.job_event_2020w02') AS relation")).rows[0]
         .relation,
     ).not.toBeNull();
     expect(
-      (await pool.query("SELECT to_regclass('ironshift.attempt_history_2020w02') AS relation"))
+      (await pool.query("SELECT to_regclass('workhorse.attempt_history_2020w02') AS relation"))
         .rows[0].relation,
     ).not.toBeNull();
     const migratedRelations = await pool.query<{ relation: string }>(
       `
-      SELECT tableoid::regclass::text AS relation FROM ironshift.job_event WHERE job_id = $1
+      SELECT tableoid::regclass::text AS relation FROM workhorse.job_event WHERE job_id = $1
       UNION ALL
-      SELECT tableoid::regclass::text FROM ironshift.attempt_history WHERE job_id = $1
+      SELECT tableoid::regclass::text FROM workhorse.attempt_history WHERE job_id = $1
       ORDER BY relation`,
       [historicalJobId],
     );
@@ -971,13 +971,13 @@ describe("live-runtime queue protocol", () => {
       { relation: "attempt_history_2020w02" },
       { relation: "job_event_2020w02" },
     ]);
-    await pool.query("SELECT ironshift.retire_history_week_v1($1)", [oldWeek]);
+    await pool.query("SELECT workhorse.retire_history_week_v1($1)", [oldWeek]);
     expect(
-      (await pool.query("SELECT to_regclass('ironshift.job_event_2020w02') AS relation")).rows[0]
+      (await pool.query("SELECT to_regclass('workhorse.job_event_2020w02') AS relation")).rows[0]
         .relation,
     ).toBeNull();
     await expect(
-      pool.query("SELECT ironshift.retire_history_week_v1(current_date)"),
+      pool.query("SELECT workhorse.retire_history_week_v1(current_date)"),
     ).rejects.toThrow(/only completed history weeks can be retired/);
   });
 
@@ -992,16 +992,16 @@ describe("live-runtime queue protocol", () => {
             date_trunc('week', current_date + make_interval(weeks => week_offset)),
             'IYYY"w"IW'
           );
-          EXECUTE format('DROP TABLE ironshift.%I', 'job_event_' || suffix);
-          EXECUTE format('DROP TABLE ironshift.%I', 'attempt_history_' || suffix);
+          EXECUTE format('DROP TABLE workhorse.%I', 'job_event_' || suffix);
+          EXECUTE format('DROP TABLE workhorse.%I', 'attempt_history_' || suffix);
         END LOOP;
       END
       $$`);
-    await pool.query("SELECT * FROM ironshift.maintain_v1()");
+    await pool.query("SELECT * FROM workhorse.maintain_v1()");
     const horizon = await pool.query<{ missing: number }>(`
       SELECT count(*) FILTER (
-               WHERE to_regclass(format('ironshift.%I', 'job_event_' || suffix)) IS NULL
-                  OR to_regclass(format('ironshift.%I', 'attempt_history_' || suffix)) IS NULL
+               WHERE to_regclass(format('workhorse.%I', 'job_event_' || suffix)) IS NULL
+                  OR to_regclass(format('workhorse.%I', 'attempt_history_' || suffix)) IS NULL
              )::integer AS missing
         FROM (
           SELECT to_char(

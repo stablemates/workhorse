@@ -1,4 +1,4 @@
-# Ironshift MVP protocol
+# Workhorse MVP protocol
 
 This is the compact schema version 2 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema now uses the weekly history lifecycle functions documented below.
 
@@ -50,7 +50,7 @@ Every closed attempt has one immutable `attempt_history` row. Every lifecycle bo
 - Any invalid request rolls back all identity, runtime, event, and notification work.
 - Empty input performs no query.
 - An active caller `PoolClient` controls commit or rollback.
-- `NOTIFY ironshift_jobs` is commit-delivered and coalesced to one message per distinct queue gaining ready work.
+- `NOTIFY workhorse_jobs` is commit-delivered and coalesced to one message per distinct queue gaining ready work.
 - Scheduled-only queues are notified only after promotion.
 
 ## Ownership and crashes
@@ -66,11 +66,11 @@ Delivery is at least once. External effects require application-level idempotenc
 `PgCronScheduler.sync(definitions, options?)` connects to both the target database and the cluster's pg_cron metadata database, normally `postgres`.
 
 - Namespaces and names are stable deployment identities using letters, digits, dot, underscore, and hyphen.
-- Definitions contain cron text plus a typed Ironshift queue job; arbitrary SQL is not accepted.
+- Definitions contain cron text plus a typed Workhorse queue job; arbitrary SQL is not accepted.
 - pg_cron job names are scoped by target database and namespace.
 - The target definition transaction commits before cron metadata reconciliation. Revision-fenced commands make a failed deploy safely retryable even though the two databases are not atomically distributed.
 - A target-wide metadata session lock coordinates synchronization with reset cleanup; a target namespace lock and metadata transaction lock serialize definition and cron reconciliation.
-- Pruning touches only current-role jobs with the exact Ironshift target/namespace prefix.
+- Pruning touches only current-role jobs with the exact Workhorse target/namespace prefix.
 - One maintenance entry runs every second by default with bounded 1,000-row promotion/recovery and 10,000-row occurrence-pruning limits.
 - Workers default to external maintenance. `maintenance: "worker"` restores cooperative per-claim maintenance for environments without pg_cron.
 - pg_cron schedules call `fire_schedule_v1(namespace, name, revision)` and use the observed execution second as their occurrence key; stale, disabled, or missing definitions are no-ops.

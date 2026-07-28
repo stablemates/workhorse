@@ -316,7 +316,7 @@ function CronPage({ data }: { data: DashboardCronPage }) {
     <Stack gap="xl">
       <PageHeader
         title="Schedules"
-        description="Recurring application and system schedules registered with Ironshift."
+        description="Recurring application and system schedules registered with Workhorse."
       />
       {data.schedules.length === 0 ? (
         <EmptyState>No recurring schedules are registered.</EmptyState>
@@ -723,7 +723,7 @@ export function Dashboard() {
             </ThemeIcon>
             <Box>
               <Text fw={750} lh={1.1}>
-                Ironshift
+                Workhorse
               </Text>
               <Text c="dimmed" size="xs">
                 Live queue demo

@@ -11,7 +11,7 @@ The clearest warning signal appears at 5,000 jobs per round. Hybrid throughput f
 ## Method
 
 - Source commit: `11ab33bbdafb73dba9709080da97a00367ae8947`
-- Database: isolated local `ironshift_bench`
+- Database: isolated local `workhorse_bench`
 - Scales: 25, 100, 500, 1,000, and 5,000 jobs per design per round
 - Rounds: 3 retained-history rounds at every scale
 - Isolation: database reset before every scale and after the complete ladder

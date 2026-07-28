@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import { installSchema, PgCronScheduler } from "ironshift";
+import { installSchema, PgCronScheduler } from "@workhorse/core";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../src/local-database.js";
@@ -39,15 +39,15 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE public.ironshift_demo_audit, public.ironshift_demo_seed, public.ironshift_demo_order, ironshift.job_event,
-    ironshift.attempt_history, ironshift.schedule_occurrence, ironshift.schedule_definition,
-    ironshift.job_outcome, ironshift.job_runtime, ironshift.job RESTART IDENTITY CASCADE`);
+  await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
+    workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
+    workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE`);
 });
 
 afterAll(async () => {
-  await pool.query("DROP TABLE IF EXISTS public.ironshift_demo_order");
-  await pool.query("DROP TABLE IF EXISTS public.ironshift_demo_seed");
-  await pool.query("DROP TABLE IF EXISTS public.ironshift_demo_audit");
+  await pool.query("DROP TABLE IF EXISTS public.workhorse_demo_order");
+  await pool.query("DROP TABLE IF EXISTS public.workhorse_demo_seed");
+  await pool.query("DROP TABLE IF EXISTS public.workhorse_demo_audit");
   await pool.end();
 });
 
@@ -59,7 +59,7 @@ function dashboardClient(
   );
 }
 
-describe("Ironshift demo", () => {
+describe("Workhorse demo", () => {
   it("uses a conservative worker polling interval for the demo", () => {
     expect(DEMO_WORKER_POLL_MS).toBe(15_000);
     expect(DEMO_LONG_RUNNING_MS).toBe(20_000);
@@ -74,9 +74,9 @@ describe("Ironshift demo", () => {
     });
     expect(await seedDemoData(database, app)).toEqual({ seeded: false, jobIds: [] });
     expect(
-      await pool.query("SELECT count(*)::integer AS count FROM public.ironshift_demo_order"),
+      await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
-    expect(await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).toMatchObject({
+    expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
       rows: [{ count: 4 }],
     });
     const client = dashboardClient(app);
@@ -107,8 +107,8 @@ describe("Ironshift demo", () => {
     expect(
       await pool.query(
         `SELECT runtime.state, job.payload, runtime.run_at > clock_timestamp() AS is_future
-           FROM ironshift.job job
-           JOIN ironshift.job_runtime runtime ON runtime.job_id = job.id
+           FROM workhorse.job job
+           JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
           WHERE job.payload->>'source' = 'scheduled-seed'`,
       ),
     ).toMatchObject({
@@ -119,18 +119,18 @@ describe("Ironshift demo", () => {
   it("creates an application row and job atomically, then processes and exposes both", async () => {
     const workerErrors: unknown[] = [];
     const refreshReasons: string[] = [];
-    const { app, ironshift, dashboardRefresh } = createTestApplication({
+    const { app, workhorse, dashboardRefresh } = createTestApplication({
       onWorkerError: (error) => workerErrors.push(error),
     });
     const unsubscribe = dashboardRefresh.subscribe((event) => refreshReasons.push(event.reason));
-    ironshift.start();
+    workhorse.start();
 
     try {
       const rootResponse = await app.request("/");
       expect(rootResponse.status).toBe(302);
       expect(rootResponse.headers.get("location")).toBe("/tasks");
       expect(await (await app.request("/api")).json()).toMatchObject({
-        name: "Ironshift demo",
+        name: "Workhorse demo",
       });
       const response = await app.request("/orders", {
         method: "POST",
@@ -148,8 +148,8 @@ describe("Ironshift demo", () => {
       }>(
         `SELECT application_order.xmin::text AS order_transaction,
                 accepted_job.xmin::text AS job_transaction
-           FROM public.ironshift_demo_order application_order
-           JOIN ironshift.job accepted_job ON accepted_job.id = $2
+           FROM public.workhorse_demo_order application_order
+           JOIN workhorse.job accepted_job ON accepted_job.id = $2
           WHERE application_order.id = $1`,
         [accepted.orderId, accepted.jobId],
       );
@@ -213,7 +213,7 @@ describe("Ironshift demo", () => {
       expect(workerErrors).toEqual([]);
     } finally {
       unsubscribe();
-      await ironshift.stop();
+      await workhorse.stop();
     }
   });
 
@@ -227,16 +227,16 @@ describe("Ironshift demo", () => {
 
     expect(response.status).toBe(400);
     expect(
-      await pool.query("SELECT count(*)::integer AS count FROM public.ironshift_demo_order"),
+      await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 0 }] });
-    expect(await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).toMatchObject({
+    expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
       rows: [{ count: 0 }],
     });
   });
 
   it("retries an intentional handler failure and exposes both attempts in the dashboard", async () => {
-    const { app, ironshift } = createTestApplication();
-    ironshift.start();
+    const { app, workhorse } = createTestApplication();
+    workhorse.start();
 
     try {
       const response = await app.request("/demo/retries", { method: "POST" });
@@ -259,7 +259,7 @@ describe("Ironshift demo", () => {
       expect(
         (
           await pool.query(
-            "SELECT attempt, outcome FROM ironshift.attempt_history WHERE job_id = $1 ORDER BY attempt",
+            "SELECT attempt, outcome FROM workhorse.attempt_history WHERE job_id = $1 ORDER BY attempt",
             [accepted.jobId],
           )
         ).rows,
@@ -284,13 +284,13 @@ describe("Ironshift demo", () => {
         failures: [],
       });
     } finally {
-      await ironshift.stop();
+      await workhorse.stop();
     }
   });
 
   it("records an intentional terminal failure and exposes it in the dashboard", async () => {
-    const { app, ironshift } = createTestApplication();
-    ironshift.start();
+    const { app, workhorse } = createTestApplication();
+    workhorse.start();
 
     try {
       const response = await app.request("/demo/failures", { method: "POST" });
@@ -320,7 +320,7 @@ describe("Ironshift demo", () => {
         health: { counts: { failed: 1 } },
       });
     } finally {
-      await ironshift.stop();
+      await workhorse.stop();
     }
   });
 
@@ -329,10 +329,10 @@ describe("Ironshift demo", () => {
     cronDatabaseUrl.pathname = "/postgres";
     const cronPool = new Pool({ connectionString: cronDatabaseUrl.toString(), max: 2 });
     const scheduler = new PgCronScheduler(pool, cronPool, {
-      namespace: "ironshift-demo-test",
+      namespace: "workhorse-demo-test",
     });
-    const { app, ironshift } = createTestApplication();
-    ironshift.start();
+    const { app, workhorse } = createTestApplication();
+    workhorse.start();
 
     try {
       const synchronized = await scheduler.sync(
@@ -358,7 +358,7 @@ describe("Ironshift demo", () => {
       let state: string | undefined;
       for (let attempt = 0; attempt < 40 && state !== "succeeded"; attempt += 1) {
         await sleep(25);
-        state = (await ironshift.context.queue.getJob(jobId!))?.state;
+        state = (await workhorse.context.queue.getJob(jobId!))?.state;
       }
       expect(state).toBe("succeeded");
 
@@ -366,7 +366,7 @@ describe("Ironshift demo", () => {
       expect(await client.dashboard.cron()).toMatchObject({
         schedules: [
           {
-            namespace: "ironshift-demo-test",
+            namespace: "workhorse-demo-test",
             name: "heartbeat",
             occurrenceCount: 1,
           },
@@ -379,7 +379,7 @@ describe("Ironshift demo", () => {
         jobs: [{ id: jobId, type: "demo.recurring", state: "succeeded" }],
       });
     } finally {
-      await ironshift.stop();
+      await workhorse.stop();
       await scheduler.sync([], { maintenance: false });
       await cronPool.end();
     }
@@ -403,20 +403,20 @@ describe("Ironshift demo", () => {
       }),
     ).rejects.toThrow(/read-only|FORBIDDEN/i);
     expect(
-      await pool.query("SELECT count(*)::integer AS count FROM public.ironshift_demo_audit"),
+      await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_audit"),
     ).toMatchObject({
       rows: [{ count: 0 }],
     });
   });
 
   it("keeps a long-running test job active for the configured duration", async () => {
-    const { app, ironshift } = createTestApplication({
+    const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
       longRunningJobMs: 250,
     });
     const client = dashboardClient(app);
-    ironshift.start();
+    workhorse.start();
 
     try {
       const enqueued = await client.dashboard.enqueueTest({
@@ -447,13 +447,13 @@ describe("Ironshift demo", () => {
         current: { outcome: { result: { completed: true, durationMs: 250 } } },
       });
     } finally {
-      await ironshift.stop();
+      await workhorse.stop();
     }
   });
 
   it("supports audited local enqueue and schedule toggles", async () => {
     await pool.query(
-      `INSERT INTO ironshift.schedule_definition
+      `INSERT INTO workhorse.schedule_definition
         (namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts)
        VALUES ($1, $2, '* * * * *', 'demo', 'demo.recurring', '{"source":"test"}'::jsonb, 3)`,
       [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
@@ -483,7 +483,7 @@ describe("Ironshift demo", () => {
     expect(
       (
         await pool.query(
-          "SELECT action, target, actor, reason, status FROM public.ironshift_demo_audit ORDER BY id",
+          "SELECT action, target, actor, reason, status FROM public.workhorse_demo_audit ORDER BY id",
         )
       ).rows,
     ).toEqual([
@@ -529,7 +529,7 @@ describe("Ironshift demo", () => {
             name: "maintenance",
             cron: DEMO_MAINTENANCE.schedule,
             active: true,
-            type: "ironshift.maintain_v1",
+            type: "workhorse.maintain_v1",
             maintenance: {
               batchSize: DEMO_MAINTENANCE.batchSize,
               occurrenceRetentionDays: DEMO_MAINTENANCE.occurrenceRetentionDays,
@@ -583,7 +583,7 @@ describe("Ironshift demo", () => {
 
   it("keeps worker maintenance fallback when pg_cron status is unavailable", async () => {
     await pool.query(
-      `INSERT INTO ironshift.schedule_definition
+      `INSERT INTO workhorse.schedule_definition
         (namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts)
        VALUES ($1, $2, '* * * * *', 'demo', 'demo.recurring', '{"source":"test"}'::jsonb, 3)`,
       [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
@@ -620,12 +620,12 @@ describe("Ironshift demo", () => {
   });
 
   it("runs core Hono and worker flows without mounting dashboard routes", async () => {
-    const { app, ironshift } = createTestApplication({ dashboard: false });
-    ironshift.start();
+    const { app, workhorse } = createTestApplication({ dashboard: false });
+    workhorse.start();
 
     try {
       expect(await (await app.request("/")).json()).toMatchObject({
-        name: "Ironshift demo",
+        name: "Workhorse demo",
       });
       expect((await app.request("/rpc/dashboard/tasks")).status).toBe(404);
       expect((await app.request("/dashboard/events")).status).toBe(404);
@@ -639,7 +639,7 @@ describe("Ironshift demo", () => {
       });
       expect(response.status).toBe(202);
     } finally {
-      await ironshift.stop();
+      await workhorse.stop();
     }
   });
 });

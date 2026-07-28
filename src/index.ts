@@ -1,10 +1,10 @@
-export { createIronshiftAdapter } from "./adapter.js";
-export type { IronshiftAdapter, IronshiftAdapterOptions } from "./adapter.js";
+export { createWorkhorseAdapter } from "./adapter.js";
+export type { WorkhorseAdapter, WorkhorseAdapterOptions } from "./adapter.js";
 export { installSchema } from "./schema.js";
 export {
   inspectPgCronRequirements,
   PgCronScheduler,
-  unscheduleIronshiftTarget,
+  unscheduleWorkhorseTarget,
   verifyPgCronExecution,
 } from "./pg-cron-scheduler.js";
 export type {

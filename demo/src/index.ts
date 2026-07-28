@@ -1,7 +1,7 @@
-import { serveWithIronshift } from "@ironshift/hono";
+import { serveWithWorkhorse } from "@workhorse/hono";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { installSchema } from "ironshift";
-import type { PgCronScheduler } from "ironshift";
+import { installSchema } from "@workhorse/core";
+import type { PgCronScheduler } from "@workhorse/core";
 import { Client, Pool } from "pg";
 import {
   createDemoApplication,
@@ -17,11 +17,11 @@ import { DashboardRefreshHub } from "./dashboard-refresh.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ??
-  process.env.IRONSHIFT_DEMO_DATABASE_URL ??
-  "postgresql://ironshift:ironshift@localhost:5432/ironshift_demo";
+  process.env.WORKHORSE_DEMO_DATABASE_URL ??
+  "postgresql://workhorse:workhorse@localhost:5432/workhorse_demo";
 const port = Number(process.env.PORT ?? 3000);
-const workerPollMs = process.env.IRONSHIFT_WORKER_POLL_MS
-  ? Number(process.env.IRONSHIFT_WORKER_POLL_MS)
+const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
+  ? Number(process.env.WORKHORSE_WORKER_POLL_MS)
   : undefined;
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 
@@ -65,13 +65,13 @@ if (cronPool) {
   );
 }
 await notificationClient.connect();
-await notificationClient.query("LISTEN ironshift_jobs");
+await notificationClient.query("LISTEN workhorse_jobs");
 notificationClient.on("notification", () => dashboardRefresh.publish("postgres"));
 notificationClient.on("error", (error) => {
   console.error("Dashboard notification listener stopped; SSE fallback remains active", error);
 });
 
-const { app, ironshift } = createDemoApplication(database, {
+const { app, workhorse } = createDemoApplication(database, {
   dashboardRefresh,
   operator: createLocalOperator(database),
   scheduleController: createLocalScheduleController(database, demoScheduler),
@@ -83,7 +83,7 @@ const { app, ironshift } = createDemoApplication(database, {
     await cronPool?.end();
     await pool.end();
   },
-  onWorkerError: (error) => console.error("Ironshift worker stopped", error),
+  onWorkerError: (error) => console.error("Workhorse worker stopped", error),
 });
 app.use("/assets/*", serveStatic({ root: "./dist/dashboard" }));
 const serveDashboard = serveStatic({
@@ -101,12 +101,12 @@ if (process.env.SEED_DEMO_DATA !== "false") {
       : "Representative demo data already exists",
   );
 }
-const running = await serveWithIronshift({
+const running = await serveWithWorkhorse({
   fetch: app.fetch,
-  ironshift,
+  workhorse,
   port,
   onListen: ({ port: listeningPort }) => {
-    console.log(`Ironshift demo listening on http://localhost:${listeningPort}`);
+    console.log(`Workhorse demo listening on http://localhost:${listeningPort}`);
   },
 });
 

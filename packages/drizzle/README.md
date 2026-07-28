@@ -1,19 +1,19 @@
-# `@ironshift/drizzle`
+# `@workhorse/drizzle`
 
-Drizzle ORM provider for Ironshift's PostgreSQL protocol.
+Drizzle ORM provider for Workhorse's PostgreSQL protocol.
 
 ```ts
-import { createDrizzleAdapter } from "@ironshift/drizzle";
+import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const db = drizzle({ client: pool });
-const ironshift = createDrizzleAdapter(db, { close: () => pool.end() });
+const workhorse = createDrizzleAdapter(db, { close: () => pool.end() });
 
 await db.transaction(async (tx) => {
   // Application writes through tx...
-  await ironshift.forTransaction(tx).enqueue("email.send", { recipient: "a@example.com" });
+  await workhorse.forTransaction(tx).enqueue("email.send", { recipient: "a@example.com" });
 });
 ```
 

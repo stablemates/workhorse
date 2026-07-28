@@ -1,6 +1,6 @@
 # Demo findings and follow-up gaps
 
-The Ironshift demo is a vertical slice of the project: transactional enqueue, worker lifecycle, retry
+The Workhorse demo is a vertical slice of the project: transactional enqueue, worker lifecycle, retry
 behavior, recurring scheduling, and operator inspection. It uses Hono and Drizzle to prove the supported
 integrations in a realistic application, but those libraries are implementation details rather than the
 subject of the demo. This document records what the implementation proved, what it forced the repository
@@ -10,7 +10,7 @@ to fix, and which gaps remain.
 
 The demo now proves these paths against PostgreSQL rather than mocks:
 
-- a Hono request inserts an application order and its Ironshift job in the same Drizzle transaction;
+- a Hono request inserts an application order and its Workhorse job in the same Drizzle transaction;
 - a Hono-managed worker processes the job and shuts down through the integration lifecycle;
 - an intentional handler error records a `retry` attempt and succeeds on attempt 2;
 - `PgCronScheduler` synchronizes and fires a recurring definition with occurrence deduplication;
@@ -22,7 +22,7 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 
 | Area        | Finding                                                                                                       | Resolution                                                                                                    |
 | ----------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| DX          | Reusing `ironshift_dev` made the documented command fail when that database contained an old or mixed schema. | Added the suffix-guarded `ironshift_demo` database and made `pnpm demo` recreate only that disposable target. |
+| DX          | Reusing `workhorse_dev` made the documented command fail when that database contained an old or mixed schema. | Added the suffix-guarded `workhorse_demo` database and made `pnpm demo` recreate only that disposable target. |
 | Packaging   | Starting the source demo without building workspace package outputs depended on stale local `dist` files.     | Made `pnpm demo` build core, integrations, and the demo before startup.                                       |
 | Integration | A dashboard coupled to process startup would make the queue unusable in API-only deployments.                 | Added `{ dashboard: false }` and an integration test that proves workers and Hono routes remain functional.   |
 | Correctness | Transactional enqueue was documented but not demonstrated through an ORM-owned request transaction.           | Added a test comparing PostgreSQL `xmin` for the application row and accepted job.                            |
@@ -32,7 +32,7 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 
 ### A1. No supported operational query surface
 
-The dashboard must issue bounded SQL directly against `ironshift.job`, `job_runtime`, `job_outcome`,
+The dashboard must issue bounded SQL directly against `workhorse.job`, `job_runtime`, `job_outcome`,
 `attempt_history`, `schedule_definition`, and `schedule_occurrence`. Those relations are protocol
 internals, so a schema evolution can break an otherwise type-safe dashboard.
 
@@ -64,7 +64,7 @@ The worker view infers active workers from leases and recent workers from attemp
 registry, start time, declared concurrency, build version, graceful-stop state, or authoritative liveness
 record.
 
-**Needed:** decide whether production telemetry is sufficient or whether Ironshift needs a bounded,
+**Needed:** decide whether production telemetry is sufficient or whether Workhorse needs a bounded,
 expiring worker registry. Any registry must avoid turning worker heartbeats into unbounded write load.
 This decision belongs with **P0-02 Production telemetry** and **P0-03 Configurable worker concurrency**.
 
@@ -131,7 +131,7 @@ protocol documentation rather than duplicating invariants.
 ### X1. Dashboard refresh is application plumbing
 
 The demo owns a dedicated PostgreSQL client, `LISTEN` reconnect/error behavior, an in-process refresh
-hub, SSE serialization, coalescing, and a safety timer. PostgreSQL notifications are hints, but Ironshift
+hub, SSE serialization, coalescing, and a safety timer. PostgreSQL notifications are hints, but Workhorse
 does not expose a reusable invalidation stream or complete notification contract.
 
 **Needed:** after **P0-04 Notification-assisted dispatch**, consider a reusable hint subscription API

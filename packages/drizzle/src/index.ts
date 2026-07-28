@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import type { IronshiftAdapter, Queryable } from "ironshift";
-import { createIronshiftAdapter } from "ironshift";
+import type { WorkhorseAdapter, Queryable } from "@workhorse/core";
+import { createWorkhorseAdapter } from "@workhorse/core";
 import type { QueryResult, QueryResultRow } from "pg";
 
 /** Public subset shared by a node-postgres Drizzle database and its transaction object. */
@@ -25,7 +25,7 @@ export class DrizzleQueryError extends Error {
     readonly statement: string,
     cause: unknown,
   ) {
-    super("Drizzle failed to execute an Ironshift database operation", { cause });
+    super("Drizzle failed to execute an Workhorse database operation", { cause });
     this.name = "DrizzleQueryError";
     this.code = databaseErrorCode(cause);
   }
@@ -62,7 +62,7 @@ function drizzleSql(text: string, values: readonly unknown[]): SQL {
   return sql.join(chunks);
 }
 
-/** Convert a Drizzle database or transaction into Ironshift's minimal database protocol. */
+/** Convert a Drizzle database or transaction into Workhorse's minimal database protocol. */
 export function drizzleQueryable(executor: DrizzleExecutor): Queryable {
   return {
     async query<R extends QueryResultRow = QueryResultRow>(text: string, values = []) {
@@ -81,7 +81,7 @@ export function drizzleQueryable(executor: DrizzleExecutor): Queryable {
 }
 
 /**
- * Create an Ironshift adapter around a node-postgres Drizzle database.
+ * Create an Workhorse adapter around a node-postgres Drizzle database.
  *
  * Call `adapter.forTransaction(tx)` inside `db.transaction(...)` so enqueue operations commit or
  * roll back with the caller's application writes.
@@ -89,8 +89,8 @@ export function drizzleQueryable(executor: DrizzleExecutor): Queryable {
 export function createDrizzleAdapter<TTransaction extends DrizzleExecutor = DrizzleExecutor>(
   database: DrizzleExecutor,
   options: DrizzleAdapterOptions = {},
-): IronshiftAdapter<TTransaction> {
-  return createIronshiftAdapter<TTransaction>({
+): WorkhorseAdapter<TTransaction> {
+  return createWorkhorseAdapter<TTransaction>({
     database: drizzleQueryable(database),
     adaptTransaction: drizzleQueryable,
     defaultQueue: options.defaultQueue,

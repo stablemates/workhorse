@@ -1,16 +1,16 @@
 import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
 import { createMiddleware } from "hono/factory";
-import type { IronshiftAdapter, Queue, Worker, WorkerOptions } from "ironshift";
+import type { WorkhorseAdapter, Queue, Worker, WorkerOptions } from "@workhorse/core";
 
-export interface HonoIronshiftContext<TTransaction> {
+export interface HonoWorkhorseContext<TTransaction> {
   readonly queue: Queue;
   forTransaction(transaction: TTransaction): Queue;
 }
 
-export type HonoIronshiftEnv<TTransaction> = {
+export type HonoWorkhorseEnv<TTransaction> = {
   Variables: {
-    ironshift: HonoIronshiftContext<TTransaction>;
+    workhorse: HonoWorkhorseContext<TTransaction>;
   };
 };
 
@@ -19,14 +19,14 @@ export interface HonoWorkerDefinition {
   configure(worker: Worker): void;
 }
 
-export interface HonoIronshiftOptions {
+export interface HonoWorkhorseOptions {
   workers?: readonly HonoWorkerDefinition[];
   onWorkerError?: (error: unknown, worker: Worker) => void;
 }
 
-/** Owns Ironshift worker startup and shutdown for one Hono application process. */
-export class HonoIronshift<TTransaction> {
-  readonly context: HonoIronshiftContext<TTransaction>;
+/** Owns Workhorse worker startup and shutdown for one Hono application process. */
+export class HonoWorkhorse<TTransaction> {
+  readonly context: HonoWorkhorseContext<TTransaction>;
   private readonly workers: Worker[] = [];
   private readonly runs: Promise<void>[] = [];
   private started = false;
@@ -34,8 +34,8 @@ export class HonoIronshift<TTransaction> {
   private closePromise: Promise<void> | undefined;
 
   constructor(
-    private readonly adapter: IronshiftAdapter<TTransaction>,
-    private readonly options: HonoIronshiftOptions = {},
+    private readonly adapter: WorkhorseAdapter<TTransaction>,
+    private readonly options: HonoWorkhorseOptions = {},
   ) {
     this.context = {
       queue: adapter.queue,
@@ -43,10 +43,10 @@ export class HonoIronshift<TTransaction> {
     };
   }
 
-  /** Typed middleware that exposes `c.var.ironshift` to routes. */
+  /** Typed middleware that exposes `c.var.workhorse` to routes. */
   middleware() {
-    return createMiddleware<HonoIronshiftEnv<TTransaction>>(async (context, next) => {
-      context.set("ironshift", this.context);
+    return createMiddleware<HonoWorkhorseEnv<TTransaction>>(async (context, next) => {
+      context.set("workhorse", this.context);
       await next();
     });
   }
@@ -55,7 +55,7 @@ export class HonoIronshift<TTransaction> {
   start(): void {
     if (this.started) return;
     if (this.quiescePromise || this.closePromise) {
-      throw new Error("A stopped HonoIronshift runtime cannot be restarted");
+      throw new Error("A stopped HonoWorkhorse runtime cannot be restarted");
     }
     this.started = true;
 
@@ -95,13 +95,13 @@ export class HonoIronshift<TTransaction> {
 
 type NodeServeOptions = Parameters<typeof serve>[0];
 
-export type ServeWithIronshiftOptions<TTransaction> = Omit<NodeServeOptions, "fetch"> & {
+export type ServeWithWorkhorseOptions<TTransaction> = Omit<NodeServeOptions, "fetch"> & {
   fetch: NodeServeOptions["fetch"];
-  ironshift: HonoIronshift<TTransaction>;
+  workhorse: HonoWorkhorse<TTransaction>;
   onListen?: Parameters<typeof serve>[1];
 };
 
-export interface HonoIronshiftServer {
+export interface HonoWorkhorseServer {
   readonly server: ServerType;
   shutdown(): Promise<void>;
 }
@@ -115,18 +115,18 @@ function closeServer(server: ServerType): Promise<void> {
   });
 }
 
-/** Start Hono and Ironshift together and return one idempotent graceful-shutdown handle. */
-export async function serveWithIronshift<TTransaction>(
-  options: ServeWithIronshiftOptions<TTransaction>,
-): Promise<HonoIronshiftServer> {
-  const { ironshift, onListen, ...serverOptions } = options;
+/** Start Hono and Workhorse together and return one idempotent graceful-shutdown handle. */
+export async function serveWithWorkhorse<TTransaction>(
+  options: ServeWithWorkhorseOptions<TTransaction>,
+): Promise<HonoWorkhorseServer> {
+  const { workhorse, onListen, ...serverOptions } = options;
 
   let server: ServerType;
   try {
-    ironshift.start();
+    workhorse.start();
     server = serve(serverOptions as NodeServeOptions, onListen);
   } catch (error) {
-    await ironshift.stop();
+    await workhorse.stop();
     throw error;
   }
 
@@ -136,9 +136,9 @@ export async function serveWithIronshift<TTransaction>(
     shutdown() {
       shutdownPromise ??= (async () => {
         const serverClosed = closeServer(server);
-        await ironshift.quiesce();
+        await workhorse.quiesce();
         await serverClosed;
-        await ironshift.stop();
+        await workhorse.stop();
       })();
       return shutdownPromise;
     },

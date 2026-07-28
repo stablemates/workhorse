@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { installSchema } from "ironshift";
+import { installSchema } from "@workhorse/core";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../../src/local-database.js";
 import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "../src/index.js";
 
@@ -13,20 +13,20 @@ const db = drizzle({ client: pool });
 const adapter = createDrizzleAdapter(db);
 
 beforeAll(async () => {
-  await pool.query("DROP SCHEMA IF EXISTS ironshift CASCADE");
+  await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
   await installSchema(pool);
-  await pool.query("DROP TABLE IF EXISTS public.ironshift_drizzle_test");
-  await pool.query("CREATE TABLE public.ironshift_drizzle_test (value text PRIMARY KEY)");
+  await pool.query("DROP TABLE IF EXISTS public.workhorse_drizzle_test");
+  await pool.query("CREATE TABLE public.workhorse_drizzle_test (value text PRIMARY KEY)");
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE public.ironshift_drizzle_test, ironshift.job_event,
-    ironshift.attempt_history, ironshift.schedule_occurrence, ironshift.schedule_definition,
-    ironshift.job_outcome, ironshift.job_runtime, ironshift.job RESTART IDENTITY CASCADE`);
+  await pool.query(`TRUNCATE public.workhorse_drizzle_test, workhorse.job_event,
+    workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
+    workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE`);
 });
 
 afterAll(async () => {
-  await pool.query("DROP TABLE IF EXISTS public.ironshift_drizzle_test");
+  await pool.query("DROP TABLE IF EXISTS public.workhorse_drizzle_test");
   await pool.end();
 });
 
@@ -34,15 +34,15 @@ describe("Drizzle provider integration", () => {
   it("commits application writes and enqueue in the caller-owned transaction", async () => {
     await db.transaction(async (transaction) => {
       await transaction.execute(
-        sql`INSERT INTO public.ironshift_drizzle_test (value) VALUES (${"committed"})`,
+        sql`INSERT INTO public.workhorse_drizzle_test (value) VALUES (${"committed"})`,
       );
       await adapter.forTransaction(transaction).enqueue("transaction.commit", { committed: true });
     });
 
-    expect((await pool.query("SELECT value FROM public.ironshift_drizzle_test")).rows).toEqual([
+    expect((await pool.query("SELECT value FROM public.workhorse_drizzle_test")).rows).toEqual([
       { value: "committed" },
     ]);
-    expect((await pool.query("SELECT job_type FROM ironshift.job")).rows).toEqual([
+    expect((await pool.query("SELECT job_type FROM workhorse.job")).rows).toEqual([
       { job_type: "transaction.commit" },
     ]);
   });
@@ -51,7 +51,7 @@ describe("Drizzle provider integration", () => {
     await expect(
       db.transaction(async (transaction) => {
         await transaction.execute(
-          sql`INSERT INTO public.ironshift_drizzle_test (value) VALUES (${"rolled-back"})`,
+          sql`INSERT INTO public.workhorse_drizzle_test (value) VALUES (${"rolled-back"})`,
         );
         await adapter.forTransaction(transaction).enqueue("transaction.rollback", {
           committed: false,
@@ -61,10 +61,10 @@ describe("Drizzle provider integration", () => {
     ).rejects.toThrow("rollback requested");
 
     expect(
-      (await pool.query("SELECT count(*)::integer AS count FROM public.ironshift_drizzle_test"))
+      (await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_drizzle_test"))
         .rows,
     ).toEqual([{ count: 0 }]);
-    expect((await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).rows).toEqual(
+    expect((await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows).toEqual(
       [{ count: 0 }],
     );
   });
@@ -75,14 +75,14 @@ describe("Drizzle provider integration", () => {
     );
 
     expect(new Set(ids).size).toBe(6);
-    expect((await pool.query("SELECT count(*)::integer AS count FROM ironshift.job")).rows).toEqual(
+    expect((await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows).toEqual(
       [{ count: 6 }],
     );
   });
 
   it("preserves PostgreSQL error codes through provider translation", async () => {
     const failure = await drizzleQueryable(db)
-      .query("SELECT * FROM ironshift.relation_that_does_not_exist")
+      .query("SELECT * FROM workhorse.relation_that_does_not_exist")
       .catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(DrizzleQueryError);

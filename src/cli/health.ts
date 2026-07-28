@@ -18,7 +18,7 @@ if (purposeIndex !== -1) {
 }
 
 // Repository scripts pass an explicit local purpose. The packaged CLI retains DATABASE_URL for
-// inspecting an application-owned database without imposing Ironshift's local naming convention.
+// inspecting an application-owned database without imposing Workhorse's local naming convention.
 const databaseUrl = localPurpose ? localDatabaseUrl(localPurpose) : process.env.DATABASE_URL;
 if (!databaseUrl)
   throw new Error("DATABASE_URL is required unless --database selects a local role");

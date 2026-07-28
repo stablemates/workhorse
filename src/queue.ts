@@ -66,7 +66,7 @@ export class Queue {
       maxAttempts: options.maxAttempts ?? 3,
     }));
     const result = await transaction.query<{ job_id: string }>(
-      "SELECT job_id FROM ironshift.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+      "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
       [JSON.stringify(input)],
     );
     return result.rows.map((row) => row.job_id);
@@ -75,7 +75,7 @@ export class Queue {
   async promote(limit = 100): Promise<number> {
     // Promotion is bounded so a large delayed backlog cannot create one long lock transaction.
     const result = await this.database.query<{ count: number }>(
-      "SELECT ironshift.promote_v1($1) AS count",
+      "SELECT workhorse.promote_v1($1) AS count",
       [limit],
     );
     return result.rows[0]!.count;
@@ -88,7 +88,7 @@ export class Queue {
     // claim_v1 commits ownership before returning the payload. Handler code must run only after
     // this query resolves so no row lock or claim transaction spans user code.
     const result = await this.database.query<ClaimRow>(
-      "SELECT * FROM ironshift.claim_v1($1, $2, $3)",
+      "SELECT * FROM workhorse.claim_v1($1, $2, $3)",
       [options.queue ?? this.defaultQueue, workerId, options.leaseMs ?? 30_000],
     );
     const row = result.rows[0];
@@ -108,7 +108,7 @@ export class Queue {
     // False means the worker/fence is stale or the lease already expired. The caller must stop
     // treating the job as owned even if local handler code is still running.
     const result = await this.database.query<{ accepted: boolean }>(
-      "SELECT ironshift.heartbeat_v1($1, $2, $3, $4) AS accepted",
+      "SELECT workhorse.heartbeat_v1($1, $2, $3, $4) AS accepted",
       [job.id, workerId, job.fenceToken.toString(), leaseMs],
     );
     return result.rows[0]!.accepted;
@@ -122,7 +122,7 @@ export class Queue {
     // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
     // rather than overwriting the result of a recovered attempt.
     const query = await this.database.query<{ accepted: boolean }>(
-      "SELECT ironshift.complete_v1($1, $2, $3, $4::jsonb) AS accepted",
+      "SELECT workhorse.complete_v1($1, $2, $3, $4::jsonb) AS accepted",
       [job.id, workerId, job.fenceToken.toString(), JSON.stringify(result)],
     );
     return query.rows[0]!.accepted;
@@ -137,7 +137,7 @@ export class Queue {
     // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
     // creating the next projection. retryDelayMs selects ready versus scheduled placement.
     const result = await this.database.query<{ state: "ready" | "scheduled" | "failed" | "stale" }>(
-      "SELECT ironshift.fail_v1($1, $2, $3, $4::jsonb, $5) AS state",
+      "SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, $5) AS state",
       [
         job.id,
         workerId,
@@ -153,7 +153,7 @@ export class Queue {
     // Recovery may be called by many workers. SKIP LOCKED inside the function partitions work
     // between callers while fence checks prevent an old lease from recovering a newer attempt.
     const result = await this.database.query<{ count: number }>(
-      "SELECT ironshift.recover_expired_v1($1, $2) AS count",
+      "SELECT workhorse.recover_expired_v1($1, $2) AS count",
       [limit, retryDelayMs],
     );
     return result.rows[0]!.count;
@@ -182,9 +182,9 @@ export class Queue {
               COALESCE(r.run_at, o.run_at) AS run_at, o.result,
               COALESCE(r.error, o.error) AS error, j.created_at,
               COALESCE(r.updated_at, o.updated_at) AS updated_at
-         FROM ironshift.job j
-         LEFT JOIN ironshift.job_runtime r ON r.job_id = j.id
-         LEFT JOIN ironshift.job_outcome o ON o.job_id = j.id
+         FROM workhorse.job j
+         LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+         LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
         WHERE j.id = $1`,
       [id],
     );
@@ -219,17 +219,17 @@ export class Queue {
                      SELECT 1
                        FROM unnest(ARRAY['job_current', 'ready_job', 'scheduled_job', 'lease'])
                          AS legacy(relation_name)
-                      WHERE to_regclass(format('ironshift.%I', relation_name)) IS NOT NULL
+                      WHERE to_regclass(format('workhorse.%I', relation_name)) IS NOT NULL
                    )
                   THEN min(version)::integer
                   ELSE NULL
                 END AS version
-           FROM ironshift.schema_version`,
+           FROM workhorse.schema_version`,
       ),
       this.database.query<{ state: JobSnapshot["state"]; count: string }>(
         `SELECT state, count(*)::text AS count
-           FROM (SELECT state FROM ironshift.job_runtime UNION ALL
-                 SELECT state FROM ironshift.job_outcome) lifecycle
+           FROM (SELECT state FROM workhorse.job_runtime UNION ALL
+                 SELECT state FROM workhorse.job_outcome) lifecycle
           GROUP BY state`,
       ),
       this.database.query<{
@@ -245,7 +245,7 @@ export class Queue {
                count(*) FILTER (WHERE state = 'active' AND expires_at <= clock_timestamp())::text AS expired,
                extract(epoch FROM clock_timestamp() - min(ready_at) FILTER (WHERE state = 'ready')) * 1000
                  AS oldest_ready_age_ms
-          FROM ironshift.job_runtime`),
+          FROM workhorse.job_runtime`),
       this.database.query<{
         relation: string;
         total_bytes: string;
@@ -267,7 +267,7 @@ export class Queue {
                s.last_vacuum, s.last_autovacuum
           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
           LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-         WHERE n.nspname = 'ironshift' AND c.relkind IN ('r', 'p')
+         WHERE n.nspname = 'workhorse' AND c.relkind IN ('r', 'p')
          ORDER BY c.relname`),
       this.database.query<{ age_ms: number | null; lock_wait_count: string }>(`
         SELECT extract(epoch FROM clock_timestamp() - min(xact_start)) * 1000 AS age_ms,

@@ -54,7 +54,7 @@ describe("competitor baseline options and plans", () => {
     expect(first).not.toEqual(createCompetitorExecutionPlan([1, 4], 6, 43));
     for (const workers of [1, 4]) {
       const steps = first.filter((step) => step.workerConcurrency === workers);
-      for (const target of ["ironshift", "pg-boss", "graphile-worker"] as const) {
+      for (const target of ["workhorse", "pg-boss", "graphile-worker"] as const) {
         expect(
           [0, 1, 2].map(
             (position) => steps.filter((s) => s.targetOrder[position] === target).length,
@@ -67,10 +67,10 @@ describe("competitor baseline options and plans", () => {
 
 describe("competitor summaries and JSON", () => {
   it("groups success-path metrics without cross-target equivalence claims", () => {
-    const summaries = summarizeCompetitorRuns([result("ironshift", 2000), result("pg-boss", 1000)]);
+    const summaries = summarizeCompetitorRuns([result("workhorse", 2000), result("pg-boss", 1000)]);
     expect(summaries).toHaveLength(2);
     expect(
-      summaries.find((summary) => summary.target === "ironshift")?.processingPerSecond.mean,
+      summaries.find((summary) => summary.target === "workhorse")?.processingPerSecond.mean,
     ).toBe(2000);
   });
 

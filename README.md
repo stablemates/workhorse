@@ -1,6 +1,6 @@
-# Ironshift validation MVP
+# Workhorse validation MVP
 
-Ironshift is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, immutable history, and a live-only dispatch relation.
+Workhorse is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, immutable history, and a live-only dispatch relation.
 
 The current implementation remains an evidence-first validation release rather than a production-support promise. Its purpose is to validate transactional enqueue, declarative pg_cron scheduling, fenced ownership, immutable attempt history, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
 
@@ -13,7 +13,7 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
 - [`docs/pg-cron-requirements.md`](docs/pg-cron-requirements.md): administrator grants, executable preflight, provider compatibility, authentication, capacity, and retention.
 - [`docs/demo-findings.md`](docs/demo-findings.md): API, packaging, documentation, and developer-experience gaps found by the end-to-end demo.
-- [`demo/README.md`](demo/README.md): interactive Ironshift demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
+- [`demo/README.md`](demo/README.md): interactive Workhorse demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
 
 ## Included scope
 
@@ -25,7 +25,7 @@ The current implementation remains an evidence-first validation release rather t
 - namespaced declarative recurring jobs synchronized into pg_cron during deployment;
 - centralized pg_cron promotion and lease recovery outside the worker claim path;
 - a single TypeScript `pg` client and worker runtime;
-- separate `@ironshift/drizzle` and `@ironshift/hono` integration packages;
+- separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
 - an optional read-only React operator dashboard with a typed oRPC boundary;
 - deterministic worker crash failpoints;
 - a JSON PostgreSQL queue-health command;
@@ -43,14 +43,14 @@ pg_cron must be preloaded and configured by a database administrator. Exact prov
 -- Set shared_preload_libraries = 'pg_cron' and cron.database_name = 'postgres', then restart.
 \c postgres
 CREATE EXTENSION IF NOT EXISTS pg_cron;
-GRANT USAGE ON SCHEMA cron TO ironshift;
-GRANT SELECT ON cron.job, cron.job_run_details TO ironshift;
+GRANT USAGE ON SCHEMA cron TO workhorse;
+GRANT SELECT ON cron.job, cron.job_run_details TO workhorse;
 GRANT EXECUTE ON FUNCTION
-  cron.schedule_in_database(text, text, text, text, text, boolean) TO ironshift;
-GRANT EXECUTE ON FUNCTION cron.unschedule(bigint) TO ironshift;
+  cron.schedule_in_database(text, text, text, text, text, boolean) TO workhorse;
+GRANT EXECUTE ON FUNCTION cron.unschedule(bigint) TO workhorse;
 ```
 
-The target and metadata pools must use the same deployment role. That role also needs `CONNECT` to the target database and normal access to the installed `ironshift` schema. pg_cron must be able to authenticate as that role when it connects to the target database. When `cron.use_background_workers` is disabled, configure PostgreSQL host authentication and a password source such as `.pgpass`; when it is enabled, size `max_worker_processes` for `cron.max_running_jobs`. Keep serverless database compute active or schedules will pause while it is suspended. Use UTC for `cron.timezone` unless every schedule deliberately follows another cluster-wide timezone. Configure operator-owned retention for `cron.job_run_details`; Ironshift reads that history but does not delete cluster-wide pg_cron records.
+The target and metadata pools must use the same deployment role. That role also needs `CONNECT` to the target database and normal access to the installed `workhorse` schema. pg_cron must be able to authenticate as that role when it connects to the target database. When `cron.use_background_workers` is disabled, configure PostgreSQL host authentication and a password source such as `.pgpass`; when it is enabled, size `max_worker_processes` for `cron.max_running_jobs`. Keep serverless database compute active or schedules will pause while it is suspended. Use UTC for `cron.timezone` unless every schedule deliberately follows another cluster-wide timezone. Configure operator-owned retention for `cron.job_run_details`; Workhorse reads that history but does not delete cluster-wide pg_cron records.
 
 ```bash
 pnpm install
@@ -67,21 +67,21 @@ Local tooling keeps four databases separate:
 
 | Database          | Purpose                                      | Commands                                |
 | ----------------- | -------------------------------------------- | --------------------------------------- |
-| `ironshift_dev`   | Manual development and `pnpm health`         | `pnpm db:reset` or `pnpm db:reset:dev`  |
-| `ironshift_test`  | Automated integration tests only             | `pnpm db:reset:test`, `pnpm test`       |
-| `ironshift_bench` | Destructive benchmark runs and their history | `pnpm db:reset:bench`, `pnpm benchmark` |
-| `ironshift_demo`  | Reproducible local demo data                 | `pnpm db:reset:demo`, `pnpm demo`       |
+| `workhorse_dev`   | Manual development and `pnpm health`         | `pnpm db:reset` or `pnpm db:reset:dev`  |
+| `workhorse_test`  | Automated integration tests only             | `pnpm db:reset:test`, `pnpm test`       |
+| `workhorse_bench` | Destructive benchmark runs and their history | `pnpm db:reset:bench`, `pnpm benchmark` |
+| `workhorse_demo`  | Reproducible local demo data                 | `pnpm db:reset:demo`, `pnpm demo`       |
 
-`pnpm db:reset:all` unschedules Ironshift-owned pg_cron entries, recreates all four databases, and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, `_bench`, or `_demo` suffix, requires confirmation internally, and refuses remote hosts unless `IRONSHIFT_ALLOW_REMOTE_RESET=1` is deliberately set.
+`pnpm db:reset:all` unschedules Workhorse-owned pg_cron entries, recreates all four databases, and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, `_bench`, or `_demo` suffix, requires confirmation internally, and refuses remote hosts unless `WORKHORSE_ALLOW_REMOTE_RESET=1` is deliberately set.
 
-The defaults use the local `ironshift` role. Override them independently with `IRONSHIFT_DEV_DATABASE_URL`, `IRONSHIFT_TEST_DATABASE_URL`, `IRONSHIFT_BENCH_DATABASE_URL`, and `IRONSHIFT_DEMO_DATABASE_URL`. Purpose-specific destructive reset, test, and benchmark tooling intentionally ignores generic `DATABASE_URL`. Application runtimes may still accept `DATABASE_URL`; the demo otherwise inherits `IRONSHIFT_DEMO_DATABASE_URL`.
+The defaults use the local `workhorse` role. Override them independently with `WORKHORSE_DEV_DATABASE_URL`, `WORKHORSE_TEST_DATABASE_URL`, `WORKHORSE_BENCH_DATABASE_URL`, and `WORKHORSE_DEMO_DATABASE_URL`. Purpose-specific destructive reset, test, and benchmark tooling intentionally ignores generic `DATABASE_URL`. Application runtimes may still accept `DATABASE_URL`; the demo otherwise inherits `WORKHORSE_DEMO_DATABASE_URL`.
 
 `pnpm pg-cron:check` schedules a temporary `SELECT 1` in the target database and waits for the daemon result, so `ready: true` proves grants plus target authentication and execution. Use `-- --database test` or `bench` for an isolated local target, or set `DATABASE_URL` and `CRON_DATABASE_URL` for a deployed environment.
 
 ## Run the demo
 
-After `pnpm install`, the demo needs only PostgreSQL 15+ and the local `ironshift` role described above.
-One command safely recreates the purpose-guarded `ironshift_demo` database, builds every workspace
+After `pnpm install`, the demo needs only PostgreSQL 15+ and the local `workhorse` role described above.
+One command safely recreates the purpose-guarded `workhorse_demo` database, builds every workspace
 package, installs the application schema, starts the Hono worker, and serves the dashboard:
 
 ```bash
@@ -98,7 +98,7 @@ connection overrides.
 
 ```ts
 import { Pool } from "pg";
-import { installSchema, PgCronScheduler, Queue, Worker } from "ironshift";
+import { installSchema, PgCronScheduler, Queue, Worker } from "@workhorse/core";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 // Use the same deployment role against the cluster's configured pg_cron metadata database.
@@ -135,30 +135,30 @@ To enqueue atomically with application writes, pass the active `PoolClient` as t
 
 ### Drizzle and Hono packages
 
-`@ironshift/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
+`@workhorse/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
 adding Drizzle to the core package:
 
 ```ts
-import { createDrizzleAdapter } from "@ironshift/drizzle";
+import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 const db = drizzle({ client: pool });
-const ironshift = createDrizzleAdapter(db);
+const workhorse = createDrizzleAdapter(db);
 
 await db.transaction(async (tx) => {
   await tx.insert(account).values({ id: accountId });
-  await ironshift.forTransaction(tx).enqueue("account.created", { accountId });
+  await workhorse.forTransaction(tx).enqueue("account.created", { accountId });
 });
 ```
 
-`@ironshift/hono` exposes the queue through typed middleware, starts configured workers once, and
+`@workhorse/hono` exposes the queue through typed middleware, starts configured workers once, and
 provides a Node server handle whose idempotent shutdown stops new claims, drains in-flight handlers
 and requests, then closes explicitly provider-owned resources. See the package READMEs for complete
 configuration and ownership behavior.
 
 `scheduler.sync()` also installs one bounded maintenance job, every second by default, for due-job promotion, expired-lease recovery, and deletion of at most 10,000 occurrence keys older than 30 days. Workers therefore default to external maintenance and do not pay those two database round trips before every claim. Deployments without pg_cron can explicitly use `new Worker(queue, { maintenance: "worker" })` as a portability fallback.
 
-Definitions contain typed Ironshift jobs rather than arbitrary SQL. pg_cron stores only revision-fenced calls to stable `ironshift.fire_schedule_v1` and `ironshift.maintain_v1` functions. Schedule names are stable deployment identities; synchronization updates changed definitions, disables omitted definitions, and prunes only pg_cron jobs owned by the same target database and namespace. A stale cron entry cannot execute a newly committed payload at its old cadence.
+Definitions contain typed Workhorse jobs rather than arbitrary SQL. pg_cron stores only revision-fenced calls to stable `workhorse.fire_schedule_v1` and `workhorse.maintain_v1` functions. Schedule names are stable deployment identities; synchronization updates changed definitions, disables omitted definitions, and prunes only pg_cron jobs owned by the same target database and namespace. A stale cron entry cannot execute a newly committed payload at its old cadence.
 
 ## Diagnostics and evidence
 
@@ -189,7 +189,7 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design and [`doc
 
 ## Competitor baseline
 
-Run the standalone, success-path-only baseline against Ironshift, pg-boss 12.26.2, and Graphile Worker 0.17.3:
+Run the standalone, success-path-only baseline against Workhorse, pg-boss 12.26.2, and Graphile Worker 0.17.3:
 
 ```bash
 pnpm db:reset:bench

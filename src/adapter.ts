@@ -10,24 +10,24 @@ import type { WorkerOptions } from "./worker.js";
  * core {@link Queryable} protocol. Framework integrations only need the default queue, worker
  * construction, and an idempotent resource shutdown hook.
  */
-export interface IronshiftAdapter<TTransaction = Queryable> {
+export interface WorkhorseAdapter<TTransaction = Queryable> {
   readonly queue: Queue;
   forTransaction(transaction: TTransaction): Queue;
   createWorker(options?: WorkerOptions): Worker;
   close(): Promise<void>;
 }
 
-export interface IronshiftAdapterOptions<TTransaction> {
+export interface WorkhorseAdapterOptions<TTransaction> {
   database: Queryable;
   adaptTransaction: (transaction: TTransaction) => Queryable;
   defaultQueue?: string;
   close?: () => void | Promise<void>;
 }
 
-/** Build one provider-neutral Ironshift runtime around a database adapter. */
-export function createIronshiftAdapter<TTransaction = Queryable>(
-  options: IronshiftAdapterOptions<TTransaction>,
-): IronshiftAdapter<TTransaction> {
+/** Build one provider-neutral Workhorse runtime around a database adapter. */
+export function createWorkhorseAdapter<TTransaction = Queryable>(
+  options: WorkhorseAdapterOptions<TTransaction>,
+): WorkhorseAdapter<TTransaction> {
   const queue = new Queue(options.database, options.defaultQueue);
   let closePromise: Promise<void> | undefined;
 

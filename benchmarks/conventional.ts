@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { MAX_ENQUEUE_BATCH_SIZE } from "../src/types.js";
 import type { EnqueueRequest, Json, Queryable } from "../src/types.js";
 
-export const conventionalSchema = "ironshift_benchmark_conventional";
+export const conventionalSchema = "workhorse_benchmark_conventional";
 export const conventionalSqlFile = "benchmark-conventional.sql";
 
 export type ConventionalJobState = "scheduled" | "ready" | "active" | "succeeded" | "failed";

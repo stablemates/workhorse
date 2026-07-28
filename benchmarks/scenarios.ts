@@ -184,13 +184,13 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   },
 ] as const;
 
-export const resetIronshiftStateSql = `TRUNCATE ironshift.job_event, ironshift.attempt_history,
-  ironshift.job_outcome, ironshift.job_runtime, ironshift.job RESTART IDENTITY CASCADE;
-ALTER SEQUENCE ironshift.fence_token_seq RESTART WITH 1;
-ALTER SEQUENCE ironshift.ready_sequence_seq RESTART WITH 1`;
+export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
+  workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
+ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
+ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1`;
 
-export const createHistoryWeekV1Sql = "SELECT ironshift.create_history_week_v1($1::date)";
-export const retireHistoryWeekV1Sql = "SELECT ironshift.retire_history_week_v1($1::date)";
+export const createHistoryWeekV1Sql = "SELECT workhorse.create_history_week_v1($1::date)";
+export const retireHistoryWeekV1Sql = "SELECT workhorse.retire_history_week_v1($1::date)";
 
 const defaults: ResolvedOperationalScenarioOptions = {
   jobCount: 12,
@@ -282,7 +282,7 @@ function queueName(prefix: string, name: OperationalScenarioName): string {
 }
 
 async function reset(pool: Queryable): Promise<void> {
-  await pool.query(resetIronshiftStateSql);
+  await pool.query(resetWorkhorseStateSql);
 }
 
 async function measured<T>(now: () => number, operation: () => Promise<T>): Promise<[T, number]> {
@@ -294,7 +294,7 @@ async function measured<T>(now: () => number, operation: () => Promise<T>): Prom
 async function rowCount(pool: Queryable, relation: string, jobId?: string): Promise<number> {
   const where = jobId === undefined ? "" : " WHERE job_id = $1";
   const result = await pool.query<{ count: string }>(
-    `SELECT count(*)::text AS count FROM ironshift.${relation}${where}`,
+    `SELECT count(*)::text AS count FROM workhorse.${relation}${where}`,
     jobId === undefined ? [] : [jobId],
   );
   return Number(result.rows[0]?.count ?? 0);
@@ -329,7 +329,7 @@ async function scheduledPromotionDrift(
   }
   const driftRows = await context.pool.query<{ drift_ms: number }>(
     `SELECT extract(epoch FROM (r.ready_at - r.run_at)) * 1000 AS drift_ms
-       FROM ironshift.job_runtime r
+       FROM workhorse.job_runtime r
       WHERE r.queue_name = $1 AND r.state = 'ready' ORDER BY r.sequence`,
     [context.queueName],
   );
@@ -700,13 +700,13 @@ async function retentionPruning(
   const historicalTimestamp = new Date(`${retiredWeekDate}T12:00:00.000Z`);
   await context.pool.query(createHistoryWeekV1Sql, [retiredWeekDate]);
   await context.pool.query(
-    `UPDATE ironshift.job_event e SET occurred_at = $1
-      FROM ironshift.job j WHERE j.id = e.job_id AND j.queue_name = $2`,
+    `UPDATE workhorse.job_event e SET occurred_at = $1
+      FROM workhorse.job j WHERE j.id = e.job_id AND j.queue_name = $2`,
     [historicalTimestamp, context.queueName],
   );
   await context.pool.query(
-    `UPDATE ironshift.attempt_history h SET occurred_at = $1, finished_at = $1
-      FROM ironshift.job j WHERE j.id = h.job_id AND j.queue_name = $2`,
+    `UPDATE workhorse.attempt_history h SET occurred_at = $1, finished_at = $1
+      FROM workhorse.job j WHERE j.id = h.job_id AND j.queue_name = $2`,
     [historicalTimestamp, context.queueName],
   );
   const historyBefore =
@@ -771,7 +771,7 @@ async function healthSnapshot(
   const expired = await queue.claim("health-expired", { leaseMs: context.options.leaseMs * 4 });
   recordInvariant(assertions, "health expired seed claimed", expired !== null, true);
   await context.pool.query(
-    `UPDATE ironshift.job_runtime
+    `UPDATE workhorse.job_runtime
         SET expires_at = clock_timestamp() - interval '1 millisecond'
       WHERE job_id = $1 AND state = 'active'`,
     [expired!.id],

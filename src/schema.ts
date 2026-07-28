@@ -9,20 +9,20 @@ export async function installSchema(database: Queryable): Promise<void> {
     version_table_exists: boolean;
     legacy_relation_exists: boolean;
   }>(`
-    SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'ironshift') AS schema_exists,
-           to_regclass('ironshift.schema_version') IS NOT NULL AS version_table_exists,
+    SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'workhorse') AS schema_exists,
+           to_regclass('workhorse.schema_version') IS NOT NULL AS version_table_exists,
            EXISTS (
              SELECT 1
                FROM unnest(ARRAY['job_current', 'ready_job', 'scheduled_job', 'lease'])
                  AS legacy(relation_name)
-              WHERE to_regclass(format('ironshift.%I', relation_name)) IS NOT NULL
+              WHERE to_regclass(format('workhorse.%I', relation_name)) IS NOT NULL
            ) AS legacy_relation_exists`);
   const state = existing.rows[0]!;
   if (state.schema_exists) {
     if (!state.version_table_exists)
-      throw new Error("refusing to install into an unversioned existing ironshift schema");
+      throw new Error("refusing to install into an unversioned existing workhorse schema");
     const versions = await database.query<{ version: number }>(
-      "SELECT version FROM ironshift.schema_version ORDER BY version",
+      "SELECT version FROM workhorse.schema_version ORDER BY version",
     );
     if (
       versions.rows.length !== 1 ||
@@ -30,7 +30,7 @@ export async function installSchema(database: Queryable): Promise<void> {
       state.legacy_relation_exists
     )
       throw new Error(
-        "refusing to treat an existing non-v2 or mixed ironshift schema as a clean installation",
+        "refusing to treat an existing non-v2 or mixed workhorse schema as a clean installation",
       );
   }
   const schemaUrl = new URL("../sql/schema.sql", import.meta.url);
