@@ -19,6 +19,7 @@ const databaseUrl =
   process.env.WORKHORSE_DEMO_DATABASE_URL ??
   "postgresql://workhorse:workhorse@localhost:5432/workhorse_demo";
 const port = Number(process.env.PORT ?? 3000);
+const environment = process.env.WORKHORSE_ENV ?? "development";
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
   ? Number(process.env.WORKHORSE_WORKER_POLL_MS)
   : undefined;
@@ -41,6 +42,7 @@ notificationClient.on("error", (error) => {
 
 const { app, workhorse } = createDemoApplication(database, {
   dashboardRefresh,
+  environment,
   operator: createLocalOperator(database),
   queueController: createLocalQueueController(database),
   scheduleController: createLocalScheduleController(database),

@@ -54,6 +54,8 @@ export interface CreateDemoApplicationOptions {
   onWorkerError?: (error: unknown) => void;
   dashboardRefresh?: DashboardRefreshHub;
   dashboard?: boolean;
+  /** Display-only deployment environment label shown in the dashboard header. */
+  environment?: string;
   operator?: DashboardOperator;
   scheduleController?: ScheduleController;
   queueController?: QueueController;
@@ -559,6 +561,7 @@ export function createDemoApplication(
   const maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS;
   const housekeepingIntervalMs = options.housekeepingIntervalMs ?? DEMO_HOUSEKEEPING_INTERVAL_MS;
   const dashboardRefresh = options.dashboardRefresh ?? new DashboardRefreshHub();
+  const environment = options.environment ?? "development";
   // Worker pause state belongs to this application process and intentionally resets on restart.
   const workerRegistry = new Map<string, Worker>();
   const workerController =
@@ -706,6 +709,7 @@ export function createDemoApplication(
           database,
           queue: context.var.workhorse.queue,
           configuredWorkers: DEMO_WORKERS,
+          environment,
           maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs, housekeepingIntervalMs },
           operator: options.operator ?? createReadOnlyOperator(),
           scheduleController: options.scheduleController,

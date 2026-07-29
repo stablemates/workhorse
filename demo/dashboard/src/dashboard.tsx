@@ -131,6 +131,15 @@ const healthyStates = new Set(["succeeded", "ready", "active", "busy"]);
 const failureStates = new Set(["failed", "discarded"]);
 const warningStates = new Set(["scheduled", "retryable", "recent"]);
 
+/** Header badge color for the deployment environment label. */
+function environmentColor(environment: string): string {
+  const normalized = environment.toLowerCase();
+  if (normalized.startsWith("prod")) return "red";
+  if (normalized.startsWith("stag")) return "orange";
+  if (normalized.startsWith("test") || normalized === "ci") return "grape";
+  return "blue";
+}
+
 function readLocation(): {
   route: PageRoute;
   filter: DashboardTaskFilter;
@@ -1220,6 +1229,19 @@ export function Dashboard() {
     error: null,
   });
   const [taskCounts, setTaskCounts] = useState<DashboardTaskCounts | null>(null);
+  const [environment, setEnvironment] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void rpcClient.dashboard
+      .meta()
+      .then((meta) => {
+        if (!cancelled) setEnvironment(meta.environment);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [runningDemoJob, setRunningDemoJob] = useState<DemoJobKind | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [togglingSchedule, setTogglingSchedule] = useState<string | null>(null);
@@ -1615,6 +1637,16 @@ export function Dashboard() {
             </Box>
           </Group>
           <Group gap="sm" wrap="nowrap">
+            {environment ? (
+              <Badge
+                color={environmentColor(environment)}
+                variant="light"
+                visibleFrom="xs"
+                title="Deployment environment (WORKHORSE_ENV)"
+              >
+                {environment}
+              </Badge>
+            ) : null}
             <Badge
               color={loadState.status === "error" ? "red" : connected ? "teal" : "gray"}
               variant="light"

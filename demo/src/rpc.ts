@@ -25,6 +25,7 @@ export interface DashboardRpcContext {
   database: DemoDatabase;
   queue: Queue;
   configuredWorkers: readonly string[];
+  environment: string;
   maintenanceLoops: MaintenanceLoopCadences;
   operator: DashboardOperator;
   scheduleController?: ScheduleController;
@@ -94,6 +95,7 @@ function auditWithOccurredAt(
 
 export const dashboardRouter = {
   dashboard: {
+    meta: procedure.handler(({ context }) => ({ environment: context.environment })),
     taskCounts: procedure.handler(({ context }) => readDashboardTaskCounts(context.database)),
     tasks: procedure
       .input(tasksInput)
