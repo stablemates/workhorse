@@ -44,6 +44,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNo
 import type {
   DashboardCronPage,
   DashboardJobDetail,
+  DashboardJobRow,
   DashboardSystemPage,
   DashboardTaskCounts,
   DashboardTaskFilter,
@@ -118,6 +119,25 @@ function formatDate(value: string | null | undefined): string {
   }).format(new Date(value));
 }
 
+function formatRelative(value: string | null | undefined): string {
+  if (!value) return "never";
+  const deltaMs = Date.now() - new Date(value).getTime();
+  const future = deltaMs < 0;
+  const seconds = Math.round(Math.abs(deltaMs) / 1_000);
+  const phrase =
+    seconds < 5
+      ? "now"
+      : seconds < 60
+        ? `${seconds}s`
+        : seconds < 3_600
+          ? `${Math.floor(seconds / 60)}m`
+          : seconds < 86_400
+            ? `${Math.floor(seconds / 3_600)}h`
+            : `${Math.floor(seconds / 86_400)}d`;
+  if (phrase === "now") return future ? "in a moment" : "just now";
+  return future ? `in ${phrase}` : `${phrase} ago`;
+}
+
 function formatDuration(milliseconds: number | null | undefined): string {
   if (milliseconds === null || milliseconds === undefined) return "—";
   if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`;
@@ -137,6 +157,28 @@ function StatusBadge({ state }: { state: string }) {
     <Badge color={statusColor(state)} variant="light" tt="capitalize">
       {state}
     </Badge>
+  );
+}
+
+/** One-line, state-specific context so a row explains itself without opening the drawer. */
+function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
+  let detail: string | null = null;
+  if (job.state === "scheduled" && job.runAt) detail = `runs ${formatRelative(job.runAt)}`;
+  else if (job.state === "active" && job.workerId) detail = `on ${job.workerId}`;
+  else if (job.state === "failed" && job.errorMessage) detail = job.errorMessage;
+  else if (job.state === "succeeded" && job.finishedAt)
+    detail = `finished ${formatRelative(job.finishedAt)}`;
+  if (!detail) return null;
+  return (
+    <Text
+      c={job.state === "failed" ? "red.7" : "dimmed"}
+      size="xs"
+      lineClamp={1}
+      style={{ wordBreak: "break-all" }}
+      title={detail}
+    >
+      {detail}
+    </Text>
   );
 }
 
@@ -252,20 +294,19 @@ function TasksPage({
         ) : null}
         <Divider />
         <ScrollArea>
-          <Table striped highlightOnHover verticalSpacing="md" horizontalSpacing="lg" miw={760}>
+          <Table striped highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={720}>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Task</Table.Th>
-                <Table.Th>Queue</Table.Th>
                 <Table.Th>Status</Table.Th>
-                <Table.Th>Attempt</Table.Th>
-                <Table.Th>Updated</Table.Th>
+                <Table.Th ta="right">Attempt</Table.Th>
+                <Table.Th ta="right">Updated</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {data.jobs.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={5}>
+                  <Table.Td colSpan={4}>
                     <Center mih={120}>
                       <Text c="dimmed" size="sm">
                         No tasks match this filter.
@@ -275,27 +316,39 @@ function TasksPage({
                 </Table.Tr>
               ) : (
                 data.jobs.map((job) => (
-                  <Table.Tr key={job.id}>
+                  <Table.Tr
+                    key={job.id}
+                    onClick={() => inspectJob(job.id)}
+                    style={{ cursor: "pointer" }}
+                  >
                     <Table.Td>
-                      <Button
-                        variant="subtle"
-                        color="dark"
-                        size="compact-sm"
-                        px={0}
-                        onClick={() => inspectJob(job.id)}
-                      >
+                      <Text fw={600} size="sm" lh={1.3}>
                         {job.type}
-                      </Button>
-                      <Code fz="xs">{job.id}</Code>
-                    </Table.Td>
-                    <Table.Td>{job.queue}</Table.Td>
-                    <Table.Td>
-                      <StatusBadge state={job.state} />
+                      </Text>
+                      <Text c="dimmed" size="xs" lh={1.3}>
+                        {job.queue} · <Code fz="10px">{job.id.slice(0, 8)}</Code>
+                      </Text>
                     </Table.Td>
                     <Table.Td>
-                      {job.attempt} / {job.maxAttempts}
+                      <Group gap="xs" wrap="nowrap">
+                        <StatusBadge state={job.state} />
+                        <TaskStatusDetail job={job} />
+                      </Group>
                     </Table.Td>
-                    <Table.Td>{formatDate(job.updatedAt)}</Table.Td>
+                    <Table.Td ta="right">
+                      <Text
+                        size="sm"
+                        c={job.attempt > 1 ? "yellow.8" : undefined}
+                        fw={job.attempt > 1 ? 600 : undefined}
+                      >
+                        {job.attempt}/{job.maxAttempts}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td ta="right">
+                      <Text size="sm" title={formatDate(job.updatedAt)} c="dimmed">
+                        {formatRelative(job.updatedAt)}
+                      </Text>
+                    </Table.Td>
                   </Table.Tr>
                 ))
               )}
