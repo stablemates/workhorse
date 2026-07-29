@@ -22,6 +22,8 @@ const RECURRING_JOB_TYPE = "demo.recurring";
 const DEMO_QUEUE = "demo";
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
 export const DEMO_WORKER_POLL_MS = 15_000;
+export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
+export const DEMO_HOUSEKEEPING_INTERVAL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
@@ -50,6 +52,8 @@ export interface CreateDemoApplicationOptions {
   operator?: DashboardOperator;
   scheduleController?: ScheduleController;
   workerPollMs?: number;
+  maintenanceIntervalMs?: number;
+  housekeepingIntervalMs?: number;
   longRunningJobMs?: number;
 }
 
@@ -228,6 +232,8 @@ export function createDemoApplication(
   database: DemoDatabase,
   options: CreateDemoApplicationOptions = {},
 ) {
+  const maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS;
+  const housekeepingIntervalMs = options.housekeepingIntervalMs ?? DEMO_HOUSEKEEPING_INTERVAL_MS;
   const dashboardRefresh = options.dashboardRefresh ?? new DashboardRefreshHub();
   const adapter = createDrizzleAdapter(database, {
     defaultQueue: DEMO_QUEUE,
@@ -240,6 +246,8 @@ export function createDemoApplication(
         workerId,
         scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
         pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
+        maintenanceIntervalMs,
+        housekeepingIntervalMs,
         retryDelayMs: (attempt) => attempt * 100,
       },
       configure(worker) {
@@ -351,6 +359,7 @@ export function createDemoApplication(
           database,
           queue: context.var.workhorse.queue,
           configuredWorkers: DEMO_WORKERS,
+          maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs, housekeepingIntervalMs },
           operator: options.operator ?? createReadOnlyOperator(),
           scheduleController: options.scheduleController,
         },

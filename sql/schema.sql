@@ -607,42 +607,120 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.maintain_v1(p_promote_limit integer DEFAULT 1000,
-  p_recover_limit integer DEFAULT 1000, p_occurrence_retention_days integer DEFAULT 30,
-  p_occurrence_prune_limit integer DEFAULT 10000)
-RETURNS TABLE (promoted integer, recovered integer, occurrences_pruned integer)
+DROP FUNCTION IF EXISTS workhorse.maintain_v1(integer, integer, integer, integer);
+
+CREATE OR REPLACE FUNCTION workhorse.tick_v1(
+  p_promote_limit integer DEFAULT 1000, p_recover_limit integer DEFAULT 1000
+) RETURNS TABLE (
+  phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
+)
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  v_started_at timestamptz;
+BEGIN
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:tick', 0)) THEN
+    RETURN QUERY VALUES
+      ('promote'::text, 0, 0, true, NULL::jsonb),
+      ('recover'::text, 0, 0, true, NULL::jsonb);
+    RETURN;
+  END IF;
+
+  phase := 'promote';
+  rows_affected := 0;
+  skipped_lock := false;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    rows_affected := workhorse.promote_v1(p_promote_limit);
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+
+  phase := 'recover';
+  rows_affected := 0;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    rows_affected := workhorse.recover_expired_v1(p_recover_limit);
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.housekeep_v1(
+  p_occurrence_retention_days integer DEFAULT 30,
+  p_occurrence_prune_limit integer DEFAULT 10000
+) RETURNS TABLE (
+  phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_started_at timestamptz;
+  v_week_offset integer;
+  v_suffix text;
 BEGIN
   IF p_occurrence_retention_days NOT BETWEEN 1 AND 3650 THEN
     RAISE EXCEPTION 'occurrence retention days must be between 1 and 3650';
   END IF;
-  IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:maintenance', 0)) THEN
-    promoted := 0;
-    recovered := 0;
-    occurrences_pruned := 0;
-    RETURN NEXT;
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:housekeeping', 0)) THEN
+    RETURN QUERY VALUES
+      ('history_partitions'::text, 0, 0, true, NULL::jsonb),
+      ('schedule_occurrences'::text, 0, 0, true, NULL::jsonb);
     RETURN;
   END IF;
-  IF EXISTS (
-    SELECT 1
-      FROM generate_series(0, 4) AS weeks(week_offset)
-      CROSS JOIN LATERAL (
-        SELECT to_char(
-          date_trunc('week', current_date + make_interval(weeks => week_offset)), 'IYYY"w"IW'
-        ) AS suffix
-      ) expected
-     WHERE to_regclass(format('workhorse.%I', 'job_event_' || suffix)) IS NULL
-        OR to_regclass(format('workhorse.%I', 'attempt_history_' || suffix)) IS NULL
-  ) THEN
-    PERFORM workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
-      FROM generate_series(0, 4) AS weeks(week_offset);
-  END IF;
-  promoted := workhorse.promote_v1(p_promote_limit);
-  recovered := workhorse.recover_expired_v1(p_recover_limit);
-  occurrences_pruned := workhorse.prune_schedule_occurrences_v1(
-    clock_timestamp() - make_interval(days => p_occurrence_retention_days),
-    p_occurrence_prune_limit
+
+  phase := 'history_partitions';
+  rows_affected := 0;
+  skipped_lock := false;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    FOR v_week_offset IN 0..4 LOOP
+      v_suffix := to_char(
+        date_trunc('week', current_date + make_interval(weeks => v_week_offset)), 'IYYY"w"IW'
+      );
+      IF to_regclass(format('workhorse.%I', 'job_event_' || v_suffix)) IS NULL
+         OR to_regclass(format('workhorse.%I', 'attempt_history_' || v_suffix)) IS NULL THEN
+        PERFORM workhorse.create_history_week_v1(
+          (current_date + make_interval(weeks => v_week_offset))::date
+        );
+        rows_affected := rows_affected + 1;
+      END IF;
+    END LOOP;
+  EXCEPTION WHEN OTHERS THEN
+    rows_affected := 0;
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+
+  phase := 'schedule_occurrences';
+  rows_affected := 0;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    rows_affected := workhorse.prune_schedule_occurrences_v1(
+      clock_timestamp() - make_interval(days => p_occurrence_retention_days),
+      p_occurrence_prune_limit
+    );
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
   RETURN NEXT;
 END;

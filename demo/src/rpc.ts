@@ -3,6 +3,7 @@ import type { Queue } from "@workhorse/core";
 import { z } from "zod";
 import type { AuditContext, DashboardOperator, DemoDatabase, ScheduleController } from "./app.js";
 import {
+  type MaintenanceLoopCadences,
   readDashboardCron,
   readDashboardJobDetail,
   readDashboardSystem,
@@ -15,6 +16,7 @@ export interface DashboardRpcContext {
   database: DemoDatabase;
   queue: Queue;
   configuredWorkers: readonly string[];
+  maintenanceLoops: MaintenanceLoopCadences;
   operator: DashboardOperator;
   scheduleController?: ScheduleController;
 }
@@ -66,7 +68,9 @@ export const dashboardRouter = {
       .handler(({ context, input }) =>
         readDashboardTasks(context.database, input.filter, input.page, input.pageSize),
       ),
-    cron: procedure.handler(({ context }) => readDashboardCron(context.database)),
+    cron: procedure.handler(({ context }) =>
+      readDashboardCron(context.database, context.maintenanceLoops),
+    ),
     system: procedure.handler(({ context }) =>
       readDashboardSystem(context.database, context.queue),
     ),
