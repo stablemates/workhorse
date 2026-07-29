@@ -47,7 +47,7 @@ Run `pnpm demo` for the project at `http://workhorse.localhost:43155`. Portless 
 automatically prefixes linked worktrees with their branch name, for example
 `http://feature-name.workhorse.localhost:43155`. Workhorse keeps Portless state in
 `~/.portless-workhorse`, uses plain HTTP on an unprivileged high port, and therefore never needs
-`sudo`. The API remains behind Vite on a deterministic worktree-specific internal port.
+`sudo`. The API remains behind Vite on a free internal port allocated separately for every run.
 
 `pnpm check` finishes by exporting only tracked files to a temporary clean checkout, installing the
 frozen lockfile, running `pnpm demo`, and exercising the dashboard snapshot, recurring schedule
@@ -70,8 +70,9 @@ The defaults use the local `workhorse` role. Override them independently with `W
 
 Use linked Git worktrees for medium and large features. The Lefthook `post-checkout` hook installs
 the frozen lockfile, copies local `.env` files from the primary checkout with mode `0600`, rewrites
-all four database URLs with a stable worktree suffix, assigns a unique internal API port, and
-provisions the four databases. Portless uses the branch name in the public `.localhost` URL.
+all four database URLs with a stable worktree suffix, and provisions the four databases. Portless
+uses the branch name in the public `.localhost` URL, while each demo run allocates a free internal
+API port.
 
 Remove a worktree with `pnpm worktree:remove <path>` so its four databases are dropped before Git
 removes the checkout. Git has no `post-worktree-remove` hook, so `post-checkout` and `post-merge`
