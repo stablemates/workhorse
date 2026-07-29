@@ -43,12 +43,11 @@ pnpm db:reset:all
 pnpm check
 ```
 
-Run `pnpm dev` for the demo at `https://workhorse.localhost`. Portless assigns the public port and
+Run `pnpm dev` for the demo at `http://workhorse.localhost:43155`. Portless assigns the application port and
 automatically prefixes linked worktrees with their branch name, for example
-`https://feature-name.workhorse.localhost`. The API remains behind Vite on a deterministic
-worktree-specific internal port. The first HTTPS setup may request administrator access. On Linux,
-run `pnpm dev:trust`; if it reports that Chromium's NSS tools are missing, install the displayed
-package with `sudo` and rerun it.
+`http://feature-name.workhorse.localhost:43155`. Workhorse keeps Portless state in
+`~/.portless-workhorse`, uses plain HTTP on an unprivileged high port, and therefore never needs
+`sudo`. The API remains behind Vite on a deterministic worktree-specific internal port.
 
 `pnpm check` finishes by exporting only tracked files to a temporary clean checkout, installing the
 frozen lockfile, running `pnpm demo`, and exercising the dashboard snapshot, recurring schedule
