@@ -35,7 +35,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 7. `complete_v1` deletes only the matching unexpired active runtime and inserts succeeded outcome, closed attempt history, and event atomically.
 8. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
 9. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID.
-10. `maintain_v1` performs bounded due promotion, expired-lease recovery, and old occurrence pruning for the worker-owned scheduler.
+10. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. `housekeep_v1` replenishes the history-partition horizon and prunes old occurrence keys under the separate `workhorse:housekeeping` lock, with each phase isolated in an exception subtransaction. Both return one telemetry row per phase: `(phase, rows_affected, duration_ms, skipped_lock, error)`.
 
 Every closed attempt has one immutable `attempt_history` row. Every lifecycle boundary appends a `job_event`.
 
@@ -69,8 +69,8 @@ Delivery is at least once. External effects require application-level idempotenc
 - Definitions contain cron text plus a typed Workhorse queue job; arbitrary SQL is not accepted.
 - Definition upsert is one target-database transaction; a per-namespace advisory lock serializes concurrent deployments.
 - Workers parse cron expressions in process and compute each enabled definition's due occurrences from its last durable occurrence.
-- Worker maintenance passes run at most once per `maintenanceIntervalMs` (default one second); transaction-scoped advisory locks inside `maintain_v1` and `fire_schedule_v1` make concurrent passes from other workers no-ops, so any number of workers run without duplicate fires and any surviving worker takes over.
-- Maintenance is bounded: 1,000-row promotion/recovery and 10,000-row occurrence-pruning limits per pass.
+- Worker tick passes run at most once per `maintenanceIntervalMs` (default one second) and housekeeping passes at most once per `housekeepingIntervalMs` (default 60 seconds); transaction-scoped advisory locks inside `tick_v1`, `housekeep_v1`, and `fire_schedule_v1` make concurrent passes from other workers no-ops, so any number of workers run without duplicate fires and any surviving worker takes over.
+- Maintenance is bounded: 1,000-row promotion/recovery limits per tick and a 10,000-row occurrence-pruning limit per housekeeping pass. Both report per-phase telemetry, surfaced through `worker.maintenanceTelemetry()` and the `onMaintenance` callback.
 - `Worker` option `scheduleNamespaces` selects which namespaces a worker evaluates; `scheduleCatchupLimit` bounds missed occurrences fired after downtime.
 - Worker fires call `fire_schedule_v1(namespace, name, revision, occurrence)` with the planned occurrence second as the occurrence key; stale, disabled, or missing definitions are no-ops.
 - Callers using `Queue.fireSchedule(namespace, name, revision, occurrenceAt)` can supply a stable external occurrence timestamp.
@@ -78,14 +78,14 @@ Delivery is at least once. External effects require application-level idempotenc
 
 ## History and retention
 
-The default partitions keep history inserts available if maintenance is late. `create_history_week_v1(week)` normalizes its argument to Monday, serializes creation for that boundary, and moves matching fallback rows into the new event and attempt partitions. `retire_history_week_v1(week)` drops both partitions only after the week is complete. Clean installation precreates the current week and four future weeks, while each `maintain_v1` call repairs and replenishes the four-week horizon when its edge is missing.
+The default partitions keep history inserts available if maintenance is late. `create_history_week_v1(week)` normalizes its argument to Monday, serializes creation for that boundary, and moves matching fallback rows into the new event and attempt partitions. `retire_history_week_v1(week)` drops both partitions only after the week is complete. Clean installation precreates the current week and four future weeks, while each `housekeep_v1` pass repairs and replenishes the four-week horizon when its edge is missing.
 
 Schedule occurrence keys older than 30 days are pruned in bounded batches by default. No automatic retention exists for `job` or `job_outcome`.
 
 ## Validation limits
 
 - The schema file supports clean installation, not online migration from schema version 1.
-- Schedules fire only while at least one worker with matching `scheduleNamespaces` runs; drift is bounded by the worker maintenance cadence.
+- Schedules fire only while at least one worker with matching `scheduleNamespaces` runs; drift is bounded by the worker tick cadence.
 - Schedule precision is one second and cron expressions are evaluated in the worker's configured timezone.
 - Polling remains authoritative; `NOTIFY` is only a wake hint.
 - Backoff/jitter and automated history-retention policy are not productized.

@@ -70,7 +70,7 @@ understandable, installable, and useful.
 
 **Depends on:** none
 
-- [x] Precreate weekly `job_event` and `attempt_history` partitions four weeks ahead through `maintain_v1`.
+- [x] Precreate weekly `job_event` and `attempt_history` partitions four weeks ahead through the housekeeping pass (`housekeep_v1`).
 - [ ] Add bounded retirement or archival of completed history partitions.
 - [ ] Define independent retention for job identity, terminal outcomes, events, attempts, and
       schedule occurrences.

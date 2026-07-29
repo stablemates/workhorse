@@ -20,7 +20,7 @@ flowchart LR
   App[Application transaction] -->|enqueue_many_v1 / enqueue_v1| PG[(PostgreSQL)]
   Deploy[Deployment] -->|schedule sync| PG
   Worker[TypeScript Worker] -->|claim / heartbeat| PG
-  Worker -->|fire_schedule_v1 / maintain_v1, advisory-lock coordinated| PG
+  Worker -->|fire_schedule_v1 / tick_v1 / housekeep_v1, advisory-lock coordinated| PG
   PG -->|payload + attempt + fence| Worker
   Worker -->|handler outside SQL transaction| Effects[External effects]
   Worker -->|complete_v1 / fail_v1| PG
@@ -117,7 +117,7 @@ Insert-only terminal state. Completion or terminal failure deletes the active ru
 
 ### History
 
-`job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed attempt, including retry, lease expiry, success, and terminal failure. Both use Monday-aligned weekly range partitions with default fallbacks. Clean installation creates the current week plus four future weeks, and `maintain_v1` continuously replenishes that horizon. Explicit week creation and completed-week retirement functions support operator-driven retention.
+`job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed attempt, including retry, lease expiry, success, and terminal failure. Both use Monday-aligned weekly range partitions with default fallbacks. Clean installation creates the current week plus four future weeks, and the housekeeping pass (`housekeep_v1`) continuously replenishes that horizon. Explicit week creation and completed-week retirement functions support operator-driven retention.
 
 ### Declarative schedules
 
@@ -125,7 +125,7 @@ Insert-only terminal state. Completion or terminal failure deletes the active ru
 
 `schedule_occurrence` provides one durable key per `(namespace, schedule_name, occurrence_at)` second. `fire_schedule_v1` inserts that key and enqueues through `enqueue_v1` in one transaction. A repeated fire for the same second returns the existing job ID instead of creating another job.
 
-Scheduling metadata lives entirely in the target database. Workers evaluate cron expressions in process with `cron-parser` and call only revision-fenced `fire_schedule_v1` or bounded `maintain_v1`. Transaction-scoped advisory locks inside those functions make concurrent callers no-ops, so schedules fire once and maintenance runs once per cadence regardless of worker count, while any surviving worker keeps schedules alive.
+Scheduling metadata lives entirely in the target database. Workers evaluate cron expressions in process with `cron-parser` and call only revision-fenced `fire_schedule_v1` or the bounded maintenance entry points `tick_v1` and `housekeep_v1`. Transaction-scoped advisory locks inside those functions make concurrent callers no-ops, so schedules fire once and maintenance runs once per cadence regardless of worker count, while any surviving worker keeps schedules alive.
 
 ## Atomic lifecycle
 
@@ -150,7 +150,13 @@ stateDiagram-v2
 
 `promote_v1` locks a bounded due set with `FOR UPDATE SKIP LOCKED`, updates those runtime rows from scheduled to ready, assigns new FIFO sequences, appends events, and emits a wake hint.
 
-Production promotion is worker-owned. Each worker calls `maintain_v1` at most once per configured `maintenanceIntervalMs`, and the function's transaction-scoped advisory lock turns concurrent calls from other workers into no-ops. `maintain_v1` performs bounded promotion, bounded expired-lease recovery, and bounded schedule-occurrence retention. Between maintenance passes a worker issues only the claim query.
+Production maintenance is worker-owned and split by cadence and failure domain into two entry points.
+
+Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default one second). Under the transaction-scoped `workhorse:tick` advisory lock it performs bounded promotion and bounded expired-lease recovery, the two dispatch-latency-critical phases. Concurrent callers return immediately with `skipped_lock = true`. The same cadence drives in-process schedule evaluation.
+
+Each worker calls `housekeep_v1` at most once per configured `housekeepingIntervalMs` (default 60 seconds). Under the separate `workhorse:housekeeping` lock it replenishes the history-partition horizon and prunes old schedule-occurrence keys, so slow housekeeping can never starve promotion. Its phases run in exception subtransactions: a partition-repair failure is reported while pruning still commits, and vice versa.
+
+Both functions return one row per phase, `(phase, rows_affected, duration_ms, skipped_lock, error)`. The worker records this telemetry per loop, exposes it through `worker.maintenanceTelemetry()`, and forwards each row to the optional `onMaintenance` callback. Between passes a worker issues only the claim query.
 
 ### Claim
 
@@ -195,9 +201,9 @@ Because definitions live only in the target database, a deployment is one transa
 - The canonical schema is a clean-install artifact, not an online version 1 to version 2 migration.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.
-- `schedule_occurrence` defaults to 30-day retention with at most 10,000 deletions per maintenance run.
+- `schedule_occurrence` defaults to 30-day retention with at most 10,000 deletions per housekeeping run.
 - Schedules have one-second precision; cron expressions are evaluated in the worker's configured timezone, for which UTC is recommended.
 - Runtime updates centralize churn in one relation and require vacuum and HOT-update validation under sustained heartbeat load.
 - `NOTIFY` is a wake hint. Polling remains the correctness mechanism.
-- History partition creation and retirement remain an explicit policy even though runtime maintenance is scheduled.
+- History partition retirement remains an explicit operator policy even though partition creation is replenished by housekeeping.
 - Retention for immutable `job` and `job_outcome` is not automated.
