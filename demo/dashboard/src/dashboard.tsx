@@ -434,7 +434,7 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
   });
   const series = groups.map((group, index) => ({
     name: group,
-    color: activitySeriesColors[index % activitySeriesColors.length]!,
+    color: group === "other" ? "gray.5" : activitySeriesColors[index % activitySeriesColors.length]!,
   }));
 
   return (
