@@ -74,7 +74,12 @@ const running = await serveWithWorkhorse({
   workhorse,
   port,
   onListen: ({ port: listeningPort }) => {
-    console.log(`Workhorse demo listening on http://localhost:${listeningPort}`);
+    if (process.env.PORTLESS_URL) {
+      console.log(`Workhorse demo available at ${process.env.PORTLESS_URL}`);
+      console.log(`Internal API listening on http://localhost:${listeningPort}`);
+    } else {
+      console.log(`Workhorse demo listening on http://localhost:${listeningPort}`);
+    }
   },
 });
 
