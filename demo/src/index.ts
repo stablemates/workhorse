@@ -1,14 +1,12 @@
 import { serveWithWorkhorse } from "@workhorse/hono";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { installSchema } from "@workhorse/core";
-import type { PgCronScheduler } from "@workhorse/core";
 import { Client, Pool } from "pg";
 import {
   createDemoApplication,
   createDemoDatabase,
   createLocalOperator,
   createLocalScheduleController,
-  createPgCronSchedulerStatusProvider,
   installDemoSchema,
   seedDemoData,
   syncDemoSchedules,
@@ -25,45 +23,14 @@ const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
   : undefined;
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 
-function deriveMaintenanceDatabaseUrl(url: string): string | undefined {
-  try {
-    const parsed = new URL(url);
-    parsed.pathname = "/postgres";
-    return parsed.toString();
-  } catch {
-    return undefined;
-  }
-}
-
-const cronDatabaseUrl = process.env.CRON_DATABASE_URL ?? deriveMaintenanceDatabaseUrl(databaseUrl);
-const cronPool = cronDatabaseUrl
-  ? new Pool({ connectionString: cronDatabaseUrl, max: 2 })
-  : undefined;
 const database = createDemoDatabase(pool);
 const dashboardRefresh = new DashboardRefreshHub();
 const notificationClient = new Client({ connectionString: databaseUrl });
 
 await installSchema(pool);
 await installDemoSchema(database);
-let demoScheduler: PgCronScheduler | undefined;
-if (cronPool) {
-  try {
-    const { result, scheduler } = await syncDemoSchedules(pool, cronPool);
-    demoScheduler = scheduler;
-    console.log(
-      `Synchronized ${result.schedules.length} recurring demo schedule in ${result.namespace}`,
-    );
-  } catch (error) {
-    console.warn(
-      "Recurring demo schedule synchronization is unavailable; continuing without pg_cron",
-      error,
-    );
-  }
-} else {
-  console.warn(
-    "Could not derive CRON_DATABASE_URL; recurring demo schedule synchronization is disabled",
-  );
-}
+await syncDemoSchedules(pool);
+console.log("Synchronized recurring demo schedules for worker-owned execution");
 await notificationClient.connect();
 await notificationClient.query("LISTEN workhorse_jobs");
 notificationClient.on("notification", () => dashboardRefresh.publish("postgres"));
@@ -74,13 +41,10 @@ notificationClient.on("error", (error) => {
 const { app, workhorse } = createDemoApplication(database, {
   dashboardRefresh,
   operator: createLocalOperator(database),
-  scheduleController: createLocalScheduleController(database, demoScheduler),
-  schedulerStatusProvider: createPgCronSchedulerStatusProvider(demoScheduler),
-  workerMaintenance: demoScheduler ? "external" : "worker",
+  scheduleController: createLocalScheduleController(database),
   workerPollMs,
   close: async () => {
     await notificationClient.end();
-    await cronPool?.end();
     await pool.end();
   },
   onWorkerError: (error) => console.error("Workhorse worker stopped", error),

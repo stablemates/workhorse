@@ -1,13 +1,7 @@
 import { ORPCError, os } from "@orpc/server";
 import type { Queue } from "@workhorse/core";
 import { z } from "zod";
-import type {
-  AuditContext,
-  DashboardOperator,
-  DemoDatabase,
-  ScheduleController,
-  SchedulerStatusProvider,
-} from "./app.js";
+import type { AuditContext, DashboardOperator, DemoDatabase, ScheduleController } from "./app.js";
 import {
   readDashboardCron,
   readDashboardJobDetail,
@@ -23,7 +17,6 @@ export interface DashboardRpcContext {
   configuredWorkers: readonly string[];
   operator: DashboardOperator;
   scheduleController?: ScheduleController;
-  schedulerStatusProvider?: SchedulerStatusProvider;
 }
 
 const procedure = os.$context<DashboardRpcContext>();
@@ -73,9 +66,7 @@ export const dashboardRouter = {
       .handler(({ context, input }) =>
         readDashboardTasks(context.database, input.filter, input.page, input.pageSize),
       ),
-    cron: procedure.handler(({ context }) =>
-      readDashboardCron(context.database, context.schedulerStatusProvider),
-    ),
+    cron: procedure.handler(({ context }) => readDashboardCron(context.database)),
     system: procedure.handler(({ context }) =>
       readDashboardSystem(context.database, context.queue),
     ),

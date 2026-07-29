@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import { installSchema, PgCronScheduler } from "@workhorse/core";
+import { installSchema } from "@workhorse/core";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../src/local-database.js";
@@ -11,9 +11,7 @@ import {
   createDemoDatabase,
   createLocalOperator,
   createLocalScheduleController,
-  createPgCronSchedulerStatusProvider,
   DEMO_LONG_RUNNING_MS,
-  DEMO_MAINTENANCE,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_POLL_MS,
   HEARTBEAT_SCHEDULE_NAME,
@@ -325,49 +323,33 @@ describe("Workhorse demo", () => {
   });
 
   it("fires a recurring definition and exposes its occurrence and job in the dashboard", async () => {
-    const cronDatabaseUrl = new URL(databaseUrl);
-    cronDatabaseUrl.pathname = "/postgres";
-    const cronPool = new Pool({ connectionString: cronDatabaseUrl.toString(), max: 2 });
-    const scheduler = new PgCronScheduler(pool, cronPool, {
-      namespace: "workhorse-demo-test",
-    });
+    await syncDemoSchedules(pool);
     const { app, workhorse } = createTestApplication();
     workhorse.start();
 
     try {
-      const synchronized = await scheduler.sync(
-        [
-          {
-            name: "heartbeat",
-            schedule: "* * * * *",
-            job: {
-              type: "demo.recurring",
-              queue: "demo",
-              payload: { source: "integration-test" },
-            },
-          },
-        ],
-        { maintenance: false },
-      );
-      expect(synchronized.schedules).toMatchObject([
-        { name: "heartbeat", enabled: true, cronActive: true },
-      ]);
-      const jobId = await scheduler.trigger("heartbeat", new Date("2026-07-22T20:00:00.000Z"));
-      expect(jobId).not.toBeNull();
-
+      let jobId: string | undefined;
       let state: string | undefined;
       for (let attempt = 0; attempt < 40 && state !== "succeeded"; attempt += 1) {
         await sleep(25);
-        state = (await workhorse.context.queue.getJob(jobId!))?.state;
+        const occurrence = await pool.query<{ job_id: string | null }>(
+          `SELECT job_id FROM workhorse.schedule_occurrence
+            WHERE namespace = $1 AND schedule_name = $2
+            ORDER BY occurrence_at DESC LIMIT 1`,
+          [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
+        );
+        jobId = occurrence.rows[0]?.job_id ?? undefined;
+        state = jobId ? (await workhorse.context.queue.getJob(jobId))?.state : undefined;
       }
+      expect(jobId).toBeDefined();
       expect(state).toBe("succeeded");
 
       const client = dashboardClient(app);
       expect(await client.dashboard.cron()).toMatchObject({
         schedules: [
           {
-            namespace: "workhorse-demo-test",
-            name: "heartbeat",
+            namespace: DEMO_SCHEDULE_NAMESPACE,
+            name: HEARTBEAT_SCHEDULE_NAME,
             occurrenceCount: 1,
           },
         ],
@@ -380,8 +362,6 @@ describe("Workhorse demo", () => {
       });
     } finally {
       await workhorse.stop();
-      await scheduler.sync([], { maintenance: false });
-      await cronPool.end();
     }
   });
 
@@ -504,119 +484,46 @@ describe("Workhorse demo", () => {
     ]);
   });
 
-  it("reconciles local schedule toggles with pg_cron", async () => {
-    const cronDatabaseUrl = new URL(databaseUrl);
-    cronDatabaseUrl.pathname = "/postgres";
-    const cronPool = new Pool({ connectionString: cronDatabaseUrl.toString(), max: 2 });
-    const { scheduler } = await syncDemoSchedules(pool, cronPool);
-    const { app } = createTestApplication({
-      operator: createLocalOperator(database),
-      scheduleController: createLocalScheduleController(database, scheduler),
-      schedulerStatusProvider: createPgCronSchedulerStatusProvider(scheduler),
-    });
-    const client = dashboardClient(app);
-
-    try {
-      expect(await client.dashboard.cron()).toMatchObject({
-        schedules: [
-          {
-            kind: "system",
-            identity: {
-              kind: "system",
-              namespace: DEMO_SCHEDULE_NAMESPACE,
-              name: "maintenance",
-            },
-            name: "maintenance",
-            cron: DEMO_MAINTENANCE.schedule,
-            active: true,
-            type: "workhorse.maintain_v1",
-            maintenance: {
-              batchSize: DEMO_MAINTENANCE.batchSize,
-              occurrenceRetentionDays: DEMO_MAINTENANCE.occurrenceRetentionDays,
-              occurrencePruneLimit: DEMO_MAINTENANCE.occurrencePruneLimit,
-            },
-            lastRun: null,
-          },
-          {
-            kind: "user",
-            identity: {
-              kind: "user",
-              namespace: DEMO_SCHEDULE_NAMESPACE,
-              name: HEARTBEAT_SCHEDULE_NAME,
-            },
-            name: HEARTBEAT_SCHEDULE_NAME,
-            active: true,
-          },
-        ],
-      });
-
-      await client.dashboard.setScheduleEnabled({
-        name: HEARTBEAT_SCHEDULE_NAME,
-        enabled: false,
-        audit: { actor: "operator", reason: "pause cron", requestId: "cron-disable" },
-      });
-      expect((await scheduler.status()).schedules).toMatchObject([
-        { name: HEARTBEAT_SCHEDULE_NAME, enabled: false, cronActive: false },
-      ]);
-      expect((await scheduler.status()).maintenance).toMatchObject({
-        active: true,
-        schedule: DEMO_MAINTENANCE.schedule,
-        batchSize: DEMO_MAINTENANCE.batchSize,
-        occurrenceRetentionDays: DEMO_MAINTENANCE.occurrenceRetentionDays,
-        occurrencePruneLimit: DEMO_MAINTENANCE.occurrencePruneLimit,
-      });
-
-      await client.dashboard.setScheduleEnabled({
-        name: HEARTBEAT_SCHEDULE_NAME,
-        enabled: true,
-        audit: { actor: "operator", reason: "resume cron", requestId: "cron-enable" },
-      });
-      expect((await scheduler.status()).schedules).toMatchObject([
-        { name: HEARTBEAT_SCHEDULE_NAME, enabled: true, cronActive: true },
-      ]);
-      expect((await scheduler.status()).maintenance).toMatchObject({ active: true });
-    } finally {
-      await scheduler.sync([], { maintenance: false });
-      await cronPool.end();
-    }
-  });
-
-  it("keeps worker maintenance fallback when pg_cron status is unavailable", async () => {
-    await pool.query(
-      `INSERT INTO workhorse.schedule_definition
-        (namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts)
-       VALUES ($1, $2, '* * * * *', 'demo', 'demo.recurring', '{"source":"test"}'::jsonb, 3)`,
-      [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
-    );
+  it("reconciles local schedule toggles with worker-owned schedule definitions", async () => {
+    await syncDemoSchedules(pool);
     const { app } = createTestApplication({
       operator: createLocalOperator(database),
       scheduleController: createLocalScheduleController(database),
-      schedulerStatusProvider: async () => null,
     });
-    const snapshot = await dashboardClient(app).dashboard.cron();
+    const client = dashboardClient(app);
 
-    expect(snapshot.schedules).toMatchObject([
-      {
-        kind: "user",
-        identity: {
+    expect(await client.dashboard.cron()).toMatchObject({
+      schedules: [
+        {
           kind: "user",
-          namespace: DEMO_SCHEDULE_NAMESPACE,
+          identity: {
+            kind: "user",
+            namespace: DEMO_SCHEDULE_NAMESPACE,
+            name: HEARTBEAT_SCHEDULE_NAME,
+          },
           name: HEARTBEAT_SCHEDULE_NAME,
+          active: true,
         },
-        name: HEARTBEAT_SCHEDULE_NAME,
-        active: true,
-        maintenance: null,
-      },
-    ]);
-    expect(snapshot.schedules.some((schedule) => schedule.kind === "system")).toBe(false);
+      ],
+    });
 
-    await expect(
-      dashboardClient(app).dashboard.setScheduleEnabled({
-        name: HEARTBEAT_SCHEDULE_NAME,
-        enabled: false,
-        audit: { actor: "operator", reason: "fallback pause", requestId: "fallback-toggle" },
-      }),
-    ).resolves.toEqual({ enabled: false });
+    await client.dashboard.setScheduleEnabled({
+      name: HEARTBEAT_SCHEDULE_NAME,
+      enabled: false,
+      audit: { actor: "operator", reason: "pause schedule", requestId: "schedule-disable" },
+    });
+    expect(await client.dashboard.cron()).toMatchObject({
+      schedules: [{ name: HEARTBEAT_SCHEDULE_NAME, enabled: false, active: false }],
+    });
+
+    await client.dashboard.setScheduleEnabled({
+      name: HEARTBEAT_SCHEDULE_NAME,
+      enabled: true,
+      audit: { actor: "operator", reason: "resume schedule", requestId: "schedule-enable" },
+    });
+    expect(await client.dashboard.cron()).toMatchObject({
+      schedules: [{ name: HEARTBEAT_SCHEDULE_NAME, enabled: true, active: true }],
+    });
   });
 
   it("runs core Hono and worker flows without mounting dashboard routes", async () => {

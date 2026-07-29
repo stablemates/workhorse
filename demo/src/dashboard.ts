@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { Queue } from "@workhorse/core";
-import type { DashboardOperator, DemoDatabase, SchedulerStatusProvider } from "./app.js";
+import type { DashboardOperator, DemoDatabase } from "./app.js";
 
 export interface DashboardQueueRow {
   queue: string;
@@ -326,24 +326,20 @@ export async function readDashboardTasks(
   };
 }
 
-export async function readDashboardCron(
-  database: DemoDatabase,
-  schedulerStatusProvider?: SchedulerStatusProvider,
-): Promise<DashboardCronPage> {
+export async function readDashboardCron(database: DemoDatabase): Promise<DashboardCronPage> {
   const now = new Date();
-  const [scheduleRows, schedulerStatus] = await Promise.all([
-    database.execute<{
-      namespace: string;
-      name: string;
-      cron: string;
-      queue: string;
-      type: string;
-      enabled: boolean;
-      revision: string;
-      updated_at: Date | string;
-      occurrence_count: number;
-      last_fired_at: Date | string | null;
-    }>(sql`
+  const scheduleRows = await database.execute<{
+    namespace: string;
+    name: string;
+    cron: string;
+    queue: string;
+    type: string;
+    enabled: boolean;
+    revision: string;
+    updated_at: Date | string;
+    occurrence_count: number;
+    last_fired_at: Date | string | null;
+  }>(sql`
       SELECT d.namespace, d.schedule_name AS name, d.cron_expression AS cron,
              d.queue_name AS queue, d.job_type AS type, d.enabled,
              d.revision::text AS revision, d.updated_at,
@@ -355,81 +351,29 @@ export async function readDashboardCron(
        GROUP BY d.namespace, d.schedule_name
        ORDER BY d.namespace, d.schedule_name
        LIMIT 50
-    `),
-    schedulerStatusProvider?.().catch(() => null) ?? Promise.resolve(null),
-  ]);
-  const statusByName = new Map(
-    (schedulerStatus?.schedules ?? []).map((schedule) => [schedule.name, schedule] as const),
-  );
-  const systemSchedules: DashboardScheduleRow[] = schedulerStatus?.maintenance
-    ? [
-        {
-          kind: "system",
-          identity: {
-            kind: "system",
-            namespace: schedulerStatus.namespace,
-            name: "maintenance",
-          },
-          namespace: schedulerStatus.namespace,
-          name: "maintenance",
-          cron: schedulerStatus.maintenance.schedule,
-          queue: null,
-          type: "workhorse.maintain_v1",
-          enabled: schedulerStatus.maintenance.active,
-          active: schedulerStatus.maintenance.active,
-          revision: schedulerStatus.maintenance.cronJobId,
-          updatedAt: now.toISOString(),
-          occurrenceCount: 0,
-          lastFiredAt: toIsoOrNull(schedulerStatus.maintenance.lastRun?.endedAt ?? null),
-          lastRun: schedulerStatus.maintenance.lastRun
-            ? {
-                status: schedulerStatus.maintenance.lastRun.status,
-                startedAt: toIsoOrNull(schedulerStatus.maintenance.lastRun.startedAt),
-                endedAt: toIsoOrNull(schedulerStatus.maintenance.lastRun.endedAt),
-                message: schedulerStatus.maintenance.lastRun.message,
-              }
-            : null,
-          maintenance: {
-            batchSize: schedulerStatus.maintenance.batchSize,
-            occurrenceRetentionDays: schedulerStatus.maintenance.occurrenceRetentionDays,
-            occurrencePruneLimit: schedulerStatus.maintenance.occurrencePruneLimit,
-          },
-        },
-      ]
-    : [];
+    `);
 
   return {
     capturedAt: now.toISOString(),
-    schedules: [
-      ...systemSchedules,
-      ...scheduleRows.rows.map((row) => {
-        const status = statusByName.get(row.name);
-        return {
-          kind: "user" as const,
-          identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
-          namespace: row.namespace,
-          name: row.name,
-          cron: status?.schedule ?? row.cron,
-          queue: row.queue,
-          type: row.type,
-          enabled: status?.enabled ?? row.enabled,
-          active: status?.cronActive ?? row.enabled,
-          revision: status?.revision ?? row.revision,
-          updatedAt: toIso(row.updated_at),
-          occurrenceCount: row.occurrence_count,
-          lastFiredAt: toIsoOrNull(status?.lastOccurrenceAt ?? row.last_fired_at),
-          lastRun: status?.lastRun
-            ? {
-                status: status.lastRun.status,
-                startedAt: toIsoOrNull(status.lastRun.startedAt),
-                endedAt: toIsoOrNull(status.lastRun.endedAt),
-                message: status.lastRun.message,
-              }
-            : null,
-          maintenance: null,
-        };
-      }),
-    ],
+    schedules: scheduleRows.rows.map((row) => {
+      return {
+        kind: "user" as const,
+        identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
+        namespace: row.namespace,
+        name: row.name,
+        cron: row.cron,
+        queue: row.queue,
+        type: row.type,
+        enabled: row.enabled,
+        active: row.enabled,
+        revision: row.revision,
+        updatedAt: toIso(row.updated_at),
+        occurrenceCount: row.occurrence_count,
+        lastFiredAt: toIsoOrNull(row.last_fired_at),
+        lastRun: null,
+        maintenance: null,
+      };
+    }),
   };
 }
 
@@ -548,25 +492,16 @@ export async function readDashboardSnapshot(
   queue: Queue,
   configuredWorkers: readonly string[],
   operator?: DashboardOperator,
-  schedulerStatusProvider?: SchedulerStatusProvider,
 ): Promise<DashboardSnapshot> {
   const now = new Date();
-  const [
-    queueRows,
-    jobRows,
-    scheduleRows,
-    workerRows,
-    failureRows,
-    metricRows,
-    health,
-    schedulerStatus,
-  ] = await Promise.all([
-    database.execute<{
-      queue: string;
-      state: string;
-      count: number;
-      oldest_ms: number | null;
-    }>(sql`
+  const [queueRows, jobRows, scheduleRows, workerRows, failureRows, metricRows, health] =
+    await Promise.all([
+      database.execute<{
+        queue: string;
+        state: string;
+        count: number;
+        oldest_ms: number | null;
+      }>(sql`
         SELECT queue_name AS queue, state, count(*)::integer AS count,
                extract(epoch FROM clock_timestamp() - min(COALESCE(ready_at, run_at))) * 1000
                  AS oldest_ms
@@ -574,17 +509,17 @@ export async function readDashboardSnapshot(
          GROUP BY queue_name, state
          ORDER BY queue_name, state
       `),
-    database.execute<{
-      id: string;
-      queue: string;
-      type: string;
-      state: string;
-      attempt: number;
-      max_attempts: number;
-      payload: unknown;
-      created_at: Date | string;
-      updated_at: Date | string;
-    }>(sql`
+      database.execute<{
+        id: string;
+        queue: string;
+        type: string;
+        state: string;
+        attempt: number;
+        max_attempts: number;
+        payload: unknown;
+        created_at: Date | string;
+        updated_at: Date | string;
+      }>(sql`
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
@@ -596,18 +531,18 @@ export async function readDashboardSnapshot(
          ORDER BY COALESCE(r.updated_at, o.updated_at, j.created_at) DESC, j.id DESC
          LIMIT 50
       `),
-    database.execute<{
-      namespace: string;
-      name: string;
-      cron: string;
-      queue: string;
-      type: string;
-      enabled: boolean;
-      revision: string;
-      updated_at: Date | string;
-      occurrence_count: number;
-      last_fired_at: Date | string | null;
-    }>(sql`
+      database.execute<{
+        namespace: string;
+        name: string;
+        cron: string;
+        queue: string;
+        type: string;
+        enabled: boolean;
+        revision: string;
+        updated_at: Date | string;
+        occurrence_count: number;
+        last_fired_at: Date | string | null;
+      }>(sql`
         SELECT d.namespace, d.schedule_name AS name, d.cron_expression AS cron,
                d.queue_name AS queue, d.job_type AS type, d.enabled,
                d.revision::text AS revision, d.updated_at,
@@ -620,12 +555,12 @@ export async function readDashboardSnapshot(
          ORDER BY d.namespace, d.schedule_name
          LIMIT 50
       `),
-    database.execute<{
-      id: string;
-      active_jobs: number;
-      completed_attempts: number;
-      last_seen_at: Date | string | null;
-    }>(sql`
+      database.execute<{
+        id: string;
+        active_jobs: number;
+        completed_attempts: number;
+        last_seen_at: Date | string | null;
+      }>(sql`
         WITH configured(id) AS (
           VALUES ${workerValues(configuredWorkers)}
         ), observed AS (
@@ -650,14 +585,14 @@ export async function readDashboardSnapshot(
          GROUP BY c.id
          ORDER BY c.id
       `),
-    database.execute<{
-      id: string;
-      queue: string;
-      type: string;
-      attempt: number;
-      finished_at: Date | string;
-      error: unknown;
-    }>(sql`
+      database.execute<{
+        id: string;
+        queue: string;
+        type: string;
+        attempt: number;
+        finished_at: Date | string;
+        error: unknown;
+      }>(sql`
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                o.current_attempt AS attempt, o.finished_at, o.error
           FROM workhorse.job_outcome o
@@ -666,15 +601,15 @@ export async function readDashboardSnapshot(
          ORDER BY o.finished_at DESC, j.id DESC
          LIMIT 50
       `),
-    database.execute<{
-      bucket_start: Date | string;
-      enqueued: number;
-      succeeded: number;
-      failed: number;
-      retried: number;
-      active: number;
-      average_duration_ms: number | null;
-    }>(sql`
+      database.execute<{
+        bucket_start: Date | string;
+        enqueued: number;
+        succeeded: number;
+        failed: number;
+        retried: number;
+        active: number;
+        average_duration_ms: number | null;
+      }>(sql`
         WITH buckets AS (
           SELECT generate_series(
             date_bin('30 seconds', clock_timestamp() - interval '2 hours', timestamp with time zone '2000-01-01'),
@@ -716,51 +651,8 @@ export async function readDashboardSnapshot(
           LEFT JOIN active ac USING (bucket_start)
          ORDER BY b.bucket_start
       `),
-    queue.health(),
-    schedulerStatusProvider?.().catch(() => null) ?? Promise.resolve(null),
-  ]);
-
-  const statusByName = new Map(
-    (schedulerStatus?.schedules ?? []).map((schedule) => [schedule.name, schedule] as const),
-  );
-  const systemScheduleRows: DashboardScheduleRow[] = schedulerStatus?.maintenance
-    ? [
-        {
-          kind: "system",
-          identity: {
-            kind: "system",
-            namespace: schedulerStatus.namespace,
-            name: "maintenance",
-          },
-          namespace: schedulerStatus.namespace,
-          name: "maintenance",
-          cron: schedulerStatus.maintenance.schedule,
-          queue: null,
-          type: "workhorse.maintain_v1",
-          enabled: schedulerStatus.maintenance.active,
-          active: schedulerStatus.maintenance.active,
-          revision: schedulerStatus.maintenance.cronJobId,
-          updatedAt: now.toISOString(),
-          occurrenceCount: 0,
-          lastFiredAt: schedulerStatus.maintenance.lastRun?.endedAt
-            ? toIso(schedulerStatus.maintenance.lastRun.endedAt)
-            : null,
-          lastRun: schedulerStatus.maintenance.lastRun
-            ? {
-                status: schedulerStatus.maintenance.lastRun.status,
-                startedAt: toIsoOrNull(schedulerStatus.maintenance.lastRun.startedAt),
-                endedAt: toIsoOrNull(schedulerStatus.maintenance.lastRun.endedAt),
-                message: schedulerStatus.maintenance.lastRun.message,
-              }
-            : null,
-          maintenance: {
-            batchSize: schedulerStatus.maintenance.batchSize,
-            occurrenceRetentionDays: schedulerStatus.maintenance.occurrenceRetentionDays,
-            occurrencePruneLimit: schedulerStatus.maintenance.occurrencePruneLimit,
-          },
-        },
-      ]
-    : [];
+      queue.health(),
+    ]);
 
   return {
     capturedAt: now.toISOString(),
@@ -782,36 +674,25 @@ export async function readDashboardSnapshot(
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
     })),
-    schedules: [
-      ...systemScheduleRows,
-      ...scheduleRows.rows.map((row) => {
-        const status = statusByName.get(row.name);
-        return {
-          kind: "user" as const,
-          identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
-          namespace: row.namespace,
-          name: row.name,
-          cron: status?.schedule ?? row.cron,
-          queue: row.queue,
-          type: row.type,
-          enabled: status?.enabled ?? row.enabled,
-          active: status?.cronActive ?? row.enabled,
-          revision: status?.revision ?? row.revision,
-          updatedAt: toIso(row.updated_at),
-          occurrenceCount: row.occurrence_count,
-          lastFiredAt: toIsoOrNull(status?.lastOccurrenceAt ?? row.last_fired_at),
-          lastRun: status?.lastRun
-            ? {
-                status: status.lastRun.status,
-                startedAt: toIsoOrNull(status.lastRun.startedAt),
-                endedAt: toIsoOrNull(status.lastRun.endedAt),
-                message: status.lastRun.message,
-              }
-            : null,
-          maintenance: null,
-        };
-      }),
-    ],
+    schedules: scheduleRows.rows.map((row) => {
+      return {
+        kind: "user" as const,
+        identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
+        namespace: row.namespace,
+        name: row.name,
+        cron: row.cron,
+        queue: row.queue,
+        type: row.type,
+        enabled: row.enabled,
+        active: row.enabled,
+        revision: row.revision,
+        updatedAt: toIso(row.updated_at),
+        occurrenceCount: row.occurrence_count,
+        lastFiredAt: toIsoOrNull(row.last_fired_at),
+        lastRun: null,
+        maintenance: null,
+      };
+    }),
     workers: workerRows.rows.map((row) => ({
       id: row.id,
       activeJobs: row.active_jobs,

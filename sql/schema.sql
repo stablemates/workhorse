@@ -104,8 +104,8 @@ CREATE TABLE IF NOT EXISTS workhorse.attempt_history_default
 CREATE INDEX IF NOT EXISTS attempt_history_job_idx
   ON workhorse.attempt_history (job_id, attempt, occurred_at);
 
--- Declarative schedules are synchronized from application code. pg_cron stores only a call to the
--- stable fire function; payloads and queue semantics remain owned by the Workhorse protocol.
+-- Declarative schedules are synchronized from application code and evaluated by worker processes.
+-- Payloads, occurrence ownership, and queue semantics remain owned by the Workhorse protocol.
 CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
   namespace text NOT NULL CHECK (namespace <> ''),
   schedule_name text NOT NULL CHECK (schedule_name <> ''),
@@ -120,10 +120,9 @@ CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
   PRIMARY KEY (namespace, schedule_name)
 );
 
--- One durable row per supplied occurrence second prevents deploy races or duplicate invocations
--- from enqueueing the same observed occurrence twice. pg_cron does not expose its planned slot to
--- the target command, so its generated calls use the execution second. Definitions are deactivated
--- rather than deleted so historical occurrence ownership remains explainable.
+-- One durable row per supplied occurrence second prevents workers from enqueueing the same cron
+-- occurrence twice. Definitions are deactivated rather than deleted so historical occurrence
+-- ownership remains explainable.
 CREATE TABLE IF NOT EXISTS workhorse.schedule_occurrence (
   namespace text NOT NULL,
   schedule_name text NOT NULL,
@@ -219,6 +218,14 @@ DECLARE
   v_definition workhorse.schedule_definition%ROWTYPE;
   v_job_id uuid;
 BEGIN
+  IF NOT pg_try_advisory_xact_lock(hashtextextended(
+    'workhorse:schedule:' || p_namespace || ':' || p_schedule_name || ':' ||
+    extract(epoch FROM date_trunc('second', p_occurrence_at))::bigint,
+    0
+  )) THEN
+    RETURN NULL;
+  END IF;
+
   SELECT * INTO v_definition
     FROM workhorse.schedule_definition definition
    WHERE definition.namespace = p_namespace
@@ -609,6 +616,13 @@ AS $$
 BEGIN
   IF p_occurrence_retention_days NOT BETWEEN 1 AND 3650 THEN
     RAISE EXCEPTION 'occurrence retention days must be between 1 and 3650';
+  END IF;
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:maintenance', 0)) THEN
+    promoted := 0;
+    recovered := 0;
+    occurrences_pruned := 0;
+    RETURN NEXT;
+    RETURN;
   END IF;
   IF EXISTS (
     SELECT 1

@@ -45,7 +45,7 @@ try {
   ]);
   await run("pnpm", ["--silent", "--dir", "packages/hono", "pack", "--pack-destination", tarballs]);
 
-  const coreTarball = path.join(tarballs, "workhorse-0.1.0.tgz");
+  const coreTarball = path.join(tarballs, "workhorse-core-0.1.0.tgz");
   const drizzleTarball = path.join(tarballs, "workhorse-drizzle-0.1.0.tgz");
   const honoTarball = path.join(tarballs, "workhorse-hono-0.1.0.tgz");
   const extracted = path.join(scratch, "core");
@@ -81,7 +81,7 @@ try {
         private: true,
         type: "module",
         dependencies: {
-          workhorse: `file:${coreTarball}`,
+          "@workhorse/core": `file:${coreTarball}`,
           "@workhorse/drizzle": `file:${drizzleTarball}`,
           "@workhorse/hono": `file:${honoTarball}`,
           "@hono/node-server": "2.0.11",

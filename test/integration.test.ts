@@ -5,36 +5,22 @@ import {
   InjectedCrashError,
   installSchema,
   MAX_ENQUEUE_BATCH_SIZE,
-  PgCronScheduler,
   Queue,
-  unscheduleWorkhorseTarget,
-  verifyPgCronExecution,
   Worker,
 } from "../src/index.js";
-import { unscheduleWorkhorseTargetWhileLocked } from "../src/pg-cron-scheduler.js";
-import {
-  assertLocalDatabasePurpose,
-  databaseName,
-  localDatabaseUrl,
-} from "../src/local-database.js";
+import { assertLocalDatabasePurpose, localDatabaseUrl } from "../src/local-database.js";
 
 const databaseUrl = localDatabaseUrl("test");
 assertLocalDatabasePurpose(databaseUrl, "test");
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
-const cronDatabaseUrl = new URL(databaseUrl);
-cronDatabaseUrl.pathname = "/postgres";
-const cronPool = new Pool({ connectionString: cronDatabaseUrl.toString(), max: 2 });
 const queue = new Queue(pool);
-const scheduler = new PgCronScheduler(pool, cronPool, { namespace: "integration" });
 
 beforeAll(async () => {
-  await unscheduleWorkhorseTarget(cronPool, databaseName(databaseUrl));
   await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
   await installSchema(pool);
 });
 
 beforeEach(async () => {
-  await unscheduleWorkhorseTarget(cronPool, databaseName(databaseUrl));
   await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
     workhorse.schedule_occurrence, workhorse.schedule_definition,
     workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE`);
@@ -42,8 +28,6 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
-  await unscheduleWorkhorseTarget(cronPool, databaseName(databaseUrl));
-  await cronPool.end();
   await pool.end();
 });
 
@@ -94,450 +78,231 @@ describe("live-runtime queue protocol", () => {
     ]);
   });
 
-  it("synchronizes namespaced pg_cron schedules and safely prunes removed definitions", async () => {
-    const first = await scheduler.sync(
-      [
-        {
-          name: "daily-report",
-          schedule: "0 6 * * *",
-          job: {
-            type: "generate-report",
-            payload: { scope: "daily" },
-            queue: "reports",
-            maxAttempts: 5,
-          },
+  it("synchronizes namespaced worker schedules and safely prunes removed definitions", async () => {
+    await queue.syncSchedules("integration", [
+      {
+        name: "daily-report",
+        schedule: "0 6 * * *",
+        job: {
+          type: "generate-report",
+          payload: { scope: "daily" },
+          queue: "reports",
+          maxAttempts: 5,
         },
-        {
-          name: "disabled-cleanup",
-          schedule: "0 2 * * 0",
-          enabled: false,
-          job: { type: "cleanup", payload: null },
-        },
-      ],
-      { maintenance: { schedule: "5 seconds", batchSize: 250 } },
-    );
-
-    expect(first.extensionVersion).toMatch(/^\d+\.\d+/);
-    expect(first.targetDatabase).toBe(databaseName(databaseUrl));
-    expect(first.maintenance).toMatchObject({
-      active: true,
-      schedule: "5 seconds",
-      batchSize: 250,
-    });
-    expect(first.schedules).toMatchObject([
-      { name: "daily-report", schedule: "0 6 * * *", enabled: true, cronActive: true },
+      },
       {
         name: "disabled-cleanup",
         schedule: "0 2 * * 0",
         enabled: false,
-        cronActive: false,
+        job: { type: "cleanup", payload: null },
       },
     ]);
 
-    const second = await scheduler.sync(
-      [
-        {
-          name: "daily-report",
-          schedule: "30 6 * * *",
-          job: {
-            type: "generate-report",
-            payload: { scope: "daily", revision: 2 },
-            queue: "reports",
-            maxAttempts: 5,
-          },
-        },
-      ],
-      { maintenance: false },
-    );
-
-    expect(second.maintenance).toBeNull();
-    expect(second.schedules).toMatchObject([
-      { name: "daily-report", schedule: "30 6 * * *", enabled: true, cronActive: true },
-      { name: "disabled-cleanup", enabled: false, cronActive: false },
-    ]);
-  });
-
-  it("never prunes schedules owned by another deployment namespace", async () => {
-    const other = new PgCronScheduler(pool, cronPool, { namespace: "integration-other" });
-    await other.sync(
-      [{ name: "other-job", schedule: "0 1 * * *", job: { type: "other", payload: null } }],
-      { maintenance: false },
-    );
-
-    await scheduler.sync([], { maintenance: false });
-
-    expect((await other.status()).schedules).toMatchObject([
-      { name: "other-job", enabled: true, cronActive: true },
-    ]);
-  });
-
-  it("serializes target cleanup behind the same metadata lock used by deploy sync", async () => {
-    const blocker = await cronPool.connect();
-    const lockKey = `workhorse:pg_cron-target:${databaseName(databaseUrl)}`;
-    await blocker.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [lockKey]);
-    let cleaned = false;
-    const cleanup = unscheduleWorkhorseTarget(cronPool, databaseName(databaseUrl)).then((count) => {
-      cleaned = true;
-      return count;
-    });
-    await sleep(50);
-    expect(cleaned).toBe(false);
-
-    await blocker.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockKey]);
-    blocker.release();
-    expect(await cleanup).toBe(0);
-  });
-
-  it("keeps the target lock through the reset tool's destructive callback", async () => {
-    let releaseAction!: () => void;
-    const actionGate = new Promise<void>((resolve) => {
-      releaseAction = resolve;
-    });
-    let signalActionStarted!: () => void;
-    const actionStarted = new Promise<void>((resolve) => {
-      signalActionStarted = resolve;
-    });
-    const resetting = unscheduleWorkhorseTargetWhileLocked(
-      cronPool,
-      databaseName(databaseUrl),
-      async () => {
-        signalActionStarted();
-        await actionGate;
-      },
-    );
-    await actionStarted;
-
-    const contender = await cronPool.connect();
-    let contenderEntered = false;
-    const competing = contender
-      .query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [
-        `workhorse:pg_cron-target:${databaseName(databaseUrl)}`,
-      ])
-      .then(() => {
-        contenderEntered = true;
-      });
-    await sleep(50);
-    expect(contenderEntered).toBe(false);
-
-    releaseAction();
-    await resetting;
-    await competing;
-    expect(contenderEntered).toBe(true);
-    await contender.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [
-      `workhorse:pg_cron-target:${databaseName(databaseUrl)}`,
-    ]);
-    contender.release();
-  });
-
-  it("serializes concurrent deploys so cron metadata and target payload cannot cross", async () => {
-    await Promise.all([
-      scheduler.sync(
-        [
-          {
-            name: "release-race",
-            schedule: "0 4 * * *",
-            job: { type: "release", payload: { release: "a" } },
-          },
-        ],
-        { maintenance: false },
-      ),
-      scheduler.sync(
-        [
-          {
-            name: "release-race",
-            schedule: "30 4 * * *",
-            job: { type: "release", payload: { release: "b" } },
-          },
-        ],
-        { maintenance: false },
-      ),
-    ]);
-
-    const status = await scheduler.status();
-    const jobId = await scheduler.trigger("release-race", new Date("2026-07-22T13:30:00.000Z"));
-    const job = await queue.getJob(jobId!);
-    expect(status.schedules[0]).toBeDefined();
-    expect(job).not.toBeNull();
-    const observed = [status.schedules[0]!.schedule, (job!.payload as { release: string }).release];
-    expect([
-      ["0 4 * * *", "a"],
-      ["30 4 * * *", "b"],
-    ]).toContainEqual(observed);
-  });
-
-  it("rejects a stale cron command after a definition revision changes", async () => {
-    await scheduler.sync(
-      [
-        {
-          name: "revision-fence",
-          schedule: "0 4 * * *",
-          job: { type: "release", payload: { release: "old" } },
-        },
-      ],
-      { maintenance: false },
-    );
-    const oldCron = await cronPool.query<{ command: string }>(
-      `SELECT command FROM cron.job
-        WHERE database = $1 AND jobname = $2`,
-      [
-        databaseName(databaseUrl),
-        `workhorse/${databaseName(databaseUrl)}/integration/revision-fence`,
-      ],
-    );
-
-    const updated = await scheduler.sync(
-      [
-        {
-          name: "revision-fence",
-          schedule: "30 4 * * *",
-          job: { type: "release", payload: { release: "new" } },
-        },
-      ],
-      { maintenance: false },
-    );
-    expect(updated.schedules[0]?.revision).toBe("2");
-
-    const stale = await pool.query<Record<string, string | null>>(oldCron.rows[0]!.command);
-    expect(Object.values(stale.rows[0]!)[0]).toBeNull();
-    expect(await pool.query("SELECT id FROM workhorse.job")).toHaveProperty("rowCount", 0);
-  });
-
-  it("makes the old command harmless when cron reconciliation fails after target commit", async () => {
-    await scheduler.sync(
-      [
-        {
-          name: "partial-deploy",
-          schedule: "0 4 * * *",
-          job: { type: "release", payload: { release: "old" } },
-        },
-      ],
-      { maintenance: false },
-    );
-    const oldCron = await cronPool.query<{ command: string }>(
-      "SELECT command FROM cron.job WHERE database = $1 AND jobname = $2",
-      [
-        databaseName(databaseUrl),
-        `workhorse/${databaseName(databaseUrl)}/integration/partial-deploy`,
-      ],
-    );
-
-    await expect(
-      scheduler.sync(
-        [
-          {
-            name: "partial-deploy",
-            schedule: "not a cron expression",
-            job: { type: "release", payload: { release: "new" } },
-          },
-        ],
-        { maintenance: false },
-      ),
-    ).rejects.toThrow(/schedule/i);
-
-    const accepted = await pool.query<{ revision: string; payload: { release: string } }>(
-      `SELECT revision::text, payload
-         FROM workhorse.schedule_definition
-        WHERE namespace = 'integration' AND schedule_name = 'partial-deploy'`,
-    );
-    expect(accepted.rows[0]).toEqual({ revision: "2", payload: { release: "new" } });
-    const stale = await pool.query<Record<string, string | null>>(oldCron.rows[0]!.command);
-    expect(Object.values(stale.rows[0]!)[0]).toBeNull();
-  });
-
-  it("removes centralized maintenance when explicitly disabled without pruning schedules", async () => {
-    await scheduler.sync([], { maintenance: { schedule: "5 seconds" }, prune: false });
-    const result = await scheduler.sync([], { maintenance: false, prune: false });
-    expect(result.maintenance).toBeNull();
-  });
-
-  it("recreates named pg_cron jobs when their active state changes", async () => {
-    const definition = {
-      name: "active-toggle",
-      schedule: "0 * * * *",
-      job: { type: "toggle", payload: null },
-    };
-    await scheduler.sync([definition], { maintenance: false });
-    const disabled = await scheduler.sync([{ ...definition, enabled: false }], {
-      maintenance: false,
-    });
-    expect(disabled.schedules[0]).toMatchObject({ enabled: false, cronActive: false });
-
-    const enabled = await scheduler.sync([definition], { maintenance: false });
-    expect(enabled.schedules[0]).toMatchObject({ enabled: true, cronActive: true });
-  });
-
-  it("waits for an in-flight fire before a disable deployment returns", async () => {
-    const synchronized = await scheduler.sync(
-      [
-        {
-          name: "disable-race",
-          schedule: "0 * * * *",
-          job: { type: "race", payload: null },
-        },
-      ],
-      { maintenance: false },
-    );
-    const revision = synchronized.schedules[0]!.revision;
-    const firing = await pool.connect();
-    await firing.query("BEGIN");
-    await firing.query("SELECT workhorse.fire_schedule_v1($1, $2, $3, $4)", [
-      "integration",
-      "disable-race",
-      revision,
-      "2026-07-22T13:31:00.000Z",
-    ]);
-
-    let disabled = false;
-    const disabling = scheduler
-      .sync(
-        [
-          {
-            name: "disable-race",
-            schedule: "0 * * * *",
-            enabled: false,
-            job: { type: "race", payload: null },
-          },
-        ],
-        { maintenance: false },
-      )
-      .then((result) => {
-        disabled = true;
-        return result;
-      });
-    await sleep(50);
-    expect(disabled).toBe(false);
-
-    await firing.query("COMMIT");
-    firing.release();
-    const result = await disabling;
-    expect(result.schedules[0]).toMatchObject({
-      enabled: false,
-      cronActive: false,
-      revision: "2",
-    });
     expect(
-      await scheduler.trigger("disable-race", new Date("2026-07-22T13:32:00.000Z")),
-    ).toBeNull();
+      (
+        await pool.query(
+          `SELECT schedule_name, cron_expression, queue_name, job_type, payload, max_attempts,
+                  enabled, revision::text
+             FROM workhorse.schedule_definition
+            WHERE namespace = 'integration'
+            ORDER BY schedule_name`,
+        )
+      ).rows,
+    ).toEqual([
+      {
+        schedule_name: "daily-report",
+        cron_expression: "0 6 * * *",
+        queue_name: "reports",
+        job_type: "generate-report",
+        payload: { scope: "daily" },
+        max_attempts: 5,
+        enabled: true,
+        revision: "1",
+      },
+      {
+        schedule_name: "disabled-cleanup",
+        cron_expression: "0 2 * * 0",
+        queue_name: "default",
+        job_type: "cleanup",
+        payload: null,
+        max_attempts: 3,
+        enabled: false,
+        revision: "1",
+      },
+    ]);
+
+    await queue.syncSchedules("integration-other", [
+      {
+        name: "other-report",
+        schedule: "0 8 * * *",
+        job: { type: "other-report", payload: {} },
+      },
+    ]);
+    await queue.syncSchedules("integration", [
+      {
+        name: "daily-report",
+        schedule: "30 6 * * *",
+        job: { type: "generate-report", payload: { scope: "changed" }, queue: "reports" },
+      },
+    ]);
+
+    expect(
+      (
+        await pool.query(
+          "SELECT namespace, schedule_name, enabled, revision::text FROM workhorse.schedule_definition ORDER BY namespace, schedule_name",
+        )
+      ).rows,
+    ).toEqual([
+      {
+        namespace: "integration",
+        schedule_name: "daily-report",
+        enabled: true,
+        revision: "2",
+      },
+      {
+        namespace: "integration",
+        schedule_name: "disabled-cleanup",
+        enabled: false,
+        revision: "1",
+      },
+      {
+        namespace: "integration-other",
+        schedule_name: "other-report",
+        enabled: true,
+        revision: "1",
+      },
+    ]);
   });
 
-  it("deduplicates a schedule occurrence before enqueueing its configured job", async () => {
-    await scheduler.sync(
-      [
+  it("rejects invalid cron expressions before persisting a schedule", async () => {
+    await expect(
+      queue.syncSchedules("integration", [
         {
-          name: "hourly-rollup",
-          schedule: "0 * * * *",
-          job: {
-            type: "rollup",
-            payload: { window: "hour" },
-            queue: "analytics",
-            maxAttempts: 4,
-          },
+          name: "invalid",
+          schedule: "every sometime",
+          job: { type: "invalid", payload: {} },
         },
-      ],
-      { maintenance: false },
-    );
-    const occurrence = new Date("2026-07-22T13:00:00.000Z");
-
-    const first = await scheduler.trigger("hourly-rollup", occurrence);
-    const duplicate = await scheduler.trigger("hourly-rollup", occurrence);
-
-    expect(duplicate).toBe(first);
-    expect(await queue.getJob(first!)).toMatchObject({
-      queue: "analytics",
-      type: "rollup",
-      payload: { window: "hour" },
-      maxAttempts: 4,
-      state: "ready",
-    });
-    const jobs = await pool.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM workhorse.job WHERE job_type = 'rollup'",
-    );
-    expect(jobs.rows[0]?.count).toBe("1");
+      ]),
+    ).rejects.toThrow(/Invalid cron expression for schedule invalid/);
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.schedule_definition"))
+        .rows[0]?.count,
+    ).toBe(0);
   });
 
-  it("prunes old occurrence rows in bounded maintenance batches", async () => {
+  it("lets workers coordinate recurring occurrences without duplicate jobs", async () => {
+    await queue.syncSchedules("integration", [
+      {
+        name: "heartbeat",
+        schedule: "* * * * * *",
+        job: { type: "cron-tick", payload: { source: "worker" } },
+      },
+    ]);
+    const first = new Worker(queue, {
+      workerId: "scheduler-a",
+      scheduleNamespaces: ["integration"],
+    }).handle("cron-tick", () => ({ worker: "a" }));
+    const second = new Worker(queue, {
+      workerId: "scheduler-b",
+      scheduleNamespaces: ["integration"],
+    }).handle("cron-tick", () => ({ worker: "b" }));
+
+    expect((await Promise.all([first.runOnce(), second.runOnce()])).filter(Boolean)).toHaveLength(
+      1,
+    );
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.schedule_occurrence WHERE namespace = 'integration' AND schedule_name = 'heartbeat'",
+        )
+      ).rows[0]?.count,
+    ).toBe(1);
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+    ).toBe(1);
+  });
+
+  it("rejects stale schedule revisions after a definition changes", async () => {
+    await queue.syncSchedules("integration", [
+      {
+        name: "revision-fence",
+        schedule: "0 * * * *",
+        job: { type: "old", payload: { revision: 1 } },
+      },
+    ]);
+    const [oldDefinition] = await queue.schedules(["integration"]);
+    await queue.syncSchedules("integration", [
+      {
+        name: "revision-fence",
+        schedule: "30 * * * *",
+        job: { type: "new", payload: { revision: 2 } },
+      },
+    ]);
+
+    expect(
+      await queue.fireSchedule(
+        oldDefinition!.namespace,
+        oldDefinition!.name,
+        oldDefinition!.revision,
+        new Date("2026-07-22T13:30:00.000Z"),
+      ),
+    ).toBeNull();
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+    ).toBe(0);
+  });
+
+  it("deduplicates concurrent calls at the schedule occurrence boundary", async () => {
+    await queue.syncSchedules("integration", [
+      {
+        name: "hourly-rollup",
+        schedule: "0 * * * *",
+        job: { type: "rollup", payload: { scope: "hourly" } },
+      },
+    ]);
+    const [definition] = await queue.schedules(["integration"]);
+    const occurrence = new Date("2026-07-22T13:00:00.000Z");
+    const results = await Promise.all([
+      queue.fireSchedule("integration", "hourly-rollup", definition!.revision, occurrence),
+      queue.fireSchedule("integration", "hourly-rollup", definition!.revision, occurrence),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+    ).toBe(1);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.schedule_occurrence WHERE namespace = 'integration' AND schedule_name = 'hourly-rollup'",
+        )
+      ).rows[0]?.count,
+    ).toBe(1);
+  });
+
+  it("keeps maintain_v1 for bounded worker maintenance and occurrence retention", async () => {
     await pool.query(
       `INSERT INTO workhorse.schedule_definition(
          namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts
-       ) VALUES ('integration', 'retention', '0 * * * *', 'default', 'retention', 'null', 3)`,
+       ) VALUES ('integration', 'retention', '0 * * * *', 'default', 'retention', '{}'::jsonb, 3)`,
     );
     await pool.query(
       `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at)
        VALUES ('integration', 'retention', clock_timestamp() - interval '40 days'),
-              ('integration', 'retention', clock_timestamp() - interval '35 days'),
-              ('integration', 'retention', clock_timestamp() - interval '5 days')`,
+              ('integration', 'retention', clock_timestamp() - interval '39 days')`,
     );
 
-    const maintained = await pool.query<{ occurrences_pruned: number }>(
-      "SELECT occurrences_pruned FROM workhorse.maintain_v1(1, 1, 30, 1)",
-    );
-    expect(maintained.rows[0]?.occurrences_pruned).toBe(1);
-    const remaining = await pool.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM workhorse.schedule_occurrence",
-    );
-    expect(remaining.rows[0]?.count).toBe("2");
+    expect(
+      await queue.maintain({ occurrenceRetentionDays: 30, occurrencePruneLimit: 1 }),
+    ).toMatchObject({ occurrencesPruned: 1 });
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.schedule_occurrence WHERE namespace = 'integration' AND schedule_name = 'retention'",
+        )
+      ).rows[0]?.count,
+    ).toBe(1);
   });
-
-  it("lets pg_cron fire a synchronized definition into the target queue", async () => {
-    await scheduler.sync(
-      [
-        {
-          name: "live-tick",
-          schedule: "1 second",
-          job: { type: "cron-tick", payload: { source: "pg_cron" } },
-        },
-      ],
-      { maintenance: false },
-    );
-
-    const deadline = Date.now() + 5_000;
-    let job = await queue.claim("cron-observer");
-    while (!job && Date.now() < deadline) {
-      await sleep(100);
-      job = await queue.claim("cron-observer");
-    }
-    await scheduler.sync([], { maintenance: false });
-
-    expect(job).toMatchObject({ type: "cron-tick", payload: { source: "pg_cron" } });
-    expect(await queue.complete(job!, "cron-observer", { observed: true })).toBe(true);
-  });
-
-  it("verifies daemon execution without leaving a recurring preflight job", async () => {
-    await expect(verifyPgCronExecution(cronPool, databaseName(databaseUrl))).resolves.toMatchObject(
-      {
-        executionReady: true,
-        status: "succeeded",
-      },
-    );
-    const remaining = await cronPool.query<{ count: string }>(
-      `SELECT count(*)::text AS count
-         FROM cron.job
-        WHERE jobname LIKE $1 AND username = current_user`,
-      [`workhorse-preflight/${databaseName(databaseUrl)}/%`],
-    );
-    expect(remaining.rows[0]?.count).toBe("0");
-  });
-
-  it("lets centralized pg_cron maintenance promote due work for ordinary workers", async () => {
-    const jobId = await queue.enqueue(
-      "maintenance-tick",
-      { source: "scheduled" },
-      { runAt: new Date(Date.now() + 200) },
-    );
-    await scheduler.sync([], { maintenance: { schedule: "1 second", batchSize: 100 } });
-
-    const deadline = Date.now() + 5_000;
-    let job = await queue.claim("maintenance-observer");
-    while (!job && Date.now() < deadline) {
-      await sleep(100);
-      job = await queue.claim("maintenance-observer");
-    }
-    await scheduler.sync([], { maintenance: false });
-
-    expect(job?.id).toBe(jobId);
-    expect(await queue.complete(job!, "maintenance-observer", { observed: true })).toBe(true);
-  });
-
   it("refuses to turn an existing v1 schema into a mixed installation", async () => {
     await pool.query("DROP SCHEMA workhorse CASCADE");
     try {
@@ -691,7 +456,7 @@ describe("live-runtime queue protocol", () => {
     expect((await queue.claim("worker-a"))?.id).toBe(id);
   });
 
-  it("uses pg_cron maintenance by default and keeps worker-managed maintenance as a fallback", async () => {
+  it("runs maintenance from every worker without an external coordinator option", async () => {
     const jobId = await queue.enqueue(
       "scheduled-worker",
       { ok: true },
@@ -699,18 +464,11 @@ describe("live-runtime queue protocol", () => {
     );
     await sleep(100);
 
-    const externallyMaintained = new Worker(queue, { workerId: "external-maintenance" }).handle(
+    const worker = new Worker(queue, { workerId: "worker-maintenance" }).handle(
       "scheduled-worker",
       () => ({ ok: true }),
     );
-    expect(await externallyMaintained.runOnce()).toBe(false);
-    expect((await queue.getJob(jobId))?.state).toBe("scheduled");
-
-    const fallback = new Worker(queue, {
-      workerId: "worker-maintenance",
-      maintenance: "worker",
-    }).handle("scheduled-worker", () => ({ ok: true }));
-    expect(await fallback.runOnce()).toBe(true);
+    expect(await worker.runOnce()).toBe(true);
     expect((await queue.getJob(jobId))?.state).toBe("succeeded");
   });
 
