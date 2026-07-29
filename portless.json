@@ -1,0 +1,5 @@
+{
+  "name": "workhorse",
+  "script": "dev:app",
+  "turbo": false
+}

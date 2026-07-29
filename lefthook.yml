@@ -10,9 +10,16 @@ pre-commit:
 
 post-checkout:
   jobs:
-    - name: install dependencies for new worktree
+    - name: set up new worktree
       run: |
         if [ "{1}" = "0000000000000000000000000000000000000000" ] &&
           [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
           pnpm install --frozen-lockfile
+          pnpm worktree:setup
         fi
+        pnpm worktree:prune
+
+post-merge:
+  jobs:
+    - name: clean resources left by removed worktrees
+      run: pnpm worktree:prune

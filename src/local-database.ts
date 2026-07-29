@@ -1,6 +1,8 @@
 /** Local database roles used by repository tooling. Application code may still use DATABASE_URL. */
 export type LocalDatabasePurpose = "dev" | "test" | "bench" | "demo";
 
+const POSTGRES_IDENTIFIER_LIMIT = 63;
+
 interface LocalDatabaseDefinition {
   /** Environment override dedicated to this database role. */
   environmentVariable: string;
@@ -33,6 +35,13 @@ const localDatabaseDefinitions: Record<LocalDatabasePurpose, LocalDatabaseDefini
   },
 };
 
+export const localDatabasePurposes: readonly LocalDatabasePurpose[] = [
+  "dev",
+  "test",
+  "bench",
+  "demo",
+];
+
 /** Resolve a repository-tooling URL without allowing one purpose to inherit another's URL. */
 export function localDatabaseUrl(
   purpose: LocalDatabasePurpose,
@@ -59,13 +68,52 @@ export function assertLocalDatabasePurpose(
 ): void {
   const name = databaseName(databaseUrl);
   const suffix = localDatabaseDefinitions[purpose].suffix;
-  if (!name.endsWith(suffix)) {
+  if (!new RegExp(`${suffix}(?:_[a-z0-9][a-z0-9_]*)?$`).test(name)) {
     throw new Error(
-      `Refusing to use database ${JSON.stringify(name)} for ${purpose}: its name must end in ${suffix}`,
+      `Refusing to use database ${JSON.stringify(name)} for ${purpose}: its name must end in ${suffix} or ${suffix}_<worktree>`,
     );
   }
 }
 
+/** Add a stable, PostgreSQL-safe worktree suffix while preserving the purpose safety marker. */
+export function worktreeDatabaseUrl(
+  databaseUrl: string,
+  purpose: LocalDatabasePurpose,
+  worktreeId: string,
+): string {
+  assertLocalDatabasePurpose(databaseUrl, purpose);
+
+  const url = new URL(databaseUrl);
+  const baseName = databaseName(databaseUrl);
+  const purposeSuffix = localDatabaseDefinitions[purpose].suffix;
+  const basePrefix = baseName.slice(0, -purposeSuffix.length);
+  const worktreeSlug = normalizeIdentifier(worktreeId) || "worktree";
+  const worktreeHash = hashWorktreeId(worktreeId);
+  const suffix = `${purposeSuffix}_${worktreeSlug.slice(0, 24)}_${worktreeHash}`;
+  const availablePrefixLength = POSTGRES_IDENTIFIER_LIMIT - suffix.length;
+  const prefix = basePrefix.slice(0, availablePrefixLength).replace(/_+$/, "") || "workhorse";
+
+  url.pathname = `/${prefix}${suffix}`;
+  return url.toString();
+}
+
 export function isLocalDatabasePurpose(value: string): value is LocalDatabasePurpose {
   return value === "dev" || value === "test" || value === "bench" || value === "demo";
+}
+
+function normalizeIdentifier(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function hashWorktreeId(value: string): string {
+  // FNV-1a is deterministic, dependency-free, and sufficient to avoid collisions between slugs.
+  let hash = 0x811c9dc5;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }

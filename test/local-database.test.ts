@@ -3,6 +3,7 @@ import {
   assertLocalDatabasePurpose,
   databaseName,
   localDatabaseUrl,
+  worktreeDatabaseUrl,
 } from "../src/local-database.js";
 
 describe("local database roles", () => {
@@ -34,5 +35,28 @@ describe("local database roles", () => {
     expect(() => assertLocalDatabasePurpose("postgres://localhost/workhorse_dev", "bench")).toThrow(
       "must end in _bench",
     );
+  });
+
+  it("accepts and creates purpose-safe worktree database names", () => {
+    const url = worktreeDatabaseUrl(
+      "postgres://workhorse:workhorse@localhost:5432/workhorse_demo",
+      "demo",
+      "feature/my useful branch",
+    );
+
+    expect(databaseName(url)).toMatch(/^workhorse_demo_feature_my_useful_branch_[a-f0-9]{8}$/);
+    expect(() => assertLocalDatabasePurpose(url, "demo")).not.toThrow();
+    expect(() => assertLocalDatabasePurpose(url, "dev")).toThrow("must end in _dev");
+  });
+
+  it("keeps long worktree database names within PostgreSQL's identifier limit", () => {
+    const url = worktreeDatabaseUrl(
+      "postgres://localhost/a_very_long_database_prefix_that_would_otherwise_overflow_test",
+      "test",
+      "a-very-long-worktree-name-that-needs-truncation",
+    );
+
+    expect(databaseName(url)).toHaveLength(63);
+    expect(databaseName(url)).toMatch(/_test_a_very_long_worktree_nam_[a-f0-9]{8}$/);
   });
 });
