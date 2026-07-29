@@ -62,8 +62,11 @@ const activityPeriods: ActivityPeriod[] = ["15m", "1h", "6h", "24h", "7d"];
 interface ActivityData {
   period: ActivityPeriod;
   bucketSeconds: number;
-  buckets: Array<{ bucketStart: string; count: number }>;
+  queues: string[];
+  buckets: Array<{ bucketStart: string; counts: Record<string, number> }>;
 }
+
+const queueSeriesColors = ["teal.6", "indigo.6", "orange.6", "grape.6", "cyan.6", "lime.6"];
 
 type PageRoute = "/tasks" | "/cron" | "/system" | "/workers";
 type DemoJobKind = "success" | "retry" | "failure" | "long-running";
@@ -287,7 +290,9 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
   );
   const [activity, setActivity] = useState<ActivityData | null>(null);
   const changePeriod = (value: string) => {
-    const next = activityPeriods.includes(value as ActivityPeriod) ? (value as ActivityPeriod) : "1h";
+    const next = activityPeriods.includes(value as ActivityPeriod)
+      ? (value as ActivityPeriod)
+      : "1h";
     setPeriod(next);
     localStorage.setItem("workhorse-activity-period", next);
   };
@@ -320,12 +325,15 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
     }
     return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
   };
+  const queues = activity?.queues ?? [];
   const chartData = (activity?.buckets ?? []).map((bucket) => ({
     bucket: labelFormat(bucket.bucketStart),
-    tasks: bucket.count,
+    ...Object.fromEntries(queues.map((queue) => [queue, bucket.counts[queue] ?? 0])),
   }));
-  const barColor =
-    filter === "discarded" ? "red.6" : filter === "retried" ? "yellow.6" : "teal.6";
+  const series = queues.map((queue, index) => ({
+    name: queue,
+    color: queueSeriesColors[index % queueSeriesColors.length]!,
+  }));
 
   return (
     <Paper withBorder p="md">
@@ -348,7 +356,10 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
         h={160}
         data={chartData}
         dataKey="bucket"
-        series={[{ name: "tasks", color: barColor }]}
+        type="stacked"
+        series={series}
+        withLegend={series.length > 1}
+        legendProps={{ verticalAlign: "bottom", height: 24 }}
         gridAxis="xy"
         tickLine="y"
         withYAxis
