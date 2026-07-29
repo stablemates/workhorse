@@ -434,13 +434,17 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
     }).format(date);
   };
   const groups = activity?.groups ?? [];
+  // Recharts treats dots in dataKey as nested paths (task types like "demo.failure"),
+  // which breaks legend hover highlighting, so chart keys replace dots and labels keep them.
+  const chartKey = (group: string) => group.replaceAll(".", "_");
   const chartData = (activity?.buckets ?? []).map((bucket) => {
     const point: Record<string, string | number> = { bucket: labelFormat(bucket.bucketStart) };
-    for (const group of groups) point[group] = bucket.counts[group] ?? 0;
+    for (const group of groups) point[chartKey(group)] = bucket.counts[group] ?? 0;
     return point;
   });
   const series = groups.map((group, index) => ({
-    name: group,
+    name: chartKey(group),
+    label: group,
     color:
       group === "other" ? "gray.5" : activitySeriesColors[index % activitySeriesColors.length]!,
   }));
