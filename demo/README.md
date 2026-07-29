@@ -23,10 +23,11 @@ pnpm demo
 ```
 
 The command recreates only the purpose-guarded `workhorse_demo` database, builds the runtime packages,
-then starts Vite with HMR at `http://localhost:3000/` and a watched Hono process behind its development
-proxy. The JSON API index remains available at `http://localhost:3000/api`. Set
-`WORKHORSE_API_PORT` if the default internal Hono port `3001` is unavailable, or
-`WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay.
+then starts Vite with HMR at `http://workhorse.localhost:43155/` and a watched Hono process behind its
+development proxy. The JSON API index remains available at `http://workhorse.localhost:43155/api`.
+Each run allocates a free internal Hono port so multiple worktrees can run concurrently. Set
+`WORKHORSE_API_PORT` only when an explicit internal port is required, or `WORKHORSE_WORKER_POLL_MS` to
+override the workers' 15-second idle polling delay.
 Startup seeds one successful transactional order, one recoverable retry, one terminal failure, and one
 future scheduled job, so Tasks, Schedules, Workers, and System Health are useful immediately. Use the
 dashboard's **enqueue test job** menu to create fresh success, retry, failure, and 20-second long-running
@@ -37,7 +38,7 @@ empty instead. The versioned seed marker makes direct application restarts idemp
 Create an order:
 
 ```bash
-curl --fail-with-body http://localhost:3000/orders \
+curl --fail-with-body http://workhorse.localhost:43155/orders \
   --header 'content-type: application/json' \
   --data '{"customerEmail":"operator@example.com","description":"Ship the demo order"}'
 ```
@@ -48,7 +49,7 @@ The response contains `orderId` and `jobId`. Inspect them with `GET /orders/:ord
 Create a job that deliberately fails once, then succeeds on its second attempt:
 
 ```bash
-curl --fail-with-body --request POST http://localhost:3000/demo/retries
+curl --fail-with-body --request POST http://workhorse.localhost:43155/demo/retries
 ```
 
 The response contains a `jobId`. The job view shows attempt 2 after recovery, while immutable attempt
@@ -57,13 +58,13 @@ history records the first `retry` outcome followed by `succeeded`.
 Create a terminal failure for the Failures view:
 
 ```bash
-curl --fail-with-body --request POST http://localhost:3000/demo/failures
+curl --fail-with-body --request POST http://workhorse.localhost:43155/demo/failures
 ```
 
 This job has one allowed attempt, so the worker records an immutable failed outcome that appears in the
 Jobs discarded tab and PostgreSQL health data.
 
-Open `http://localhost:3000/tasks` for the Mantine operator dashboard. Its full-width application shell
+Open `http://workhorse.localhost:43155/tasks` for the Mantine operator dashboard. Its full-width application shell
 keeps the header and responsive sidebar in place while browser URLs switch between `/tasks`, `/cron`,
 `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as the `filter`
 query parameter, with pagination persisted as `page`.
