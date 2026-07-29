@@ -8,6 +8,14 @@ CREATE TABLE IF NOT EXISTS workhorse.schema_version (
   installed_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Sparse per-queue operational control. The dispatch path remains a cheap anti-join when no queue
+-- has been explicitly managed.
+CREATE TABLE IF NOT EXISTS workhorse.queue_control (
+  queue_name text PRIMARY KEY CHECK (queue_name <> ''),
+  paused boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
 -- Immutable accepted-job identity and payload.
 CREATE TABLE IF NOT EXISTS workhorse.job (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -376,6 +384,67 @@ AS $$
   ))) ORDER BY ordinal LIMIT 1;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.pause_queue_v1(p_queue_name text)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF p_queue_name IS NULL OR p_queue_name = '' THEN
+    RAISE EXCEPTION 'queue_name must not be empty';
+  END IF;
+  INSERT INTO workhorse.queue_control(queue_name, paused)
+    VALUES (p_queue_name, true)
+  ON CONFLICT (queue_name) DO UPDATE
+    SET paused = true, updated_at = clock_timestamp();
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.resume_queue_v1(p_queue_name text)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF p_queue_name IS NULL OR p_queue_name = '' THEN
+    RAISE EXCEPTION 'queue_name must not be empty';
+  END IF;
+  INSERT INTO workhorse.queue_control(queue_name, paused)
+    VALUES (p_queue_name, false)
+  ON CONFLICT (queue_name) DO UPDATE
+    SET paused = false, updated_at = clock_timestamp();
+  RETURN false;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.purge_queue_v1(p_queue_name text)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  IF p_queue_name IS NULL OR p_queue_name = '' THEN
+    RAISE EXCEPTION 'queue_name must not be empty';
+  END IF;
+  INSERT INTO workhorse.queue_control(queue_name, paused)
+    VALUES (p_queue_name, false)
+  ON CONFLICT (queue_name) DO NOTHING;
+  WITH purgeable AS (
+    SELECT r.job_id
+      FROM workhorse.job_runtime r
+     WHERE r.queue_name = p_queue_name AND r.state IN ('ready', 'scheduled')
+     FOR UPDATE OF r
+  ), deleted AS (
+    DELETE FROM workhorse.job j
+     USING purgeable p
+     WHERE j.id = p.job_id
+     RETURNING j.id
+  )
+  SELECT count(*)::integer INTO v_count FROM deleted;
+  RETURN v_count;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.promote_v1(p_limit integer DEFAULT 100)
 RETURNS integer
 LANGUAGE plpgsql
@@ -431,6 +500,10 @@ BEGIN
   WITH candidate AS (
     SELECT r.job_id FROM workhorse.job_runtime r
      WHERE r.state = 'ready' AND r.queue_name = p_queue_name
+       AND NOT EXISTS (
+         SELECT 1 FROM workhorse.queue_control control
+          WHERE control.queue_name = p_queue_name AND control.paused
+       )
      ORDER BY r.sequence, r.job_id FOR UPDATE SKIP LOCKED LIMIT 1
   )
   UPDATE workhorse.job_runtime r
@@ -803,7 +876,7 @@ BEGIN
 END;
 $$;
 
-INSERT INTO workhorse.schema_version(version) VALUES (3) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (4) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
   FROM generate_series(0, 4) AS weeks(week_offset);
 

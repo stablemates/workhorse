@@ -56,6 +56,7 @@ export interface CreateDemoApplicationOptions {
   dashboard?: boolean;
   operator?: DashboardOperator;
   scheduleController?: ScheduleController;
+  queueController?: QueueController;
   workerController?: WorkerController;
   workerPollMs?: number;
   maintenanceIntervalMs?: number;
@@ -85,6 +86,15 @@ export interface ScheduleController {
     enabled: boolean,
     audit: AuditContext,
   ) => Promise<{ enabled: boolean }>;
+}
+
+export interface QueueController {
+  setQueuePaused?: (
+    queueName: string,
+    paused: boolean,
+    audit: AuditContext,
+  ) => Promise<{ paused: boolean }>;
+  purgeQueue?: (queueName: string, audit: AuditContext) => Promise<{ deletedCount: number }>;
 }
 
 export interface WorkerController {
@@ -460,6 +470,52 @@ export function createLocalScheduleController(database: DemoDatabase): ScheduleC
   };
 }
 
+export function createLocalQueueController(database: DemoDatabase): QueueController {
+  return {
+    async setQueuePaused(queueName, paused, audit) {
+      return database.transaction(async (transaction) => {
+        const beforeRows = await transaction.execute<{ paused: boolean }>(sql`
+          SELECT paused FROM workhorse.queue_control WHERE queue_name = ${queueName} FOR UPDATE
+        `);
+        const before = { paused: beforeRows.rows[0]?.paused ?? false };
+        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: queueName });
+        if (paused) await workhorse.queue.pauseQueue(queueName);
+        else await workhorse.queue.resumeQueue(queueName);
+        await transaction.execute(sql`
+          INSERT INTO public.workhorse_demo_audit
+            (actor, reason, request_id, occurred_at, action, target, before, after, status)
+          VALUES
+            (${audit.actor}, ${audit.reason}, ${audit.requestId},
+             ${audit.occurredAt ?? new Date().toISOString()}, 'setQueuePaused', ${`queue:${queueName}`},
+             ${JSON.stringify(before)}::jsonb, ${JSON.stringify({ paused })}::jsonb, 'succeeded')
+        `);
+        return { paused };
+      });
+    },
+    async purgeQueue(queueName, audit) {
+      return database.transaction(async (transaction) => {
+        const beforeRows = await transaction.execute<{ purgeable_jobs: number }>(sql`
+          SELECT count(*)::integer AS purgeable_jobs
+            FROM workhorse.job_runtime
+           WHERE queue_name = ${queueName} AND state IN ('ready', 'scheduled')
+        `);
+        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: queueName });
+        const deletedCount = await workhorse.queue.purgeQueue(queueName);
+        await transaction.execute(sql`
+          INSERT INTO public.workhorse_demo_audit
+            (actor, reason, request_id, occurred_at, action, target, before, after, status)
+          VALUES
+            (${audit.actor}, ${audit.reason}, ${audit.requestId},
+             ${audit.occurredAt ?? new Date().toISOString()}, 'purgeQueue', ${`queue:${queueName}`},
+             ${JSON.stringify(beforeRows.rows[0] ?? { purgeable_jobs: 0 })}::jsonb,
+             ${JSON.stringify({ deletedCount })}::jsonb, 'succeeded')
+        `);
+        return { deletedCount };
+      });
+    },
+  };
+}
+
 export function createLocalWorkerController(
   database: DemoDatabase,
   workers: ReadonlyMap<string, Worker>,
@@ -653,6 +709,7 @@ export function createDemoApplication(
           maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs, housekeepingIntervalMs },
           operator: options.operator ?? createReadOnlyOperator(),
           scheduleController: options.scheduleController,
+          queueController: options.queueController,
           workerController,
         },
       });

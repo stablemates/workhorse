@@ -50,6 +50,7 @@ import type {
   DashboardCronPage,
   DashboardJobDetail,
   DashboardJobRow,
+  DashboardQueuesPage,
   DashboardSystemPage,
   DashboardTaskCounts,
   DashboardTaskFilter,
@@ -89,11 +90,12 @@ const activitySeriesColors = [
   "pink.6",
 ];
 
-type PageRoute = "/tasks" | "/cron" | "/system" | "/workers" | "/settings";
+type PageRoute = "/tasks" | "/cron" | "/queues" | "/system" | "/workers" | "/settings";
 type DemoJobKind = "success" | "retry" | "failure" | "long-running";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
   | { route: "/cron"; value: DashboardCronPage }
+  | { route: "/queues"; value: DashboardQueuesPage }
   | { route: "/system"; value: DashboardSystemPage }
   | { route: "/workers"; value: DashboardWorkersPage }
   | { route: "/settings"; value: null };
@@ -103,7 +105,14 @@ type LoadState =
   | { status: "error"; data: PageData | null; error: string };
 
 const tasksPerPage = 10;
-const pageRoutes = new Set<PageRoute>(["/tasks", "/cron", "/system", "/workers", "/settings"]);
+const pageRoutes = new Set<PageRoute>([
+  "/tasks",
+  "/cron",
+  "/queues",
+  "/system",
+  "/workers",
+  "/settings",
+]);
 const taskFilters: ReadonlyArray<{
   value: DashboardTaskFilter;
   label: string;
@@ -786,6 +795,150 @@ function CronPage({
   );
 }
 
+function QueuesPage({
+  data,
+  togglingQueue,
+  purgingQueue,
+  confirmingQueue,
+  actionError,
+  actionFeedback,
+  setQueuePaused,
+  setConfirmingQueue,
+  purgeQueue,
+}: {
+  data: DashboardQueuesPage;
+  togglingQueue: string | null;
+  purgingQueue: string | null;
+  confirmingQueue: string | null;
+  actionError: string | null;
+  actionFeedback: string | null;
+  setQueuePaused: (queue: string, paused: boolean) => void;
+  setConfirmingQueue: (queue: string | null) => void;
+  purgeQueue: (queue: string) => void;
+}) {
+  return (
+    <Stack gap="xl">
+      <PageHeader
+        title="Queues"
+        description="Pause dispatch, inspect queue-level task counts, or clear waiting work."
+      />
+      {actionError ? (
+        <Text c="red" size="sm">
+          {actionError}
+        </Text>
+      ) : actionFeedback ? (
+        <Text c="teal" size="sm">
+          {actionFeedback}
+        </Text>
+      ) : null}
+      {data.queues.length === 0 ? (
+        <EmptyState>No queues have accepted work yet.</EmptyState>
+      ) : (
+        <Paper withBorder>
+          <ScrollArea>
+            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={980}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Queue</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th ta="right">Scheduled</Table.Th>
+                  <Table.Th ta="right">Ready</Table.Th>
+                  <Table.Th ta="right">Active</Table.Th>
+                  <Table.Th ta="right">Succeeded</Table.Th>
+                  <Table.Th ta="right">Failed</Table.Th>
+                  <Table.Th ta="right">Actions</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {data.queues.map((queue) => {
+                  const approximatePrefix = queue.terminalCountsApproximate ? "~" : "";
+                  return (
+                    <Table.Tr key={queue.queue}>
+                      <Table.Td>
+                        <Code
+                          fz="xs"
+                          style={{ background: "transparent", paddingBlock: 0, paddingInline: 0 }}
+                        >
+                          {queue.queue}
+                        </Code>
+                      </Table.Td>
+                      <Table.Td>
+                        <Switch
+                          size="sm"
+                          checked={!queue.paused}
+                          disabled={togglingQueue === queue.queue}
+                          label={queue.paused ? "Paused" : "Running"}
+                          styles={{ label: { fontSize: "var(--mantine-font-size-xs)" } }}
+                          aria-label={`${queue.paused ? "Resume" : "Pause"} ${queue.queue}`}
+                          onChange={(event) =>
+                            setQueuePaused(queue.queue, !event.currentTarget.checked)
+                          }
+                        />
+                      </Table.Td>
+                      <Table.Td ta="right">{queue.scheduled}</Table.Td>
+                      <Table.Td ta="right">{queue.ready}</Table.Td>
+                      <Table.Td ta="right">{queue.active}</Table.Td>
+                      <Table.Td
+                        ta="right"
+                        title={queue.terminalCountsApproximate ? "Planner estimate" : undefined}
+                      >
+                        {approximatePrefix}
+                        {queue.succeeded}
+                      </Table.Td>
+                      <Table.Td
+                        ta="right"
+                        title={queue.terminalCountsApproximate ? "Planner estimate" : undefined}
+                      >
+                        {approximatePrefix}
+                        {queue.failed}
+                      </Table.Td>
+                      <Table.Td ta="right">
+                        {confirmingQueue === queue.queue ? (
+                          <Group gap={4} justify="flex-end" wrap="nowrap">
+                            <Button
+                              color="red"
+                              size="compact-xs"
+                              loading={purgingQueue === queue.queue}
+                              onClick={() => purgeQueue(queue.queue)}
+                            >
+                              Confirm clear
+                            </Button>
+                            <Button
+                              variant="subtle"
+                              color="gray"
+                              size="compact-xs"
+                              disabled={purgingQueue === queue.queue}
+                              onClick={() => setConfirmingQueue(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </Group>
+                        ) : (
+                          <Button
+                            variant="light"
+                            color="red"
+                            size="compact-xs"
+                            onClick={() => setConfirmingQueue(queue.queue)}
+                          >
+                            Clear
+                          </Button>
+                        )}
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        </Paper>
+      )}
+      <Text c="dimmed" size="xs">
+        Clear removes scheduled and ready tasks only. Active tasks keep their current ownership.
+      </Text>
+    </Stack>
+  );
+}
+
 function SystemPage({ data }: { data: DashboardSystemPage }) {
   return (
     <Stack gap="xl">
@@ -1048,6 +1201,7 @@ function readStoredRefreshInterval(): RefreshIntervalValue {
 
 function routeTitle(route: PageRoute): string {
   if (route === "/cron") return "schedules";
+  if (route === "/queues") return "queues";
   if (route === "/system") return "system health";
   if (route === "/workers") return "workers";
   if (route === "/settings") return "settings";
@@ -1070,6 +1224,11 @@ export function Dashboard() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [togglingSchedule, setTogglingSchedule] = useState<string | null>(null);
   const [scheduleActionError, setScheduleActionError] = useState<string | null>(null);
+  const [togglingQueue, setTogglingQueue] = useState<string | null>(null);
+  const [purgingQueue, setPurgingQueue] = useState<string | null>(null);
+  const [confirmingQueue, setConfirmingQueue] = useState<string | null>(null);
+  const [queueActionError, setQueueActionError] = useState<string | null>(null);
+  const [queueActionFeedback, setQueueActionFeedback] = useState<string | null>(null);
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
   const [workerActionError, setWorkerActionError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -1123,6 +1282,8 @@ export function Dashboard() {
         };
       } else if (location.route === "/cron") {
         data = { route: "/cron", value: await rpcClient.dashboard.cron() };
+      } else if (location.route === "/queues") {
+        data = { route: "/queues", value: await rpcClient.dashboard.queues() };
       } else if (location.route === "/system") {
         data = { route: "/system", value: await rpcClient.dashboard.system() };
       } else if (location.route === "/settings") {
@@ -1204,6 +1365,59 @@ export function Dashboard() {
         );
       } finally {
         setTogglingSchedule(null);
+      }
+    },
+    [loadPage],
+  );
+
+  const toggleQueue = useCallback(
+    async (queue: string, paused: boolean) => {
+      setTogglingQueue(queue);
+      setQueueActionError(null);
+      setQueueActionFeedback(null);
+      try {
+        await rpcClient.dashboard.setQueuePaused({
+          queue,
+          paused,
+          audit: {
+            actor: "local-demo",
+            reason: `${paused ? "Pause" : "Resume"} ${queue} from the dashboard`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        await loadPage();
+      } catch (cause) {
+        setQueueActionError(cause instanceof Error ? cause.message : "Unable to update the queue");
+      } finally {
+        setTogglingQueue(null);
+      }
+    },
+    [loadPage],
+  );
+
+  const clearQueue = useCallback(
+    async (queue: string) => {
+      setPurgingQueue(queue);
+      setQueueActionError(null);
+      setQueueActionFeedback(null);
+      try {
+        const result = await rpcClient.dashboard.purgeQueue({
+          queue,
+          audit: {
+            actor: "local-demo",
+            reason: `Clear waiting work from ${queue} from the dashboard`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        setConfirmingQueue(null);
+        setQueueActionFeedback(
+          `Cleared ${result.deletedCount} waiting ${result.deletedCount === 1 ? "task" : "tasks"} from ${queue}.`,
+        );
+        await loadPage();
+      } catch (cause) {
+        setQueueActionError(cause instanceof Error ? cause.message : "Unable to clear the queue");
+      } finally {
+        setPurgingQueue(null);
       }
     },
     [loadPage],
@@ -1335,6 +1549,20 @@ export function Dashboard() {
         setScheduleEnabled={(namespace, name, enabled) =>
           void toggleSchedule(namespace, name, enabled)
         }
+      />
+    );
+  } else if (loadState.data?.route === "/queues") {
+    content = (
+      <QueuesPage
+        data={loadState.data.value}
+        togglingQueue={togglingQueue}
+        purgingQueue={purgingQueue}
+        confirmingQueue={confirmingQueue}
+        actionError={queueActionError}
+        actionFeedback={queueActionFeedback}
+        setQueuePaused={(queue, paused) => void toggleQueue(queue, paused)}
+        setConfirmingQueue={setConfirmingQueue}
+        purgeQueue={(queue) => void clearQueue(queue)}
       />
     );
   } else if (loadState.data?.route === "/system") {
@@ -1496,6 +1724,15 @@ export function Dashboard() {
               leftSection={<CalendarDots size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/cron")}
+            />
+            <NavLink
+              component="a"
+              href="/queues"
+              active={location.route === "/queues"}
+              label="Queues"
+              leftSection={<ListDashes size={18} />}
+              variant="light"
+              onClick={(event) => handleLink(event, "/queues")}
             />
             <NavLink
               component="a"

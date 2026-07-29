@@ -24,7 +24,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
     workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE`);
+    workhorse.queue_control, workhorse.job_outcome, workhorse.job_runtime,
+    workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
 });
 
@@ -33,11 +34,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v3 without compatibility write tables", async () => {
+  it("installs schema v4 without compatibility write tables", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(3);
+    expect(version.rows[0]?.version).toBe(4);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -446,7 +447,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v3 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v4 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -479,6 +480,43 @@ describe("live-runtime queue protocol", () => {
       "SELECT job_id, event_type FROM workhorse.job_event WHERE event_type = 'enqueued' ORDER BY event_id",
     );
     expect(events.rows).toEqual(ids.map((jobId) => ({ job_id: jobId, event_type: "enqueued" })));
+  });
+
+  it("pauses claims, resumes dispatch, and purges only non-active jobs from one queue", async () => {
+    const queueName = "managed";
+    const activeId = await queue.enqueue("active", {}, { queue: queueName });
+    const active = await queue.claim("worker-active", { queue: queueName });
+    expect(active?.id).toBe(activeId);
+
+    const readyId = await queue.enqueue("ready", {}, { queue: queueName });
+    const scheduledId = await queue.enqueue(
+      "scheduled",
+      {},
+      {
+        queue: queueName,
+        runAt: new Date(Date.now() + 60_000),
+      },
+    );
+    const otherId = await queue.enqueue("other", {}, { queue: "other" });
+
+    await queue.pauseQueue(queueName);
+    expect(await queue.claim("worker-paused", { queue: queueName })).toBeNull();
+    expect(
+      await pool.query("SELECT paused FROM workhorse.queue_control WHERE queue_name = $1", [
+        queueName,
+      ]),
+    ).toMatchObject({ rows: [{ paused: true }] });
+
+    await queue.resumeQueue(queueName);
+    expect((await queue.claim("worker-resumed", { queue: queueName }))?.id).toBe(readyId);
+
+    await queue.enqueue("ready-after-resume", {}, { queue: queueName });
+    expect(await queue.purgeQueue(queueName)).toBe(2);
+    expect(await queue.getJob(activeId)).toMatchObject({ state: "active" });
+    expect(await queue.getJob(readyId)).toMatchObject({ state: "active" });
+    expect(await queue.getJob(scheduledId)).toBeNull();
+    expect(await queue.getJob(otherId)).toMatchObject({ state: "ready" });
+    expect(await queue.purgeQueue(queueName)).toBe(0);
   });
 
   it("treats an empty enqueue batch as a query-free no-op", async () => {
@@ -1053,7 +1091,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(3);
+    expect(health.schemaVersion).toBe(4);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(1);
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);

@@ -5,6 +5,7 @@ import type {
   AuditContext,
   DashboardOperator,
   DemoDatabase,
+  QueueController,
   ScheduleController,
   WorkerController,
 } from "./app.js";
@@ -13,6 +14,7 @@ import {
   readDashboardActivity,
   readDashboardCron,
   readDashboardJobDetail,
+  readDashboardQueues,
   readDashboardSystem,
   readDashboardTaskCounts,
   readDashboardTasks,
@@ -26,6 +28,7 @@ export interface DashboardRpcContext {
   maintenanceLoops: MaintenanceLoopCadences;
   operator: DashboardOperator;
   scheduleController?: ScheduleController;
+  queueController?: QueueController;
   workerController?: WorkerController;
 }
 
@@ -68,6 +71,15 @@ const setScheduleEnabledInput = z.object({
   enabled: z.boolean(),
   audit: auditSchema,
 });
+const setQueuePausedInput = z.object({
+  queue: z.string().trim().min(1),
+  paused: z.boolean(),
+  audit: auditSchema,
+});
+const purgeQueueInput = z.object({
+  queue: z.string().trim().min(1),
+  audit: auditSchema,
+});
 const setWorkerPausedInput = z.object({
   workerId: z.string().trim().min(1),
   paused: z.boolean(),
@@ -96,6 +108,7 @@ export const dashboardRouter = {
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),
     ),
+    queues: procedure.handler(({ context }) => readDashboardQueues(context.database)),
     system: procedure.handler(({ context }) =>
       readDashboardSystem(context.database, context.queue),
     ),
@@ -133,6 +146,22 @@ export const dashboardRouter = {
           auditWithOccurredAt(input.audit),
         );
       }),
+    setQueuePaused: procedure.input(setQueuePausedInput).handler(async ({ context, input }) => {
+      if (context.operator.mode !== "local" || !context.queueController?.setQueuePaused) {
+        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+      }
+      return context.queueController.setQueuePaused(
+        input.queue,
+        input.paused,
+        auditWithOccurredAt(input.audit),
+      );
+    }),
+    purgeQueue: procedure.input(purgeQueueInput).handler(async ({ context, input }) => {
+      if (context.operator.mode !== "local" || !context.queueController?.purgeQueue) {
+        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+      }
+      return context.queueController.purgeQueue(input.queue, auditWithOccurredAt(input.audit));
+    }),
     setWorkerPaused: procedure.input(setWorkerPausedInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.workerController?.setWorkerPaused) {
         throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });

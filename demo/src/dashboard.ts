@@ -9,6 +9,17 @@ export interface DashboardQueueRow {
   oldestMs: number | null;
 }
 
+export interface DashboardManagedQueueRow {
+  queue: string;
+  paused: boolean;
+  scheduled: number;
+  ready: number;
+  active: number;
+  succeeded: number;
+  failed: number;
+  terminalCountsApproximate: boolean;
+}
+
 export interface DashboardJobRow extends Record<string, unknown> {
   id: string;
   queue: string;
@@ -126,6 +137,11 @@ export interface DashboardCronPage {
   schedules: DashboardScheduleRow[];
 }
 
+export interface DashboardQueuesPage {
+  capturedAt: string;
+  queues: DashboardManagedQueueRow[];
+}
+
 export interface DashboardSystemPage {
   capturedAt: string;
   queues: DashboardQueueRow[];
@@ -200,7 +216,9 @@ export interface DashboardSnapshot {
   capturedAt: string;
   operatorPolicy: {
     mode: "read-only" | "local";
-    supportedMutations: Array<"enqueueTest" | "setScheduleEnabled" | "setWorkerPaused">;
+    supportedMutations: Array<
+      "enqueueTest" | "setScheduleEnabled" | "setQueuePaused" | "purgeQueue" | "setWorkerPaused"
+    >;
     requiredAuditContext: readonly ["actor", "reason", "requestId", "occurredAt"];
   };
   queues: DashboardQueueRow[];
@@ -245,7 +263,13 @@ function operatorPolicy(
   }
   return {
     mode: "local",
-    supportedMutations: ["enqueueTest", "setScheduleEnabled", "setWorkerPaused"],
+    supportedMutations: [
+      "enqueueTest",
+      "setScheduleEnabled",
+      "setQueuePaused",
+      "purgeQueue",
+      "setWorkerPaused",
+    ],
     requiredAuditContext: ["actor", "reason", "requestId", "occurredAt"],
   };
 }
@@ -361,6 +385,98 @@ async function readDashboardTaskCountsExact(database: DemoDatabase): Promise<Das
     running: counts.running_count,
     completed: counts.completed_count,
     discarded: counts.discarded_count,
+  };
+}
+
+/** Queue management rows keep hot live-state counts exact and estimate cold outcomes at scale. */
+export async function readDashboardQueues(database: DemoDatabase): Promise<DashboardQueuesPage> {
+  const [queueRows, relationRows] = await Promise.all([
+    database.execute<{
+      queue: string;
+      paused: boolean;
+      scheduled: number;
+      ready: number;
+      active: number;
+    }>(sql`
+      WITH known_queues AS (
+        SELECT queue_name FROM workhorse.job
+        UNION
+        SELECT queue_name FROM workhorse.queue_control
+      ), live_counts AS (
+        SELECT queue_name,
+               count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
+               count(*) FILTER (WHERE state = 'ready')::integer AS ready,
+               count(*) FILTER (WHERE state = 'active')::integer AS active
+          FROM workhorse.job_runtime
+         GROUP BY queue_name
+      )
+      SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
+             COALESCE(live.scheduled, 0)::integer AS scheduled,
+             COALESCE(live.ready, 0)::integer AS ready,
+             COALESCE(live.active, 0)::integer AS active
+        FROM known_queues known
+        LEFT JOIN workhorse.queue_control control USING (queue_name)
+        LEFT JOIN live_counts live USING (queue_name)
+       ORDER BY known.queue_name
+    `),
+    database.execute<{ estimate: string | number }>(sql`
+      SELECT reltuples::bigint AS estimate FROM pg_class WHERE oid = 'workhorse.job'::regclass
+    `),
+  ]);
+  const approximate = Number(relationRows.rows[0]?.estimate ?? -1) >= approximateCountThreshold;
+
+  let terminalCounts: Map<string, { succeeded: number; failed: number }>;
+  if (approximate) {
+    const estimates = await Promise.all(
+      queueRows.rows.map(async (row) => {
+        const [succeeded, failed] = await Promise.all([
+          estimateRows(
+            database,
+            sql`SELECT 1 FROM workhorse.job_outcome outcome
+                  JOIN workhorse.job job ON job.id = outcome.job_id
+                 WHERE job.queue_name = ${row.queue} AND outcome.state = 'succeeded'`,
+          ),
+          estimateRows(
+            database,
+            sql`SELECT 1 FROM workhorse.job_outcome outcome
+                  JOIN workhorse.job job ON job.id = outcome.job_id
+                 WHERE job.queue_name = ${row.queue} AND outcome.state = 'failed'`,
+          ),
+        ]);
+        return [row.queue, { succeeded, failed }] as const;
+      }),
+    );
+    terminalCounts = new Map(estimates);
+  } else {
+    const exactRows = await database.execute<{
+      queue: string;
+      succeeded: number;
+      failed: number;
+    }>(sql`
+      SELECT job.queue_name AS queue,
+             count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS succeeded,
+             count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed
+        FROM workhorse.job_outcome outcome
+        JOIN workhorse.job job ON job.id = outcome.job_id
+       GROUP BY job.queue_name
+    `);
+    terminalCounts = new Map(
+      exactRows.rows.map((row) => [row.queue, { succeeded: row.succeeded, failed: row.failed }]),
+    );
+  }
+
+  return {
+    capturedAt: new Date().toISOString(),
+    queues: queueRows.rows.map((row) => ({
+      queue: row.queue,
+      paused: row.paused,
+      scheduled: row.scheduled,
+      ready: row.ready,
+      active: row.active,
+      succeeded: terminalCounts.get(row.queue)?.succeeded ?? 0,
+      failed: terminalCounts.get(row.queue)?.failed ?? 0,
+      terminalCountsApproximate: approximate,
+    })),
   };
 }
 
