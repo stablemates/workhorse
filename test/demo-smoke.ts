@@ -101,6 +101,7 @@ try {
       PORT: String(port),
       WORKHORSE_API_PORT: String(port + 1),
       DATABASE_URL: demoDatabaseUrl,
+      WORKHORSE_DISABLE_PORTLESS: "1",
       WORKHORSE_WORKER_POLL_MS: "15",
     },
     detached: process.platform !== "win32",

@@ -1,5 +1,5 @@
 {
   "name": "workhorse",
-  "script": "dev:app",
+  "script": "demo:app",
   "turbo": false
 }

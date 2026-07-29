@@ -24,11 +24,11 @@
     "provenance": true
   },
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --import tsx scripts/portless.ts",
-    "dev:app": "pnpm build:runtime && node --env-file-if-exists=.env --import tsx scripts/dev.ts",
+    "dev": "pnpm demo",
     "build": "pnpm build:runtime && pnpm --filter @workhorse/demo build",
     "build:runtime": "pnpm build:core && pnpm --filter './packages/*' build",
-    "demo": "pnpm db:reset:demo && pnpm build:runtime && node --env-file-if-exists=.env --import tsx scripts/dev.ts",
+    "demo": "node --env-file-if-exists=.env --import tsx scripts/portless.ts",
+    "demo:app": "pnpm db:reset:demo && pnpm build:runtime && node --env-file-if-exists=.env --import tsx scripts/dev.ts",
     "build:core": "tsc -p tsconfig.build.json && rm -rf dist/sql && cp -R sql dist/sql",
     "typecheck": "pnpm typecheck:core && tsc -p tsconfig.scripts.json --noEmit && pnpm build:runtime && pnpm --filter './packages/*' typecheck && pnpm --filter @workhorse/demo typecheck",
     "typecheck:core": "tsc -p tsconfig.json --noEmit",
