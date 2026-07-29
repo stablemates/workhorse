@@ -43,7 +43,7 @@ pnpm db:reset:all
 pnpm check
 ```
 
-Run `pnpm dev` for the demo at `http://workhorse.localhost:43155`. Portless assigns the application port and
+Run `pnpm demo` for the project at `http://workhorse.localhost:43155`. Portless assigns the application port and
 automatically prefixes linked worktrees with their branch name, for example
 `http://feature-name.workhorse.localhost:43155`. Workhorse keeps Portless state in
 `~/.portless-workhorse`, uses plain HTTP on an unprivileged high port, and therefore never needs
