@@ -16,6 +16,7 @@ import {
   DEMO_WORKER_POLL_MS,
   HEARTBEAT_SCHEDULE_NAME,
   installDemoSchema,
+  REPORT_SCHEDULE_NAME,
   seedDemoData,
   syncDemoSchedules,
 } from "../src/app.js";
@@ -61,6 +62,25 @@ describe("Workhorse demo", () => {
   it("uses a conservative worker polling interval for the demo", () => {
     expect(DEMO_WORKER_POLL_MS).toBe(15_000);
     expect(DEMO_LONG_RUNNING_MS).toBe(20_000);
+  });
+
+  it("synchronizes the always-on demo schedules at startup", async () => {
+    await syncDemoSchedules(pool);
+
+    expect(
+      await pool.query(
+        `SELECT schedule_name, cron_expression, enabled
+           FROM workhorse.schedule_definition
+          WHERE namespace = $1
+          ORDER BY schedule_name`,
+        [DEMO_SCHEDULE_NAMESPACE],
+      ),
+    ).toMatchObject({
+      rows: [
+        { schedule_name: REPORT_SCHEDULE_NAME, cron_expression: "*/5 * * * *", enabled: true },
+        { schedule_name: HEARTBEAT_SCHEDULE_NAME, cron_expression: "* * * * *", enabled: true },
+      ],
+    });
   });
 
   it("seeds representative dashboard data exactly once", async () => {
@@ -358,8 +378,11 @@ describe("Workhorse demo", () => {
       expect(
         await client.dashboard.tasks({ filter: "completed", page: 1, pageSize: 10 }),
       ).toMatchObject({
-        total: 1,
-        jobs: [{ id: jobId, type: "demo.recurring", state: "succeeded" }],
+        total: 2,
+        jobs: expect.arrayContaining([
+          expect.objectContaining({ id: jobId, type: "demo.recurring", state: "succeeded" }),
+          expect.objectContaining({ type: "demo.report", state: "succeeded" }),
+        ]),
       });
     } finally {
       await workhorse.stop();
@@ -378,6 +401,8 @@ describe("Workhorse demo", () => {
     ).rejects.toThrow(/read-only|FORBIDDEN/i);
     await expect(
       client.dashboard.setScheduleEnabled({
+        kind: "user",
+        namespace: DEMO_SCHEDULE_NAMESPACE,
         name: HEARTBEAT_SCHEDULE_NAME,
         enabled: false,
         audit: { actor: "test", reason: "verify read-only", requestId: "readonly-toggle" },
@@ -433,12 +458,7 @@ describe("Workhorse demo", () => {
   });
 
   it("supports audited local enqueue and schedule toggles", async () => {
-    await pool.query(
-      `INSERT INTO workhorse.schedule_definition
-        (namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts)
-       VALUES ($1, $2, '* * * * *', 'demo', 'demo.recurring', '{"source":"test"}'::jsonb, 3)`,
-      [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
-    );
+    await syncDemoSchedules(pool);
     const { app } = createTestApplication({
       operator: createLocalOperator(database),
       scheduleController: createLocalScheduleController(database),
@@ -456,15 +476,26 @@ describe("Workhorse demo", () => {
     });
     expect(
       await client.dashboard.setScheduleEnabled({
-        name: HEARTBEAT_SCHEDULE_NAME,
+        kind: "user",
+        namespace: DEMO_SCHEDULE_NAMESPACE,
+        name: REPORT_SCHEDULE_NAME,
         enabled: false,
-        audit: { actor: "operator", reason: "pause schedule", requestId: "audit-toggle" },
+        audit: { actor: "operator", reason: "pause reports", requestId: "audit-toggle" },
       }),
     ).toEqual({ enabled: false });
+    await syncDemoSchedules(pool);
+    expect(
+      await pool.query(
+        `SELECT enabled FROM workhorse.schedule_definition
+          WHERE namespace = $1 AND schedule_name = $2`,
+        [DEMO_SCHEDULE_NAMESPACE, REPORT_SCHEDULE_NAME],
+      ),
+    ).toMatchObject({ rows: [{ enabled: false }] });
     expect(
       (
         await pool.query(
-          "SELECT action, target, actor, reason, status FROM public.workhorse_demo_audit ORDER BY id",
+          `SELECT action, target, actor, reason, request_id, before, after, status
+             FROM public.workhorse_demo_audit ORDER BY id`,
         )
       ).rows,
     ).toEqual([
@@ -473,13 +504,19 @@ describe("Workhorse demo", () => {
         target: "job:success",
         actor: "operator",
         reason: "smoke enqueue",
+        request_id: "audit-enqueue",
+        before: null,
+        after: expect.objectContaining({ jobId: enqueued.jobId }),
         status: "succeeded",
       },
       {
         action: "setScheduleEnabled",
-        target: "schedule:heartbeat",
+        target: `schedule:${DEMO_SCHEDULE_NAMESPACE}:${REPORT_SCHEDULE_NAME}`,
         actor: "operator",
-        reason: "pause schedule",
+        reason: "pause reports",
+        request_id: "audit-toggle",
+        before: { enabled: true },
+        after: { enabled: false },
         status: "succeeded",
       },
     ]);
@@ -525,6 +562,8 @@ describe("Workhorse demo", () => {
     );
 
     await client.dashboard.setScheduleEnabled({
+      kind: "user",
+      namespace: DEMO_SCHEDULE_NAMESPACE,
       name: HEARTBEAT_SCHEDULE_NAME,
       enabled: false,
       audit: { actor: "operator", reason: "pause schedule", requestId: "schedule-disable" },
@@ -540,6 +579,8 @@ describe("Workhorse demo", () => {
     );
 
     await client.dashboard.setScheduleEnabled({
+      kind: "user",
+      namespace: DEMO_SCHEDULE_NAMESPACE,
       name: HEARTBEAT_SCHEDULE_NAME,
       enabled: true,
       audit: { actor: "operator", reason: "resume schedule", requestId: "schedule-enable" },

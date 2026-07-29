@@ -54,6 +54,8 @@ const enqueueTestInput = z.object({
   audit: auditSchema,
 });
 const setScheduleEnabledInput = z.object({
+  kind: z.literal("user"),
+  namespace: z.string().trim().min(1),
   name: z.string().trim().min(1),
   enabled: z.boolean(),
   audit: auditSchema,
@@ -105,6 +107,7 @@ export const dashboardRouter = {
           throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
         }
         return context.scheduleController.setScheduleEnabled(
+          input.namespace,
           input.name,
           input.enabled,
           auditWithOccurredAt(input.audit),

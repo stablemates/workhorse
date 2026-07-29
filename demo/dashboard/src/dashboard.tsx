@@ -571,13 +571,28 @@ function TasksPage({
   );
 }
 
-function CronPage({ data }: { data: DashboardCronPage }) {
+function CronPage({
+  data,
+  togglingSchedule,
+  actionError,
+  setScheduleEnabled,
+}: {
+  data: DashboardCronPage;
+  togglingSchedule: string | null;
+  actionError: string | null;
+  setScheduleEnabled: (namespace: string, name: string, enabled: boolean) => void;
+}) {
   return (
     <Stack gap="xl">
       <PageHeader
         title="Schedules"
         description="Recurring application and system schedules registered with Workhorse."
       />
+      {actionError ? (
+        <Text c="red" size="sm">
+          {actionError}
+        </Text>
+      ) : null}
       {data.schedules.length === 0 ? (
         <EmptyState>No recurring schedules are registered.</EmptyState>
       ) : (
@@ -595,27 +610,46 @@ function CronPage({ data }: { data: DashboardCronPage }) {
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {data.schedules.map((schedule) => (
-                  <Table.Tr key={`${schedule.namespace}:${schedule.name}`}>
-                    <Table.Td>
-                      <Text fw={600} size="sm">
-                        {schedule.name}
-                      </Text>
-                      <Text c="dimmed" size="xs">
-                        {schedule.kind} · {schedule.namespace}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Code>{schedule.cron}</Code>
-                    </Table.Td>
-                    <Table.Td>{schedule.queue ?? "System maintenance"}</Table.Td>
-                    <Table.Td>
-                      <StatusBadge state={schedule.active ? "active" : "disabled"} />
-                    </Table.Td>
-                    <Table.Td>{formatDate(schedule.lastFiredAt)}</Table.Td>
-                    <Table.Td>{schedule.occurrenceCount}</Table.Td>
-                  </Table.Tr>
-                ))}
+                {data.schedules.map((schedule) => {
+                  const scheduleKey = `${schedule.namespace}:${schedule.name}`;
+                  return (
+                    <Table.Tr key={scheduleKey}>
+                      <Table.Td>
+                        <Text fw={600} size="sm">
+                          {schedule.name}
+                        </Text>
+                        <Text c="dimmed" size="xs">
+                          {schedule.kind} · {schedule.namespace}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Code>{schedule.cron}</Code>
+                      </Table.Td>
+                      <Table.Td>{schedule.queue ?? "System maintenance"}</Table.Td>
+                      <Table.Td>
+                        {schedule.kind === "user" ? (
+                          <Switch
+                            checked={schedule.enabled}
+                            disabled={togglingSchedule === scheduleKey}
+                            label={schedule.enabled ? "Enabled" : "Disabled"}
+                            aria-label={`${schedule.enabled ? "Disable" : "Enable"} ${schedule.name}`}
+                            onChange={(event) =>
+                              setScheduleEnabled(
+                                schedule.namespace,
+                                schedule.name,
+                                event.currentTarget.checked,
+                              )
+                            }
+                          />
+                        ) : (
+                          <StatusBadge state={schedule.active ? "active" : "disabled"} />
+                        )}
+                      </Table.Td>
+                      <Table.Td>{formatDate(schedule.lastFiredAt)}</Table.Td>
+                      <Table.Td>{schedule.occurrenceCount}</Table.Td>
+                    </Table.Tr>
+                  );
+                })}
               </Table.Tbody>
             </Table>
           </ScrollArea>
@@ -767,6 +801,8 @@ export function Dashboard() {
   const [taskCounts, setTaskCounts] = useState<DashboardTaskCounts | null>(null);
   const [runningDemoJob, setRunningDemoJob] = useState<DemoJobKind | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [togglingSchedule, setTogglingSchedule] = useState<string | null>(null);
+  const [scheduleActionError, setScheduleActionError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedJob, setSelectedJob] = useState<DashboardJobDetail | null>(null);
   const [jobDetailError, setJobDetailError] = useState<string | null>(null);
@@ -867,6 +903,35 @@ export function Dashboard() {
     [loadPage, location.filter, location.page, navigate],
   );
 
+  const toggleSchedule = useCallback(
+    async (namespace: string, name: string, enabled: boolean) => {
+      const scheduleKey = `${namespace}:${name}`;
+      setTogglingSchedule(scheduleKey);
+      setScheduleActionError(null);
+      try {
+        await rpcClient.dashboard.setScheduleEnabled({
+          kind: "user",
+          namespace,
+          name,
+          enabled,
+          audit: {
+            actor: "local-demo",
+            reason: `${enabled ? "Enable" : "Disable"} ${namespace}/${name} from the dashboard`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        await loadPage();
+      } catch (cause) {
+        setScheduleActionError(
+          cause instanceof Error ? cause.message : "Unable to update the schedule",
+        );
+      } finally {
+        setTogglingSchedule(null);
+      }
+    },
+    [loadPage],
+  );
+
   const inspectJob = useCallback(async (id: string) => {
     setSelectedJobId(id);
     setSelectedJob(null);
@@ -949,7 +1014,16 @@ export function Dashboard() {
       />
     );
   } else if (loadState.data?.route === "/cron") {
-    content = <CronPage data={loadState.data.value} />;
+    content = (
+      <CronPage
+        data={loadState.data.value}
+        togglingSchedule={togglingSchedule}
+        actionError={scheduleActionError}
+        setScheduleEnabled={(namespace, name, enabled) =>
+          void toggleSchedule(namespace, name, enabled)
+        }
+      />
+    );
   } else if (loadState.data?.route === "/system") {
     content = <SystemPage data={loadState.data.value} />;
   } else if (loadState.data?.route === "/workers") {

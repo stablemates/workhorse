@@ -19,6 +19,7 @@ const RETRY_JOB_TYPE = "demo.retry";
 const FAILURE_JOB_TYPE = "demo.failure";
 const LONG_RUNNING_JOB_TYPE = "demo.long-running";
 const RECURRING_JOB_TYPE = "demo.recurring";
+const REPORT_JOB_TYPE = "demo.report";
 const DEMO_QUEUE = "demo";
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
 export const DEMO_WORKER_POLL_MS = 15_000;
@@ -27,6 +28,7 @@ export const DEMO_HOUSEKEEPING_INTERVAL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
+export const REPORT_SCHEDULE_NAME = "demo.report";
 const DEMO_INDEX = {
   name: "Workhorse demo",
   endpoints: [
@@ -74,6 +76,7 @@ export interface DashboardOperator {
 
 export interface ScheduleController {
   setScheduleEnabled?: (
+    namespace: string,
     name: string,
     enabled: boolean,
     audit: AuditContext,
@@ -103,6 +106,20 @@ function heartbeatSchedule(enabled = true) {
       type: RECURRING_JOB_TYPE,
       queue: DEMO_QUEUE,
       payload: { source: "worker" },
+      maxAttempts: 3,
+    },
+  } as const;
+}
+
+function reportSchedule(enabled = true) {
+  return {
+    name: REPORT_SCHEDULE_NAME,
+    schedule: "*/5 * * * *",
+    enabled,
+    job: {
+      type: REPORT_JOB_TYPE,
+      queue: DEMO_QUEUE,
+      payload: { report: "queue-health", source: "schedule" },
       maxAttempts: 3,
     },
   } as const;
@@ -150,8 +167,17 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
 }
 
 export async function syncDemoSchedules(database: Pool): Promise<void> {
-  await new Queue(database, DEMO_QUEUE).syncSchedules(DEMO_SCHEDULE_NAMESPACE, [
-    heartbeatSchedule(),
+  const queue = new Queue(database, DEMO_QUEUE);
+  const existing = await database.query<{ name: string; enabled: boolean }>(
+    `SELECT schedule_name AS name, enabled
+       FROM workhorse.schedule_definition
+      WHERE namespace = $1`,
+    [DEMO_SCHEDULE_NAMESPACE],
+  );
+  const enabledByName = new Map(existing.rows.map((schedule) => [schedule.name, schedule.enabled]));
+  await queue.syncSchedules(DEMO_SCHEDULE_NAMESPACE, [
+    heartbeatSchedule(enabledByName.get(HEARTBEAT_SCHEDULE_NAME) ?? true),
+    reportSchedule(enabledByName.get(REPORT_SCHEDULE_NAME) ?? true),
   ]);
 }
 
@@ -197,20 +223,18 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
 
 export function createLocalScheduleController(database: DemoDatabase): ScheduleController {
   return {
-    async setScheduleEnabled(name, enabled, audit) {
-      if (name !== HEARTBEAT_SCHEDULE_NAME)
-        throw new Error(`Schedule ${name} is not controlled here`);
+    async setScheduleEnabled(namespace, name, enabled, audit) {
       const rows = await database.transaction(async (transaction) => {
         const before = await transaction.execute<{ enabled: boolean }>(sql`
           SELECT enabled FROM workhorse.schedule_definition
-           WHERE namespace = ${DEMO_SCHEDULE_NAMESPACE} AND schedule_name = ${name}
+           WHERE namespace = ${namespace} AND schedule_name = ${name}
            FOR UPDATE
         `);
-        if (before.rows.length === 0) throw new Error(`Schedule ${name} not found`);
+        if (before.rows.length === 0) throw new Error(`Schedule ${namespace}/${name} not found`);
         const updated = await transaction.execute<{ enabled: boolean }>(sql`
           UPDATE workhorse.schedule_definition
              SET enabled = ${enabled}, revision = revision + 1, updated_at = clock_timestamp()
-           WHERE namespace = ${DEMO_SCHEDULE_NAMESPACE} AND schedule_name = ${name}
+           WHERE namespace = ${namespace} AND schedule_name = ${name}
            RETURNING enabled
         `);
         await transaction.execute(sql`
@@ -218,7 +242,7 @@ export function createLocalScheduleController(database: DemoDatabase): ScheduleC
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
-             ${audit.occurredAt ?? new Date().toISOString()}, 'setScheduleEnabled', ${`schedule:${name}`},
+             ${audit.occurredAt ?? new Date().toISOString()}, 'setScheduleEnabled', ${`schedule:${namespace}:${name}`},
              ${JSON.stringify(before.rows[0])}::jsonb, ${JSON.stringify({ enabled })}::jsonb, 'succeeded')
         `);
         return updated.rows;
@@ -270,6 +294,10 @@ export function createDemoApplication(
         worker.handle<{ source: string }>(RECURRING_JOB_TYPE, async ({ source }, { job }) => {
           dashboardRefresh.publish("worker");
           return { source, recurring: true, attempt: job.attempt };
+        });
+        worker.handle<{ report: string; source: string }>(REPORT_JOB_TYPE, async (payload) => {
+          dashboardRefresh.publish("worker");
+          return { ...payload, generated: true };
         });
         worker.handle(FAILURE_JOB_TYPE, () => {
           throw new Error("Intentional terminal demo failure");
