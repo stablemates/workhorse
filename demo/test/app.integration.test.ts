@@ -251,9 +251,17 @@ describe("Workhorse demo", () => {
           { id: "demo-worker-2", status: expect.stringMatching(/active|idle|recent|offline/) },
         ],
       });
-      expect(await client.dashboard.system()).toMatchObject({
-        failures: [],
-        health: { schemaVersion: 4, counts: { succeeded: 1 } },
+      expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
+        window: "1h",
+        status: { level: "healthy", checks: [] },
+        kpis: {
+          drain: { completedPerMinute: expect.any(Number), enqueuedPerMinute: expect.any(Number) },
+          backlog: { ready: 0 },
+          errorRate: { current: 0 },
+          lease: { expired: 0 },
+        },
+        outcomes: expect.any(Array),
+        integrity: { dueButUnpromoted: 0, partitions: expect.any(Array) },
       });
       const detail = await client.dashboard.jobDetail({ id: accepted.jobId });
       expect(detail).toMatchObject({
@@ -340,8 +348,9 @@ describe("Workhorse demo", () => {
       expect(await client.dashboard.workers()).toMatchObject({
         workers: [{ id: "demo-worker-1" }, { id: "demo-worker-2" }],
       });
-      expect(await client.dashboard.system()).toMatchObject({
-        failures: [],
+      expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
+        window: "1h",
+        kpis: { retry: { backoff: 0 }, errorRate: { current: expect.any(Number) } },
       });
     } finally {
       await workhorse.stop();
@@ -375,9 +384,16 @@ describe("Workhorse demo", () => {
         jobs: [{ id: accepted.jobId, type: "demo.failure", state: "failed" }],
         counts: { all: 1, discarded: 1 },
       });
-      expect(await client.dashboard.system()).toMatchObject({
-        failures: [{ id: accepted.jobId, type: "demo.failure", attempt: 1 }],
-        health: { counts: { failed: 1 } },
+      expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
+        status: { level: "healthy", checks: [] },
+        failingTypes: [
+          expect.objectContaining({
+            queue: "demo",
+            type: "demo.failure",
+            attempts: 1,
+            terminalFailures: 1,
+          }),
+        ],
       });
     } finally {
       await workhorse.stop();
