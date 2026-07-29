@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AuditContext, DashboardOperator, DemoDatabase, ScheduleController } from "./app.js";
 import {
   type MaintenanceLoopCadences,
+  readDashboardActivity,
   readDashboardCron,
   readDashboardJobDetail,
   readDashboardSystem,
@@ -44,6 +45,10 @@ const tasksInput = z.object({
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(100).default(10),
 });
+const activityInput = z.object({
+  filter: taskFilter.default("all"),
+  period: z.enum(["15m", "1h", "6h", "24h", "7d"]).default("1h"),
+});
 const enqueueTestInput = z.object({
   kind: z.enum(["success", "retry", "failure", "long-running"]),
   audit: auditSchema,
@@ -67,6 +72,11 @@ export const dashboardRouter = {
       .input(tasksInput)
       .handler(({ context, input }) =>
         readDashboardTasks(context.database, input.filter, input.page, input.pageSize),
+      ),
+    activity: procedure
+      .input(activityInput)
+      .handler(({ context, input }) =>
+        readDashboardActivity(context.database, input.filter, input.period),
       ),
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),

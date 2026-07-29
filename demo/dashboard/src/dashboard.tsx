@@ -16,6 +16,7 @@ import {
   Pagination,
   Paper,
   ScrollArea,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Switch,
@@ -24,6 +25,7 @@ import {
   ThemeIcon,
   Title,
 } from "@mantine/core";
+import { BarChart } from "@mantine/charts";
 import { useDisclosure } from "@mantine/hooks";
 import {
   ActivityIcon,
@@ -53,6 +55,15 @@ import type {
   DashboardWorkersPage,
 } from "../../src/dashboard";
 import { rpcClient } from "../lib/rpc";
+
+type ActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
+const activityPeriods: ActivityPeriod[] = ["15m", "1h", "6h", "24h", "7d"];
+
+interface ActivityData {
+  period: ActivityPeriod;
+  bucketSeconds: number;
+  buckets: Array<{ bucketStart: string; count: number }>;
+}
 
 type PageRoute = "/tasks" | "/cron" | "/system" | "/workers";
 type DemoJobKind = "success" | "retry" | "failure" | "long-running";
@@ -269,6 +280,87 @@ function EmptyState({ children }: { children: ReactNode }) {
   );
 }
 
+/** Full-width bar chart of task activity, filtered like the list and switchable across periods. */
+function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
+  const [period, setPeriod] = useState<ActivityPeriod>(
+    () => (localStorage.getItem("workhorse-activity-period") as ActivityPeriod) ?? "1h",
+  );
+  const [activity, setActivity] = useState<ActivityData | null>(null);
+  const changePeriod = (value: string) => {
+    const next = activityPeriods.includes(value as ActivityPeriod) ? (value as ActivityPeriod) : "1h";
+    setPeriod(next);
+    localStorage.setItem("workhorse-activity-period", next);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      void rpcClient.dashboard
+        .activity({ filter, period })
+        .then((page) => {
+          if (!cancelled) setActivity(page);
+        })
+        .catch(() => undefined);
+    load();
+    const timer = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [filter, period]);
+
+  const labelFormat = (value: string): string => {
+    const date = new Date(value);
+    if (period === "7d" || period === "24h") {
+      return new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+      }).format(date);
+    }
+    return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
+  };
+  const chartData = (activity?.buckets ?? []).map((bucket) => ({
+    bucket: labelFormat(bucket.bucketStart),
+    tasks: bucket.count,
+  }));
+  const barColor =
+    filter === "discarded" ? "red.6" : filter === "retried" ? "yellow.6" : "teal.6";
+
+  return (
+    <Paper withBorder p="md">
+      <Group justify="space-between" mb="sm">
+        <Text fw={600} size="sm">
+          Activity
+          <Text span c="dimmed" size="sm">
+            {" "}
+            · {filter === "all" ? "all tasks" : filter}
+          </Text>
+        </Text>
+        <SegmentedControl
+          size="xs"
+          value={period}
+          onChange={changePeriod}
+          data={activityPeriods.map((value) => ({ value, label: value }))}
+        />
+      </Group>
+      <BarChart
+        h={160}
+        data={chartData}
+        dataKey="bucket"
+        series={[{ name: "tasks", color: barColor }]}
+        gridAxis="xy"
+        tickLine="y"
+        withYAxis
+        withTooltip
+        barProps={{ radius: 2 }}
+        yAxisProps={{ allowDecimals: false, width: 36 }}
+        xAxisProps={{ interval: "preserveStartEnd", minTickGap: 24 }}
+      />
+    </Paper>
+  );
+}
+
 function TasksPage({
   data,
   navigate,
@@ -304,6 +396,7 @@ function TasksPage({
 
   return (
     <Stack gap="xl">
+      <TasksActivityChart filter={data.filter} />
       <Paper withBorder>
         <Group justify="space-between" p="md">
           <Switch
