@@ -474,7 +474,7 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
           align: "left",
           verticalAlign: "middle",
           width: 120,
-          wrapperStyle: { paddingRight: 16 },
+          wrapperStyle: { paddingRight: 16, textAlign: "left" },
         }}
         gridAxis="xy"
         tickLine="y"
@@ -977,6 +977,25 @@ function SettingsPage() {
   );
 }
 
+/** Auto refresh cadence for the whole dashboard; "off" relies on SSE pushes only. */
+const refreshIntervals = [
+  { value: "off", label: "Auto refresh off", ms: null },
+  { value: "5s", label: "Every 5s", ms: 5_000 },
+  { value: "15s", label: "Every 15s", ms: 15_000 },
+  { value: "30s", label: "Every 30s", ms: 30_000 },
+  { value: "1m", label: "Every minute", ms: 60_000 },
+  { value: "5m", label: "Every 5 minutes", ms: 300_000 },
+] as const;
+type RefreshIntervalValue = (typeof refreshIntervals)[number]["value"];
+const refreshStorageKey = "workhorse-auto-refresh";
+
+function readStoredRefreshInterval(): RefreshIntervalValue {
+  const stored = localStorage.getItem(refreshStorageKey);
+  return refreshIntervals.some((option) => option.value === stored)
+    ? (stored as RefreshIntervalValue)
+    : "30s";
+}
+
 function routeTitle(route: PageRoute): string {
   if (route === "/cron") return "schedules";
   if (route === "/system") return "system health";
@@ -1004,6 +1023,12 @@ export function Dashboard() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedJob, setSelectedJob] = useState<DashboardJobDetail | null>(null);
   const [jobDetailError, setJobDetailError] = useState<string | null>(null);
+  const [refreshInterval, setRefreshInterval] =
+    useState<RefreshIntervalValue>(readStoredRefreshInterval);
+  const changeRefreshInterval = useCallback((value: RefreshIntervalValue) => {
+    setRefreshInterval(value);
+    localStorage.setItem(refreshStorageKey, value);
+  }, []);
   const requestId = useRef(0);
 
   const navigate = useCallback(
@@ -1172,6 +1197,16 @@ export function Dashboard() {
     return () => events.close();
   }, [loadPage, loadTaskCounts, location.route, selectedJobId]);
 
+  useEffect(() => {
+    const intervalMs = refreshIntervals.find((option) => option.value === refreshInterval)?.ms;
+    if (!intervalMs) return;
+    const timer = setInterval(() => {
+      void loadPage();
+      if (location.route !== "/tasks") void loadTaskCounts();
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [refreshInterval, loadPage, loadTaskCounts, location.route]);
+
   const connected = loadState.status !== "error" && loadState.data !== null;
   const loading = loadState.status === "loading";
 
@@ -1285,15 +1320,49 @@ export function Dashboard() {
                   ? "Connected"
                   : "Connecting"}
             </Badge>
-            <Button
-              variant="default"
-              size="xs"
-              leftSection={<ArrowClockwise size={14} />}
-              loading={loading}
-              onClick={() => void loadPage()}
-            >
-              Refresh
-            </Button>
+            <Group gap={0} wrap="nowrap">
+              <Button
+                variant="default"
+                size="xs"
+                leftSection={<ArrowClockwise size={14} />}
+                loading={loading}
+                onClick={() => void loadPage()}
+                style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+              >
+                Refresh
+              </Button>
+              <Menu position="bottom-end" withinPortal>
+                <Menu.Target>
+                  <Button
+                    variant="default"
+                    size="xs"
+                    px={6}
+                    style={{
+                      borderTopLeftRadius: 0,
+                      borderBottomLeftRadius: 0,
+                      borderLeft: "none",
+                    }}
+                    aria-label="Auto refresh interval"
+                  >
+                    {refreshInterval === "off" ? "manual" : refreshInterval}
+                  </Button>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Label>Auto refresh</Menu.Label>
+                  {refreshIntervals.map((option) => (
+                    <Menu.Item
+                      key={option.value}
+                      onClick={() => changeRefreshInterval(option.value)}
+                      rightSection={
+                        refreshInterval === option.value ? <CheckCircle size={14} /> : null
+                      }
+                    >
+                      {option.label}
+                    </Menu.Item>
+                  ))}
+                </Menu.Dropdown>
+              </Menu>
+            </Group>
           </Group>
         </Group>
       </AppShell.Header>
