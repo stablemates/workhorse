@@ -48,6 +48,7 @@ const tasksInput = z.object({
 const activityInput = z.object({
   filter: taskFilter.default("all"),
   period: z.enum(["15m", "1h", "6h", "24h", "7d"]).default("1h"),
+  groupBy: z.enum(["queue", "worker", "task"]).default("queue"),
 });
 const enqueueTestInput = z.object({
   kind: z.enum(["success", "retry", "failure", "long-running"]),
@@ -78,7 +79,7 @@ export const dashboardRouter = {
     activity: procedure
       .input(activityInput)
       .handler(({ context, input }) =>
-        readDashboardActivity(context.database, input.filter, input.period),
+        readDashboardActivity(context.database, input.filter, input.period, input.groupBy),
       ),
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),
