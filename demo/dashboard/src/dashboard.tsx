@@ -371,12 +371,14 @@ function TasksPage({
             striped
             highlightOnHover
             verticalSpacing={6}
-            horizontalSpacing="md"
-            miw={fullArgs ? 980 : 860}
+            horizontalSpacing="sm"
+            miw={fullArgs ? 960 : 840}
           >
             <Table.Thead>
               <Table.Tr>
+                <Table.Th>ID</Table.Th>
                 <Table.Th>Task</Table.Th>
+                <Table.Th>Queue</Table.Th>
                 <Table.Th>Args</Table.Th>
                 <Table.Th>Status</Table.Th>
                 <Table.Th ta="right">Attempt</Table.Th>
@@ -387,7 +389,7 @@ function TasksPage({
             <Table.Tbody>
               {data.jobs.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={6}>
+                  <Table.Td colSpan={8}>
                     <Center mih={120}>
                       <Text c="dimmed" size="sm">
                         No tasks match this filter.
@@ -403,11 +405,22 @@ function TasksPage({
                     style={{ cursor: "pointer" }}
                   >
                     <Table.Td>
+                      <Code
+                        fz="xs"
+                        title={job.id}
+                        style={{ background: "transparent", paddingInline: 0 }}
+                      >
+                        {job.id.slice(0, 8)}
+                      </Code>
+                    </Table.Td>
+                    <Table.Td>
                       <Text fw={600} size="sm" lh={1.3}>
                         {job.type}
                       </Text>
-                      <Text c="dimmed" size="xs" lh={1.3}>
-                        {job.queue} · <Code fz="10px">{job.id.slice(0, 8)}</Code>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" c="dimmed">
+                        {job.queue}
                       </Text>
                     </Table.Td>
                     <Table.Td>
