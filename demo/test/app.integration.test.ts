@@ -89,19 +89,27 @@ describe("Workhorse demo", () => {
     expect(await seedDemoData(database, app)).toMatchObject({
       seeded: true,
       jobIds: [expect.any(String), expect.any(String), expect.any(String), expect.any(String)],
+      historicalJobCount: 362,
     });
-    expect(await seedDemoData(database, app)).toEqual({ seeded: false, jobIds: [] });
+    expect(await seedDemoData(database, app)).toEqual({
+      seeded: false,
+      jobIds: [],
+      historicalJobCount: 0,
+    });
     expect(
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 4 }],
+      rows: [{ count: 366 }],
     });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 4,
+      all: 366,
       scheduled: 1,
       queued: 3,
+      completed: 346,
+      discarded: 16,
+      retried: 22,
     });
     const firstPage = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 2 });
     const secondPage = await client.dashboard.tasks({ filter: "all", page: 2, pageSize: 2 });
@@ -109,11 +117,11 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 2,
-      total: 4,
-      counts: { all: 4, scheduled: 1, queued: 3 },
+      total: 366,
+      counts: { all: 366, scheduled: 1, queued: 3, completed: 346, discarded: 16 },
     });
     expect(firstPage.jobs).toHaveLength(2);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 2, total: 4 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 2, total: 366 });
     expect(secondPage.jobs).toHaveLength(2);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 10 }),
@@ -131,6 +139,33 @@ describe("Workhorse demo", () => {
       ),
     ).toMatchObject({
       rows: [{ state: "scheduled", payload: { source: "scheduled-seed" }, is_future: true }],
+    });
+
+    const queueActivity = await client.dashboard.activity({
+      filter: "all",
+      period: "7d",
+      groupBy: "queue",
+    });
+    expect(queueActivity.groups).toEqual(["demo", "emails", "orders"]);
+    expect(
+      queueActivity.buckets.filter((bucket) => Object.keys(bucket.counts).length > 0).length,
+    ).toBeGreaterThan(6);
+    await expect(
+      client.dashboard.activity({ filter: "all", period: "7d", groupBy: "worker" }),
+    ).resolves.toMatchObject({ groups: ["demo-worker-1", "demo-worker-2", "unassigned"] });
+    await expect(
+      client.dashboard.activity({ filter: "all", period: "7d", groupBy: "task" }),
+    ).resolves.toMatchObject({
+      groups: [
+        "demo.failure",
+        "demo.recurring",
+        "demo.report",
+        "demo.retry",
+        "email.digest",
+        "email.send",
+        "order.process",
+        "order.refund",
+      ],
     });
   });
 
