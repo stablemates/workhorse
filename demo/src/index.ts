@@ -13,11 +13,9 @@ import {
   syncDemoSchedules,
 } from "./app.js";
 import { DashboardRefreshHub } from "./dashboard-refresh.js";
+import { resolveDemoDatabaseUrl } from "./environment.js";
 
-const databaseUrl =
-  process.env.DATABASE_URL ??
-  process.env.WORKHORSE_DEMO_DATABASE_URL ??
-  "postgresql://workhorse:workhorse@localhost:5432/workhorse_demo";
+const databaseUrl = resolveDemoDatabaseUrl();
 const port = Number(process.env.PORT ?? 3000);
 const environment = process.env.WORKHORSE_ENV ?? "development";
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
