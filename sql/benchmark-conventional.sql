@@ -104,7 +104,7 @@ BEGIN
     SELECT 1 FROM jsonb_array_elements(p_requests) request
     WHERE COALESCE(request->>'queue', '') = ''
        OR COALESCE(request->>'type', '') = ''
-       OR COALESCE((request->>'maxAttempts')::integer, 3) NOT BETWEEN 1 AND 100
+       OR COALESCE((request->>'maxAttempts')::integer, 25) NOT BETWEEN 1 AND 100
        OR request->>'runAt' IS NULL
   ) THEN
     RAISE EXCEPTION 'each request requires non-empty queue/type/runAt and maxAttempts between 1 and 100';
@@ -118,7 +118,7 @@ BEGIN
            request->>'type' AS job_type,
            COALESCE(request->'payload', 'null'::jsonb) AS payload,
            (request->>'runAt')::timestamptz AS run_at,
-           COALESCE((request->>'maxAttempts')::integer, 3) AS max_attempts,
+           COALESCE((request->>'maxAttempts')::integer, 25) AS max_attempts,
            CASE WHEN (request->>'runAt')::timestamptz <= v_now
              THEN 'ready' ELSE 'scheduled' END AS state
     FROM jsonb_array_elements(p_requests) WITH ORDINALITY input(request, ordinality)
@@ -155,7 +155,7 @@ CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.enqueue_v1(
   p_job_type text,
   p_payload jsonb,
   p_run_at timestamptz DEFAULT clock_timestamp(),
-  p_max_attempts integer DEFAULT 3
+  p_max_attempts integer DEFAULT 25
 ) RETURNS uuid
 LANGUAGE sql
 AS $$
@@ -329,7 +329,7 @@ CREATE OR REPLACE FUNCTION workhorse_benchmark_conventional.fail_v1(
   p_worker_id text,
   p_fence_token bigint,
   p_error jsonb DEFAULT '{}'::jsonb,
-  p_retry_delay_ms integer DEFAULT 0
+  p_retry_delay_ms integer DEFAULT NULL
 ) RETURNS text
 LANGUAGE plpgsql
 AS $$
@@ -338,6 +338,8 @@ DECLARE
   v_next_state text;
   v_next_run_at timestamptz;
   v_outcome text;
+  v_retry_count integer;
+  v_retry_delay_seconds double precision;
 BEGIN
   SELECT * INTO v_job
     FROM workhorse_benchmark_conventional.job
@@ -352,8 +354,15 @@ BEGIN
   END IF;
 
   IF v_job.current_attempt < v_job.max_attempts THEN
-    v_next_state := CASE WHEN p_retry_delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
-    v_next_run_at := clock_timestamp() + make_interval(secs => GREATEST(p_retry_delay_ms, 0)::double precision / 1000.0);
+    IF p_retry_delay_ms IS NULL THEN
+      v_retry_count := v_job.current_attempt - 1;
+      v_retry_delay_seconds := power(v_retry_count::double precision, 4) + 15
+        + floor(random() * 10) * (v_retry_count + 1);
+    ELSE
+      v_retry_delay_seconds := GREATEST(p_retry_delay_ms, 0)::double precision / 1000.0;
+    END IF;
+    v_next_state := CASE WHEN v_retry_delay_seconds <= 0 THEN 'ready' ELSE 'scheduled' END;
+    v_next_run_at := clock_timestamp() + make_interval(secs => v_retry_delay_seconds);
     v_outcome := 'retry';
   ELSE
     v_next_state := 'failed';

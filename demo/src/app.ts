@@ -296,7 +296,6 @@ function heartbeatSchedule(enabled = true) {
       type: RECURRING_JOB_TYPE,
       queue: DEMO_QUEUE,
       payload: { source: "worker" },
-      maxAttempts: 3,
     },
   } as const;
 }
@@ -310,7 +309,6 @@ function reportSchedule(enabled = true) {
       type: REPORT_JOB_TYPE,
       queue: DEMO_QUEUE,
       payload: { report: "queue-health", source: "schedule" },
-      maxAttempts: 3,
     },
   } as const;
 }
@@ -395,14 +393,18 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
         }[kind];
         const failUntilAttempt = kind === "retry" ? 1 + Math.floor(Math.random() * 10) : null;
         const maxAttempts =
-          kind === "failure" ? 1 : failUntilAttempt !== null ? failUntilAttempt + 2 : 3;
+          kind === "failure" ? 1 : failUntilAttempt !== null ? failUntilAttempt + 2 : undefined;
         const payload: Json =
           kind === "success"
             ? { source: "operator" }
             : failUntilAttempt !== null
               ? { label: `operator-${kind}`, failUntilAttempt }
               : { label: `operator-${kind}` };
-        const jobId = await workhorse.queue.enqueue(type, payload, { maxAttempts });
+        const jobId = await workhorse.queue.enqueue(
+          type,
+          payload,
+          maxAttempts === undefined ? {} : { maxAttempts },
+        );
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
@@ -541,7 +543,7 @@ export function createDemoApplication(
         });
         return context.var.workhorse
           .forTransaction(transaction)
-          .enqueue(ORDER_JOB_TYPE, { orderId }, { maxAttempts: 3 });
+          .enqueue(ORDER_JOB_TYPE, { orderId });
       });
       dashboardRefresh.publish("enqueue");
 

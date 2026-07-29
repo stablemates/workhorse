@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 2 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema now uses the weekly history lifecycle functions documented below.
+This is the compact schema version 3 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema now uses the weekly history lifecycle functions documented below.
 
 ## Storage model
 
@@ -30,7 +30,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 2. `promote_v1` locks a bounded due set with `SKIP LOCKED`, updates scheduled runtime rows to ready, assigns sequences, and appends events.
 3. `claim_v1` locks one FIFO ready row and performs one runtime state update to active with worker, fence, heartbeat, and expiry data, then appends the claim event.
 4. `heartbeat_v1` CAS-updates only the matching unexpired active runtime.
-5. `fail_v1` locks the matching active generation. Retry CAS-updates the same runtime, increments attempt, and places it ready or scheduled. Exhaustion deletes runtime and inserts failed outcome.
+5. `fail_v1` locks the matching active generation. Retry CAS-updates the same runtime, increments attempt, and schedules Sidekiq-inspired quartic backoff with jitter unless the caller explicitly overrides the delay. Exhaustion deletes runtime and inserts failed outcome.
 6. `recover_expired_v1` locks expired active runtimes in bounded batches and performs the same attempt increment/requeue or terminal delete/outcome transition with observed fence and expiry guards.
 7. `complete_v1` deletes only the matching unexpired active runtime and inserts succeeded outcome, closed attempt history, and event atomically.
 8. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
@@ -88,5 +88,5 @@ Schedule occurrence keys older than 30 days are pruned in bounded batches by def
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` runs; drift is bounded by the worker tick cadence.
 - Schedule precision is one second and cron expressions are evaluated in the worker's configured timezone.
 - Polling remains authoritative; `NOTIFY` is only a wake hint.
-- Backoff/jitter and automated history-retention policy are not productized.
+- Automated history-retention policy is not productized.
 - Centralized runtime churn, partial-index maintenance, autovacuum behavior, and migration duration require production-scale measurement.

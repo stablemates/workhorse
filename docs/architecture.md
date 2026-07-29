@@ -99,7 +99,7 @@ The only mutable lifecycle relation. Its check constraint makes state-specific f
 - `ready`: `ready_at` and FIFO `sequence` are populated; ownership fields are null
 - `active`: worker, acquisition, heartbeat, expiry, and positive fence are populated; ready placement fields are null
 
-Retry and recovery increment `current_attempt` while moving the same row back to ready or scheduled. Heartbeats update only the matching active generation.
+Retry and recovery increment `current_attempt` while moving the same row back to ready or scheduled. Handler failures default to a SQL-owned, Sidekiq-inspired delay of `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds, where `count` is the zero-based retry count. The default 25-attempt budget produces a roughly 20-day retry window. An explicit caller delay still overrides the formula, including zero for immediate retry. Heartbeats update only the matching active generation.
 
 Selective indexes keep unrelated states out of each access path:
 
@@ -136,8 +136,8 @@ stateDiagram-v2
   scheduled --> ready: promote
   ready --> active: claim
   active --> active: heartbeat
-  active --> ready: fail/recover, immediate retry
-  active --> scheduled: fail/recover, delayed retry
+  active --> ready: fail/recover, explicit immediate retry
+  active --> scheduled: fail with default backoff / delayed retry
   active --> succeeded: complete
   active --> failed: exhausted fail/recovery
 ```

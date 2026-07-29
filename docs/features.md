@@ -1,6 +1,6 @@
 # Feature support matrix
 
-This is the authoritative implementation snapshot for schema version 2. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
+This is the authoritative implementation snapshot for schema version 3. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
 
 ## At a glance
 
@@ -52,7 +52,7 @@ This is the authoritative implementation snapshot for schema version 2. “Suppo
 | Terminal failure                   | Supported     | Handler exhaustion or lease exhaustion creates immutable failed outcome.                                                                                                                                                                          |
 | Immutable terminal materialization | Supported     | Terminal jobs occupy `job_outcome`, not dispatch indexes.                                                                                                                                                                                         |
 | Dead-letter queue and redrive      | Not supported | Failed outcomes are queryable but no DLQ projection or redrive API exists.                                                                                                                                                                        |
-| Backoff policy                     | Partial       | Caller supplies retry delay; exponential backoff and jitter are not productized.                                                                                                                                                                  |
+| Backoff policy                     | Supported     | SQL applies Sidekiq-inspired quartic backoff with jitter by default; callers can explicitly override the delay.                                                                                                                                   |
 
 ## History, reads, and observability
 
@@ -62,7 +62,7 @@ This is the authoritative implementation snapshot for schema version 2. “Suppo
 | Closed attempt history             | Supported     | Success, terminal failure, retry, and lease expiry append immutable `attempt_history`.                                                                                          |
 | Weekly history partitions          | Supported     | Monday-aligned partitions are precreated four weeks ahead and replenished by housekeeping, with explicit create and completed-week retirement functions plus default fallbacks. |
 | Current/terminal lookup            | Supported     | `Queue.getJob(id)` coalesces the sole live runtime or terminal outcome into the stable `JobSnapshot` shape.                                                                     |
-| Queue health                       | Supported     | Reports schema version 2; live and terminal state counts; runtime depths; expired active rows; oldest ready age; relation and PostgreSQL diagnostics.                           |
+| Queue health                       | Supported     | Reports schema version 3; live and terminal state counts; runtime depths; expired active rows; oldest ready age; relation and PostgreSQL diagnostics.                           |
 | Crash-boundary harness             | Supported     | Worker failpoints model process loss before and after handler/completion boundaries.                                                                                            |
 | Job/outcome retention              | Not supported | Immutable identity and terminal outcomes are not automatically archived or deleted.                                                                                             |
 | Consistent health snapshot         | Partial       | Diagnostics are independent read-only queries and statistics can lag.                                                                                                           |
@@ -76,11 +76,11 @@ This is the authoritative implementation snapshot for schema version 2. “Suppo
 | Drizzle ORM provider                  | Supported     | Separate package adapts node-postgres Drizzle databases and caller-owned transactions without adding Drizzle to core.                  |
 | Hono lifecycle integration            | Supported     | Separate package provides typed middleware, explicit worker startup, and idempotent graceful Node server shutdown.                     |
 | TypeScript schedule synchronization   | Supported     | Deploy-time sync reconciles owned schedule definitions; status APIs expose occurrences and recent fires.                               |
-| Versioned SQL API                     | Supported     | Existing `_v1` function names and signatures remain stable; installed schema version is 2.                                             |
+| Versioned SQL API                     | Supported     | Existing `_v1` function names and signatures remain stable; installed schema version is 3.                                             |
 | Graceful worker stop                  | Supported     | Stop prevents further claims and waits for in-flight work.                                                                             |
 | Worker concurrency                    | Partial       | One worker runs one handler at a time; scale with multiple instances.                                                                  |
 | Additional ORM/framework integrations | Not supported | The adapter boundary is validated by Drizzle and Hono; broader provider coverage remains roadmap work.                                 |
-| Online v1 to v2 migration             | Not supported | The canonical schema is clean-install only. Operators need a separately engineered migration.                                          |
+| Online schema migration               | Not supported | The canonical schema is clean-install only. Operators need a separately engineered migration.                                          |
 | Compatibility write views             | Not supported | Legacy write relations are intentionally absent to avoid dual-write semantics.                                                         |
 | Exactly-once effects                  | Not supported | Delivery is at least once; applications need idempotency or outbox/inbox patterns.                                                     |
 | Cron                                  | Supported     | Workers parse cron in process on plain PostgreSQL; definitions enqueue typed jobs, not SQL.                                            |
