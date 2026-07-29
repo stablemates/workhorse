@@ -88,6 +88,21 @@ export type DashboardTaskFilter =
 
 export type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 
+export type DashboardActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
+
+export interface DashboardActivityBucket {
+  bucketStart: string;
+  count: number;
+}
+
+export interface DashboardActivityPage {
+  capturedAt: string;
+  filter: DashboardTaskFilter;
+  period: DashboardActivityPeriod;
+  bucketSeconds: number;
+  buckets: DashboardActivityBucket[];
+}
+
 export interface DashboardTasksPage {
   capturedAt: string;
   filter: DashboardTaskFilter;
@@ -281,6 +296,68 @@ export async function readDashboardTaskCounts(
     running: counts.running_count,
     completed: counts.completed_count,
     discarded: counts.discarded_count,
+  };
+}
+
+export const activityPeriods: Record<
+  DashboardActivityPeriod,
+  { windowSeconds: number; bucketSeconds: number }
+> = {
+  "15m": { windowSeconds: 15 * 60, bucketSeconds: 30 },
+  "1h": { windowSeconds: 60 * 60, bucketSeconds: 2 * 60 },
+  "6h": { windowSeconds: 6 * 60 * 60, bucketSeconds: 10 * 60 },
+  "24h": { windowSeconds: 24 * 60 * 60, bucketSeconds: 60 * 60 },
+  "7d": { windowSeconds: 7 * 24 * 60 * 60, bucketSeconds: 6 * 60 * 60 },
+};
+
+/** Bucketed task activity over a trailing window, honoring the same status filter as the list. */
+export async function readDashboardActivity(
+  database: DemoDatabase,
+  filter: DashboardTaskFilter,
+  period: DashboardActivityPeriod,
+): Promise<DashboardActivityPage> {
+  const { windowSeconds, bucketSeconds } = activityPeriods[period];
+  const rows = await database.execute<{ bucket_start: Date | string; count: number }>(sql`
+    WITH tasks AS (
+      SELECT COALESCE(r.state, o.state) AS state,
+             COALESCE(r.current_attempt, o.current_attempt) AS attempt,
+             COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
+        FROM workhorse.job j
+        LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+        LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+    ), buckets AS (
+      SELECT generate_series(
+        date_bin(
+          make_interval(secs => ${bucketSeconds}),
+          clock_timestamp() - make_interval(secs => ${windowSeconds}),
+          timestamp with time zone '2000-01-01'
+        ) + make_interval(secs => ${bucketSeconds}),
+        date_bin(
+          make_interval(secs => ${bucketSeconds}),
+          clock_timestamp(),
+          timestamp with time zone '2000-01-01'
+        ),
+        make_interval(secs => ${bucketSeconds})
+      ) AS bucket_start
+    )
+    SELECT b.bucket_start, count(t.updated_at)::integer AS count
+      FROM buckets b
+      LEFT JOIN tasks t
+        ON t.updated_at >= b.bucket_start
+       AND t.updated_at < b.bucket_start + make_interval(secs => ${bucketSeconds})
+       AND ${taskFilterCondition(filter)}
+     GROUP BY b.bucket_start
+     ORDER BY b.bucket_start
+  `);
+  return {
+    capturedAt: new Date().toISOString(),
+    filter,
+    period,
+    bucketSeconds,
+    buckets: rows.rows.map((row) => ({
+      bucketStart: toIso(row.bucket_start),
+      count: row.count,
+    })),
   };
 }
 

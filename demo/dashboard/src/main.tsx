@@ -1,5 +1,7 @@
 // oxlint-disable-next-line import/no-unassigned-import -- Mantine exposes its component styles as CSS.
 import "@mantine/core/styles.css";
+// oxlint-disable-next-line import/no-unassigned-import -- Mantine chart styles ship separately.
+import "@mantine/charts/styles.css";
 
 import { MantineProvider } from "@mantine/core";
 import { StrictMode } from "react";
