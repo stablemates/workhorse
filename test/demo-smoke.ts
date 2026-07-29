@@ -153,13 +153,19 @@ try {
   const completedOrder = await waitForJob(baseUrl, order.jobId, "succeeded");
   if (completedOrder.state !== "succeeded") throw new Error("Order worker did not succeed");
 
-  const retryResponse = await fetch(`${baseUrl}/demo/retries`, { method: "POST" });
+  const retryResponse = await fetch(`${baseUrl}/demo/retries`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ failUntilAttempt: 1 }),
+  });
   if (retryResponse.status !== 202)
     throw new Error(`Retry request returned ${retryResponse.status}`);
-  const retry = (await retryResponse.json()) as { jobId: string };
+  const retry = (await retryResponse.json()) as { jobId: string; expectedAttempts: number };
   const completedRetry = await waitForJob(baseUrl, retry.jobId, "succeeded");
-  if (completedRetry.currentAttempt !== 2) {
-    throw new Error(`Expected retry attempt 2, received ${String(completedRetry.currentAttempt)}`);
+  if (completedRetry.currentAttempt !== retry.expectedAttempts) {
+    throw new Error(
+      `Expected retry attempt ${retry.expectedAttempts}, received ${String(completedRetry.currentAttempt)}`,
+    );
   }
 
   const failureResponse = await fetch(`${baseUrl}/demo/failures`, { method: "POST" });

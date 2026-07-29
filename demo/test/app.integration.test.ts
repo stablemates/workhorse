@@ -250,7 +250,7 @@ describe("Workhorse demo", () => {
       });
       expect(await client.dashboard.system()).toMatchObject({
         failures: [],
-        health: { schemaVersion: 2, counts: { succeeded: 1 } },
+        health: { schemaVersion: 3, counts: { succeeded: 1 } },
       });
       const detail = await client.dashboard.jobDetail({ id: accepted.jobId });
       expect(detail).toMatchObject({

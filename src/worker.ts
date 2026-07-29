@@ -48,7 +48,7 @@ export interface WorkerOptions {
   scheduleNamespaces?: readonly string[];
   /** Maximum missed occurrences fired for one schedule in one maintenance pass. */
   scheduleCatchupLimit?: number;
-  /** Delay before the next attempt, either fixed or derived from the one-based attempt number. */
+  /** Override SQL-owned retry backoff, either fixed or derived from the one-based attempt number. */
   retryDelayMs?: number | ((attempt: number) => number);
   /** Test-only crash hook. Injected crashes deliberately bypass normal fail/retry handling. */
   failpoint?: Failpoint | ((point: Failpoint, job: ClaimedJob) => boolean | Promise<boolean>);
@@ -181,7 +181,7 @@ export class Worker {
       const delay =
         typeof this.options.retryDelayMs === "function"
           ? this.options.retryDelayMs(job.attempt)
-          : (this.options.retryDelayMs ?? 0);
+          : this.options.retryDelayMs;
       await this.queue.fail(job, this.workerId, error, delay);
     } finally {
       clearInterval(heartbeat);

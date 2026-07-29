@@ -33,11 +33,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v2 without compatibility write tables", async () => {
+  it("installs schema v3 without compatibility write tables", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(2);
+    expect(version.rows[0]?.version).toBe(3);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -140,7 +140,7 @@ describe("live-runtime queue protocol", () => {
         queue_name: "default",
         job_type: "cleanup",
         payload: null,
-        max_attempts: 3,
+        max_attempts: 25,
         enabled: false,
         revision: "1",
       },
@@ -446,7 +446,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v2 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v3 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -575,6 +575,36 @@ describe("live-runtime queue protocol", () => {
     expect(
       (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0].count,
     ).toBe(0);
+  });
+
+  it("defaults enqueued jobs to 25 attempts in both client and SQL entry points", async () => {
+    const clientId = await queue.enqueue("client-default", {});
+    const sqlResult = await pool.query<{ job_id: string }>(
+      "SELECT workhorse.enqueue_v1('default', 'sql-default', '{}'::jsonb) AS job_id",
+    );
+    const batchResult = await pool.query<{ job_id: string }>(
+      "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb)",
+      [
+        JSON.stringify([
+          {
+            queue: "default",
+            type: "batch-default",
+            payload: {},
+            runAt: new Date().toISOString(),
+          },
+        ]),
+      ],
+    );
+
+    const attempts = await pool.query<{ job_type: string; max_attempts: number }>(
+      "SELECT job_type, max_attempts FROM workhorse.job WHERE id = ANY($1::uuid[]) ORDER BY job_type",
+      [[clientId, sqlResult.rows[0]!.job_id, batchResult.rows[0]!.job_id]],
+    );
+    expect(attempts.rows).toEqual([
+      { job_type: "batch-default", max_attempts: 25 },
+      { job_type: "client-default", max_attempts: 25 },
+      { job_type: "sql-default", max_attempts: 25 },
+    ]);
   });
 
   it("separates scheduled work and promotes only when due", async () => {
@@ -769,7 +799,7 @@ describe("live-runtime queue protocol", () => {
   it("records immutable retry and success attempts", async () => {
     const id = await queue.enqueue("email", { to: "a@example.com" }, { maxAttempts: 2 });
     const first = await queue.claim("worker-a");
-    expect(await queue.fail(first!, "worker-a", new Error("temporary"))).toBe("ready");
+    expect(await queue.fail(first!, "worker-a", new Error("temporary"), 0)).toBe("ready");
     expect((await queue.getJob(id))?.fenceToken).toBe(0n);
     const second = await queue.claim("worker-a");
     expect(second?.attempt).toBe(2);
@@ -806,6 +836,35 @@ describe("live-runtime queue protocol", () => {
       (await pool.query("SELECT state, result FROM workhorse.job_outcome WHERE job_id = $1", [id]))
         .rows[0],
     ).toEqual({ state: "succeeded", result: { ok: true } });
+  });
+
+  it("uses Sidekiq-inspired SQL backoff with jitter when no retry delay is supplied", async () => {
+    const id = await queue.enqueue("backoff", {}, { maxAttempts: 3 });
+    const first = await queue.claim("worker-a");
+    expect(await queue.fail(first!, "worker-a", new Error("immediate override"), 0)).toBe("ready");
+
+    const second = await queue.claim("worker-a");
+    const beforeFailure = new Date();
+
+    expect(second?.attempt).toBe(2);
+    expect(await queue.fail(second!, "worker-a", new Error("temporary"))).toBe("scheduled");
+
+    const retry = await pool.query<{
+      current_attempt: number;
+      run_at: Date;
+      delay_seconds: number;
+    }>(
+      `SELECT current_attempt, run_at,
+              extract(epoch FROM (run_at - $2::timestamptz))::double precision AS delay_seconds
+         FROM workhorse.job_runtime
+        WHERE job_id = $1`,
+      [id, beforeFailure],
+    );
+    expect(retry.rows[0]!.current_attempt).toBe(3);
+    expect(retry.rows[0]!.run_at.getTime()).toBeGreaterThan(Date.now());
+    // retry count 1: 1^4 + 15 + rand(0..9) * 2 => [16, 34] seconds.
+    expect(retry.rows[0]!.delay_seconds).toBeGreaterThanOrEqual(16);
+    expect(retry.rows[0]!.delay_seconds).toBeLessThan(35);
   });
 
   it("moves a terminal handler failure to failed", async () => {
@@ -920,7 +979,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(2);
+    expect(health.schemaVersion).toBe(3);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(1);
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);

@@ -118,7 +118,7 @@ export class Queue {
       type,
       payload,
       runAt: (options.runAt ?? new Date()).toISOString(),
-      maxAttempts: options.maxAttempts ?? 3,
+      maxAttempts: options.maxAttempts ?? 25,
     }));
     const result = await transaction.query<{ job_id: string }>(
       "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
@@ -177,7 +177,7 @@ export class Queue {
       queue: definition.job.queue ?? this.defaultQueue,
       type: definition.job.type,
       payload: definition.job.payload,
-      maxAttempts: definition.job.maxAttempts ?? 3,
+      maxAttempts: definition.job.maxAttempts ?? 25,
     }));
     await this.database.query("SELECT workhorse.sync_schedule_definitions_v1($1, $2::jsonb, $3)", [
       namespace,
@@ -280,10 +280,11 @@ export class Queue {
     job: ClaimedJob<unknown>,
     workerId: string,
     error: unknown,
-    retryDelayMs = 0,
+    retryDelayMs?: number,
   ): Promise<"ready" | "scheduled" | "failed" | "stale"> {
     // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
-    // creating the next projection. retryDelayMs selects ready versus scheduled placement.
+    // creating the next projection. Undefined selects SQL-owned backoff; a number explicitly
+    // overrides it, including zero for an immediate retry.
     const result = await this.database.query<{ state: "ready" | "scheduled" | "failed" | "stale" }>(
       "SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, $5) AS state",
       [
@@ -291,7 +292,7 @@ export class Queue {
         workerId,
         job.fenceToken.toString(),
         JSON.stringify(errorEnvelope(error)),
-        retryDelayMs,
+        retryDelayMs ?? null,
       ],
     );
     return result.rows[0]!.state;
