@@ -90,6 +90,8 @@ export type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 
 export type DashboardActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 
+export type DashboardActivityGroupBy = "queue" | "worker" | "task";
+
 export interface DashboardActivityBucket {
   bucketStart: string;
   counts: Record<string, number>;
@@ -99,8 +101,9 @@ export interface DashboardActivityPage {
   capturedAt: string;
   filter: DashboardTaskFilter;
   period: DashboardActivityPeriod;
+  groupBy: DashboardActivityGroupBy;
   bucketSeconds: number;
-  queues: string[];
+  groups: string[];
   buckets: DashboardActivityBucket[];
 }
 
@@ -311,26 +314,40 @@ export const activityPeriods: Record<
   "7d": { windowSeconds: 7 * 24 * 60 * 60, bucketSeconds: 6 * 60 * 60 },
 };
 
-/** Bucketed task activity by queue over a trailing window, honoring the list's status filter. */
+/** Bucketed task activity over a trailing window, grouped by queue, worker, or task type. */
 export async function readDashboardActivity(
   database: DemoDatabase,
   filter: DashboardTaskFilter,
   period: DashboardActivityPeriod,
+  groupBy: DashboardActivityGroupBy = "queue",
 ): Promise<DashboardActivityPage> {
   const { windowSeconds, bucketSeconds } = activityPeriods[period];
+  const groupExpression =
+    groupBy === "queue"
+      ? sql`j.queue_name`
+      : groupBy === "task"
+        ? sql`j.job_type`
+        : sql`COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned')`;
   const rows = await database.execute<{
     bucket_start: Date | string;
-    queue: string | null;
+    group_key: string | null;
     count: number;
   }>(sql`
     WITH tasks AS (
-      SELECT j.queue_name AS queue,
+      SELECT ${groupExpression} AS group_key,
              COALESCE(r.state, o.state) AS state,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt,
              COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
         FROM workhorse.job j
         LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
         LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+        LEFT JOIN LATERAL (
+          SELECT ah.worker_id
+            FROM workhorse.attempt_history ah
+           WHERE ah.job_id = j.id
+           ORDER BY ah.attempt DESC
+           LIMIT 1
+        ) attempt_worker ON ${groupBy === "worker" ? sql`true` : sql`false`}
     ), buckets AS (
       SELECT generate_series(
         date_bin(
@@ -346,17 +363,17 @@ export async function readDashboardActivity(
         make_interval(secs => ${bucketSeconds})
       ) AS bucket_start
     )
-    SELECT b.bucket_start, t.queue, count(t.updated_at)::integer AS count
+    SELECT b.bucket_start, t.group_key, count(t.updated_at)::integer AS count
       FROM buckets b
       LEFT JOIN tasks t
         ON t.updated_at >= b.bucket_start
        AND t.updated_at < b.bucket_start + make_interval(secs => ${bucketSeconds})
        AND ${taskFilterCondition(filter)}
-     GROUP BY b.bucket_start, t.queue
+     GROUP BY b.bucket_start, t.group_key
      ORDER BY b.bucket_start
   `);
-  const queues = [
-    ...new Set(rows.rows.flatMap((row) => (row.queue === null ? [] : [row.queue]))),
+  const groups = [
+    ...new Set(rows.rows.flatMap((row) => (row.group_key === null ? [] : [row.group_key]))),
     // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
   ].sort();
   const byBucket = new Map<string, DashboardActivityBucket>();
@@ -367,14 +384,15 @@ export async function readDashboardActivity(
       bucket = { bucketStart, counts: {} };
       byBucket.set(bucketStart, bucket);
     }
-    if (row.queue !== null) bucket.counts[row.queue] = row.count;
+    if (row.group_key !== null) bucket.counts[row.group_key] = row.count;
   }
   return {
     capturedAt: new Date().toISOString(),
     filter,
     period,
+    groupBy,
     bucketSeconds,
-    queues,
+    groups,
     buckets: [...byBucket.values()],
   };
 }

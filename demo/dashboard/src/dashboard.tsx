@@ -59,14 +59,22 @@ import { rpcClient } from "../lib/rpc";
 type ActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 const activityPeriods: ActivityPeriod[] = ["15m", "1h", "6h", "24h", "7d"];
 
+type ActivityGroupBy = "queue" | "worker" | "task";
+const activityGroupings: Array<{ value: ActivityGroupBy; label: string }> = [
+  { value: "queue", label: "Queue" },
+  { value: "worker", label: "Worker" },
+  { value: "task", label: "Task" },
+];
+
 interface ActivityData {
   period: ActivityPeriod;
+  groupBy: ActivityGroupBy;
   bucketSeconds: number;
-  queues: string[];
+  groups: string[];
   buckets: Array<{ bucketStart: string; counts: Record<string, number> }>;
 }
 
-const queueSeriesColors = ["teal.6", "indigo.6", "orange.6", "grape.6", "cyan.6", "lime.6"];
+const activitySeriesColors = ["teal.6", "indigo.6", "orange.6", "grape.6", "cyan.6", "lime.6"];
 
 type PageRoute = "/tasks" | "/cron" | "/system" | "/workers";
 type DemoJobKind = "success" | "retry" | "failure" | "long-running";
@@ -283,11 +291,15 @@ function EmptyState({ children }: { children: ReactNode }) {
   );
 }
 
-/** Full-width bar chart of task activity, filtered like the list and switchable across periods. */
+/** Full-width stacked bar chart of task activity with switchable period and grouping. */
 function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
   const [period, setPeriod] = useState<ActivityPeriod>(
     () => (localStorage.getItem("workhorse-activity-period") as ActivityPeriod) ?? "1h",
   );
+  const [groupBy, setGroupBy] = useState<ActivityGroupBy>(() => {
+    const stored = localStorage.getItem("workhorse-activity-group") as ActivityGroupBy | null;
+    return stored !== null && activityGroupings.some((g) => g.value === stored) ? stored : "queue";
+  });
   const [activity, setActivity] = useState<ActivityData | null>(null);
   const changePeriod = (value: string) => {
     const next = activityPeriods.includes(value as ActivityPeriod)
@@ -296,12 +308,19 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
     setPeriod(next);
     localStorage.setItem("workhorse-activity-period", next);
   };
+  const changeGroupBy = (value: string) => {
+    const next = activityGroupings.some((g) => g.value === value)
+      ? (value as ActivityGroupBy)
+      : "queue";
+    setGroupBy(next);
+    localStorage.setItem("workhorse-activity-group", next);
+  };
 
   useEffect(() => {
     let cancelled = false;
     const load = () =>
       void rpcClient.dashboard
-        .activity({ filter, period })
+        .activity({ filter, period, groupBy })
         .then((page) => {
           if (!cancelled) setActivity(page);
         })
@@ -312,7 +331,7 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [filter, period]);
+  }, [filter, period, groupBy]);
 
   const labelFormat = (value: string): string => {
     const date = new Date(value);
@@ -325,15 +344,15 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
     }
     return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
   };
-  const queues = activity?.queues ?? [];
+  const groups = activity?.groups ?? [];
   const chartData = (activity?.buckets ?? []).map((bucket) => {
     const point: Record<string, string | number> = { bucket: labelFormat(bucket.bucketStart) };
-    for (const queue of queues) point[queue] = bucket.counts[queue] ?? 0;
+    for (const group of groups) point[group] = bucket.counts[group] ?? 0;
     return point;
   });
-  const series = queues.map((queue, index) => ({
-    name: queue,
-    color: queueSeriesColors[index % queueSeriesColors.length]!,
+  const series = groups.map((group, index) => ({
+    name: group,
+    color: activitySeriesColors[index % activitySeriesColors.length]!,
   }));
 
   return (
@@ -346,12 +365,20 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
             · {filter === "all" ? "all tasks" : filter}
           </Text>
         </Text>
-        <SegmentedControl
-          size="xs"
-          value={period}
-          onChange={changePeriod}
-          data={activityPeriods.map((value) => ({ value, label: value }))}
-        />
+        <Group gap="xs">
+          <SegmentedControl
+            size="xs"
+            value={groupBy}
+            onChange={changeGroupBy}
+            data={activityGroupings.map(({ value, label }) => ({ value, label }))}
+          />
+          <SegmentedControl
+            size="xs"
+            value={period}
+            onChange={changePeriod}
+            data={activityPeriods.map((value) => ({ value, label: value }))}
+          />
+        </Group>
       </Group>
       <BarChart
         h={260}
