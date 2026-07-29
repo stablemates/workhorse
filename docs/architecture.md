@@ -18,10 +18,9 @@ No compatibility write views are installed for the version 1 projection tables.
 ```mermaid
 flowchart LR
   App[Application transaction] -->|enqueue_many_v1 / enqueue_v1| PG[(PostgreSQL)]
-  Deploy[Deployment] -->|PgCronScheduler.sync| PG
-  Deploy -->|schedule_in_database / prune| Cron[(postgres.cron)]
-  Cron -->|fire_schedule_v1 / maintain_v1| PG
+  Deploy[Deployment] -->|schedule sync| PG
   Worker[TypeScript Worker] -->|claim / heartbeat| PG
+  Worker -->|fire_schedule_v1 / maintain_v1, advisory-lock coordinated| PG
   PG -->|payload + attempt + fence| Worker
   Worker -->|handler outside SQL transaction| Effects[External effects]
   Worker -->|complete_v1 / fail_v1| PG
@@ -126,7 +125,7 @@ Insert-only terminal state. Completion or terminal failure deletes the active ru
 
 `schedule_occurrence` provides one durable key per `(namespace, schedule_name, occurrence_at)` second. `fire_schedule_v1` inserts that key and enqueues through `enqueue_v1` in one transaction. A repeated fire for the same second returns the existing job ID instead of creating another job.
 
-pg_cron metadata remains in the cluster's configured `postgres` database. Its generated commands contain only revision-fenced calls to `fire_schedule_v1` or bounded calls to `maintain_v1`. Names include target database and namespace, allowing deploy synchronization and reset tooling to prune only entries they own.
+Scheduling metadata lives entirely in the target database. Workers evaluate cron expressions in process with `cron-parser` and call only revision-fenced `fire_schedule_v1` or bounded `maintain_v1`. Transaction-scoped advisory locks inside those functions make concurrent callers no-ops, so schedules fire once and maintenance runs once per cadence regardless of worker count, while any surviving worker keeps schedules alive.
 
 ## Atomic lifecycle
 
@@ -151,7 +150,7 @@ stateDiagram-v2
 
 `promote_v1` locks a bounded due set with `FOR UPDATE SKIP LOCKED`, updates those runtime rows from scheduled to ready, assigns new FIFO sequences, appends events, and emits a wake hint.
 
-Production promotion is coordinated by a namespaced pg_cron maintenance job. `maintain_v1` calls bounded promotion, bounded expired-lease recovery, and bounded schedule-occurrence retention once per configured interval. Workers default to external maintenance and therefore issue only the claim query; `maintenance: "worker"` retains the old cooperative behavior as an explicit fallback.
+Production promotion is worker-owned. Each worker calls `maintain_v1` at most once per configured `maintenanceIntervalMs`, and the function's transaction-scoped advisory lock turns concurrent calls from other workers into no-ops. `maintain_v1` performs bounded promotion, bounded expired-lease recovery, and bounded schedule-occurrence retention. Between maintenance passes a worker issues only the claim query.
 
 ### Claim
 
@@ -179,29 +178,25 @@ Production promotion is coordinated by a namespaced pg_cron maintenance job. `ma
 
 Workhorse provides durable at-least-once execution. A process can die after an external effect but before completion commits, or after completion commits but before observing the response. Applications must use idempotency keys or transactional outbox/inbox patterns for non-idempotent effects.
 
-Schedule occurrence deduplication prevents duplicate enqueue for one supplied occurrence second. pg_cron-generated calls use the observed execution second because pg_cron does not expose its planned slot to the target command. This does not change handler delivery semantics: a scheduled job can still execute more than once after a worker crash.
+Schedule occurrence deduplication prevents duplicate enqueue for one occurrence second. The worker's in-process scheduler supplies the planned occurrence slot as the key, and a per-occurrence advisory lock plus the durable key make concurrent workers racing the same fire converge on one job. This does not change handler delivery semantics: a scheduled job can still execute more than once after a worker crash.
 
 ## Deployment synchronization
 
-`PgCronScheduler.sync()` is a desired-state reconciler:
+`Queue.syncSchedules(namespace, definitions, { prune })` is a desired-state reconciler:
 
 1. It validates stable namespace and schedule names plus queue job definitions.
-2. It preflights extension, schema, metadata-read, scheduling, and unscheduling privileges.
-3. It atomically upserts target definitions and optionally deactivates omitted names.
-4. It holds a target-wide metadata-database session lock and target namespace lock across the full reconciliation, then transactionally creates or updates named pg_cron jobs.
-5. It prunes only current-role jobs with the exact target-database and namespace prefix.
+2. It atomically upserts target definitions and by default deactivates omitted names through `sync_schedule_definitions_v1`.
+3. A per-namespace advisory lock serializes concurrent deployments of the same namespace.
 
-Target and cron metadata databases cannot share one PostgreSQL transaction. The target definition commits first; cron reconciliation then converges. Every material definition change increments a revision embedded in the generated command. A failed cron update therefore leaves accepted desired state while the old command becomes a no-op, which is safe to retry on the next deployment. Definition row locking also makes a disable deployment wait for a fire that already began before returning.
+Because definitions live only in the target database, a deployment is one transaction: there is no second metadata database to converge. Every material definition change increments a revision, and worker fires pass the revision they loaded. A stale in-process schedule therefore becomes a no-op instead of running a new payload at an old cadence. Definition row locking also makes a disable deployment wait for a fire that already began before returning.
 
 ## Operational limits
 
 - The canonical schema is a clean-install artifact, not an online version 1 to version 2 migration.
-- pg_cron 1.6+ must be installed and preloaded in the cluster's configured metadata database.
-- The deploy role needs `USAGE` and metadata reads on `cron`, plus execution of `schedule_in_database` and `unschedule(bigint)`.
-- pg_cron must be able to authenticate as the target role; suspended serverless compute pauses schedules.
-- `schedule_occurrence` defaults to 30-day retention with at most 10,000 deletions per maintenance run; pg_cron run-history retention remains administrator-owned.
-- Provider-specific setup and compatibility requirements are documented in `docs/pg-cron-requirements.md` and checked by `pnpm pg-cron:check`.
-- Schedules have one-second precision and use the cluster-wide pg_cron timezone, for which UTC is recommended.
+- Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
+- Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.
+- `schedule_occurrence` defaults to 30-day retention with at most 10,000 deletions per maintenance run.
+- Schedules have one-second precision; cron expressions are evaluated in the worker's configured timezone, for which UTC is recommended.
 - Runtime updates centralize churn in one relation and require vacuum and HOT-update validation under sustained heartbeat load.
 - `NOTIFY` is a wake hint. Polling remains the correctness mechanism.
 - History partition creation and retirement remain an explicit policy even though runtime maintenance is scheduled.

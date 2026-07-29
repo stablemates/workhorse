@@ -134,7 +134,7 @@ understandable, installable, and useful.
 
 **Depends on:** none
 
-- [ ] Test supported Node.js, PostgreSQL, and pg_cron versions in CI.
+- [ ] Test supported Node.js and PostgreSQL versions in CI.
 - [ ] Publish package provenance, changelog, upgrade notes, and protocol compatibility guarantees.
 - [ ] Add install and smoke tests against a packed package rather than source-only imports.
 - [ ] Define the production-support boundary separately from benchmark validation.

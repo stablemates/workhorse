@@ -1,7 +1,8 @@
 # ADR 0002: pg_cron-backed declarative scheduling and maintenance
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0003](0003-worker-owned-scheduler.md)
 - **Date:** 2026-07-22
+- **Superseded:** 2026-07-29
 - **Requires:** pg_cron 1.6 or newer in the cluster's `postgres` database
 
 ## Context
