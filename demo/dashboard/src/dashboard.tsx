@@ -76,7 +76,18 @@ interface ActivityData {
   buckets: Array<{ bucketStart: string; counts: Record<string, number> }>;
 }
 
-const activitySeriesColors = ["teal.6", "indigo.6", "orange.6", "grape.6", "cyan.6", "lime.6"];
+const activitySeriesColors = [
+  "teal.6",
+  "indigo.6",
+  "orange.6",
+  "grape.6",
+  "cyan.6",
+  "lime.6",
+  "red.6",
+  "yellow.6",
+  "blue.6",
+  "pink.6",
+];
 
 type PageRoute = "/tasks" | "/cron" | "/system" | "/workers" | "/settings";
 type DemoJobKind = "success" | "retry" | "failure" | "long-running";
@@ -458,7 +469,13 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
         type="stacked"
         series={series}
         withLegend={series.length > 1}
-        legendProps={{ verticalAlign: "bottom", height: 24 }}
+        legendProps={{
+          layout: "vertical",
+          align: "left",
+          verticalAlign: "middle",
+          width: 120,
+          wrapperStyle: { paddingRight: 16 },
+        }}
         gridAxis="xy"
         tickLine="y"
         withYAxis
