@@ -481,7 +481,7 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
           layout: "vertical",
           align: "left",
           verticalAlign: "middle",
-          width: 120,
+          width: 170,
           wrapperStyle: { paddingRight: 16, textAlign: "left" },
         }}
         gridAxis="xy"
