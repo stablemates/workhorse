@@ -34,6 +34,7 @@ export interface DashboardScheduleRow {
   };
   namespace: string;
   name: string;
+  description: string | null;
   cron: string;
   queue: string | null;
   type: string;
@@ -468,6 +469,19 @@ export async function readDashboardTasks(
   };
 }
 
+/** Display-only schedule descriptions; the core schema deliberately has no description column. */
+const scheduleDescriptions: Record<string, string> = {
+  "workhorse:tick": "Promotes due jobs to ready and recovers expired leases.",
+  "workhorse:housekeeping": "Prunes old schedule occurrences and replenishes history partitions.",
+  "workhorse-demo:heartbeat":
+    "Enqueues a recurring heartbeat job every minute to keep the demo lively.",
+  "workhorse-demo:demo.report": "Generates a queue-health report every five minutes.",
+};
+
+function scheduleDescription(namespace: string, name: string): string | null {
+  return scheduleDescriptions[`${namespace}:${name}`] ?? null;
+}
+
 function systemMaintenanceSchedules(
   now: Date,
   cadences: MaintenanceLoopCadences,
@@ -479,6 +493,7 @@ function systemMaintenanceSchedules(
       identity: { kind: "system", namespace: "workhorse", name: "tick" },
       namespace: "workhorse",
       name: "tick",
+      description: scheduleDescription("workhorse", "tick"),
       cron: `every ${cadences.tickIntervalMs}ms`,
       queue: null,
       type: "workhorse.tick_v1",
@@ -499,6 +514,7 @@ function systemMaintenanceSchedules(
       identity: { kind: "system", namespace: "workhorse", name: "housekeeping" },
       namespace: "workhorse",
       name: "housekeeping",
+      description: scheduleDescription("workhorse", "housekeeping"),
       cron: `every ${cadences.housekeepingIntervalMs}ms`,
       queue: null,
       type: "workhorse.housekeep_v1",
@@ -557,6 +573,7 @@ export async function readDashboardCron(
           identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
           namespace: row.namespace,
           name: row.name,
+          description: scheduleDescription(row.namespace, row.name),
           cron: row.cron,
           queue: row.queue,
           type: row.type,
@@ -889,6 +906,7 @@ export async function readDashboardSnapshot(
         identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
         namespace: row.namespace,
         name: row.name,
+        description: scheduleDescription(row.namespace, row.name),
         cron: row.cron,
         queue: row.queue,
         type: row.type,
