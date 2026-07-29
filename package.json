@@ -6,8 +6,7 @@
   "bin": {
     "workhorse-bench": "./dist/src/cli/benchmark.js",
     "workhorse-bench-competitors": "./dist/src/cli/benchmark-competitors.js",
-    "workhorse-health": "./dist/src/cli/health.js",
-    "workhorse-pg-cron-check": "./dist/src/cli/check-pg-cron.js"
+    "workhorse-health": "./dist/src/cli/health.js"
   },
   "files": [
     "dist",
@@ -37,7 +36,6 @@
     "test:demo-smoke": "tsx test/demo-smoke.ts",
     "health": "tsx src/cli/health.ts --database dev",
     "health:bench": "tsx src/cli/health.ts --database bench",
-    "pg-cron:check": "tsx src/cli/check-pg-cron.ts",
     "benchmark": "tsx src/cli/benchmark.ts",
     "benchmark:competitors": "tsx src/cli/benchmark-competitors.ts",
     "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin src test benchmarks packages demo vitest.config.ts",
@@ -54,6 +52,7 @@
     "db:reset:all": "pnpm db:reset:dev && pnpm db:reset:test && pnpm db:reset:bench && pnpm db:reset:demo"
   },
   "dependencies": {
+    "cron-parser": "5.6.2",
     "pg": "^8.16.3"
   },
   "devDependencies": {

@@ -7,7 +7,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { PgCronScheduler, type Json, type PgCronSyncResult } from "@workhorse/core";
+import { Queue, type Json } from "@workhorse/core";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { DashboardRefreshHub } from "./dashboard-refresh.js";
@@ -25,12 +25,6 @@ export const DEMO_WORKER_POLL_MS = 15_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
-export const DEMO_MAINTENANCE = {
-  schedule: "1 second",
-  batchSize: 1_000,
-  occurrenceRetentionDays: 30,
-  occurrencePruneLimit: 10_000,
-} as const;
 const DEMO_INDEX = {
   name: "Workhorse demo",
   endpoints: [
@@ -55,8 +49,6 @@ export interface CreateDemoApplicationOptions {
   dashboard?: boolean;
   operator?: DashboardOperator;
   scheduleController?: ScheduleController;
-  schedulerStatusProvider?: SchedulerStatusProvider;
-  workerMaintenance?: "worker" | "external";
   workerPollMs?: number;
   longRunningJobMs?: number;
 }
@@ -84,8 +76,6 @@ export interface ScheduleController {
   ) => Promise<{ enabled: boolean }>;
 }
 
-export type SchedulerStatusProvider = () => Promise<PgCronSyncResult | null>;
-
 const orderRequestSchema = z.object({
   customerEmail: z
     .string()
@@ -108,7 +98,7 @@ function heartbeatSchedule(enabled = true) {
     job: {
       type: RECURRING_JOB_TYPE,
       queue: DEMO_QUEUE,
-      payload: { source: "pg_cron" },
+      payload: { source: "worker" },
       maxAttempts: 3,
     },
   } as const;
@@ -155,19 +145,10 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
   `);
 }
 
-export async function syncDemoSchedules(database: Pool, cronDatabase: Pool) {
-  const scheduler = new PgCronScheduler(database, cronDatabase, {
-    namespace: DEMO_SCHEDULE_NAMESPACE,
-  });
-  const result = await scheduler.sync([heartbeatSchedule()], { maintenance: DEMO_MAINTENANCE });
-  return { scheduler, result };
-}
-
-export function createPgCronSchedulerStatusProvider(
-  scheduler: PgCronScheduler | undefined,
-): SchedulerStatusProvider | undefined {
-  if (!scheduler) return undefined;
-  return async () => scheduler.status();
+export async function syncDemoSchedules(database: Pool): Promise<void> {
+  await new Queue(database, DEMO_QUEUE).syncSchedules(DEMO_SCHEDULE_NAMESPACE, [
+    heartbeatSchedule(),
+  ]);
 }
 
 function parseOrderRequest(input: unknown): DemoOrderRequest | null {
@@ -210,34 +191,11 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
   };
 }
 
-export function createLocalScheduleController(
-  database: DemoDatabase,
-  scheduler?: PgCronScheduler,
-): ScheduleController {
+export function createLocalScheduleController(database: DemoDatabase): ScheduleController {
   return {
     async setScheduleEnabled(name, enabled, audit) {
       if (name !== HEARTBEAT_SCHEDULE_NAME)
         throw new Error(`Schedule ${name} is not controlled here`);
-      if (scheduler) {
-        const before = await database.execute<{ enabled: boolean }>(sql`
-          SELECT enabled FROM workhorse.schedule_definition
-           WHERE namespace = ${DEMO_SCHEDULE_NAMESPACE} AND schedule_name = ${name}
-        `);
-        if (before.rows.length === 0) throw new Error(`Schedule ${name} not found`);
-        await scheduler.sync([heartbeatSchedule(enabled)], {
-          maintenance: DEMO_MAINTENANCE,
-          prune: false,
-        });
-        await database.execute(sql`
-          INSERT INTO public.workhorse_demo_audit
-            (actor, reason, request_id, occurred_at, action, target, before, after, status)
-          VALUES
-            (${audit.actor}, ${audit.reason}, ${audit.requestId},
-             ${audit.occurredAt ?? new Date().toISOString()}, 'setScheduleEnabled', ${`schedule:${name}`},
-             ${JSON.stringify(before.rows[0])}::jsonb, ${JSON.stringify({ enabled })}::jsonb, 'succeeded')
-        `);
-        return { enabled };
-      }
       const rows = await database.transaction(async (transaction) => {
         const before = await transaction.execute<{ enabled: boolean }>(sql`
           SELECT enabled FROM workhorse.schedule_definition
@@ -280,7 +238,7 @@ export function createDemoApplication(
       options: {
         queue: DEMO_QUEUE,
         workerId,
-        maintenance: options.workerMaintenance ?? "worker",
+        scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
         pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
         retryDelayMs: (attempt) => attempt * 100,
       },
@@ -395,7 +353,6 @@ export function createDemoApplication(
           configuredWorkers: DEMO_WORKERS,
           operator: options.operator ?? createReadOnlyOperator(),
           scheduleController: options.scheduleController,
-          schedulerStatusProvider: options.schedulerStatusProvider,
         },
       });
       return response ?? context.notFound();

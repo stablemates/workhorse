@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { CronExpressionParser } from "cron-parser";
 import { Queue } from "./queue.js";
 import type { ClaimedJob, Json } from "./types.js";
 
@@ -31,11 +32,12 @@ export interface WorkerOptions {
   heartbeatMs?: number;
   /** Idle polling delay. Polling is always the durable fallback even when NOTIFY is added later. */
   pollMs?: number;
-  /**
-   * Maintenance ownership. pg_cron is the default coordinator; `worker` is a portability fallback
-   * that promotes due jobs and recovers expired leases before every claim attempt.
-   */
-  maintenance?: "external" | "worker";
+  /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
+  maintenanceIntervalMs?: number;
+  /** Namespaces whose enabled recurring schedules this worker should evaluate and fire. */
+  scheduleNamespaces?: readonly string[];
+  /** Maximum missed occurrences fired for one schedule in one maintenance pass. */
+  scheduleCatchupLimit?: number;
   /** Delay before the next attempt, either fixed or derived from the one-based attempt number. */
   retryDelayMs?: number | ((attempt: number) => number);
   /** Test-only crash hook. Injected crashes deliberately bypass normal fail/retry handling. */
@@ -55,6 +57,10 @@ export class Worker {
   private readonly leaseMs: number;
   private readonly heartbeatMs: number;
   private readonly pollMs: number;
+  private readonly maintenanceIntervalMs: number;
+  private readonly scheduleNamespaces: readonly string[];
+  private readonly scheduleCatchupLimit: number;
+  private lastMaintenanceAt = Number.NEGATIVE_INFINITY;
   private stopping = false;
 
   constructor(
@@ -66,7 +72,14 @@ export class Worker {
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
     this.pollMs = options.pollMs ?? 250;
+    this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1_000;
+    this.scheduleNamespaces = [...new Set(options.scheduleNamespaces ?? [])];
+    this.scheduleCatchupLimit = options.scheduleCatchupLimit ?? 100;
     if (this.heartbeatMs >= this.leaseMs) throw new Error("heartbeatMs must be less than leaseMs");
+    if (this.maintenanceIntervalMs < 100)
+      throw new Error("maintenanceIntervalMs must be at least 100");
+    if (this.scheduleCatchupLimit < 1 || this.scheduleCatchupLimit > 10_000)
+      throw new Error("scheduleCatchupLimit must be between 1 and 10000");
   }
 
   handle<TPayload extends Json = Json, TResult extends Json = Json>(
@@ -89,12 +102,7 @@ export class Worker {
   }
 
   async runOnce(): Promise<boolean> {
-    // Production deployments centralize maintenance through PgCronScheduler. The explicit worker
-    // fallback preserves portability without charging every normal claim two extra round trips.
-    if (this.options.maintenance === "worker") {
-      await this.queue.promote(100);
-      await this.queue.recoverExpired(100);
-    }
+    await this.runMaintenance();
     const job = await this.queue.claim(this.workerId, {
       queue: this.queueName,
       leaseMs: this.leaseMs,
@@ -154,13 +162,65 @@ export class Worker {
     return true;
   }
 
+  private async runMaintenance(): Promise<void> {
+    const nowMs = Date.now();
+    if (nowMs - this.lastMaintenanceAt < this.maintenanceIntervalMs) return;
+    await this.queue.maintain();
+    this.lastMaintenanceAt = nowMs;
+    if (this.scheduleNamespaces.length === 0) return;
+
+    const now = new Date();
+    for (const schedule of await this.queue.schedules(this.scheduleNamespaces)) {
+      for (const occurrence of dueOccurrences(
+        schedule.schedule,
+        schedule.lastOccurrenceAt,
+        now,
+        this.scheduleCatchupLimit,
+      )) {
+        await this.queue.fireSchedule(
+          schedule.namespace,
+          schedule.name,
+          schedule.revision,
+          occurrence,
+        );
+      }
+    }
+  }
+
   async run(signal?: AbortSignal): Promise<void> {
     this.stopping = false;
     while (!this.stopping) {
       if (signal?.aborted) break;
       const worked = await this.runOnce();
       // Do not sleep after work. This drains a backlog quickly while avoiding an idle busy loop.
-      if (!worked) await sleep(this.pollMs, undefined, { signal }).catch(() => undefined);
+      if (!worked) {
+        await sleep(Math.min(this.pollMs, this.maintenanceIntervalMs), undefined, { signal }).catch(
+          () => undefined,
+        );
+      }
     }
   }
+}
+
+function dueOccurrences(
+  expression: string,
+  lastOccurrenceAt: Date | null,
+  now: Date,
+  limit: number,
+): Date[] {
+  if (!lastOccurrenceAt) {
+    const cron = CronExpressionParser.parse(expression, {
+      currentDate: new Date(now.getTime() + 1_000),
+    });
+    return [cron.prev().toDate()];
+  }
+
+  const cron = CronExpressionParser.parse(expression, { currentDate: lastOccurrenceAt });
+  const occurrences: Date[] = [];
+  while (occurrences.length < limit) {
+    const occurrence = cron.next().toDate();
+    if (occurrence.getTime() > now.getTime()) break;
+    occurrences.push(occurrence);
+  }
+  return occurrences;
 }

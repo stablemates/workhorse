@@ -1,3 +1,4 @@
+import { CronExpressionParser } from "cron-parser";
 import type {
   ClaimedJob,
   EnqueueOptions,
@@ -7,6 +8,34 @@ import type {
   Queryable,
   QueueHealth,
 } from "./types.js";
+
+export interface ScheduleJobDefinition {
+  type: string;
+  payload: Json;
+  queue?: string;
+  maxAttempts?: number;
+}
+
+export interface ScheduleDefinition {
+  name: string;
+  schedule: string;
+  enabled?: boolean;
+  job: ScheduleJobDefinition;
+}
+
+export interface StoredSchedule {
+  namespace: string;
+  name: string;
+  schedule: string;
+  revision: bigint;
+  lastOccurrenceAt: Date | null;
+}
+
+export interface MaintenanceResult {
+  promoted: number;
+  recovered: number;
+  occurrencesPruned: number;
+}
 import { MAX_ENQUEUE_BATCH_SIZE } from "./types.js";
 
 type ClaimRow = {
@@ -79,6 +108,105 @@ export class Queue {
       [limit],
     );
     return result.rows[0]!.count;
+  }
+
+  async maintain(
+    options: {
+      promoteLimit?: number;
+      recoverLimit?: number;
+      occurrenceRetentionDays?: number;
+      occurrencePruneLimit?: number;
+    } = {},
+  ): Promise<MaintenanceResult> {
+    const result = await this.database.query<{
+      promoted: number;
+      recovered: number;
+      occurrences_pruned: number;
+    }>("SELECT * FROM workhorse.maintain_v1($1, $2, $3, $4)", [
+      options.promoteLimit ?? 1_000,
+      options.recoverLimit ?? 1_000,
+      options.occurrenceRetentionDays ?? 30,
+      options.occurrencePruneLimit ?? 10_000,
+    ]);
+    const row = result.rows[0]!;
+    return {
+      promoted: row.promoted,
+      recovered: row.recovered,
+      occurrencesPruned: row.occurrences_pruned,
+    };
+  }
+
+  async syncSchedules(
+    namespace: string,
+    definitions: readonly ScheduleDefinition[],
+    options: { prune?: boolean } = {},
+  ): Promise<void> {
+    for (const definition of definitions) {
+      try {
+        CronExpressionParser.parse(definition.schedule);
+      } catch (error) {
+        throw new Error(`Invalid cron expression for schedule ${definition.name}`, {
+          cause: error,
+        });
+      }
+    }
+    const input = definitions.map((definition) => ({
+      name: definition.name,
+      schedule: definition.schedule,
+      enabled: definition.enabled ?? true,
+      queue: definition.job.queue ?? this.defaultQueue,
+      type: definition.job.type,
+      payload: definition.job.payload,
+      maxAttempts: definition.job.maxAttempts ?? 3,
+    }));
+    await this.database.query("SELECT workhorse.sync_schedule_definitions_v1($1, $2::jsonb, $3)", [
+      namespace,
+      JSON.stringify(input),
+      options.prune ?? true,
+    ]);
+  }
+
+  async schedules(namespaces: readonly string[]): Promise<StoredSchedule[]> {
+    if (namespaces.length === 0) return [];
+    const result = await this.database.query<{
+      namespace: string;
+      schedule_name: string;
+      cron_expression: string;
+      revision: string;
+      last_occurrence_at: Date | null;
+    }>(
+      `SELECT definition.namespace, definition.schedule_name, definition.cron_expression,
+              definition.revision::text,
+              max(occurrence.occurrence_at) AS last_occurrence_at
+         FROM workhorse.schedule_definition definition
+         LEFT JOIN workhorse.schedule_occurrence occurrence
+           ON occurrence.namespace = definition.namespace
+          AND occurrence.schedule_name = definition.schedule_name
+        WHERE definition.enabled AND definition.namespace = ANY($1::text[])
+        GROUP BY definition.namespace, definition.schedule_name
+        ORDER BY definition.namespace, definition.schedule_name`,
+      [namespaces],
+    );
+    return result.rows.map((row) => ({
+      namespace: row.namespace,
+      name: row.schedule_name,
+      schedule: row.cron_expression,
+      revision: BigInt(row.revision),
+      lastOccurrenceAt: row.last_occurrence_at,
+    }));
+  }
+
+  async fireSchedule(
+    namespace: string,
+    name: string,
+    revision: bigint,
+    occurrenceAt: Date,
+  ): Promise<string | null> {
+    const result = await this.database.query<{ job_id: string | null }>(
+      "SELECT workhorse.fire_schedule_v1($1, $2, $3, $4) AS job_id",
+      [namespace, name, revision.toString(), occurrenceAt.toISOString()],
+    );
+    return result.rows[0]!.job_id;
   }
 
   async claim<TPayload = Json>(

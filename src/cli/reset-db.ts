@@ -6,7 +6,6 @@ import {
   isLocalDatabasePurpose,
   localDatabaseUrl,
 } from "../local-database.js";
-import { unscheduleWorkhorseTargetWhileLocked } from "../pg-cron-scheduler.js";
 import { installSchema } from "../schema.js";
 
 // This command is intentionally harder to invoke than normal development commands because it
@@ -42,17 +41,10 @@ console.log(
 );
 const admin = new Pool({ connectionString: adminUrl.toString(), max: 1 });
 try {
-  await unscheduleWorkhorseTargetWhileLocked(
-    admin,
-    targetDatabaseName,
-    async (client, unscheduled) => {
-      if (unscheduled > 0) console.log(`Unscheduled ${unscheduled} Workhorse pg_cron jobs`);
-      // FORCE terminates other sessions. The purpose suffix, confirmation, and host guard above are
-      // the safety boundary around this destructive operation.
-      await client.query(`DROP DATABASE IF EXISTS ${identifier(targetDatabaseName)} WITH (FORCE)`);
-      await client.query(`CREATE DATABASE ${identifier(targetDatabaseName)}`);
-    },
-  );
+  // FORCE terminates other sessions. The purpose suffix, confirmation, and host guard above are the
+  // safety boundary around this destructive operation.
+  await admin.query(`DROP DATABASE IF EXISTS ${identifier(targetDatabaseName)} WITH (FORCE)`);
+  await admin.query(`CREATE DATABASE ${identifier(targetDatabaseName)}`);
 } finally {
   await admin.end();
 }

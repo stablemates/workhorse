@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      cron-parser:
+        specifier: 5.6.2
+        version: 5.6.2
       pg:
         specifier: ^8.16.3
         version: 8.22.0

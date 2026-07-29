@@ -12,9 +12,6 @@ const port = 31_000 + Math.floor(Math.random() * 1_000);
 const demoDatabaseUrl =
   process.env.WORKHORSE_DEMO_DATABASE_URL ??
   "postgresql://workhorse:workhorse@localhost:5432/workhorse_demo";
-const derivedCronDatabaseUrl = new URL(demoDatabaseUrl);
-derivedCronDatabaseUrl.pathname = "/postgres";
-const cronDatabaseUrl = process.env.CRON_DATABASE_URL ?? derivedCronDatabaseUrl.toString();
 
 interface CommandResult {
   code: number;
@@ -104,7 +101,6 @@ try {
       PORT: String(port),
       WORKHORSE_API_PORT: String(port + 1),
       DATABASE_URL: demoDatabaseUrl,
-      CRON_DATABASE_URL: cronDatabaseUrl,
       WORKHORSE_WORKER_POLL_MS: "15",
     },
     detached: process.platform !== "win32",
@@ -176,7 +172,7 @@ try {
   const tasksResponse = await fetch(`${baseUrl}/rpc/dashboard/tasks`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ filter: "all", page: 1, pageSize: 100 }),
+    body: JSON.stringify({ json: { filter: "all", page: 1, pageSize: 100 } }),
   });
   const tasksText = await tasksResponse.text();
   const cronResponse = await fetch(`${baseUrl}/rpc/dashboard/cron`, {
