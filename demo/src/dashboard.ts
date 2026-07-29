@@ -17,6 +17,10 @@ export interface DashboardJobRow extends Record<string, unknown> {
   attempt: number;
   maxAttempts: number;
   payload: unknown;
+  runAt: string | null;
+  workerId: string | null;
+  finishedAt: string | null;
+  errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -196,6 +200,15 @@ function toIsoOrNull(value: Date | string | null): string | null {
   return value ? toIso(value) : null;
 }
 
+/** Extract the human-readable message from a stored error envelope without shipping stacks. */
+function errorMessageOrNull(error: unknown): string | null {
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message: unknown }).message;
+    if (typeof message === "string" && message.length > 0) return message;
+  }
+  return null;
+}
+
 function operatorPolicy(
   operator: DashboardOperator | undefined,
 ): DashboardSnapshot["operatorPolicy"] {
@@ -288,6 +301,10 @@ export async function readDashboardTasks(
       attempt: number;
       max_attempts: number;
       payload: unknown;
+      run_at: Date | string | null;
+      worker_id: string | null;
+      finished_at: Date | string | null;
+      error: unknown;
       created_at: Date | string;
       updated_at: Date | string;
     }>(sql`
@@ -295,7 +312,11 @@ export async function readDashboardTasks(
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               j.max_attempts, j.payload, j.created_at,
+               j.max_attempts, j.payload,
+               COALESCE(r.run_at, o.run_at) AS run_at,
+               r.worker_id, o.finished_at,
+               COALESCE(o.error, r.error) AS error,
+               j.created_at,
                COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
           FROM workhorse.job j
           LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
@@ -324,6 +345,10 @@ export async function readDashboardTasks(
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
       payload: row.payload,
+      runAt: toIsoOrNull(row.run_at),
+      workerId: row.worker_id,
+      finishedAt: toIsoOrNull(row.finished_at),
+      errorMessage: errorMessageOrNull(row.error),
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
     })),
@@ -576,13 +601,21 @@ export async function readDashboardSnapshot(
         attempt: number;
         max_attempts: number;
         payload: unknown;
+        run_at: Date | string | null;
+        worker_id: string | null;
+        finished_at: Date | string | null;
+        error: unknown;
         created_at: Date | string;
         updated_at: Date | string;
       }>(sql`
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               j.max_attempts, j.payload, j.created_at,
+               j.max_attempts, j.payload,
+               COALESCE(r.run_at, o.run_at) AS run_at,
+               r.worker_id, o.finished_at,
+               COALESCE(o.error, r.error) AS error,
+               j.created_at,
                COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
           FROM workhorse.job j
           LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
@@ -730,6 +763,10 @@ export async function readDashboardSnapshot(
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
       payload: row.payload,
+      runAt: toIsoOrNull(row.run_at),
+      workerId: row.worker_id,
+      finishedAt: toIsoOrNull(row.finished_at),
+      errorMessage: errorMessageOrNull(row.error),
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
     })),
