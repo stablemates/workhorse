@@ -18,6 +18,7 @@ import {
   ScrollArea,
   SimpleGrid,
   Stack,
+  Switch,
   Table,
   Text,
   ThemeIcon,
@@ -182,10 +183,28 @@ function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
   );
 }
 
-/** Render a payload as one collapsed `key: value` line; the full JSON is in the hover title. */
-function CollapsedArgs({ payload }: { payload: unknown }) {
+/** Render a payload as one collapsed `key: value` line, or full pretty JSON when expanded. */
+function CollapsedArgs({ payload, expanded }: { payload: unknown; expanded: boolean }) {
   if (payload === null || payload === undefined) return <Text c="dimmed">—</Text>;
   const full = JSON.stringify(payload, null, 1);
+  if (expanded) {
+    return (
+      <Code
+        fz="xs"
+        title={full}
+        style={{
+          display: "inline-block",
+          maxWidth: 340,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-all",
+          background: "transparent",
+          paddingInline: 0,
+        }}
+      >
+        {JSON.stringify(payload)}
+      </Code>
+    );
+  }
   let preview: string;
   if (typeof payload === "object" && !Array.isArray(payload)) {
     const entries = Object.entries(payload as Record<string, unknown>);
@@ -265,6 +284,13 @@ function TasksPage({
   actionError: string | null;
   inspectJob: (id: string) => void;
 }) {
+  const [fullArgs, setFullArgs] = useState(
+    () => localStorage.getItem("workhorse-full-args") === "true",
+  );
+  const toggleFullArgs = (checked: boolean) => {
+    setFullArgs(checked);
+    localStorage.setItem("workhorse-full-args", String(checked));
+  };
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
   const pagination = (
     <Pagination
@@ -279,49 +305,57 @@ function TasksPage({
   return (
     <Stack gap="xl">
       <Paper withBorder>
-        <Group justify="flex-end" p="md">
-          <Menu position="bottom-start" withinPortal>
-            <Menu.Target>
-              <Button
-                variant="default"
-                size="xs"
-                radius="xl"
-                leftSection={<PlayCircle size={16} />}
-                loading={runningDemoJob !== null}
-              >
-                enqueue test job
-              </Button>
-            </Menu.Target>
-            <Menu.Dropdown>
-              <Menu.Label>Execution path</Menu.Label>
-              <Menu.Item
-                leftSection={<CheckCircle size={16} />}
-                onClick={() => void runDemoJob("success")}
-              >
-                Successful job
-              </Menu.Item>
-              <Menu.Item
-                leftSection={<ArrowCounterClockwise size={16} />}
-                onClick={() => void runDemoJob("retry")}
-              >
-                Retry once
-              </Menu.Item>
-              <Menu.Item
-                leftSection={<XCircle size={16} />}
-                color="red"
-                onClick={() => void runDemoJob("failure")}
-              >
-                Terminal failure
-              </Menu.Item>
-              <Menu.Item
-                leftSection={<Clock size={16} />}
-                onClick={() => void runDemoJob("long-running")}
-              >
-                Long-running · 20s
-              </Menu.Item>
-            </Menu.Dropdown>
-          </Menu>
-          {pagination}
+        <Group justify="space-between" p="md">
+          <Switch
+            size="xs"
+            label="Full args"
+            checked={fullArgs}
+            onChange={(event) => toggleFullArgs(event.currentTarget.checked)}
+          />
+          <Group>
+            <Menu position="bottom-start" withinPortal>
+              <Menu.Target>
+                <Button
+                  variant="default"
+                  size="xs"
+                  radius="xl"
+                  leftSection={<PlayCircle size={16} />}
+                  loading={runningDemoJob !== null}
+                >
+                  enqueue test job
+                </Button>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Label>Execution path</Menu.Label>
+                <Menu.Item
+                  leftSection={<CheckCircle size={16} />}
+                  onClick={() => void runDemoJob("success")}
+                >
+                  Successful job
+                </Menu.Item>
+                <Menu.Item
+                  leftSection={<ArrowCounterClockwise size={16} />}
+                  onClick={() => void runDemoJob("retry")}
+                >
+                  Retry once
+                </Menu.Item>
+                <Menu.Item
+                  leftSection={<XCircle size={16} />}
+                  color="red"
+                  onClick={() => void runDemoJob("failure")}
+                >
+                  Terminal failure
+                </Menu.Item>
+                <Menu.Item
+                  leftSection={<Clock size={16} />}
+                  onClick={() => void runDemoJob("long-running")}
+                >
+                  Long-running · 20s
+                </Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
+            {pagination}
+          </Group>
         </Group>
         {actionError ? (
           <>
@@ -333,7 +367,13 @@ function TasksPage({
         ) : null}
         <Divider />
         <ScrollArea>
-          <Table striped highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={860}>
+          <Table
+            striped
+            highlightOnHover
+            verticalSpacing={6}
+            horizontalSpacing="md"
+            miw={fullArgs ? 980 : 860}
+          >
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Task</Table.Th>
@@ -371,7 +411,7 @@ function TasksPage({
                       </Text>
                     </Table.Td>
                     <Table.Td>
-                      <CollapsedArgs payload={job.payload} />
+                      <CollapsedArgs payload={job.payload} expanded={fullArgs} />
                     </Table.Td>
                     <Table.Td>
                       <Group gap="xs" wrap="nowrap">
