@@ -353,7 +353,7 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
         />
       </Group>
       <BarChart
-        h={160}
+        h={260}
         data={chartData}
         dataKey="bucket"
         type="stacked"
