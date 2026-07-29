@@ -114,25 +114,100 @@ describe("Workhorse demo", () => {
       discarded: 16,
       retried: 22,
     });
-    const firstPage = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 2 });
-    const secondPage = await client.dashboard.tasks({ filter: "all", page: 2, pageSize: 2 });
+    const firstPage = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25 });
+    const secondPage = await client.dashboard.tasks({ filter: "all", page: 2, pageSize: 25 });
     expect(firstPage).toMatchObject({
       filter: "all",
       page: 1,
-      pageSize: 2,
+      pageSize: 25,
       total: 366,
       counts: { all: 366, scheduled: 1, queued: 3, completed: 346, discarded: 16 },
     });
-    expect(firstPage.jobs).toHaveLength(2);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 2, total: 366 });
-    expect(secondPage.jobs).toHaveLength(2);
+    expect(firstPage.jobs).toHaveLength(25);
+    expect(firstPage.facets).toMatchObject({
+      queues: ["demo", "emails", "orders"],
+      workers: ["demo-worker-1", "demo-worker-2"],
+      tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
+    });
+    expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 366 });
+    expect(secondPage.jobs).toHaveLength(25);
     expect(
-      await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 10 }),
+      await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
       total: 1,
       jobs: [{ state: "scheduled", payload: { source: "scheduled-seed" } }],
     });
+    await expect(
+      client.dashboard.tasks({ filter: "all", page: 1, pageSize: 10 as 25 }),
+    ).rejects.toThrow(/input validation/i);
+
+    const tagFiltered = await client.dashboard.tasks({
+      filter: "all",
+      page: 1,
+      pageSize: 50,
+      tags: ["weekly", "billing"],
+    });
+    expect(tagFiltered.total).toBeGreaterThan(0);
+    expect(
+      tagFiltered.jobs.every((job) => job.tags.some((tag) => ["weekly", "billing"].includes(tag))),
+    ).toBe(true);
+
+    await expect(
+      client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, search: "report" }),
+    ).resolves.toMatchObject({
+      jobs: expect.arrayContaining([expect.objectContaining({ type: "demo.report" })]),
+    });
+    await expect(
+      client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, search: "demo.r*ort" }),
+    ).resolves.toMatchObject({
+      jobs: expect.arrayContaining([expect.objectContaining({ type: "demo.report" })]),
+    });
+    await expect(
+      client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25, search: "no-such-task" }),
+    ).resolves.toMatchObject({ total: 0, jobs: [] });
+
+    const queueFiltered = await client.dashboard.tasks({
+      filter: "all",
+      page: 1,
+      pageSize: 25,
+      queue: "emails",
+    });
+    expect(queueFiltered.jobs.every((job) => job.queue === "emails")).toBe(true);
+    const workerFiltered = await client.dashboard.tasks({
+      filter: "all",
+      page: 1,
+      pageSize: 25,
+      worker: "demo-worker-1",
+    });
+    expect(workerFiltered.jobs.every((job) => job.workerId === "demo-worker-1")).toBe(true);
+    const typeFiltered = await client.dashboard.tasks({
+      filter: "all",
+      page: 1,
+      pageSize: 25,
+      jobType: "email.send",
+    });
+    expect(typeFiltered.jobs.every((job) => job.type === "email.send")).toBe(true);
+    const combined = await client.dashboard.tasks({
+      filter: "all",
+      page: 1,
+      pageSize: 25,
+      queue: "emails",
+      worker: "demo-worker-1",
+      jobType: "email.send",
+      tags: ["email"],
+    });
+    expect(combined.total).toBeGreaterThan(0);
+    expect(
+      combined.jobs.every(
+        (job) =>
+          job.queue === "emails" &&
+          job.workerId === "demo-worker-1" &&
+          job.type === "email.send" &&
+          job.tags.includes("email"),
+      ),
+    ).toBe(true);
     expect(
       await pool.query(
         `SELECT runtime.state, job.payload, runtime.run_at > clock_timestamp() AS is_future
@@ -153,6 +228,15 @@ describe("Workhorse demo", () => {
     expect(
       queueActivity.buckets.filter((bucket) => Object.keys(bucket.counts).length > 0).length,
     ).toBeGreaterThan(6);
+    const filteredActivity = await client.dashboard.activity({
+      filter: "all",
+      period: "7d",
+      groupBy: "task",
+      tags: ["email"],
+      queue: "emails",
+      worker: "demo-worker-1",
+    });
+    expect(filteredActivity.groups.every((group) => group.startsWith("email."))).toBe(true);
     await expect(
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "worker" }),
     ).resolves.toMatchObject({ groups: ["demo-worker-1", "demo-worker-2", "unassigned"] });
@@ -231,7 +315,7 @@ describe("Workhorse demo", () => {
         job: { id: accepted.jobId, state: "succeeded", result: { processed: true } },
       });
       const client = dashboardClient(app);
-      expect(await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 10 })).toMatchObject({
+      expect(await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25 })).toMatchObject({
         filter: "all",
         page: 1,
         total: 1,
@@ -338,7 +422,7 @@ describe("Workhorse demo", () => {
 
       const client = dashboardClient(app);
       expect(
-        await client.dashboard.tasks({ filter: "retried", page: 1, pageSize: 10 }),
+        await client.dashboard.tasks({ filter: "retried", page: 1, pageSize: 25 }),
       ).toMatchObject({
         filter: "retried",
         total: 1,
@@ -377,7 +461,7 @@ describe("Workhorse demo", () => {
 
       const client = dashboardClient(app);
       expect(
-        await client.dashboard.tasks({ filter: "discarded", page: 1, pageSize: 10 }),
+        await client.dashboard.tasks({ filter: "discarded", page: 1, pageSize: 25 }),
       ).toMatchObject({
         filter: "discarded",
         total: 1,
@@ -434,7 +518,7 @@ describe("Workhorse demo", () => {
         ]),
       );
       expect(
-        await client.dashboard.tasks({ filter: "completed", page: 1, pageSize: 10 }),
+        await client.dashboard.tasks({ filter: "completed", page: 1, pageSize: 25 }),
       ).toMatchObject({
         total: 2,
         jobs: expect.arrayContaining([
@@ -516,7 +600,7 @@ describe("Workhorse demo", () => {
       for (let attempt = 0; attempt < 40 && !observedRunning; attempt += 1) {
         await sleep(10);
         observedRunning = (
-          await client.dashboard.tasks({ filter: "running", page: 1, pageSize: 10 })
+          await client.dashboard.tasks({ filter: "running", page: 1, pageSize: 25 })
         ).jobs.some((job) => job.id === enqueued.jobId);
       }
       expect(observedRunning).toBe(true);

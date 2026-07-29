@@ -15,6 +15,7 @@ export interface EnqueueOptions {
   queue?: string;
   runAt?: Date;
   maxAttempts?: number;
+  tags?: string[];
 }
 
 /** One job accepted by {@link Queue.enqueueMany}, with the same semantics as `Queue.enqueue`. */
@@ -22,6 +23,7 @@ export interface EnqueueRequest<TPayload extends Json = Json> {
   type: string;
   payload: TPayload;
   options?: EnqueueOptions;
+  tags?: string[];
 }
 
 /**
@@ -51,6 +53,7 @@ export interface JobSnapshot<TResult = Json> {
   queue: string;
   type: string;
   payload: Json;
+  tags: string[];
   state: JobState;
   currentAttempt: number;
   maxAttempts: number;

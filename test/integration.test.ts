@@ -34,11 +34,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v4 without compatibility write tables", async () => {
+  it("installs schema v5 without compatibility write tables", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(4);
+    expect(version.rows[0]?.version).toBe(5);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -85,12 +85,20 @@ describe("live-runtime queue protocol", () => {
        WHERE schemaname = 'workhorse'
          AND indexname = ANY($1::text[])
        ORDER BY indexname`,
-      [["job_runtime_expired_active_idx", "job_runtime_ready_idx", "job_runtime_scheduled_idx"]],
+      [
+        [
+          "job_runtime_expired_active_idx",
+          "job_runtime_ready_idx",
+          "job_runtime_scheduled_idx",
+          "job_tags_gin_idx",
+        ],
+      ],
     );
     expect(indexes.rows.map((row) => row.indexname)).toEqual([
       "job_runtime_expired_active_idx",
       "job_runtime_ready_idx",
       "job_runtime_scheduled_idx",
+      "job_tags_gin_idx",
     ]);
   });
 
@@ -447,7 +455,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v4 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v5 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -480,6 +488,43 @@ describe("live-runtime queue protocol", () => {
       "SELECT job_id, event_type FROM workhorse.job_event WHERE event_type = 'enqueued' ORDER BY event_id",
     );
     expect(events.rows).toEqual(ids.map((jobId) => ({ job_id: jobId, event_type: "enqueued" })));
+  });
+
+  it("round-trips tags and supports indexed overlap filtering", async () => {
+    const billingId = await queue.enqueue(
+      "invoice.capture",
+      { invoiceId: "inv-1" },
+      { tags: ["billing", "priority"] },
+    );
+    const reportId = (
+      await queue.enqueueMany([
+        { type: "report.weekly", payload: {}, tags: ["reports", "weekly"] },
+        { type: "email.send", payload: {}, tags: ["email", "transactional"] },
+      ])
+    )[0]!;
+
+    await expect(queue.getJob(billingId)).resolves.toMatchObject({
+      id: billingId,
+      tags: ["billing", "priority"],
+    });
+    await expect(queue.getJob(reportId)).resolves.toMatchObject({
+      id: reportId,
+      tags: ["reports", "weekly"],
+    });
+    const tagged = await pool.query<{ id: string }>(
+      "SELECT id FROM workhorse.job WHERE tags && $1::text[] ORDER BY id",
+      [["billing", "weekly"]],
+    );
+    expect(new Set(tagged.rows.map((row) => row.id))).toEqual(new Set([billingId, reportId]));
+
+    await expect(queue.enqueue("invalid", {}, { tags: [""] })).rejects.toThrow(/non-empty tags/);
+    await expect(
+      queue.enqueue(
+        "too-many",
+        {},
+        { tags: Array.from({ length: 21 }, (_, index) => `tag-${index}`) },
+      ),
+    ).rejects.toThrow(/at most 20/);
   });
 
   it("pauses claims, resumes dispatch, and purges only non-active jobs from one queue", async () => {
@@ -1091,7 +1136,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(4);
+    expect(health.schemaVersion).toBe(5);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(1);
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);

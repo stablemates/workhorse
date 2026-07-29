@@ -56,12 +56,23 @@ const tasksInput = z.object({
   filter: taskFilter.default("all"),
   queue: z.string().trim().min(1).nullable().default(null),
   page: z.number().int().min(1).default(1),
-  pageSize: z.number().int().min(1).max(100).default(10),
+  worker: z.string().trim().min(1).nullable().default(null),
+  jobType: z.string().trim().min(1).nullable().default(null),
+  tags: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
+  search: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => value || null),
+  pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
 });
 const activityInput = z.object({
   filter: taskFilter.default("all"),
   period: z.enum(["15m", "1h", "6h", "24h", "7d"]).default("1h"),
   groupBy: z.enum(["queue", "worker", "task"]).default("queue"),
+  tags: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
+  queue: z.string().trim().min(1).nullable().default(null),
+  worker: z.string().trim().min(1).nullable().default(null),
 });
 const systemInput = z.object({
   window: z.enum(["15m", "1h", "24h"]).default("1h"),
@@ -105,12 +116,31 @@ export const dashboardRouter = {
     tasks: procedure
       .input(tasksInput)
       .handler(({ context, input }) =>
-        readDashboardTasks(context.database, input.filter, input.page, input.pageSize, input.queue),
+        readDashboardTasks(
+          context.database,
+          input.filter,
+          input.page,
+          input.pageSize,
+          input.queue,
+          input.tags,
+          input.search,
+          input.worker,
+          input.jobType,
+          context.configuredWorkers,
+        ),
       ),
     activity: procedure
       .input(activityInput)
       .handler(({ context, input }) =>
-        readDashboardActivity(context.database, input.filter, input.period, input.groupBy),
+        readDashboardActivity(
+          context.database,
+          input.filter,
+          input.period,
+          input.groupBy,
+          input.tags,
+          input.queue,
+          input.worker,
+        ),
       ),
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),

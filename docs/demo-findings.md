@@ -102,7 +102,7 @@ with an explicit mounting API. Keep the dashboard optional and avoid adding Reac
 
 ### D1. Schema upgrades are not documented because they do not exist
 
-`installSchema()` intentionally rejects non-v4 or mixed installations. The live demo exposed how quickly
+`installSchema()` intentionally rejects non-v5 or mixed installations. The live demo exposed how quickly
 that clean-install boundary becomes user-visible.
 
 **Needed:** ordered transactional migrations, independent schema and protocol versions, dry-run/status

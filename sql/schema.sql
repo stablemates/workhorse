@@ -8,6 +8,20 @@ CREATE TABLE IF NOT EXISTS workhorse.schema_version (
   installed_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+CREATE OR REPLACE FUNCTION workhorse.valid_tags(p_tags text[])
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT p_tags IS NOT NULL
+     AND cardinality(p_tags) <= 20
+     AND array_position(p_tags, NULL) IS NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM unnest(p_tags) tag WHERE tag = '' OR char_length(tag) > 100
+     );
+$$;
+
 -- Sparse per-queue operational control. The dispatch path remains a cheap anti-join when no queue
 -- has been explicitly managed.
 CREATE TABLE IF NOT EXISTS workhorse.queue_control (
@@ -22,9 +36,25 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
   queue_name text NOT NULL CHECK (queue_name <> ''),
   job_type text NOT NULL CHECK (job_type <> ''),
   payload jsonb NOT NULL,
+  tags text[] NOT NULL DEFAULT '{}'
+    CONSTRAINT job_tags_valid CHECK (workhorse.valid_tags(tags)),
   max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
+ALTER TABLE workhorse.job ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'workhorse.job'::regclass AND conname = 'job_tags_valid'
+  ) THEN
+    ALTER TABLE workhorse.job
+      ADD CONSTRAINT job_tags_valid CHECK (workhorse.valid_tags(tags));
+  END IF;
+END;
+$$;
+-- GIN indexes array elements so overlap and containment tag filters avoid scanning every job row.
+CREATE INDEX IF NOT EXISTS job_tags_gin_idx ON workhorse.job USING gin (tags);
 
 -- Monotonic ownership generations and FIFO placement generations.
 CREATE SEQUENCE IF NOT EXISTS workhorse.fence_token_seq;
@@ -325,8 +355,17 @@ BEGIN
        OR COALESCE(request->>'type', '') = ''
        OR COALESCE((request->>'maxAttempts')::integer, 25) NOT BETWEEN 1 AND 100
        OR request->>'runAt' IS NULL
+       OR jsonb_typeof(COALESCE(request->'tags', '[]'::jsonb)) <> 'array'
+       OR jsonb_array_length(COALESCE(request->'tags', '[]'::jsonb)) > 20
+       OR EXISTS (
+         SELECT 1
+           FROM jsonb_array_elements(COALESCE(request->'tags', '[]'::jsonb)) tag
+          WHERE jsonb_typeof(tag) <> 'string'
+             OR tag #>> '{}' = ''
+             OR char_length(tag #>> '{}') > 100
+       )
   ) THEN
-    RAISE EXCEPTION 'each request requires non-empty queue/type/runAt and maxAttempts between 1 and 100';
+    RAISE EXCEPTION 'each request requires non-empty queue/type/runAt, maxAttempts between 1 and 100, and at most 20 non-empty tags of at most 100 characters';
   END IF;
 
   RETURN QUERY
@@ -336,13 +375,14 @@ BEGIN
            request->>'queue' AS queue_name,
            request->>'type' AS job_type,
            COALESCE(request->'payload', 'null'::jsonb) AS payload,
+           ARRAY(SELECT jsonb_array_elements_text(COALESCE(request->'tags', '[]'::jsonb))) AS tags,
            (request->>'runAt')::timestamptz AS run_at,
            COALESCE((request->>'maxAttempts')::integer, 25) AS max_attempts,
            CASE WHEN (request->>'runAt')::timestamptz <= v_now THEN 'ready' ELSE 'scheduled' END AS state
       FROM jsonb_array_elements(p_requests) WITH ORDINALITY input(request, ordinality)
   ), inserted_jobs AS (
-    INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts)
-      SELECT p.job_id, p.queue_name, p.job_type, p.payload, p.max_attempts
+    INSERT INTO workhorse.job(id, queue_name, job_type, payload, tags, max_attempts)
+      SELECT p.job_id, p.queue_name, p.job_type, p.payload, p.tags, p.max_attempts
         FROM parsed p ORDER BY p.ordinal
     RETURNING id
   ), inserted_runtime AS (
@@ -369,18 +409,20 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS workhorse.enqueue_v1(text, text, jsonb, timestamptz, integer);
 CREATE OR REPLACE FUNCTION workhorse.enqueue_v1(
   p_queue_name text,
   p_job_type text,
   p_payload jsonb,
   p_run_at timestamptz DEFAULT clock_timestamp(),
-  p_max_attempts integer DEFAULT 25
+  p_max_attempts integer DEFAULT 25,
+  p_tags text[] DEFAULT '{}'
 ) RETURNS uuid
 LANGUAGE sql
 AS $$
   SELECT job_id FROM workhorse.enqueue_many_v1(jsonb_build_array(jsonb_build_object(
     'queue', p_queue_name, 'type', p_job_type, 'payload', COALESCE(p_payload, 'null'::jsonb),
-    'runAt', p_run_at, 'maxAttempts', p_max_attempts
+    'runAt', p_run_at, 'maxAttempts', p_max_attempts, 'tags', to_jsonb(COALESCE(p_tags, '{}'))
   ))) ORDER BY ordinal LIMIT 1;
 $$;
 
@@ -876,7 +918,7 @@ BEGIN
 END;
 $$;
 
-INSERT INTO workhorse.schema_version(version) VALUES (4) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
   FROM generate_series(0, 4) AS weeks(week_offset);
 

@@ -127,6 +127,7 @@ interface HistoricalJob {
   queueName: string;
   jobType: string;
   payload: Json;
+  tags: string[];
   maxAttempts: number;
   createdAt: Date;
   state: "succeeded" | "failed";
@@ -294,6 +295,18 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
         sequence: index + 1,
         source: task.queueName === "emails" ? "campaign" : "historical-demo",
       },
+      tags:
+        task.queueName === "emails"
+          ? index % 2 === 0
+            ? ["email", "transactional"]
+            : ["email", "campaign"]
+          : task.jobType === REPORT_JOB_TYPE
+            ? ["reports", "weekly"]
+            : task.queueName === "orders"
+              ? ["billing"]
+              : index % 5 === 0
+                ? ["demo-test"]
+                : [],
       maxAttempts,
       createdAt,
       state: failed ? "failed" : "succeeded",
@@ -422,11 +435,10 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
             : failUntilAttempt !== null
               ? { label: `operator-${kind}`, failUntilAttempt }
               : { label: `operator-${kind}` };
-        const jobId = await workhorse.queue.enqueue(
-          type,
-          payload,
-          maxAttempts === undefined ? {} : { maxAttempts },
-        );
+        const jobId = await workhorse.queue.enqueue(type, payload, {
+          ...(maxAttempts === undefined ? {} : { maxAttempts }),
+          tags: ["demo-test"],
+        });
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
@@ -653,7 +665,7 @@ export function createDemoApplication(
         });
         return context.var.workhorse
           .forTransaction(transaction)
-          .enqueue(ORDER_JOB_TYPE, { orderId });
+          .enqueue(ORDER_JOB_TYPE, { orderId }, { tags: ["billing"] });
       });
       dashboardRefresh.publish("enqueue");
 
@@ -671,7 +683,7 @@ export function createDemoApplication(
       const jobId = await context.var.workhorse.queue.enqueue(
         RETRY_JOB_TYPE,
         { label: "recover-after-random-failures", failUntilAttempt },
-        { maxAttempts: failUntilAttempt + 2 },
+        { maxAttempts: failUntilAttempt + 2, tags: ["demo-test"] },
       );
       dashboardRefresh.publish("enqueue");
       return context.json({ jobId, status: "queued", expectedAttempts: failUntilAttempt + 1 }, 202);
@@ -680,7 +692,7 @@ export function createDemoApplication(
       const jobId = await context.var.workhorse.queue.enqueue(
         FAILURE_JOB_TYPE,
         { label: "terminal-failure" },
-        { maxAttempts: 1 },
+        { maxAttempts: 1, tags: ["demo-test"] },
       );
       dashboardRefresh.publish("enqueue");
       return context.json({ jobId, status: "queued", expectedOutcome: "failed" }, 202);
@@ -755,6 +767,13 @@ function jsonbValue(value: Json | null) {
   return value === null ? sql`NULL` : sql`${JSON.stringify(value)}::jsonb`;
 }
 
+function textArrayValue(values: readonly string[]) {
+  return sql`ARRAY[${sql.join(
+    values.map((value) => sql`${value}`),
+    sql`, `,
+  )}]::text[]`;
+}
+
 async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
   return database.transaction(async (transaction) => {
     // The seven-day window crosses into the previous ISO week. Use the core partition helper so
@@ -773,11 +792,12 @@ async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
     const jobs = buildHistoricalJobs();
     await transaction.execute(sql`
       INSERT INTO workhorse.job
-        (id, queue_name, job_type, payload, max_attempts, created_at)
+        (id, queue_name, job_type, payload, tags, max_attempts, created_at)
       VALUES ${sql.join(
         jobs.map(
           (job) => sql`(
             ${job.id}, ${job.queueName}, ${job.jobType}, ${JSON.stringify(job.payload)}::jsonb,
+            ${textArrayValue(job.tags)},
             ${job.maxAttempts}, ${job.createdAt}
           )`,
         ),
@@ -855,7 +875,7 @@ export async function seedDemoData(
       const scheduledJobId = await workhorse.queue.enqueue(
         RECURRING_JOB_TYPE,
         { source: "scheduled-seed" },
-        { runAt: new Date(Date.now() + 24 * 60 * 60 * 1_000) },
+        { runAt: new Date(Date.now() + 24 * 60 * 60 * 1_000), tags: ["reports", "weekly"] },
       );
       jobIds.push(order.jobId, retry.jobId, failure.jobId, scheduledJobId);
     } catch (error) {

@@ -100,7 +100,9 @@ export class Queue {
     options: EnqueueOptions = {},
     transaction: Queryable = this.database,
   ): Promise<string> {
-    return (await this.enqueueMany([{ type, payload, options }], transaction))[0]!;
+    return (
+      await this.enqueueMany([{ type, payload, options, tags: options.tags }], transaction)
+    )[0]!;
   }
 
   async enqueueMany(
@@ -113,12 +115,13 @@ export class Queue {
     }
 
     // Supplying an active PoolClient makes the whole batch participate in the caller's transaction.
-    const input = requests.map(({ type, payload, options = {} }) => ({
+    const input = requests.map(({ type, payload, options = {}, tags }) => ({
       queue: options.queue ?? this.defaultQueue,
       type,
       payload,
       runAt: (options.runAt ?? new Date()).toISOString(),
       maxAttempts: options.maxAttempts ?? 25,
+      tags: tags ?? options.tags ?? [],
     }));
     const result = await transaction.query<{ job_id: string }>(
       "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
@@ -331,6 +334,7 @@ export class Queue {
       queue_name: string;
       job_type: string;
       payload: Json;
+      tags: string[];
       state: JobSnapshot["state"];
       current_attempt: number;
       max_attempts: number;
@@ -341,7 +345,7 @@ export class Queue {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT j.id, j.queue_name, j.job_type, j.payload, COALESCE(r.state, o.state) AS state,
+      `SELECT j.id, j.queue_name, j.job_type, j.payload, j.tags, COALESCE(r.state, o.state) AS state,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
               COALESCE(r.run_at, o.run_at) AS run_at, o.result,
@@ -360,6 +364,7 @@ export class Queue {
       queue: row.queue_name,
       type: row.job_type,
       payload: row.payload,
+      tags: row.tags,
       state: row.state,
       currentAttempt: row.current_attempt,
       maxAttempts: row.max_attempts,
