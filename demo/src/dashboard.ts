@@ -65,8 +65,11 @@ export interface DashboardWorkerRow {
   id: string;
   activeJobs: number;
   completedAttempts: number;
-  lastSeenAt: string;
-  status: "busy" | "idle" | "recent";
+  failedAttempts: number;
+  averageExecutionMs: number | null;
+  lastSeenAt: string | null;
+  paused: boolean;
+  status: "active" | "idle" | "recent" | "offline";
 }
 
 export interface DashboardFailureRow {
@@ -132,6 +135,7 @@ export interface DashboardSystemPage {
 
 export interface DashboardWorkersPage {
   capturedAt: string;
+  canManageWorkers: boolean;
   workers: DashboardWorkerRow[];
 }
 
@@ -196,7 +200,7 @@ export interface DashboardSnapshot {
   capturedAt: string;
   operatorPolicy: {
     mode: "read-only" | "local";
-    supportedMutations: Array<"enqueueTest" | "setScheduleEnabled">;
+    supportedMutations: Array<"enqueueTest" | "setScheduleEnabled" | "setWorkerPaused">;
     requiredAuditContext: readonly ["actor", "reason", "requestId", "occurredAt"];
   };
   queues: DashboardQueueRow[];
@@ -241,7 +245,7 @@ function operatorPolicy(
   }
   return {
     mode: "local",
-    supportedMutations: ["enqueueTest", "setScheduleEnabled"],
+    supportedMutations: ["enqueueTest", "setScheduleEnabled", "setWorkerPaused"],
     requiredAuditContext: ["actor", "reason", "requestId", "occurredAt"],
   };
 }
@@ -725,53 +729,73 @@ export async function readDashboardSystem(
 export async function readDashboardWorkers(
   database: DemoDatabase,
   configuredWorkers: readonly string[],
+  workerStates: ReadonlyMap<string, { paused: boolean }> = new Map(),
+  canManageWorkers = false,
 ): Promise<DashboardWorkersPage> {
   const now = new Date();
   const workerRows = await database.execute<{
     id: string;
     active_jobs: number;
     completed_attempts: number;
+    failed_attempts: number;
+    average_execution_ms: number | null;
     last_seen_at: Date | string | null;
   }>(sql`
     WITH configured(id) AS (
       VALUES ${workerValues(configuredWorkers)}
-    ), observed AS (
-      SELECT worker_id AS id, count(*)::integer AS active_jobs, 0::integer AS completed_attempts,
-             max(heartbeat_at) AS last_seen_at
+    ), active AS (
+      SELECT worker_id AS id, count(*)::integer AS active_jobs, max(acquired_at) AS last_seen_at
         FROM workhorse.job_runtime
        WHERE state = 'active' AND worker_id IN (SELECT id FROM configured)
        GROUP BY worker_id
-      UNION ALL
-      SELECT worker_id AS id, 0::integer AS active_jobs,
-             count(*)::integer AS completed_attempts, max(finished_at) AS last_seen_at
+    ), recent_history AS (
+      -- Exact counts are cheap here because both time predicates keep partition scans to one hour.
+      SELECT worker_id AS id, count(*)::integer AS completed_attempts,
+             count(*) FILTER (WHERE outcome = 'failed')::integer AS failed_attempts,
+             avg(extract(epoch FROM finished_at - started_at) * 1000)::double precision
+               AS average_execution_ms,
+             max(finished_at) AS last_seen_at
         FROM workhorse.attempt_history
-       WHERE occurred_at >= clock_timestamp() - interval '5 minutes'
+       WHERE occurred_at >= clock_timestamp() - interval '1 hour'
+         AND finished_at >= clock_timestamp() - interval '1 hour'
          AND worker_id IN (SELECT id FROM configured)
        GROUP BY worker_id
     )
-    SELECT c.id, COALESCE(sum(o.active_jobs), 0)::integer AS active_jobs,
-           COALESCE(sum(o.completed_attempts), 0)::integer AS completed_attempts,
-           max(o.last_seen_at) AS last_seen_at
+    SELECT c.id, COALESCE(a.active_jobs, 0)::integer AS active_jobs,
+           COALESCE(h.completed_attempts, 0)::integer AS completed_attempts,
+           COALESCE(h.failed_attempts, 0)::integer AS failed_attempts,
+           h.average_execution_ms,
+           GREATEST(a.last_seen_at, h.last_seen_at) AS last_seen_at
       FROM configured c
-      LEFT JOIN observed o ON o.id = c.id
-     GROUP BY c.id
+      LEFT JOIN active a ON a.id = c.id
+      LEFT JOIN recent_history h ON h.id = c.id
      ORDER BY c.id
   `);
 
   return {
     capturedAt: now.toISOString(),
-    workers: workerRows.rows.map((row) => ({
-      id: row.id,
-      activeJobs: row.active_jobs,
-      completedAttempts: row.completed_attempts,
-      lastSeenAt: toIsoOrNull(row.last_seen_at) ?? now.toISOString(),
-      status:
-        row.active_jobs > 0
-          ? "busy"
-          : row.last_seen_at && new Date(row.last_seen_at).getTime() >= now.getTime() - 5 * 60_000
-            ? "recent"
-            : "idle",
-    })),
+    canManageWorkers,
+    workers: workerRows.rows.map((row) => {
+      const state = workerStates.get(row.id);
+      return {
+        id: row.id,
+        activeJobs: row.active_jobs,
+        completedAttempts: row.completed_attempts,
+        failedAttempts: row.failed_attempts,
+        averageExecutionMs: row.average_execution_ms,
+        lastSeenAt: toIsoOrNull(row.last_seen_at),
+        paused: state?.paused ?? false,
+        status:
+          row.active_jobs > 0
+            ? "active"
+            : state
+              ? "idle"
+              : row.last_seen_at &&
+                  new Date(row.last_seen_at).getTime() >= now.getTime() - 5 * 60_000
+                ? "recent"
+                : "offline",
+      };
+    }),
   };
 }
 
@@ -998,13 +1022,16 @@ export async function readDashboardSnapshot(
       id: row.id,
       activeJobs: row.active_jobs,
       completedAttempts: row.completed_attempts,
-      lastSeenAt: toIsoOrNull(row.last_seen_at) ?? now.toISOString(),
+      failedAttempts: 0,
+      averageExecutionMs: null,
+      lastSeenAt: toIsoOrNull(row.last_seen_at),
+      paused: false,
       status:
         row.active_jobs > 0
-          ? "busy"
+          ? "active"
           : row.last_seen_at && new Date(row.last_seen_at).getTime() >= now.getTime() - 5 * 60_000
             ? "recent"
-            : "idle",
+            : "offline",
     })),
     failures: failureRows.rows.map((row) => ({
       id: row.id,

@@ -77,6 +77,7 @@ export class Worker {
   private previousPassWorked = false;
   private readonly latestMaintenance = new Map<string, WorkerMaintenanceTelemetry>();
   private stopping = false;
+  private paused = false;
 
   constructor(
     private readonly queue: Queue,
@@ -112,6 +113,22 @@ export class Worker {
     this.stopping = true;
   }
 
+  /** Stop claiming new jobs while leaving maintenance and any in-flight handler running. */
+  pause(): void {
+    this.paused = true;
+  }
+
+  /** Resume claims immediately instead of waiting for the previous idle poll deadline. */
+  resume(): void {
+    this.paused = false;
+    this.previousPassWorked = false;
+    this.lastClaimAt = Number.NEGATIVE_INFINITY;
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+
   maintenanceTelemetry(): WorkerMaintenanceTelemetry[] {
     return [...this.latestMaintenance.values()];
   }
@@ -125,6 +142,7 @@ export class Worker {
 
   async runOnce(): Promise<boolean> {
     await this.runMaintenance();
+    if (this.paused) return false;
     const nowMs = Date.now();
     if (!this.previousPassWorked && nowMs - this.lastClaimAt < this.pollMs) return false;
 
