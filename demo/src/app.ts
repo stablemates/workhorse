@@ -393,9 +393,15 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
           failure: FAILURE_JOB_TYPE,
           "long-running": LONG_RUNNING_JOB_TYPE,
         }[kind];
-        const maxAttempts = kind === "failure" ? 1 : 3;
+        const failUntilAttempt = kind === "retry" ? 1 + Math.floor(Math.random() * 10) : null;
+        const maxAttempts =
+          kind === "failure" ? 1 : failUntilAttempt !== null ? failUntilAttempt + 2 : 3;
         const payload: Json =
-          kind === "success" ? { source: "operator" } : { label: `operator-${kind}` };
+          kind === "success"
+            ? { source: "operator" }
+            : failUntilAttempt !== null
+              ? { label: `operator-${kind}`, failUntilAttempt }
+              : { label: `operator-${kind}` };
         const jobId = await workhorse.queue.enqueue(type, payload, { maxAttempts });
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
@@ -476,11 +482,17 @@ export function createDemoApplication(
           dashboardRefresh.publish("worker");
           return { orderId, processed: true };
         });
-        worker.handle<{ label: string }>(RETRY_JOB_TYPE, async ({ label }, { job }) => {
-          if (job.attempt === 1) throw new Error("Intentional first-attempt demo failure");
-          dashboardRefresh.publish("worker");
-          return { label, recovered: true, attempt: job.attempt };
-        });
+        worker.handle<{ label: string; failUntilAttempt?: number }>(
+          RETRY_JOB_TYPE,
+          async ({ label, failUntilAttempt }, { job }) => {
+            const failuresBefore = failUntilAttempt ?? 1;
+            if (job.attempt <= failuresBefore) {
+              throw new Error(`Intentional demo failure ${job.attempt}/${failuresBefore}`);
+            }
+            dashboardRefresh.publish("worker");
+            return { label, recovered: true, attempt: job.attempt };
+          },
+        );
         worker.handle<{ source: string }>(RECURRING_JOB_TYPE, async ({ source }, { job }) => {
           dashboardRefresh.publish("worker");
           return { source, recurring: true, attempt: job.attempt };
@@ -536,13 +548,21 @@ export function createDemoApplication(
       return context.json({ orderId, jobId, status: "queued" }, 202);
     })
     .post("/demo/retries", async (context) => {
+      const body = (await context.req.json().catch(() => ({}))) as {
+        failUntilAttempt?: number;
+      };
+      const requested = body.failUntilAttempt;
+      const failUntilAttempt =
+        typeof requested === "number" && Number.isInteger(requested) && requested >= 1
+          ? Math.min(requested, 10)
+          : 1 + Math.floor(Math.random() * 10);
       const jobId = await context.var.workhorse.queue.enqueue(
         RETRY_JOB_TYPE,
-        { label: "recover-after-one-failure" },
-        { maxAttempts: 3 },
+        { label: "recover-after-random-failures", failUntilAttempt },
+        { maxAttempts: failUntilAttempt + 2 },
       );
       dashboardRefresh.publish("enqueue");
-      return context.json({ jobId, status: "queued", expectedAttempts: 2 }, 202);
+      return context.json({ jobId, status: "queued", expectedAttempts: failUntilAttempt + 1 }, 202);
     })
     .post("/demo/failures", async (context) => {
       const jobId = await context.var.workhorse.queue.enqueue(

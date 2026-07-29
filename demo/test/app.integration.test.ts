@@ -292,7 +292,11 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      const response = await app.request("/demo/retries", { method: "POST" });
+      const response = await app.request("/demo/retries", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ failUntilAttempt: 1 }),
+      });
       expect(response.status).toBe(202);
       const accepted = (await response.json()) as { jobId: string; expectedAttempts: number };
       expect(accepted.expectedAttempts).toBe(2);
