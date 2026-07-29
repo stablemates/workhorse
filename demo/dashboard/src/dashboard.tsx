@@ -241,7 +241,10 @@ function CollapsedArgs({ payload, expanded }: { payload: unknown; expanded: bool
           maxWidth: 340,
           whiteSpace: "pre-wrap",
           wordBreak: "break-all",
+          verticalAlign: "middle",
+          lineHeight: 1.4,
           background: "transparent",
+          paddingBlock: 0,
           paddingInline: 0,
         }}
       >
@@ -268,7 +271,9 @@ function CollapsedArgs({ payload, expanded }: { payload: unknown; expanded: bool
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
         verticalAlign: "middle",
+        lineHeight: 1.4,
         background: "transparent",
+        paddingBlock: 0,
         paddingInline: 0,
       }}
     >
@@ -562,7 +567,7 @@ function TasksPage({
                       <Code
                         fz="xs"
                         title={job.id}
-                        style={{ background: "transparent", paddingInline: 0 }}
+                        style={{ background: "transparent", paddingBlock: 0, paddingInline: 0 }}
                       >
                         {job.id.slice(0, 8)}
                       </Code>
