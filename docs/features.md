@@ -1,6 +1,6 @@
 # Feature support matrix
 
-This is the authoritative implementation snapshot for schema version 4. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
+This is the authoritative implementation snapshot for schema version 5. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
 
 ## At a glance
 
@@ -22,6 +22,7 @@ This is the authoritative implementation snapshot for schema version 4. “Suppo
 | --------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Stable job identity               | Supported     | One immutable `job` UUID persists across attempts, events, runtime, and outcome.                                                                   |
 | JSON payload and named type       | Supported     | Payload and type are immutable in `job`; runtime validation and payload size policy are application concerns.                                      |
+| Job tags                          | Supported     | Jobs accept up to 20 non-empty tags of at most 100 characters; a GIN index supports overlap and containment filters.                               |
 | Named queues                      | Supported     | Enqueue and claim accept queue names.                                                                                                              |
 | Queue pause/resume and purge      | Supported     | `pause_queue_v1`/`resume_queue_v1` suppress claims per queue via `queue_control`; `purge_queue_v1` removes scheduled and ready work atomically.    |
 | FIFO ordering                     | Supported     | Ready runtimes use a monotonic sequence. Batch-ready jobs receive sequences in input order; promotion/retry assigns a new ready sequence.          |
@@ -64,7 +65,7 @@ This is the authoritative implementation snapshot for schema version 4. “Suppo
 | Closed attempt history             | Supported     | Success, terminal failure, retry, and lease expiry append immutable `attempt_history`.                                                                                          |
 | Weekly history partitions          | Supported     | Monday-aligned partitions are precreated four weeks ahead and replenished by housekeeping, with explicit create and completed-week retirement functions plus default fallbacks. |
 | Current/terminal lookup            | Supported     | `Queue.getJob(id)` coalesces the sole live runtime or terminal outcome into the stable `JobSnapshot` shape.                                                                     |
-| Queue health                       | Supported     | Reports schema version 4; live and terminal state counts; runtime depths; expired active rows; oldest ready age; relation and PostgreSQL diagnostics.                           |
+| Queue health                       | Supported     | Reports schema version 5; live and terminal state counts; runtime depths; expired active rows; oldest ready age; relation and PostgreSQL diagnostics.                           |
 | Crash-boundary harness             | Supported     | Worker failpoints model process loss before and after handler/completion boundaries.                                                                                            |
 | Job/outcome retention              | Not supported | Immutable identity and terminal outcomes are not automatically archived or deleted.                                                                                             |
 | Consistent health snapshot         | Partial       | Diagnostics are independent read-only queries and statistics can lag.                                                                                                           |
@@ -78,7 +79,7 @@ This is the authoritative implementation snapshot for schema version 4. “Suppo
 | Drizzle ORM provider                  | Supported     | Separate package adapts node-postgres Drizzle databases and caller-owned transactions without adding Drizzle to core.                                                                                            |
 | Hono lifecycle integration            | Supported     | Separate package provides typed middleware, explicit worker startup, and idempotent graceful Node server shutdown.                                                                                               |
 | TypeScript schedule synchronization   | Supported     | Deploy-time sync reconciles owned schedule definitions; status APIs expose occurrences and recent fires.                                                                                                         |
-| Versioned SQL API                     | Supported     | Existing `_v1` function names and signatures remain stable; installed schema version is 4.                                                                                                                       |
+| Versioned SQL API                     | Supported     | Existing `_v1` names and call shapes remain compatible; trailing defaults extend enqueue without breaking existing callers. Installed schema version is 5.                                                       |
 | Graceful worker stop                  | Supported     | Stop prevents further claims and waits for in-flight work.                                                                                                                                                       |
 | Worker pause/resume                   | Supported     | `Worker.pause()`/`resume()` stop new claims while active jobs finish and heartbeats continue; demo exposes audited per-worker toggles.                                                                           |
 | Worker concurrency                    | Partial       | One worker runs one handler at a time; scale with multiple instances.                                                                                                                                            |

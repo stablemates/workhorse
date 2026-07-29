@@ -28,6 +28,7 @@ export interface DashboardJobRow extends Record<string, unknown> {
   attempt: number;
   maxAttempts: number;
   payload: unknown;
+  tags: string[];
   runAt: string | null;
   workerId: string | null;
   finishedAt: string | null;
@@ -126,11 +127,21 @@ export interface DashboardTasksPage {
   capturedAt: string;
   filter: DashboardTaskFilter;
   queue: string | null;
+  worker: string | null;
+  jobType: string | null;
+  tags: string[];
+  search: string | null;
   page: number;
   pageSize: number;
   total: number;
   counts: DashboardTaskCounts;
   jobs: DashboardJobRow[];
+  facets: {
+    queues: string[];
+    workers: string[];
+    jobTypes: string[];
+    tags: string[];
+  };
 }
 
 export interface DashboardCronPage {
@@ -354,6 +365,13 @@ function workerValues(workers: readonly string[]) {
   );
 }
 
+function textArrayExpression(values: readonly string[]) {
+  return sql`ARRAY[${sql.join(
+    values.map((value) => sql`${value}`),
+    sql`, `,
+  )}]::text[]`;
+}
+
 function taskFilterCondition(filter: DashboardTaskFilter) {
   if (filter === "scheduled") return sql`state = 'scheduled'`;
   if (filter === "retried") return sql`attempt > 1`;
@@ -362,6 +380,35 @@ function taskFilterCondition(filter: DashboardTaskFilter) {
   if (filter === "completed") return sql`state = 'succeeded'`;
   if (filter === "discarded") return sql`state = 'failed'`;
   return sql`true`;
+}
+
+function taskSearchPattern(search: string | null): string | null {
+  if (!search) return null;
+  // ILIKE is case-insensitive. User * is the only wildcard; literal !, %, and _ are escaped.
+  return `%${search.replaceAll("!", "!!").replaceAll("%", "!%").replaceAll("_", "!_").replaceAll("*", "%")}%`;
+}
+
+function taskQueryCondition(options: {
+  queue: string | null;
+  worker: string | null;
+  jobType: string | null;
+  tags: readonly string[];
+  searchPattern: string | null;
+}) {
+  const { queue, worker, jobType, tags, searchPattern } = options;
+  const tagArray = textArrayExpression(tags);
+  return sql`
+    (${queue}::text IS NULL OR queue = ${queue})
+    AND (${worker}::text IS NULL OR worker_id = ${worker})
+    AND (${jobType}::text IS NULL OR type = ${jobType})
+    -- Multiple selected tags use OR semantics through PostgreSQL array overlap.
+    AND (cardinality(${tagArray}) = 0 OR tags && ${tagArray})
+    AND (
+      ${searchPattern}::text IS NULL
+      OR type ILIKE ${searchPattern} ESCAPE '!'
+      OR queue ILIKE ${searchPattern} ESCAPE '!'
+      OR id::text ILIKE ${searchPattern} ESCAPE '!'
+    )`;
 }
 
 /**
@@ -574,8 +621,12 @@ export async function readDashboardActivity(
   filter: DashboardTaskFilter,
   period: DashboardActivityPeriod,
   groupBy: DashboardActivityGroupBy = "queue",
+  tags: readonly string[] = [],
+  queue: string | null = null,
+  worker: string | null = null,
 ): Promise<DashboardActivityPage> {
   const { windowSeconds, bucketSeconds } = activityPeriods[period];
+  const tagArray = textArrayExpression(tags);
   const groupExpression =
     groupBy === "queue"
       ? sql`j.queue_name`
@@ -591,7 +642,9 @@ export async function readDashboardActivity(
       SELECT ${groupExpression} AS group_key,
              COALESCE(r.state, o.state) AS state,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-             COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
+             COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+             j.tags, j.queue_name AS queue,
+             COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id
         FROM workhorse.job j
         LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
         LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
@@ -601,7 +654,7 @@ export async function readDashboardActivity(
            WHERE ah.job_id = j.id
            ORDER BY ah.attempt DESC
            LIMIT 1
-        ) attempt_worker ON ${groupBy === "worker" ? sql`true` : sql`false`}
+        ) attempt_worker ON true
     ), buckets AS (
       SELECT generate_series(
         date_bin(
@@ -623,6 +676,9 @@ export async function readDashboardActivity(
         ON t.updated_at >= b.bucket_start
        AND t.updated_at < b.bucket_start + make_interval(secs => ${bucketSeconds})
        AND ${taskFilterCondition(filter)}
+       AND (cardinality(${tagArray}) = 0 OR t.tags && ${tagArray})
+       AND (${queue}::text IS NULL OR t.queue = ${queue})
+       AND (${worker}::text IS NULL OR t.worker_id = ${worker})
      GROUP BY b.bucket_start, t.group_key
      ORDER BY b.bucket_start
   `);
@@ -671,20 +727,37 @@ export async function readDashboardTasks(
   page: number,
   pageSize: number,
   queue: string | null = null,
+  tags: readonly string[] = [],
+  search: string | null = null,
+  worker: string | null = null,
+  jobType: string | null = null,
+  configuredWorkers: readonly string[] = [],
 ): Promise<DashboardTasksPage> {
   const offset = (page - 1) * pageSize;
-  const [counts, totalRows, jobRows] = await Promise.all([
+  const searchPattern = taskSearchPattern(search);
+  const queryCondition = taskQueryCondition({ queue, worker, jobType, tags, searchPattern });
+  const configuredWorkerRows =
+    configuredWorkers.length === 0
+      ? sql`SELECT NULL::text AS worker WHERE false`
+      : sql`SELECT worker FROM (VALUES ${workerValues(configuredWorkers)}) configured(worker)`;
+  const [counts, totalRows, jobRows, facetRows] = await Promise.all([
     readDashboardTaskCounts(database),
     database.execute<{ count: number }>(sql`
       WITH tasks AS (
-        SELECT j.queue_name AS queue, COALESCE(r.state, o.state) AS state,
-               COALESCE(r.current_attempt, o.current_attempt) AS attempt
+        SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.tags,
+               COALESCE(r.state, o.state) AS state,
+               COALESCE(r.current_attempt, o.current_attempt) AS attempt,
+               COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id
           FROM workhorse.job j
           LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
           LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+          LEFT JOIN LATERAL (
+            SELECT ah.worker_id FROM workhorse.attempt_history ah
+             WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
+          ) attempt_worker ON true
       )
       SELECT count(*)::integer AS count FROM tasks
-       WHERE ${taskFilterCondition(filter)} AND (${queue}::text IS NULL OR queue = ${queue})
+       WHERE ${taskFilterCondition(filter)} AND ${queryCondition}
     `),
     database.execute<{
       id: string;
@@ -694,6 +767,7 @@ export async function readDashboardTasks(
       attempt: number;
       max_attempts: number;
       payload: unknown;
+      tags: string[];
       run_at: Date | string | null;
       worker_id: string | null;
       finished_at: Date | string | null;
@@ -705,28 +779,61 @@ export async function readDashboardTasks(
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               j.max_attempts, j.payload,
+               j.max_attempts, j.payload, j.tags,
                COALESCE(r.run_at, o.run_at) AS run_at,
-               r.worker_id, o.finished_at,
+               COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id,
+               o.finished_at,
                COALESCE(o.error, r.error) AS error,
                j.created_at,
                COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
           FROM workhorse.job j
           LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
           LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+          LEFT JOIN LATERAL (
+            SELECT ah.worker_id FROM workhorse.attempt_history ah
+             WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
+          ) attempt_worker ON true
       )
       SELECT *
         FROM tasks
-       WHERE ${taskFilterCondition(filter)} AND (${queue}::text IS NULL OR queue = ${queue})
+       WHERE ${taskFilterCondition(filter)} AND ${queryCondition}
        ORDER BY updated_at DESC, id DESC
        LIMIT ${pageSize}
       OFFSET ${offset}
+    `),
+    database.execute<{
+      queues: string[];
+      workers: string[];
+      job_types: string[];
+      tags: string[];
+    }>(sql`
+      WITH configured_workers AS (${configuredWorkerRows}),
+      queue_values AS (
+        SELECT queue_name AS value FROM workhorse.job
+        UNION SELECT queue_name FROM workhorse.queue_control
+      ), worker_values AS (
+        SELECT worker AS value FROM configured_workers
+        UNION SELECT worker_id FROM workhorse.job_runtime WHERE worker_id IS NOT NULL
+        UNION SELECT worker_id FROM workhorse.attempt_history WHERE worker_id IS NOT NULL
+      ), type_values AS (
+        SELECT DISTINCT job_type AS value FROM workhorse.job
+      ), tag_values AS (
+        SELECT DISTINCT unnest(tags) AS value FROM workhorse.job
+      )
+      SELECT ARRAY(SELECT value FROM queue_values WHERE value IS NOT NULL ORDER BY value) AS queues,
+             ARRAY(SELECT value FROM worker_values WHERE value IS NOT NULL ORDER BY value) AS workers,
+             ARRAY(SELECT value FROM type_values ORDER BY value) AS job_types,
+             ARRAY(SELECT value FROM tag_values ORDER BY value) AS tags
     `),
   ]);
   return {
     capturedAt: new Date().toISOString(),
     filter,
     queue,
+    worker,
+    jobType,
+    tags: [...tags],
+    search,
     page,
     pageSize,
     total: totalRows.rows[0]?.count ?? 0,
@@ -739,6 +846,7 @@ export async function readDashboardTasks(
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
       payload: row.payload,
+      tags: row.tags,
       runAt: toIsoOrNull(row.run_at),
       workerId: row.worker_id,
       finishedAt: toIsoOrNull(row.finished_at),
@@ -746,6 +854,12 @@ export async function readDashboardTasks(
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
     })),
+    facets: {
+      queues: facetRows.rows[0]?.queues ?? [],
+      workers: facetRows.rows[0]?.workers ?? [],
+      jobTypes: facetRows.rows[0]?.job_types ?? [],
+      tags: facetRows.rows[0]?.tags ?? [],
+    },
   };
 }
 
@@ -1515,6 +1629,7 @@ export async function readDashboardSnapshot(
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
       payload: row.payload,
+      tags: [],
       runAt: toIsoOrNull(row.run_at),
       workerId: row.worker_id,
       finishedAt: toIsoOrNull(row.finished_at),

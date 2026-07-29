@@ -13,6 +13,7 @@ import {
   Group,
   Loader,
   Menu,
+  MultiSelect,
   NavLink,
   Pagination,
   Paper,
@@ -24,6 +25,7 @@ import {
   Switch,
   Table,
   Text,
+  TextInput,
   ThemeIcon,
   Title,
   Tooltip,
@@ -40,6 +42,7 @@ import {
   GearSix,
   ListDashes,
   ListChecks,
+  MagnifyingGlass,
   PlayCircle,
   Pulse,
   Robot,
@@ -72,6 +75,13 @@ import type {
   DashboardWorkersPage,
 } from "../../src/dashboard";
 import { rpcClient } from "../lib/rpc";
+import {
+  parseTaskLocation,
+  taskLocationHref,
+  taskPageSizes,
+  type TaskLocationState,
+  type TaskPageSize,
+} from "./task-location";
 
 type ActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 const activityPeriods: ActivityPeriod[] = ["15m", "1h", "6h", "24h", "7d"];
@@ -135,7 +145,6 @@ type LoadState =
   | { status: "ready"; data: PageData; error: null }
   | { status: "error"; data: PageData | null; error: string };
 
-const tasksPerPage = 10;
 const pageRoutes = new Set<PageRoute>([
   "/tasks",
   "/cron",
@@ -157,7 +166,6 @@ const taskFilters: ReadonlyArray<{
   { value: "completed", label: "Completed", icon: CheckCircle },
   { value: "discarded", label: "Discarded", icon: XCircle },
 ];
-const taskFilterSet = new Set<DashboardTaskFilter>(taskFilters.map(({ value }) => value));
 const healthyStates = new Set(["succeeded", "ready", "active", "busy"]);
 const failureStates = new Set(["failed", "discarded"]);
 const warningStates = new Set(["scheduled", "retryable", "recent"]);
@@ -173,29 +181,26 @@ function environmentColor(environment: string): string {
 
 function readLocation(): {
   route: PageRoute;
-  filter: DashboardTaskFilter;
-  queue: string | null;
-  page: number;
-} {
+} & TaskLocationState {
   const route = pageRoutes.has(window.location.pathname as PageRoute)
     ? (window.location.pathname as PageRoute)
     : "/tasks";
-  const parameters = new URLSearchParams(window.location.search);
-  const requestedFilter = parameters.get("filter") as DashboardTaskFilter | null;
-  const filter = requestedFilter && taskFilterSet.has(requestedFilter) ? requestedFilter : "all";
-  const queue = parameters.get("queue")?.trim() || null;
-  const requestedPage = Number(parameters.get("page") ?? "1");
-  const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
-  return { route, filter, queue, page };
+  const storedPeriod = localStorage.getItem("workhorse-activity-period") as ActivityPeriod | null;
+  const storedGroup = localStorage.getItem("workhorse-activity-group") as ActivityGroupBy | null;
+  return {
+    route,
+    ...parseTaskLocation(window.location.search, {
+      period: storedPeriod && activityPeriods.includes(storedPeriod) ? storedPeriod : "1h",
+      group:
+        storedGroup && activityGroupings.some(({ value }) => value === storedGroup)
+          ? storedGroup
+          : "queue",
+    }),
+  };
 }
 
-function taskHref(filter: DashboardTaskFilter, page = 1, queue: string | null = null): string {
-  const parameters = new URLSearchParams();
-  if (filter !== "all") parameters.set("filter", filter);
-  if (queue) parameters.set("queue", queue);
-  if (page > 1) parameters.set("page", String(page));
-  const query = parameters.toString();
-  return query ? `/tasks?${query}` : "/tasks";
+function taskHref(state: TaskLocationState): string {
+  return taskLocationHref(state);
 }
 
 /**
@@ -410,35 +415,44 @@ function EmptyState({ children }: { children: ReactNode }) {
 }
 
 /** Full-width stacked bar chart of task activity with switchable period and grouping. */
-function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
-  const [period, setPeriod] = useState<ActivityPeriod>(
-    () => (localStorage.getItem("workhorse-activity-period") as ActivityPeriod) ?? "1h",
-  );
-  const [groupBy, setGroupBy] = useState<ActivityGroupBy>(() => {
-    const stored = localStorage.getItem("workhorse-activity-group") as ActivityGroupBy | null;
-    return stored !== null && activityGroupings.some((g) => g.value === stored) ? stored : "queue";
-  });
+function TasksActivityChart({
+  filter,
+  period,
+  groupBy,
+  tags,
+  queue,
+  worker,
+  updateLocation,
+}: {
+  filter: DashboardTaskFilter;
+  period: ActivityPeriod;
+  groupBy: ActivityGroupBy;
+  tags: string[];
+  queue: string | null;
+  worker: string | null;
+  updateLocation: (updates: Partial<TaskLocationState>) => void;
+}) {
   const [activity, setActivity] = useState<ActivityData | null>(null);
   const changePeriod = (value: string) => {
     const next = activityPeriods.includes(value as ActivityPeriod)
       ? (value as ActivityPeriod)
       : "1h";
-    setPeriod(next);
     localStorage.setItem("workhorse-activity-period", next);
+    updateLocation({ period: next });
   };
   const changeGroupBy = (value: string) => {
     const next = activityGroupings.some((g) => g.value === value)
       ? (value as ActivityGroupBy)
       : "queue";
-    setGroupBy(next);
     localStorage.setItem("workhorse-activity-group", next);
+    updateLocation({ group: next });
   };
 
   useEffect(() => {
     let cancelled = false;
     const load = () =>
       void rpcClient.dashboard
-        .activity({ filter, period, groupBy })
+        .activity({ filter, period, groupBy, tags, queue, worker })
         .then((page) => {
           if (!cancelled) setActivity(page);
         })
@@ -449,7 +463,7 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [filter, period, groupBy]);
+  }, [filter, period, groupBy, tags, queue, worker]);
 
   const labelFormat = (value: string): string => {
     const date = new Date(value);
@@ -545,9 +559,13 @@ function TasksPage({
   runningDemoJob,
   actionError,
   inspectJob,
+  replace,
+  taskLocation,
 }: {
   data: DashboardTasksPage;
   navigate: (href: string) => void;
+  replace: (href: string) => void;
+  taskLocation: TaskLocationState;
   runDemoJob: (kind: DemoJobKind) => Promise<void>;
   runningDemoJob: DemoJobKind | null;
   actionError: string | null;
@@ -556,6 +574,21 @@ function TasksPage({
   const [fullArgs, setFullArgs] = useState(
     () => localStorage.getItem("workhorse-full-args") === "true",
   );
+  const [searchInput, setSearchInput] = useState(taskLocation.search ?? "");
+  useEffect(() => setSearchInput(taskLocation.search ?? ""), [taskLocation.search]);
+  const locationState: TaskLocationState = taskLocation;
+  const updateLocation = (updates: Partial<TaskLocationState>, useReplace = false) => {
+    const href = taskHref({ ...locationState, page: 1, ...updates });
+    if (useReplace) replace(href);
+    else navigate(href);
+  };
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const search = searchInput.trim() || null;
+      if (search !== taskLocation.search) updateLocation({ search }, true);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput, taskLocation.search]);
   const toggleFullArgs = (checked: boolean) => {
     setFullArgs(checked);
     localStorage.setItem("workhorse-full-args", String(checked));
@@ -564,7 +597,7 @@ function TasksPage({
   const pagination = (
     <Pagination
       value={Math.min(data.page, totalPages)}
-      onChange={(page) => navigate(taskHref(data.filter, page, data.queue))}
+      onChange={(page) => navigate(taskHref({ ...locationState, page }))}
       total={totalPages}
       size="xs"
       aria-label="Tasks pagination"
@@ -573,77 +606,122 @@ function TasksPage({
 
   return (
     <Stack gap="xl">
-      <TasksActivityChart filter={data.filter} />
-      {data.queue ? (
-        <Group justify="space-between">
-          <Group gap="xs">
-            <Text c="dimmed" size="sm">
-              Queue filter
-            </Text>
-            <Badge variant="light">{data.queue}</Badge>
-          </Group>
-          <Button
-            variant="subtle"
-            size="compact-xs"
-            onClick={() => navigate(taskHref(data.filter))}
-          >
-            Clear filter
-          </Button>
-        </Group>
-      ) : null}
+      <TasksActivityChart
+        filter={data.filter}
+        period={locationState.period}
+        groupBy={locationState.group}
+        tags={data.tags}
+        queue={data.queue}
+        worker={data.worker}
+        updateLocation={updateLocation}
+      />
       <Paper withBorder>
-        <Group justify="space-between" p="md">
-          <Switch
-            size="xs"
-            label="Full args"
-            checked={fullArgs}
-            onChange={(event) => toggleFullArgs(event.currentTarget.checked)}
-          />
-          <Group>
-            <Menu position="bottom-start" withinPortal>
-              <Menu.Target>
-                <Button
-                  variant="default"
-                  size="xs"
-                  radius="xl"
-                  leftSection={<PlayCircle size={16} />}
-                  loading={runningDemoJob !== null}
-                >
-                  enqueue test job
-                </Button>
-              </Menu.Target>
-              <Menu.Dropdown>
-                <Menu.Label>Execution path</Menu.Label>
-                <Menu.Item
-                  leftSection={<CheckCircle size={16} />}
-                  onClick={() => void runDemoJob("success")}
-                >
-                  Successful job
-                </Menu.Item>
-                <Menu.Item
-                  leftSection={<ArrowCounterClockwise size={16} />}
-                  onClick={() => void runDemoJob("retry")}
-                >
-                  Retry once
-                </Menu.Item>
-                <Menu.Item
-                  leftSection={<XCircle size={16} />}
-                  color="red"
-                  onClick={() => void runDemoJob("failure")}
-                >
-                  Terminal failure
-                </Menu.Item>
-                <Menu.Item
-                  leftSection={<Clock size={16} />}
-                  onClick={() => void runDemoJob("long-running")}
-                >
-                  Long-running · 20s
-                </Menu.Item>
-              </Menu.Dropdown>
-            </Menu>
-            {pagination}
+        <Stack gap="xs" p="md">
+          <Group gap="xs" wrap="nowrap">
+            <TextInput
+              size="xs"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.currentTarget.value)}
+              leftSection={<MagnifyingGlass size={14} />}
+              placeholder="Search tasks (* wildcard)"
+              aria-label="Search tasks"
+              style={{ flex: "1 1 220px" }}
+            />
+            <MultiSelect
+              size="xs"
+              data={data.facets.tags}
+              value={data.tags}
+              onChange={(tags) => updateLocation({ tags })}
+              placeholder="Tags"
+              searchable
+              clearable
+              maxDropdownHeight={240}
+              style={{ flex: "1 1 220px" }}
+            />
+            {(
+              [
+                ["Queue", data.queue, data.facets.queues, "queue"],
+                ["Worker", data.worker, data.facets.workers, "worker"],
+                ["Task type", data.jobType, data.facets.jobTypes, "jobType"],
+              ] as const
+            ).map(([placeholder, value, values, key]) => (
+              <Select
+                key={key}
+                size="xs"
+                data={values}
+                value={value}
+                onChange={(next) => updateLocation({ [key]: next })}
+                placeholder={placeholder}
+                searchable
+                clearable
+                style={{ flex: "1 1 150px" }}
+              />
+            ))}
           </Group>
-        </Group>
+          <Group justify="space-between">
+            <Switch
+              size="xs"
+              label="Full args"
+              checked={fullArgs}
+              onChange={(event) => toggleFullArgs(event.currentTarget.checked)}
+            />
+            <Group gap="xs">
+              <Menu position="bottom-start" withinPortal>
+                <Menu.Target>
+                  <Button
+                    variant="default"
+                    size="xs"
+                    radius="xl"
+                    leftSection={<PlayCircle size={16} />}
+                    loading={runningDemoJob !== null}
+                  >
+                    enqueue test job
+                  </Button>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Label>Execution path</Menu.Label>
+                  <Menu.Item
+                    leftSection={<CheckCircle size={16} />}
+                    onClick={() => void runDemoJob("success")}
+                  >
+                    Successful job
+                  </Menu.Item>
+                  <Menu.Item
+                    leftSection={<ArrowCounterClockwise size={16} />}
+                    onClick={() => void runDemoJob("retry")}
+                  >
+                    Retry once
+                  </Menu.Item>
+                  <Menu.Item
+                    leftSection={<XCircle size={16} />}
+                    color="red"
+                    onClick={() => void runDemoJob("failure")}
+                  >
+                    Terminal failure
+                  </Menu.Item>
+                  <Menu.Item
+                    leftSection={<Clock size={16} />}
+                    onClick={() => void runDemoJob("long-running")}
+                  >
+                    Long-running · 20s
+                  </Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
+              <Select
+                size="xs"
+                w={76}
+                value={String(data.pageSize)}
+                data={taskPageSizes.map((size) => ({ value: String(size), label: String(size) }))}
+                onChange={(value) =>
+                  updateLocation({ pageSize: Number(value ?? 50) as TaskPageSize })
+                }
+                allowDeselect={false}
+                aria-label="Tasks per page"
+              />
+              {pagination}
+            </Group>
+          </Group>
+        </Stack>
         {actionError ? (
           <>
             <Divider />
@@ -701,9 +779,16 @@ function TasksPage({
                       </Code>
                     </Table.Td>
                     <Table.Td>
-                      <Text fw={600} size="sm" lh={1.3} title={job.type}>
-                        {taskDisplayName(job.type, job.queue)}
-                      </Text>
+                      <Group gap={4} wrap="nowrap">
+                        <Text fw={600} size="sm" lh={1.3} title={job.type}>
+                          {taskDisplayName(job.type, job.queue)}
+                        </Text>
+                        {job.tags.map((tag) => (
+                          <Badge key={tag} size="xs" variant="light" color="gray" tt="none">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </Group>
                     </Table.Td>
                     <Table.Td>
                       <Text size="sm" c="dimmed">
@@ -1799,10 +1884,22 @@ export function Dashboard() {
   const [jobDetailError, setJobDetailError] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<RefreshIntervalValue>(readStoredRefreshInterval);
-  const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(readStoredSystemWindow);
-  const changeSystemWindow = useCallback((window: DashboardSystemWindow) => {
-    setSystemWindow(window);
-    localStorage.setItem(systemWindowStorageKey, window);
+  const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(() => {
+    const initial = readLocation();
+    return initial.route === "/system" &&
+      systemWindows.includes(initial.period as DashboardSystemWindow)
+      ? (initial.period as DashboardSystemWindow)
+      : readStoredSystemWindow();
+  });
+  const changeSystemWindow = useCallback((nextWindow: DashboardSystemWindow) => {
+    setSystemWindow(nextWindow);
+    localStorage.setItem(systemWindowStorageKey, nextWindow);
+    const parameters = new URLSearchParams(window.location.search);
+    if (nextWindow === "1h") parameters.delete("period");
+    else parameters.set("period", nextWindow);
+    const query = parameters.toString();
+    window.history.pushState(null, "", query ? `/system?${query}` : "/system");
+    setLocation(readLocation());
   }, []);
   const changeRefreshInterval = useCallback((value: RefreshIntervalValue) => {
     setRefreshInterval(value);
@@ -1818,6 +1915,10 @@ export function Dashboard() {
     },
     [closeNavbar],
   );
+  const replace = useCallback((href: string) => {
+    window.history.replaceState(null, "", href);
+    setLocation(readLocation());
+  }, []);
 
   const handleLink = useCallback(
     (event: MouseEvent<HTMLElement>, href: string) => {
@@ -1845,8 +1946,12 @@ export function Dashboard() {
           value: await rpcClient.dashboard.tasks({
             filter: location.filter,
             queue: location.queue,
+            worker: location.worker,
+            jobType: location.jobType,
+            tags: location.tags,
+            search: location.search ?? undefined,
             page: location.page,
-            pageSize: tasksPerPage,
+            pageSize: location.pageSize,
           }),
         };
       } else if (location.route === "/cron") {
@@ -2034,7 +2139,14 @@ export function Dashboard() {
 
   useEffect(() => {
     const onPopState = () => {
-      setLocation(readLocation());
+      const next = readLocation();
+      setLocation(next);
+      if (
+        next.route === "/system" &&
+        systemWindows.includes(next.period as DashboardSystemWindow)
+      ) {
+        setSystemWindow(next.period as DashboardSystemWindow);
+      }
       closeNavbar();
     };
     window.addEventListener("popstate", onPopState);
@@ -2106,6 +2218,8 @@ export function Dashboard() {
       <TasksPage
         data={loadState.data.value}
         navigate={navigate}
+        replace={replace}
+        taskLocation={location}
         runDemoJob={runDemoJob}
         runningDemoJob={runningDemoJob}
         actionError={actionError}
@@ -2271,7 +2385,7 @@ export function Dashboard() {
               Tasks
             </Text>
             {taskFilters.map((filter) => {
-              const href = taskHref(filter.value);
+              const href = taskHref({ ...location, filter: filter.value, page: 1 });
               const count = taskCounts?.[filter.value];
               const Icon = filter.icon;
               return (
