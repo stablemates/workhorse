@@ -73,6 +73,8 @@ export class Worker {
   private readonly scheduleCatchupLimit: number;
   private lastTickAt = Number.NEGATIVE_INFINITY;
   private lastHousekeepingAt = Number.NEGATIVE_INFINITY;
+  private lastClaimAt = Number.NEGATIVE_INFINITY;
+  private previousPassWorked = false;
   private readonly latestMaintenance = new Map<string, WorkerMaintenanceTelemetry>();
   private stopping = false;
 
@@ -123,10 +125,15 @@ export class Worker {
 
   async runOnce(): Promise<boolean> {
     await this.runMaintenance();
+    const nowMs = Date.now();
+    if (!this.previousPassWorked && nowMs - this.lastClaimAt < this.pollMs) return false;
+
+    this.lastClaimAt = nowMs;
     const job = await this.queue.claim(this.workerId, {
       queue: this.queueName,
       leaseMs: this.leaseMs,
     });
+    this.previousPassWorked = job !== null;
     if (!job) return false;
 
     // afterClaim is outside the committed claim transaction. Throwing here leaves the lease exactly
@@ -185,10 +192,12 @@ export class Worker {
   private async runMaintenance(): Promise<void> {
     const nowMs = Date.now();
     if (nowMs - this.lastTickAt >= this.maintenanceIntervalMs) {
-      for (const result of await this.queue.tick()) this.recordMaintenance("tick", result);
+      const tick = await this.queue.tick();
+      for (const result of tick) this.recordMaintenance("tick", result);
       this.lastTickAt = nowMs;
 
-      if (this.scheduleNamespaces.length > 0) {
+      const ownsTick = tick.length > 0 && tick.every((result) => !result.skippedLock);
+      if (ownsTick && this.scheduleNamespaces.length > 0) {
         const now = new Date();
         for (const schedule of await this.queue.schedules(this.scheduleNamespaces)) {
           for (const occurrence of dueOccurrences(

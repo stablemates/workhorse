@@ -1,9 +1,10 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   InjectedCrashError,
   installSchema,
+  type MaintenancePhaseResult,
   MAX_ENQUEUE_BATCH_SIZE,
   Queue,
   Worker,
@@ -621,6 +622,102 @@ describe("live-runtime queue protocol", () => {
       "tick:promote",
       "tick:recover",
     ]);
+  });
+
+  it("keeps idle claim polling on pollMs despite more frequent maintenance wakeups", async () => {
+    const tickResults: MaintenancePhaseResult[] = [
+      { phase: "promote", rowsAffected: 0, durationMs: 0, skippedLock: false, error: null },
+      { phase: "recover", rowsAffected: 0, durationMs: 0, skippedLock: false, error: null },
+    ];
+    const housekeepingResults: MaintenancePhaseResult[] = [
+      {
+        phase: "history_partitions",
+        rowsAffected: 0,
+        durationMs: 0,
+        skippedLock: false,
+        error: null,
+      },
+      {
+        phase: "schedule_occurrences",
+        rowsAffected: 0,
+        durationMs: 0,
+        skippedLock: false,
+        error: null,
+      },
+    ];
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const tick = vi.spyOn(queue, "tick").mockResolvedValue(tickResults);
+    const housekeep = vi.spyOn(queue, "housekeep").mockResolvedValue(housekeepingResults);
+    const claim = vi.spyOn(queue, "claim").mockResolvedValue(null);
+
+    try {
+      const worker = new Worker(queue, {
+        workerId: "idle-cadence",
+        pollMs: 15_000,
+        maintenanceIntervalMs: 1_000,
+        housekeepingIntervalMs: 60_000,
+      });
+
+      await worker.runOnce();
+      now.mockReturnValue(1_000);
+      await worker.runOnce();
+      now.mockReturnValue(2_000);
+      await worker.runOnce();
+      now.mockReturnValue(14_999);
+      await worker.runOnce();
+
+      expect(tick).toHaveBeenCalledTimes(4);
+      expect(claim).toHaveBeenCalledTimes(1);
+
+      now.mockReturnValue(15_000);
+      await worker.runOnce();
+      expect(claim).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+      tick.mockRestore();
+      housekeep.mockRestore();
+      claim.mockRestore();
+    }
+  });
+
+  it("does not scan recurring schedules when the tick advisory lock is skipped", async () => {
+    const skippedTick: MaintenancePhaseResult[] = [
+      { phase: "promote", rowsAffected: 0, durationMs: 0, skippedLock: true, error: null },
+      { phase: "recover", rowsAffected: 0, durationMs: 0, skippedLock: true, error: null },
+    ];
+    const ownedTick: MaintenancePhaseResult[] = skippedTick.map((result) => ({
+      ...result,
+      skippedLock: false,
+    }));
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const tick = vi.spyOn(queue, "tick").mockResolvedValueOnce(skippedTick);
+    const housekeep = vi.spyOn(queue, "housekeep").mockResolvedValue([]);
+    const schedules = vi.spyOn(queue, "schedules").mockResolvedValue([]);
+    const claim = vi.spyOn(queue, "claim").mockResolvedValue(null);
+
+    try {
+      const worker = new Worker(queue, {
+        workerId: "schedule-lock-gate",
+        pollMs: 15_000,
+        maintenanceIntervalMs: 100,
+        scheduleNamespaces: ["integration"],
+      });
+
+      await worker.runOnce();
+      expect(schedules).not.toHaveBeenCalled();
+
+      tick.mockResolvedValueOnce(ownedTick);
+      now.mockReturnValue(100);
+      await worker.runOnce();
+      expect(schedules).toHaveBeenCalledOnce();
+      expect(schedules).toHaveBeenCalledWith(["integration"]);
+    } finally {
+      now.mockRestore();
+      tick.mockRestore();
+      housekeep.mockRestore();
+      schedules.mockRestore();
+      claim.mockRestore();
+    }
   });
 
   it("claims exclusively and rejects stale completion after recovery", async () => {
