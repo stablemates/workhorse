@@ -21,6 +21,9 @@ const LONG_RUNNING_JOB_TYPE = "demo.long-running";
 const RECURRING_JOB_TYPE = "demo.recurring";
 const REPORT_JOB_TYPE = "demo.report";
 const DEMO_QUEUE = "demo";
+const REPRESENTATIVE_SEED_NAME = "default-dashboard-v2";
+const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
+const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
 export const DEMO_WORKER_POLL_MS = 15_000;
 export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
@@ -96,6 +99,193 @@ export function createDemoDatabase(pool: Pool) {
 }
 
 export type DemoDatabase = ReturnType<typeof createDemoDatabase>;
+
+interface HistoricalJob {
+  id: string;
+  queueName: string;
+  jobType: string;
+  payload: Json;
+  maxAttempts: number;
+  createdAt: Date;
+  state: "succeeded" | "failed";
+  currentAttempt: number;
+  fenceToken: number;
+  runAt: Date;
+  result: Json | null;
+  error: Json | null;
+  finishedAt: Date;
+  workerId: (typeof DEMO_WORKERS)[number];
+  attempts: HistoricalAttempt[];
+}
+
+interface HistoricalAttempt {
+  attempt: number;
+  fenceToken: number;
+  workerId: (typeof DEMO_WORKERS)[number];
+  outcome: "succeeded" | "failed" | "retry";
+  startedAt: Date;
+  finishedAt: Date;
+  error: Json | null;
+}
+
+function createHistoricalRandom() {
+  let state = 0x5eed_cafe;
+  return () => {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    return state / 0x1_0000_0000;
+  };
+}
+
+function historicalTimestamps(now: Date, random: () => number): Date[] {
+  const timestamps: Date[] = [];
+  const today = new Date(now);
+  today.setUTCHours(0, 0, 0, 0);
+
+  // A steady business-hours baseline makes every day visible without looking mechanically uniform.
+  for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
+    for (let index = 0; index < 42; index += 1) {
+      const businessHour = 8 + Math.floor(random() * 11);
+      const timestamp = new Date(today);
+      timestamp.setUTCDate(timestamp.getUTCDate() - dayOffset);
+      timestamp.setUTCHours(businessHour, Math.floor(random() * 60), Math.floor(random() * 60), 0);
+      if (timestamp < now && timestamp.getTime() >= now.getTime() - 7 * 24 * 60 * 60 * 1_000) {
+        timestamps.push(timestamp);
+      }
+    }
+  }
+
+  // Two short campaign/order bursts provide recognisable spikes in the seven-day view.
+  for (const [dayOffset, hour, count] of [
+    [2, 14, 16],
+    [5, 10, 12],
+  ] as const) {
+    for (let index = 0; index < count; index += 1) {
+      const timestamp = new Date(today);
+      timestamp.setUTCDate(timestamp.getUTCDate() - dayOffset);
+      timestamp.setUTCHours(hour, Math.floor(random() * 25), Math.floor(random() * 60), 0);
+      timestamps.push(timestamp);
+    }
+  }
+
+  // Keep all shorter dashboard periods populated as well as the full historical window.
+  const recentRanges = [
+    { count: 8, minimumMinutesAgo: 1, maximumMinutesAgo: 14 },
+    { count: 8, minimumMinutesAgo: 15, maximumMinutesAgo: 59 },
+    { count: 12, minimumMinutesAgo: 60, maximumMinutesAgo: 6 * 60 - 1 },
+    { count: 12, minimumMinutesAgo: 6 * 60, maximumMinutesAgo: 24 * 60 - 1 },
+  ];
+  for (const range of recentRanges) {
+    for (let index = 0; index < range.count; index += 1) {
+      const ageMinutes =
+        range.minimumMinutesAgo + random() * (range.maximumMinutesAgo - range.minimumMinutesAgo);
+      timestamps.push(new Date(now.getTime() - ageMinutes * 60 * 1_000));
+    }
+  }
+
+  // Early UTC startup can leave today's business-hours baseline in the future. Fill to a stable size.
+  while (timestamps.length < HISTORICAL_JOB_COUNT) {
+    const ageMinutes = 24 * 60 + random() * 5.5 * 24 * 60;
+    timestamps.push(new Date(now.getTime() - ageMinutes * 60 * 1_000));
+  }
+  return (
+    timestamps
+      .slice(0, HISTORICAL_JOB_COUNT)
+      // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+      .sort((left, right) => left.getTime() - right.getTime())
+  );
+}
+
+function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
+  const random = createHistoricalRandom();
+  const taskChoices = [
+    { queueName: "demo", jobType: RECURRING_JOB_TYPE },
+    { queueName: "demo", jobType: REPORT_JOB_TYPE },
+    { queueName: "orders", jobType: ORDER_JOB_TYPE },
+    { queueName: "orders", jobType: "order.refund" },
+    { queueName: "emails", jobType: "email.send" },
+    { queueName: "emails", jobType: "email.digest" },
+  ] as const;
+  const errors = [
+    { name: "SMTPError", message: "upstream mail provider returned 451", code: "SMTP_451" },
+    { name: "PaymentGatewayError", message: "payment authorization timed out", code: "ETIMEDOUT" },
+    {
+      name: "ReportError",
+      message: "analytics replica was temporarily unavailable",
+      code: "DB_REPLICA",
+    },
+  ] as const;
+
+  return historicalTimestamps(now, random).map((createdAt, index) => {
+    const task = taskChoices[Math.floor(random() * taskChoices.length)]!;
+    const retried = index % 17 === 0;
+    const failed = index % 23 === 0;
+    const currentAttempt = retried ? 2 : 1;
+    const maxAttempts = failed ? currentAttempt : retried ? 3 : 1;
+    const runAt = new Date(createdAt.getTime() + (200 + random() * 8_000));
+    const durationMs =
+      task.jobType === REPORT_JOB_TYPE
+        ? 8_000 + random() * 38_000
+        : task.queueName === "emails"
+          ? 300 + random() * 4_500
+          : 500 + random() * 12_000;
+    const finishedAt = new Date(runAt.getTime() + durationMs + (retried ? 4_000 : 0));
+    const workerId = DEMO_WORKERS[index % DEMO_WORKERS.length]!;
+    const fenceToken = index * 10 + currentAttempt + 1;
+    const error = failed ? errors[index % errors.length]! : null;
+    const attempts: HistoricalAttempt[] = [];
+
+    if (retried) {
+      const retryStartedAt = new Date(runAt);
+      const retryFinishedAt = new Date(retryStartedAt.getTime() + 400 + random() * 2_500);
+      attempts.push({
+        attempt: 1,
+        fenceToken: index * 10 + 1,
+        workerId: DEMO_WORKERS[(index + 1) % DEMO_WORKERS.length]!,
+        outcome: "retry",
+        startedAt: retryStartedAt,
+        finishedAt: retryFinishedAt,
+        error: {
+          name: "TransientError",
+          message: "dependency unavailable; retrying",
+          code: "EAGAIN",
+        },
+      });
+    }
+
+    const finalStartedAt = retried ? new Date(finishedAt.getTime() - durationMs) : new Date(runAt);
+    attempts.push({
+      attempt: currentAttempt,
+      fenceToken,
+      workerId,
+      outcome: failed ? "failed" : "succeeded",
+      startedAt: finalStartedAt,
+      finishedAt,
+      error,
+    });
+
+    return {
+      id: randomUUID(),
+      queueName: task.queueName,
+      jobType: task.jobType,
+      payload: {
+        demoSeed: HISTORICAL_SEED_NAME,
+        sequence: index + 1,
+        source: task.queueName === "emails" ? "campaign" : "historical-demo",
+      },
+      maxAttempts,
+      createdAt,
+      state: failed ? "failed" : "succeeded",
+      currentAttempt,
+      fenceToken,
+      runAt,
+      result: failed ? null : { ok: true, durationMs: Math.round(durationMs) },
+      error,
+      finishedAt,
+      workerId,
+      attempts,
+    };
+  });
+}
 
 function heartbeatSchedule(enabled = true) {
   return {
@@ -426,50 +616,125 @@ export function createDemoApplication(
   return { app, workhorse, dashboardRefresh };
 }
 
+function jsonbValue(value: Json | null) {
+  return value === null ? sql`NULL` : sql`${JSON.stringify(value)}::jsonb`;
+}
+
+async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
+  return database.transaction(async (transaction) => {
+    // The seven-day window crosses into the previous ISO week. Use the core partition helper so
+    // backdated attempts do not accumulate in the default partition.
+    await transaction.execute(sql`
+      SELECT workhorse.create_history_week_v1((current_date - interval '1 week')::date)
+    `);
+    const marker = await transaction.execute<{ name: string }>(sql`
+      INSERT INTO public.workhorse_demo_seed (name)
+      VALUES (${HISTORICAL_SEED_NAME})
+      ON CONFLICT (name) DO NOTHING
+      RETURNING name
+    `);
+    if (marker.rows.length === 0) return 0;
+
+    const jobs = buildHistoricalJobs();
+    await transaction.execute(sql`
+      INSERT INTO workhorse.job
+        (id, queue_name, job_type, payload, max_attempts, created_at)
+      VALUES ${sql.join(
+        jobs.map(
+          (job) => sql`(
+            ${job.id}, ${job.queueName}, ${job.jobType}, ${JSON.stringify(job.payload)}::jsonb,
+            ${job.maxAttempts}, ${job.createdAt}
+          )`,
+        ),
+        sql`, `,
+      )}
+    `);
+    await transaction.execute(sql`
+      INSERT INTO workhorse.job_outcome
+        (job_id, state, current_attempt, fence_token, run_at, result, error, finished_at, updated_at)
+      VALUES ${sql.join(
+        jobs.map(
+          (job) => sql`(
+            ${job.id}, ${job.state}, ${job.currentAttempt}, ${job.fenceToken}, ${job.runAt},
+            ${jsonbValue(job.result)}, ${jsonbValue(job.error)}, ${job.finishedAt}, ${job.finishedAt}
+          )`,
+        ),
+        sql`, `,
+      )}
+    `);
+    await transaction.execute(sql`
+      INSERT INTO workhorse.attempt_history
+        (job_id, attempt, fence_token, worker_id, outcome, started_at, finished_at, error, occurred_at)
+      VALUES ${sql.join(
+        jobs.flatMap((job) =>
+          job.attempts.map(
+            (attempt) => sql`(
+              ${job.id}, ${attempt.attempt}, ${attempt.fenceToken}, ${attempt.workerId},
+              ${attempt.outcome}, ${attempt.startedAt}, ${attempt.finishedAt},
+              ${jsonbValue(attempt.error)}, ${attempt.finishedAt}
+            )`,
+          ),
+        ),
+        sql`, `,
+      )}
+    `);
+    return jobs.length;
+  });
+}
+
 export async function seedDemoData(
   database: DemoDatabase,
   app: ReturnType<typeof createDemoApplication>["app"],
 ) {
   const marker = await database.execute<{ name: string }>(sql`
     INSERT INTO public.workhorse_demo_seed (name)
-    VALUES ('default-dashboard-v2')
+    VALUES (${REPRESENTATIVE_SEED_NAME})
     ON CONFLICT (name) DO NOTHING
     RETURNING name
   `);
-  if (marker.rows.length === 0) return { seeded: false, jobIds: [] };
+  const jobIds: string[] = [];
 
-  try {
-    const orderResponse = await app.request("/orders", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        customerEmail: "demo.operator@example.com",
-        description: "Inspect a successful transactional order",
-      }),
-    });
-    const retryResponse = await app.request("/demo/retries", { method: "POST" });
-    const failureResponse = await app.request("/demo/failures", { method: "POST" });
-    const responses = [orderResponse, retryResponse, failureResponse];
-    if (responses.some((response) => response.status !== 202)) {
-      throw new Error(
-        `Demo seed requests failed with statuses ${responses.map((response) => response.status).join(", ")}`,
+  if (marker.rows.length > 0) {
+    try {
+      const orderResponse = await app.request("/orders", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          customerEmail: "demo.operator@example.com",
+          description: "Inspect a successful transactional order",
+        }),
+      });
+      const retryResponse = await app.request("/demo/retries", { method: "POST" });
+      const failureResponse = await app.request("/demo/failures", { method: "POST" });
+      const responses = [orderResponse, retryResponse, failureResponse];
+      if (responses.some((response) => response.status !== 202)) {
+        throw new Error(
+          `Demo seed requests failed with statuses ${responses.map((response) => response.status).join(", ")}`,
+        );
+      }
+
+      const order = (await orderResponse.json()) as { jobId: string };
+      const retry = (await retryResponse.json()) as { jobId: string };
+      const failure = (await failureResponse.json()) as { jobId: string };
+      const workhorse = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
+      const scheduledJobId = await workhorse.queue.enqueue(
+        RECURRING_JOB_TYPE,
+        { source: "scheduled-seed" },
+        { runAt: new Date(Date.now() + 24 * 60 * 60 * 1_000) },
       );
+      jobIds.push(order.jobId, retry.jobId, failure.jobId, scheduledJobId);
+    } catch (error) {
+      await database.execute(sql`
+        DELETE FROM public.workhorse_demo_seed WHERE name = ${REPRESENTATIVE_SEED_NAME}
+      `);
+      throw error;
     }
-
-    const order = (await orderResponse.json()) as { jobId: string };
-    const retry = (await retryResponse.json()) as { jobId: string };
-    const failure = (await failureResponse.json()) as { jobId: string };
-    const workhorse = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
-    const scheduledJobId = await workhorse.queue.enqueue(
-      RECURRING_JOB_TYPE,
-      { source: "scheduled-seed" },
-      { runAt: new Date(Date.now() + 24 * 60 * 60 * 1_000) },
-    );
-    return { seeded: true, jobIds: [order.jobId, retry.jobId, failure.jobId, scheduledJobId] };
-  } catch (error) {
-    await database.execute(sql`
-      DELETE FROM public.workhorse_demo_seed WHERE name = 'default-dashboard-v2'
-    `);
-    throw error;
   }
+
+  const historicalJobCount = await seedHistoricalDemoData(database);
+  return {
+    seeded: marker.rows.length > 0 || historicalJobCount > 0,
+    jobIds,
+    historicalJobCount,
+  };
 }
