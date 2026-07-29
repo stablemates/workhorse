@@ -17,6 +17,7 @@ import {
   Paper,
   ScrollArea,
   SegmentedControl,
+  Select,
   SimpleGrid,
   Stack,
   Switch,
@@ -35,6 +36,7 @@ import {
   CheckCircle,
   Clock,
   Cpu,
+  GearSix,
   ListDashes,
   ListChecks,
   PlayCircle,
@@ -76,20 +78,21 @@ interface ActivityData {
 
 const activitySeriesColors = ["teal.6", "indigo.6", "orange.6", "grape.6", "cyan.6", "lime.6"];
 
-type PageRoute = "/tasks" | "/cron" | "/system" | "/workers";
+type PageRoute = "/tasks" | "/cron" | "/system" | "/workers" | "/settings";
 type DemoJobKind = "success" | "retry" | "failure" | "long-running";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
   | { route: "/cron"; value: DashboardCronPage }
   | { route: "/system"; value: DashboardSystemPage }
-  | { route: "/workers"; value: DashboardWorkersPage };
+  | { route: "/workers"; value: DashboardWorkersPage }
+  | { route: "/settings"; value: null };
 type LoadState =
   | { status: "loading"; data: PageData | null; error: null }
   | { status: "ready"; data: PageData; error: null }
   | { status: "error"; data: PageData | null; error: string };
 
 const tasksPerPage = 10;
-const pageRoutes = new Set<PageRoute>(["/tasks", "/cron", "/system", "/workers"]);
+const pageRoutes = new Set<PageRoute>(["/tasks", "/cron", "/system", "/workers", "/settings"]);
 const taskFilters: ReadonlyArray<{
   value: DashboardTaskFilter;
   label: string;
@@ -132,6 +135,39 @@ function taskHref(filter: DashboardTaskFilter, page = 1): string {
   return query ? `/tasks?${query}` : "/tasks";
 }
 
+/**
+ * Display timezone preference. Timestamps are stored and transported as UTC ISO
+ * strings; this only affects rendering. "system" means the browser's own zone.
+ */
+const timeZoneStorageKey = "workhorse-timezone";
+let displayTimeZone: string | null = readStoredTimeZone();
+const timeZoneListeners = new Set<() => void>();
+
+function readStoredTimeZone(): string | null {
+  const stored = localStorage.getItem(timeZoneStorageKey);
+  if (!stored || stored === "system") return null;
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeZone: stored }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+function setDisplayTimeZone(zone: string | null): void {
+  displayTimeZone = zone;
+  localStorage.setItem(timeZoneStorageKey, zone ?? "system");
+  for (const listener of timeZoneListeners) listener();
+}
+
+function subscribeTimeZone(listener: () => void): () => void {
+  timeZoneListeners.add(listener);
+  return () => timeZoneListeners.delete(listener);
+}
+
+function currentTimeZoneValue(): string {
+  return displayTimeZone ?? "system";
+}
+
 function formatDate(value: string | null | undefined): string {
   if (!value) return "Never";
   return new Intl.DateTimeFormat(undefined, {
@@ -139,6 +175,7 @@ function formatDate(value: string | null | undefined): string {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: displayTimeZone ?? undefined,
   }).format(new Date(value));
 }
 
@@ -151,6 +188,8 @@ function formatExact(value: string | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    timeZone: displayTimeZone ?? undefined,
+    timeZoneName: "short",
   }).format(new Date(value));
 }
 
@@ -367,9 +406,14 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
         month: "short",
         day: "numeric",
         hour: "2-digit",
+        timeZone: displayTimeZone ?? undefined,
       }).format(date);
     }
-    return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: displayTimeZone ?? undefined,
+    }).format(date);
   };
   const groups = activity?.groups ?? [];
   const chartData = (activity?.buckets ?? []).map((bucket) => {
@@ -859,15 +903,76 @@ function WorkersPage({ data }: { data: DashboardWorkersPage }) {
   );
 }
 
+/** Common timezones plus the browser default; stored values are IANA zone names. */
+const timeZoneOptions: Array<{ value: string; label: string }> = [
+  { value: "system", label: `System (${Intl.DateTimeFormat().resolvedOptions().timeZone})` },
+  { value: "UTC", label: "UTC" },
+  { value: "America/New_York", label: "America/New_York" },
+  { value: "America/Chicago", label: "America/Chicago" },
+  { value: "America/Denver", label: "America/Denver" },
+  { value: "America/Los_Angeles", label: "America/Los_Angeles" },
+  { value: "Europe/London", label: "Europe/London" },
+  { value: "Europe/Berlin", label: "Europe/Berlin" },
+  { value: "Europe/Kyiv", label: "Europe/Kyiv" },
+  { value: "Asia/Dubai", label: "Asia/Dubai" },
+  { value: "Asia/Kolkata", label: "Asia/Kolkata" },
+  { value: "Asia/Singapore", label: "Asia/Singapore" },
+  { value: "Asia/Tokyo", label: "Asia/Tokyo" },
+  { value: "Australia/Sydney", label: "Australia/Sydney" },
+];
+
+function SettingsPage() {
+  const [timeZone, setTimeZone] = useState(currentTimeZoneValue);
+  const changeTimeZone = (value: string | null) => {
+    const next = value ?? "system";
+    setDisplayTimeZone(next === "system" ? null : next);
+    setTimeZone(next);
+  };
+  const now = new Date().toISOString();
+  return (
+    <Stack gap="xl">
+      <PageHeader title="Settings" description="Dashboard display preferences for this browser." />
+      <Paper withBorder p="lg" maw={480}>
+        <Stack gap="sm">
+          <Box>
+            <Text fw={600} size="sm">
+              Display timezone
+            </Text>
+            <Text c="dimmed" size="xs">
+              All timestamps are stored in UTC; this only changes how they are shown. Saved in this
+              browser.
+            </Text>
+          </Box>
+          <Select
+            value={timeZone}
+            onChange={changeTimeZone}
+            data={timeZoneOptions}
+            searchable
+            allowDeselect={false}
+            aria-label="Display timezone"
+          />
+          <Text c="dimmed" size="xs">
+            Now: {formatExact(now)}
+          </Text>
+        </Stack>
+      </Paper>
+    </Stack>
+  );
+}
+
 function routeTitle(route: PageRoute): string {
   if (route === "/cron") return "schedules";
   if (route === "/system") return "system health";
   if (route === "/workers") return "workers";
+  if (route === "/settings") return "settings";
   return "current tasks";
 }
 
 export function Dashboard() {
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
+  // Timestamps format through module-level displayTimeZone; re-render everything on change.
+  const [, setTimeZoneTick] = useState(0);
+  useEffect(() => subscribeTimeZone(() => setTimeZoneTick((tick) => tick + 1)), []);
   const [location, setLocation] = useState(readLocation);
   const [loadState, setLoadState] = useState<LoadState>({
     status: "loading",
@@ -926,6 +1031,8 @@ export function Dashboard() {
         data = { route: "/cron", value: await rpcClient.dashboard.cron() };
       } else if (location.route === "/system") {
         data = { route: "/system", value: await rpcClient.dashboard.system() };
+      } else if (location.route === "/settings") {
+        data = { route: "/settings", value: null };
       } else {
         data = {
           route: "/workers",
@@ -1104,6 +1211,8 @@ export function Dashboard() {
     content = <SystemPage data={loadState.data.value} />;
   } else if (loadState.data?.route === "/workers") {
     content = <WorkersPage data={loadState.data.value} />;
+  } else if (loadState.data?.route === "/settings") {
+    content = <SettingsPage />;
   } else {
     content = null;
   }
@@ -1234,6 +1343,15 @@ export function Dashboard() {
               leftSection={<Robot size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/workers")}
+            />
+            <NavLink
+              component="a"
+              href="/settings"
+              active={location.route === "/settings"}
+              label="Settings"
+              leftSection={<GearSix size={18} />}
+              variant="light"
+              onClick={(event) => handleLink(event, "/settings")}
             />
           </Stack>
         </AppShell.Section>
