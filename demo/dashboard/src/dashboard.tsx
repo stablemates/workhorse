@@ -182,6 +182,45 @@ function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
   );
 }
 
+/** Render a payload as one collapsed `key: value` line; the full JSON is in the hover title. */
+function CollapsedArgs({ payload }: { payload: unknown }) {
+  if (payload === null || payload === undefined) return <Text c="dimmed">—</Text>;
+  const full = JSON.stringify(payload, null, 1);
+  let preview: string;
+  if (typeof payload === "object" && !Array.isArray(payload)) {
+    const entries = Object.entries(payload as Record<string, unknown>);
+    if (entries.length === 0) return <Text c="dimmed">—</Text>;
+    preview = entries.map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(", ");
+  } else {
+    preview = JSON.stringify(payload);
+  }
+  return (
+    <Code
+      fz="xs"
+      title={full}
+      style={{
+        display: "inline-block",
+        maxWidth: 220,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        verticalAlign: "middle",
+        background: "transparent",
+        paddingInline: 0,
+      }}
+    >
+      {preview}
+    </Code>
+  );
+}
+
+/** Wall-clock time from enqueue to terminal outcome, only shown once the job finished. */
+function taskDuration(job: DashboardJobRow): string | null {
+  if (!job.finishedAt) return null;
+  const elapsed = new Date(job.finishedAt).getTime() - new Date(job.createdAt).getTime();
+  return elapsed >= 0 ? formatDuration(elapsed) : null;
+}
+
 function PageHeader({ title, description }: { title: string; description: string }) {
   return (
     <Box>
@@ -294,19 +333,21 @@ function TasksPage({
         ) : null}
         <Divider />
         <ScrollArea>
-          <Table striped highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={720}>
+          <Table striped highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={860}>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Task</Table.Th>
+                <Table.Th>Args</Table.Th>
                 <Table.Th>Status</Table.Th>
                 <Table.Th ta="right">Attempt</Table.Th>
+                <Table.Th ta="right">Duration</Table.Th>
                 <Table.Th ta="right">Updated</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {data.jobs.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={4}>
+                  <Table.Td colSpan={6}>
                     <Center mih={120}>
                       <Text c="dimmed" size="sm">
                         No tasks match this filter.
@@ -330,6 +371,9 @@ function TasksPage({
                       </Text>
                     </Table.Td>
                     <Table.Td>
+                      <CollapsedArgs payload={job.payload} />
+                    </Table.Td>
+                    <Table.Td>
                       <Group gap="xs" wrap="nowrap">
                         <StatusBadge state={job.state} />
                         <TaskStatusDetail job={job} />
@@ -342,6 +386,11 @@ function TasksPage({
                         fw={job.attempt > 1 ? 600 : undefined}
                       >
                         {job.attempt}/{job.maxAttempts}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td ta="right">
+                      <Text size="sm" c="dimmed">
+                        {taskDuration(job) ?? "—"}
                       </Text>
                     </Table.Td>
                     <Table.Td ta="right">
