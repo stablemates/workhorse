@@ -180,6 +180,11 @@ function formatDuration(milliseconds: number | null | undefined): string {
   return `${Math.round(milliseconds / 60_000)} min`;
 }
 
+/** Trim a `queue.` prefix from a task type since the queue has its own column. */
+function taskDisplayName(type: string, queue: string): string {
+  return type.startsWith(`${queue}.`) ? type.slice(queue.length + 1) : type;
+}
+
 function statusColor(state: string): string {
   if (healthyStates.has(state)) return "teal";
   if (failureStates.has(state) || state === "unhealthy") return "red";
@@ -563,8 +568,8 @@ function TasksPage({
                       </Code>
                     </Table.Td>
                     <Table.Td>
-                      <Text fw={600} size="sm" lh={1.3}>
-                        {job.type}
+                      <Text fw={600} size="sm" lh={1.3} title={job.type}>
+                        {taskDisplayName(job.type, job.queue)}
                       </Text>
                     </Table.Td>
                     <Table.Td>
