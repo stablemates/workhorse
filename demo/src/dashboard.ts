@@ -357,6 +357,7 @@ export async function readDashboardActivity(
   `);
   const queues = [
     ...new Set(rows.rows.flatMap((row) => (row.queue === null ? [] : [row.queue]))),
+    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
   ].sort();
   const byBucket = new Map<string, DashboardActivityBucket>();
   for (const row of rows.rows) {
