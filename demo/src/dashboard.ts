@@ -263,7 +263,67 @@ function taskFilterCondition(filter: DashboardTaskFilter) {
   return sql`true`;
 }
 
+/**
+ * Above this size, sidebar counts switch from exact scans to planner estimates.
+ * job_runtime stays small by design (live jobs only), so it is always counted
+ * exactly; job and job_outcome grow without bound.
+ */
+const approximateCountThreshold = 50_000;
+
+/** Planner row estimate for a query (PostgreSQL wiki "count estimate" technique). */
+async function estimateRows(database: DemoDatabase, query: ReturnType<typeof sql>) {
+  const plan = await database.execute<Record<string, unknown>>(
+    sql`EXPLAIN (FORMAT JSON) ${query}`,
+  );
+  const cell = Object.values(plan.rows[0] ?? {})[0];
+  const parsed: unknown = typeof cell === "string" ? JSON.parse(cell) : cell;
+  const rows = (parsed as Array<{ Plan?: { "Plan Rows"?: number } }>)[0]?.Plan?.["Plan Rows"];
+  return typeof rows === "number" ? Math.max(0, Math.round(rows)) : 0;
+}
+
 export async function readDashboardTaskCounts(
+  database: DemoDatabase,
+): Promise<DashboardTaskCounts> {
+  const relRows = await database.execute<{ estimate: string | number }>(sql`
+    SELECT reltuples::bigint AS estimate FROM pg_class WHERE oid = 'workhorse.job'::regclass
+  `);
+  const jobEstimate = Number(relRows.rows[0]?.estimate ?? -1);
+  // reltuples is -1 until the first vacuum/analyze; treat unknown as small.
+  if (jobEstimate < approximateCountThreshold) {
+    return readDashboardTaskCountsExact(database);
+  }
+
+  const runtimeRows = await database.execute<{
+    scheduled_count: number;
+    queued_count: number;
+    running_count: number;
+    retried_live_count: number;
+  }>(sql`
+    SELECT count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
+           count(*) FILTER (WHERE state = 'ready')::integer AS queued_count,
+           count(*) FILTER (WHERE state = 'active')::integer AS running_count,
+           count(*) FILTER (WHERE current_attempt > 1)::integer AS retried_live_count
+      FROM workhorse.job_runtime
+  `);
+  const live = runtimeRows.rows[0]!;
+  const [completed, discarded, retriedTerminal] = await Promise.all([
+    estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'succeeded'`),
+    estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'failed'`),
+    estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE current_attempt > 1`),
+  ]);
+
+  return {
+    all: jobEstimate,
+    scheduled: live.scheduled_count,
+    retried: live.retried_live_count + retriedTerminal,
+    queued: live.queued_count,
+    running: live.running_count,
+    completed,
+    discarded,
+  };
+}
+
+async function readDashboardTaskCountsExact(
   database: DemoDatabase,
 ): Promise<DashboardTaskCounts> {
   const countRows = await database.execute<{
