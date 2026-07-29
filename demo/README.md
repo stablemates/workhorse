@@ -6,15 +6,15 @@ operator dashboard.
 
 The demo application uses Hono and Drizzle to exercise both integration packages in a realistic setup.
 An order and its durable job are committed in one Drizzle transaction, two Hono-managed workers process
-the queue, and optional pg_cron scheduling drives recurring work. Those frameworks support the demo;
+the queue, and worker-owned in-process scheduling drives recurring work. Those frameworks support the demo;
 Workhorse's durable execution model is what the demo is designed to show.
 
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
 Prerequisites are Node.js 22+, pnpm 10+, workspace dependencies installed with `pnpm install`, and
-PostgreSQL 15+ with the local `workhorse` role described in the root README. pg_cron is optional unless
-you want to run the recurring-job portion.
+PostgreSQL 15+ with the local `workhorse` role described in the root README. No PostgreSQL extensions are
+required; recurring work runs through the workers themselves.
 
 From the repository root, run the complete demo with one command:
 
@@ -88,21 +88,12 @@ heartbeat schedule. Every action records actor, reason, request ID, timestamp, t
 state, and status in `public.workhorse_demo_audit`. Cancellation, redrive, and arbitrary schedule
 editing remain unavailable.
 
-The local command derives the pg_cron metadata URL by changing the target database name to `postgres`.
-Set `CRON_DATABASE_URL` explicitly when the cluster uses another metadata database. The deployment role
-must match `DATABASE_URL`:
-
-```bash
-CRON_DATABASE_URL=postgresql://workhorse:workhorse@localhost:5432/postgres \
-  pnpm --filter @workhorse/demo start
-```
-
-Startup reconciles a namespaced one-minute schedule plus Workhorse's centralized maintenance registration
-through `PgCronScheduler`. The Cron view distinguishes the application heartbeat from the system-owned
-maintenance loop that promotes due jobs, recovers expired leases, and prunes old occurrence rows. The
-heartbeat's audited control reconciles both the durable definition and the underlying pg_cron entry. Jobs
-and Workers show each resulting execution. When pg_cron is unavailable, startup warns, keeps worker-owned
-maintenance as the fallback, and continues with the rest of the demo.
+Startup synchronizes a namespaced one-minute heartbeat schedule through `Queue.syncSchedules`, and the
+workers evaluate due schedules in-process with advisory-lock coordination and SQL-level occurrence
+deduplication. The Cron view distinguishes the application heartbeat from the worker-owned maintenance
+loop that promotes due jobs, recovers expired leases, and prunes old occurrence rows. The heartbeat's
+audited control updates the durable schedule definition, and Jobs and Workers show each resulting
+execution.
 
 Dashboard mounting is optional at the application boundary. Pass `{ dashboard: false }` to
 `createDemoApplication` to omit both oRPC and SSE routes while retaining Hono order creation,
@@ -110,5 +101,5 @@ transactional enqueue, workers, job inspection, and health. The integration suit
 application order row and accepted Workhorse job have the same PostgreSQL transaction ID.
 
 Set `DATABASE_URL` and `PORT` to override the local defaults. The application installs the current
-Workhorse schema and its idempotent demo table at startup. It prefers centralized pg_cron maintenance
-and falls back to Workhorse's portable worker-owned maintenance mode when pg_cron is unavailable.
+Workhorse schema and its idempotent demo table at startup. Maintenance runs through the workers
+themselves, so no external scheduler or PostgreSQL extension is required.
