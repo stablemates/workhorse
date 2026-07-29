@@ -326,10 +326,11 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
     return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
   };
   const queues = activity?.queues ?? [];
-  const chartData = (activity?.buckets ?? []).map((bucket) => ({
-    bucket: labelFormat(bucket.bucketStart),
-    ...Object.fromEntries(queues.map((queue) => [queue, bucket.counts[queue] ?? 0])),
-  }));
+  const chartData = (activity?.buckets ?? []).map((bucket) => {
+    const point: Record<string, string | number> = { bucket: labelFormat(bucket.bucketStart) };
+    for (const queue of queues) point[queue] = bucket.counts[queue] ?? 0;
+    return point;
+  });
   const series = queues.map((queue, index) => ({
     name: queue,
     color: queueSeriesColors[index % queueSeriesColors.length]!,
