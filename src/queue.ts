@@ -136,6 +136,22 @@ export class Queue {
     return result.rows[0]!.count;
   }
 
+  async pauseQueue(queueName = this.defaultQueue): Promise<void> {
+    await this.database.query("SELECT workhorse.pause_queue_v1($1)", [queueName]);
+  }
+
+  async resumeQueue(queueName = this.defaultQueue): Promise<void> {
+    await this.database.query("SELECT workhorse.resume_queue_v1($1)", [queueName]);
+  }
+
+  async purgeQueue(queueName = this.defaultQueue): Promise<number> {
+    const result = await this.database.query<{ count: number }>(
+      "SELECT workhorse.purge_queue_v1($1) AS count",
+      [queueName],
+    );
+    return result.rows[0]!.count;
+  }
+
   async tick(
     options: { promoteLimit?: number; recoverLimit?: number } = {},
   ): Promise<MaintenancePhaseResult[]> {

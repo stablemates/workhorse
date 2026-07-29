@@ -6,6 +6,7 @@ import {
   createDemoApplication,
   createDemoDatabase,
   createLocalOperator,
+  createLocalQueueController,
   createLocalScheduleController,
   installDemoSchema,
   seedDemoData,
@@ -41,6 +42,7 @@ notificationClient.on("error", (error) => {
 const { app, workhorse } = createDemoApplication(database, {
   dashboardRefresh,
   operator: createLocalOperator(database),
+  queueController: createLocalQueueController(database),
   scheduleController: createLocalScheduleController(database),
   workerPollMs,
   close: async () => {
@@ -54,7 +56,7 @@ const serveDashboard = serveStatic({
   root: "./dist/dashboard",
   rewriteRequestPath: () => "/index.html",
 });
-for (const route of ["/tasks", "/cron", "/system", "/workers"]) {
+for (const route of ["/tasks", "/cron", "/queues", "/system", "/workers", "/settings"]) {
   app.get(route, serveDashboard);
 }
 if (process.env.SEED_DEMO_DATA !== "false") {

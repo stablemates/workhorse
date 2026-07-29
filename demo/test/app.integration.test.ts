@@ -9,6 +9,7 @@ import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../src/local-da
 import {
   createDemoApplication,
   createDemoDatabase,
+  createLocalQueueController,
   createLocalOperator,
   createLocalScheduleController,
   DEMO_LONG_RUNNING_MS,
@@ -41,7 +42,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
     workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE`);
+    workhorse.queue_control, workhorse.job_outcome, workhorse.job_runtime,
+    workhorse.job RESTART IDENTITY CASCADE`);
 });
 
 afterAll(async () => {
@@ -251,7 +253,7 @@ describe("Workhorse demo", () => {
       });
       expect(await client.dashboard.system()).toMatchObject({
         failures: [],
-        health: { schemaVersion: 3, counts: { succeeded: 1 } },
+        health: { schemaVersion: 4, counts: { succeeded: 1 } },
       });
       const detail = await client.dashboard.jobDetail({ id: accepted.jobId });
       expect(detail).toMatchObject({
@@ -449,6 +451,19 @@ describe("Workhorse demo", () => {
       }),
     ).rejects.toThrow(/read-only|FORBIDDEN/i);
     await expect(
+      client.dashboard.setQueuePaused({
+        queue: "default",
+        paused: true,
+        audit: { actor: "test", reason: "verify read-only", requestId: "readonly-queue" },
+      }),
+    ).rejects.toThrow(/read-only|FORBIDDEN/i);
+    await expect(
+      client.dashboard.purgeQueue({
+        queue: "default",
+        audit: { actor: "test", reason: "verify read-only", requestId: "readonly-purge" },
+      }),
+    ).rejects.toThrow(/read-only|FORBIDDEN/i);
+    await expect(
       client.dashboard.setWorkerPaused({
         workerId: DEMO_WORKERS[0],
         paused: true,
@@ -622,6 +637,109 @@ describe("Workhorse demo", () => {
     } finally {
       await workhorse.stop();
     }
+  });
+
+  it("reads queue stats and audits pause, resume, and safe purge mutations", async () => {
+    const queueName = "managed-demo";
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      queueController: createLocalQueueController(database),
+    });
+    const client = dashboardClient(app);
+    const activeId = await workhorse.context.queue.enqueue("active", {}, { queue: queueName });
+    expect((await workhorse.context.queue.claim("demo-worker", { queue: queueName }))?.id).toBe(
+      activeId,
+    );
+    await workhorse.context.queue.enqueue("ready", {}, { queue: queueName });
+    await workhorse.context.queue.enqueue(
+      "scheduled",
+      {},
+      {
+        queue: queueName,
+        runAt: new Date(Date.now() + 60_000),
+      },
+    );
+
+    await expect(client.dashboard.queues()).resolves.toMatchObject({
+      queues: [
+        {
+          queue: queueName,
+          paused: false,
+          scheduled: 1,
+          ready: 1,
+          active: 1,
+          succeeded: 0,
+          failed: 0,
+          terminalCountsApproximate: false,
+        },
+      ],
+    });
+    await expect(
+      client.dashboard.setQueuePaused({
+        queue: queueName,
+        paused: true,
+        audit: { actor: "operator", reason: "pause queue", requestId: "queue-pause" },
+      }),
+    ).resolves.toEqual({ paused: true });
+    await expect(
+      workhorse.context.queue.claim("paused-worker", { queue: queueName }),
+    ).resolves.toBeNull();
+    await expect(
+      client.dashboard.setQueuePaused({
+        queue: queueName,
+        paused: false,
+        audit: { actor: "operator", reason: "resume queue", requestId: "queue-resume" },
+      }),
+    ).resolves.toEqual({ paused: false });
+    await expect(
+      client.dashboard.purgeQueue({
+        queue: queueName,
+        audit: { actor: "operator", reason: "clear queue", requestId: "queue-purge" },
+      }),
+    ).resolves.toEqual({ deletedCount: 2 });
+    await expect(workhorse.context.queue.getJob(activeId)).resolves.toMatchObject({
+      state: "active",
+    });
+
+    expect(
+      (
+        await pool.query(
+          `SELECT action, target, actor, reason, request_id, before, after, status
+             FROM public.workhorse_demo_audit ORDER BY id`,
+        )
+      ).rows,
+    ).toEqual([
+      {
+        action: "setQueuePaused",
+        target: `queue:${queueName}`,
+        actor: "operator",
+        reason: "pause queue",
+        request_id: "queue-pause",
+        before: { paused: false },
+        after: { paused: true },
+        status: "succeeded",
+      },
+      {
+        action: "setQueuePaused",
+        target: `queue:${queueName}`,
+        actor: "operator",
+        reason: "resume queue",
+        request_id: "queue-resume",
+        before: { paused: true },
+        after: { paused: false },
+        status: "succeeded",
+      },
+      {
+        action: "purgeQueue",
+        target: `queue:${queueName}`,
+        actor: "operator",
+        reason: "clear queue",
+        request_id: "queue-purge",
+        before: { purgeable_jobs: 2 },
+        after: { deletedCount: 2 },
+        status: "succeeded",
+      },
+    ]);
   });
 
   it("reconciles local schedule toggles with worker-owned schedule definitions", async () => {
