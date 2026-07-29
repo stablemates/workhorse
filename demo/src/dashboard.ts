@@ -360,6 +360,10 @@ async function readDashboardTaskCountsExact(database: DemoDatabase): Promise<Das
   };
 }
 
+/** Legend cap for the activity chart; overflow groups are folded into "other". */
+const maxActivityGroups = 10;
+const otherActivityGroup = "other";
+
 export const activityPeriods: Record<
   DashboardActivityPeriod,
   { windowSeconds: number; bucketSeconds: number }
@@ -429,10 +433,22 @@ export async function readDashboardActivity(
      GROUP BY b.bucket_start, t.group_key
      ORDER BY b.bucket_start
   `);
-  const groups = [
-    ...new Set(rows.rows.flatMap((row) => (row.group_key === null ? [] : [row.group_key]))),
+  const totals = new Map<string, number>();
+  for (const row of rows.rows) {
+    if (row.group_key === null) continue;
+    totals.set(row.group_key, (totals.get(row.group_key) ?? 0) + row.count);
+  }
+  // Cap the legend at 10 entries: keep the 9 busiest groups and fold the rest into "other".
+  const ranked = [...totals.entries()]
     // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
-  ].sort();
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([group]) => group);
+  const kept = ranked.length > maxActivityGroups ? ranked.slice(0, maxActivityGroups - 1) : ranked;
+  const keptSet = new Set(kept);
+  const hasOther = ranked.length > keptSet.size;
+  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+  const groups = [...kept].sort();
+  if (hasOther) groups.push(otherActivityGroup);
   const byBucket = new Map<string, DashboardActivityBucket>();
   for (const row of rows.rows) {
     const bucketStart = toIso(row.bucket_start);
@@ -441,7 +457,9 @@ export async function readDashboardActivity(
       bucket = { bucketStart, counts: {} };
       byBucket.set(bucketStart, bucket);
     }
-    if (row.group_key !== null) bucket.counts[row.group_key] = row.count;
+    if (row.group_key === null) continue;
+    const key = keptSet.has(row.group_key) ? row.group_key : otherActivityGroup;
+    bucket.counts[key] = (bucket.counts[key] ?? 0) + row.count;
   }
   return {
     capturedAt: new Date().toISOString(),
