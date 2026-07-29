@@ -92,7 +92,7 @@ export type DashboardActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 
 export interface DashboardActivityBucket {
   bucketStart: string;
-  count: number;
+  counts: Record<string, number>;
 }
 
 export interface DashboardActivityPage {
@@ -100,6 +100,7 @@ export interface DashboardActivityPage {
   filter: DashboardTaskFilter;
   period: DashboardActivityPeriod;
   bucketSeconds: number;
+  queues: string[];
   buckets: DashboardActivityBucket[];
 }
 
@@ -310,16 +311,21 @@ export const activityPeriods: Record<
   "7d": { windowSeconds: 7 * 24 * 60 * 60, bucketSeconds: 6 * 60 * 60 },
 };
 
-/** Bucketed task activity over a trailing window, honoring the same status filter as the list. */
+/** Bucketed task activity by queue over a trailing window, honoring the list's status filter. */
 export async function readDashboardActivity(
   database: DemoDatabase,
   filter: DashboardTaskFilter,
   period: DashboardActivityPeriod,
 ): Promise<DashboardActivityPage> {
   const { windowSeconds, bucketSeconds } = activityPeriods[period];
-  const rows = await database.execute<{ bucket_start: Date | string; count: number }>(sql`
+  const rows = await database.execute<{
+    bucket_start: Date | string;
+    queue: string | null;
+    count: number;
+  }>(sql`
     WITH tasks AS (
-      SELECT COALESCE(r.state, o.state) AS state,
+      SELECT j.queue_name AS queue,
+             COALESCE(r.state, o.state) AS state,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt,
              COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
         FROM workhorse.job j
@@ -340,24 +346,35 @@ export async function readDashboardActivity(
         make_interval(secs => ${bucketSeconds})
       ) AS bucket_start
     )
-    SELECT b.bucket_start, count(t.updated_at)::integer AS count
+    SELECT b.bucket_start, t.queue, count(t.updated_at)::integer AS count
       FROM buckets b
       LEFT JOIN tasks t
         ON t.updated_at >= b.bucket_start
        AND t.updated_at < b.bucket_start + make_interval(secs => ${bucketSeconds})
        AND ${taskFilterCondition(filter)}
-     GROUP BY b.bucket_start
+     GROUP BY b.bucket_start, t.queue
      ORDER BY b.bucket_start
   `);
+  const queues = [
+    ...new Set(rows.rows.flatMap((row) => (row.queue === null ? [] : [row.queue]))),
+  ].sort();
+  const byBucket = new Map<string, DashboardActivityBucket>();
+  for (const row of rows.rows) {
+    const bucketStart = toIso(row.bucket_start);
+    let bucket = byBucket.get(bucketStart);
+    if (!bucket) {
+      bucket = { bucketStart, counts: {} };
+      byBucket.set(bucketStart, bucket);
+    }
+    if (row.queue !== null) bucket.counts[row.queue] = row.count;
+  }
   return {
     capturedAt: new Date().toISOString(),
     filter,
     period,
     bucketSeconds,
-    buckets: rows.rows.map((row) => ({
-      bucketStart: toIso(row.bucket_start),
-      count: row.count,
-    })),
+    queues,
+    buckets: [...byBucket.values()],
   };
 }
 
