@@ -272,9 +272,7 @@ const approximateCountThreshold = 50_000;
 
 /** Planner row estimate for a query (PostgreSQL wiki "count estimate" technique). */
 async function estimateRows(database: DemoDatabase, query: ReturnType<typeof sql>) {
-  const plan = await database.execute<Record<string, unknown>>(
-    sql`EXPLAIN (FORMAT JSON) ${query}`,
-  );
+  const plan = await database.execute<Record<string, unknown>>(sql`EXPLAIN (FORMAT JSON) ${query}`);
   const cell = Object.values(plan.rows[0] ?? {})[0];
   const parsed: unknown = typeof cell === "string" ? JSON.parse(cell) : cell;
   const rows = (parsed as Array<{ Plan?: { "Plan Rows"?: number } }>)[0]?.Plan?.["Plan Rows"];
@@ -323,9 +321,7 @@ export async function readDashboardTaskCounts(
   };
 }
 
-async function readDashboardTaskCountsExact(
-  database: DemoDatabase,
-): Promise<DashboardTaskCounts> {
+async function readDashboardTaskCountsExact(database: DemoDatabase): Promise<DashboardTaskCounts> {
   const countRows = await database.execute<{
     all_count: number;
     scheduled_count: number;
