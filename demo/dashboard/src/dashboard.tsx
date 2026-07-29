@@ -484,6 +484,9 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
           width: 170,
           wrapperStyle: { paddingRight: 16, textAlign: "left" },
         }}
+        styles={{
+          legend: { justifyContent: "flex-start", flexDirection: "column", alignItems: "flex-start" },
+        }}
         gridAxis="xy"
         tickLine="y"
         withYAxis
