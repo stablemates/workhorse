@@ -35,7 +35,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 7. `complete_v1` deletes only the matching unexpired active runtime and inserts succeeded outcome, closed attempt history, and event atomically.
 8. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
 9. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID.
-10. `maintain_v1` performs bounded due promotion, expired-lease recovery, and old occurrence pruning for pg_cron.
+10. `maintain_v1` performs bounded due promotion, expired-lease recovery, and old occurrence pruning for the worker-owned scheduler.
 
 Every closed attempt has one immutable `attempt_history` row. Every lifecycle boundary appends a `job_event`.
 
@@ -61,33 +61,32 @@ Worker failpoints at `afterClaim`, `beforeHandler`, `afterHandler`, `beforeCompl
 
 Delivery is at least once. External effects require application-level idempotency.
 
-## pg_cron scheduling contract
+## Worker-owned scheduling contract
 
-`PgCronScheduler.sync(definitions, options?)` connects to both the target database and the cluster's pg_cron metadata database, normally `postgres`.
+`Queue.syncSchedules(namespace, definitions, { prune })` runs against the target database only, normally during deployment.
 
 - Namespaces and names are stable deployment identities using letters, digits, dot, underscore, and hyphen.
 - Definitions contain cron text plus a typed Workhorse queue job; arbitrary SQL is not accepted.
-- pg_cron job names are scoped by target database and namespace.
-- The target definition transaction commits before cron metadata reconciliation. Revision-fenced commands make a failed deploy safely retryable even though the two databases are not atomically distributed.
-- A target-wide metadata session lock coordinates synchronization with reset cleanup; a target namespace lock and metadata transaction lock serialize definition and cron reconciliation.
-- Pruning touches only current-role jobs with the exact Workhorse target/namespace prefix.
-- One maintenance entry runs every second by default with bounded 1,000-row promotion/recovery and 10,000-row occurrence-pruning limits.
-- Workers default to external maintenance. `maintenance: "worker"` restores cooperative per-claim maintenance for environments without pg_cron.
-- pg_cron schedules call `fire_schedule_v1(namespace, name, revision)` and use the observed execution second as their occurrence key; stale, disabled, or missing definitions are no-ops.
-- Callers using `trigger(name, scheduledAt)` can supply a stable external occurrence timestamp.
+- Definition upsert is one target-database transaction; a per-namespace advisory lock serializes concurrent deployments.
+- Workers parse cron expressions in process and compute each enabled definition's due occurrences from its last durable occurrence.
+- Worker maintenance passes run at most once per `maintenanceIntervalMs` (default one second); transaction-scoped advisory locks inside `maintain_v1` and `fire_schedule_v1` make concurrent passes from other workers no-ops, so any number of workers run without duplicate fires and any surviving worker takes over.
+- Maintenance is bounded: 1,000-row promotion/recovery and 10,000-row occurrence-pruning limits per pass.
+- `Worker` option `scheduleNamespaces` selects which namespaces a worker evaluates; `scheduleCatchupLimit` bounds missed occurrences fired after downtime.
+- Worker fires call `fire_schedule_v1(namespace, name, revision, occurrence)` with the planned occurrence second as the occurrence key; stale, disabled, or missing definitions are no-ops.
+- Callers using `Queue.fireSchedule(namespace, name, revision, occurrenceAt)` can supply a stable external occurrence timestamp.
 - Occurrence deduplication is enqueue-level only. Worker delivery remains at least once.
 
 ## History and retention
 
 The default partitions keep history inserts available if maintenance is late. `create_history_week_v1(week)` normalizes its argument to Monday, serializes creation for that boundary, and moves matching fallback rows into the new event and attempt partitions. `retire_history_week_v1(week)` drops both partitions only after the week is complete. Clean installation precreates the current week and four future weeks, while each `maintain_v1` call repairs and replenishes the four-week horizon when its edge is missing.
 
-Schedule occurrence keys older than 30 days are pruned in bounded batches by default. No automatic retention exists for `job` or `job_outcome`, and `cron.job_run_details` retention remains administrator-owned.
+Schedule occurrence keys older than 30 days are pruned in bounded batches by default. No automatic retention exists for `job` or `job_outcome`.
 
 ## Validation limits
 
 - The schema file supports clean installation, not online migration from schema version 1.
-- Production scheduling requires pg_cron 1.6+, cross-database scheduling grants, target-role authentication, and active database compute. Run `pnpm pg-cron:check`; provider details are in `docs/pg-cron-requirements.md`.
-- Schedule precision is one second and cron expressions use the configured pg_cron timezone.
+- Schedules fire only while at least one worker with matching `scheduleNamespaces` runs; drift is bounded by the worker maintenance cadence.
+- Schedule precision is one second and cron expressions are evaluated in the worker's configured timezone.
 - Polling remains authoritative; `NOTIFY` is only a wake hint.
 - Backoff/jitter and automated history-retention policy are not productized.
 - Centralized runtime churn, partial-index maintenance, autovacuum behavior, and migration duration require production-scale measurement.

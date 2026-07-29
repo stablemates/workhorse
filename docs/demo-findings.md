@@ -13,7 +13,7 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 - a Hono request inserts an application order and its Workhorse job in the same Drizzle transaction;
 - a Hono-managed worker processes the job and shuts down through the integration lifecycle;
 - an intentional handler error records a `retry` attempt and succeeds on attempt 2;
-- `PgCronScheduler` synchronizes and fires a recurring definition with occurrence deduplication;
+- the worker-owned scheduler synchronizes and fires a recurring definition with occurrence deduplication;
 - the typed oRPC snapshot exposes queues, jobs, schedules, workers, failures, and database health;
 - the dashboard can be omitted without changing core queue behavior;
 - `pnpm demo` recreates only a purpose-guarded demo database, builds the workspace, and serves the app.
@@ -51,11 +51,11 @@ bounded validation. This is tracked by **P0-05 Built-in retry policies**.
 ### A3. Framework integrations do not own schedule deployment
 
 The Drizzle adapter can enqueue through a caller-owned transaction, but recurring schedules still need
-separate raw `pg` target and metadata pools plus an explicit `PgCronScheduler.sync()` call. Hono has
+an explicit deploy-time schedule synchronization call against a raw `pg` pool. Hono has
 worker lifecycle hooks but no deploy-time schedule synchronization hook.
 
 **Needed:** a framework-neutral deploy lifecycle abstraction, plus Drizzle and Hono helpers that retain
-clear pool ownership and still expose the full `PgCronScheduler` result. This does not block the current
+clear pool ownership and still expose the full synchronization result. This does not block the current
 API, but should be designed before adding more framework integrations.
 
 ### A4. Worker identity is observational only
@@ -108,14 +108,16 @@ that clean-install boundary becomes user-visible.
 **Needed:** ordered transactional migrations, independent schema and protocol versions, dry-run/status
 commands, rollback guidance, and upgrade tests. This is tracked by **P2-07 Schema migration framework**.
 
-### D2. pg_cron remains the highest-friction prerequisite
+### D2. Recurring-job setup friction was removed with the pg_cron dependency
 
-Recurring jobs require a second metadata connection, matching deployment roles, grants, target
-authentication, and cluster-level configuration. The base demo remains portable by making recurrence
-optional, but that can hide deployment failures until scheduling is enabled.
+Earlier iterations required pg_cron: a second metadata connection, matching deployment roles, grants,
+target authentication, and cluster-level configuration, and the demo had to make recurrence optional to
+stay portable. The worker-owned scheduler removed that entire prerequisite class: recurring jobs now
+run on plain PostgreSQL through in-process cron evaluation, advisory-lock coordination, and SQL
+occurrence deduplication.
 
-**Needed:** keep `pnpm pg-cron:check` prominent, add provider-specific verified recipes over time, and
-surface preflight failures with actionable remediation before schedule synchronization.
+**Needed:** document worker scheduling cadence and catch-up behavior in task-oriented guides, and keep
+the demo exercising recurring jobs by default now that no extra infrastructure is required.
 
 ### D3. Operational semantics need task-oriented guides
 
