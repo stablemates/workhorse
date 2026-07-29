@@ -2,6 +2,9 @@ docs/research
 node_modules/
 dist/
 .env
+.env.*
+!.env.example
+!**/.env.example
 *.tgz
 benchmark*.json
 benchmark-artifacts/

@@ -43,6 +43,13 @@ pnpm db:reset:all
 pnpm check
 ```
 
+Run `pnpm dev` for the demo at `https://workhorse.localhost`. Portless assigns the public port and
+automatically prefixes linked worktrees with their branch name, for example
+`https://feature-name.workhorse.localhost`. The API remains behind Vite on a deterministic
+worktree-specific internal port. The first HTTPS setup may request administrator access. On Linux,
+run `pnpm dev:trust`; if it reports that Chromium's NSS tools are missing, install the displayed
+package with `sudo` and rerun it.
+
 `pnpm check` finishes by exporting only tracked files to a temporary clean checkout, installing the
 frozen lockfile, running `pnpm demo`, and exercising the dashboard snapshot, recurring schedule
 synchronization, transactional order, worker, retry, and terminal-failure paths.
@@ -59,6 +66,19 @@ Local tooling keeps four databases separate:
 `pnpm db:reset:all` recreates all four databases and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, `_bench`, or `_demo` suffix, requires confirmation internally, and refuses remote hosts unless `WORKHORSE_ALLOW_REMOTE_RESET=1` is deliberately set.
 
 The defaults use the local `workhorse` role. Override them independently with `WORKHORSE_DEV_DATABASE_URL`, `WORKHORSE_TEST_DATABASE_URL`, `WORKHORSE_BENCH_DATABASE_URL`, and `WORKHORSE_DEMO_DATABASE_URL`. Purpose-specific destructive reset, test, and benchmark tooling intentionally ignores generic `DATABASE_URL`. Application runtimes may still accept `DATABASE_URL`; the demo otherwise inherits `WORKHORSE_DEMO_DATABASE_URL`.
+
+### Worktrees
+
+Use linked Git worktrees for medium and large features. The Lefthook `post-checkout` hook installs
+the frozen lockfile, copies local `.env` files from the primary checkout with mode `0600`, rewrites
+all four database URLs with a stable worktree suffix, assigns a unique internal API port, and
+provisions the four databases. Portless uses the branch name in the public `.localhost` URL.
+
+Remove a worktree with `pnpm worktree:remove <path>` so its four databases are dropped before Git
+removes the checkout. Git has no `post-worktree-remove` hook, so `post-checkout` and `post-merge`
+also run `pnpm worktree:prune` to clean registered databases left behind by a manual
+`git worktree remove`. Run `pnpm worktree:cleanup` inside a linked worktree only when you want to
+drop its databases without removing the checkout.
 
 ## Run the demo
 

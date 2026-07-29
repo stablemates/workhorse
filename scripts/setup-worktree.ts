@@ -1,0 +1,56 @@
+import { chmod, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  copyIgnoredEnvironmentFiles,
+  createWorktreeResources,
+  parseEnvironment,
+  readEnvironment,
+  resourceEnvironment,
+  run,
+  updateEnvironment,
+  worktreeContext,
+  writeResourceRegistry,
+} from "./worktree-resources.js";
+
+const context = worktreeContext();
+if (!context.linked) {
+  console.log("Primary worktree detected; no worktree-specific resources are needed");
+  process.exit(0);
+}
+
+const copied = await copyIgnoredEnvironmentFiles(context.primaryWorktreeRoot, context.worktreeRoot);
+const targetEnvironmentPath = join(context.worktreeRoot, ".env");
+let targetEnvironmentContents: string;
+try {
+  targetEnvironmentContents = await readFile(targetEnvironmentPath, "utf8");
+} catch {
+  targetEnvironmentContents = await readFile(join(context.worktreeRoot, ".env.example"), "utf8");
+}
+
+const primaryEnvironment = {
+  ...process.env,
+  ...parseEnvironment(targetEnvironmentContents),
+  ...(await readEnvironment(join(context.primaryWorktreeRoot, ".env"))),
+};
+const resources = createWorktreeResources(
+  context.worktreeId,
+  context.worktreeRoot,
+  context.gitDirectory,
+  primaryEnvironment,
+);
+const generatedEnvironment = resourceEnvironment(resources);
+await writeFile(
+  targetEnvironmentPath,
+  updateEnvironment(targetEnvironmentContents, generatedEnvironment),
+);
+await chmod(targetEnvironmentPath, 0o600);
+
+await writeResourceRegistry(context.commonGitDirectory, resources);
+await run("pnpm", ["db:reset:all"], {
+  cwd: context.worktreeRoot,
+  env: { ...process.env, ...generatedEnvironment },
+});
+
+console.log(
+  `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s), provisioned four databases, and assigned API port ${generatedEnvironment.WORKHORSE_API_PORT}`,
+);
