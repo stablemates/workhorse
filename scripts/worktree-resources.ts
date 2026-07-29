@@ -131,7 +131,6 @@ export function resourceEnvironment(resources: WorktreeResources): Record<string
         resources.databaseUrls[purpose],
       ]),
     ),
-    WORKHORSE_API_PORT: String(worktreeApiPort(resources.worktreeId)),
   };
 }
 
@@ -239,10 +238,6 @@ async function findEnvironmentFiles(root: string): Promise<string[]> {
 function isLocalEnvironmentFile(name: string): boolean {
   if (name.endsWith(".example")) return false;
   return name === ".env" || name.startsWith(".env.");
-}
-
-function worktreeApiPort(worktreeId: string): number {
-  return 10_000 + (Number.parseInt(worktreeHash(worktreeId), 16) % 40_000);
 }
 
 function worktreeHash(value: string): string {

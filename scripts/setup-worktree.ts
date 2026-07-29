@@ -52,5 +52,5 @@ await run("pnpm", ["db:reset:all"], {
 });
 
 console.log(
-  `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s), provisioned four databases, and assigned API port ${generatedEnvironment.WORKHORSE_API_PORT}`,
+  `Configured linked worktree ${context.worktreeId}: copied ${copied.length} env file(s) and provisioned four databases`,
 );

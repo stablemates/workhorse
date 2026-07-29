@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
+import { resolveInternalApiPort } from "./development-port.js";
+
+const apiPort = await resolveInternalApiPort(process.env.WORKHORSE_API_PORT);
+const childEnvironment = { ...process.env, WORKHORSE_API_PORT: String(apiPort) };
 
 const commands = [
   ["pnpm", ["--filter", "@workhorse/demo", "dev:api"]],
   ["pnpm", ["--filter", "@workhorse/demo", "dev:dashboard"]],
 ] as const;
 const children = commands.map(([command, arguments_]) =>
-  spawn(command, arguments_, { env: process.env, stdio: "inherit" }),
+  spawn(command, arguments_, { env: childEnvironment, stdio: "inherit" }),
 );
 
 let stopping = false;
