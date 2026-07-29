@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { CronExpressionParser } from "cron-parser";
 import { Queue } from "./queue.js";
+import type { MaintenancePhaseResult } from "./queue.js";
 import type { ClaimedJob, Json } from "./types.js";
 
 export type Failpoint =
@@ -13,6 +14,11 @@ export type Handler<TPayload = Json, TResult extends Json = Json> = (
   payload: TPayload,
   context: { job: ClaimedJob<TPayload>; signal: AbortSignal },
 ) => Promise<TResult> | TResult;
+
+export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
+  loop: "tick" | "housekeeping";
+  observedAt: string;
+}
 
 export class InjectedCrashError extends Error {
   constructor(readonly failpoint: Failpoint) {
@@ -34,6 +40,10 @@ export interface WorkerOptions {
   pollMs?: number;
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
   maintenanceIntervalMs?: number;
+  /** Minimum delay between partition replenishment and occurrence-pruning passes. */
+  housekeepingIntervalMs?: number;
+  /** Receives one telemetry event for every SQL-owned maintenance phase. */
+  onMaintenance?: (telemetry: WorkerMaintenanceTelemetry) => void;
   /** Namespaces whose enabled recurring schedules this worker should evaluate and fire. */
   scheduleNamespaces?: readonly string[];
   /** Maximum missed occurrences fired for one schedule in one maintenance pass. */
@@ -58,9 +68,12 @@ export class Worker {
   private readonly heartbeatMs: number;
   private readonly pollMs: number;
   private readonly maintenanceIntervalMs: number;
+  private readonly housekeepingIntervalMs: number;
   private readonly scheduleNamespaces: readonly string[];
   private readonly scheduleCatchupLimit: number;
-  private lastMaintenanceAt = Number.NEGATIVE_INFINITY;
+  private lastTickAt = Number.NEGATIVE_INFINITY;
+  private lastHousekeepingAt = Number.NEGATIVE_INFINITY;
+  private readonly latestMaintenance = new Map<string, WorkerMaintenanceTelemetry>();
   private stopping = false;
 
   constructor(
@@ -73,11 +86,14 @@ export class Worker {
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
     this.pollMs = options.pollMs ?? 250;
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1_000;
+    this.housekeepingIntervalMs = options.housekeepingIntervalMs ?? 60_000;
     this.scheduleNamespaces = [...new Set(options.scheduleNamespaces ?? [])];
     this.scheduleCatchupLimit = options.scheduleCatchupLimit ?? 100;
     if (this.heartbeatMs >= this.leaseMs) throw new Error("heartbeatMs must be less than leaseMs");
     if (this.maintenanceIntervalMs < 100)
       throw new Error("maintenanceIntervalMs must be at least 100");
+    if (this.housekeepingIntervalMs < 100)
+      throw new Error("housekeepingIntervalMs must be at least 100");
     if (this.scheduleCatchupLimit < 1 || this.scheduleCatchupLimit > 10_000)
       throw new Error("scheduleCatchupLimit must be between 1 and 10000");
   }
@@ -92,6 +108,10 @@ export class Worker {
 
   stop(): void {
     this.stopping = true;
+  }
+
+  maintenanceTelemetry(): WorkerMaintenanceTelemetry[] {
+    return [...this.latestMaintenance.values()];
   }
 
   private async inject(point: Failpoint, job: ClaimedJob): Promise<void> {
@@ -164,27 +184,44 @@ export class Worker {
 
   private async runMaintenance(): Promise<void> {
     const nowMs = Date.now();
-    if (nowMs - this.lastMaintenanceAt < this.maintenanceIntervalMs) return;
-    await this.queue.maintain();
-    this.lastMaintenanceAt = nowMs;
-    if (this.scheduleNamespaces.length === 0) return;
+    if (nowMs - this.lastTickAt >= this.maintenanceIntervalMs) {
+      for (const result of await this.queue.tick()) this.recordMaintenance("tick", result);
+      this.lastTickAt = nowMs;
 
-    const now = new Date();
-    for (const schedule of await this.queue.schedules(this.scheduleNamespaces)) {
-      for (const occurrence of dueOccurrences(
-        schedule.schedule,
-        schedule.lastOccurrenceAt,
-        now,
-        this.scheduleCatchupLimit,
-      )) {
-        await this.queue.fireSchedule(
-          schedule.namespace,
-          schedule.name,
-          schedule.revision,
-          occurrence,
-        );
+      if (this.scheduleNamespaces.length > 0) {
+        const now = new Date();
+        for (const schedule of await this.queue.schedules(this.scheduleNamespaces)) {
+          for (const occurrence of dueOccurrences(
+            schedule.schedule,
+            schedule.lastOccurrenceAt,
+            now,
+            this.scheduleCatchupLimit,
+          )) {
+            await this.queue.fireSchedule(
+              schedule.namespace,
+              schedule.name,
+              schedule.revision,
+              occurrence,
+            );
+          }
+        }
       }
     }
+
+    if (nowMs - this.lastHousekeepingAt >= this.housekeepingIntervalMs) {
+      for (const result of await this.queue.housekeep())
+        this.recordMaintenance("housekeeping", result);
+      this.lastHousekeepingAt = nowMs;
+    }
+  }
+
+  private recordMaintenance(
+    loop: WorkerMaintenanceTelemetry["loop"],
+    result: MaintenancePhaseResult,
+  ): void {
+    const telemetry = { ...result, loop, observedAt: new Date().toISOString() };
+    this.latestMaintenance.set(`${loop}:${result.phase}`, telemetry);
+    this.options.onMaintenance?.(telemetry);
   }
 
   async run(signal?: AbortSignal): Promise<void> {
@@ -194,9 +231,11 @@ export class Worker {
       const worked = await this.runOnce();
       // Do not sleep after work. This drains a backlog quickly while avoiding an idle busy loop.
       if (!worked) {
-        await sleep(Math.min(this.pollMs, this.maintenanceIntervalMs), undefined, { signal }).catch(
-          () => undefined,
-        );
+        await sleep(
+          Math.min(this.pollMs, this.maintenanceIntervalMs, this.housekeepingIntervalMs),
+          undefined,
+          { signal },
+        ).catch(() => undefined);
       }
     }
   }

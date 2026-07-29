@@ -46,10 +46,14 @@ export interface DashboardScheduleRow {
     message: string | null;
   } | null;
   maintenance?: {
-    batchSize: number;
-    occurrenceRetentionDays: number;
-    occurrencePruneLimit: number;
+    intervalMs: number;
+    phases: string[];
   } | null;
+}
+
+export interface MaintenanceLoopCadences {
+  tickIntervalMs: number;
+  housekeepingIntervalMs: number;
 }
 
 export interface DashboardWorkerRow {
@@ -326,7 +330,59 @@ export async function readDashboardTasks(
   };
 }
 
-export async function readDashboardCron(database: DemoDatabase): Promise<DashboardCronPage> {
+function systemMaintenanceSchedules(
+  now: Date,
+  cadences: MaintenanceLoopCadences,
+): DashboardScheduleRow[] {
+  const updatedAt = now.toISOString();
+  return [
+    {
+      kind: "system",
+      identity: { kind: "system", namespace: "workhorse", name: "tick" },
+      namespace: "workhorse",
+      name: "tick",
+      cron: `every ${cadences.tickIntervalMs}ms`,
+      queue: null,
+      type: "workhorse.tick_v1",
+      enabled: true,
+      active: true,
+      revision: "1",
+      updatedAt,
+      occurrenceCount: 0,
+      lastFiredAt: null,
+      lastRun: null,
+      maintenance: {
+        intervalMs: cadences.tickIntervalMs,
+        phases: ["promote", "recover"],
+      },
+    },
+    {
+      kind: "system",
+      identity: { kind: "system", namespace: "workhorse", name: "housekeeping" },
+      namespace: "workhorse",
+      name: "housekeeping",
+      cron: `every ${cadences.housekeepingIntervalMs}ms`,
+      queue: null,
+      type: "workhorse.housekeep_v1",
+      enabled: true,
+      active: true,
+      revision: "1",
+      updatedAt,
+      occurrenceCount: 0,
+      lastFiredAt: null,
+      lastRun: null,
+      maintenance: {
+        intervalMs: cadences.housekeepingIntervalMs,
+        phases: ["history_partitions", "schedule_occurrences"],
+      },
+    },
+  ];
+}
+
+export async function readDashboardCron(
+  database: DemoDatabase,
+  maintenanceLoops: MaintenanceLoopCadences,
+): Promise<DashboardCronPage> {
   const now = new Date();
   const scheduleRows = await database.execute<{
     namespace: string;
@@ -355,25 +411,28 @@ export async function readDashboardCron(database: DemoDatabase): Promise<Dashboa
 
   return {
     capturedAt: now.toISOString(),
-    schedules: scheduleRows.rows.map((row) => {
-      return {
-        kind: "user" as const,
-        identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
-        namespace: row.namespace,
-        name: row.name,
-        cron: row.cron,
-        queue: row.queue,
-        type: row.type,
-        enabled: row.enabled,
-        active: row.enabled,
-        revision: row.revision,
-        updatedAt: toIso(row.updated_at),
-        occurrenceCount: row.occurrence_count,
-        lastFiredAt: toIsoOrNull(row.last_fired_at),
-        lastRun: null,
-        maintenance: null,
-      };
-    }),
+    schedules: [
+      ...systemMaintenanceSchedules(now, maintenanceLoops),
+      ...scheduleRows.rows.map((row) => {
+        return {
+          kind: "user" as const,
+          identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
+          namespace: row.namespace,
+          name: row.name,
+          cron: row.cron,
+          queue: row.queue,
+          type: row.type,
+          enabled: row.enabled,
+          active: row.enabled,
+          revision: row.revision,
+          updatedAt: toIso(row.updated_at),
+          occurrenceCount: row.occurrence_count,
+          lastFiredAt: toIsoOrNull(row.last_fired_at),
+          lastRun: null,
+          maintenance: null,
+        };
+      }),
+    ],
   };
 }
 

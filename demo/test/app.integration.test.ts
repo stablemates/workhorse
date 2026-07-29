@@ -345,15 +345,16 @@ describe("Workhorse demo", () => {
       expect(state).toBe("succeeded");
 
       const client = dashboardClient(app);
-      expect(await client.dashboard.cron()).toMatchObject({
-        schedules: [
-          {
+      const cron = await client.dashboard.cron();
+      expect(cron.schedules).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
             namespace: DEMO_SCHEDULE_NAMESPACE,
             name: HEARTBEAT_SCHEDULE_NAME,
             occurrenceCount: 1,
-          },
-        ],
-      });
+          }),
+        ]),
+      );
       expect(
         await client.dashboard.tasks({ filter: "completed", page: 1, pageSize: 10 }),
       ).toMatchObject({
@@ -492,9 +493,25 @@ describe("Workhorse demo", () => {
     });
     const client = dashboardClient(app);
 
-    expect(await client.dashboard.cron()).toMatchObject({
-      schedules: [
-        {
+    const cron = await client.dashboard.cron();
+    expect(cron.schedules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "system",
+          name: "tick",
+          type: "workhorse.tick_v1",
+          maintenance: { intervalMs: 1_000, phases: ["promote", "recover"] },
+        }),
+        expect.objectContaining({
+          kind: "system",
+          name: "housekeeping",
+          type: "workhorse.housekeep_v1",
+          maintenance: {
+            intervalMs: 60_000,
+            phases: ["history_partitions", "schedule_occurrences"],
+          },
+        }),
+        expect.objectContaining({
           kind: "user",
           identity: {
             kind: "user",
@@ -503,27 +520,39 @@ describe("Workhorse demo", () => {
           },
           name: HEARTBEAT_SCHEDULE_NAME,
           active: true,
-        },
-      ],
-    });
+        }),
+      ]),
+    );
 
     await client.dashboard.setScheduleEnabled({
       name: HEARTBEAT_SCHEDULE_NAME,
       enabled: false,
       audit: { actor: "operator", reason: "pause schedule", requestId: "schedule-disable" },
     });
-    expect(await client.dashboard.cron()).toMatchObject({
-      schedules: [{ name: HEARTBEAT_SCHEDULE_NAME, enabled: false, active: false }],
-    });
+    expect((await client.dashboard.cron()).schedules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: HEARTBEAT_SCHEDULE_NAME,
+          enabled: false,
+          active: false,
+        }),
+      ]),
+    );
 
     await client.dashboard.setScheduleEnabled({
       name: HEARTBEAT_SCHEDULE_NAME,
       enabled: true,
       audit: { actor: "operator", reason: "resume schedule", requestId: "schedule-enable" },
     });
-    expect(await client.dashboard.cron()).toMatchObject({
-      schedules: [{ name: HEARTBEAT_SCHEDULE_NAME, enabled: true, active: true }],
-    });
+    expect((await client.dashboard.cron()).schedules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: HEARTBEAT_SCHEDULE_NAME,
+          enabled: true,
+          active: true,
+        }),
+      ]),
+    );
   });
 
   it("runs core Hono and worker flows without mounting dashboard routes", async () => {

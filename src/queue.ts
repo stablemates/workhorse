@@ -31,10 +31,18 @@ export interface StoredSchedule {
   lastOccurrenceAt: Date | null;
 }
 
-export interface MaintenanceResult {
-  promoted: number;
-  recovered: number;
-  occurrencesPruned: number;
+export type MaintenancePhase =
+  | "promote"
+  | "recover"
+  | "history_partitions"
+  | "schedule_occurrences";
+
+export interface MaintenancePhaseResult {
+  phase: MaintenancePhase;
+  rowsAffected: number;
+  durationMs: number;
+  skippedLock: boolean;
+  error: Json;
 }
 import { MAX_ENQUEUE_BATCH_SIZE } from "./types.js";
 
@@ -47,6 +55,24 @@ type ClaimRow = {
   fence_token: string;
   lease_expires_at: Date;
 };
+
+type MaintenancePhaseRow = {
+  phase: MaintenancePhase;
+  rows_affected: number;
+  duration_ms: number;
+  skipped_lock: boolean;
+  error: Json;
+};
+
+function maintenancePhaseResult(row: MaintenancePhaseRow): MaintenancePhaseResult {
+  return {
+    phase: row.phase,
+    rowsAffected: row.rows_affected,
+    durationMs: row.duration_ms,
+    skippedLock: row.skipped_lock,
+    error: row.error,
+  };
+}
 
 function errorEnvelope(error: unknown): Json {
   // Persist a bounded JSON representation instead of relying on Error's non-enumerable fields.
@@ -110,30 +136,24 @@ export class Queue {
     return result.rows[0]!.count;
   }
 
-  async maintain(
-    options: {
-      promoteLimit?: number;
-      recoverLimit?: number;
-      occurrenceRetentionDays?: number;
-      occurrencePruneLimit?: number;
-    } = {},
-  ): Promise<MaintenanceResult> {
-    const result = await this.database.query<{
-      promoted: number;
-      recovered: number;
-      occurrences_pruned: number;
-    }>("SELECT * FROM workhorse.maintain_v1($1, $2, $3, $4)", [
-      options.promoteLimit ?? 1_000,
-      options.recoverLimit ?? 1_000,
-      options.occurrenceRetentionDays ?? 30,
-      options.occurrencePruneLimit ?? 10_000,
-    ]);
-    const row = result.rows[0]!;
-    return {
-      promoted: row.promoted,
-      recovered: row.recovered,
-      occurrencesPruned: row.occurrences_pruned,
-    };
+  async tick(
+    options: { promoteLimit?: number; recoverLimit?: number } = {},
+  ): Promise<MaintenancePhaseResult[]> {
+    const result = await this.database.query<MaintenancePhaseRow>(
+      "SELECT * FROM workhorse.tick_v1($1, $2)",
+      [options.promoteLimit ?? 1_000, options.recoverLimit ?? 1_000],
+    );
+    return result.rows.map(maintenancePhaseResult);
+  }
+
+  async housekeep(
+    options: { occurrenceRetentionDays?: number; occurrencePruneLimit?: number } = {},
+  ): Promise<MaintenancePhaseResult[]> {
+    const result = await this.database.query<MaintenancePhaseRow>(
+      "SELECT * FROM workhorse.housekeep_v1($1, $2)",
+      [options.occurrenceRetentionDays ?? 30, options.occurrencePruneLimit ?? 10_000],
+    );
+    return result.rows.map(maintenancePhaseResult);
   }
 
   async syncSchedules(
