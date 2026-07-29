@@ -9,6 +9,7 @@ import {
   Code,
   Divider,
   Drawer,
+  Grid,
   Group,
   Loader,
   Menu,
@@ -46,12 +47,25 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type {
   DashboardCronPage,
   DashboardJobDetail,
   DashboardJobRow,
   DashboardQueuesPage,
   DashboardSystemPage,
+  DashboardSystemRetryBucket,
+  DashboardSystemWindow,
   DashboardTaskCounts,
   DashboardTaskFilter,
   DashboardTasksPage,
@@ -61,6 +75,18 @@ import { rpcClient } from "../lib/rpc";
 
 type ActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 const activityPeriods: ActivityPeriod[] = ["15m", "1h", "6h", "24h", "7d"];
+
+const systemWindows: DashboardSystemWindow[] = ["15m", "1h", "24h"];
+const systemWindowStorageKey = "workhorse-system-window";
+// Demo defaults, make configurable later.
+const systemOldestReadyWarningMs = 60_000;
+const systemErrorRateWarning = 0.05;
+const systemErrorRateCaution = 0.01;
+
+function readStoredSystemWindow(): DashboardSystemWindow {
+  const stored = localStorage.getItem(systemWindowStorageKey) as DashboardSystemWindow | null;
+  return stored && systemWindows.includes(stored) ? stored : "1h";
+}
 
 type ActivityGroupBy = "queue" | "worker" | "task";
 const activityGroupings: Array<{ value: ActivityGroupBy; label: string }> = [
@@ -89,6 +115,11 @@ const activitySeriesColors = [
   "blue.6",
   "pink.6",
 ];
+
+// Recharts treats dots in dataKey as nested paths (task types like "demo.failure").
+function activityChartKey(group: string): string {
+  return group.replaceAll(".", "_");
+}
 
 type PageRoute = "/tasks" | "/cron" | "/queues" | "/system" | "/workers" | "/settings";
 type DemoJobKind = "success" | "retry" | "failure" | "long-running";
@@ -143,6 +174,7 @@ function environmentColor(environment: string): string {
 function readLocation(): {
   route: PageRoute;
   filter: DashboardTaskFilter;
+  queue: string | null;
   page: number;
 } {
   const route = pageRoutes.has(window.location.pathname as PageRoute)
@@ -151,14 +183,16 @@ function readLocation(): {
   const parameters = new URLSearchParams(window.location.search);
   const requestedFilter = parameters.get("filter") as DashboardTaskFilter | null;
   const filter = requestedFilter && taskFilterSet.has(requestedFilter) ? requestedFilter : "all";
+  const queue = parameters.get("queue")?.trim() || null;
   const requestedPage = Number(parameters.get("page") ?? "1");
   const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
-  return { route, filter, page };
+  return { route, filter, queue, page };
 }
 
-function taskHref(filter: DashboardTaskFilter, page = 1): string {
+function taskHref(filter: DashboardTaskFilter, page = 1, queue: string | null = null): string {
   const parameters = new URLSearchParams();
   if (filter !== "all") parameters.set("filter", filter);
+  if (queue) parameters.set("queue", queue);
   if (page > 1) parameters.set("page", String(page));
   const query = parameters.toString();
   return query ? `/tasks?${query}` : "/tasks";
@@ -434,16 +468,13 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
     }).format(date);
   };
   const groups = activity?.groups ?? [];
-  // Recharts treats dots in dataKey as nested paths (task types like "demo.failure"),
-  // which breaks legend hover highlighting, so chart keys replace dots and labels keep them.
-  const chartKey = (group: string) => group.replaceAll(".", "_");
   const chartData = (activity?.buckets ?? []).map((bucket) => {
     const point: Record<string, string | number> = { bucket: labelFormat(bucket.bucketStart) };
-    for (const group of groups) point[chartKey(group)] = bucket.counts[group] ?? 0;
+    for (const group of groups) point[activityChartKey(group)] = bucket.counts[group] ?? 0;
     return point;
   });
   const series = groups.map((group, index) => ({
-    name: chartKey(group),
+    name: activityChartKey(group),
     label: group,
     color:
       group === "other" ? "gray.5" : activitySeriesColors[index % activitySeriesColors.length]!,
@@ -489,7 +520,11 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
           wrapperStyle: { paddingRight: 16, textAlign: "left" },
         }}
         styles={{
-          legend: { justifyContent: "flex-start", flexDirection: "column", alignItems: "flex-start" },
+          legend: {
+            justifyContent: "flex-start",
+            flexDirection: "column",
+            alignItems: "flex-start",
+          },
         }}
         gridAxis="xy"
         tickLine="y"
@@ -529,7 +564,7 @@ function TasksPage({
   const pagination = (
     <Pagination
       value={Math.min(data.page, totalPages)}
-      onChange={(page) => navigate(taskHref(data.filter, page))}
+      onChange={(page) => navigate(taskHref(data.filter, page, data.queue))}
       total={totalPages}
       size="xs"
       aria-label="Tasks pagination"
@@ -539,6 +574,23 @@ function TasksPage({
   return (
     <Stack gap="xl">
       <TasksActivityChart filter={data.filter} />
+      {data.queue ? (
+        <Group justify="space-between">
+          <Group gap="xs">
+            <Text c="dimmed" size="sm">
+              Queue filter
+            </Text>
+            <Badge variant="light">{data.queue}</Badge>
+          </Group>
+          <Button
+            variant="subtle"
+            size="compact-xs"
+            onClick={() => navigate(taskHref(data.filter))}
+          >
+            Clear filter
+          </Button>
+        </Group>
+      ) : null}
       <Paper withBorder>
         <Group justify="space-between" p="md">
           <Switch
@@ -955,79 +1007,561 @@ function QueuesPage({
   );
 }
 
-function SystemPage({ data }: { data: DashboardSystemPage }) {
+function formatRate(value: number): string {
+  if (value === 0) return "0";
+  if (Math.abs(value) < 0.1) return "<0.1";
+  return value.toFixed(1);
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(value < 0.01 ? 1 : 0)}%`;
+}
+
+function MiniTrend({ series }: { series: Array<{ values: number[]; color: string }> }) {
+  const values = series.flatMap((item) => item.values);
+  const maximum = Math.max(1, ...values);
+  const width = 132;
+  const height = 34;
+  return (
+    <Box component="svg" viewBox={`0 0 ${width} ${height}`} w="100%" h={height} aria-hidden>
+      {series.map((item, seriesIndex) => {
+        const points = item.values
+          .map((value, index) => {
+            const x = item.values.length <= 1 ? 0 : (index / (item.values.length - 1)) * width;
+            const y = height - (value / maximum) * (height - 3) - 1.5;
+            return `${x},${y}`;
+          })
+          .join(" ");
+        return (
+          <polyline
+            key={`${item.color}:${seriesIndex}`}
+            points={points}
+            fill="none"
+            stroke={item.color}
+            strokeWidth="2"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        );
+      })}
+    </Box>
+  );
+}
+
+function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }) {
+  const maximum = Math.max(1, ...buckets.map((bucket) => bucket.count));
+  return (
+    <Stack gap={6}>
+      {buckets.map((bucket) => (
+        <Group key={bucket.label} gap="xs" wrap="nowrap">
+          <Text c="dimmed" size="xs" w={34} ta="right">
+            {bucket.label}
+          </Text>
+          <Box bg="var(--mantine-color-default-hover)" h={7} style={{ flex: 1, borderRadius: 8 }}>
+            <Box
+              bg="var(--mantine-color-orange-6)"
+              h="100%"
+              w={`${(bucket.count / maximum) * 100}%`}
+              style={{ borderRadius: 8 }}
+            />
+          </Box>
+          <Text size="xs" fw={650} w={24} ta="right">
+            {bucket.count}
+          </Text>
+        </Group>
+      ))}
+    </Stack>
+  );
+}
+
+function HealthKpi({
+  title,
+  value,
+  detail,
+  color = "blue",
+  icon,
+  children,
+}: {
+  title: string;
+  value: ReactNode;
+  detail: ReactNode;
+  color?: string;
+  icon: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <Card withBorder padding="md" mih={154}>
+      <Group justify="space-between" align="flex-start" wrap="nowrap">
+        <Box>
+          <Text c="dimmed" fw={600} size="xs" tt="uppercase" lts={0.4}>
+            {title}
+          </Text>
+          <Text fw={750} fz={26} lh={1.2} mt={7}>
+            {value}
+          </Text>
+        </Box>
+        <ThemeIcon variant="light" color={color} size="lg">
+          {icon}
+        </ThemeIcon>
+      </Group>
+      <Text c="dimmed" size="xs" mt={5} mih={18}>
+        {detail}
+      </Text>
+      {children ? <Box mt="sm">{children}</Box> : null}
+    </Card>
+  );
+}
+
+function systemBucketLabel(value: string, window: DashboardSystemWindow): string {
+  const date = new Date(value);
+  return new Intl.DateTimeFormat(undefined, {
+    month: window === "24h" ? "short" : undefined,
+    day: window === "24h" ? "numeric" : undefined,
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: displayTimeZone ?? undefined,
+  }).format(date);
+}
+
+function SystemPage({
+  data,
+  setWindow,
+  navigate,
+}: {
+  data: DashboardSystemPage;
+  setWindow: (window: DashboardSystemWindow) => void;
+  navigate: (href: string) => void;
+}) {
+  const systemStatusColor = data.status.level === "critical" ? "red" : "teal";
+  const errorColor =
+    data.kpis.errorRate.current >= systemErrorRateWarning
+      ? "red"
+      : data.kpis.errorRate.current >= systemErrorRateCaution
+        ? "yellow"
+        : "teal";
+  const backlogColor =
+    (data.kpis.backlog.oldestReadyMs ?? 0) > systemOldestReadyWarningMs ? "yellow" : "blue";
+  const outcomeChartData = data.outcomes.map((bucket) => ({
+    bucket: systemBucketLabel(bucket.bucketStart, data.window),
+    enqueued: bucket.enqueued,
+    succeeded: bucket.succeeded,
+    failed: bucket.failed,
+    retry: bucket.retry,
+    leaseExpired: bucket.leaseExpired,
+  }));
+  const recentOutcomes = data.outcomes.slice(-30);
+  const defaultSpill = data.integrity.defaultEventRows + data.integrity.defaultAttemptRows;
+
   return (
     <Stack gap="xl">
-      <PageHeader
-        title="System Health"
-        description="Queue depth, task age, and the backend health report."
-      />
-      <SimpleGrid cols={{ base: 1, md: 2 }}>
-        <Card withBorder padding="lg">
-          <Group justify="space-between" mb="lg">
-            <Box>
-              <Text fw={700}>Queues</Text>
-              <Text c="dimmed" size="sm">
-                Current work grouped by queue and state
-              </Text>
-            </Box>
-            <ThemeIcon variant="light" color="blue">
-              <ListChecks size={18} />
-            </ThemeIcon>
+      <Group justify="space-between" align="flex-start">
+        <Box>
+          <Group gap="sm" mb={4}>
+            <Title order={1}>System Health</Title>
+            <Badge color={systemStatusColor} variant="light" size="lg" tt="capitalize">
+              {data.status.level}
+            </Badge>
           </Group>
-          {data.queues.length === 0 ? (
-            <Text c="dimmed" size="sm">
-              No queued work.
-            </Text>
-          ) : (
-            <Stack gap="sm">
-              {data.queues.map((queue) => (
-                <Group key={`${queue.queue}:${queue.state}`} justify="space-between">
-                  <Box>
-                    <Text fw={600} size="sm">
-                      {queue.queue}
-                    </Text>
-                    <Text c="dimmed" size="xs">
-                      Oldest: {formatDuration(queue.oldestMs)}
-                    </Text>
-                  </Box>
-                  <Group gap="xs">
-                    <Text fw={700}>{queue.count}</Text>
-                    <StatusBadge state={queue.state} />
-                  </Group>
-                </Group>
+          <Group gap="xs">
+            {data.status.checks.slice(0, 3).map((check) => (
+              <Text
+                key={check}
+                c={systemStatusColor === "teal" ? "dimmed" : `${systemStatusColor}.7`}
+                size="sm"
+              >
+                {check}
+              </Text>
+            ))}
+            {data.status.checks.length === 0 ? (
+              <Text c="dimmed" size="sm">
+                No operator checks need attention.
+              </Text>
+            ) : null}
+          </Group>
+          {data.pausedQueues.length > 0 ? (
+            <Group gap={6} mt="xs">
+              <Text c="dimmed" size="xs">
+                Paused
+              </Text>
+              {data.pausedQueues.map((queue) => (
+                <Badge key={queue} color="yellow" variant="light" size="sm">
+                  {queue}
+                </Badge>
               ))}
-            </Stack>
-          )}
-        </Card>
-        <Card withBorder padding="lg">
-          <Group justify="space-between" mb="lg">
-            <Box>
-              <Text fw={700}>Backend report</Text>
-              <Text c="dimmed" size="sm">
-                Health data returned by the queue API
-              </Text>
-            </Box>
-            <ThemeIcon variant="light" color="teal">
-              <Pulse size={18} />
-            </ThemeIcon>
-          </Group>
-          <Code block>{JSON.stringify(data.health, null, 2)}</Code>
-        </Card>
+            </Group>
+          ) : null}
+        </Box>
+        <Stack gap={6} align="flex-end">
+          <SegmentedControl
+            size="xs"
+            value={data.window}
+            onChange={(value) => setWindow(value as DashboardSystemWindow)}
+            data={systemWindows.map((value) => ({ value, label: value }))}
+          />
+          <Text c="dimmed" size="xs" title={formatExact(data.capturedAt)}>
+            Captured {formatRelative(data.capturedAt)}
+          </Text>
+        </Stack>
+      </Group>
+
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 6 }} spacing="sm">
+        <HealthKpi
+          title="Drain balance"
+          value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
+          detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} enqueued · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
+          color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
+          icon={<ArrowClockwise size={18} />}
+        >
+          <MiniTrend
+            series={[
+              {
+                values: recentOutcomes.map((bucket) => bucket.enqueued),
+                color: "var(--mantine-color-blue-6)",
+              },
+              {
+                values: recentOutcomes.map((bucket) => bucket.succeeded + bucket.failed),
+                color: "var(--mantine-color-teal-6)",
+              },
+            ]}
+          />
+        </HealthKpi>
+        <HealthKpi
+          title="Backlog risk"
+          value={data.kpis.backlog.ready}
+          detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)} · 60s demo default`}
+          color={backlogColor}
+          icon={<ListChecks size={18} />}
+        />
+        <HealthKpi
+          title="Attempt error rate"
+          value={formatPercent(data.kpis.errorRate.current)}
+          detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior · 1%/5% defaults`}
+          color={errorColor}
+          icon={<WarningCircle size={18} />}
+        />
+        <HealthKpi
+          title="First-attempt wait p95"
+          value={formatDuration(data.kpis.queueWait.p95Ms)}
+          detail="Enqueue to first claim"
+          color="indigo"
+          icon={<Clock size={18} />}
+        >
+          <Tooltip
+            label={`p50 ${formatDuration(data.kpis.queueWait.p50Ms)} · p99 ${formatDuration(data.kpis.queueWait.p99Ms)}`}
+          >
+            <Text c="dimmed" size="xs" td="underline" style={{ cursor: "help" }}>
+              p50 and p99
+            </Text>
+          </Tooltip>
+        </HealthKpi>
+        <HealthKpi
+          title="Retry pressure"
+          value={data.kpis.retry.backoff}
+          detail={`${data.kpis.retry.dueSoon} due within 5 minutes`}
+          color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
+          icon={<ArrowCounterClockwise size={18} />}
+        >
+          <RetryBars buckets={data.kpis.retry.buckets} />
+        </HealthKpi>
+        <HealthKpi
+          title="Lease danger"
+          value={data.kpis.lease.expired}
+          detail={`${data.kpis.lease.expiringSoon} expiring ≤30s · ${data.kpis.lease.recovered} recovered`}
+          color={data.kpis.lease.expired > 0 ? "red" : "teal"}
+          icon={<Pulse size={18} />}
+        />
       </SimpleGrid>
-      <Card withBorder padding="lg">
-        <Group justify="space-between">
+
+      <Paper withBorder p="md">
+        <Group justify="space-between" mb="sm">
           <Box>
-            <Text fw={700}>Recent failures</Text>
-            <Text c="dimmed" size="sm">
-              Terminal failures retained in this page response
+            <Text fw={650}>Outcome rate</Text>
+            <Text c="dimmed" size="xs">
+              Minute buckets · enqueued line over closed-attempt outcomes
             </Text>
           </Box>
-          <Badge color={data.failures.length > 0 ? "red" : "teal"} variant="light" size="lg">
-            {data.failures.length}
+          <Badge variant="light" color="gray">
+            {data.window}
           </Badge>
         </Group>
-      </Card>
+        <Box h={300}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart
+              data={outcomeChartData}
+              margin={{ top: 12, right: 12, bottom: 0, left: -12 }}
+            >
+              <CartesianGrid stroke="var(--mantine-color-default-border)" strokeDasharray="3 3" />
+              <XAxis
+                dataKey="bucket"
+                minTickGap={36}
+                tick={{ fontSize: 11, fill: "var(--mantine-color-dimmed)" }}
+                tickLine={false}
+              />
+              <YAxis
+                allowDecimals={false}
+                width={38}
+                tick={{ fontSize: 11, fill: "var(--mantine-color-dimmed)" }}
+                tickLine={false}
+              />
+              <RechartsTooltip />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="succeeded" stackId="outcomes" fill="var(--mantine-color-teal-6)" />
+              <Bar dataKey="failed" stackId="outcomes" fill="var(--mantine-color-red-6)" />
+              <Bar dataKey="retry" stackId="outcomes" fill="var(--mantine-color-orange-6)" />
+              <Bar dataKey="leaseExpired" stackId="outcomes" fill="var(--mantine-color-grape-6)" />
+              <Line
+                dataKey="enqueued"
+                type="monotone"
+                stroke="var(--mantine-color-blue-7)"
+                strokeWidth={2}
+                dot={false}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </Box>
+      </Paper>
+
+      <Grid gutter="xl">
+        <Grid.Col span={{ base: 12, lg: 8 }}>
+          <Paper withBorder h="100%">
+            <Group justify="space-between" p="md">
+              <Box>
+                <Text fw={650}>Queue pressure</Text>
+                <Text c="dimmed" size="xs">
+                  Worst queues first · select a row to inspect its tasks
+                </Text>
+              </Box>
+              <Badge
+                variant="light"
+                color={data.queues.some((queue) => queue.paused) ? "yellow" : "gray"}
+              >
+                {data.queues.length} queues
+              </Badge>
+            </Group>
+            <ScrollArea>
+              <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={920}>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Queue</Table.Th>
+                    <Table.Th>Status</Table.Th>
+                    <Table.Th ta="right">Ready</Table.Th>
+                    <Table.Th ta="right">Oldest</Table.Th>
+                    <Table.Th ta="right">Due ≤5m</Table.Th>
+                    <Table.Th ta="right">Active</Table.Th>
+                    <Table.Th ta="right">Retrying</Table.Th>
+                    <Table.Th ta="right">Enq/min</Table.Th>
+                    <Table.Th ta="right">Done/min</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {data.queues.map((queue) => (
+                    <Table.Tr
+                      key={queue.queue}
+                      tabIndex={0}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`);
+                        }
+                      }}
+                    >
+                      <Table.Td>
+                        <Code fz="xs" style={{ background: "transparent", padding: 0 }}>
+                          {queue.queue}
+                        </Code>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge color={queue.paused ? "yellow" : "teal"} variant="light" size="sm">
+                          {queue.paused ? "Paused" : "Running"}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td ta="right">{queue.ready}</Table.Td>
+                      <Table.Td ta="right">{formatDuration(queue.oldestReadyMs)}</Table.Td>
+                      <Table.Td ta="right">{queue.dueSoon}</Table.Td>
+                      <Table.Td ta="right">{queue.active}</Table.Td>
+                      <Table.Td ta="right">{queue.retrying}</Table.Td>
+                      <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
+                      <Table.Td ta="right">{formatRate(queue.completedPerMinute)}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </ScrollArea>
+          </Paper>
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, lg: 4 }}>
+          <Paper withBorder p="md" h="100%">
+            <Text fw={650}>Retry storm</Text>
+            <Text c="dimmed" size="xs" mb="lg">
+              Scheduled retries arriving next
+            </Text>
+            <RetryBars buckets={data.retryStorm.buckets} />
+            <Divider my="lg" />
+            <Text c="dimmed" fw={600} size="xs" tt="uppercase" mb="xs">
+              Top contributors
+            </Text>
+            {data.retryStorm.topTypes.length === 0 ? (
+              <Text c="dimmed" size="sm">
+                No retries are in backoff.
+              </Text>
+            ) : (
+              <Stack gap="xs">
+                {data.retryStorm.topTypes.map((type) => (
+                  <Group key={`${type.queue}:${type.type}`} justify="space-between" wrap="nowrap">
+                    <Box style={{ minWidth: 0 }}>
+                      <Text size="sm" fw={600} truncate>
+                        {taskDisplayName(type.type, type.queue)}
+                      </Text>
+                      <Text c="dimmed" size="xs">
+                        {type.queue}
+                      </Text>
+                    </Box>
+                    <Badge color="orange" variant="light">
+                      {type.count}
+                    </Badge>
+                  </Group>
+                ))}
+              </Stack>
+            )}
+          </Paper>
+        </Grid.Col>
+      </Grid>
+
+      <Grid gutter="xl">
+        <Grid.Col span={{ base: 12, lg: 7 }}>
+          <Paper withBorder h="100%">
+            <Box p="md">
+              <Text fw={650}>Top failing job types</Text>
+              <Text c="dimmed" size="xs">
+                Closed attempts in the selected window
+              </Text>
+            </Box>
+            {data.failingTypes.length === 0 ? (
+              <Center mih={180}>
+                <Text c="dimmed" size="sm">
+                  No failed attempts in this window.
+                </Text>
+              </Center>
+            ) : (
+              <ScrollArea>
+                <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={760}>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Queue / type</Table.Th>
+                      <Table.Th ta="right">Attempts</Table.Th>
+                      <Table.Th ta="right">Error %</Table.Th>
+                      <Table.Th ta="right">Terminal</Table.Th>
+                      <Table.Th>Last error</Table.Th>
+                      <Table.Th>Last seen</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {data.failingTypes.map((type) => (
+                      <Table.Tr key={`${type.queue}:${type.type}`}>
+                        <Table.Td>
+                          <Text size="sm" fw={600}>
+                            {taskDisplayName(type.type, type.queue)}
+                          </Text>
+                          <Text c="dimmed" size="xs">
+                            {type.queue}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td ta="right">{type.attempts}</Table.Td>
+                        <Table.Td ta="right">
+                          <Text c={type.errorRate >= 0.05 ? "red.7" : "yellow.8"} size="sm">
+                            {formatPercent(type.errorRate)}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td ta="right">{type.terminalFailures}</Table.Td>
+                        <Table.Td maw={220}>
+                          <Text size="xs" lineClamp={1} title={type.lastError ?? undefined}>
+                            {type.lastError ?? "—"}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <Text c="dimmed" size="xs" title={formatExact(type.lastSeenAt)}>
+                            {formatRelative(type.lastSeenAt)}
+                          </Text>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </ScrollArea>
+            )}
+          </Paper>
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, lg: 5 }}>
+          <Paper withBorder p="md" h="100%">
+            <Text fw={650}>Integrity</Text>
+            <Text c="dimmed" size="xs" mb="lg">
+              Tick proxy and weekly history coverage
+            </Text>
+            <Group justify="space-between" mb="lg">
+              <Box>
+                <Text size="sm" fw={600}>
+                  Due but unpromoted
+                </Text>
+                <Text c="dimmed" size="xs">
+                  Scheduled more than 10s overdue
+                </Text>
+              </Box>
+              <Badge
+                color={data.integrity.dueButUnpromoted > 0 ? "red" : "teal"}
+                variant="light"
+                size="lg"
+              >
+                {data.integrity.dueButUnpromoted}
+              </Badge>
+            </Group>
+            <Table verticalSpacing={6} horizontalSpacing="xs">
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Week</Table.Th>
+                  <Table.Th ta="center">Events</Table.Th>
+                  <Table.Th ta="center">Attempts</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {data.integrity.partitions.map((partition) => (
+                  <Table.Tr key={partition.week}>
+                    <Table.Td>
+                      <Text size="xs" title={formatExact(partition.startsAt)}>
+                        {partition.week}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td ta="center">
+                      <Badge color={partition.eventExists ? "teal" : "red"} variant="dot" size="sm">
+                        {partition.eventExists ? "Ready" : "Missing"}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td ta="center">
+                      <Badge
+                        color={partition.attemptExists ? "teal" : "red"}
+                        variant="dot"
+                        size="sm"
+                      >
+                        {partition.attemptExists ? "Ready" : "Missing"}
+                      </Badge>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+            <Divider my="md" />
+            <Group justify="space-between">
+              <Text size="sm" fw={600}>
+                Default partition spill
+              </Text>
+              <Badge color={defaultSpill > 0 ? "yellow" : "teal"} variant="light">
+                {data.integrity.defaultEventRows} events · {data.integrity.defaultAttemptRows}{" "}
+                attempts
+              </Badge>
+            </Group>
+          </Paper>
+        </Grid.Col>
+      </Grid>
     </Stack>
   );
 }
@@ -1265,6 +1799,11 @@ export function Dashboard() {
   const [jobDetailError, setJobDetailError] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<RefreshIntervalValue>(readStoredRefreshInterval);
+  const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(readStoredSystemWindow);
+  const changeSystemWindow = useCallback((window: DashboardSystemWindow) => {
+    setSystemWindow(window);
+    localStorage.setItem(systemWindowStorageKey, window);
+  }, []);
   const changeRefreshInterval = useCallback((value: RefreshIntervalValue) => {
     setRefreshInterval(value);
     localStorage.setItem(refreshStorageKey, value);
@@ -1305,6 +1844,7 @@ export function Dashboard() {
           route: "/tasks",
           value: await rpcClient.dashboard.tasks({
             filter: location.filter,
+            queue: location.queue,
             page: location.page,
             pageSize: tasksPerPage,
           }),
@@ -1314,7 +1854,10 @@ export function Dashboard() {
       } else if (location.route === "/queues") {
         data = { route: "/queues", value: await rpcClient.dashboard.queues() };
       } else if (location.route === "/system") {
-        data = { route: "/system", value: await rpcClient.dashboard.system() };
+        data = {
+          route: "/system",
+          value: await rpcClient.dashboard.system({ window: systemWindow }),
+        };
       } else if (location.route === "/settings") {
         data = { route: "/settings", value: null };
       } else {
@@ -1336,7 +1879,7 @@ export function Dashboard() {
         }));
       }
     }
-  }, [location]);
+  }, [location, systemWindow]);
 
   const loadTaskCounts = useCallback(async () => {
     try {
@@ -1595,7 +2138,9 @@ export function Dashboard() {
       />
     );
   } else if (loadState.data?.route === "/system") {
-    content = <SystemPage data={loadState.data.value} />;
+    content = (
+      <SystemPage data={loadState.data.value} setWindow={changeSystemWindow} navigate={navigate} />
+    );
   } else if (loadState.data?.route === "/workers") {
     content = (
       <WorkersPage

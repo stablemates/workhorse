@@ -10,6 +10,7 @@ import type {
   WorkerController,
 } from "./app.js";
 import {
+  type DashboardSystemWindow,
   type MaintenanceLoopCadences,
   readDashboardActivity,
   readDashboardCron,
@@ -53,6 +54,7 @@ const taskFilter = z.enum([
 ]);
 const tasksInput = z.object({
   filter: taskFilter.default("all"),
+  queue: z.string().trim().min(1).nullable().default(null),
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(100).default(10),
 });
@@ -60,6 +62,9 @@ const activityInput = z.object({
   filter: taskFilter.default("all"),
   period: z.enum(["15m", "1h", "6h", "24h", "7d"]).default("1h"),
   groupBy: z.enum(["queue", "worker", "task"]).default("queue"),
+});
+const systemInput = z.object({
+  window: z.enum(["15m", "1h", "24h"]).default("1h"),
 });
 const enqueueTestInput = z.object({
   kind: z.enum(["success", "retry", "failure", "long-running"]),
@@ -100,7 +105,7 @@ export const dashboardRouter = {
     tasks: procedure
       .input(tasksInput)
       .handler(({ context, input }) =>
-        readDashboardTasks(context.database, input.filter, input.page, input.pageSize),
+        readDashboardTasks(context.database, input.filter, input.page, input.pageSize, input.queue),
       ),
     activity: procedure
       .input(activityInput)
@@ -111,9 +116,11 @@ export const dashboardRouter = {
       readDashboardCron(context.database, context.maintenanceLoops),
     ),
     queues: procedure.handler(({ context }) => readDashboardQueues(context.database)),
-    system: procedure.handler(({ context }) =>
-      readDashboardSystem(context.database, context.queue),
-    ),
+    system: procedure
+      .input(systemInput)
+      .handler(({ context, input }) =>
+        readDashboardSystem(context.database, input.window as DashboardSystemWindow),
+      ),
     workers: procedure.handler(({ context }) => {
       const canManageWorkers =
         context.operator.mode === "local" && Boolean(context.workerController?.setWorkerPaused);
