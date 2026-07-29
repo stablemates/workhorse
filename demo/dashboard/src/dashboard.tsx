@@ -25,6 +25,7 @@ import {
   Text,
   ThemeIcon,
   Title,
+  Tooltip,
 } from "@mantine/core";
 import { BarChart } from "@mantine/charts";
 import { useDisclosure } from "@mantine/hooks";
@@ -35,7 +36,6 @@ import {
   CalendarDots,
   CheckCircle,
   Clock,
-  Cpu,
   GearSix,
   ListDashes,
   ListChecks,
@@ -179,17 +179,6 @@ function currentTimeZoneValue(): string {
   return displayTimeZone ?? "system";
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "Never";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: displayTimeZone ?? undefined,
-  }).format(new Date(value));
-}
-
 function formatExact(value: string | null | undefined): string {
   if (!value) return "never";
   return new Intl.DateTimeFormat(undefined, {
@@ -237,7 +226,7 @@ function taskDisplayName(type: string, queue: string): string {
 
 function statusColor(state: string): string {
   if (healthyStates.has(state)) return "teal";
-  if (failureStates.has(state) || state === "unhealthy") return "red";
+  if (failureStates.has(state) || state === "unhealthy" || state === "offline") return "red";
   if (warningStates.has(state)) return "yellow";
   return "gray";
 }
@@ -434,7 +423,8 @@ function TasksActivityChart({ filter }: { filter: DashboardTaskFilter }) {
   });
   const series = groups.map((group, index) => ({
     name: group,
-    color: group === "other" ? "gray.5" : activitySeriesColors[index % activitySeriesColors.length]!,
+    color:
+      group === "other" ? "gray.5" : activitySeriesColors[index % activitySeriesColors.length]!,
   }));
 
   return (
@@ -873,49 +863,109 @@ function SystemPage({ data }: { data: DashboardSystemPage }) {
   );
 }
 
-function WorkersPage({ data }: { data: DashboardWorkersPage }) {
+function WorkersPage({
+  data,
+  togglingWorker,
+  actionError,
+  setWorkerPaused,
+}: {
+  data: DashboardWorkersPage;
+  togglingWorker: string | null;
+  actionError: string | null;
+  setWorkerPaused: (workerId: string, paused: boolean) => void;
+}) {
   return (
     <Stack gap="xl">
       <PageHeader
         title="Workers"
-        description="Configured workers and the tasks they are currently processing."
+        description="Live claim state and one-hour execution throughput for this demo process."
       />
+      {actionError ? (
+        <Text c="red" size="sm">
+          {actionError}
+        </Text>
+      ) : null}
       {data.workers.length === 0 ? (
         <EmptyState>No workers have reported activity.</EmptyState>
       ) : (
-        <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }}>
-          {data.workers.map((worker) => (
-            <Card key={worker.id} withBorder padding="lg">
-              <Group justify="space-between" align="flex-start">
-                <ThemeIcon variant="light" color={statusColor(worker.status)} size="lg">
-                  <Cpu size={20} />
-                </ThemeIcon>
-                <StatusBadge state={worker.status} />
-              </Group>
-              <Text fw={700} mt="lg">
-                {worker.id}
-              </Text>
-              <Text c="dimmed" size="sm">
-                Last seen {formatDate(worker.lastSeenAt)}
-              </Text>
-              <Group grow mt="lg">
-                <Paper bg="var(--mantine-color-default-hover)" p="sm" radius="md">
-                  <Text c="dimmed" size="xs">
-                    Active
-                  </Text>
-                  <Text fw={700}>{worker.activeJobs}</Text>
-                </Paper>
-                <Paper bg="var(--mantine-color-default-hover)" p="sm" radius="md">
-                  <Text c="dimmed" size="xs">
-                    Completed
-                  </Text>
-                  <Text fw={700}>{worker.completedAttempts}</Text>
-                </Paper>
-              </Group>
-            </Card>
-          ))}
-        </SimpleGrid>
+        <Paper withBorder>
+          <ScrollArea>
+            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={980}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Worker</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Claims</Table.Th>
+                  <Table.Th ta="right">Current jobs</Table.Th>
+                  <Table.Th ta="right">Attempts · 1h</Table.Th>
+                  <Table.Th ta="right">Failures · 1h</Table.Th>
+                  <Table.Th ta="right">Avg execution · 1h</Table.Th>
+                  <Table.Th>Last seen</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {data.workers.map((worker) => (
+                  <Table.Tr key={worker.id}>
+                    <Table.Td>
+                      <Code
+                        fz="xs"
+                        style={{ background: "transparent", paddingBlock: 0, paddingInline: 0 }}
+                      >
+                        {worker.id}
+                      </Code>
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap={6} wrap="nowrap">
+                        <StatusBadge state={worker.status} />
+                        {worker.paused ? (
+                          <Badge color="yellow" variant="light">
+                            Paused
+                          </Badge>
+                        ) : null}
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <Tooltip
+                        label="Worker controls are unavailable in read-only mode"
+                        disabled={data.canManageWorkers}
+                      >
+                        <Box component="span" display="inline-block">
+                          <Switch
+                            size="sm"
+                            checked={!worker.paused}
+                            disabled={!data.canManageWorkers || togglingWorker === worker.id}
+                            aria-label={`${worker.paused ? "Resume" : "Pause"} ${worker.id}`}
+                            onChange={(event) =>
+                              setWorkerPaused(worker.id, !event.currentTarget.checked)
+                            }
+                          />
+                        </Box>
+                      </Tooltip>
+                    </Table.Td>
+                    <Table.Td ta="right">{worker.activeJobs}</Table.Td>
+                    <Table.Td ta="right">{worker.completedAttempts}</Table.Td>
+                    <Table.Td ta="right">
+                      <Text c={worker.failedAttempts > 0 ? "red.7" : undefined} size="sm">
+                        {worker.failedAttempts}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td ta="right">{formatDuration(worker.averageExecutionMs)}</Table.Td>
+                    <Table.Td>
+                      <Text c="dimmed" size="xs" title={formatExact(worker.lastSeenAt)}>
+                        {formatRelative(worker.lastSeenAt)}
+                      </Text>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        </Paper>
       )}
+      <Text c="dimmed" size="xs">
+        Pause stops new claims only. Active jobs keep heartbeating until they finish. Worker pause
+        state is held in this server process and clears on restart.
+      </Text>
     </Stack>
   );
 }
@@ -1020,6 +1070,8 @@ export function Dashboard() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [togglingSchedule, setTogglingSchedule] = useState<string | null>(null);
   const [scheduleActionError, setScheduleActionError] = useState<string | null>(null);
+  const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
+  const [workerActionError, setWorkerActionError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedJob, setSelectedJob] = useState<DashboardJobDetail | null>(null);
   const [jobDetailError, setJobDetailError] = useState<string | null>(null);
@@ -1157,6 +1209,32 @@ export function Dashboard() {
     [loadPage],
   );
 
+  const toggleWorker = useCallback(
+    async (workerId: string, paused: boolean) => {
+      setTogglingWorker(workerId);
+      setWorkerActionError(null);
+      try {
+        await rpcClient.dashboard.setWorkerPaused({
+          workerId,
+          paused,
+          audit: {
+            actor: "local-demo",
+            reason: `${paused ? "Pause" : "Resume"} ${workerId} from the dashboard`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        await loadPage();
+      } catch (cause) {
+        setWorkerActionError(
+          cause instanceof Error ? cause.message : "Unable to update the worker",
+        );
+      } finally {
+        setTogglingWorker(null);
+      }
+    },
+    [loadPage],
+  );
+
   const inspectJob = useCallback(async (id: string) => {
     setSelectedJobId(id);
     setSelectedJob(null);
@@ -1262,7 +1340,14 @@ export function Dashboard() {
   } else if (loadState.data?.route === "/system") {
     content = <SystemPage data={loadState.data.value} />;
   } else if (loadState.data?.route === "/workers") {
-    content = <WorkersPage data={loadState.data.value} />;
+    content = (
+      <WorkersPage
+        data={loadState.data.value}
+        togglingWorker={togglingWorker}
+        actionError={workerActionError}
+        setWorkerPaused={(workerId, paused) => void toggleWorker(workerId, paused)}
+      />
+    );
   } else if (loadState.data?.route === "/settings") {
     content = <SettingsPage />;
   } else {

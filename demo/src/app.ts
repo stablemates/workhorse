@@ -7,7 +7,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { Queue, type Json } from "@workhorse/core";
+import { Queue, type Json, type Worker } from "@workhorse/core";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { DashboardRefreshHub } from "./dashboard-refresh.js";
@@ -56,6 +56,7 @@ export interface CreateDemoApplicationOptions {
   dashboard?: boolean;
   operator?: DashboardOperator;
   scheduleController?: ScheduleController;
+  workerController?: WorkerController;
   workerPollMs?: number;
   maintenanceIntervalMs?: number;
   housekeepingIntervalMs?: number;
@@ -84,6 +85,15 @@ export interface ScheduleController {
     enabled: boolean,
     audit: AuditContext,
   ) => Promise<{ enabled: boolean }>;
+}
+
+export interface WorkerController {
+  workerStates(): ReadonlyMap<string, { paused: boolean }>;
+  setWorkerPaused?: (
+    workerId: string,
+    paused: boolean,
+    audit: AuditContext,
+  ) => Promise<{ paused: boolean }>;
 }
 
 const orderRequestSchema = z.object({
@@ -450,6 +460,42 @@ export function createLocalScheduleController(database: DemoDatabase): ScheduleC
   };
 }
 
+export function createLocalWorkerController(
+  database: DemoDatabase,
+  workers: ReadonlyMap<string, Worker>,
+): WorkerController {
+  return {
+    workerStates() {
+      return new Map(
+        [...workers].map(([workerId, worker]) => [workerId, { paused: worker.isPaused() }]),
+      );
+    },
+    async setWorkerPaused(workerId, paused, audit) {
+      const worker = workers.get(workerId);
+      if (!worker) throw new Error(`Worker ${workerId} is not running in this demo process`);
+      const before = { paused: worker.isPaused() };
+      if (paused) worker.pause();
+      else worker.resume();
+
+      try {
+        await database.execute(sql`
+          INSERT INTO public.workhorse_demo_audit
+            (actor, reason, request_id, occurred_at, action, target, before, after, status)
+          VALUES
+            (${audit.actor}, ${audit.reason}, ${audit.requestId},
+             ${audit.occurredAt ?? new Date().toISOString()}, 'setWorkerPaused', ${`worker:${workerId}`},
+             ${JSON.stringify(before)}::jsonb, ${JSON.stringify({ paused })}::jsonb, 'succeeded')
+        `);
+      } catch (error) {
+        if (before.paused) worker.pause();
+        else worker.resume();
+        throw error;
+      }
+      return { paused };
+    },
+  };
+}
+
 export function createDemoApplication(
   database: DemoDatabase,
   options: CreateDemoApplicationOptions = {},
@@ -457,6 +503,10 @@ export function createDemoApplication(
   const maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS;
   const housekeepingIntervalMs = options.housekeepingIntervalMs ?? DEMO_HOUSEKEEPING_INTERVAL_MS;
   const dashboardRefresh = options.dashboardRefresh ?? new DashboardRefreshHub();
+  // Worker pause state belongs to this application process and intentionally resets on restart.
+  const workerRegistry = new Map<string, Worker>();
+  const workerController =
+    options.workerController ?? createLocalWorkerController(database, workerRegistry);
   const adapter = createDrizzleAdapter(database, {
     defaultQueue: DEMO_QUEUE,
     close: options.close,
@@ -473,6 +523,7 @@ export function createDemoApplication(
         retryDelayMs: (attempt) => attempt * 100,
       },
       configure(worker) {
+        workerRegistry.set(workerId, worker);
         worker.handle<{ orderId: string }>(ORDER_JOB_TYPE, async ({ orderId }) => {
           const updated = await database
             .update(orders)
@@ -602,6 +653,7 @@ export function createDemoApplication(
           maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs, housekeepingIntervalMs },
           operator: options.operator ?? createReadOnlyOperator(),
           scheduleController: options.scheduleController,
+          workerController,
         },
       });
       return response ?? context.notFound();
@@ -635,7 +687,7 @@ export function createDemoApplication(
     );
   }
 
-  return { app, workhorse, dashboardRefresh };
+  return { app, workhorse, dashboardRefresh, workerController };
 }
 
 function jsonbValue(value: Json | null) {

@@ -14,6 +14,7 @@ import {
   DEMO_LONG_RUNNING_MS,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_POLL_MS,
+  DEMO_WORKERS,
   HEARTBEAT_SCHEDULE_NAME,
   installDemoSchema,
   REPORT_SCHEDULE_NAME,
@@ -244,8 +245,8 @@ describe("Workhorse demo", () => {
       });
       expect(await client.dashboard.workers()).toMatchObject({
         workers: [
-          { id: "demo-worker-1", status: expect.stringMatching(/idle|recent|busy/) },
-          { id: "demo-worker-2", status: expect.stringMatching(/idle|recent|busy/) },
+          { id: "demo-worker-1", status: expect.stringMatching(/active|idle|recent|offline/) },
+          { id: "demo-worker-2", status: expect.stringMatching(/active|idle|recent|offline/) },
         ],
       });
       expect(await client.dashboard.system()).toMatchObject({
@@ -447,6 +448,13 @@ describe("Workhorse demo", () => {
         audit: { actor: "test", reason: "verify read-only", requestId: "readonly-toggle" },
       }),
     ).rejects.toThrow(/read-only|FORBIDDEN/i);
+    await expect(
+      client.dashboard.setWorkerPaused({
+        workerId: DEMO_WORKERS[0],
+        paused: true,
+        audit: { actor: "test", reason: "verify read-only", requestId: "readonly-worker" },
+      }),
+    ).rejects.toThrow(/read-only|FORBIDDEN/i);
     expect(
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_audit"),
     ).toMatchObject({
@@ -559,6 +567,61 @@ describe("Workhorse demo", () => {
         status: "succeeded",
       },
     ]);
+  });
+
+  it("pauses a local worker through RPC and audits the in-memory state change", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      await expect(client.dashboard.workers()).resolves.toMatchObject({
+        canManageWorkers: true,
+        workers: expect.arrayContaining([
+          expect.objectContaining({ id: DEMO_WORKERS[0], paused: false, status: "idle" }),
+        ]),
+      });
+      await expect(
+        client.dashboard.setWorkerPaused({
+          workerId: DEMO_WORKERS[0],
+          paused: true,
+          audit: {
+            actor: "operator",
+            reason: "pause one demo worker",
+            requestId: "worker-pause",
+          },
+        }),
+      ).resolves.toEqual({ paused: true });
+
+      await expect(client.dashboard.workers()).resolves.toMatchObject({
+        workers: expect.arrayContaining([
+          expect.objectContaining({ id: DEMO_WORKERS[0], paused: true, status: "idle" }),
+        ]),
+      });
+      expect(
+        (
+          await pool.query(
+            `SELECT action, target, actor, reason, request_id, before, after, status
+               FROM public.workhorse_demo_audit ORDER BY id`,
+          )
+        ).rows,
+      ).toEqual([
+        {
+          action: "setWorkerPaused",
+          target: `worker:${DEMO_WORKERS[0]}`,
+          actor: "operator",
+          reason: "pause one demo worker",
+          request_id: "worker-pause",
+          before: { paused: false },
+          after: { paused: true },
+          status: "succeeded",
+        },
+      ]);
+    } finally {
+      await workhorse.stop();
+    }
   });
 
   it("reconciles local schedule toggles with worker-owned schedule definitions", async () => {

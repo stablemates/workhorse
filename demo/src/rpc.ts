@@ -1,7 +1,13 @@
 import { ORPCError, os } from "@orpc/server";
 import type { Queue } from "@workhorse/core";
 import { z } from "zod";
-import type { AuditContext, DashboardOperator, DemoDatabase, ScheduleController } from "./app.js";
+import type {
+  AuditContext,
+  DashboardOperator,
+  DemoDatabase,
+  ScheduleController,
+  WorkerController,
+} from "./app.js";
 import {
   type MaintenanceLoopCadences,
   readDashboardActivity,
@@ -20,6 +26,7 @@ export interface DashboardRpcContext {
   maintenanceLoops: MaintenanceLoopCadences;
   operator: DashboardOperator;
   scheduleController?: ScheduleController;
+  workerController?: WorkerController;
 }
 
 const procedure = os.$context<DashboardRpcContext>();
@@ -61,6 +68,11 @@ const setScheduleEnabledInput = z.object({
   enabled: z.boolean(),
   audit: auditSchema,
 });
+const setWorkerPausedInput = z.object({
+  workerId: z.string().trim().min(1),
+  paused: z.boolean(),
+  audit: auditSchema,
+});
 
 function auditWithOccurredAt(
   audit: z.infer<typeof auditSchema>,
@@ -87,9 +99,16 @@ export const dashboardRouter = {
     system: procedure.handler(({ context }) =>
       readDashboardSystem(context.database, context.queue),
     ),
-    workers: procedure.handler(({ context }) =>
-      readDashboardWorkers(context.database, context.configuredWorkers),
-    ),
+    workers: procedure.handler(({ context }) => {
+      const canManageWorkers =
+        context.operator.mode === "local" && Boolean(context.workerController?.setWorkerPaused);
+      return readDashboardWorkers(
+        context.database,
+        context.configuredWorkers,
+        context.workerController?.workerStates(),
+        canManageWorkers,
+      );
+    }),
     jobDetail: procedure.input(jobDetailInput).handler(async ({ context, input }) => {
       const detail = await readDashboardJobDetail(context.database, input.id);
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
@@ -114,6 +133,16 @@ export const dashboardRouter = {
           auditWithOccurredAt(input.audit),
         );
       }),
+    setWorkerPaused: procedure.input(setWorkerPausedInput).handler(async ({ context, input }) => {
+      if (context.operator.mode !== "local" || !context.workerController?.setWorkerPaused) {
+        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+      }
+      return context.workerController.setWorkerPaused(
+        input.workerId,
+        input.paused,
+        auditWithOccurredAt(input.audit),
+      );
+    }),
   },
 };
 

@@ -621,6 +621,80 @@ describe("live-runtime queue protocol", () => {
     expect((await queue.claim("worker-a"))?.id).toBe(id);
   });
 
+  it("lets running workers drain work while a paused worker stops claiming until resumed", async () => {
+    const handledBy: string[] = [];
+    const pausedWorker = new Worker(queue, {
+      workerId: "paused-worker",
+      pollMs: 1,
+    }).handle<{ sequence: number }>("pause-control", ({ sequence }) => {
+      handledBy.push(`paused:${sequence}`);
+      return { sequence };
+    });
+    const runningWorker = new Worker(queue, {
+      workerId: "running-worker",
+      pollMs: 1,
+    }).handle<{ sequence: number }>("pause-control", ({ sequence }) => {
+      handledBy.push(`running:${sequence}`);
+      return { sequence };
+    });
+    const initialIds = await Promise.all(
+      [1, 2, 3].map((sequence) => queue.enqueue("pause-control", { sequence })),
+    );
+
+    pausedWorker.pause();
+    expect(pausedWorker.isPaused()).toBe(true);
+    expect(await pausedWorker.runOnce()).toBe(false);
+    while (await runningWorker.runOnce()) {
+      // Drain all ready work without allowing the paused worker to compete for claims.
+    }
+
+    expect(handledBy).toEqual(["running:1", "running:2", "running:3"]);
+    await expect(Promise.all(initialIds.map((id) => queue.getJob(id)))).resolves.toEqual(
+      initialIds.map((id) => expect.objectContaining({ id, state: "succeeded" })),
+    );
+
+    const resumedId = await queue.enqueue("pause-control", { sequence: 4 });
+    pausedWorker.resume();
+    expect(pausedWorker.isPaused()).toBe(false);
+    expect(await pausedWorker.runOnce()).toBe(true);
+    expect(handledBy.at(-1)).toBe("paused:4");
+    await expect(queue.getJob(resumedId)).resolves.toMatchObject({ state: "succeeded" });
+  });
+
+  it("allows an active job to finish after its worker is paused", async () => {
+    let releaseHandler!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const worker = new Worker(queue, {
+      workerId: "pause-in-flight",
+      heartbeatMs: 50,
+      leaseMs: 500,
+    }).handle("pause-in-flight", async () => {
+      markStarted();
+      await released;
+      return { completedWhilePaused: true };
+    });
+    const jobId = await queue.enqueue("pause-in-flight", {});
+
+    const run = worker.runOnce();
+    await started;
+    worker.pause();
+    releaseHandler();
+
+    await expect(run).resolves.toBe(true);
+    expect(worker.isPaused()).toBe(true);
+    await expect(queue.getJob(jobId)).resolves.toMatchObject({
+      state: "succeeded",
+      result: { completedWhilePaused: true },
+    });
+    expect(await worker.runOnce()).toBe(false);
+  });
+
   it("runs tick and housekeeping on independent worker cadences with phase telemetry", async () => {
     const jobId = await queue.enqueue(
       "scheduled-worker",
