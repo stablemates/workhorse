@@ -91,7 +91,8 @@ editing remain unavailable.
 Startup synchronizes a namespaced one-minute heartbeat schedule through `Queue.syncSchedules`, and the
 workers evaluate due schedules in-process with advisory-lock coordination and SQL-level occurrence
 deduplication. The Cron view distinguishes the application heartbeat from the worker-owned maintenance
-loop that promotes due jobs, recovers expired leases, and prunes old occurrence rows. The heartbeat's
+loops: a fast tick that promotes due jobs and recovers expired leases, and a slower housekeeping pass
+that prunes old occurrence rows and replenishes history partitions. The heartbeat's
 audited control updates the durable schedule definition, and Jobs and Workers show each resulting
 execution.
 

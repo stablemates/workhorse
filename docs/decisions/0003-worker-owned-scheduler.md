@@ -1,6 +1,6 @@
 # ADR 0003: Worker-owned in-process scheduling and maintenance
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by [ADR 0004](0004-two-cadence-maintenance.md)
 - **Date:** 2026-07-29
 - **Supersedes:** [ADR 0002: pg_cron-backed declarative scheduling and maintenance](0002-pg-cron-scheduler.md)
 
@@ -25,7 +25,7 @@ Remove pg_cron entirely. Workers own scheduling and maintenance in process.
 2. Cron expressions are parsed and evaluated inside the worker process. The worker computes each definition's next occurrence and fires it when due.
 3. A PostgreSQL advisory lock coordinates scheduling across worker instances, so any number of workers can run the scheduler loop while only one drives a given tick. Every worker is a candidate; losing the lock is not an error. This removes the single-scheduler failure mode without an external coordinator.
 4. Occurrence deduplication stays in SQL. `fire_schedule_v1` reserves one durable `(namespace, schedule_name, occurrence_at)` key before enqueueing, so a fire raced or replayed by multiple workers still enqueues exactly one job for that occurrence second. Because the worker computes the planned occurrence itself, occurrence keys now use the planned slot rather than pg_cron's observed execution second.
-5. Maintenance (bounded due promotion, expired-lease recovery, occurrence-key pruning, history-partition replenishment) runs on the same worker-owned cadence through `maintain_v1`, coordinated by the same advisory-lock mechanism instead of a pg_cron entry.
+5. Maintenance (bounded due promotion, expired-lease recovery, occurrence-key pruning, history-partition replenishment) runs on worker-owned cadences coordinated by the same advisory-lock mechanism instead of a pg_cron entry. [ADR 0004](0004-two-cadence-maintenance.md) splits this into a fast tick and a slow housekeeping entry point.
 6. Revision fencing is retained: stale, disabled, or pruned definitions make `fire_schedule_v1` a no-op.
 
 ## Consequences
@@ -63,4 +63,4 @@ PostgreSQL has no native timer primitive without an extension; triggers cannot o
 
 ## Validation
 
-Acceptance requires live PostgreSQL tests for: multi-worker scheduling with advisory-lock mutual exclusion, duplicate occurrence suppression under concurrent fires, catch-up behavior after worker downtime, revision-fenced no-ops for stale and disabled definitions, worker-owned `maintain_v1` promotion and recovery cadence, and end-to-end recurring execution with no pg_cron extension installed.
+Acceptance requires live PostgreSQL tests for: multi-worker scheduling with advisory-lock mutual exclusion, duplicate occurrence suppression under concurrent fires, catch-up behavior after worker downtime, revision-fenced no-ops for stale and disabled definitions, worker-owned promotion and recovery cadence, and end-to-end recurring execution with no pg_cron extension installed.
