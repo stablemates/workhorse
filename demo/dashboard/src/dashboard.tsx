@@ -142,6 +142,18 @@ function formatDate(value: string | null | undefined): string {
   }).format(new Date(value));
 }
 
+function formatExact(value: string | null | undefined): string {
+  if (!value) return "never";
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
+
 function formatRelative(value: string | null | undefined): string {
   if (!value) return "never";
   const deltaMs = Date.now() - new Date(value).getTime();
@@ -186,11 +198,16 @@ function StatusBadge({ state }: { state: string }) {
 /** One-line, state-specific context so a row explains itself without opening the drawer. */
 function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
   let detail: string | null = null;
-  if (job.state === "scheduled" && job.runAt) detail = `runs ${formatRelative(job.runAt)}`;
-  else if (job.state === "active" && job.workerId) detail = `on ${job.workerId}`;
+  let exactTime: string | null = null;
+  if (job.state === "scheduled" && job.runAt) {
+    detail = `runs ${formatRelative(job.runAt)}`;
+    exactTime = formatExact(job.runAt);
+  } else if (job.state === "active" && job.workerId) detail = `on ${job.workerId}`;
   else if (job.state === "failed" && job.errorMessage) detail = job.errorMessage;
-  else if (job.state === "succeeded" && job.finishedAt)
+  else if (job.state === "succeeded" && job.finishedAt) {
     detail = `finished ${formatRelative(job.finishedAt)}`;
+    exactTime = formatExact(job.finishedAt);
+  }
   if (!detail) return null;
   return (
     <Text
@@ -198,7 +215,7 @@ function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
       size="xs"
       lineClamp={1}
       style={{ wordBreak: "break-all" }}
-      title={detail}
+      title={exactTime ?? detail}
     >
       {detail}
     </Text>
@@ -579,7 +596,7 @@ function TasksPage({
                       </Text>
                     </Table.Td>
                     <Table.Td ta="right">
-                      <Text size="sm" title={formatDate(job.updatedAt)} c="dimmed">
+                      <Text size="sm" title={formatExact(job.updatedAt)} c="dimmed">
                         {formatRelative(job.updatedAt)}
                       </Text>
                     </Table.Td>
