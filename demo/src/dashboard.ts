@@ -136,12 +136,13 @@ export interface DashboardTasksPage {
   total: number;
   counts: DashboardTaskCounts;
   jobs: DashboardJobRow[];
-  facets: {
-    queues: string[];
-    workers: string[];
-    jobTypes: string[];
-    tags: string[];
-  };
+}
+
+export interface DashboardTaskFacets {
+  queues: string[];
+  workers: string[];
+  jobTypes: string[];
+  tags: string[];
 }
 
 export interface DashboardCronPage {
@@ -733,16 +734,11 @@ export async function readDashboardTasks(
   search: string | null = null,
   worker: string | null = null,
   jobType: string | null = null,
-  configuredWorkers: readonly string[] = [],
 ): Promise<DashboardTasksPage> {
   const offset = (page - 1) * pageSize;
   const searchPattern = taskSearchPattern(search);
   const queryCondition = taskQueryCondition({ queue, worker, jobType, tags, searchPattern });
-  const configuredWorkerRows =
-    configuredWorkers.length === 0
-      ? sql`SELECT NULL::text AS worker WHERE false`
-      : sql`SELECT worker FROM (VALUES ${workerValues(configuredWorkers)}) configured(worker)`;
-  const [counts, totalRows, jobRows, facetRows] = await Promise.all([
+  const [counts, totalRows, jobRows] = await Promise.all([
     readDashboardTaskCounts(database),
     database.execute<{ count: number }>(sql`
       WITH tasks AS (
@@ -803,30 +799,6 @@ export async function readDashboardTasks(
        LIMIT ${pageSize}
       OFFSET ${offset}
     `),
-    database.execute<{
-      queues: string[];
-      workers: string[];
-      job_types: string[];
-      tags: string[];
-    }>(sql`
-      WITH configured_workers AS (${configuredWorkerRows}),
-      queue_values AS (
-        SELECT queue_name AS value FROM workhorse.job
-        UNION SELECT queue_name FROM workhorse.queue_control
-      ), worker_values AS (
-        SELECT worker AS value FROM configured_workers
-        UNION SELECT worker_id FROM workhorse.job_runtime WHERE worker_id IS NOT NULL
-        UNION SELECT worker_id FROM workhorse.attempt_history WHERE worker_id IS NOT NULL
-      ), type_values AS (
-        SELECT DISTINCT job_type AS value FROM workhorse.job
-      ), tag_values AS (
-        SELECT DISTINCT unnest(tags) AS value FROM workhorse.job
-      )
-      SELECT ARRAY(SELECT value FROM queue_values WHERE value IS NOT NULL ORDER BY value) AS queues,
-             ARRAY(SELECT value FROM worker_values WHERE value IS NOT NULL ORDER BY value) AS workers,
-             ARRAY(SELECT value FROM type_values ORDER BY value) AS job_types,
-             ARRAY(SELECT value FROM tag_values ORDER BY value) AS tags
-    `),
   ]);
   return {
     capturedAt: new Date().toISOString(),
@@ -856,12 +828,46 @@ export async function readDashboardTasks(
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
     })),
-    facets: {
-      queues: facetRows.rows[0]?.queues ?? [],
-      workers: facetRows.rows[0]?.workers ?? [],
-      jobTypes: facetRows.rows[0]?.job_types ?? [],
-      tags: facetRows.rows[0]?.tags ?? [],
-    },
+  };
+}
+
+export async function readDashboardTaskFacets(
+  database: DemoDatabase,
+  configuredWorkers: readonly string[] = [],
+): Promise<DashboardTaskFacets> {
+  const configuredWorkerRows =
+    configuredWorkers.length === 0
+      ? sql`SELECT NULL::text AS worker WHERE false`
+      : sql`SELECT worker FROM (VALUES ${workerValues(configuredWorkers)}) configured(worker)`;
+  const rows = await database.execute<{
+    queues: string[];
+    workers: string[];
+    job_types: string[];
+    tags: string[];
+  }>(sql`
+    WITH configured_workers AS (${configuredWorkerRows}),
+    queue_values AS (
+      SELECT queue_name AS value FROM workhorse.job
+      UNION SELECT queue_name FROM workhorse.queue_control
+    ), worker_values AS (
+      SELECT worker AS value FROM configured_workers
+      UNION SELECT worker_id FROM workhorse.job_runtime WHERE worker_id IS NOT NULL
+      UNION SELECT worker_id FROM workhorse.attempt_history WHERE worker_id IS NOT NULL
+    ), type_values AS (
+      SELECT DISTINCT job_type AS value FROM workhorse.job
+    ), tag_values AS (
+      SELECT DISTINCT unnest(tags) AS value FROM workhorse.job
+    )
+    SELECT ARRAY(SELECT value FROM queue_values WHERE value IS NOT NULL ORDER BY value) AS queues,
+           ARRAY(SELECT value FROM worker_values WHERE value IS NOT NULL ORDER BY value) AS workers,
+           ARRAY(SELECT value FROM type_values ORDER BY value) AS job_types,
+           ARRAY(SELECT value FROM tag_values ORDER BY value) AS tags
+  `);
+  return {
+    queues: rows.rows[0]?.queues ?? [],
+    workers: rows.rows[0]?.workers ?? [],
+    jobTypes: rows.rows[0]?.job_types ?? [],
+    tags: rows.rows[0]?.tags ?? [],
   };
 }
 

@@ -124,9 +124,11 @@ describe("Workhorse demo", () => {
       counts: { all: 366, scheduled: 1, queued: 3, completed: 346, discarded: 16 },
     });
     expect(firstPage.jobs).toHaveLength(25);
-    expect(firstPage.facets).toMatchObject({
+    expect(firstPage).not.toHaveProperty("facets");
+    await expect(client.dashboard.taskFacets()).resolves.toMatchObject({
       queues: ["demo", "emails", "orders"],
       workers: ["demo-worker-1", "demo-worker-2"],
+      jobTypes: expect.arrayContaining(["demo.report", "order.process"]),
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
