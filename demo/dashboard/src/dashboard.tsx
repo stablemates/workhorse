@@ -4,7 +4,6 @@ import {
   Box,
   Burger,
   Button,
-  Card,
   Center,
   Code,
   Divider,
@@ -20,7 +19,6 @@ import {
   ScrollArea,
   SegmentedControl,
   Select,
-  SimpleGrid,
   Stack,
   Switch,
   Table,
@@ -1166,6 +1164,7 @@ function HealthKpi({
   color = "blue",
   icon,
   children,
+  divided = false,
 }: {
   title: string;
   value: ReactNode;
@@ -1173,27 +1172,42 @@ function HealthKpi({
   color?: string;
   icon: ReactNode;
   children?: ReactNode;
+  divided?: boolean;
 }) {
   return (
-    <Card withBorder padding="md" mih={154}>
-      <Group justify="space-between" align="flex-start" wrap="nowrap">
-        <Box>
-          <Text c="dimmed" fw={600} size="xs" tt="uppercase" lts={0.4}>
-            {title}
-          </Text>
-          <Text fw={750} fz={26} lh={1.2} mt={7}>
+    <Box
+      px="md"
+      py="xs"
+      style={divided ? { borderTop: "1px solid var(--mantine-color-default-border)" } : undefined}
+    >
+      <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+        <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
+          <ThemeIcon variant="light" color={color} size="md" style={{ flexShrink: 0 }}>
+            {icon}
+          </ThemeIcon>
+          <Box style={{ minWidth: 0 }}>
+            <Text fw={600} size="sm">
+              {title}
+            </Text>
+            <Text c="dimmed" size="xs" lineClamp={1}>
+              {detail}
+            </Text>
+          </Box>
+        </Group>
+        {children ? (
+          <Box visibleFrom="sm" w={140} style={{ flexShrink: 0 }}>
+            {children}
+          </Box>
+        ) : null}
+        {typeof value === "string" || typeof value === "number" ? (
+          <Text fw={750} fz={20} lh={1.2} ta="right" style={{ flexShrink: 0 }}>
             {value}
           </Text>
-        </Box>
-        <ThemeIcon variant="light" color={color} size="lg">
-          {icon}
-        </ThemeIcon>
+        ) : (
+          value
+        )}
       </Group>
-      <Text c="dimmed" size="xs" mt={5} mih={18}>
-        {detail}
-      </Text>
-      {children ? <Box mt="sm">{children}</Box> : null}
-    </Card>
+    </Box>
   );
 }
 
@@ -1235,6 +1249,11 @@ function SystemPage({
     leaseExpired: bucket.leaseExpired,
   }));
   const recentOutcomes = data.outcomes.slice(-30);
+  const queueWaitPercentiles = [
+    { label: "p50", duration: data.kpis.queueWait.p50Ms },
+    { label: "p95", duration: data.kpis.queueWait.p95Ms },
+    { label: "p99", duration: data.kpis.queueWait.p99Ms },
+  ];
   const defaultSpill = data.integrity.defaultEventRows + data.integrity.defaultAttemptRows;
 
   return (
@@ -1289,74 +1308,6 @@ function SystemPage({
         </Stack>
       </Group>
 
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 6 }} spacing="sm">
-        <HealthKpi
-          title="Drain balance"
-          value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
-          detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} enqueued · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
-          color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
-          icon={<ArrowClockwise size={18} />}
-        >
-          <MiniTrend
-            series={[
-              {
-                values: recentOutcomes.map((bucket) => bucket.enqueued),
-                color: "var(--mantine-color-blue-6)",
-              },
-              {
-                values: recentOutcomes.map((bucket) => bucket.succeeded + bucket.failed),
-                color: "var(--mantine-color-teal-6)",
-              },
-            ]}
-          />
-        </HealthKpi>
-        <HealthKpi
-          title="Backlog risk"
-          value={data.kpis.backlog.ready}
-          detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)} · 60s demo default`}
-          color={backlogColor}
-          icon={<ListChecks size={18} />}
-        />
-        <HealthKpi
-          title="Attempt error rate"
-          value={formatPercent(data.kpis.errorRate.current)}
-          detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior · 1%/5% defaults`}
-          color={errorColor}
-          icon={<WarningCircle size={18} />}
-        />
-        <HealthKpi
-          title="First-attempt wait p95"
-          value={formatDuration(data.kpis.queueWait.p95Ms)}
-          detail="Enqueue to first claim"
-          color="indigo"
-          icon={<Clock size={18} />}
-        >
-          <Tooltip
-            label={`p50 ${formatDuration(data.kpis.queueWait.p50Ms)} · p99 ${formatDuration(data.kpis.queueWait.p99Ms)}`}
-          >
-            <Text c="dimmed" size="xs" td="underline" style={{ cursor: "help" }}>
-              p50 and p99
-            </Text>
-          </Tooltip>
-        </HealthKpi>
-        <HealthKpi
-          title="Retry pressure"
-          value={data.kpis.retry.backoff}
-          detail={`${data.kpis.retry.dueSoon} due within 5 minutes`}
-          color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
-          icon={<ArrowCounterClockwise size={18} />}
-        >
-          <RetryBars buckets={data.kpis.retry.buckets} />
-        </HealthKpi>
-        <HealthKpi
-          title="Lease danger"
-          value={data.kpis.lease.expired}
-          detail={`${data.kpis.lease.expiringSoon} expiring ≤30s · ${data.kpis.lease.recovered} recovered`}
-          color={data.kpis.lease.expired > 0 ? "red" : "teal"}
-          icon={<Pulse size={18} />}
-        />
-      </SimpleGrid>
-
       <Paper withBorder p="md">
         <Group justify="space-between" mb="sm">
           <Box>
@@ -1407,7 +1358,7 @@ function SystemPage({
       </Paper>
 
       <Grid gutter="xl">
-        <Grid.Col span={{ base: 12, lg: 8 }}>
+        <Grid.Col span={{ base: 12, lg: 8 }} order={{ base: 2, lg: 2 }}>
           <Paper withBorder h="100%">
             <Group justify="space-between" p="md">
               <Box>
@@ -1475,46 +1426,124 @@ function SystemPage({
             </ScrollArea>
           </Paper>
         </Grid.Col>
-        <Grid.Col span={{ base: 12, lg: 4 }}>
-          <Paper withBorder p="md" h="100%">
-            <Text fw={650}>Retry storm</Text>
-            <Text c="dimmed" size="xs" mb="lg">
-              Scheduled retries arriving next
-            </Text>
-            <RetryBars buckets={data.retryStorm.buckets} />
-            <Divider my="lg" />
-            <Text c="dimmed" fw={600} size="xs" tt="uppercase" mb="xs">
-              Top contributors
-            </Text>
-            {data.retryStorm.topTypes.length === 0 ? (
-              <Text c="dimmed" size="sm">
-                No retries are in backoff.
-              </Text>
-            ) : (
-              <Stack gap="xs">
-                {data.retryStorm.topTypes.map((type) => (
-                  <Group key={`${type.queue}:${type.type}`} justify="space-between" wrap="nowrap">
-                    <Box style={{ minWidth: 0 }}>
-                      <Text size="sm" fw={600} truncate>
-                        {taskDisplayName(type.type, type.queue)}
-                      </Text>
-                      <Text c="dimmed" size="xs">
-                        {type.queue}
-                      </Text>
-                    </Box>
-                    <Badge color="orange" variant="light">
-                      {type.count}
-                    </Badge>
+        <Grid.Col span={{ base: 12, lg: 4 }} order={{ base: 1, lg: 1 }}>
+          <Stack gap="xl">
+            <Paper withBorder>
+              <HealthKpi
+                title="Drain balance"
+                value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
+                detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} enqueued · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
+                color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
+                icon={<ArrowClockwise size={18} />}
+              >
+                <MiniTrend
+                  series={[
+                    {
+                      values: recentOutcomes.map((bucket) => bucket.enqueued),
+                      color: "var(--mantine-color-blue-6)",
+                    },
+                    {
+                      values: recentOutcomes.map((bucket) => bucket.succeeded + bucket.failed),
+                      color: "var(--mantine-color-teal-6)",
+                    },
+                  ]}
+                />
+              </HealthKpi>
+              <HealthKpi
+                divided
+                title="Backlog risk"
+                value={data.kpis.backlog.ready}
+                detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)} · 60s demo default`}
+                color={backlogColor}
+                icon={<ListChecks size={18} />}
+              />
+              <HealthKpi
+                divided
+                title="Attempt error rate"
+                value={formatPercent(data.kpis.errorRate.current)}
+                detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior · 1%/5% defaults`}
+                color={errorColor}
+                icon={<WarningCircle size={18} />}
+              />
+              <HealthKpi
+                divided
+                title="First-attempt wait"
+                value={
+                  <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0 }}>
+                    {queueWaitPercentiles.map((percentile) => (
+                      <Box key={percentile.label} ta="right">
+                        <Text c="dimmed" fz={10} lh={1}>
+                          {percentile.label}
+                        </Text>
+                        <Text fw={700} size="sm" lh={1.2}>
+                          {formatDuration(percentile.duration)}
+                        </Text>
+                      </Box>
+                    ))}
                   </Group>
-                ))}
-              </Stack>
-            )}
-          </Paper>
+                }
+                detail="Enqueue to first claim"
+                color="indigo"
+                icon={<Clock size={18} />}
+              />
+              <HealthKpi
+                divided
+                title="Retry pressure"
+                value={data.kpis.retry.backoff}
+                detail={`${data.kpis.retry.dueSoon} due within 5 minutes`}
+                color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
+                icon={<ArrowCounterClockwise size={18} />}
+              />
+              <HealthKpi
+                divided
+                title="Lease danger"
+                value={data.kpis.lease.expired}
+                detail={`${data.kpis.lease.expiringSoon} expiring ≤30s · ${data.kpis.lease.recovered} recovered`}
+                color={data.kpis.lease.expired > 0 ? "red" : "teal"}
+                icon={<Pulse size={18} />}
+              />
+            </Paper>
+
+            <Paper withBorder p="md">
+              <Text fw={650}>Retry storm</Text>
+              <Text c="dimmed" size="xs" mb="lg">
+                Scheduled retries arriving next
+              </Text>
+              <RetryBars buckets={data.retryStorm.buckets} />
+              <Divider my="lg" />
+              <Text c="dimmed" fw={600} size="xs" tt="uppercase" mb="xs">
+                Top contributors
+              </Text>
+              {data.retryStorm.topTypes.length === 0 ? (
+                <Text c="dimmed" size="sm">
+                  No retries are in backoff.
+                </Text>
+              ) : (
+                <Stack gap="xs">
+                  {data.retryStorm.topTypes.map((type) => (
+                    <Group key={`${type.queue}:${type.type}`} justify="space-between" wrap="nowrap">
+                      <Box style={{ minWidth: 0 }}>
+                        <Text size="sm" fw={600} truncate>
+                          {taskDisplayName(type.type, type.queue)}
+                        </Text>
+                        <Text c="dimmed" size="xs">
+                          {type.queue}
+                        </Text>
+                      </Box>
+                      <Badge color="orange" variant="light">
+                        {type.count}
+                      </Badge>
+                    </Group>
+                  ))}
+                </Stack>
+              )}
+            </Paper>
+          </Stack>
         </Grid.Col>
       </Grid>
 
       <Grid gutter="xl">
-        <Grid.Col span={{ base: 12, lg: 7 }}>
+        <Grid.Col span={{ base: 12, lg: 6 }}>
           <Paper withBorder h="100%">
             <Box p="md">
               <Text fw={650}>Top failing job types</Text>
@@ -1577,7 +1606,7 @@ function SystemPage({
             )}
           </Paper>
         </Grid.Col>
-        <Grid.Col span={{ base: 12, lg: 5 }}>
+        <Grid.Col span={{ base: 12, lg: 6 }}>
           <Paper withBorder p="md" h="100%">
             <Text fw={650}>Integrity</Text>
             <Text c="dimmed" size="xs" mb="lg">
