@@ -1,4 +1,5 @@
 import {
+  ActionIcon,
   AppShell,
   Badge,
   Box,
@@ -38,6 +39,7 @@ import {
   CheckCircle,
   Clock,
   GearSix,
+  Info,
   ListDashes,
   ListChecks,
   MagnifyingGlass,
@@ -1157,10 +1159,22 @@ function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }) {
   );
 }
 
+function HelpButton({ label, help }: { label: string; help: string }) {
+  return (
+    <Tooltip label={help} multiline w={280} withArrow>
+      <ActionIcon aria-label={`${label}: ${help}`} color="gray" size="sm" variant="subtle">
+        <Info size={14} />
+      </ActionIcon>
+    </Tooltip>
+  );
+}
+
 function HealthKpi({
   title,
   value,
   detail,
+  help,
+  scope,
   color = "blue",
   icon,
   children,
@@ -1169,6 +1183,8 @@ function HealthKpi({
   title: string;
   value: ReactNode;
   detail: ReactNode;
+  help: string;
+  scope: string;
   color?: string;
   icon: ReactNode;
   children?: ReactNode;
@@ -1186,9 +1202,34 @@ function HealthKpi({
             {icon}
           </ThemeIcon>
           <Box style={{ minWidth: 0 }}>
-            <Text fw={600} size="sm">
-              {title}
-            </Text>
+            <Group gap={6} wrap="nowrap">
+              <Tooltip
+                label={help}
+                multiline
+                w={280}
+                withArrow
+                position="top-start"
+                openDelay={150}
+                closeDelay={80}
+                events={{ hover: true, focus: true, touch: true }}
+              >
+                <Text
+                  fw={600}
+                  size="sm"
+                  tabIndex={0}
+                  style={{
+                    cursor: "help",
+                    textDecoration: "underline dotted",
+                    textUnderlineOffset: 3,
+                  }}
+                >
+                  {title}
+                </Text>
+              </Tooltip>
+              <Text c="dimmed" fz={10} fw={600} lh={1} tt="uppercase">
+                {scope}
+              </Text>
+            </Group>
             <Text c="dimmed" size="xs" lineClamp={1}>
               {detail}
             </Text>
@@ -1262,6 +1303,10 @@ function SystemPage({
         <Box>
           <Group gap="sm" mb={4}>
             <Title order={1}>System Health</Title>
+            <HelpButton
+              label="System Health"
+              help="Operational health captured at the time shown on the right. The window selector controls rate, error, wait, recovery, and historical metrics; current-state counts and forward-looking deadlines are labeled separately."
+            />
             <Badge color={systemStatusColor} variant="light" size="lg" tt="capitalize">
               {data.status.level}
             </Badge>
@@ -1311,7 +1356,13 @@ function SystemPage({
       <Paper withBorder p="md">
         <Group justify="space-between" mb="sm">
           <Box>
-            <Text fw={650}>Outcome rate</Text>
+            <Group gap={4} wrap="nowrap">
+              <Text fw={650}>Outcome rate</Text>
+              <HelpButton
+                label="Outcome rate"
+                help="One-minute buckets across the selected window. Bars show closed-attempt outcomes and the line shows jobs enqueued during each minute."
+              />
+            </Group>
             <Text c="dimmed" size="xs">
               Minute buckets · enqueued line over closed-attempt outcomes
             </Text>
@@ -1362,7 +1413,13 @@ function SystemPage({
           <Paper withBorder h="100%">
             <Group justify="space-between" p="md">
               <Box>
-                <Text fw={650}>Queue pressure</Text>
+                <Group gap={4} wrap="nowrap">
+                  <Text fw={650}>Queue pressure</Text>
+                  <HelpButton
+                    label="Queue pressure"
+                    help="Current queue state ranked by backlog risk. Ready, oldest, due, active, and retrying are snapshots; enqueue and completion rates use the selected window. Select a row to inspect its tasks."
+                  />
+                </Group>
                 <Text c="dimmed" size="xs">
                   Worst queues first · select a row to inspect its tasks
                 </Text>
@@ -1433,6 +1490,8 @@ function SystemPage({
                 title="Drain balance"
                 value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
                 detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} enqueued · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
+                help="Average completed jobs per minute compared with enqueued jobs per minute during the selected window. A negative net means work arrived faster than it completed."
+                scope={data.window}
                 color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
                 icon={<ArrowClockwise size={18} />}
               >
@@ -1453,7 +1512,9 @@ function SystemPage({
                 divided
                 title="Backlog risk"
                 value={data.kpis.backlog.ready}
-                detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)} · 60s demo default`}
+                detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)}`}
+                help="A current snapshot of jobs ready to run. The age of the oldest ready job highlights queues that are not draining promptly; yellow begins after 60 seconds."
+                scope="now"
                 color={backlogColor}
                 icon={<ListChecks size={18} />}
               />
@@ -1461,7 +1522,9 @@ function SystemPage({
                 divided
                 title="Attempt error rate"
                 value={formatPercent(data.kpis.errorRate.current)}
-                detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior · 1%/5% defaults`}
+                detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior ${data.window}`}
+                help="The share of attempts that did not succeed during the selected window, compared with the immediately preceding window of the same length. Caution starts at 1% and warning at 5%."
+                scope={data.window}
                 color={errorColor}
                 icon={<WarningCircle size={18} />}
               />
@@ -1483,6 +1546,8 @@ function SystemPage({
                   </Group>
                 }
                 detail="Enqueue to first claim"
+                help="The median, 95th, and 99th percentile delay from enqueue to the first claim for jobs first claimed during the selected window."
+                scope={data.window}
                 color="indigo"
                 icon={<Clock size={18} />}
               />
@@ -1490,7 +1555,9 @@ function SystemPage({
                 divided
                 title="Retry pressure"
                 value={data.kpis.retry.backoff}
-                detail={`${data.kpis.retry.dueSoon} due within 5 minutes`}
+                detail={`${data.kpis.retry.dueSoon} due in the next 5m`}
+                help="A current snapshot of jobs waiting in retry backoff. The secondary count shows how many scheduled retries become due within the next five minutes."
+                scope="now"
                 color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
                 icon={<ArrowCounterClockwise size={18} />}
               />
@@ -1498,14 +1565,22 @@ function SystemPage({
                 divided
                 title="Lease danger"
                 value={data.kpis.lease.expired}
-                detail={`${data.kpis.lease.expiringSoon} expiring ≤30s · ${data.kpis.lease.recovered} recovered`}
+                detail={`${data.kpis.lease.expiringSoon} expire in 30s · ${data.kpis.lease.recovered} recovered/${data.window}`}
+                help="A current snapshot of active jobs with expired leases. It also shows leases expiring within 30 seconds and lease expirations recorded during the selected window."
+                scope="now"
                 color={data.kpis.lease.expired > 0 ? "red" : "teal"}
                 icon={<Pulse size={18} />}
               />
             </Paper>
 
             <Paper withBorder p="md">
-              <Text fw={650}>Retry storm</Text>
+              <Group gap={4} wrap="nowrap">
+                <Text fw={650}>Retry storm</Text>
+                <HelpButton
+                  label="Retry storm"
+                  help="A current snapshot of jobs in retry backoff, grouped by when they become due: within 1 minute, 5 minutes, 15 minutes, 1 hour, or later. Contributors are the job types with the most pending retries now."
+                />
+              </Group>
               <Text c="dimmed" size="xs" mb="lg">
                 Scheduled retries arriving next
               </Text>
@@ -1546,7 +1621,13 @@ function SystemPage({
         <Grid.Col span={{ base: 12, lg: 6 }}>
           <Paper withBorder h="100%">
             <Box p="md">
-              <Text fw={650}>Top failing job types</Text>
+              <Group gap={4} wrap="nowrap">
+                <Text fw={650}>Top failing job types</Text>
+                <HelpButton
+                  label="Top failing job types"
+                  help="Job types with non-successful attempts during the selected window, ranked by error count. Error rate and terminal failures use the same window; last error and last seen identify the latest matching attempt."
+                />
+              </Group>
               <Text c="dimmed" size="xs">
                 Closed attempts in the selected window
               </Text>
@@ -1608,7 +1689,13 @@ function SystemPage({
         </Grid.Col>
         <Grid.Col span={{ base: 12, lg: 6 }}>
           <Paper withBorder p="md" h="100%">
-            <Text fw={650}>Integrity</Text>
+            <Group gap={4} wrap="nowrap">
+              <Text fw={650}>Integrity</Text>
+              <HelpButton
+                label="Integrity"
+                help="Checks whether scheduled work is being promoted now and whether history partitions exist for the current and next four weeks. Default-partition spill counts rows written during the selected window."
+              />
+            </Group>
             <Text c="dimmed" size="xs" mb="lg">
               Tick proxy and weekly history coverage
             </Text>
