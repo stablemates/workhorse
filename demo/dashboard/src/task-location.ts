@@ -3,7 +3,7 @@ import type { DashboardTaskFilter } from "../../src/dashboard";
 export const taskPageSizes = [25, 50, 100] as const;
 export type TaskPageSize = (typeof taskPageSizes)[number];
 export type TaskActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
-export type TaskActivityGroup = "queue" | "worker" | "task";
+export type TaskActivityGroup = "queue" | "worker" | "task" | "status";
 
 export interface TaskLocationState {
   filter: DashboardTaskFilter;
@@ -67,7 +67,7 @@ export function parseTaskLocation(
     period: ["15m", "1h", "6h", "24h", "7d"].includes(requestedPeriod ?? "")
       ? requestedPeriod!
       : (defaults.period ?? "1h"),
-    group: ["queue", "worker", "task"].includes(requestedGroup ?? "")
+    group: ["queue", "worker", "task", "status"].includes(requestedGroup ?? "")
       ? requestedGroup!
       : (defaults.group ?? "queue"),
   };
