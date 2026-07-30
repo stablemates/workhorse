@@ -17,6 +17,7 @@ import {
   readDashboardJobDetail,
   readDashboardQueues,
   readDashboardSystem,
+  readDashboardTaskFacets,
   readDashboardTaskCounts,
   readDashboardTasks,
   readDashboardWorkers,
@@ -126,9 +127,11 @@ export const dashboardRouter = {
           input.search,
           input.worker,
           input.jobType,
-          context.configuredWorkers,
         ),
       ),
+    taskFacets: procedure.handler(({ context }) =>
+      readDashboardTaskFacets(context.database, context.configuredWorkers),
+    ),
     activity: procedure
       .input(activityInput)
       .handler(({ context, input }) =>

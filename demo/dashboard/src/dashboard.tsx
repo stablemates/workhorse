@@ -67,6 +67,7 @@ import type {
   DashboardSystemPage,
   DashboardSystemRetryBucket,
   DashboardSystemWindow,
+  DashboardTaskFacets,
   DashboardTaskCounts,
   DashboardTaskFilter,
   DashboardTasksPage,
@@ -632,6 +633,136 @@ function TasksActivityChart({
   );
 }
 
+function includeSelectedOption(values: string[], selected: string | null): string[] {
+  return selected && !values.includes(selected) ? [selected, ...values] : values;
+}
+
+function includeSelectedOptions(values: string[], selected: readonly string[]): string[] {
+  const available = new Set(values);
+  const missing = selected.filter((value) => !available.has(value));
+  return missing.length > 0 ? [...missing, ...values] : values;
+}
+
+function useTaskFacets({
+  queue,
+  worker,
+  jobType,
+  tags,
+}: Pick<DashboardTasksPage, "queue" | "worker" | "jobType" | "tags">) {
+  const [facets, setFacets] = useState<DashboardTaskFacets | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const request = useRef<Promise<void> | null>(null);
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current += 1;
+    },
+    [],
+  );
+  const load = useCallback(() => {
+    if (facets || request.current) return;
+    const activeGeneration = generation.current;
+    setLoading(true);
+    setError(null);
+    request.current = rpcClient.dashboard
+      .taskFacets()
+      .then((nextFacets) => {
+        if (generation.current === activeGeneration) setFacets(nextFacets);
+      })
+      .catch(() => {
+        if (generation.current === activeGeneration) {
+          setError("Unable to load filter options. Reopen to retry.");
+        }
+      })
+      .finally(() => {
+        if (generation.current === activeGeneration) {
+          request.current = null;
+          setLoading(false);
+        }
+      });
+  }, [facets]);
+  const values = facets ?? { queues: [], workers: [], jobTypes: [], tags: [] };
+  return {
+    facets: {
+      queues: includeSelectedOption(values.queues, queue),
+      workers: includeSelectedOption(values.workers, worker),
+      jobTypes: includeSelectedOption(values.jobTypes, jobType),
+      tags: includeSelectedOptions(values.tags, tags),
+    },
+    loading,
+    error,
+    load,
+  };
+}
+
+function TaskListingFilters({
+  data,
+  searchInput,
+  setSearchInput,
+  taskFacets,
+  updateLocation,
+}: {
+  data: DashboardTasksPage;
+  searchInput: string;
+  setSearchInput: (value: string) => void;
+  taskFacets: ReturnType<typeof useTaskFacets>;
+  updateLocation: (updates: Partial<TaskLocationState>) => void;
+}) {
+  const nothingFoundMessage = taskFacets.loading ? "Loading filters…" : taskFacets.error;
+  return (
+    <Group gap="xs" wrap="nowrap">
+      <TextInput
+        size="xs"
+        value={searchInput}
+        onChange={(event) => setSearchInput(event.currentTarget.value)}
+        leftSection={<MagnifyingGlass size={14} />}
+        placeholder="Search tasks (* wildcard)"
+        aria-label="Search tasks"
+        style={{ flex: "1 1 220px" }}
+      />
+      <MultiSelect
+        size="xs"
+        data={taskFacets.facets.tags}
+        value={data.tags}
+        onChange={(tags) => updateLocation({ tags })}
+        onDropdownOpen={taskFacets.load}
+        placeholder="Tags"
+        searchable
+        clearable
+        rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
+        nothingFoundMessage={nothingFoundMessage ?? "No tags found"}
+        maxDropdownHeight={240}
+        style={{ flex: "1 1 220px" }}
+      />
+      {(
+        [
+          ["Queue", data.queue, taskFacets.facets.queues, "queue"],
+          ["Worker", data.worker, taskFacets.facets.workers, "worker"],
+          ["Task type", data.jobType, taskFacets.facets.jobTypes, "jobType"],
+        ] as const
+      ).map(([placeholder, value, values, key]) => (
+        <Select
+          key={key}
+          size="xs"
+          data={values}
+          value={value}
+          onChange={(next) => updateLocation({ [key]: next })}
+          onDropdownOpen={taskFacets.load}
+          placeholder={placeholder}
+          searchable
+          clearable
+          rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
+          nothingFoundMessage={
+            nothingFoundMessage ?? `No ${placeholder.toLowerCase()} options found`
+          }
+          style={{ flex: "1 1 150px" }}
+        />
+      ))}
+    </Group>
+  );
+}
+
 function TasksPage({
   data,
   navigate,
@@ -654,8 +785,9 @@ function TasksPage({
   const [fullArgs, setFullArgs] = useState(
     () => localStorage.getItem("workhorse-full-args") === "true",
   );
-  const [searchInput, setSearchInput] = useState(taskLocation.search ?? "");
-  useEffect(() => setSearchInput(taskLocation.search ?? ""), [taskLocation.search]);
+  const [searchDraft, setSearchDraft] = useState<string | null>(null);
+  const searchInput = searchDraft ?? taskLocation.search ?? "";
+  const taskFacets = useTaskFacets(data);
   const locationState: TaskLocationState = taskLocation;
   const updateLocation = useCallback(
     (updates: Partial<TaskLocationState>, useReplace = false) => {
@@ -666,12 +798,14 @@ function TasksPage({
     [locationState, navigate, replace],
   );
   useEffect(() => {
+    if (searchDraft === null) return;
     const timer = setTimeout(() => {
-      const search = searchInput.trim() || null;
+      const search = searchDraft.trim() || null;
       if (search !== taskLocation.search) updateLocation({ search }, true);
+      setSearchDraft(null);
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchInput, taskLocation.search, updateLocation]);
+  }, [searchDraft, taskLocation.search, updateLocation]);
   const toggleFullArgs = (checked: boolean) => {
     setFullArgs(checked);
     localStorage.setItem("workhorse-full-args", String(checked));
@@ -700,47 +834,13 @@ function TasksPage({
       />
       <Paper withBorder>
         <Stack gap="xs" p="md">
-          <Group gap="xs" wrap="nowrap">
-            <TextInput
-              size="xs"
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.currentTarget.value)}
-              leftSection={<MagnifyingGlass size={14} />}
-              placeholder="Search tasks (* wildcard)"
-              aria-label="Search tasks"
-              style={{ flex: "1 1 220px" }}
-            />
-            <MultiSelect
-              size="xs"
-              data={data.facets.tags}
-              value={data.tags}
-              onChange={(tags) => updateLocation({ tags })}
-              placeholder="Tags"
-              searchable
-              clearable
-              maxDropdownHeight={240}
-              style={{ flex: "1 1 220px" }}
-            />
-            {(
-              [
-                ["Queue", data.queue, data.facets.queues, "queue"],
-                ["Worker", data.worker, data.facets.workers, "worker"],
-                ["Task type", data.jobType, data.facets.jobTypes, "jobType"],
-              ] as const
-            ).map(([placeholder, value, values, key]) => (
-              <Select
-                key={key}
-                size="xs"
-                data={values}
-                value={value}
-                onChange={(next) => updateLocation({ [key]: next })}
-                placeholder={placeholder}
-                searchable
-                clearable
-                style={{ flex: "1 1 150px" }}
-              />
-            ))}
-          </Group>
+          <TaskListingFilters
+            data={data}
+            searchInput={searchInput}
+            setSearchInput={setSearchDraft}
+            taskFacets={taskFacets}
+            updateLocation={updateLocation}
+          />
           <Group justify="space-between">
             <Switch
               size="xs"
