@@ -49,18 +49,16 @@ import {
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
-  Bar,
-  CartesianGrid,
-  ComposedChart,
-  Legend,
-  Line,
-  ResponsiveContainer,
-  Tooltip as RechartsTooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import type {
   DashboardCronPage,
   DashboardJobDetail,
@@ -92,6 +90,64 @@ const systemWindowStorageKey = "workhorse-system-window";
 const systemOldestReadyWarningMs = 60_000;
 const systemErrorRateWarning = 0.05;
 const systemErrorRateCaution = 0.01;
+
+interface SystemOutcomeChartPoint {
+  bucket: string;
+  enqueued: number;
+  succeeded: number;
+  failed: number;
+  retry: number;
+  leaseExpired: number;
+}
+
+const SystemOutcomeChart = lazy(async () => {
+  const {
+    Bar,
+    CartesianGrid,
+    ComposedChart,
+    Legend,
+    Line,
+    ResponsiveContainer,
+    Tooltip: RechartsTooltip,
+    XAxis,
+    YAxis,
+  } = await import("recharts");
+
+  return {
+    default: ({ data }: { data: SystemOutcomeChartPoint[] }) => (
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={data} margin={{ top: 12, right: 12, bottom: 0, left: -12 }}>
+          <CartesianGrid stroke="var(--mantine-color-default-border)" strokeDasharray="3 3" />
+          <XAxis
+            dataKey="bucket"
+            minTickGap={36}
+            tick={{ fontSize: 11, fill: "var(--mantine-color-dimmed)" }}
+            tickLine={false}
+          />
+          <YAxis
+            allowDecimals={false}
+            width={38}
+            tick={{ fontSize: 11, fill: "var(--mantine-color-dimmed)" }}
+            tickLine={false}
+          />
+          <RechartsTooltip />
+          <Legend wrapperStyle={{ fontSize: 12 }} />
+          <Bar dataKey="succeeded" stackId="outcomes" fill="var(--mantine-color-teal-6)" />
+          <Bar dataKey="failed" stackId="outcomes" fill="var(--mantine-color-red-6)" />
+          <Bar dataKey="retry" stackId="outcomes" fill="var(--mantine-color-orange-6)" />
+          <Bar dataKey="leaseExpired" stackId="outcomes" fill="var(--mantine-color-grape-6)" />
+          <Line
+            dataKey="enqueued"
+            type="monotone"
+            stroke="var(--mantine-color-blue-7)"
+            strokeWidth={2}
+            dot={false}
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+    ),
+  };
+});
 
 function readStoredSystemWindow(): DashboardSystemWindow {
   const stored = localStorage.getItem(systemWindowStorageKey) as DashboardSystemWindow | null;
@@ -209,14 +265,25 @@ function taskHref(state: TaskLocationState): string {
  * strings; this only affects rendering. "system" means the browser's own zone.
  */
 const timeZoneStorageKey = "workhorse-timezone";
+const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+const createDateTimeFormatter = Intl.DateTimeFormat;
 let displayTimeZone: string | null = readStoredTimeZone();
 const timeZoneListeners = new Set<() => void>();
+
+function getDateTimeFormatter(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = JSON.stringify(options);
+  const cached = dateTimeFormatters.get(key);
+  if (cached) return cached;
+  const formatter = new createDateTimeFormatter(undefined, options);
+  dateTimeFormatters.set(key, formatter);
+  return formatter;
+}
 
 function readStoredTimeZone(): string | null {
   const stored = localStorage.getItem(timeZoneStorageKey);
   if (!stored || stored === "system") return null;
   try {
-    return new Intl.DateTimeFormat(undefined, { timeZone: stored }).resolvedOptions().timeZone;
+    return getDateTimeFormatter({ timeZone: stored }).resolvedOptions().timeZone;
   } catch {
     return null;
   }
@@ -239,7 +306,7 @@ function currentTimeZoneValue(): string {
 
 function formatExact(value: string | null | undefined): string {
   if (!value) return "never";
-  return new Intl.DateTimeFormat(undefined, {
+  return getDateTimeFormatter({
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -477,14 +544,14 @@ function TasksActivityChart({
   const labelFormat = (value: string): string => {
     const date = new Date(value);
     if (period === "7d" || period === "24h") {
-      return new Intl.DateTimeFormat(undefined, {
+      return getDateTimeFormatter({
         month: "short",
         day: "numeric",
         hour: "2-digit",
         timeZone: displayTimeZone ?? undefined,
       }).format(date);
     }
-    return new Intl.DateTimeFormat(undefined, {
+    return getDateTimeFormatter({
       hour: "2-digit",
       minute: "2-digit",
       timeZone: displayTimeZone ?? undefined,
@@ -590,18 +657,21 @@ function TasksPage({
   const [searchInput, setSearchInput] = useState(taskLocation.search ?? "");
   useEffect(() => setSearchInput(taskLocation.search ?? ""), [taskLocation.search]);
   const locationState: TaskLocationState = taskLocation;
-  const updateLocation = (updates: Partial<TaskLocationState>, useReplace = false) => {
-    const href = taskHref({ ...locationState, page: 1, ...updates });
-    if (useReplace) replace(href);
-    else navigate(href);
-  };
+  const updateLocation = useCallback(
+    (updates: Partial<TaskLocationState>, useReplace = false) => {
+      const href = taskHref({ ...locationState, page: 1, ...updates });
+      if (useReplace) replace(href);
+      else navigate(href);
+    },
+    [locationState, navigate, replace],
+  );
   useEffect(() => {
     const timer = setTimeout(() => {
       const search = searchInput.trim() || null;
       if (search !== taskLocation.search) updateLocation({ search }, true);
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchInput, taskLocation.search]);
+  }, [searchInput, taskLocation.search, updateLocation]);
   const toggleFullArgs = (checked: boolean) => {
     setFullArgs(checked);
     localStorage.setItem("workhorse-full-args", String(checked));
@@ -1267,13 +1337,247 @@ function HealthKpi({
 
 function systemBucketLabel(value: string, window: DashboardSystemWindow): string {
   const date = new Date(value);
-  return new Intl.DateTimeFormat(undefined, {
+  return getDateTimeFormatter({
     month: window === "24h" ? "short" : undefined,
     day: window === "24h" ? "numeric" : undefined,
     hour: "2-digit",
     minute: "2-digit",
     timeZone: displayTimeZone ?? undefined,
   }).format(date);
+}
+
+function SystemOperations({
+  data,
+  navigate,
+}: {
+  data: DashboardSystemPage;
+  navigate: (href: string) => void;
+}) {
+  const errorColor =
+    data.kpis.errorRate.current >= systemErrorRateWarning
+      ? "red"
+      : data.kpis.errorRate.current >= systemErrorRateCaution
+        ? "yellow"
+        : "teal";
+  const backlogColor =
+    (data.kpis.backlog.oldestReadyMs ?? 0) > systemOldestReadyWarningMs ? "yellow" : "blue";
+  const recentOutcomes = data.outcomes.slice(-30);
+  const queueWaitPercentiles = [
+    { label: "p50", duration: data.kpis.queueWait.p50Ms },
+    { label: "p95", duration: data.kpis.queueWait.p95Ms },
+    { label: "p99", duration: data.kpis.queueWait.p99Ms },
+  ];
+
+  return (
+    <Grid gutter="xl">
+      <Grid.Col span={{ base: 12, lg: 8 }} order={{ base: 2, lg: 2 }}>
+        <Paper withBorder h="100%">
+          <Group justify="space-between" p="md">
+            <Box>
+              <Group gap={4} wrap="nowrap">
+                <Text fw={650}>Queue pressure</Text>
+                <HelpButton
+                  label="Queue pressure"
+                  help="Current queue state ranked by backlog risk. Ready, oldest, due, active, and retrying are snapshots; enqueue and completion rates use the selected window. Select a row to inspect its tasks."
+                />
+              </Group>
+              <Text c="dimmed" size="xs">
+                Worst queues first · select a row to inspect its tasks
+              </Text>
+            </Box>
+            <Badge
+              variant="light"
+              color={data.queues.some((queue) => queue.paused) ? "yellow" : "gray"}
+            >
+              {data.queues.length} queues
+            </Badge>
+          </Group>
+          <ScrollArea>
+            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={920}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Queue</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th ta="right">Ready</Table.Th>
+                  <Table.Th ta="right">Oldest</Table.Th>
+                  <Table.Th ta="right">Due ≤5m</Table.Th>
+                  <Table.Th ta="right">Active</Table.Th>
+                  <Table.Th ta="right">Retrying</Table.Th>
+                  <Table.Th ta="right">Enq/min</Table.Th>
+                  <Table.Th ta="right">Done/min</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {data.queues.map((queue) => (
+                  <Table.Tr
+                    key={queue.queue}
+                    tabIndex={0}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`);
+                      }
+                    }}
+                  >
+                    <Table.Td>
+                      <Code fz="xs" style={{ background: "transparent", padding: 0 }}>
+                        {queue.queue}
+                      </Code>
+                    </Table.Td>
+                    <Table.Td>
+                      <Badge color={queue.paused ? "yellow" : "teal"} variant="light" size="sm">
+                        {queue.paused ? "Paused" : "Running"}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td ta="right">{queue.ready}</Table.Td>
+                    <Table.Td ta="right">{formatDuration(queue.oldestReadyMs)}</Table.Td>
+                    <Table.Td ta="right">{queue.dueSoon}</Table.Td>
+                    <Table.Td ta="right">{queue.active}</Table.Td>
+                    <Table.Td ta="right">{queue.retrying}</Table.Td>
+                    <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
+                    <Table.Td ta="right">{formatRate(queue.completedPerMinute)}</Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        </Paper>
+      </Grid.Col>
+      <Grid.Col span={{ base: 12, lg: 4 }} order={{ base: 1, lg: 1 }}>
+        <Stack gap="xl">
+          <Paper withBorder>
+            <HealthKpi
+              title="Drain balance"
+              value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
+              detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} enqueued · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
+              help="Average completed jobs per minute compared with enqueued jobs per minute during the selected window. A negative net means work arrived faster than it completed."
+              scope={data.window}
+              color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
+              icon={<ArrowClockwise size={18} />}
+            >
+              <MiniTrend
+                series={[
+                  {
+                    values: recentOutcomes.map((bucket) => bucket.enqueued),
+                    color: "var(--mantine-color-blue-6)",
+                  },
+                  {
+                    values: recentOutcomes.map((bucket) => bucket.succeeded + bucket.failed),
+                    color: "var(--mantine-color-teal-6)",
+                  },
+                ]}
+              />
+            </HealthKpi>
+            <HealthKpi
+              divided
+              title="Backlog risk"
+              value={data.kpis.backlog.ready}
+              detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)}`}
+              help="A current snapshot of jobs ready to run. The age of the oldest ready job highlights queues that are not draining promptly; yellow begins after 60 seconds."
+              scope="now"
+              color={backlogColor}
+              icon={<ListChecks size={18} />}
+            />
+            <HealthKpi
+              divided
+              title="Attempt error rate"
+              value={formatPercent(data.kpis.errorRate.current)}
+              detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior ${data.window}`}
+              help="The share of attempts that did not succeed during the selected window, compared with the immediately preceding window of the same length. Caution starts at 1% and warning at 5%."
+              scope={data.window}
+              color={errorColor}
+              icon={<WarningCircle size={18} />}
+            />
+            <HealthKpi
+              divided
+              title="First-attempt wait"
+              value={
+                <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0 }}>
+                  {queueWaitPercentiles.map((percentile) => (
+                    <Box key={percentile.label} ta="right">
+                      <Text c="dimmed" fz={10} lh={1}>
+                        {percentile.label}
+                      </Text>
+                      <Text fw={700} size="sm" lh={1.2}>
+                        {formatDuration(percentile.duration)}
+                      </Text>
+                    </Box>
+                  ))}
+                </Group>
+              }
+              detail="Enqueue to first claim"
+              help="The median, 95th, and 99th percentile delay from enqueue to the first claim for jobs first claimed during the selected window."
+              scope={data.window}
+              color="indigo"
+              icon={<Clock size={18} />}
+            />
+            <HealthKpi
+              divided
+              title="Retry pressure"
+              value={data.kpis.retry.backoff}
+              detail={`${data.kpis.retry.dueSoon} due in the next 5m`}
+              help="A current snapshot of jobs waiting in retry backoff. The secondary count shows how many scheduled retries become due within the next five minutes."
+              scope="now"
+              color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
+              icon={<ArrowCounterClockwise size={18} />}
+            />
+            <HealthKpi
+              divided
+              title="Lease danger"
+              value={data.kpis.lease.expired}
+              detail={`${data.kpis.lease.expiringSoon} expire in 30s · ${data.kpis.lease.recovered} recovered/${data.window}`}
+              help="A current snapshot of active jobs with expired leases. It also shows leases expiring within 30 seconds and lease expirations recorded during the selected window."
+              scope="now"
+              color={data.kpis.lease.expired > 0 ? "red" : "teal"}
+              icon={<Pulse size={18} />}
+            />
+          </Paper>
+
+          <Paper withBorder p="md">
+            <Group gap={4} wrap="nowrap">
+              <Text fw={650}>Retry storm</Text>
+              <HelpButton
+                label="Retry storm"
+                help="A current snapshot of jobs in retry backoff, grouped by when they become due: within 1 minute, 5 minutes, 15 minutes, 1 hour, or later. Contributors are the job types with the most pending retries now."
+              />
+            </Group>
+            <Text c="dimmed" size="xs" mb="lg">
+              Scheduled retries arriving next
+            </Text>
+            <RetryBars buckets={data.retryStorm.buckets} />
+            <Divider my="lg" />
+            <Text c="dimmed" fw={600} size="xs" tt="uppercase" mb="xs">
+              Top contributors
+            </Text>
+            {data.retryStorm.topTypes.length === 0 ? (
+              <Text c="dimmed" size="sm">
+                No retries are in backoff.
+              </Text>
+            ) : (
+              <Stack gap="xs">
+                {data.retryStorm.topTypes.map((type) => (
+                  <Group key={`${type.queue}:${type.type}`} justify="space-between" wrap="nowrap">
+                    <Box style={{ minWidth: 0 }}>
+                      <Text size="sm" fw={600} truncate>
+                        {taskDisplayName(type.type, type.queue)}
+                      </Text>
+                      <Text c="dimmed" size="xs">
+                        {type.queue}
+                      </Text>
+                    </Box>
+                    <Badge color="orange" variant="light">
+                      {type.count}
+                    </Badge>
+                  </Group>
+                ))}
+              </Stack>
+            )}
+          </Paper>
+        </Stack>
+      </Grid.Col>
+    </Grid>
+  );
 }
 
 function SystemPage({
@@ -1286,14 +1590,6 @@ function SystemPage({
   navigate: (href: string) => void;
 }) {
   const systemStatusColor = data.status.level === "critical" ? "red" : "teal";
-  const errorColor =
-    data.kpis.errorRate.current >= systemErrorRateWarning
-      ? "red"
-      : data.kpis.errorRate.current >= systemErrorRateCaution
-        ? "yellow"
-        : "teal";
-  const backlogColor =
-    (data.kpis.backlog.oldestReadyMs ?? 0) > systemOldestReadyWarningMs ? "yellow" : "blue";
   const outcomeChartData = data.outcomes.map((bucket) => ({
     bucket: systemBucketLabel(bucket.bucketStart, data.window),
     enqueued: bucket.enqueued,
@@ -1302,12 +1598,6 @@ function SystemPage({
     retry: bucket.retry,
     leaseExpired: bucket.leaseExpired,
   }));
-  const recentOutcomes = data.outcomes.slice(-30);
-  const queueWaitPercentiles = [
-    { label: "p50", duration: data.kpis.queueWait.p50Ms },
-    { label: "p95", duration: data.kpis.queueWait.p95Ms },
-    { label: "p99", duration: data.kpis.queueWait.p99Ms },
-  ];
   const defaultSpill = data.integrity.defaultEventRows + data.integrity.defaultAttemptRows;
 
   return (
@@ -1385,251 +1675,18 @@ function SystemPage({
           </Badge>
         </Group>
         <Box h={300}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart
-              data={outcomeChartData}
-              margin={{ top: 12, right: 12, bottom: 0, left: -12 }}
-            >
-              <CartesianGrid stroke="var(--mantine-color-default-border)" strokeDasharray="3 3" />
-              <XAxis
-                dataKey="bucket"
-                minTickGap={36}
-                tick={{ fontSize: 11, fill: "var(--mantine-color-dimmed)" }}
-                tickLine={false}
-              />
-              <YAxis
-                allowDecimals={false}
-                width={38}
-                tick={{ fontSize: 11, fill: "var(--mantine-color-dimmed)" }}
-                tickLine={false}
-              />
-              <RechartsTooltip />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="succeeded" stackId="outcomes" fill="var(--mantine-color-teal-6)" />
-              <Bar dataKey="failed" stackId="outcomes" fill="var(--mantine-color-red-6)" />
-              <Bar dataKey="retry" stackId="outcomes" fill="var(--mantine-color-orange-6)" />
-              <Bar dataKey="leaseExpired" stackId="outcomes" fill="var(--mantine-color-grape-6)" />
-              <Line
-                dataKey="enqueued"
-                type="monotone"
-                stroke="var(--mantine-color-blue-7)"
-                strokeWidth={2}
-                dot={false}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
+          <Suspense
+            fallback={
+              <Center h="100%">
+                <Loader size="sm" />
+              </Center>
+            }
+          >
+            <SystemOutcomeChart data={outcomeChartData} />
+          </Suspense>
         </Box>
       </Paper>
-
-      <Grid gutter="xl">
-        <Grid.Col span={{ base: 12, lg: 8 }} order={{ base: 2, lg: 2 }}>
-          <Paper withBorder h="100%">
-            <Group justify="space-between" p="md">
-              <Box>
-                <Group gap={4} wrap="nowrap">
-                  <Text fw={650}>Queue pressure</Text>
-                  <HelpButton
-                    label="Queue pressure"
-                    help="Current queue state ranked by backlog risk. Ready, oldest, due, active, and retrying are snapshots; enqueue and completion rates use the selected window. Select a row to inspect its tasks."
-                  />
-                </Group>
-                <Text c="dimmed" size="xs">
-                  Worst queues first · select a row to inspect its tasks
-                </Text>
-              </Box>
-              <Badge
-                variant="light"
-                color={data.queues.some((queue) => queue.paused) ? "yellow" : "gray"}
-              >
-                {data.queues.length} queues
-              </Badge>
-            </Group>
-            <ScrollArea>
-              <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={920}>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Queue</Table.Th>
-                    <Table.Th>Status</Table.Th>
-                    <Table.Th ta="right">Ready</Table.Th>
-                    <Table.Th ta="right">Oldest</Table.Th>
-                    <Table.Th ta="right">Due ≤5m</Table.Th>
-                    <Table.Th ta="right">Active</Table.Th>
-                    <Table.Th ta="right">Retrying</Table.Th>
-                    <Table.Th ta="right">Enq/min</Table.Th>
-                    <Table.Th ta="right">Done/min</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {data.queues.map((queue) => (
-                    <Table.Tr
-                      key={queue.queue}
-                      tabIndex={0}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`);
-                        }
-                      }}
-                    >
-                      <Table.Td>
-                        <Code fz="xs" style={{ background: "transparent", padding: 0 }}>
-                          {queue.queue}
-                        </Code>
-                      </Table.Td>
-                      <Table.Td>
-                        <Badge color={queue.paused ? "yellow" : "teal"} variant="light" size="sm">
-                          {queue.paused ? "Paused" : "Running"}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td ta="right">{queue.ready}</Table.Td>
-                      <Table.Td ta="right">{formatDuration(queue.oldestReadyMs)}</Table.Td>
-                      <Table.Td ta="right">{queue.dueSoon}</Table.Td>
-                      <Table.Td ta="right">{queue.active}</Table.Td>
-                      <Table.Td ta="right">{queue.retrying}</Table.Td>
-                      <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
-                      <Table.Td ta="right">{formatRate(queue.completedPerMinute)}</Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </ScrollArea>
-          </Paper>
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, lg: 4 }} order={{ base: 1, lg: 1 }}>
-          <Stack gap="xl">
-            <Paper withBorder>
-              <HealthKpi
-                title="Drain balance"
-                value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
-                detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} enqueued · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
-                help="Average completed jobs per minute compared with enqueued jobs per minute during the selected window. A negative net means work arrived faster than it completed."
-                scope={data.window}
-                color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
-                icon={<ArrowClockwise size={18} />}
-              >
-                <MiniTrend
-                  series={[
-                    {
-                      values: recentOutcomes.map((bucket) => bucket.enqueued),
-                      color: "var(--mantine-color-blue-6)",
-                    },
-                    {
-                      values: recentOutcomes.map((bucket) => bucket.succeeded + bucket.failed),
-                      color: "var(--mantine-color-teal-6)",
-                    },
-                  ]}
-                />
-              </HealthKpi>
-              <HealthKpi
-                divided
-                title="Backlog risk"
-                value={data.kpis.backlog.ready}
-                detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)}`}
-                help="A current snapshot of jobs ready to run. The age of the oldest ready job highlights queues that are not draining promptly; yellow begins after 60 seconds."
-                scope="now"
-                color={backlogColor}
-                icon={<ListChecks size={18} />}
-              />
-              <HealthKpi
-                divided
-                title="Attempt error rate"
-                value={formatPercent(data.kpis.errorRate.current)}
-                detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior ${data.window}`}
-                help="The share of attempts that did not succeed during the selected window, compared with the immediately preceding window of the same length. Caution starts at 1% and warning at 5%."
-                scope={data.window}
-                color={errorColor}
-                icon={<WarningCircle size={18} />}
-              />
-              <HealthKpi
-                divided
-                title="First-attempt wait"
-                value={
-                  <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0 }}>
-                    {queueWaitPercentiles.map((percentile) => (
-                      <Box key={percentile.label} ta="right">
-                        <Text c="dimmed" fz={10} lh={1}>
-                          {percentile.label}
-                        </Text>
-                        <Text fw={700} size="sm" lh={1.2}>
-                          {formatDuration(percentile.duration)}
-                        </Text>
-                      </Box>
-                    ))}
-                  </Group>
-                }
-                detail="Enqueue to first claim"
-                help="The median, 95th, and 99th percentile delay from enqueue to the first claim for jobs first claimed during the selected window."
-                scope={data.window}
-                color="indigo"
-                icon={<Clock size={18} />}
-              />
-              <HealthKpi
-                divided
-                title="Retry pressure"
-                value={data.kpis.retry.backoff}
-                detail={`${data.kpis.retry.dueSoon} due in the next 5m`}
-                help="A current snapshot of jobs waiting in retry backoff. The secondary count shows how many scheduled retries become due within the next five minutes."
-                scope="now"
-                color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
-                icon={<ArrowCounterClockwise size={18} />}
-              />
-              <HealthKpi
-                divided
-                title="Lease danger"
-                value={data.kpis.lease.expired}
-                detail={`${data.kpis.lease.expiringSoon} expire in 30s · ${data.kpis.lease.recovered} recovered/${data.window}`}
-                help="A current snapshot of active jobs with expired leases. It also shows leases expiring within 30 seconds and lease expirations recorded during the selected window."
-                scope="now"
-                color={data.kpis.lease.expired > 0 ? "red" : "teal"}
-                icon={<Pulse size={18} />}
-              />
-            </Paper>
-
-            <Paper withBorder p="md">
-              <Group gap={4} wrap="nowrap">
-                <Text fw={650}>Retry storm</Text>
-                <HelpButton
-                  label="Retry storm"
-                  help="A current snapshot of jobs in retry backoff, grouped by when they become due: within 1 minute, 5 minutes, 15 minutes, 1 hour, or later. Contributors are the job types with the most pending retries now."
-                />
-              </Group>
-              <Text c="dimmed" size="xs" mb="lg">
-                Scheduled retries arriving next
-              </Text>
-              <RetryBars buckets={data.retryStorm.buckets} />
-              <Divider my="lg" />
-              <Text c="dimmed" fw={600} size="xs" tt="uppercase" mb="xs">
-                Top contributors
-              </Text>
-              {data.retryStorm.topTypes.length === 0 ? (
-                <Text c="dimmed" size="sm">
-                  No retries are in backoff.
-                </Text>
-              ) : (
-                <Stack gap="xs">
-                  {data.retryStorm.topTypes.map((type) => (
-                    <Group key={`${type.queue}:${type.type}`} justify="space-between" wrap="nowrap">
-                      <Box style={{ minWidth: 0 }}>
-                        <Text size="sm" fw={600} truncate>
-                          {taskDisplayName(type.type, type.queue)}
-                        </Text>
-                        <Text c="dimmed" size="xs">
-                          {type.queue}
-                        </Text>
-                      </Box>
-                      <Badge color="orange" variant="light">
-                        {type.count}
-                      </Badge>
-                    </Group>
-                  ))}
-                </Stack>
-              )}
-            </Paper>
-          </Stack>
-        </Grid.Col>
-      </Grid>
-
+      <SystemOperations data={data} navigate={navigate} />
       <Grid gutter="xl">
         <Grid.Col span={{ base: 12, lg: 6 }}>
           <Paper withBorder h="100%">
@@ -1972,7 +2029,7 @@ function routeTitle(route: PageRoute): string {
   return "current tasks";
 }
 
-export function Dashboard() {
+function useDashboardController() {
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
   // Timestamps format through module-level displayTimeZone; re-render everything on change.
   const [, setTimeZoneTick] = useState(0);
@@ -2289,7 +2346,7 @@ export function Dashboard() {
 
   useEffect(() => {
     const events = new EventSource("/dashboard/events");
-    events.addEventListener("refresh", () => {
+    const handleRefresh = () => {
       void loadPage();
       if (location.route !== "/tasks") void loadTaskCounts();
       if (selectedJobId) {
@@ -2298,8 +2355,12 @@ export function Dashboard() {
           .then(setSelectedJob)
           .catch(() => undefined);
       }
-    });
-    return () => events.close();
+    };
+    events.addEventListener("refresh", handleRefresh);
+    return () => {
+      events.removeEventListener("refresh", handleRefresh);
+      events.close();
+    };
   }, [loadPage, loadTaskCounts, location.route, selectedJobId]);
 
   useEffect(() => {
@@ -2398,6 +2459,53 @@ export function Dashboard() {
   } else {
     content = null;
   }
+
+  return {
+    navbarOpened,
+    toggleNavbar,
+    environment,
+    loadState,
+    connected,
+    loading,
+    loadPage,
+    refreshInterval,
+    changeRefreshInterval,
+    location,
+    taskCounts,
+    handleLink,
+    content,
+    selectedJobId,
+    setSelectedJobId,
+    selectedJob,
+    setSelectedJob,
+    jobDetailError,
+    setJobDetailError,
+  };
+}
+
+export function Dashboard() {
+  const controller = useDashboardController();
+  const {
+    navbarOpened,
+    toggleNavbar,
+    environment,
+    loadState,
+    connected,
+    loading,
+    loadPage,
+    refreshInterval,
+    changeRefreshInterval,
+    location,
+    taskCounts,
+    handleLink,
+    content,
+    selectedJobId,
+    setSelectedJobId,
+    selectedJob,
+    setSelectedJob,
+    jobDetailError,
+    setJobDetailError,
+  } = controller;
 
   return (
     <AppShell

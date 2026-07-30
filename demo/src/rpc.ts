@@ -42,7 +42,7 @@ const auditSchema = z.object({
   requestId: z.string().trim().min(1),
 });
 
-const jobDetailInput = z.object({ id: z.string().uuid() });
+const jobDetailInput = z.object({ id: z.uuid() });
 const taskFilter = z.enum([
   "all",
   "scheduled",

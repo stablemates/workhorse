@@ -70,6 +70,7 @@
     "oxlint": "^1.74.0",
     "pg-boss": "12.26.2",
     "portless": "0.15.4",
+    "react-doctor": "0.9.2",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"

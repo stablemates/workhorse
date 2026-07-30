@@ -109,10 +109,7 @@ export interface WorkerController {
 }
 
 const orderRequestSchema = z.object({
-  customerEmail: z
-    .string()
-    .email()
-    .transform((value) => value.trim()),
+  customerEmail: z.email().transform((value) => value.trim()),
   description: z.string().trim().min(1),
 });
 
@@ -851,16 +848,18 @@ export async function seedDemoData(
 
   if (marker.rows.length > 0) {
     try {
-      const orderResponse = await app.request("/orders", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          customerEmail: "demo.operator@example.com",
-          description: "Inspect a successful transactional order",
+      const [orderResponse, retryResponse, failureResponse] = await Promise.all([
+        app.request("/orders", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            customerEmail: "demo.operator@example.com",
+            description: "Inspect a successful transactional order",
+          }),
         }),
-      });
-      const retryResponse = await app.request("/demo/retries", { method: "POST" });
-      const failureResponse = await app.request("/demo/failures", { method: "POST" });
+        app.request("/demo/retries", { method: "POST" }),
+        app.request("/demo/failures", { method: "POST" }),
+      ]);
       const responses = [orderResponse, retryResponse, failureResponse];
       if (responses.some((response) => response.status !== 202)) {
         throw new Error(
