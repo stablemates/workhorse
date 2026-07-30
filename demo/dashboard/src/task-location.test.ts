@@ -43,4 +43,10 @@ describe("task location state", () => {
       }),
     ).toMatchObject({ filter: "all", page: 1, pageSize: 50, period: "24h", group: "worker" });
   });
+
+  it("round-trips status activity grouping", () => {
+    const state = parseTaskLocation("?group=status");
+    expect(state.group).toBe("status");
+    expect(taskLocationHref(state)).toBe("/tasks?group=status");
+  });
 });

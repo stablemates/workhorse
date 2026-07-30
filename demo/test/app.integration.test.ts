@@ -254,6 +254,12 @@ describe("Workhorse demo", () => {
         "order.refund",
       ],
     });
+    await expect(
+      client.dashboard.activity({ filter: "all", period: "7d", groupBy: "status" }),
+    ).resolves.toMatchObject({
+      groupBy: "status",
+      groups: ["failed", "ready", "scheduled", "succeeded"],
+    });
   });
 
   it("creates an application row and job atomically, then processes and exposes both", async () => {

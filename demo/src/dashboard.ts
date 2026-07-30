@@ -106,7 +106,7 @@ export type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 
 export type DashboardActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 
-export type DashboardActivityGroupBy = "queue" | "worker" | "task";
+export type DashboardActivityGroupBy = "queue" | "worker" | "task" | "status";
 
 export interface DashboardActivityBucket {
   bucketStart: string;
@@ -615,7 +615,7 @@ export const activityPeriods: Record<
   "7d": { windowSeconds: 7 * 24 * 60 * 60, bucketSeconds: 6 * 60 * 60 },
 };
 
-/** Bucketed task activity over a trailing window, grouped by queue, worker, or task type. */
+/** Bucketed task activity over a trailing window, grouped by queue, worker, task type, or status. */
 export async function readDashboardActivity(
   database: DemoDatabase,
   filter: DashboardTaskFilter,
@@ -632,7 +632,9 @@ export async function readDashboardActivity(
       ? sql`j.queue_name`
       : groupBy === "task"
         ? sql`j.job_type`
-        : sql`COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned')`;
+        : groupBy === "status"
+          ? sql`COALESCE(r.state, o.state)`
+          : sql`COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned')`;
   const rows = await database.execute<{
     bucket_start: Date | string;
     group_key: string | null;

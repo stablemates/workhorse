@@ -98,11 +98,12 @@ function readStoredSystemWindow(): DashboardSystemWindow {
   return stored && systemWindows.includes(stored) ? stored : "1h";
 }
 
-type ActivityGroupBy = "queue" | "worker" | "task";
+type ActivityGroupBy = "queue" | "worker" | "task" | "status";
 const activityGroupings: Array<{ value: ActivityGroupBy; label: string }> = [
   { value: "queue", label: "Queue" },
   { value: "worker", label: "Worker" },
   { value: "task", label: "Task" },
+  { value: "status", label: "Status" },
 ];
 
 interface ActivityData {
@@ -287,6 +288,14 @@ function statusColor(state: string): string {
   if (warningStates.has(state)) return "yellow";
   return "gray";
 }
+
+const activityStatusColors: Record<string, string> = {
+  scheduled: "yellow.6",
+  ready: "cyan.6",
+  active: "blue.6",
+  succeeded: "teal.6",
+  failed: "red.6",
+};
 
 function StatusBadge({ state }: { state: string }) {
   return (
@@ -491,7 +500,11 @@ function TasksActivityChart({
     name: activityChartKey(group),
     label: group,
     color:
-      group === "other" ? "gray.5" : activitySeriesColors[index % activitySeriesColors.length]!,
+      group === "other"
+        ? "gray.5"
+        : groupBy === "status"
+          ? (activityStatusColors[group] ?? "gray.6")
+          : activitySeriesColors[index % activitySeriesColors.length]!,
   }));
 
   return (
