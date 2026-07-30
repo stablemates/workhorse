@@ -1306,13 +1306,17 @@ export async function readDashboardSystem(
       const rightRisk = (right.oldestReadyMs ?? 0) + right.ready * 1_000 + right.dueSoon * 100;
       return rightRisk - leftRisk || left.queue.localeCompare(right.queue);
     });
+  const pausedQueues: string[] = [];
+  for (const row of queues) {
+    if (row.paused) pausedQueues.push(row.queue);
+  }
 
   return {
     capturedAt: new Date().toISOString(),
     window,
     windowSeconds,
     status,
-    pausedQueues: queues.filter((row) => row.paused).map((row) => row.queue),
+    pausedQueues,
     kpis: {
       drain: {
         enqueuedPerMinute: summary.current_enqueued / minutes,
