@@ -1905,6 +1905,41 @@ describe("live-runtime queue protocol", () => {
     expect(retry.rows[0]!.delay_seconds).toBeLessThan(35);
   });
 
+  it("passes the claimed job to retry delay callbacks", async () => {
+    const delayMs = 300_000;
+    const observed: Array<{ attempt: number; type: string; payload: unknown }> = [];
+    const worker = new Worker(queue, {
+      workerId: "job-aware-retry-worker",
+      pollMs: 0,
+      retryDelayMs: (attempt, job) => {
+        observed.push({ attempt, type: job.type, payload: job.payload });
+        return (job.payload as { retryDelayMs: number }).retryDelayMs;
+      },
+    });
+    worker.handle("job-aware-retry", () => {
+      throw new Error("intentional job-aware retry");
+    });
+    const id = await queue.enqueue(
+      "job-aware-retry",
+      { retryDelayMs: delayMs },
+      { maxAttempts: 2 },
+    );
+    const before = Date.now();
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+
+    expect(observed).toEqual([
+      { attempt: 1, type: "job-aware-retry", payload: { retryDelayMs: delayMs } },
+    ]);
+    const runtime = await pool.query<{ state: string; current_attempt: number; run_at: Date }>(
+      "SELECT state, current_attempt, run_at FROM workhorse.job_runtime WHERE job_id = $1",
+      [id],
+    );
+    expect(runtime.rows[0]).toMatchObject({ state: "scheduled", current_attempt: 2 });
+    expect(runtime.rows[0]!.run_at.getTime()).toBeGreaterThanOrEqual(before + delayMs);
+    expect(runtime.rows[0]!.run_at.getTime()).toBeLessThanOrEqual(Date.now() + delayMs);
+  });
+
   it("moves a terminal handler failure to failed", async () => {
     const id = await queue.enqueue("email", {}, { maxAttempts: 1 });
     const job = await queue.claim("worker-a");

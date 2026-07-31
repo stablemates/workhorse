@@ -1202,7 +1202,7 @@ export async function readDashboardSystem(
       SELECT count(*) FILTER (WHERE state = 'ready')::integer AS ready,
              extract(epoch FROM clock_timestamp() - min(ready_at) FILTER (WHERE state = 'ready')) * 1000
                AS oldest_ready_ms,
-             count(*) FILTER (WHERE current_attempt > 1)::integer AS backoff,
+             count(*) FILTER (WHERE state = 'scheduled' AND current_attempt > 1)::integer AS backoff,
              count(*) FILTER (WHERE state = 'scheduled' AND current_attempt > 1
                AND run_at <= clock_timestamp() + interval '5 minutes')::integer AS due_soon,
              count(*) FILTER (WHERE state = 'active')::integer AS active,
@@ -1251,7 +1251,7 @@ export async function readDashboardSystem(
                count(*) FILTER (WHERE state = 'scheduled'
                  AND run_at <= clock_timestamp() + interval '5 minutes')::integer AS due_soon,
                count(*) FILTER (WHERE state = 'active')::integer AS active,
-               count(*) FILTER (WHERE current_attempt > 1)::integer AS retrying
+               count(*) FILTER (WHERE state = 'scheduled' AND current_attempt > 1)::integer AS retrying
           FROM workhorse.job_runtime GROUP BY queue_name
       ), enqueued AS (
         SELECT j.queue_name, count(*)::integer AS count

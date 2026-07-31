@@ -15,6 +15,7 @@ import {
   DEMO_DURABLE_STEP_MS,
   DEMO_DURABLE_TIMER_WAIT_MS,
   DEMO_LONG_RUNNING_MS,
+  DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_POLL_MS,
   DEMO_WORKERS,
@@ -114,6 +115,9 @@ describe("Workhorse demo", () => {
         expect.any(String),
         expect.any(String),
         expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
       ],
       historicalJobCount: 362,
     });
@@ -129,7 +133,7 @@ describe("Workhorse demo", () => {
              SELECT xmin::text AS version FROM workhorse.job WHERE id = ANY($1::uuid[])
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
-               WHERE name = 'default-dashboard-v5'
+               WHERE name = 'default-dashboard-v6'
            ) representative_rows`,
         [seeded.jobIds],
       ),
@@ -138,7 +142,7 @@ describe("Workhorse demo", () => {
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 370 }],
+      rows: [{ count: 373 }],
     });
     expect(
       await pool.query(
@@ -173,6 +177,7 @@ describe("Workhorse demo", () => {
       await pool.query(
         `SELECT payload, max_attempts, tags FROM workhorse.job
           WHERE job_type = 'demo.durable-pipeline'
+            AND payload->>'failureMode' IS NULL
           ORDER BY payload->>'scenario'`,
       ),
     ).toMatchObject({
@@ -194,11 +199,70 @@ describe("Workhorse demo", () => {
         },
       ],
     });
+    expect(
+      await pool.query(
+        `SELECT payload, max_attempts, tags FROM workhorse.job
+          WHERE job_type = 'demo.durable-pipeline'
+            AND payload->>'failureMode' = 'continuous'
+          ORDER BY (payload->>'retryDelayMs')::integer`,
+      ),
+    ).toMatchObject({
+      rows: [
+        {
+          payload: {
+            scenario: "order-fulfillment",
+            failureMode: "continuous",
+            retryDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[0],
+            source: "persistent-failure-seed",
+          },
+          max_attempts: 25,
+          tags: [
+            "demo-test",
+            "durable-checkpoint",
+            "intentionally-failing",
+            "order-fulfillment",
+            "retry-5m",
+          ],
+        },
+        {
+          payload: {
+            scenario: "customer-onboarding",
+            failureMode: "continuous",
+            retryDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[1],
+            source: "persistent-failure-seed",
+          },
+          max_attempts: 25,
+          tags: [
+            "demo-test",
+            "durable-checkpoint",
+            "intentionally-failing",
+            "customer-onboarding",
+            "retry-7m",
+          ],
+        },
+        {
+          payload: {
+            scenario: "report-publication",
+            failureMode: "continuous",
+            retryDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[2],
+            source: "persistent-failure-seed",
+          },
+          max_attempts: 25,
+          tags: [
+            "demo-test",
+            "durable-checkpoint",
+            "intentionally-failing",
+            "report-publication",
+            "retry-10m",
+          ],
+        },
+      ],
+    });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 370,
+      all: 373,
       scheduled: 1,
-      queued: 7,
+      queued: 10,
       completed: 346,
       discarded: 16,
       retried: 22,
@@ -209,8 +273,8 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 370,
-      counts: { all: 370, scheduled: 1, queued: 7, completed: 346, discarded: 16 },
+      total: 373,
+      counts: { all: 373, scheduled: 1, queued: 10, completed: 346, discarded: 16 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -221,7 +285,7 @@ describe("Workhorse demo", () => {
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 370 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 373 });
     expect(secondPage.jobs).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
@@ -353,6 +417,106 @@ describe("Workhorse demo", () => {
       groupBy: "status",
       groups: ["failed", "ready", "scheduled", "succeeded"],
     });
+  });
+
+  it("keeps seeded durable failures retrying in visible five-to-ten-minute windows", async () => {
+    const workerErrors: unknown[] = [];
+    const { app, workhorse } = createTestApplication({
+      durableTimerWaitMs: 1,
+      onWorkerError: (error) => workerErrors.push(error),
+    });
+    await seedDemoData(database);
+    workhorse.start();
+
+    type PersistentFailureRow = {
+      scenario: string;
+      retry_delay_ms: number;
+      state: string;
+      current_attempt: number;
+      max_attempts: number;
+      remaining_ms: number;
+      checkpoint_count: number;
+      error_message: string;
+    };
+    let rows: PersistentFailureRow[] = [];
+    try {
+      for (let attempt = 0; attempt < 160; attempt += 1) {
+        await sleep(25);
+        rows = (
+          await pool.query<PersistentFailureRow>(`
+            SELECT job.payload->>'scenario' AS scenario,
+                   (job.payload->>'retryDelayMs')::integer AS retry_delay_ms,
+                   runtime.state, runtime.current_attempt, job.max_attempts,
+                   floor(extract(epoch FROM (runtime.run_at - clock_timestamp())) * 1000)::integer
+                     AS remaining_ms,
+                   (SELECT count(*)::integer FROM workhorse.job_checkpoint checkpoint
+                     WHERE checkpoint.job_id = job.id) AS checkpoint_count,
+                   runtime.error->>'message' AS error_message
+              FROM workhorse.job job
+              JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
+             WHERE job.payload->>'source' = 'persistent-failure-seed'
+             ORDER BY (job.payload->>'retryDelayMs')::integer
+          `)
+        ).rows;
+        if (rows.length === 3 && rows.every((row) => row.state === "scheduled")) break;
+      }
+
+      expect(rows).toHaveLength(3);
+      for (const [index, row] of rows.entries()) {
+        const configuredDelay = DEMO_PERSISTENT_RETRY_DELAYS_MS[index]!;
+        expect(row).toMatchObject({
+          retry_delay_ms: configuredDelay,
+          state: "scheduled",
+          current_attempt: 2,
+          max_attempts: 25,
+          error_message: expect.stringContaining("Intentional"),
+        });
+        expect(row.remaining_ms).toBeGreaterThan(configuredDelay - 15_000);
+        expect(row.remaining_ms).toBeLessThanOrEqual(configuredDelay);
+        expect(row.checkpoint_count).toBeGreaterThan(0);
+      }
+      expect(rows.map((row) => row.scenario)).toEqual([
+        "order-fulfillment",
+        "customer-onboarding",
+        "report-publication",
+      ]);
+      const client = dashboardClient(app);
+      const retried = await client.dashboard.tasks({ filter: "retried", page: 1, pageSize: 25 });
+      expect(retried.jobs).toEqual(
+        expect.arrayContaining(
+          DEMO_PERSISTENT_RETRY_DELAYS_MS.map((retryDelayMs) =>
+            expect.objectContaining({
+              state: "scheduled",
+              attempt: 2,
+              maxAttempts: 25,
+              runAt: expect.any(String),
+              payload: expect.objectContaining({
+                failureMode: "continuous",
+                retryDelayMs,
+                source: "persistent-failure-seed",
+              }),
+              tags: expect.arrayContaining(["intentionally-failing"]),
+            }),
+          ),
+        ),
+      );
+      let system = await client.dashboard.system({ window: "1h" });
+      for (let attempt = 0; attempt < 80 && system.kpis.retry.backoff !== 3; attempt += 1) {
+        await sleep(25);
+        system = await client.dashboard.system({ window: "1h" });
+      }
+      expect(system.kpis.retry).toMatchObject({
+        backoff: 3,
+        dueSoon: 1,
+        buckets: expect.arrayContaining([
+          { label: "5m", count: 1 },
+          { label: "15m", count: 2 },
+        ]),
+      });
+      expect(workerErrors).toEqual([]);
+    } finally {
+      await workhorse.stop();
+    }
   });
 
   it("creates an application row and job atomically, then processes and exposes both", async () => {

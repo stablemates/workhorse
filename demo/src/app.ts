@@ -33,7 +33,7 @@ export const DURABLE_TIMER_PUBLISH_CHECKPOINT = "publish-after-wait";
 const RECURRING_JOB_TYPE = "demo.recurring";
 const REPORT_JOB_TYPE = "demo.report";
 const DEMO_QUEUE = "demo";
-const REPRESENTATIVE_SEED_NAME = "default-dashboard-v5";
+const REPRESENTATIVE_SEED_NAME = "default-dashboard-v6";
 const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
@@ -43,6 +43,7 @@ export const DEMO_HOUSEKEEPING_INTERVAL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_DURABLE_STEP_MS = 2_000;
 export const DEMO_DURABLE_TIMER_WAIT_MS = 10_000;
+export const DEMO_PERSISTENT_RETRY_DELAYS_MS = [5 * 60_000, 7 * 60_000, 10 * 60_000] as const;
 export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
 export const REPORT_SCHEDULE_NAME = "demo.report";
@@ -661,7 +662,26 @@ export function createDemoApplication(
         pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
         maintenanceIntervalMs,
         housekeepingIntervalMs,
-        retryDelayMs: (attempt) => attempt * 100,
+        retryDelayMs: (attempt, job) => {
+          if (
+            job.type === DURABLE_DEMO_JOB_TYPE &&
+            job.payload !== null &&
+            typeof job.payload === "object" &&
+            !Array.isArray(job.payload)
+          ) {
+            const requested = job.payload.retryDelayMs;
+            if (
+              job.payload.failureMode === "continuous" &&
+              typeof requested === "number" &&
+              Number.isSafeInteger(requested) &&
+              requested >= DEMO_PERSISTENT_RETRY_DELAYS_MS[0] &&
+              requested <= DEMO_PERSISTENT_RETRY_DELAYS_MS.at(-1)!
+            ) {
+              return requested;
+            }
+          }
+          return attempt * 100;
+        },
       },
       configure(worker) {
         workerRegistry.set(workerId, worker);
@@ -700,7 +720,7 @@ export function createDemoApplication(
         );
         worker.handle<DurableDemoPayload>(
           DURABLE_DEMO_JOB_TYPE,
-          async ({ scenario: scenarioInput }, { checkpoint, job, signal }) => {
+          async ({ scenario: scenarioInput, failureMode }, { checkpoint, job, signal }) => {
             const scenario = parseDurableDemoScenario(scenarioInput);
             if (!scenario)
               throw new Error(`Unknown durable demo scenario ${String(scenarioInput)}`);
@@ -714,11 +734,12 @@ export function createDemoApplication(
                 output: string;
               }
             > = {};
+            const operationDelayMs = failureMode === "continuous" ? 0 : durableStepMs;
 
             for (const [stepIndex, step] of definition.steps.entries()) {
               const artifact = await checkpoint(step.name, async () => {
                 options.onDurableStepOperation?.(scenario, step.name, job.attempt);
-                await sleep(durableStepMs, undefined, { signal });
+                await sleep(operationDelayMs, undefined, { signal });
                 return {
                   operationId: randomUUID(),
                   completedAt: new Date().toISOString(),
@@ -732,6 +753,10 @@ export function createDemoApplication(
               if (job.attempt === 1 && stepIndex === definition.failAfterStep) {
                 throw new Error(`Intentional crash after durable step ${step.name}`);
               }
+            }
+
+            if (failureMode === "continuous") {
+              throw new Error(`Intentional persistent failure after durable scenario ${scenario}`);
             }
 
             return {
@@ -1126,6 +1151,32 @@ export async function seedDemoData(database: DemoDatabase) {
           DURABLE_DEMO_JOB_TYPE,
           { scenario },
           { maxAttempts: 2, tags: ["demo-test", "durable-checkpoint", scenario] },
+        ),
+      );
+    }
+    for (const [index, scenario] of (
+      Object.keys(durableDemoScenarios) as DurableDemoScenario[]
+    ).entries()) {
+      const retryDelayMs = DEMO_PERSISTENT_RETRY_DELAYS_MS[index]!;
+      seededJobIds.push(
+        await workhorse.queue.enqueue(
+          DURABLE_DEMO_JOB_TYPE,
+          {
+            scenario,
+            failureMode: "continuous",
+            retryDelayMs,
+            source: "persistent-failure-seed",
+          },
+          {
+            maxAttempts: 25,
+            tags: [
+              "demo-test",
+              "durable-checkpoint",
+              "intentionally-failing",
+              scenario,
+              `retry-${retryDelayMs / 60_000}m`,
+            ],
+          },
         ),
       );
     }
