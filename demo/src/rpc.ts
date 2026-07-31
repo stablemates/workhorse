@@ -79,7 +79,8 @@ const systemInput = z.object({
   window: z.enum(["15m", "1h", "24h"]).default("1h"),
 });
 const enqueueTestInput = z.object({
-  kind: z.enum(["success", "retry", "failure", "long-running"]),
+  kind: z.enum(["success", "retry", "durable", "failure", "long-running"]),
+  scenario: z.enum(["order-fulfillment", "customer-onboarding", "report-publication"]).optional(),
   audit: auditSchema,
 });
 const setScheduleEnabledInput = z.object({
@@ -173,7 +174,11 @@ export const dashboardRouter = {
       if (context.operator.mode !== "local" || !context.operator.enqueueTest) {
         throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
       }
-      return context.operator.enqueueTest(input.kind, auditWithOccurredAt(input.audit));
+      return context.operator.enqueueTest(
+        input.kind,
+        auditWithOccurredAt(input.audit),
+        input.scenario,
+      );
     }),
     setScheduleEnabled: procedure
       .input(setScheduleEnabledInput)

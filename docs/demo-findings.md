@@ -14,9 +14,11 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 - a Hono-managed worker processes the job and shuts down through the integration lifecycle;
 - an intentional handler saves a named capacity-reservation checkpoint, records a `retry` attempt, and
   reuses the checkpoint value when attempt 2 succeeds;
+- three demo-declared pipelines expose multi-step checkpoint progress for order fulfillment, customer
+  onboarding, and report publication without treating the presentation plan as a core workflow graph;
 - the worker-owned scheduler synchronizes and fires a recurring definition with occurrence deduplication;
-- the typed oRPC snapshot exposes queues, jobs, checkpoint provenance, schedules, workers, failures, and
-  database health;
+- the typed oRPC snapshot exposes queues, jobs, checkpoint provenance, demo-owned progress plans,
+  schedules, workers, failures, and database health;
 - the dashboard can be omitted without changing core queue behavior;
 - `pnpm demo` recreates only a purpose-guarded demo database, builds the workspace, and serves the app.
 

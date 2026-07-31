@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Queue } from "@workhorse/core";
 import type { DashboardOperator, DemoDatabase } from "./app.js";
+import { durableDemoPlanForJob, type DurableDemoPlan } from "./durable-demo.js";
 
 export interface DashboardQueueRow {
   queue: string;
@@ -35,6 +36,7 @@ export interface DashboardJobRow extends Record<string, unknown> {
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
+  durability: { completedSteps: number; totalSteps: number } | null;
 }
 
 export interface DashboardScheduleRow {
@@ -259,6 +261,7 @@ export interface DashboardJobDetail {
     createdAt: string;
   };
   payload: unknown;
+  durability: DurableDemoPlan | null;
   current: {
     runtime: {
       state: string;
@@ -780,6 +783,7 @@ export async function readDashboardTasks(
       error: unknown;
       created_at: Date | string;
       updated_at: Date | string;
+      checkpoint_names: string[];
     }>(sql`
       WITH tasks AS (
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
@@ -791,7 +795,11 @@ export async function readDashboardTasks(
                o.finished_at,
                COALESCE(o.error, r.error) AS error,
                j.created_at,
-               COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
+               COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+               ARRAY(SELECT checkpoint.checkpoint_name
+                       FROM workhorse.job_checkpoint checkpoint
+                      WHERE checkpoint.job_id = j.id
+                      ORDER BY checkpoint.checkpoint_name) AS checkpoint_names
           FROM workhorse.job j
           LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
           LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
@@ -820,22 +828,32 @@ export async function readDashboardTasks(
     pageSize,
     total: totalRows.rows[0]?.count ?? 0,
     counts,
-    jobs: jobRows.rows.map((row) => ({
-      id: row.id,
-      queue: row.queue,
-      type: row.type,
-      state: row.state,
-      attempt: row.attempt,
-      maxAttempts: row.max_attempts,
-      payload: row.payload,
-      tags: row.tags,
-      runAt: toIsoOrNull(row.run_at),
-      workerId: row.worker_id,
-      finishedAt: toIsoOrNull(row.finished_at),
-      errorMessage: errorMessageOrNull(row.error),
-      createdAt: toIso(row.created_at),
-      updatedAt: toIso(row.updated_at),
-    })),
+    jobs: jobRows.rows.map((row) => {
+      const plan = durableDemoPlanForJob(row.type, row.payload);
+      const checkpointNames = new Set(row.checkpoint_names);
+      return {
+        id: row.id,
+        queue: row.queue,
+        type: row.type,
+        state: row.state,
+        attempt: row.attempt,
+        maxAttempts: row.max_attempts,
+        payload: row.payload,
+        tags: row.tags,
+        runAt: toIsoOrNull(row.run_at),
+        workerId: row.worker_id,
+        finishedAt: toIsoOrNull(row.finished_at),
+        errorMessage: errorMessageOrNull(row.error),
+        createdAt: toIso(row.created_at),
+        updatedAt: toIso(row.updated_at),
+        durability: plan
+          ? {
+              completedSteps: plan.steps.filter((step) => checkpointNames.has(step.name)).length,
+              totalSteps: plan.steps.length,
+            }
+          : null,
+      };
+    }),
   };
 }
 
@@ -1656,6 +1674,7 @@ export async function readDashboardSnapshot(
       errorMessage: errorMessageOrNull(row.error),
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
+      durability: null,
     })),
     schedules: scheduleRows.rows.map((row) => {
       return {
@@ -1805,6 +1824,7 @@ export async function readDashboardJobDetail(
       createdAt: toIso(job.created_at),
     },
     payload: job.payload,
+    durability: durableDemoPlanForJob(job.type, job.payload),
     current: {
       runtime: job.runtime_state
         ? {

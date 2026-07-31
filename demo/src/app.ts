@@ -11,6 +11,13 @@ import { Queue, type Json, type Worker } from "@workhorse/core";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { DashboardRefreshHub } from "./dashboard-refresh.js";
+import {
+  DURABLE_DEMO_JOB_TYPE,
+  type DurableDemoPayload,
+  type DurableDemoScenario,
+  durableDemoScenarios,
+  parseDurableDemoScenario,
+} from "./durable-demo.js";
 import { dashboardRouter } from "./rpc.js";
 import { orders } from "./schema.js";
 
@@ -22,7 +29,7 @@ const LONG_RUNNING_JOB_TYPE = "demo.long-running";
 const RECURRING_JOB_TYPE = "demo.recurring";
 const REPORT_JOB_TYPE = "demo.report";
 const DEMO_QUEUE = "demo";
-const REPRESENTATIVE_SEED_NAME = "default-dashboard-v3";
+const REPRESENTATIVE_SEED_NAME = "default-dashboard-v4";
 const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
@@ -30,6 +37,7 @@ export const DEMO_WORKER_POLL_MS = 15_000;
 export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
 export const DEMO_HOUSEKEEPING_INTERVAL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
+export const DEMO_DURABLE_STEP_MS = 2_000;
 export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
 export const REPORT_SCHEDULE_NAME = "demo.report";
@@ -38,6 +46,7 @@ const DEMO_INDEX = {
   endpoints: [
     "POST /orders",
     "POST /demo/retries",
+    "POST /demo/durable",
     "POST /demo/failures",
     "GET /orders/:id",
     "GET /jobs/:id",
@@ -65,6 +74,12 @@ export interface CreateDemoApplicationOptions {
   maintenanceIntervalMs?: number;
   housekeepingIntervalMs?: number;
   longRunningJobMs?: number;
+  durableStepMs?: number;
+  onDurableStepOperation?: (
+    scenario: DurableDemoScenario,
+    stepName: string,
+    attempt: number,
+  ) => void;
 }
 
 export interface AuditContext {
@@ -77,8 +92,9 @@ export interface AuditContext {
 export interface DashboardOperator {
   mode: "read-only" | "local";
   enqueueTest?: (
-    kind: "success" | "retry" | "failure" | "long-running",
+    kind: "success" | "retry" | "durable" | "failure" | "long-running",
     audit: AuditContext,
+    scenario?: DurableDemoScenario,
   ) => Promise<{ jobId: string }>;
 }
 
@@ -411,31 +427,65 @@ export function createReadOnlyOperator(): DashboardOperator {
   return { mode: "read-only" };
 }
 
+function demoTestJob(
+  kind: Parameters<NonNullable<DashboardOperator["enqueueTest"]>>[0],
+  scenarioInput?: DurableDemoScenario,
+): {
+  type: string;
+  payload: Json;
+  maxAttempts?: number;
+  tags: string[];
+} {
+  if (kind === "success") {
+    return {
+      type: RECURRING_JOB_TYPE,
+      payload: { source: "operator" },
+      tags: ["demo-test"],
+    };
+  }
+  if (kind === "retry") {
+    return {
+      type: RETRY_JOB_TYPE,
+      payload: { label: "operator-retry", failUntilAttempt: 1 },
+      maxAttempts: 3,
+      tags: ["demo-test", "durable-checkpoint"],
+    };
+  }
+  if (kind === "durable") {
+    const scenario = scenarioInput ?? "order-fulfillment";
+    return {
+      type: DURABLE_DEMO_JOB_TYPE,
+      payload: { scenario },
+      maxAttempts: 2,
+      tags: ["demo-test", "durable-checkpoint", scenario],
+    };
+  }
+  if (kind === "failure") {
+    return {
+      type: FAILURE_JOB_TYPE,
+      payload: { label: "operator-failure" },
+      maxAttempts: 1,
+      tags: ["demo-test"],
+    };
+  }
+  return {
+    type: LONG_RUNNING_JOB_TYPE,
+    payload: { label: "operator-long-running" },
+    tags: ["demo-test"],
+  };
+}
+
 export function createLocalOperator(database: DemoDatabase): DashboardOperator {
   return {
     mode: "local",
-    async enqueueTest(kind, audit) {
+    async enqueueTest(kind, audit, scenario) {
       const target = `job:${kind}`;
       return database.transaction(async (transaction) => {
         const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
-        const type = {
-          success: RECURRING_JOB_TYPE,
-          retry: RETRY_JOB_TYPE,
-          failure: FAILURE_JOB_TYPE,
-          "long-running": LONG_RUNNING_JOB_TYPE,
-        }[kind];
-        const failUntilAttempt = kind === "retry" ? 1 : null;
-        const maxAttempts =
-          kind === "failure" ? 1 : failUntilAttempt !== null ? failUntilAttempt + 2 : undefined;
-        const payload: Json =
-          kind === "success"
-            ? { source: "operator" }
-            : failUntilAttempt !== null
-              ? { label: `operator-${kind}`, failUntilAttempt }
-              : { label: `operator-${kind}` };
-        const jobId = await workhorse.queue.enqueue(type, payload, {
-          ...(maxAttempts === undefined ? {} : { maxAttempts }),
-          tags: kind === "retry" ? ["demo-test", "durable-checkpoint"] : ["demo-test"],
+        const definition = demoTestJob(kind, scenario);
+        const jobId = await workhorse.queue.enqueue(definition.type, definition.payload, {
+          ...(definition.maxAttempts === undefined ? {} : { maxAttempts: definition.maxAttempts }),
+          tags: definition.tags,
         });
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
@@ -443,7 +493,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
              ${audit.occurredAt ?? new Date().toISOString()}, 'enqueueTest', ${target},
-             NULL, ${JSON.stringify({ jobId, type, payload, maxAttempts })}::jsonb, 'succeeded')
+             NULL, ${JSON.stringify({ jobId, ...definition })}::jsonb, 'succeeded')
         `);
         return { jobId };
       });
@@ -570,6 +620,7 @@ export function createDemoApplication(
 ) {
   const maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS;
   const housekeepingIntervalMs = options.housekeepingIntervalMs ?? DEMO_HOUSEKEEPING_INTERVAL_MS;
+  const durableStepMs = options.durableStepMs ?? DEMO_DURABLE_STEP_MS;
   const dashboardRefresh = options.dashboardRefresh ?? new DashboardRefreshHub();
   const environment = options.environment ?? "development";
   // Worker pause state belongs to this application process and intentionally resets on restart.
@@ -623,6 +674,53 @@ export function createDemoApplication(
               attempt: job.attempt,
               checkpointReused: reservation.reservedOnAttempt < job.attempt,
               reservation,
+            };
+          },
+        );
+        worker.handle<DurableDemoPayload>(
+          DURABLE_DEMO_JOB_TYPE,
+          async ({ scenario: scenarioInput }, { checkpoint, job, signal }) => {
+            const scenario = parseDurableDemoScenario(scenarioInput);
+            if (!scenario)
+              throw new Error(`Unknown durable demo scenario ${String(scenarioInput)}`);
+            const definition = durableDemoScenarios[scenario];
+            const artifacts: Record<
+              string,
+              {
+                operationId: string;
+                completedAt: string;
+                completedOnAttempt: number;
+                output: string;
+              }
+            > = {};
+
+            for (const [stepIndex, step] of definition.steps.entries()) {
+              const artifact = await checkpoint(step.name, async () => {
+                options.onDurableStepOperation?.(scenario, step.name, job.attempt);
+                await sleep(durableStepMs, undefined, { signal });
+                return {
+                  operationId: randomUUID(),
+                  completedAt: new Date().toISOString(),
+                  completedOnAttempt: job.attempt,
+                  output: `${step.label} completed`,
+                };
+              });
+              artifacts[step.name] = artifact;
+              dashboardRefresh.publish("worker");
+
+              if (job.attempt === 1 && stepIndex === definition.failAfterStep) {
+                throw new Error(`Intentional crash after durable step ${step.name}`);
+              }
+            }
+
+            return {
+              scenario,
+              completed: true,
+              attempt: job.attempt,
+              reusedCheckpoints: definition.steps
+                .filter((step) => artifacts[step.name]!.completedOnAttempt < job.attempt)
+                .map((step) => step.name),
+              artifacts,
             };
           },
         );
@@ -701,6 +799,38 @@ export function createDemoApplication(
           status: "queued",
           expectedAttempts: failUntilAttempt + 1,
           expectedCheckpoint: RETRY_CHECKPOINT_NAME,
+        },
+        202,
+      );
+    })
+    .post("/demo/durable", async (context) => {
+      const body = (await context.req.json().catch(() => ({}))) as { scenario?: unknown };
+      const scenario = body.scenario
+        ? parseDurableDemoScenario(body.scenario)
+        : ("order-fulfillment" as const);
+      if (!scenario) {
+        return context.json(
+          { error: `Expected scenario: ${Object.keys(durableDemoScenarios).join(", ")}` },
+          400,
+        );
+      }
+      const definition = durableDemoScenarios[scenario];
+      const jobId = await context.var.workhorse.queue.enqueue(
+        DURABLE_DEMO_JOB_TYPE,
+        { scenario },
+        {
+          maxAttempts: 2,
+          tags: ["demo-test", "durable-checkpoint", scenario],
+        },
+      );
+      dashboardRefresh.publish("enqueue");
+      return context.json(
+        {
+          jobId,
+          status: "queued",
+          scenario,
+          checkpointPlan: definition.steps.map((step) => step.name),
+          expectedAttempts: 2,
         },
         202,
       );
@@ -854,60 +984,64 @@ async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
   });
 }
 
-export async function seedDemoData(
-  database: DemoDatabase,
-  app: ReturnType<typeof createDemoApplication>["app"],
-) {
-  const marker = await database.execute<{ name: string }>(sql`
-    INSERT INTO public.workhorse_demo_seed (name)
-    VALUES (${REPRESENTATIVE_SEED_NAME})
-    ON CONFLICT (name) DO NOTHING
-    RETURNING name
-  `);
-  const jobIds: string[] = [];
+export async function seedDemoData(database: DemoDatabase) {
+  const jobIds = await database.transaction(async (transaction) => {
+    const marker = await transaction.execute<{ name: string }>(sql`
+      INSERT INTO public.workhorse_demo_seed (name)
+      VALUES (${REPRESENTATIVE_SEED_NAME})
+      ON CONFLICT (name) DO NOTHING
+      RETURNING name
+    `);
+    if (marker.rows.length === 0) return [];
 
-  if (marker.rows.length > 0) {
-    try {
-      const [orderResponse, retryResponse, failureResponse] = await Promise.all([
-        app.request("/orders", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            customerEmail: "demo.operator@example.com",
-            description: "Inspect a successful transactional order",
-          }),
-        }),
-        app.request("/demo/retries", { method: "POST" }),
-        app.request("/demo/failures", { method: "POST" }),
-      ]);
-      const responses = [orderResponse, retryResponse, failureResponse];
-      if (responses.some((response) => response.status !== 202)) {
-        throw new Error(
-          `Demo seed requests failed with statuses ${responses.map((response) => response.status).join(", ")}`,
-        );
-      }
-
-      const order = (await orderResponse.json()) as { jobId: string };
-      const retry = (await retryResponse.json()) as { jobId: string };
-      const failure = (await failureResponse.json()) as { jobId: string };
-      const workhorse = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
-      const scheduledJobId = await workhorse.queue.enqueue(
+    const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+    const seededJobIds: string[] = [];
+    const orderId = randomUUID();
+    await transaction.insert(orders).values({
+      id: orderId,
+      customerEmail: "demo.operator@example.com",
+      description: "Inspect a successful transactional order",
+      status: "queued",
+    });
+    seededJobIds.push(
+      await workhorse.queue.enqueue(ORDER_JOB_TYPE, { orderId }, { tags: ["billing"] }),
+    );
+    seededJobIds.push(
+      await workhorse.queue.enqueue(
+        RETRY_JOB_TYPE,
+        { label: "recover-with-durable-checkpoint", failUntilAttempt: 1 },
+        { maxAttempts: 3, tags: ["demo-test", "durable-checkpoint"] },
+      ),
+    );
+    seededJobIds.push(
+      await workhorse.queue.enqueue(
+        FAILURE_JOB_TYPE,
+        { label: "terminal-failure" },
+        { maxAttempts: 1, tags: ["demo-test"] },
+      ),
+    );
+    for (const scenario of Object.keys(durableDemoScenarios) as DurableDemoScenario[]) {
+      seededJobIds.push(
+        await workhorse.queue.enqueue(
+          DURABLE_DEMO_JOB_TYPE,
+          { scenario },
+          { maxAttempts: 2, tags: ["demo-test", "durable-checkpoint", scenario] },
+        ),
+      );
+    }
+    seededJobIds.push(
+      await workhorse.queue.enqueue(
         RECURRING_JOB_TYPE,
         { source: "scheduled-seed" },
         { runAt: new Date(Date.now() + 24 * 60 * 60 * 1_000), tags: ["reports", "weekly"] },
-      );
-      jobIds.push(order.jobId, retry.jobId, failure.jobId, scheduledJobId);
-    } catch (error) {
-      await database.execute(sql`
-        DELETE FROM public.workhorse_demo_seed WHERE name = ${REPRESENTATIVE_SEED_NAME}
-      `);
-      throw error;
-    }
-  }
+      ),
+    );
+    return seededJobIds;
+  });
 
   const historicalJobCount = await seedHistoricalDemoData(database);
   return {
-    seeded: marker.rows.length > 0 || historicalJobCount > 0,
+    seeded: jobIds.length > 0 || historicalJobCount > 0,
     jobIds,
     historicalJobCount,
   };

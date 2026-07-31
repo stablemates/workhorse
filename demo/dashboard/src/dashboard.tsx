@@ -21,6 +21,7 @@ import {
   SegmentedControl,
   Select,
   Stack,
+  Stepper,
   Switch,
   Table,
   Text,
@@ -190,7 +191,8 @@ function activityChartKey(group: string): string {
 }
 
 type PageRoute = "/tasks" | "/cron" | "/queues" | "/system" | "/workers" | "/settings";
-type DemoJobKind = "success" | "retry" | "failure" | "long-running";
+type DemoJobKind = "success" | "retry" | "durable" | "failure" | "long-running";
+type DurableDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
   | { route: "/cron"; value: DashboardCronPage }
@@ -345,7 +347,129 @@ function formatDuration(milliseconds: number | null | undefined): string {
   return `${Math.round(milliseconds / 60_000)} min`;
 }
 
+function checkpointOutput(value: unknown): string {
+  if (value && typeof value === "object" && "output" in value) {
+    const output = (value as { output?: unknown }).output;
+    if (typeof output === "string") return output;
+  }
+  return JSON.stringify(value);
+}
+
+function plannedStepDescription(
+  job: DashboardJobDetail,
+  checkpoint: DashboardJobDetail["checkpoints"][number] | undefined,
+  stepIndex: number,
+  activeStep: number,
+) {
+  if (checkpoint) {
+    return (
+      <Stack gap={2} mt={2}>
+        <Text c="dimmed" size="xs">
+          Attempt {checkpoint.attempt} · {checkpoint.workerId} · fence {checkpoint.fenceToken}
+        </Text>
+        <Code fz="xs" title={JSON.stringify(checkpoint.value)}>
+          {checkpointOutput(checkpoint.value)}
+        </Code>
+      </Stack>
+    );
+  }
+  if (stepIndex !== activeStep) return "Pending durable boundary";
+  if (job.identity.state === "active") return "Operation running; checkpoint not saved yet";
+  if (job.identity.state === "ready") return "Waiting for the next worker attempt";
+  if (job.identity.state === "scheduled") return "Scheduled; checkpoint not reached yet";
+  if (job.identity.state === "failed") return "Not reached before terminal failure";
+  return "No checkpoint was recorded";
+}
+
+function PlannedDurability({ job }: { job: DashboardJobDetail }) {
+  const plan = job.durability!;
+  const checkpoints = new Map(job.checkpoints.map((checkpoint) => [checkpoint.name, checkpoint]));
+  const planNames = new Set(plan.steps.map((step) => step.name));
+  const completedPlanSteps = plan.steps.filter((step) => checkpoints.has(step.name)).length;
+  const unmatchedCheckpoints = job.checkpoints.filter(
+    (checkpoint) => !planNames.has(checkpoint.name),
+  );
+  const activeStep = plan.steps.findIndex((step) => !checkpoints.has(step.name));
+  const resolvedActiveStep = activeStep === -1 ? plan.steps.length : activeStep;
+  return (
+    <Box>
+      <Group justify="space-between" align="flex-start" mb="sm">
+        <Box>
+          <Text fw={600} size="sm">
+            {plan.label}
+          </Text>
+          <Text c="dimmed" size="xs">
+            {plan.description}
+          </Text>
+        </Box>
+        <Badge variant="light" color="violet">
+          {completedPlanSteps}/{plan.steps.length} durable
+        </Badge>
+      </Group>
+      <Stepper
+        active={resolvedActiveStep}
+        orientation="vertical"
+        size="xs"
+        color="violet"
+        iconSize={28}
+        allowNextStepsSelect={false}
+        completedIcon={<CheckCircle size={15} weight="bold" />}
+        progressIcon={<Clock size={14} weight="bold" />}
+      >
+        {plan.steps.map((step, stepIndex) => {
+          const checkpoint = checkpoints.get(step.name);
+          return (
+            <Stepper.Step
+              key={step.name}
+              label={step.label}
+              description={plannedStepDescription(job, checkpoint, stepIndex, resolvedActiveStep)}
+              loading={job.identity.state === "active" && stepIndex === resolvedActiveStep}
+              allowStepSelect={false}
+              aria-label={`${step.label}: ${checkpoint ? "checkpoint saved" : "not completed"}`}
+            />
+          );
+        })}
+        <Stepper.Completed>
+          <Text
+            c={job.identity.state === "succeeded" ? "teal" : "violet"}
+            fw={600}
+            size="sm"
+            mt="xs"
+          >
+            {job.identity.state === "succeeded"
+              ? "All declared boundaries are durable and the pipeline completed."
+              : "All declared boundaries are durable; the current attempt has not completed yet."}
+          </Text>
+        </Stepper.Completed>
+      </Stepper>
+      <Text c="dimmed" size="xs" mt="sm">
+        The step plan belongs to this demo. Workhorse stores only the completed checkpoint evidence.
+      </Text>
+      {unmatchedCheckpoints.length > 0 ? (
+        <Box mt="md">
+          <Text fw={600} size="xs" mb={4}>
+            Additional checkpoint evidence
+          </Text>
+          <Stack gap="xs">
+            {unmatchedCheckpoints.map((checkpoint) => (
+              <Paper key={checkpoint.name} withBorder p="xs">
+                <Text fw={600} size="xs">
+                  {checkpoint.name}
+                </Text>
+                <Code block mt={4} fz="xs">
+                  {JSON.stringify(checkpoint.value, null, 2)}
+                </Code>
+              </Paper>
+            ))}
+          </Stack>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
 function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
+  if (job.durability) return <PlannedDurability job={job} />;
   const currentAttempt = job.current.outcome?.attempt ?? job.current.runtime?.attempt ?? 1;
   return (
     <Box>
@@ -392,6 +516,21 @@ function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
         </Stack>
       )}
     </Box>
+  );
+}
+
+function DurableProgressBadge({ job }: { job: DashboardJobRow }) {
+  if (!job.durability) return null;
+  return (
+    <Badge
+      size="xs"
+      variant="light"
+      color="violet"
+      leftSection={<CheckCircle size={11} weight="bold" />}
+      tt="none"
+    >
+      Durable {job.durability.completedSteps}/{job.durability.totalSteps}
+    </Badge>
   );
 }
 
@@ -827,7 +966,7 @@ function TasksPage({
   navigate: (href: string) => void;
   replace: (href: string) => void;
   taskLocation: TaskLocationState;
-  runDemoJob: (kind: DemoJobKind) => Promise<void>;
+  runDemoJob: (kind: DemoJobKind, scenario?: DurableDemoScenario) => Promise<void>;
   runningDemoJob: DemoJobKind | null;
   actionError: string | null;
   inspectJob: (id: string) => void;
@@ -926,6 +1065,24 @@ function TasksPage({
                     Retry once
                   </Menu.Item>
                   <Menu.Item
+                    leftSection={<ListChecks size={16} />}
+                    onClick={() => void runDemoJob("durable", "order-fulfillment")}
+                  >
+                    Durable · order fulfillment · 4 steps
+                  </Menu.Item>
+                  <Menu.Item
+                    leftSection={<ListChecks size={16} />}
+                    onClick={() => void runDemoJob("durable", "customer-onboarding")}
+                  >
+                    Durable · customer onboarding · 3 steps
+                  </Menu.Item>
+                  <Menu.Item
+                    leftSection={<ListChecks size={16} />}
+                    onClick={() => void runDemoJob("durable", "report-publication")}
+                  >
+                    Durable · report publication · 3 steps
+                  </Menu.Item>
+                  <Menu.Item
                     leftSection={<XCircle size={16} />}
                     color="red"
                     onClick={() => void runDemoJob("failure")}
@@ -1016,11 +1173,14 @@ function TasksPage({
                         <Text fw={600} size="sm" lh={1.3} title={job.type}>
                           {taskDisplayName(job.type, job.queue)}
                         </Text>
-                        {job.tags.map((tag) => (
-                          <Badge key={tag} size="xs" variant="light" color="gray" tt="none">
-                            {tag}
-                          </Badge>
-                        ))}
+                        <DurableProgressBadge job={job} />
+                        {job.tags.map((tag) =>
+                          tag === "durable-checkpoint" ? null : (
+                            <Badge key={tag} size="xs" variant="light" color="gray" tt="none">
+                              {tag}
+                            </Badge>
+                          ),
+                        )}
                       </Group>
                     </Table.Td>
                     <Table.Td>
@@ -2331,15 +2491,16 @@ function useDashboardController() {
   }, []);
 
   const runDemoJob = useCallback(
-    async (kind: DemoJobKind) => {
+    async (kind: DemoJobKind, scenario?: DurableDemoScenario) => {
       setRunningDemoJob(kind);
       setActionError(null);
       try {
         await rpcClient.dashboard.enqueueTest({
           kind,
+          ...(scenario ? { scenario } : {}),
           audit: {
             actor: "local-demo",
-            reason: `Demonstrate the ${kind} execution path`,
+            reason: `Demonstrate the ${scenario ?? kind} execution path`,
             requestId: crypto.randomUUID(),
           },
         });
