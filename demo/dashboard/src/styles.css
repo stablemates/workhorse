@@ -1,0 +1,126 @@
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+.workhorse-brand__mark {
+  align-items: center;
+  background: #0b0d10;
+  border-radius: 9px;
+  display: flex;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.workhorse-brand__wordmark {
+  display: block;
+  filter: brightness(0.26) contrast(1.25);
+  height: auto;
+  width: 158px;
+}
+
+.theme-switch {
+  border: 1px solid var(--mantine-color-default-border);
+}
+
+html[data-theme="workhorse"] {
+  --mantine-color-body: #090b0e;
+  --mantine-color-default: #11151a;
+  --mantine-color-default-hover: #181d23;
+  --mantine-color-default-border: #2a3037;
+  --mantine-color-text: #e7e4de;
+  --mantine-color-dimmed: #949ba3;
+  --mantine-color-dark-4: #5f6872;
+  --mantine-color-dark-5: #343b43;
+  --mantine-color-dark-6: #191e24;
+  --mantine-color-dark-7: #11151a;
+  --mantine-color-dark-8: #0d1014;
+  --mantine-color-dark-9: #090b0e;
+}
+
+html[data-theme="workhorse"] body {
+  background-color: #090b0e;
+  background-image:
+    linear-gradient(
+      115deg,
+      transparent 0 72%,
+      rgb(190 198 207 / 2.5%) 72% 72.1%,
+      transparent 72.1%
+    ),
+    radial-gradient(circle at 78% 4%, rgb(181 191 201 / 7%), transparent 31%);
+}
+
+html[data-theme="workhorse"] .mantine-AppShell-header {
+  background: rgb(11 14 18 / 94%);
+  border-color: #2c3239;
+  backdrop-filter: blur(14px);
+}
+
+html[data-theme="workhorse"] .mantine-AppShell-navbar {
+  background: linear-gradient(180deg, #0d1014 0%, #0a0d10 100%);
+  border-color: #252b32;
+}
+
+html[data-theme="workhorse"] .mantine-Paper-root {
+  background-color: #101419;
+  border-color: #292f36;
+}
+
+html[data-theme="workhorse"] .mantine-NavLink-root[data-active] {
+  background: linear-gradient(90deg, rgb(167 177 187 / 16%), rgb(167 177 187 / 5%));
+  border-left: 2px solid #b6bec7;
+  color: #f0eee9;
+}
+
+html[data-theme="workhorse"] .mantine-NavLink-root {
+  border-left: 2px solid transparent;
+  border-radius: 3px;
+}
+
+html[data-theme="workhorse"] .mantine-Button-root[data-variant="filled"] {
+  background: #c5cbd1;
+  color: #101317;
+}
+
+html[data-theme="workhorse"] .theme-switch {
+  background: #0b0e12;
+  border-color: #303740;
+}
+
+html[data-theme="workhorse"] .theme-switch .mantine-SegmentedControl-indicator {
+  background: #c5cbd1;
+}
+
+html[data-theme="workhorse"] .theme-switch .mantine-SegmentedControl-label[data-active] {
+  color: #0e1115;
+}
+
+html[data-theme="workhorse"] .workhorse-brand__mark {
+  box-shadow: 0 8px 22px rgb(0 0 0 / 35%);
+}
+
+html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
+  filter: none;
+}
+
+@media (max-width: 36em) {
+  .workhorse-brand__wordmark {
+    width: 124px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mantine-AppShell-header,
+  .mantine-AppShell-navbar,
+  .mantine-Paper-root {
+    transition:
+      background-color 180ms ease,
+      border-color 180ms ease;
+  }
+}
