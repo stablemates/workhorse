@@ -12,6 +12,7 @@ import {
   createLocalQueueController,
   createLocalOperator,
   createLocalScheduleController,
+  DEMO_DURABLE_STEP_MS,
   DEMO_LONG_RUNNING_MS,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_POLL_MS,
@@ -31,7 +32,12 @@ const pool = new Pool({ connectionString: databaseUrl, max: 4 });
 const database = createDemoDatabase(pool);
 
 function createTestApplication(options: CreateDemoApplicationOptions = {}) {
-  return createDemoApplication(database, { workerPollMs: 15, longRunningJobMs: 25, ...options });
+  return createDemoApplication(database, {
+    workerPollMs: 15,
+    longRunningJobMs: 25,
+    durableStepMs: 0,
+    ...options,
+  });
 }
 
 beforeAll(async () => {
@@ -65,6 +71,7 @@ describe("Workhorse demo", () => {
   it("uses a conservative worker polling interval for the demo", () => {
     expect(DEMO_WORKER_POLL_MS).toBe(15_000);
     expect(DEMO_LONG_RUNNING_MS).toBe(20_000);
+    expect(DEMO_DURABLE_STEP_MS).toBe(2_000);
   });
 
   it("synchronizes the always-on demo schedules at startup", async () => {
@@ -89,21 +96,42 @@ describe("Workhorse demo", () => {
   it("seeds representative dashboard data exactly once", async () => {
     const { app } = createTestApplication();
 
-    expect(await seedDemoData(database, app)).toMatchObject({
+    const seeded = await seedDemoData(database);
+    expect(seeded).toMatchObject({
       seeded: true,
-      jobIds: [expect.any(String), expect.any(String), expect.any(String), expect.any(String)],
+      jobIds: [
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+      ],
       historicalJobCount: 362,
     });
-    expect(await seedDemoData(database, app)).toEqual({
+    expect(await seedDemoData(database)).toEqual({
       seeded: false,
       jobIds: [],
       historicalJobCount: 0,
     });
     expect(
+      await pool.query(
+        `SELECT array_agg(DISTINCT version ORDER BY version) AS versions
+           FROM (
+             SELECT xmin::text AS version FROM workhorse.job WHERE id = ANY($1::uuid[])
+             UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
+             UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
+               WHERE name = 'default-dashboard-v4'
+           ) representative_rows`,
+        [seeded.jobIds],
+      ),
+    ).toMatchObject({ rows: [{ versions: [expect.any(String)] }] });
+    expect(
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 366 }],
+      rows: [{ count: 369 }],
     });
     expect(
       await pool.query(
@@ -119,11 +147,36 @@ describe("Workhorse demo", () => {
         },
       ],
     });
+    expect(
+      await pool.query(
+        `SELECT payload, max_attempts, tags FROM workhorse.job
+          WHERE job_type = 'demo.durable-pipeline'
+          ORDER BY payload->>'scenario'`,
+      ),
+    ).toMatchObject({
+      rows: [
+        {
+          payload: { scenario: "customer-onboarding" },
+          max_attempts: 2,
+          tags: ["demo-test", "durable-checkpoint", "customer-onboarding"],
+        },
+        {
+          payload: { scenario: "order-fulfillment" },
+          max_attempts: 2,
+          tags: ["demo-test", "durable-checkpoint", "order-fulfillment"],
+        },
+        {
+          payload: { scenario: "report-publication" },
+          max_attempts: 2,
+          tags: ["demo-test", "durable-checkpoint", "report-publication"],
+        },
+      ],
+    });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 366,
+      all: 369,
       scheduled: 1,
-      queued: 3,
+      queued: 6,
       completed: 346,
       discarded: 16,
       retried: 22,
@@ -134,8 +187,8 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 366,
-      counts: { all: 366, scheduled: 1, queued: 3, completed: 346, discarded: 16 },
+      total: 369,
+      counts: { all: 369, scheduled: 1, queued: 6, completed: 346, discarded: 16 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -146,7 +199,7 @@ describe("Workhorse demo", () => {
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 366 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 369 });
     expect(secondPage.jobs).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
@@ -260,6 +313,7 @@ describe("Workhorse demo", () => {
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "task" }),
     ).resolves.toMatchObject({
       groups: [
+        "demo.durable-pipeline",
         "demo.failure",
         "demo.recurring",
         "demo.report",
@@ -528,6 +582,230 @@ describe("Workhorse demo", () => {
     }
   });
 
+  it("continues a declared durable pipeline without repeating completed steps", async () => {
+    const operations: string[] = [];
+    const { app, workhorse } = createTestApplication({
+      onDurableStepOperation(scenario, stepName, attempt) {
+        operations.push(`${scenario}:${stepName}:${attempt}`);
+      },
+    });
+    workhorse.start();
+
+    try {
+      const response = await app.request("/demo/durable", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scenario: "order-fulfillment" }),
+      });
+      expect(response.status).toBe(202);
+      const accepted = (await response.json()) as {
+        jobId: string;
+        scenario: string;
+        checkpointPlan: string[];
+        expectedAttempts: number;
+      };
+      expect(accepted).toMatchObject({
+        scenario: "order-fulfillment",
+        checkpointPlan: [
+          "validate-order",
+          "reserve-inventory",
+          "authorize-payment",
+          "arrange-shipment",
+        ],
+        expectedAttempts: 2,
+      });
+
+      let job: { state: string; currentAttempt: number; result: unknown } | undefined;
+      for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
+        await sleep(25);
+        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
+        job = ((await jobResponse.json()) as { job: typeof job }).job;
+      }
+      expect(job).toMatchObject({
+        state: "succeeded",
+        currentAttempt: 2,
+        result: {
+          scenario: "order-fulfillment",
+          completed: true,
+          attempt: 2,
+          reusedCheckpoints: ["validate-order", "reserve-inventory"],
+          artifacts: {
+            "validate-order": { completedOnAttempt: 1 },
+            "reserve-inventory": { completedOnAttempt: 1 },
+            "authorize-payment": { completedOnAttempt: 2 },
+            "arrange-shipment": { completedOnAttempt: 2 },
+          },
+        },
+      });
+
+      const checkpointRows = (
+        await pool.query<{
+          checkpoint_name: string;
+          checkpoint_value: { operationId: string; completedOnAttempt: number };
+          attempt: number;
+        }>(
+          `SELECT checkpoint_name, checkpoint_value, attempt
+             FROM workhorse.job_checkpoint WHERE job_id = $1 ORDER BY created_at, checkpoint_name`,
+          [accepted.jobId],
+        )
+      ).rows;
+      expect(
+        checkpointRows.map((row) => ({ name: row.checkpoint_name, attempt: row.attempt })),
+      ).toEqual([
+        { name: "validate-order", attempt: 1 },
+        { name: "reserve-inventory", attempt: 1 },
+        { name: "authorize-payment", attempt: 2 },
+        { name: "arrange-shipment", attempt: 2 },
+      ]);
+      expect(new Set(checkpointRows.map((row) => row.checkpoint_value.operationId)).size).toBe(4);
+      expect(operations).toEqual([
+        "order-fulfillment:validate-order:1",
+        "order-fulfillment:reserve-inventory:1",
+        "order-fulfillment:authorize-payment:2",
+        "order-fulfillment:arrange-shipment:2",
+      ]);
+
+      const client = dashboardClient(app);
+      expect(await client.dashboard.jobDetail({ id: accepted.jobId })).toMatchObject({
+        identity: { id: accepted.jobId, state: "succeeded", type: "demo.durable-pipeline" },
+        durability: {
+          source: "demo-declared",
+          scenario: "order-fulfillment",
+          label: "Order fulfillment",
+          steps: [
+            { name: "validate-order" },
+            { name: "reserve-inventory" },
+            { name: "authorize-payment" },
+            { name: "arrange-shipment" },
+          ],
+        },
+        checkpoints: [{ attempt: 1 }, { attempt: 1 }, { attempt: 2 }, { attempt: 2 }],
+      });
+      await pool.query(
+        `INSERT INTO workhorse.job_checkpoint
+          (job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id)
+         VALUES ($1, 'diagnostic-extra', '{"output":"extra evidence"}'::jsonb, 2, 999999, 'test')`,
+        [accepted.jobId],
+      );
+      expect(
+        await client.dashboard.tasks({ filter: "retried", page: 1, pageSize: 25 }),
+      ).toMatchObject({
+        jobs: [
+          {
+            id: accepted.jobId,
+            durability: { completedSteps: 4, totalSteps: 4 },
+          },
+        ],
+      });
+      expect(await client.dashboard.jobDetail({ id: accepted.jobId })).toMatchObject({
+        durability: { steps: expect.any(Array) },
+        checkpoints: expect.arrayContaining([
+          expect.objectContaining({
+            name: "diagnostic-extra",
+            value: { output: "extra evidence" },
+          }),
+        ]),
+      });
+      expect(
+        await pool.query(
+          `SELECT count(*)::integer AS count FROM workhorse.job_event
+            WHERE job_id = $1 AND event_type = 'checkpoint_saved'`,
+          [accepted.jobId],
+        ),
+      ).toMatchObject({ rows: [{ count: 4 }] });
+
+      for (const scenario of ["unknown", "toString", "__proto__"]) {
+        expect(
+          (
+            await app.request("/demo/durable", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ scenario }),
+            })
+          ).status,
+        ).toBe(400);
+      }
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it.each([
+    {
+      scenario: "customer-onboarding",
+      reused: ["create-account"],
+      operations: [
+        "customer-onboarding:create-account:1",
+        "customer-onboarding:provision-workspace:2",
+        "customer-onboarding:send-welcome:2",
+      ],
+      checkpointAttempts: [1, 2, 2],
+    },
+    {
+      scenario: "report-publication",
+      reused: ["snapshot-data", "render-report", "publish-report"],
+      operations: [
+        "report-publication:snapshot-data:1",
+        "report-publication:render-report:1",
+        "report-publication:publish-report:1",
+      ],
+      checkpointAttempts: [1, 1, 1],
+    },
+  ] as const)("resumes $scenario from its distinct durable boundary", async (example) => {
+    const operations: string[] = [];
+    const { app, workhorse } = createTestApplication({
+      onDurableStepOperation(scenario, stepName, attempt) {
+        operations.push(`${scenario}:${stepName}:${attempt}`);
+      },
+    });
+    workhorse.start();
+
+    try {
+      const response = await app.request("/demo/durable", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scenario: example.scenario }),
+      });
+      const accepted = (await response.json()) as { jobId: string };
+      let job: { state: string; currentAttempt: number; result: unknown } | undefined;
+      for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
+        await sleep(25);
+        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
+        job = ((await jobResponse.json()) as { job: typeof job }).job;
+      }
+
+      expect(job).toMatchObject({
+        state: "succeeded",
+        currentAttempt: 2,
+        result: { reusedCheckpoints: example.reused },
+      });
+      expect(operations).toEqual(example.operations);
+      expect(
+        (
+          await pool.query<{ attempt: number }>(
+            `SELECT attempt FROM workhorse.job_checkpoint
+              WHERE job_id = $1 ORDER BY created_at, checkpoint_name`,
+            [accepted.jobId],
+          )
+        ).rows.map((row) => row.attempt),
+      ).toEqual(example.checkpointAttempts);
+      expect(
+        (
+          await pool.query<{ attempt: number; outcome: string }>(
+            `SELECT attempt, outcome FROM workhorse.attempt_history
+              WHERE job_id = $1 ORDER BY attempt`,
+            [accepted.jobId],
+          )
+        ).rows,
+      ).toEqual([
+        { attempt: 1, outcome: "retry" },
+        { attempt: 2, outcome: "succeeded" },
+      ]);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
   it("records an intentional terminal failure and exposes it in the dashboard", async () => {
     const { app, workhorse } = createTestApplication();
     workhorse.start();
@@ -731,6 +1009,40 @@ describe("Workhorse demo", () => {
     ).toMatchObject({
       rows: [{ max_attempts: 3, tags: ["demo-test", "durable-checkpoint"] }],
     });
+
+    for (const example of [
+      { scenario: "order-fulfillment", totalSteps: 4 },
+      { scenario: "customer-onboarding", totalSteps: 3 },
+      { scenario: "report-publication", totalSteps: 3 },
+    ] as const) {
+      const durable = await client.dashboard.enqueueTest({
+        kind: "durable",
+        scenario: example.scenario,
+        audit: {
+          actor: "operator",
+          reason: `show ${example.scenario} durable progress`,
+          requestId: `audit-durable-${example.scenario}`,
+        },
+      });
+      const detail = await client.dashboard.jobDetail({ id: durable.jobId });
+      expect(detail).toMatchObject({
+        identity: { id: durable.jobId, type: "demo.durable-pipeline", state: "ready" },
+        payload: { scenario: example.scenario },
+        durability: { source: "demo-declared", scenario: example.scenario },
+        checkpoints: [],
+      });
+      expect(detail.durability?.steps).toHaveLength(example.totalSteps);
+      expect(
+        await client.dashboard.tasks({ filter: "queued", page: 1, pageSize: 25 }),
+      ).toMatchObject({
+        jobs: expect.arrayContaining([
+          expect.objectContaining({
+            id: durable.jobId,
+            durability: { completedSteps: 0, totalSteps: example.totalSteps },
+          }),
+        ]),
+      });
+    }
   });
 
   it("supports audited local enqueue and schedule toggles", async () => {

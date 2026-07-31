@@ -60,7 +60,7 @@ for (const route of ["/tasks", "/cron", "/queues", "/system", "/workers", "/sett
   app.get(route, serveDashboard);
 }
 if (process.env.SEED_DEMO_DATA !== "false") {
-  const seed = await seedDemoData(database, app);
+  const seed = await seedDemoData(database);
   console.log(
     seed.seeded
       ? `Seeded ${seed.jobIds.length} representative and ${seed.historicalJobCount} historical demo jobs`

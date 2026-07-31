@@ -28,12 +28,15 @@ development proxy. The JSON API index remains available at `http://workhorse.loc
 Each run allocates a free internal Hono port so multiple worktrees can run concurrently. Set
 `WORKHORSE_API_PORT` only when an explicit internal port is required, or `WORKHORSE_WORKER_POLL_MS` to
 override the workers' 15-second idle polling delay.
-Startup seeds one successful transactional order, one checkpointed recoverable retry, one terminal failure, and one
-future scheduled job, so Tasks, Schedules, Workers, and System Health are useful immediately. Use the
-dashboard's **enqueue test job** menu to create fresh success, retry, failure, and 20-second long-running
-paths, then open a task to inspect its payload, durable checkpoints, and immutable attempt history. The long-running case gives
-the Running and Workers views enough time to show an active lease. Set `SEED_DEMO_DATA=false` to start
-empty instead. The versioned seed marker makes direct application restarts idempotent.
+Startup seeds one successful transactional order, one checkpointed recoverable retry, three multi-step
+durable pipelines, one terminal failure, and one future scheduled job. The durable pipelines cover order
+fulfillment, customer onboarding, and report publication. Each intentionally crashes after a different
+checkpoint on attempt 1, then resumes without repeating the completed operations. Use the dashboard's
+**enqueue test job** menu to create fresh success, retry, durable pipeline, failure, and 20-second
+long-running paths. Durable rows show a violet **Durable N/M** badge, and their task drawer uses a Mantine
+Stepper to show saved, running, and pending restart boundaries. Each new durable operation takes two
+seconds so progress remains visible. Set `SEED_DEMO_DATA=false` to start empty instead. The versioned seed
+marker makes direct application restarts idempotent.
 
 Create an order:
 
@@ -57,6 +60,20 @@ simulated capacity reservation and then fails deliberately. Attempt 2 reuses tha
 of running the checkpoint operation again. The task drawer labels the checkpoint
 **Persisted across retry**, shows its attempt and worker provenance, and keeps the immutable `retry` then
 `succeeded` attempt history alongside it.
+
+Create a four-step order-fulfillment pipeline:
+
+```bash
+curl --fail-with-body http://workhorse.localhost:43155/demo/durable \
+  --header 'content-type: application/json' \
+  --data '{"scenario":"order-fulfillment"}'
+```
+
+The response declares the checkpoint plan. `validate-order` and `reserve-inventory` complete on attempt 1,
+then the handler crashes deliberately. Attempt 2 reuses both checkpoint values before completing
+`authorize-payment` and `arrange-shipment`. The Stepper plan is demo-owned presentation metadata;
+Workhorse itself stores only immutable checkpoint evidence. The other supported scenarios are
+`customer-onboarding` and `report-publication`.
 
 Create a terminal failure for the Failures view:
 
