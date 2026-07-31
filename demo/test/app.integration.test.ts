@@ -41,7 +41,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
-    workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
+    workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
     workhorse.queue_control, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
 });
@@ -104,6 +104,20 @@ describe("Workhorse demo", () => {
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
       rows: [{ count: 366 }],
+    });
+    expect(
+      await pool.query(
+        `SELECT payload, max_attempts, tags FROM workhorse.job
+          WHERE job_type = 'demo.retry' AND payload->>'label' = 'recover-with-durable-checkpoint'`,
+      ),
+    ).toMatchObject({
+      rows: [
+        {
+          payload: { label: "recover-with-durable-checkpoint", failUntilAttempt: 1 },
+          max_attempts: 3,
+          tags: ["demo-test", "durable-checkpoint"],
+        },
+      ],
     });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
@@ -401,8 +415,13 @@ describe("Workhorse demo", () => {
         body: JSON.stringify({ failUntilAttempt: 1 }),
       });
       expect(response.status).toBe(202);
-      const accepted = (await response.json()) as { jobId: string; expectedAttempts: number };
+      const accepted = (await response.json()) as {
+        jobId: string;
+        expectedAttempts: number;
+        expectedCheckpoint: string;
+      };
       expect(accepted.expectedAttempts).toBe(2);
+      expect(accepted.expectedCheckpoint).toBe("reserve-capacity");
 
       let job: { state: string; currentAttempt: number; result: unknown } | undefined;
       for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
@@ -414,8 +433,38 @@ describe("Workhorse demo", () => {
       expect(job).toMatchObject({
         state: "succeeded",
         currentAttempt: 2,
-        result: { recovered: true, attempt: 2 },
+        result: {
+          recovered: true,
+          attempt: 2,
+          checkpointReused: true,
+          reservation: {
+            reservationId: expect.any(String),
+            reservedAt: expect.any(String),
+            reservedOnAttempt: 1,
+          },
+        },
       });
+      expect(
+        (
+          await pool.query(
+            `SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text, worker_id
+               FROM workhorse.job_checkpoint WHERE job_id = $1`,
+            [accepted.jobId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          checkpoint_name: "reserve-capacity",
+          checkpoint_value: {
+            reservationId: expect.any(String),
+            reservedAt: expect.any(String),
+            reservedOnAttempt: 1,
+          },
+          attempt: 1,
+          fence_token: expect.any(String),
+          worker_id: expect.stringMatching(/^demo-worker-/),
+        },
+      ]);
       expect(
         (
           await pool.query(
@@ -444,6 +493,36 @@ describe("Workhorse demo", () => {
         window: "1h",
         kpis: { retry: { backoff: 0 }, errorRate: { current: expect.any(Number) } },
       });
+      expect(await client.dashboard.jobDetail({ id: accepted.jobId })).toMatchObject({
+        identity: { id: accepted.jobId, state: "succeeded" },
+        checkpoints: [
+          {
+            name: "reserve-capacity",
+            attempt: 1,
+            fenceToken: expect.any(String),
+            workerId: expect.stringMatching(/^demo-worker-/),
+            value: { reservedOnAttempt: 1 },
+          },
+        ],
+        attempts: [
+          { attempt: 1, outcome: "retry" },
+          { attempt: 2, outcome: "succeeded" },
+        ],
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            attempt: 1,
+            type: "checkpoint_saved",
+            details: expect.objectContaining({ name: "reserve-capacity" }),
+          }),
+        ]),
+      });
+      expect(
+        await pool.query(
+          `SELECT count(*)::integer AS count FROM workhorse.job_event
+            WHERE job_id = $1 AND event_type = 'checkpoint_saved'`,
+          [accepted.jobId],
+        ),
+      ).toMatchObject({ rows: [{ count: 1 }] });
     } finally {
       await workhorse.stop();
     }
@@ -625,6 +704,33 @@ describe("Workhorse demo", () => {
     } finally {
       await workhorse.stop();
     }
+  });
+
+  it("enqueues a deterministic checkpoint retry from the dashboard operator", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+
+    const enqueued = await client.dashboard.enqueueTest({
+      kind: "retry",
+      audit: {
+        actor: "operator",
+        reason: "show durable checkpoint reuse",
+        requestId: "audit-checkpoint-retry",
+      },
+    });
+
+    expect(await client.dashboard.jobDetail({ id: enqueued.jobId })).toMatchObject({
+      identity: { id: enqueued.jobId, type: "demo.retry", state: "ready" },
+      payload: { label: "operator-retry", failUntilAttempt: 1 },
+      checkpoints: [],
+    });
+    expect(
+      await pool.query("SELECT max_attempts, tags FROM workhorse.job WHERE id = $1", [
+        enqueued.jobId,
+      ]),
+    ).toMatchObject({
+      rows: [{ max_attempts: 3, tags: ["demo-test", "durable-checkpoint"] }],
+    });
   });
 
   it("supports audited local enqueue and schedule toggles", async () => {

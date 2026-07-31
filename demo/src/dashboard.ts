@@ -288,6 +288,14 @@ export interface DashboardJobDetail {
     durationMs: number;
     error: unknown;
   }>;
+  checkpoints: Array<{
+    name: string;
+    value: unknown;
+    attempt: number;
+    fenceToken: string;
+    workerId: string;
+    createdAt: string;
+  }>;
   events: Array<{
     id: string;
     attempt: number | null;
@@ -1713,7 +1721,7 @@ export async function readDashboardJobDetail(
   database: DemoDatabase,
   id: string,
 ): Promise<DashboardJobDetail | null> {
-  const [jobRows, attemptRows, eventRows] = await Promise.all([
+  const [jobRows, attemptRows, checkpointRows, eventRows] = await Promise.all([
     database.execute<{
       id: string;
       queue: string;
@@ -1757,6 +1765,19 @@ export async function readDashboardJobDetail(
         FROM workhorse.attempt_history
        WHERE job_id = ${id}
        ORDER BY attempt, attempt_id
+    `),
+    database.execute<{
+      checkpoint_name: string;
+      checkpoint_value: unknown;
+      attempt: number;
+      fence_token: string;
+      worker_id: string;
+      created_at: Date | string;
+    }>(sql`
+      SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text, worker_id, created_at
+        FROM workhorse.job_checkpoint
+       WHERE job_id = ${id}
+       ORDER BY created_at, checkpoint_name
     `),
     database.execute<{
       event_id: string;
@@ -1816,6 +1837,14 @@ export async function readDashboardJobDetail(
       finishedAt: toIso(row.finished_at),
       durationMs: Number(row.duration_ms),
       error: row.error,
+    })),
+    checkpoints: checkpointRows.rows.map((row) => ({
+      name: row.checkpoint_name,
+      value: row.checkpoint_value,
+      attempt: row.attempt,
+      fenceToken: row.fence_token,
+      workerId: row.worker_id,
+      createdAt: toIso(row.created_at),
     })),
     events: eventRows.rows.map((row) => ({
       id: row.event_id,

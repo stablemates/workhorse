@@ -12,9 +12,11 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 
 - a Hono request inserts an application order and its Workhorse job in the same Drizzle transaction;
 - a Hono-managed worker processes the job and shuts down through the integration lifecycle;
-- an intentional handler error records a `retry` attempt and succeeds on attempt 2;
+- an intentional handler saves a named capacity-reservation checkpoint, records a `retry` attempt, and
+  reuses the checkpoint value when attempt 2 succeeds;
 - the worker-owned scheduler synchronizes and fires a recurring definition with occurrence deduplication;
-- the typed oRPC snapshot exposes queues, jobs, schedules, workers, failures, and database health;
+- the typed oRPC snapshot exposes queues, jobs, checkpoint provenance, schedules, workers, failures, and
+  database health;
 - the dashboard can be omitted without changing core queue behavior;
 - `pnpm demo` recreates only a purpose-guarded demo database, builds the workspace, and serves the app.
 
