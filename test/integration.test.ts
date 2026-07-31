@@ -8,6 +8,7 @@ import {
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
   Queue,
+  type Queryable,
   Worker,
 } from "../src/index.js";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../src/local-database.js";
@@ -1286,10 +1287,10 @@ describe("live-runtime queue protocol", () => {
       queue.scheduleWait(continuation!, "conflict-worker", "embargo", {
         wakeAt: new Date(target.getTime() + 1),
       }),
-    ).rejects.toMatchObject({ name: "WaitConflictError" });
+    ).rejects.toMatchObject({ name: "WaitConflictError", existing: first.wait });
     await expect(
       queue.scheduleWait(continuation!, "conflict-worker", "embargo", { durationMs: 1 }),
-    ).rejects.toMatchObject({ name: "WaitConflictError" });
+    ).rejects.toMatchObject({ name: "WaitConflictError", existing: first.wait });
     await expect(queue.getWait(id, "embargo")).resolves.toEqual(first.wait);
     await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
   });
@@ -1944,6 +1945,57 @@ describe("live-runtime queue protocol", () => {
     >("sum", ({ a, b }) => ({ total: a + b }));
     expect(await worker.runOnce()).toBe(true);
     expect((await queue.getJob<{ total: number }>(id))?.result).toEqual({ total: 5 });
+  });
+
+  it("does not query durability tables for handlers that use no durability helpers", async () => {
+    const durabilityQueries: string[] = [];
+    const countingDatabase: Queryable = {
+      query(text, values) {
+        if (/workhorse\.job_(?:checkpoint|wait)\b/.test(text)) durabilityQueries.push(text);
+        return pool.query(text, values ? [...values] : undefined);
+      },
+    };
+    const countingQueue = new Queue(countingDatabase);
+    const id = await countingQueue.enqueue("ordinary-handler", { value: 42 });
+    const worker = new Worker(countingQueue, { workerId: "ordinary-worker" }).handle<
+      { value: number },
+      { value: number }
+    >("ordinary-handler", ({ value }) => ({ value }));
+
+    expect(await worker.runOnce()).toBe(true);
+    await expect(countingQueue.getJob(id)).resolves.toMatchObject({
+      state: "succeeded",
+      result: { value: 42 },
+    });
+    expect(durabilityQueries).toEqual([]);
+  });
+
+  it("loads each durability cache only once on first helper use", async () => {
+    const durabilityQueries: string[] = [];
+    const countingDatabase: Queryable = {
+      query(text, values) {
+        if (/workhorse\.job_(?:checkpoint|wait)\b/.test(text)) durabilityQueries.push(text);
+        return pool.query(text, values ? [...values] : undefined);
+      },
+    };
+    const countingQueue = new Queue(countingDatabase);
+    await countingQueue.enqueue("durability-reads", {});
+    const worker = new Worker(countingQueue, { workerId: "durability-read-worker" }).handle(
+      "durability-reads",
+      async (_payload, context) => {
+        await Promise.all([
+          context.getCheckpoint("first"),
+          context.getCheckpoint("second"),
+          context.getWait("first"),
+          context.getWait("second"),
+        ]);
+        return null;
+      },
+    );
+
+    expect(await worker.runOnce()).toBe(true);
+    expect(durabilityQueries.filter((query) => query.includes("job_checkpoint"))).toHaveLength(1);
+    expect(durabilityQueries.filter((query) => query.includes("job_wait"))).toHaveLength(1);
   });
 
   it("reuses a completed checkpoint when a later attempt restarts the handler", async () => {

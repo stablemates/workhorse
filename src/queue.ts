@@ -194,6 +194,7 @@ export class WaitConflictError extends Error {
   constructor(
     readonly jobId: string,
     readonly waitName: string,
+    readonly existing: JobWait,
   ) {
     super(
       `Wait ${waitName} for job ${jobId} already exists with a different mode or absolute target`,
@@ -538,7 +539,9 @@ export class Queue {
     );
     const row = result.rows[0]!;
     if (row.status === "stale") throw new WaitLeaseLostError(job.id, name);
-    if (row.status === "conflict") throw new WaitConflictError(job.id, name);
+    if (row.status === "conflict") {
+      throw new WaitConflictError(job.id, name, waitRecord({ ...row, job_id: job.id }));
+    }
     if (row.status === "limit_exceeded") throw new WaitLimitExceededError(job.id);
     if (row.status !== "scheduled" && row.status !== "elapsed") {
       throw new Error(`Unexpected wait status: ${String(row.status)}`);
