@@ -1178,7 +1178,7 @@ function TasksActivityChart({
           layout: "vertical",
           align: "left",
           verticalAlign: "middle",
-          width: 170,
+          width: 220,
           wrapperStyle: { paddingRight: 16, textAlign: "left" },
         }}
         styles={{
@@ -1186,6 +1186,14 @@ function TasksActivityChart({
             justifyContent: "flex-start",
             flexDirection: "column",
             alignItems: "flex-start",
+          },
+          legendItem: { width: "100%", minWidth: 0 },
+          legendItemName: {
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           },
         }}
         gridAxis="xy"
