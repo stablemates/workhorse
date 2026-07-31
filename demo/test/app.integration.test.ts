@@ -13,10 +13,15 @@ import {
   createLocalOperator,
   createLocalScheduleController,
   DEMO_DURABLE_STEP_MS,
+  DEMO_DURABLE_TIMER_WAIT_MS,
   DEMO_LONG_RUNNING_MS,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_POLL_MS,
   DEMO_WORKERS,
+  DURABLE_TIMER_JOB_TYPE,
+  DURABLE_TIMER_PREPARE_CHECKPOINT,
+  DURABLE_TIMER_PUBLISH_CHECKPOINT,
+  DURABLE_TIMER_WAIT_NAME,
   HEARTBEAT_SCHEDULE_NAME,
   installDemoSchema,
   REPORT_SCHEDULE_NAME,
@@ -47,7 +52,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
-    workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
+    workhorse.job_wait, workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
     workhorse.queue_control, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
 });
@@ -72,6 +77,7 @@ describe("Workhorse demo", () => {
     expect(DEMO_WORKER_POLL_MS).toBe(15_000);
     expect(DEMO_LONG_RUNNING_MS).toBe(20_000);
     expect(DEMO_DURABLE_STEP_MS).toBe(2_000);
+    expect(DEMO_DURABLE_TIMER_WAIT_MS).toBe(10_000);
   });
 
   it("synchronizes the always-on demo schedules at startup", async () => {
@@ -107,6 +113,7 @@ describe("Workhorse demo", () => {
         expect.any(String),
         expect.any(String),
         expect.any(String),
+        expect.any(String),
       ],
       historicalJobCount: 362,
     });
@@ -122,7 +129,7 @@ describe("Workhorse demo", () => {
              SELECT xmin::text AS version FROM workhorse.job WHERE id = ANY($1::uuid[])
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
-               WHERE name = 'default-dashboard-v4'
+               WHERE name = 'default-dashboard-v5'
            ) representative_rows`,
         [seeded.jobIds],
       ),
@@ -131,7 +138,22 @@ describe("Workhorse demo", () => {
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 369 }],
+      rows: [{ count: 370 }],
+    });
+    expect(
+      await pool.query(
+        `SELECT payload, max_attempts, tags FROM workhorse.job
+          WHERE job_type = $1 AND payload->>'source' = 'representative-seed'`,
+        [DURABLE_TIMER_JOB_TYPE],
+      ),
+    ).toMatchObject({
+      rows: [
+        {
+          payload: { source: "representative-seed" },
+          max_attempts: 1,
+          tags: ["demo-test", "durable-checkpoint", "durable-timer"],
+        },
+      ],
     });
     expect(
       await pool.query(
@@ -174,9 +196,9 @@ describe("Workhorse demo", () => {
     });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 369,
+      all: 370,
       scheduled: 1,
-      queued: 6,
+      queued: 7,
       completed: 346,
       discarded: 16,
       retried: 22,
@@ -187,8 +209,8 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 369,
-      counts: { all: 369, scheduled: 1, queued: 6, completed: 346, discarded: 16 },
+      total: 370,
+      counts: { all: 370, scheduled: 1, queued: 7, completed: 346, discarded: 16 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -199,7 +221,7 @@ describe("Workhorse demo", () => {
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 369 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 370 });
     expect(secondPage.jobs).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
@@ -250,7 +272,7 @@ describe("Workhorse demo", () => {
       pageSize: 25,
       worker: "demo-worker-1",
     });
-    expect(workerFiltered.jobs.every((job) => job.workerId === "demo-worker-1")).toBe(true);
+    expect(workerFiltered.jobs.every((job) => job.lastWorkerId === "demo-worker-1")).toBe(true);
     const typeFiltered = await client.dashboard.tasks({
       filter: "all",
       page: 1,
@@ -272,7 +294,7 @@ describe("Workhorse demo", () => {
       combined.jobs.every(
         (job) =>
           job.queue === "emails" &&
-          job.workerId === "demo-worker-1" &&
+          job.lastWorkerId === "demo-worker-1" &&
           job.type === "email.send" &&
           job.tags.includes("email"),
       ),
@@ -314,6 +336,7 @@ describe("Workhorse demo", () => {
     ).resolves.toMatchObject({
       groups: [
         "demo.durable-pipeline",
+        "demo.durable-timer",
         "demo.failure",
         "demo.recurring",
         "demo.report",
@@ -577,6 +600,281 @@ describe("Workhorse demo", () => {
           [accepted.jobId],
         ),
       ).toMatchObject({ rows: [{ count: 1 }] });
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("suspends and reclaims one logical attempt around a named durable timer", async () => {
+    const operations: Array<{ operation: string; attempt: number; fenceToken: string }> = [];
+    const { app, workhorse } = createTestApplication({
+      workerPollMs: 5,
+      maintenanceIntervalMs: 100,
+      durableTimerWaitMs: 500,
+      onDurableTimerOperation(operation, attempt, fenceToken) {
+        operations.push({ operation, attempt, fenceToken: fenceToken.toString() });
+      },
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      const response = await app.request("/demo/timers", { method: "POST" });
+      expect(response.status).toBe(202);
+      const accepted = (await response.json()) as {
+        jobId: string;
+        expectedAttempt: number;
+        prepareCheckpoint: string;
+        waitName: string;
+        publishCheckpoint: string;
+      };
+      expect(accepted).toMatchObject({
+        expectedAttempt: 1,
+        prepareCheckpoint: DURABLE_TIMER_PREPARE_CHECKPOINT,
+        waitName: DURABLE_TIMER_WAIT_NAME,
+        publishCheckpoint: DURABLE_TIMER_PUBLISH_CHECKPOINT,
+      });
+
+      let suspended:
+        | {
+            state: string;
+            current_attempt: number;
+            fence_token: string;
+            worker_id: string | null;
+            acquired_at: Date | null;
+            heartbeat_at: Date | null;
+            expires_at: Date | null;
+            wait_name: string | null;
+            attempt_started_at: Date;
+          }
+        | undefined;
+      for (let poll = 0; poll < 100 && suspended?.state !== "scheduled"; poll += 1) {
+        await sleep(10);
+        suspended = (
+          await pool.query(
+            `SELECT state, current_attempt, fence_token::text, worker_id, acquired_at, heartbeat_at,
+                    expires_at, wait_name, attempt_started_at
+               FROM workhorse.job_runtime WHERE job_id = $1`,
+            [accepted.jobId],
+          )
+        ).rows[0];
+      }
+      expect(suspended).toMatchObject({
+        state: "scheduled",
+        current_attempt: 1,
+        fence_token: "0",
+        worker_id: null,
+        acquired_at: null,
+        heartbeat_at: null,
+        expires_at: null,
+        wait_name: DURABLE_TIMER_WAIT_NAME,
+        attempt_started_at: expect.any(Date),
+      });
+
+      const waits = await pool.query<{
+        wait_name: string;
+        mode: string;
+        duration_ms: string;
+        wake_at: Date;
+        attempt: number;
+        fence_token: string;
+        worker_id: string;
+      }>(
+        `SELECT wait_name, mode, duration_ms::text, wake_at, attempt, fence_token::text, worker_id
+           FROM workhorse.job_wait WHERE job_id = $1`,
+        [accepted.jobId],
+      );
+      expect(waits.rows).toEqual([
+        {
+          wait_name: DURABLE_TIMER_WAIT_NAME,
+          mode: "relative",
+          duration_ms: "500",
+          wake_at: expect.any(Date),
+          attempt: 1,
+          fence_token: expect.any(String),
+          worker_id: expect.stringMatching(/^demo-worker-/),
+        },
+      ]);
+      const firstFence = waits.rows[0]!.fence_token;
+      expect(BigInt(firstFence)).toBeGreaterThan(0n);
+      expect(operations).toEqual([{ operation: "prepare", attempt: 1, fenceToken: firstFence }]);
+      expect(
+        (
+          await pool.query(
+            `SELECT checkpoint_name, fence_token::text FROM workhorse.job_checkpoint
+              WHERE job_id = $1 ORDER BY created_at`,
+            [accepted.jobId],
+          )
+        ).rows,
+      ).toEqual([{ checkpoint_name: DURABLE_TIMER_PREPARE_CHECKPOINT, fence_token: firstFence }]);
+      expect(
+        (
+          await pool.query(
+            `SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id`,
+            [accepted.jobId],
+          )
+        ).rows.map((row) => row.event_type),
+      ).toEqual(["enqueued", "claimed", "checkpoint_saved", "wait_scheduled"]);
+
+      const scheduledTasks = await client.dashboard.tasks({
+        filter: "scheduled",
+        page: 1,
+        pageSize: 25,
+      });
+      expect(scheduledTasks.jobs).toEqual([
+        expect.objectContaining({
+          id: accepted.jobId,
+          state: "scheduled",
+          attempt: 1,
+          workerId: null,
+          lastWorkerId: waits.rows[0]!.worker_id,
+          waitName: DURABLE_TIMER_WAIT_NAME,
+          wakeAt: waits.rows[0]!.wake_at.toISOString(),
+          wait: {
+            name: DURABLE_TIMER_WAIT_NAME,
+            wakeAt: waits.rows[0]!.wake_at.toISOString(),
+            mode: "relative",
+          },
+        }),
+      ]);
+      expect(await client.dashboard.jobDetail({ id: accepted.jobId })).toMatchObject({
+        current: {
+          runtime: {
+            state: "scheduled",
+            attempt: 1,
+            fenceToken: "0",
+            workerId: null,
+            acquiredAt: null,
+            heartbeatAt: null,
+            expiresAt: null,
+            waitName: DURABLE_TIMER_WAIT_NAME,
+            attemptStartedAt: suspended!.attempt_started_at.toISOString(),
+          },
+        },
+        waits: [
+          {
+            name: DURABLE_TIMER_WAIT_NAME,
+            mode: "relative",
+            durationMs: 500,
+            wakeAt: waits.rows[0]!.wake_at.toISOString(),
+            attempt: 1,
+            fenceToken: firstFence,
+            workerId: waits.rows[0]!.worker_id,
+          },
+        ],
+      });
+
+      let finalJob:
+        | {
+            state: string;
+            currentAttempt: number;
+            fenceToken: string;
+            result: Record<string, unknown>;
+          }
+        | undefined;
+      for (let poll = 0; poll < 200 && finalJob?.state !== "succeeded"; poll += 1) {
+        await sleep(10);
+        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
+        finalJob = ((await jobResponse.json()) as { job: typeof finalJob }).job;
+      }
+      expect(finalJob).toMatchObject({
+        state: "succeeded",
+        currentAttempt: 1,
+        result: {
+          source: "http",
+          completed: true,
+          attempt: 1,
+          prepareCheckpointReused: true,
+          waitReplayed: true,
+          wait: { name: DURABLE_TIMER_WAIT_NAME, firstFence },
+          prepared: { preparedOnAttempt: 1, preparedOnFence: firstFence },
+          publication: { publishedOnAttempt: 1, publishedOnFence: expect.any(String) },
+        },
+      });
+
+      const claims = await pool.query<{
+        fence_token: string;
+        occurred_at: Date;
+      }>(
+        `SELECT details->>'fence_token' AS fence_token, occurred_at
+           FROM workhorse.job_event
+          WHERE job_id = $1 AND event_type = 'claimed' ORDER BY event_id`,
+        [accepted.jobId],
+      );
+      expect(claims.rows).toHaveLength(2);
+      expect(claims.rows[0]!.fence_token).toBe(firstFence);
+      const secondFence = claims.rows[1]!.fence_token;
+      expect(secondFence).not.toBe(firstFence);
+      expect(finalJob!.fenceToken).toBe(secondFence);
+      expect(operations).toEqual([
+        { operation: "prepare", attempt: 1, fenceToken: firstFence },
+        { operation: "publish", attempt: 1, fenceToken: secondFence },
+      ]);
+
+      const history = await pool.query<{
+        attempt: number;
+        fence_token: string;
+        outcome: string;
+        started_at: Date;
+        claimed_at: Date;
+        finished_at: Date;
+      }>(
+        `SELECT attempt, fence_token::text, outcome, started_at, claimed_at, finished_at
+           FROM workhorse.attempt_history WHERE job_id = $1`,
+        [accepted.jobId],
+      );
+      expect(history.rows).toHaveLength(1);
+      expect(history.rows[0]).toMatchObject({
+        attempt: 1,
+        fence_token: secondFence,
+        outcome: "succeeded",
+        started_at: suspended!.attempt_started_at,
+      });
+      expect(history.rows[0]!.claimed_at.getTime()).toBeGreaterThan(
+        history.rows[0]!.started_at.getTime(),
+      );
+      expect(
+        Math.abs(history.rows[0]!.claimed_at.getTime() - claims.rows[1]!.occurred_at.getTime()),
+      ).toBeLessThan(100);
+      expect(history.rows[0]!.finished_at.getTime()).toBeGreaterThanOrEqual(
+        history.rows[0]!.claimed_at.getTime(),
+      );
+
+      const finalDetail = await client.dashboard.jobDetail({ id: accepted.jobId });
+      expect(finalDetail).toMatchObject({
+        identity: { type: DURABLE_TIMER_JOB_TYPE, state: "succeeded" },
+        current: { runtime: null, outcome: { attempt: 1, result: { waitReplayed: true } } },
+        checkpoints: [
+          { name: DURABLE_TIMER_PREPARE_CHECKPOINT, attempt: 1, fenceToken: firstFence },
+          { name: DURABLE_TIMER_PUBLISH_CHECKPOINT, attempt: 1, fenceToken: secondFence },
+        ],
+        attempts: [
+          {
+            attempt: 1,
+            outcome: "succeeded",
+            startedAt: history.rows[0]!.started_at.toISOString(),
+            claimedAt: history.rows[0]!.claimed_at.toISOString(),
+            executionMs: expect.any(Number),
+            elapsedMs: expect.any(Number),
+          },
+        ],
+        waits: [{ name: DURABLE_TIMER_WAIT_NAME, fenceToken: firstFence }],
+      });
+      expect(finalDetail.attempts[0]!.elapsedMs).toBeGreaterThan(
+        finalDetail.attempts[0]!.executionMs + 300,
+      );
+      expect(finalDetail.events.map((event) => event.type)).toEqual([
+        "enqueued",
+        "claimed",
+        "checkpoint_saved",
+        "wait_scheduled",
+        "promoted",
+        "wait_elapsed",
+        "claimed",
+        "wait_replayed",
+        "checkpoint_saved",
+        "succeeded",
+      ]);
     } finally {
       await workhorse.stop();
     }
@@ -1009,6 +1307,37 @@ describe("Workhorse demo", () => {
     ).toMatchObject({
       rows: [{ max_attempts: 3, tags: ["demo-test", "durable-checkpoint"] }],
     });
+
+    const timer = await client.dashboard.enqueueTest({
+      kind: "timer",
+      audit: {
+        actor: "operator",
+        reason: "show named durable timer replay",
+        requestId: "audit-durable-timer",
+      },
+    });
+    expect(await client.dashboard.jobDetail({ id: timer.jobId })).toMatchObject({
+      identity: { id: timer.jobId, type: DURABLE_TIMER_JOB_TYPE, state: "ready" },
+      payload: { source: "operator" },
+      waits: [],
+      checkpoints: [],
+    });
+    expect(
+      await pool.query("SELECT max_attempts, tags FROM workhorse.job WHERE id = $1", [timer.jobId]),
+    ).toMatchObject({
+      rows: [
+        {
+          max_attempts: 1,
+          tags: ["demo-test", "durable-checkpoint", "durable-timer"],
+        },
+      ],
+    });
+    expect(
+      await pool.query(
+        `SELECT action, target FROM public.workhorse_demo_audit WHERE request_id = $1`,
+        ["audit-durable-timer"],
+      ),
+    ).toMatchObject({ rows: [{ action: "enqueueTest", target: "job:timer" }] });
 
     for (const example of [
       { scenario: "order-fulfillment", totalSteps: 4 },

@@ -79,7 +79,7 @@ const systemInput = z.object({
   window: z.enum(["15m", "1h", "24h"]).default("1h"),
 });
 const enqueueTestInput = z.object({
-  kind: z.enum(["success", "retry", "durable", "failure", "long-running"]),
+  kind: z.enum(["success", "retry", "durable", "timer", "failure", "long-running"]),
   scenario: z.enum(["order-fulfillment", "customer-onboarding", "report-publication"]).optional(),
   audit: auditSchema,
 });

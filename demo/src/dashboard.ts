@@ -32,11 +32,15 @@ export interface DashboardJobRow extends Record<string, unknown> {
   tags: string[];
   runAt: string | null;
   workerId: string | null;
+  lastWorkerId: string | null;
   finishedAt: string | null;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
   durability: { completedSteps: number; totalSteps: number } | null;
+  waitName: string | null;
+  wakeAt: string | null;
+  wait: { name: string; wakeAt: string; mode: "relative" | "absolute" } | null;
 }
 
 export interface DashboardScheduleRow {
@@ -269,7 +273,12 @@ export interface DashboardJobDetail {
       runAt: string;
       readyAt: string | null;
       workerId: string | null;
+      fenceToken: string;
+      acquiredAt: string | null;
       heartbeatAt: string | null;
+      expiresAt: string | null;
+      waitName: string | null;
+      attemptStartedAt: string | null;
       error: unknown;
     } | null;
     outcome: {
@@ -287,13 +296,27 @@ export interface DashboardJobDetail {
     workerId: string;
     outcome: string;
     startedAt: string;
+    claimedAt: string;
     finishedAt: string;
     durationMs: number;
+    executionMs: number;
+    elapsedMs: number;
     error: unknown;
   }>;
   checkpoints: Array<{
     name: string;
     value: unknown;
+    attempt: number;
+    fenceToken: string;
+    workerId: string;
+    createdAt: string;
+  }>;
+  waits: Array<{
+    name: string;
+    mode: "relative" | "absolute";
+    durationMs: number | null;
+    requestedWakeAt: string | null;
+    wakeAt: string;
     attempt: number;
     fenceToken: string;
     workerId: string;
@@ -756,10 +779,13 @@ export async function readDashboardTasks(
         SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.tags,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id
+               COALESCE(r.worker_id, current_wait.worker_id, attempt_worker.worker_id,
+                        'unassigned') AS worker_id
           FROM workhorse.job j
           LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
           LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+          LEFT JOIN workhorse.job_wait current_wait
+            ON current_wait.job_id = j.id AND current_wait.wait_name = r.wait_name
           LEFT JOIN LATERAL (
             SELECT ah.worker_id FROM workhorse.attempt_history ah
              WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
@@ -778,12 +804,16 @@ export async function readDashboardTasks(
       payload: unknown;
       tags: string[];
       run_at: Date | string | null;
+      current_worker_id: string | null;
       worker_id: string | null;
       finished_at: Date | string | null;
       error: unknown;
       created_at: Date | string;
       updated_at: Date | string;
       checkpoint_names: string[];
+      wait_name: string | null;
+      wake_at: Date | string | null;
+      wait_mode: "relative" | "absolute" | null;
     }>(sql`
       WITH tasks AS (
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
@@ -791,11 +821,16 @@ export async function readDashboardTasks(
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                j.max_attempts, j.payload, j.tags,
                COALESCE(r.run_at, o.run_at) AS run_at,
-               COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id,
+               r.worker_id AS current_worker_id,
+               COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id)
+                 AS worker_id,
                o.finished_at,
                COALESCE(o.error, r.error) AS error,
                j.created_at,
                COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+               r.wait_name,
+               durable_wait.wake_at,
+               durable_wait.mode AS wait_mode,
                ARRAY(SELECT checkpoint.checkpoint_name
                        FROM workhorse.job_checkpoint checkpoint
                       WHERE checkpoint.job_id = j.id
@@ -803,6 +838,8 @@ export async function readDashboardTasks(
           FROM workhorse.job j
           LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
           LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+          LEFT JOIN workhorse.job_wait durable_wait
+            ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
           LEFT JOIN LATERAL (
             SELECT ah.worker_id FROM workhorse.attempt_history ah
              WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
@@ -841,7 +878,8 @@ export async function readDashboardTasks(
         payload: row.payload,
         tags: row.tags,
         runAt: toIsoOrNull(row.run_at),
-        workerId: row.worker_id,
+        workerId: row.current_worker_id,
+        lastWorkerId: row.worker_id,
         finishedAt: toIsoOrNull(row.finished_at),
         errorMessage: errorMessageOrNull(row.error),
         createdAt: toIso(row.created_at),
@@ -852,6 +890,12 @@ export async function readDashboardTasks(
               totalSteps: plan.steps.length,
             }
           : null,
+        waitName: row.wait_name,
+        wakeAt: toIsoOrNull(row.wake_at),
+        wait:
+          row.wait_name && row.wake_at && row.wait_mode
+            ? { name: row.wait_name, wakeAt: toIso(row.wake_at), mode: row.wait_mode }
+            : null,
       };
     }),
   };
@@ -1428,7 +1472,7 @@ export async function readDashboardWorkers(
       -- Exact counts are cheap here because both time predicates keep partition scans to one hour.
       SELECT worker_id AS id, count(*)::integer AS completed_attempts,
              count(*) FILTER (WHERE outcome = 'failed')::integer AS failed_attempts,
-             avg(extract(epoch FROM finished_at - started_at) * 1000)::double precision
+             avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision
                AS average_execution_ms,
              max(finished_at) AS last_seen_at
         FROM workhorse.attempt_history
@@ -1623,7 +1667,7 @@ export async function readDashboardSnapshot(
                  count(*) FILTER (WHERE outcome = 'succeeded')::integer AS succeeded,
                  count(*) FILTER (WHERE outcome = 'failed')::integer AS failed,
                  count(*) FILTER (WHERE outcome = 'retry')::integer AS retried,
-                 avg(extract(epoch FROM finished_at - started_at) * 1000)::double precision AS average_duration_ms
+                 avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision AS average_duration_ms
             FROM workhorse.attempt_history
            WHERE finished_at >= clock_timestamp() - interval '2 hours'
            GROUP BY 1
@@ -1670,11 +1714,15 @@ export async function readDashboardSnapshot(
       tags: [],
       runAt: toIsoOrNull(row.run_at),
       workerId: row.worker_id,
+      lastWorkerId: row.worker_id,
       finishedAt: toIsoOrNull(row.finished_at),
       errorMessage: errorMessageOrNull(row.error),
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
       durability: null,
+      waitName: null,
+      wakeAt: null,
+      wait: null,
     })),
     schedules: scheduleRows.rows.map((row) => {
       return {
@@ -1740,7 +1788,7 @@ export async function readDashboardJobDetail(
   database: DemoDatabase,
   id: string,
 ): Promise<DashboardJobDetail | null> {
-  const [jobRows, attemptRows, checkpointRows, eventRows] = await Promise.all([
+  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows] = await Promise.all([
     database.execute<{
       id: string;
       queue: string;
@@ -1753,6 +1801,11 @@ export async function readDashboardJobDetail(
       ready_at: Date | string | null;
       worker_id: string | null;
       heartbeat_at: Date | string | null;
+      fence_token: string;
+      acquired_at: Date | string | null;
+      expires_at: Date | string | null;
+      wait_name: string | null;
+      attempt_started_at: Date | string | null;
       runtime_error: unknown;
       outcome_state: string | null;
       outcome_attempt: number | null;
@@ -1762,7 +1815,9 @@ export async function readDashboardJobDetail(
     }>(sql`
       SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.payload, j.created_at,
              r.state AS runtime_state, r.current_attempt AS runtime_attempt, r.run_at, r.ready_at,
-             r.worker_id, r.heartbeat_at, r.error AS runtime_error,
+             r.worker_id, r.fence_token::text, r.acquired_at, r.heartbeat_at, r.expires_at,
+             r.wait_name, r.attempt_started_at,
+             r.error AS runtime_error,
              o.state AS outcome_state, o.current_attempt AS outcome_attempt, o.finished_at,
              o.result, o.error AS outcome_error
         FROM workhorse.job j
@@ -1775,12 +1830,15 @@ export async function readDashboardJobDetail(
       worker_id: string;
       outcome: string;
       started_at: Date | string;
+      claimed_at: Date | string;
       finished_at: Date | string;
-      duration_ms: number;
+      execution_ms: number;
+      elapsed_ms: number;
       error: unknown;
     }>(sql`
-      SELECT attempt, worker_id, outcome, started_at, finished_at,
-             extract(epoch FROM finished_at - started_at) * 1000 AS duration_ms, error
+      SELECT attempt, worker_id, outcome, started_at, claimed_at, finished_at,
+             extract(epoch FROM finished_at - claimed_at) * 1000 AS execution_ms,
+             extract(epoch FROM finished_at - started_at) * 1000 AS elapsed_ms, error
         FROM workhorse.attempt_history
        WHERE job_id = ${id}
        ORDER BY attempt, attempt_id
@@ -1796,7 +1854,24 @@ export async function readDashboardJobDetail(
       SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text, worker_id, created_at
         FROM workhorse.job_checkpoint
        WHERE job_id = ${id}
-       ORDER BY created_at, checkpoint_name
+      ORDER BY created_at, checkpoint_name
+    `),
+    database.execute<{
+      wait_name: string;
+      mode: "relative" | "absolute";
+      duration_ms: string | null;
+      requested_wake_at: Date | string | null;
+      wake_at: Date | string;
+      attempt: number;
+      fence_token: string;
+      worker_id: string;
+      created_at: Date | string;
+    }>(sql`
+      SELECT wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt,
+             fence_token::text, worker_id, created_at
+        FROM workhorse.job_wait
+       WHERE job_id = ${id}
+       ORDER BY created_at, wait_name
     `),
     database.execute<{
       event_id: string;
@@ -1833,7 +1908,12 @@ export async function readDashboardJobDetail(
             runAt: toIso(job.run_at!),
             readyAt: toIsoOrNull(job.ready_at),
             workerId: job.worker_id,
+            fenceToken: job.fence_token,
+            acquiredAt: toIsoOrNull(job.acquired_at),
             heartbeatAt: toIsoOrNull(job.heartbeat_at),
+            expiresAt: toIsoOrNull(job.expires_at),
+            waitName: job.wait_name,
+            attemptStartedAt: toIsoOrNull(job.attempt_started_at),
             error: job.runtime_error,
           }
         : null,
@@ -1854,13 +1934,27 @@ export async function readDashboardJobDetail(
       workerId: row.worker_id,
       outcome: row.outcome,
       startedAt: toIso(row.started_at),
+      claimedAt: toIso(row.claimed_at),
       finishedAt: toIso(row.finished_at),
-      durationMs: Number(row.duration_ms),
+      durationMs: Number(row.execution_ms),
+      executionMs: Number(row.execution_ms),
+      elapsedMs: Number(row.elapsed_ms),
       error: row.error,
     })),
     checkpoints: checkpointRows.rows.map((row) => ({
       name: row.checkpoint_name,
       value: row.checkpoint_value,
+      attempt: row.attempt,
+      fenceToken: row.fence_token,
+      workerId: row.worker_id,
+      createdAt: toIso(row.created_at),
+    })),
+    waits: waitRows.rows.map((row) => ({
+      name: row.wait_name,
+      mode: row.mode,
+      durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
+      requestedWakeAt: toIsoOrNull(row.requested_wake_at),
+      wakeAt: toIso(row.wake_at),
       attempt: row.attempt,
       fenceToken: row.fence_token,
       workerId: row.worker_id,
