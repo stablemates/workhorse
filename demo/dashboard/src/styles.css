@@ -101,16 +101,8 @@ html[data-theme="workhorse"] .theme-switch .mantine-SegmentedControl-label[data-
   color: #0e1115;
 }
 
-html[data-theme="workhorse"] .workhorse-brand__mark {
-  box-shadow: 0 8px 22px rgb(0 0 0 / 35%);
-}
-
 html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
   filter: none;
-}
-
-html[data-mantine-color-scheme="dark"] .workhorse-brand__mark {
-  background: #0b0d10;
 }
 
 @media (max-width: 36em) {
