@@ -10,7 +10,7 @@ export function WorkhorseMark({ label = "Workhorse", ...props }: WorkhorseMarkPr
 
 export function WorkhorseBrand() {
   return (
-    <Group gap={10} wrap="nowrap" className="workhorse-brand">
+    <Group gap={6} wrap="nowrap" className="workhorse-brand">
       <Box className="workhorse-brand__mark" aria-hidden="true">
         <WorkhorseMark label="" w={38} h={38} />
       </Box>
