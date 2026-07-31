@@ -1178,7 +1178,7 @@ function TasksActivityChart({
           layout: "vertical",
           align: "left",
           verticalAlign: "middle",
-          width: 220,
+          width: 280,
           wrapperStyle: { paddingRight: 16, textAlign: "left" },
         }}
         styles={{
