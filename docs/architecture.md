@@ -36,6 +36,7 @@ erDiagram
   job ||--o| job_runtime : "live lifecycle"
   job ||--o| job_outcome : "terminal lifecycle"
   job ||--o{ job_checkpoint : "records restart boundaries"
+  job ||--o{ job_wait : "records timer boundaries"
   job ||--o{ job_event : "emits"
   job ||--o{ attempt_history : "closes attempts"
   schedule_definition ||--o{ schedule_occurrence : "fires"
@@ -59,6 +60,8 @@ erDiagram
     bigint sequence
     text worker_id
     timestamptz expires_at
+    text wait_name
+    timestamptz attempt_started_at
   }
   job_outcome {
     uuid job_id PK
@@ -73,6 +76,18 @@ erDiagram
     uuid job_id PK
     text checkpoint_name PK
     jsonb checkpoint_value
+    int attempt
+    bigint fence_token
+    text worker_id
+    timestamptz created_at
+  }
+  job_wait {
+    uuid job_id PK
+    text wait_name PK
+    text mode
+    bigint duration_ms
+    timestamptz requested_wake_at
+    timestamptz wake_at
     int attempt
     bigint fence_token
     text worker_id
@@ -105,11 +120,11 @@ Insert-only identity, routing, payload, retry budget, and acceptance time. Dispa
 
 The only mutable lifecycle relation. Its check constraint makes state-specific fields mutually exclusive:
 
-- `scheduled`: `run_at` is populated; ready and ownership fields are null
-- `ready`: `ready_at` and FIFO `sequence` are populated; ownership fields are null
-- `active`: worker, acquisition, heartbeat, expiry, and positive fence are populated; ready placement fields are null
+- `scheduled`: `run_at` is populated; ready and ownership fields are null; `wait_name` and `attempt_started_at` are either both null for enqueue/retry delay or both populated for a durable timer
+- `ready`: `ready_at` and FIFO `sequence` are populated; ownership fields and `wait_name` are null; a resumed timer may preserve `attempt_started_at`
+- `active`: worker, acquisition, heartbeat, expiry, positive fence, and logical `attempt_started_at` are populated; ready placement and `wait_name` are null
 
-Retry and recovery increment `current_attempt` while moving the same row back to ready or scheduled. Handler failures default to a SQL-owned, Sidekiq-inspired delay of `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds, where `count` is the zero-based retry count. The default 25-attempt budget produces a roughly 20-day retry window. An explicit caller delay still overrides the formula, including zero for immediate retry. Heartbeats update only the matching active generation.
+Retry and recovery increment `current_attempt` while moving the same row back to ready or scheduled. Named durable timer suspension preserves `current_attempt`, because waiting is successful control flow rather than failure; promotion and the next claim continue the same logical attempt with a new fence. Handler failures default to a SQL-owned, Sidekiq-inspired delay of `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds, where `count` is the zero-based retry count. The default 25-attempt budget produces a roughly 20-day retry window. An explicit caller delay still overrides the formula, including zero for immediate retry. Heartbeats update only the matching active generation.
 
 Selective indexes keep unrelated states out of each access path:
 
@@ -133,9 +148,15 @@ Insert-only named JSON results at explicit handler restart boundaries. The prima
 
 Values are limited to 1 MiB of PostgreSQL's canonical JSONB text representation, giving every language client one authoritative definition. Checkpoints intentionally have no independent retirement path because deleting a completed name while retaining a retryable job could repeat that step. They cascade only when the stable parent job identity is deleted, so future job-retention policy must account for checkpoint storage.
 
+### `job_wait`
+
+Insert-once named timer boundaries for a stable job identity. Relative sleeps store the first PostgreSQL-computed wake timestamp and are first-write-wins by name; absolute waits conflict if replay supplies a different target or changes mode. `schedule_wait_v1` locks and revalidates the active generation, then either returns an elapsed row or atomically moves runtime to scheduled without consuming an attempt. Rows retain attempt, fence, worker, and creation provenance and leave dispatch eligibility in `job_runtime`.
+
+Code after a wait resumes by replaying the handler from its entry point. Work before the wait must itself be idempotent or checkpointed. Names are limited to 200 characters, durations to 365 days, and one job to 1,000 timer names. Waits cascade only with the stable parent job identity.
+
 ### History
 
-`job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed attempt, including retry, lease expiry, success, and terminal failure. Both use Monday-aligned weekly range partitions with default fallbacks. Clean installation creates the current week plus four future weeks, and the housekeeping pass (`housekeep_v1`) continuously replenishes that horizon. Explicit week creation and completed-week retirement functions support operator-driven retention.
+`job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed logical attempt, including retry, lease expiry, success, and terminal failure. Its `started_at` preserves the logical attempt start across timer suspensions, while `claimed_at` identifies the final activation that closed it. Timer suspension itself emits events but does not close attempt history. Both history relations use Monday-aligned weekly range partitions with default fallbacks. Clean installation creates the current week plus four future weeks, and the housekeeping pass (`housekeep_v1`) continuously replenishes that horizon. Explicit week creation and completed-week retirement functions support operator-driven retention.
 
 ### Declarative schedules
 
@@ -154,6 +175,7 @@ stateDiagram-v2
   scheduled --> ready: promote
   ready --> active: claim
   active --> active: heartbeat
+  active --> scheduled: named durable wait, same attempt
   active --> ready: fail/recover, explicit immediate retry
   active --> scheduled: fail with default backoff / delayed retry
   active --> succeeded: complete
@@ -166,7 +188,7 @@ stateDiagram-v2
 
 ### Promotion
 
-`promote_v1` locks a bounded due set with `FOR UPDATE SKIP LOCKED`, updates those runtime rows from scheduled to ready, assigns new FIFO sequences, appends events, and emits a wake hint.
+`promote_v1` locks a bounded due set with `FOR UPDATE SKIP LOCKED`, updates those runtime rows from scheduled to ready, assigns new FIFO sequences, appends events, and emits a wake hint. Every promoted row emits `promoted`; its locked `due` CTE also carries any durable `wait_name` through the update so timer-backed rows append `wait_elapsed` before the marker is cleared.
 
 Production maintenance is worker-owned and split by cadence and failure domain into two entry points.
 
@@ -175,6 +197,12 @@ Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` 
 Each worker calls `housekeep_v1` at most once per configured `housekeepingIntervalMs` (default 60 seconds). Under the separate `workhorse:housekeeping` lock it replenishes the history-partition horizon and prunes old schedule-occurrence keys, so slow housekeeping can never starve promotion. Its phases run in exception subtransactions: a partition-repair failure is reported while pruning still commits, and vice versa.
 
 Both functions return one row per phase, `(phase, rows_affected, duration_ms, skipped_lock, error)`. The worker records this telemetry per loop, exposes it through `worker.maintenanceTelemetry()`, and forwards each row to the optional `onMaintenance` callback. Between passes a worker issues only the claim query.
+
+### Durable timer suspension
+
+`schedule_wait_v1` accepts either a relative bigint duration or an absolute timestamp, locks the exact active worker/fence generation, and rechecks lease expiry after acquiring the runtime lock. A first future target inserts `job_wait`, changes runtime to wait-marked scheduled state, clears ownership, and emits `wait_scheduled`. A first past-due target is still recorded but leaves runtime active and returns elapsed. Relative replay returns the first stored target even if later configuration supplies another duration; absolute target or mode changes conflict. Reaching an elapsed name emits `wait_replayed`.
+
+Suspension aborts the handler's cooperative signal and exits through private worker control flow, so the heartbeat stops and the worker slot is free for another claim. It does not call failure or completion and does not increment attempts. Normal promotion later makes the same logical attempt claimable with a new fence. Wake latency is bounded by maintenance cadence and worker availability, not by an exact wall-clock guarantee. Queue health reports the number of sleeping and overdue waits plus the next durable wake target.
 
 ### Claim
 

@@ -616,7 +616,7 @@ BEGIN
 
   INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
     VALUES (v_runtime.job_id, v_runtime.current_attempt, 'claimed',
-      jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence, 'expires_at', v_expires));
+      jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
   RETURN QUERY
     SELECT j.id, j.job_type, j.payload, v_runtime.current_attempt, j.max_attempts, v_fence, v_expires
       FROM workhorse.job j WHERE j.id = v_runtime.job_id;
@@ -720,7 +720,7 @@ BEGIN
       p_job_id,
       v_runtime.current_attempt,
       'checkpoint_saved',
-      jsonb_build_object('name', p_checkpoint_name, 'fence_token', p_fence_token)
+      jsonb_build_object('name', p_checkpoint_name, 'fence_token', p_fence_token::text)
     );
 
   RETURN QUERY VALUES (
@@ -826,7 +826,7 @@ BEGIN
           'stored_duration_ms', v_wait.duration_ms,
           'requested_wake_at', v_requested_target,
           'stored_wake_at', v_wait.wake_at,
-          'fence_token', p_fence_token
+          'fence_token', p_fence_token::text
         )
       );
     RETURN QUERY VALUES (
@@ -867,8 +867,9 @@ BEGIN
           'name', p_wait_name,
           'mode', v_mode,
           'wake_at', v_wait.wake_at,
-          'reason', 'already_due',
-          'fence_token', p_fence_token
+          'reason', 'due',
+          'immediate', true,
+          'fence_token', p_fence_token::text
         )
       );
     RETURN QUERY VALUES (
@@ -890,7 +891,16 @@ BEGIN
      AND runtime.fence_token = p_fence_token
      AND runtime.expires_at > clock_timestamp();
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'active runtime ownership changed while scheduling wait';
+    -- The lease can cross its deadline after the post-lock validation above while the immutable
+    -- row is being inserted. Remove that transaction-local row and preserve the public stale
+    -- result instead of leaking an implementation exception to the client.
+    DELETE FROM workhorse.job_wait stored
+     WHERE stored.job_id = p_job_id AND stored.wait_name = p_wait_name;
+    RETURN QUERY VALUES (
+      'stale'::text, NULL::text, NULL::text, NULL::bigint, NULL::timestamptz,
+      NULL::timestamptz, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
+    );
+    RETURN;
   END IF;
 
   INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
@@ -904,7 +914,7 @@ BEGIN
         'duration_ms', p_duration_ms,
         'requested_wake_at', p_wake_at,
         'wake_at', v_wait.wake_at,
-        'fence_token', p_fence_token
+        'fence_token', p_fence_token::text
       )
     );
   RETURN QUERY VALUES (
@@ -937,7 +947,7 @@ BEGIN
     v_runtime.attempt_started_at, v_runtime.acquired_at
   );
   INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-    VALUES (p_job_id, v_runtime.current_attempt, 'succeeded', jsonb_build_object('fence_token', p_fence_token));
+    VALUES (p_job_id, v_runtime.current_attempt, 'succeeded', jsonb_build_object('fence_token', p_fence_token::text));
   RETURN true;
 END;
 $$;
@@ -1072,7 +1082,7 @@ BEGIN
         'lease_expired', v_runtime.attempt_started_at, v_runtime.acquired_at, v_error);
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
       VALUES (v_runtime.job_id, v_runtime.current_attempt, 'lease_expired',
-        jsonb_build_object('fence_token', v_runtime.fence_token, 'next_state', v_state));
+        jsonb_build_object('fence_token', v_runtime.fence_token::text, 'next_state', v_state));
     v_count := v_count + 1;
   END LOOP;
   IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;

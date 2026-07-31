@@ -49,8 +49,9 @@ async function waitForJob(
   baseUrl: string,
   jobId: string,
   expectedState: "succeeded" | "failed",
+  pollAttempts = 100,
 ): Promise<Record<string, unknown>> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < pollAttempts; attempt += 1) {
     const response = await fetch(`${baseUrl}/jobs/${jobId}`);
     if (response.ok) {
       const body = (await response.json()) as { job: Record<string, unknown> };
@@ -169,6 +170,26 @@ try {
     );
   }
 
+  const timerResponse = await fetch(`${baseUrl}/demo/timers`, { method: "POST" });
+  if (timerResponse.status !== 202) {
+    throw new Error(`Durable timer request returned ${timerResponse.status}`);
+  }
+  const timer = (await timerResponse.json()) as { jobId: string; expectedAttempt: number };
+  const completedTimer = await waitForJob(baseUrl, timer.jobId, "succeeded", 400);
+  if (completedTimer.currentAttempt !== timer.expectedAttempt) {
+    throw new Error(
+      `Expected durable timer attempt ${timer.expectedAttempt}, received ${String(completedTimer.currentAttempt)}`,
+    );
+  }
+  const timerResult = completedTimer.result as
+    | { prepareCheckpointReused?: boolean; waitReplayed?: boolean }
+    | undefined;
+  if (timerResult?.prepareCheckpointReused !== true || timerResult.waitReplayed !== true) {
+    throw new Error(
+      `Durable timer did not replay persisted boundaries: ${JSON.stringify(timerResult)}`,
+    );
+  }
+
   const failureResponse = await fetch(`${baseUrl}/demo/failures`, { method: "POST" });
   if (failureResponse.status !== 202) {
     throw new Error(`Failure request returned ${failureResponse.status}`);
@@ -192,6 +213,7 @@ try {
     !tasksResponse.ok ||
     !tasksText.includes(order.jobId) ||
     !tasksText.includes(retry.jobId) ||
+    !tasksText.includes(timer.jobId) ||
     !tasksText.includes(failure.jobId) ||
     !cronResponse.ok ||
     !cronText.includes("workhorse-demo")
@@ -205,6 +227,7 @@ try {
       dashboard: true,
       orderState: completedOrder.state,
       retryAttempt: completedRetry.currentAttempt,
+      durableTimerAttempt: completedTimer.currentAttempt,
       failureState: completedFailure.state,
       recurringSchedule: true,
     })}`,

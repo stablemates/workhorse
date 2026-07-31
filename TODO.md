@@ -1,6 +1,6 @@
 # Future feature roadmap
 
-This roadmap starts from the schema version 2 validation MVP described in
+This roadmap starts from the schema version 7 validation MVP described in
 [`docs/features.md`](docs/features.md). Items are ordered by product risk and dependency, not by
 feature visibility. A feature is complete only when its SQL contract, TypeScript API, integration
 tests, operational diagnostics, documentation, and benchmark impact are addressed.
@@ -241,6 +241,20 @@ understandable, installable, and useful.
       coalesces overlapping same-name calls.
 - [x] Reject repeated names with materially different values and document the external-effect crash
       window without making an exactly-once claim.
+
+### [x] P1-11 Named durable timer waits
+
+**Depends on:** P1-10
+
+- [x] Persist immutable relative or absolute timer boundaries keyed by stable job and wait names.
+- [x] Fence scheduling against the exact active, unexpired ownership generation and atomically release
+      the lease into the existing scheduled index.
+- [x] Resume in the same logical attempt with a new fence, one final attempt-history row, and explicit
+      scheduled, elapsed, and replay lifecycle events.
+- [x] Expose Queue reads plus `context.sleep`, `sleepUntil`, and `getWait` with typed conflict, lease,
+      and per-job limit failures.
+- [x] Bound names, durations, future horizons, and retained waits, and document restart-from-entry
+      semantics without claiming continuation or workflow persistence.
 
 ## P2: operator and ecosystem experience
 

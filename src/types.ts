@@ -108,6 +108,12 @@ export interface QueueHealth {
   counts: Record<JobState, number>;
   readyDepth: number;
   scheduledDepth: number;
+  /** Scheduled runtimes currently suspended at a named durable timer boundary. */
+  sleepingJobs: number;
+  /** Durable timer runtimes whose not-before target has passed but remain unpromoted. */
+  overdueWaits: number;
+  /** Earliest not-before target among currently suspended durable timers. */
+  nextWakeAt: Date | null;
   activeLeases: number;
   expiredLeases: number;
   oldestReadyAgeMs: number | null;

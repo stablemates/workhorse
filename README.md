@@ -22,6 +22,7 @@ The current implementation remains an evidence-first validation release rather t
 - fenced heartbeat, completion, retry, and expired-lease recovery;
 - append-only, time-partitioned lifecycle events and finalized attempts;
 - immutable named handler checkpoints that survive retry and are fenced against stale workers;
+- named durable timer waits that release the worker lease and restart in the same logical attempt;
 - namespaced declarative recurring jobs synchronized into the target database during deployment;
 - worker-owned in-process cron scheduling with advisory-lock coordination and SQL occurrence deduplication;
 - centralized promotion and lease recovery off the worker claim hot path;
@@ -128,13 +129,17 @@ const worker = new Worker(queue, {
   workerId: "email-1",
   // This worker also evaluates and fires this namespace's recurring schedules.
   scheduleNamespaces: ["billing-production"],
-}).handle("email", async ({ to }, { checkpoint }) => {
+}).handle("email", async ({ to }, { checkpoint, sleep }) => {
   const delivery = await checkpoint("provider-delivery", async () => {
-    // The checkpoint prevents this completed step from running again after a later handler failure.
+    // The checkpoint prevents this completed step from running again after a later restart.
     // A crash between the external effect and checkpoint commit is still possible, so the provider
     // call must use a stable idempotency key.
     return { deliveredTo: to };
   });
+
+  // This commits a named PostgreSQL timer, releases the lease and worker slot, and restarts the
+  // handler after promotion. The provider checkpoint is replayed rather than executed again.
+  await sleep("delivery-observation-window", 60_000);
   return delivery;
 });
 
@@ -142,6 +147,11 @@ await worker.runOnce();
 ```
 
 To enqueue atomically with application writes, pass the active `PoolClient` as the fourth argument to `enqueue`.
+
+Durable waits are not exact-time alarms. The stored target is a not-before boundary; promotion cadence,
+queue pause, worker availability, and database downtime can delay the next claim. The default
+one-second maintenance cadence makes sub-second durable waits inefficient. Use
+`context.sleepUntil(name, date)` for an immutable absolute target.
 
 ### Drizzle and Hono packages
 
@@ -193,7 +203,9 @@ Follow the complete [benchmark runbook](docs/benchmarking.md) before running or 
 - Accepted jobs are durable in PostgreSQL.
 - Handlers execute outside database transactions and are **at least once**.
 - Only the current unexpired worker/fence pair can heartbeat, complete, or fail an attempt.
-- Only that owner can save a checkpoint; checkpoint names are immutable and survive later attempts.
+- Only that owner can save a checkpoint or schedule a durable wait; both names are immutable and survive handler restarts.
+- A durable wait clears active ownership, consumes no retry attempt, and restarts the handler from its entry point after due promotion.
+- Code before a wait can execute again. Put completed external or expensive work behind a checkpoint or another idempotency boundary.
 - Recovery closes an expired attempt immutably and creates a new attempt.
 - A stale worker cannot commit queue completion after recovery.
 - PostgreSQL cannot make HTTP calls, emails, payments, or other external effects exactly once. Use stable external idempotency keys, an outbox/inbox, or compensation.

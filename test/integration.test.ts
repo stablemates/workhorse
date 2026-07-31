@@ -1259,7 +1259,7 @@ describe("live-runtime queue protocol", () => {
       requested_duration_ms: 30_000,
       stored_duration_ms: 30,
       stored_wake_at: expect.any(String),
-      fence_token: Number(continuation!.fenceToken),
+      fence_token: continuation!.fenceToken.toString(),
     });
     expect(new Date(String(event.rows[0]!.details.stored_wake_at))).toEqual(first.wait.wakeAt);
   });
@@ -1393,7 +1393,8 @@ describe("live-runtime queue protocol", () => {
     expect(event.rows[0]!.details).toMatchObject({
       name: "already-open",
       mode: "absolute",
-      reason: "already_due",
+      reason: "due",
+      immediate: true,
       wake_at: expect.any(String),
     });
     expect(new Date(String(event.rows[0]!.details.wake_at))).toEqual(target);
@@ -1467,6 +1468,41 @@ describe("live-runtime queue protocol", () => {
     } finally {
       await blocker.query("ROLLBACK").catch(() => undefined);
       blocker.release();
+    }
+  });
+
+  it("returns typed stale when the wait lease expires during the suspension transition", async () => {
+    const id = await queue.enqueue("wait-transition-expiry", {});
+    const job = await queue.claim("wait-transition-worker", { leaseMs: 250 });
+
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION workhorse.test_delay_wait_insert()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        PERFORM pg_sleep(0.4);
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER test_delay_wait_insert
+      BEFORE INSERT ON workhorse.job_wait
+      FOR EACH ROW EXECUTE FUNCTION workhorse.test_delay_wait_insert();
+    `);
+
+    try {
+      await expect(
+        queue.scheduleWait(job!, "wait-transition-worker", "expired-during-transition", {
+          durationMs: 1_000,
+        }),
+      ).rejects.toMatchObject({ name: "WaitLeaseLostError" });
+      await expect(queue.getWait(id, "expired-during-transition")).resolves.toBeNull();
+      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active" });
+    } finally {
+      await pool.query(`
+        DROP TRIGGER IF EXISTS test_delay_wait_insert ON workhorse.job_wait;
+        DROP FUNCTION IF EXISTS workhorse.test_delay_wait_insert();
+      `);
     }
   });
 
@@ -2089,12 +2125,21 @@ describe("live-runtime queue protocol", () => {
   });
 
   it("reports queue and PostgreSQL health", async () => {
+    const waitingId = await queue.enqueue("waiting", {});
+    const waiting = await queue.claim("health-worker");
+    expect(waiting?.id).toBe(waitingId);
+    const scheduledWait = await queue.scheduleWait(waiting!, "health-worker", "health-window", {
+      durationMs: 60_000,
+    });
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
     expect(health.schemaVersion).toBe(7);
     expect(health.readyDepth).toBe(1);
-    expect(health.scheduledDepth).toBe(1);
+    expect(health.scheduledDepth).toBe(2);
+    expect(health.sleepingJobs).toBe(1);
+    expect(health.overdueWaits).toBe(0);
+    expect(health.nextWakeAt).toEqual(scheduledWait.wait.wakeAt);
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
     expect(health.lockWaitCount).toBeGreaterThanOrEqual(0);
     expect(health.notificationQueueUsage).toBeGreaterThanOrEqual(0);
