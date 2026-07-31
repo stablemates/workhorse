@@ -3,7 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#1c1c1e" />
+    <meta name="theme-color" content="#090b0e" />
+    <link rel="icon" type="image/png" href="/brand/workhorse-mark.png" />
+    <script>
+      (() => {
+        const key = "workhorse-theme-scheme";
+        const allowed = new Set(["light", "dark", "workhorse"]);
+        let scheme;
+
+        try {
+          const stored = localStorage.getItem(key);
+          scheme = allowed.has(stored)
+            ? stored
+            : matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+        } catch {
+          scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+
+        document.documentElement.dataset.theme = scheme;
+        document.documentElement.dataset.mantineColorScheme = scheme === "light" ? "light" : "dark";
+        document.documentElement.style.colorScheme = scheme === "light" ? "light" : "dark";
+      })();
+    </script>
     <title>Workhorse Operations</title>
   </head>
   <body>

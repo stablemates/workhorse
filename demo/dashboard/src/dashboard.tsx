@@ -33,7 +33,6 @@ import {
 import { BarChart } from "@mantine/charts";
 import { useDisclosure } from "@mantine/hooks";
 import {
-  ActivityIcon,
   ArrowCounterClockwise,
   ArrowClockwise,
   CalendarDots,
@@ -75,6 +74,7 @@ import type {
   DashboardWorkersPage,
 } from "../../src/dashboard";
 import { rpcClient } from "../lib/rpc";
+import { WorkhorseBrand } from "./brand";
 import {
   parseTaskLocation,
   taskLocationHref,
@@ -82,6 +82,7 @@ import {
   type TaskLocationState,
   type TaskPageSize,
 } from "./task-location";
+import { ThemeSchemeSwitch } from "./theme";
 
 type ActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 const activityPeriods: ActivityPeriod[] = ["15m", "1h", "6h", "24h", "7d"];
@@ -3222,19 +3223,10 @@ export function Dashboard() {
               size="sm"
               aria-label="Toggle navigation"
             />
-            <ThemeIcon size="lg" radius="md" color="dark">
-              <ActivityIcon size={20} weight="bold" />
-            </ThemeIcon>
-            <Box>
-              <Text fw={750} lh={1.1}>
-                Workhorse
-              </Text>
-              <Text c="dimmed" size="xs">
-                Live queue demo
-              </Text>
-            </Box>
+            <WorkhorseBrand />
           </Group>
           <Group gap="sm" wrap="nowrap">
+            <ThemeSchemeSwitch />
             {environment ? (
               <Badge
                 color={environmentColor(environment)}
