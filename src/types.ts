@@ -31,6 +31,8 @@ export interface EnqueueRequest<TPayload extends Json = Json> {
  * identity allocation, and notification work inside one PostgreSQL transaction.
  */
 export const MAX_ENQUEUE_BATCH_SIZE = 1_000;
+/** Maximum PostgreSQL canonical JSONB text size accepted for one durable checkpoint value. */
+export const MAX_CHECKPOINT_VALUE_BYTES = 1_048_576;
 
 export interface ClaimedJob<TPayload = Json> {
   /** Stable job identity across all attempts. */
@@ -44,6 +46,19 @@ export interface ClaimedJob<TPayload = Json> {
   fenceToken: bigint;
   /** Client-visible expiry snapshot. PostgreSQL remains authoritative. */
   leaseExpiresAt: Date;
+}
+
+/** One immutable named result persisted at an explicit handler restart boundary. */
+export interface JobCheckpoint<TValue extends Json = Json> {
+  jobId: string;
+  name: string;
+  value: TValue;
+  /** Attempt that first persisted this checkpoint. */
+  attempt: number;
+  /** Ownership generation that authorized the checkpoint write. */
+  fenceToken: bigint;
+  workerId: string;
+  createdAt: Date;
 }
 
 export type JobState = "scheduled" | "ready" | "active" | "succeeded" | "failed";

@@ -3,6 +3,7 @@ import type {
   ClaimedJob,
   EnqueueOptions,
   EnqueueRequest,
+  JobCheckpoint,
   JobSnapshot,
   Json,
   Queryable,
@@ -56,6 +57,20 @@ type ClaimRow = {
   lease_expires_at: Date;
 };
 
+type CheckpointRow = {
+  job_id: string;
+  checkpoint_name: string;
+  checkpoint_value: Json;
+  attempt: number;
+  fence_token: string;
+  worker_id: string;
+  created_at: Date;
+};
+
+type SaveCheckpointRow = Omit<CheckpointRow, "job_id" | "checkpoint_name"> & {
+  status: "saved" | "existing" | "conflict" | "stale";
+};
+
 type MaintenancePhaseRow = {
   phase: MaintenancePhase;
   rows_affected: number;
@@ -80,6 +95,34 @@ function errorEnvelope(error: unknown): Json {
     return { name: error.name, message: error.message, stack: error.stack ?? null };
   }
   return { name: "NonErrorThrown", message: String(error) };
+}
+
+function checkpointRecord<TValue extends Json>(row: CheckpointRow): JobCheckpoint<TValue> {
+  return {
+    jobId: row.job_id,
+    name: row.checkpoint_name,
+    value: row.checkpoint_value as TValue,
+    attempt: row.attempt,
+    fenceToken: BigInt(row.fence_token),
+    workerId: row.worker_id,
+    createdAt: row.created_at,
+  };
+}
+
+export class CheckpointLeaseLostError extends Error {
+  constructor(jobId: string, checkpointName: string) {
+    super(
+      `Cannot save checkpoint ${checkpointName} for job ${jobId} because the lease is stale or expired`,
+    );
+    this.name = "CheckpointLeaseLostError";
+  }
+}
+
+export class CheckpointConflictError extends Error {
+  constructor(jobId: string, checkpointName: string) {
+    super(`Checkpoint ${checkpointName} for job ${jobId} already exists with a different value`);
+    this.name = "CheckpointConflictError";
+  }
 }
 
 /**
@@ -279,6 +322,49 @@ export class Queue {
       [job.id, workerId, job.fenceToken.toString(), leaseMs],
     );
     return result.rows[0]!.accepted;
+  }
+
+  async getCheckpoint<TValue extends Json = Json>(
+    jobId: string,
+    name: string,
+  ): Promise<JobCheckpoint<TValue> | null> {
+    const result = await this.database.query<CheckpointRow>(
+      `SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
+              worker_id, created_at
+         FROM workhorse.job_checkpoint
+        WHERE job_id = $1 AND checkpoint_name = $2`,
+      [jobId, name],
+    );
+    const row = result.rows[0];
+    return row ? checkpointRecord<TValue>(row) : null;
+  }
+
+  async saveCheckpoint<TValue extends Json>(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+    value: TValue,
+  ): Promise<JobCheckpoint<TValue>> {
+    const encodedValue = JSON.stringify(value);
+    if (encodedValue === undefined) {
+      throw new TypeError("Checkpoint value must be JSON serializable");
+    }
+    const result = await this.database.query<SaveCheckpointRow>(
+      `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at
+         FROM workhorse.save_checkpoint_v1($1, $2, $3, $4, $5::jsonb)`,
+      [job.id, workerId, job.fenceToken.toString(), name, encodedValue],
+    );
+    const row = result.rows[0]!;
+    if (row.status === "stale") throw new CheckpointLeaseLostError(job.id, name);
+    if (row.status === "conflict") throw new CheckpointConflictError(job.id, name);
+    if (row.status !== "saved" && row.status !== "existing") {
+      throw new Error(`Unexpected checkpoint status: ${String(row.status)}`);
+    }
+    return checkpointRecord<TValue>({
+      ...row,
+      job_id: job.id,
+      checkpoint_name: name,
+    });
   }
 
   async complete<TResult extends Json>(

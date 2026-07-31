@@ -229,6 +229,19 @@ understandable, installable, and useful.
 - [ ] Define update frequency and size limits to control write amplification.
 - [ ] Expose latest progress through lookup APIs and telemetry.
 
+### [x] P1-10 Explicit durable checkpoints
+
+**Depends on:** none
+
+- [x] Persist immutable named JSON results for a stable job identity across retries and terminal
+      materialization.
+- [x] Fence checkpoint writes against the exact active, unexpired worker ownership generation.
+- [x] Preserve attempt, fence, worker, and creation-time provenance and append a lifecycle event.
+- [x] Expose low-level Queue read/write methods and a handler helper that reuses completed names and
+      coalesces overlapping same-name calls.
+- [x] Reject repeated names with materially different values and document the external-effect crash
+      window without making an exactly-once claim.
+
 ## P2: operator and ecosystem experience
 
 ### [ ] P2-01 Query and listing API

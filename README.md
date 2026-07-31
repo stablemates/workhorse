@@ -21,6 +21,7 @@ The current implementation remains an evidence-first validation release rather t
 - `FOR UPDATE SKIP LOCKED` claims with monotonically increasing fence tokens;
 - fenced heartbeat, completion, retry, and expired-lease recovery;
 - append-only, time-partitioned lifecycle events and finalized attempts;
+- immutable named handler checkpoints that survive retry and are fenced against stale workers;
 - namespaced declarative recurring jobs synchronized into the target database during deployment;
 - worker-owned in-process cron scheduling with advisory-lock coordination and SQL occurrence deduplication;
 - centralized promotion and lease recovery off the worker claim hot path;
@@ -127,9 +128,14 @@ const worker = new Worker(queue, {
   workerId: "email-1",
   // This worker also evaluates and fires this namespace's recurring schedules.
   scheduleNamespaces: ["billing-production"],
-}).handle("email", async ({ to }) => {
-  // External effects remain at least once. Use a provider idempotency key.
-  return { deliveredTo: to };
+}).handle("email", async ({ to }, { checkpoint }) => {
+  const delivery = await checkpoint("provider-delivery", async () => {
+    // The checkpoint prevents this completed step from running again after a later handler failure.
+    // A crash between the external effect and checkpoint commit is still possible, so the provider
+    // call must use a stable idempotency key.
+    return { deliveredTo: to };
+  });
+  return delivery;
 });
 
 await worker.runOnce();
@@ -187,6 +193,7 @@ Follow the complete [benchmark runbook](docs/benchmarking.md) before running or 
 - Accepted jobs are durable in PostgreSQL.
 - Handlers execute outside database transactions and are **at least once**.
 - Only the current unexpired worker/fence pair can heartbeat, complete, or fail an attempt.
+- Only that owner can save a checkpoint; checkpoint names are immutable and survive later attempts.
 - Recovery closes an expired attempt immutably and creates a new attempt.
 - A stale worker cannot commit queue completion after recovery.
 - PostgreSQL cannot make HTTP calls, emails, payments, or other external effects exactly once. Use stable external idempotency keys, an outbox/inbox, or compensation.

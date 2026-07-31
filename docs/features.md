@@ -1,6 +1,6 @@
 # Feature support matrix
 
-This is the authoritative implementation snapshot for schema version 5. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
+This is the authoritative implementation snapshot for schema version 6. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
 
 ## At a glance
 
@@ -15,6 +15,7 @@ This is the authoritative implementation snapshot for schema version 5. “Suppo
 | Drizzle provider and Hono lifecycle package    | Demo-only operations dashboard         | Online production migration guarantees         |
 | Live runtime plus immutable outcomes           | Clean-install schema only              |                                                |
 | Append-only events and attempt history         |                                        |                                                |
+| Immutable fenced handler checkpoints           |                                        |                                                |
 
 ## Core job and dispatch
 
@@ -56,6 +57,7 @@ This is the authoritative implementation snapshot for schema version 5. “Suppo
 | Immutable terminal materialization | Supported     | Terminal jobs occupy `job_outcome`, not dispatch indexes.                                                                                                                                                                                         |
 | Dead-letter queue and redrive      | Not supported | Failed outcomes are queryable but no DLQ projection or redrive API exists.                                                                                                                                                                        |
 | Backoff policy                     | Supported     | SQL applies Sidekiq-inspired quartic backoff with jitter by default; callers can explicitly override the delay.                                                                                                                                   |
+| Explicit durable checkpoints       | Supported     | Handlers can persist immutable named JSON results of at most 1 MiB through `context.checkpoint`; completed names are reused by later attempts and writes require the exact unexpired worker/fence generation.                                     |
 
 ## History, reads, and observability
 
@@ -65,9 +67,10 @@ This is the authoritative implementation snapshot for schema version 5. “Suppo
 | Closed attempt history             | Supported     | Success, terminal failure, retry, and lease expiry append immutable `attempt_history`.                                                                                          |
 | Weekly history partitions          | Supported     | Monday-aligned partitions are precreated four weeks ahead and replenished by housekeeping, with explicit create and completed-week retirement functions plus default fallbacks. |
 | Current/terminal lookup            | Supported     | `Queue.getJob(id)` coalesces the sole live runtime or terminal outcome into the stable `JobSnapshot` shape.                                                                     |
-| Queue health                       | Supported     | Reports schema version 5; live and terminal state counts; runtime depths; expired active rows; oldest ready age; relation and PostgreSQL diagnostics.                           |
+| Queue health                       | Supported     | Reports schema version 6; live and terminal state counts; runtime depths; expired active rows; oldest ready age; relation and PostgreSQL diagnostics.                           |
 | Crash-boundary harness             | Supported     | Worker failpoints model process loss before and after handler/completion boundaries.                                                                                            |
 | Job/outcome retention              | Not supported | Immutable identity and terminal outcomes are not automatically archived or deleted.                                                                                             |
+| Checkpoint retention               | Partial       | Checkpoints remain with the stable job identity and are removed only when that parent job is deleted; deleting them independently could make a retry repeat a completed step.   |
 | Consistent health snapshot         | Partial       | Diagnostics are independent read-only queries and statistics can lag.                                                                                                           |
 | OpenTelemetry and metrics endpoint | Not supported | Consumers must instrument calls externally.                                                                                                                                     |
 
@@ -79,7 +82,7 @@ This is the authoritative implementation snapshot for schema version 5. “Suppo
 | Drizzle ORM provider                  | Supported     | Separate package adapts node-postgres Drizzle databases and caller-owned transactions without adding Drizzle to core.                                                                                            |
 | Hono lifecycle integration            | Supported     | Separate package provides typed middleware, explicit worker startup, and idempotent graceful Node server shutdown.                                                                                               |
 | TypeScript schedule synchronization   | Supported     | Deploy-time sync reconciles owned schedule definitions; status APIs expose occurrences and recent fires.                                                                                                         |
-| Versioned SQL API                     | Supported     | Existing `_v1` names and call shapes remain compatible; trailing defaults extend enqueue without breaking existing callers. Installed schema version is 5.                                                       |
+| Versioned SQL API                     | Supported     | Existing `_v1` names and call shapes remain compatible; trailing defaults extend enqueue without breaking existing callers. Installed schema version is 6.                                                       |
 | Graceful worker stop                  | Supported     | Stop prevents further claims and waits for in-flight work.                                                                                                                                                       |
 | Worker pause/resume                   | Supported     | `Worker.pause()`/`resume()` stop new claims while active jobs finish and heartbeats continue; demo exposes audited per-worker toggles.                                                                           |
 | Worker concurrency                    | Partial       | One worker runs one handler at a time; scale with multiple instances.                                                                                                                                            |
@@ -88,5 +91,5 @@ This is the authoritative implementation snapshot for schema version 5. “Suppo
 | Compatibility write views             | Not supported | Legacy write relations are intentionally absent to avoid dual-write semantics.                                                                                                                                   |
 | Exactly-once effects                  | Not supported | Delivery is at least once; applications need idempotency or outbox/inbox patterns.                                                                                                                               |
 | Cron                                  | Supported     | Workers parse cron in process on plain PostgreSQL; definitions enqueue typed jobs, not SQL.                                                                                                                      |
-| Workflows, dependencies, cancellation | Not supported | No stable contracts exist.                                                                                                                                                                                       |
+| Workflows, dependencies, cancellation | Not supported | Named checkpoints provide explicit restart boundaries, but no workflow graph, durable wait, signal, dependency, or cancellation contract exists.                                                                 |
 | UI, RBAC, multi-tenancy               | Partial       | The demo ships an operations dashboard (tasks, activity, schedules, queues, workers, system health) with audited local mutations; core exposes database and TypeScript protocols only. No RBAC or multi-tenancy. |

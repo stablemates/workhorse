@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 3 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema now uses the weekly history lifecycle functions documented below.
+This is the compact schema version 6 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema includes explicit durable checkpoints and the weekly history lifecycle functions documented below.
 
 ## Storage model
 
@@ -8,6 +8,7 @@ This is the compact schema version 3 protocol reference. Public TypeScript `Queu
 | --------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------- |
 | `job`                 | Immutable identity, queue, type, payload, retry limit | Insert once                                                             |
 | `job_runtime`         | Sole live row for scheduled, ready, or active work    | Insert at enqueue; CAS-update while live; delete at terminal transition |
+| `job_checkpoint`      | Immutable named handler restart boundaries            | Insert once per job and checkpoint name under a fenced active lease     |
 | `job_outcome`         | Terminal success or failure                           | Insert once after runtime deletion                                      |
 | `job_event`           | Lifecycle audit                                       | Append-only, weekly range partitions                                    |
 | `attempt_history`     | Closed attempt records                                | Append-only, weekly range partitions                                    |
@@ -30,12 +31,13 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 2. `promote_v1` locks a bounded due set with `SKIP LOCKED`, updates scheduled runtime rows to ready, assigns sequences, and appends events.
 3. `claim_v1` locks one FIFO ready row and performs one runtime state update to active with worker, fence, heartbeat, and expiry data, then appends the claim event.
 4. `heartbeat_v1` CAS-updates only the matching unexpired active runtime.
-5. `fail_v1` locks the matching active generation. Retry CAS-updates the same runtime, increments attempt, and schedules Sidekiq-inspired quartic backoff with jitter unless the caller explicitly overrides the delay. Exhaustion deletes runtime and inserts failed outcome.
-6. `recover_expired_v1` locks expired active runtimes in bounded batches and performs the same attempt increment/requeue or terminal delete/outcome transition with observed fence and expiry guards.
-7. `complete_v1` deletes only the matching unexpired active runtime and inserts succeeded outcome, closed attempt history, and event atomically.
-8. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
-9. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID.
-10. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. `housekeep_v1` replenishes the history-partition horizon and prunes old occurrence keys under the separate `workhorse:housekeeping` lock, with each phase isolated in an exception subtransaction. Both return one telemetry row per phase: `(phase, rows_affected, duration_ms, skipped_lock, error)`.
+5. `save_checkpoint_v1` locks the matching unexpired active generation and inserts one immutable named JSON result plus a `checkpoint_saved` event. Repeated equal values return the stored checkpoint; different values conflict; stale owners are rejected.
+6. `fail_v1` locks the matching active generation. Retry CAS-updates the same runtime, increments attempt, and schedules Sidekiq-inspired quartic backoff with jitter unless the caller explicitly overrides the delay. Exhaustion deletes runtime and inserts failed outcome.
+7. `recover_expired_v1` locks expired active runtimes in bounded batches and performs the same attempt increment/requeue or terminal delete/outcome transition with observed fence and expiry guards.
+8. `complete_v1` deletes only the matching unexpired active runtime and inserts succeeded outcome, closed attempt history, and event atomically.
+9. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
+10. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID.
+11. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. `housekeep_v1` replenishes the history-partition horizon and prunes old occurrence keys under the separate `workhorse:housekeeping` lock, with each phase isolated in an exception subtransaction. Both return one telemetry row per phase: `(phase, rows_affected, duration_ms, skipped_lock, error)`.
 
 Every closed attempt has one immutable `attempt_history` row. Every lifecycle boundary appends a `job_event`.
 
@@ -60,6 +62,10 @@ A claim is owned only while `job_runtime.state = 'active'` and job ID, worker ID
 Worker failpoints at `afterClaim`, `beforeHandler`, `afterHandler`, `beforeComplete`, and `afterComplete` model process loss. Pre-completion crashes leave active runtime for recovery. An `afterComplete` crash leaves immutable succeeded outcome and closed attempt history.
 
 Delivery is at least once. External effects require application-level idempotency.
+
+`HandlerContext.checkpoint(name, operation)` first returns an existing immutable value when present. Otherwise it runs the operation and saves its JSON result under the active fence. Concurrent calls for the same name within one handler are coalesced. A crash after an external effect but before PostgreSQL commits the checkpoint can still repeat that effect, so checkpoints do not replace provider idempotency, outbox/inbox, or compensation.
+
+Checkpoint values are limited to 1 MiB of PostgreSQL's canonical JSONB text representation. They follow the parent job identity's retention lifecycle and cannot be retired independently without risking repetition of a previously completed step. A checkpoint miss proves only that PostgreSQL has no committed result for that name; it does not prove an external operation never ran.
 
 ## Worker-owned scheduling contract
 

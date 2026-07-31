@@ -5,6 +5,7 @@ import {
   InjectedCrashError,
   installSchema,
   type MaintenancePhaseResult,
+  MAX_CHECKPOINT_VALUE_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
   Queue,
   Worker,
@@ -24,7 +25,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
     workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.queue_control, workhorse.job_outcome, workhorse.job_runtime,
+    workhorse.queue_control, workhorse.job_checkpoint, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
 });
@@ -34,11 +35,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v5 without compatibility write tables", async () => {
+  it("installs schema v6 without compatibility write tables", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(5);
+    expect(version.rows[0]?.version).toBe(6);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -455,7 +456,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v5 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v6 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -720,9 +721,10 @@ describe("live-runtime queue protocol", () => {
       handledBy.push(`running:${sequence}`);
       return { sequence };
     });
-    const initialIds = await Promise.all(
-      [1, 2, 3].map((sequence) => queue.enqueue("pause-control", { sequence })),
-    );
+    const initialIds: string[] = [];
+    for (const sequence of [1, 2, 3]) {
+      initialIds.push(await queue.enqueue("pause-control", { sequence }));
+    }
 
     pausedWorker.pause();
     expect(pausedWorker.isPaused()).toBe(true);
@@ -953,6 +955,206 @@ describe("live-runtime queue protocol", () => {
     expect(await queue.heartbeat(job!, "worker-b", 1_000)).toBe(false);
   });
 
+  it("persists immutable checkpoints with ownership provenance", async () => {
+    const id = await queue.enqueue("checkpointed", { orderId: "order-1" });
+    const job = await queue.claim("worker-a");
+
+    const saved = await queue.saveCheckpoint(job!, "worker-a", "payment-authorized", {
+      authorizationId: "auth-1",
+    });
+    expect(saved).toMatchObject({
+      jobId: id,
+      name: "payment-authorized",
+      value: { authorizationId: "auth-1" },
+      attempt: 1,
+      fenceToken: job!.fenceToken,
+      workerId: "worker-a",
+    });
+    await expect(queue.getCheckpoint(id, "payment-authorized")).resolves.toEqual(saved);
+    await expect(
+      queue.saveCheckpoint(job!, "worker-a", "nullable-result", null),
+    ).resolves.toMatchObject({
+      name: "nullable-result",
+      value: null,
+    });
+
+    const repeated = await queue.saveCheckpoint(job!, "worker-a", "payment-authorized", {
+      authorizationId: "auth-1",
+    });
+    expect(repeated).toEqual(saved);
+    await expect(
+      queue.saveCheckpoint(job!, "worker-a", "payment-authorized", {
+        authorizationId: "auth-2",
+      }),
+    ).rejects.toThrow(/different value/);
+
+    expect(await queue.complete(job!, "worker-a", { ok: true })).toBe(true);
+    await expect(queue.getCheckpoint(id, "payment-authorized")).resolves.toEqual(saved);
+    const events = await pool.query<{ event_type: string }>(
+      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
+      [id],
+    );
+    expect(events.rows.map((row) => row.event_type)).toEqual([
+      "enqueued",
+      "claimed",
+      "checkpoint_saved",
+      "checkpoint_saved",
+      "succeeded",
+    ]);
+  });
+
+  it("bounds checkpoint values before durable writes", async () => {
+    const id = await queue.enqueue("checkpoint-size", {});
+    const job = await queue.claim("worker-a");
+
+    await expect(
+      queue.saveCheckpoint(job!, "worker-a", "oversized", {
+        data: "x".repeat(MAX_CHECKPOINT_VALUE_BYTES + 1),
+      }),
+    ).rejects.toThrow(/at most 1048576 bytes/);
+    await expect(
+      pool.query(
+        `SELECT * FROM workhorse.save_checkpoint_v1(
+          $1, $2, $3, 'oversized-sql', to_jsonb(repeat('x', $4))
+        )`,
+        [id, "worker-a", job!.fenceToken.toString(), MAX_CHECKPOINT_VALUE_BYTES + 1],
+      ),
+    ).rejects.toThrow(/at most 1048576 bytes/);
+    await expect(queue.getCheckpoint(id, "oversized")).resolves.toBeNull();
+    await expect(queue.getCheckpoint(id, "oversized-sql")).resolves.toBeNull();
+  });
+
+  it("rejects checkpoint writes from a stale ownership generation", async () => {
+    const id = await queue.enqueue("checkpointed", {}, { maxAttempts: 2 });
+    const stale = await queue.claim("worker-a", { leaseMs: 100 });
+    await sleep(130);
+    expect(await queue.recoverExpired()).toBe(1);
+    const current = await queue.claim("worker-b");
+
+    await expect(
+      queue.saveCheckpoint(stale!, "worker-a", "stale-step", { shouldNotPersist: true }),
+    ).rejects.toThrow(/lease is stale or expired/);
+    await expect(queue.getCheckpoint(id, "stale-step")).resolves.toBeNull();
+    await expect(
+      queue.saveCheckpoint(current!, "worker-b", "current-step", { persisted: true }),
+    ).resolves.toMatchObject({ name: "current-step", attempt: 2, workerId: "worker-b" });
+  });
+
+  it("serializes checkpoint writes against a concurrent retry transition", async () => {
+    const id = await queue.enqueue("checkpoint-race", {}, { maxAttempts: 2 });
+    const job = await queue.claim("worker-a");
+    const transition = await pool.connect();
+
+    try {
+      await transition.query("BEGIN");
+      await transition.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [
+        id,
+      ]);
+      const saving = queue.saveCheckpoint(job!, "worker-a", "racing-step", { persisted: true });
+      const rejection = saving.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await sleep(20);
+      await transition.query("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, 0) AS state", [
+        id,
+        "worker-a",
+        job!.fenceToken.toString(),
+        JSON.stringify({ message: "retry" }),
+      ]);
+      await transition.query("COMMIT");
+
+      await expect(rejection).resolves.toMatchObject({
+        name: "CheckpointLeaseLostError",
+        message: expect.stringMatching(/lease is stale or expired/),
+      });
+      await expect(queue.getCheckpoint(id, "racing-step")).resolves.toBeNull();
+      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+    } finally {
+      await transition.query("ROLLBACK").catch(() => undefined);
+      transition.release();
+    }
+  });
+
+  it("serializes checkpoint writes against concurrent terminal completion", async () => {
+    const id = await queue.enqueue("checkpoint-complete-race", {});
+    const job = await queue.claim("worker-a");
+    const transition = await pool.connect();
+
+    try {
+      await transition.query("BEGIN");
+      await transition.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [
+        id,
+      ]);
+      const rejection = queue
+        .saveCheckpoint(job!, "worker-a", "too-late", { persisted: true })
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      await sleep(20);
+      await transition.query("SELECT workhorse.complete_v1($1, $2, $3, $4::jsonb) AS accepted", [
+        id,
+        "worker-a",
+        job!.fenceToken.toString(),
+        JSON.stringify({ completed: true }),
+      ]);
+      await transition.query("COMMIT");
+
+      await expect(rejection).resolves.toMatchObject({ name: "CheckpointLeaseLostError" });
+      await expect(queue.getCheckpoint(id, "too-late")).resolves.toBeNull();
+      await expect(queue.getJob(id)).resolves.toMatchObject({
+        state: "succeeded",
+        result: { completed: true },
+      });
+    } finally {
+      await transition.query("ROLLBACK").catch(() => undefined);
+      transition.release();
+    }
+  });
+
+  it("retains checkpoints after terminal failure", async () => {
+    const id = await queue.enqueue("checkpoint-failure", {}, { maxAttempts: 1 });
+    const job = await queue.claim("worker-a");
+    const checkpoint = await queue.saveCheckpoint(job!, "worker-a", "before-failure", {
+      prepared: true,
+    });
+
+    expect(await queue.fail(job!, "worker-a", new Error("terminal"))).toBe("failed");
+    await expect(queue.getCheckpoint(id, "before-failure")).resolves.toEqual(checkpoint);
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "failed" });
+  });
+
+  it("rechecks checkpoint lease expiry after waiting for the runtime lock", async () => {
+    const id = await queue.enqueue("checkpoint-lock-expiry", {});
+    const job = await queue.claim("worker-a", { leaseMs: 100 });
+    const blocker = await pool.connect();
+
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [id]);
+      const saving = queue.saveCheckpoint(job!, "worker-a", "expired-while-waiting", {
+        persisted: true,
+      });
+      const rejection = saving.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await sleep(130);
+      await blocker.query("COMMIT");
+
+      await expect(rejection).resolves.toMatchObject({
+        name: "CheckpointLeaseLostError",
+        message: expect.stringMatching(/lease is stale or expired/),
+      });
+      await expect(queue.getCheckpoint(id, "expired-while-waiting")).resolves.toBeNull();
+      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active" });
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
   it("records immutable retry and success attempts", async () => {
     const id = await queue.enqueue("email", { to: "a@example.com" }, { maxAttempts: 2 });
     const first = await queue.claim("worker-a");
@@ -1102,6 +1304,66 @@ describe("live-runtime queue protocol", () => {
     expect((await queue.getJob<{ total: number }>(id))?.result).toEqual({ total: 5 });
   });
 
+  it("reuses a completed checkpoint when a later attempt restarts the handler", async () => {
+    const id = await queue.enqueue("checkpoint-retry", {}, { maxAttempts: 2 });
+    let externalEffects = 0;
+    const worker = new Worker(queue, {
+      workerId: "checkpoint-worker",
+      retryDelayMs: 0,
+    }).handle("checkpoint-retry", async (_payload, context) => {
+      const authorization = await context.checkpoint("authorize", () => {
+        externalEffects += 1;
+        return { authorizationId: `auth-${externalEffects}` };
+      });
+      if (context.job.attempt === 1) throw new Error("crash after durable checkpoint");
+      return authorization;
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    expect((await queue.getJob(id))?.state).toBe("ready");
+    expect(await worker.runOnce()).toBe(true);
+
+    expect(externalEffects).toBe(1);
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "succeeded",
+      result: { authorizationId: "auth-1" },
+    });
+    await expect(queue.getCheckpoint(id, "authorize")).resolves.toMatchObject({
+      value: { authorizationId: "auth-1" },
+      attempt: 1,
+      workerId: "checkpoint-worker",
+    });
+  });
+
+  it("coalesces overlapping handler calls for the same checkpoint name", async () => {
+    const id = await queue.enqueue("checkpoint-overlap", {});
+    let operations = 0;
+    const worker = new Worker(queue, { workerId: "checkpoint-worker" }).handle(
+      "checkpoint-overlap",
+      async (_payload, context) => {
+        const operation = async () => {
+          operations += 1;
+          await sleep(10);
+          return { operation: operations };
+        };
+        const [first, second] = await Promise.all([
+          context.checkpoint("shared", operation),
+          context.checkpoint("shared", operation),
+        ]);
+        return { first, second };
+      },
+    );
+
+    expect(await worker.runOnce()).toBe(true);
+    expect(operations).toBe(1);
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      result: {
+        first: { operation: 1 },
+        second: { operation: 1 },
+      },
+    });
+  });
+
   it.each([
     ["afterClaim", 0, "active"],
     ["beforeHandler", 0, "active"],
@@ -1136,7 +1398,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(5);
+    expect(health.schemaVersion).toBe(6);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(1);
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);

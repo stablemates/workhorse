@@ -35,6 +35,7 @@ PostgreSQL is the durable authority. A worker owns a job only while the active `
 erDiagram
   job ||--o| job_runtime : "live lifecycle"
   job ||--o| job_outcome : "terminal lifecycle"
+  job ||--o{ job_checkpoint : "records restart boundaries"
   job ||--o{ job_event : "emits"
   job ||--o{ attempt_history : "closes attempts"
   schedule_definition ||--o{ schedule_occurrence : "fires"
@@ -67,6 +68,15 @@ erDiagram
     jsonb result
     jsonb error
     timestamptz finished_at
+  }
+  job_checkpoint {
+    uuid job_id PK
+    text checkpoint_name PK
+    jsonb checkpoint_value
+    int attempt
+    bigint fence_token
+    text worker_id
+    timestamptz created_at
   }
   schedule_definition {
     text namespace PK
@@ -114,6 +124,14 @@ The table uses fillfactor 70 because heartbeat and lifecycle updates are intenti
 ### `job_outcome`
 
 Insert-only terminal state. Completion or terminal failure deletes the active runtime row and inserts the outcome in one transaction. Succeeded rows contain `result`; failed rows contain `error`. Terminal jobs no longer occupy dispatch indexes.
+
+### `job_checkpoint`
+
+Insert-only named JSON results at explicit handler restart boundaries. The primary key `(job_id, checkpoint_name)` makes each name immutable for the stable job identity, so retries can reuse completed steps. `save_checkpoint_v1` locks and verifies the exact active, unexpired worker/fence generation before inserting, serializing the write against completion, failure, and lease recovery. Attempt, fence, worker, and creation time preserve ownership provenance. Equal repeated saves return the existing row; a different value conflicts.
+
+`HandlerContext.checkpoint(name, operation)` reads an existing value before running user code and coalesces overlapping calls for the same name inside one handler. It does not make external effects exactly once: a process can disappear after an external system commits but before the checkpoint transaction commits.
+
+Values are limited to 1 MiB of PostgreSQL's canonical JSONB text representation, giving every language client one authoritative definition. Checkpoints intentionally have no independent retirement path because deleting a completed name while retaining a retryable job could repeat that step. They cascade only when the stable parent job identity is deleted, so future job-retention policy must account for checkpoint storage.
 
 ### History
 
