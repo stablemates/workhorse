@@ -1,10 +1,19 @@
 export { createWorkhorseAdapter } from "./adapter.js";
 export type { WorkhorseAdapter, WorkhorseAdapterOptions } from "./adapter.js";
 export { installSchema } from "./schema.js";
-export { CheckpointConflictError, CheckpointLeaseLostError, Queue } from "./queue.js";
+export {
+  CheckpointConflictError,
+  CheckpointLeaseLostError,
+  Queue,
+  WaitConflictError,
+  WaitLeaseLostError,
+  WaitLimitExceededError,
+} from "./queue.js";
 export type {
   MaintenancePhase,
   MaintenancePhaseResult,
+  ScheduleWaitRequest,
+  ScheduleWaitResult,
   ScheduleDefinition,
   ScheduleJobDefinition,
   StoredSchedule,
@@ -24,8 +33,13 @@ export type {
   JobCheckpoint,
   JobSnapshot,
   JobState,
+  JobWait,
   Json,
   Queryable,
   QueueHealth,
 } from "./types.js";
-export { MAX_CHECKPOINT_VALUE_BYTES, MAX_ENQUEUE_BATCH_SIZE } from "./types.js";
+export {
+  MAX_CHECKPOINT_VALUE_BYTES,
+  MAX_ENQUEUE_BATCH_SIZE,
+  MAX_WAIT_DURATION_MS,
+} from "./types.js";

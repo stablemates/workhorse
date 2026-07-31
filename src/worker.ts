@@ -2,7 +2,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { CronExpressionParser } from "cron-parser";
 import { Queue } from "./queue.js";
 import type { MaintenancePhaseResult } from "./queue.js";
-import type { ClaimedJob, JobCheckpoint, Json } from "./types.js";
+import type { ClaimedJob, JobCheckpoint, JobWait, Json } from "./types.js";
+
+const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
 
 export type Failpoint =
   | "afterClaim"
@@ -15,6 +17,8 @@ export interface HandlerContext<TPayload = Json> {
   signal: AbortSignal;
   /** Read a previously persisted restart boundary without executing user code. */
   getCheckpoint<TValue extends Json = Json>(name: string): Promise<JobCheckpoint<TValue> | null>;
+  /** Read an immutable named durable wait from the current handler activation's snapshot. */
+  getWait(name: string): Promise<JobWait | null>;
   /**
    * Return the persisted value when this name already exists. Otherwise run the operation and
    * immutably persist its JSON result under the current fenced lease.
@@ -23,6 +27,10 @@ export interface HandlerContext<TPayload = Json> {
     name: string,
     operation: () => Promise<TValue> | TValue,
   ): Promise<TValue>;
+  /** Suspend this job without consuming its logical attempt until the relative timer is due. */
+  sleep(name: string, durationMs: number): Promise<void>;
+  /** Suspend this job without consuming its logical attempt until the absolute target is due. */
+  sleepUntil(name: string, wakeAt: Date): Promise<void>;
 }
 
 export type Handler<TPayload = Json, TResult extends Json = Json> = (
@@ -180,6 +188,7 @@ export class Worker {
 
     const controller = new AbortController();
     let leaseLost = false;
+    let durablySuspended = false;
     // The heartbeat timer runs only while user code is active. A rejected heartbeat aborts the
     // cooperative signal, but cannot forcibly interrupt arbitrary JavaScript or external effects.
     const heartbeat = setInterval(() => {
@@ -197,10 +206,18 @@ export class Worker {
 
     try {
       await this.inject("beforeHandler", job);
+      const [prefetchedCheckpoints, prefetchedWaits] = await Promise.all([
+        this.queue.listCheckpoints(job.id),
+        this.queue.listWaits(job.id),
+      ]);
+      const checkpoints = new Map(prefetchedCheckpoints.map((item) => [item.name, item]));
+      const waits = new Map(prefetchedWaits.map((item) => [item.name, item]));
       // No database transaction or row lock spans this call. Handlers are at least once and must
       // use external idempotency for effects that cannot safely repeat.
-      const getCheckpoint: HandlerContext["getCheckpoint"] = <TValue extends Json>(name: string) =>
-        this.queue.getCheckpoint<TValue>(job.id, name);
+      const getCheckpoint: HandlerContext["getCheckpoint"] = async <TValue extends Json>(
+        name: string,
+      ) => (checkpoints.get(name) as JobCheckpoint<TValue> | undefined) ?? null;
+      const getWait: HandlerContext["getWait"] = async (name: string) => waits.get(name) ?? null;
       const inFlightCheckpoints = new Map<string, Promise<Json>>();
       const checkpoint: HandlerContext["checkpoint"] = async <TValue extends Json>(
         name: string,
@@ -209,12 +226,13 @@ export class Worker {
         const pending = inFlightCheckpoints.get(name);
         if (pending) return (await pending) as TValue;
         const execution = (async (): Promise<TValue> => {
-          const existing = await this.queue.getCheckpoint<TValue>(job.id, name);
+          const existing = checkpoints.get(name) as JobCheckpoint<TValue> | undefined;
           if (existing) return existing.value;
           if (controller.signal.aborted)
             throw controller.signal.reason ?? new Error("Job lease was lost");
           const value = await operation();
           const saved = await this.queue.saveCheckpoint(job, this.workerId, name, value);
+          checkpoints.set(name, saved);
           return saved.value;
         })();
         inFlightCheckpoints.set(name, execution);
@@ -224,11 +242,45 @@ export class Worker {
           if (inFlightCheckpoints.get(name) === execution) inFlightCheckpoints.delete(name);
         }
       };
+      const inFlightWaits = new Map<string, Promise<void>>();
+      const scheduleWait = (
+        name: string,
+        request: { durationMs: number } | { wakeAt: Date },
+      ): Promise<void> => {
+        const pending = inFlightWaits.get(name);
+        if (pending) return pending;
+        const execution = (async () => {
+          if (controller.signal.aborted) {
+            throw controller.signal.reason ?? new Error("Job lease was lost");
+          }
+          const scheduled = await this.queue.scheduleWait(job, this.workerId, name, request);
+          waits.set(name, scheduled.wait);
+          if (scheduled.status === "scheduled") {
+            durablySuspended = true;
+            controller.abort(DURABLE_WAIT_SUSPENSION);
+            throw DURABLE_WAIT_SUSPENSION;
+          }
+        })();
+        inFlightWaits.set(name, execution);
+        void execution
+          .finally(() => {
+            if (inFlightWaits.get(name) === execution) inFlightWaits.delete(name);
+          })
+          .catch(() => undefined);
+        return execution;
+      };
+      const durableSleep: HandlerContext["sleep"] = (name, durationMs) =>
+        scheduleWait(name, { durationMs });
+      const sleepUntil: HandlerContext["sleepUntil"] = (name, wakeAt) =>
+        scheduleWait(name, { wakeAt });
       const result = await handler(job.payload, {
         job,
         signal: controller.signal,
         getCheckpoint,
+        getWait,
         checkpoint,
+        sleep: durableSleep,
+        sleepUntil,
       });
       await this.inject("afterHandler", job);
       if (leaseLost || controller.signal.aborted)
@@ -238,6 +290,13 @@ export class Worker {
       if (!accepted) throw new Error("Completion rejected because the lease is stale or expired");
       await this.inject("afterComplete", job);
     } catch (error) {
+      if (
+        durablySuspended ||
+        error === DURABLE_WAIT_SUSPENSION ||
+        controller.signal.reason === DURABLE_WAIT_SUSPENSION
+      ) {
+        return true;
+      }
       // A crash failpoint models process disappearance, so converting it into fail_v1 would produce
       // the wrong durable state. Ordinary handler errors do close and retry the attempt.
       if (error instanceof InjectedCrashError) throw error;

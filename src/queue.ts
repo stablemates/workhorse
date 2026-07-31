@@ -5,6 +5,7 @@ import type {
   EnqueueRequest,
   JobCheckpoint,
   JobSnapshot,
+  JobWait,
   Json,
   Queryable,
   QueueHealth,
@@ -45,7 +46,7 @@ export interface MaintenancePhaseResult {
   skippedLock: boolean;
   error: Json;
 }
-import { MAX_ENQUEUE_BATCH_SIZE } from "./types.js";
+import { MAX_ENQUEUE_BATCH_SIZE, MAX_WAIT_DURATION_MS } from "./types.js";
 
 type ClaimRow = {
   job_id: string;
@@ -70,6 +71,35 @@ type CheckpointRow = {
 type SaveCheckpointRow = Omit<CheckpointRow, "job_id" | "checkpoint_name"> & {
   status: "saved" | "existing" | "conflict" | "stale";
 };
+
+type WaitRow = {
+  job_id: string;
+  wait_name: string;
+  mode: JobWait["mode"];
+  duration_ms: string | null;
+  requested_wake_at: Date | null;
+  wake_at: Date;
+  attempt: number;
+  fence_token: string;
+  worker_id: string;
+  created_at: Date;
+};
+
+type ScheduleWaitRow = Omit<WaitRow, "job_id"> & {
+  status: "scheduled" | "elapsed" | "conflict" | "limit_exceeded" | "stale";
+};
+
+export type ScheduleWaitRequest =
+  | { durationMs: number; wakeAt?: never }
+  | {
+      durationMs?: never;
+      wakeAt: Date;
+    };
+
+export interface ScheduleWaitResult {
+  status: "scheduled" | "elapsed";
+  wait: JobWait;
+}
 
 type MaintenancePhaseRow = {
   phase: MaintenancePhase;
@@ -109,6 +139,29 @@ function checkpointRecord<TValue extends Json>(row: CheckpointRow): JobCheckpoin
   };
 }
 
+function waitRecord(row: WaitRow): JobWait {
+  return {
+    jobId: row.job_id,
+    name: row.wait_name,
+    mode: row.mode,
+    durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
+    requestedWakeAt: row.requested_wake_at,
+    wakeAt: row.wake_at,
+    attempt: row.attempt,
+    fenceToken: BigInt(row.fence_token),
+    workerId: row.worker_id,
+    createdAt: row.created_at,
+  };
+}
+
+function validateWaitName(name: string): void {
+  if (typeof name !== "string") throw new TypeError("Wait name must be a string");
+  const length = [...name].length;
+  if (length < 1 || length > 200) {
+    throw new RangeError("Wait name must contain between 1 and 200 characters");
+  }
+}
+
 export class CheckpointLeaseLostError extends Error {
   constructor(jobId: string, checkpointName: string) {
     super(
@@ -122,6 +175,37 @@ export class CheckpointConflictError extends Error {
   constructor(jobId: string, checkpointName: string) {
     super(`Checkpoint ${checkpointName} for job ${jobId} already exists with a different value`);
     this.name = "CheckpointConflictError";
+  }
+}
+
+export class WaitLeaseLostError extends Error {
+  constructor(
+    readonly jobId: string,
+    readonly waitName: string,
+  ) {
+    super(
+      `Cannot schedule wait ${waitName} for job ${jobId} because the lease is stale or expired`,
+    );
+    this.name = "WaitLeaseLostError";
+  }
+}
+
+export class WaitConflictError extends Error {
+  constructor(
+    readonly jobId: string,
+    readonly waitName: string,
+  ) {
+    super(
+      `Wait ${waitName} for job ${jobId} already exists with a different mode or absolute target`,
+    );
+    this.name = "WaitConflictError";
+  }
+}
+
+export class WaitLimitExceededError extends Error {
+  constructor(readonly jobId: string) {
+    super(`Job ${jobId} already has the maximum of 1000 durable waits`);
+    this.name = "WaitLimitExceededError";
   }
 }
 
@@ -339,6 +423,20 @@ export class Queue {
     return row ? checkpointRecord<TValue>(row) : null;
   }
 
+  async listCheckpoints<TValue extends Json = Json>(
+    jobId: string,
+  ): Promise<JobCheckpoint<TValue>[]> {
+    const result = await this.database.query<CheckpointRow>(
+      `SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
+              worker_id, created_at
+         FROM workhorse.job_checkpoint
+        WHERE job_id = $1
+        ORDER BY created_at, checkpoint_name`,
+      [jobId],
+    );
+    return result.rows.map((row) => checkpointRecord<TValue>(row));
+  }
+
   async saveCheckpoint<TValue extends Json>(
     job: ClaimedJob<unknown>,
     workerId: string,
@@ -365,6 +463,90 @@ export class Queue {
       job_id: job.id,
       checkpoint_name: name,
     });
+  }
+
+  async getWait(jobId: string, name: string): Promise<JobWait | null> {
+    validateWaitName(name);
+    const result = await this.database.query<WaitRow>(
+      `SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
+              attempt, fence_token::text, worker_id, created_at
+         FROM workhorse.job_wait
+        WHERE job_id = $1 AND wait_name = $2`,
+      [jobId, name],
+    );
+    const row = result.rows[0];
+    return row ? waitRecord(row) : null;
+  }
+
+  async listWaits(jobId: string): Promise<JobWait[]> {
+    const result = await this.database.query<WaitRow>(
+      `SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
+              attempt, fence_token::text, worker_id, created_at
+         FROM workhorse.job_wait
+        WHERE job_id = $1
+        ORDER BY created_at, wait_name`,
+      [jobId],
+    );
+    return result.rows.map(waitRecord);
+  }
+
+  async scheduleWait(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+    request: ScheduleWaitRequest,
+  ): Promise<ScheduleWaitResult> {
+    validateWaitName(name);
+    if (typeof workerId !== "string" || workerId.length === 0) {
+      throw new TypeError("Worker ID must be a non-empty string");
+    }
+
+    const hasDuration = "durationMs" in request && request.durationMs !== undefined;
+    const hasWakeAt = "wakeAt" in request && request.wakeAt !== undefined;
+    if (hasDuration === hasWakeAt) {
+      throw new TypeError("Exactly one of durationMs or wakeAt is required");
+    }
+
+    let durationWire: string | null = null;
+    let wakeAtWire: string | null = null;
+    if (hasDuration) {
+      const durationMs = request.durationMs;
+      if (!Number.isSafeInteger(durationMs)) {
+        throw new TypeError("Wait durationMs must be a safe integer number of milliseconds");
+      }
+      if (durationMs < 1 || durationMs > MAX_WAIT_DURATION_MS) {
+        throw new RangeError(`Wait durationMs must be between 1 and ${MAX_WAIT_DURATION_MS}`);
+      }
+      // pg must receive bigint as text so JavaScript never rounds the wire value.
+      durationWire = durationMs.toString();
+    } else {
+      const wakeAt = request.wakeAt;
+      if (!(wakeAt instanceof Date) || !Number.isFinite(wakeAt.getTime())) {
+        throw new TypeError("Wait wakeAt must be a finite Date");
+      }
+      if (wakeAt.getTime() - Date.now() > MAX_WAIT_DURATION_MS) {
+        throw new RangeError("Wait wakeAt must be no more than 365 days in the future");
+      }
+      wakeAtWire = wakeAt.toISOString();
+    }
+
+    const result = await this.database.query<ScheduleWaitRow>(
+      `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
+              attempt, fence_token::text, worker_id, created_at
+         FROM workhorse.schedule_wait_v1($1, $2, $3, $4, $5::bigint, $6::timestamptz)`,
+      [job.id, workerId, job.fenceToken.toString(), name, durationWire, wakeAtWire],
+    );
+    const row = result.rows[0]!;
+    if (row.status === "stale") throw new WaitLeaseLostError(job.id, name);
+    if (row.status === "conflict") throw new WaitConflictError(job.id, name);
+    if (row.status === "limit_exceeded") throw new WaitLimitExceededError(job.id);
+    if (row.status !== "scheduled" && row.status !== "elapsed") {
+      throw new Error(`Unexpected wait status: ${String(row.status)}`);
+    }
+    return {
+      status: row.status,
+      wait: waitRecord({ ...row, job_id: job.id }),
+    };
   }
 
   async complete<TResult extends Json>(
