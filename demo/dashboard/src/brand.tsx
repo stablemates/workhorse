@@ -12,7 +12,7 @@ export function WorkhorseBrand() {
   return (
     <Group gap={10} wrap="nowrap" className="workhorse-brand">
       <Box className="workhorse-brand__mark" aria-hidden="true">
-        <WorkhorseMark label="" w={34} h={34} />
+        <WorkhorseMark label="" w={38} h={38} />
       </Box>
       <Box
         component="img"
