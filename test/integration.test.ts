@@ -25,7 +25,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
     workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.queue_control, workhorse.job_checkpoint, workhorse.job_outcome, workhorse.job_runtime,
+    workhorse.queue_control, workhorse.job_wait, workhorse.job_checkpoint,
+    workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
 });
@@ -35,11 +36,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v6 without compatibility write tables", async () => {
+  it("installs schema v7 without compatibility write tables", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(6);
+    expect(version.rows[0]?.version).toBe(7);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -456,7 +457,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v6 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v7 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -1155,6 +1156,647 @@ describe("live-runtime queue protocol", () => {
     }
   });
 
+  it("schedules the first named wait with immutable ownership provenance", async () => {
+    const id = await queue.enqueue("wait-first", {});
+    const job = await queue.claim("wait-worker", { leaseMs: 10_000 });
+    const active = await pool.query<{ attempt_started_at: Date; acquired_at: Date }>(
+      `SELECT attempt_started_at, acquired_at
+         FROM workhorse.job_runtime
+        WHERE job_id = $1`,
+      [id],
+    );
+    const before = Date.now();
+
+    const result = await queue.scheduleWait(job!, "wait-worker", "provider-cooldown", {
+      durationMs: 5_000,
+    });
+    const after = Date.now();
+
+    expect(result.status).toBe("scheduled");
+    expect(result.wait).toMatchObject({
+      jobId: id,
+      name: "provider-cooldown",
+      mode: "relative",
+      durationMs: 5_000,
+      requestedWakeAt: null,
+      attempt: 1,
+      fenceToken: job!.fenceToken,
+      workerId: "wait-worker",
+    });
+    expect(result.wait.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 5_000);
+    expect(result.wait.wakeAt.getTime()).toBeLessThanOrEqual(after + 5_100);
+    await expect(queue.getWait(id, "provider-cooldown")).resolves.toEqual(result.wait);
+    await expect(queue.listWaits(id)).resolves.toEqual([result.wait]);
+
+    const runtime = await pool.query<{
+      state: string;
+      run_at: Date;
+      current_attempt: number;
+      fence_token: string;
+      worker_id: string | null;
+      expires_at: Date | null;
+      wait_name: string | null;
+      attempt_started_at: Date;
+    }>(
+      `SELECT state, run_at, current_attempt, fence_token::text, worker_id, expires_at,
+              wait_name, attempt_started_at
+         FROM workhorse.job_runtime
+        WHERE job_id = $1`,
+      [id],
+    );
+    expect(runtime.rows[0]).toEqual({
+      state: "scheduled",
+      run_at: result.wait.wakeAt,
+      current_attempt: 1,
+      fence_token: "0",
+      worker_id: null,
+      expires_at: null,
+      wait_name: "provider-cooldown",
+      attempt_started_at: active.rows[0]!.attempt_started_at,
+    });
+    expect(active.rows[0]!.attempt_started_at).toEqual(active.rows[0]!.acquired_at);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0].count,
+    ).toBe(0);
+    expect(await queue.complete(job!, "wait-worker", { tooLate: true })).toBe(false);
+    expect(await queue.fail(job!, "wait-worker", new Error("too late"))).toBe("stale");
+  });
+
+  it("replays relative waits first-write-wins despite duration drift", async () => {
+    const id = await queue.enqueue("wait-relative-replay", {});
+    const firstClaim = await queue.claim("relative-worker");
+    const first = await queue.scheduleWait(firstClaim!, "relative-worker", "backoff", {
+      durationMs: 30,
+    });
+    await sleep(50);
+    expect(await queue.promote()).toBe(1);
+    const continuation = await queue.claim("relative-worker");
+
+    const replay = await queue.scheduleWait(continuation!, "relative-worker", "backoff", {
+      durationMs: 30_000,
+    });
+
+    expect(replay).toEqual({ status: "elapsed", wait: first.wait });
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "active",
+      currentAttempt: 1,
+      fenceToken: continuation!.fenceToken,
+    });
+    const event = await pool.query<{ details: Record<string, unknown> }>(
+      `SELECT details FROM workhorse.job_event
+        WHERE job_id = $1 AND event_type = 'wait_replayed'`,
+      [id],
+    );
+    expect(event.rows[0]!.details).toMatchObject({
+      name: "backoff",
+      mode: "relative",
+      requested_duration_ms: 30_000,
+      stored_duration_ms: 30,
+      stored_wake_at: expect.any(String),
+      fence_token: Number(continuation!.fenceToken),
+    });
+    expect(new Date(String(event.rows[0]!.details.stored_wake_at))).toEqual(first.wait.wakeAt);
+  });
+
+  it("rejects changed absolute targets and relative/absolute mode changes", async () => {
+    const id = await queue.enqueue("wait-conflicts", {});
+    const firstClaim = await queue.claim("conflict-worker");
+    const target = new Date(Date.now() + 30);
+    const first = await queue.scheduleWait(firstClaim!, "conflict-worker", "embargo", {
+      wakeAt: target,
+    });
+    expect(first.wait).toMatchObject({
+      jobId: id,
+      name: "embargo",
+      mode: "absolute",
+      durationMs: null,
+      requestedWakeAt: target,
+      wakeAt: target,
+    });
+    await sleep(50);
+    expect(await queue.promote()).toBe(1);
+    const continuation = await queue.claim("conflict-worker");
+
+    await expect(
+      queue.scheduleWait(continuation!, "conflict-worker", "embargo", {
+        wakeAt: new Date(target.getTime() + 1),
+      }),
+    ).rejects.toMatchObject({ name: "WaitConflictError" });
+    await expect(
+      queue.scheduleWait(continuation!, "conflict-worker", "embargo", { durationMs: 1 }),
+    ).rejects.toMatchObject({ name: "WaitConflictError" });
+    await expect(queue.getWait(id, "embargo")).resolves.toEqual(first.wait);
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active", currentAttempt: 1 });
+  });
+
+  it("bounds wait names, relative durations, and absolute timestamps", async () => {
+    const id = await queue.enqueue("wait-bounds", {});
+    const job = await queue.claim("bounds-worker");
+    const schedule = (name: string, options: { durationMs: number } | { wakeAt: Date }) =>
+      queue.scheduleWait(job!, "bounds-worker", name, options);
+
+    await expect(schedule("", { durationMs: 1 })).rejects.toThrow(/between 1 and 200/);
+    await expect(schedule("x".repeat(201), { durationMs: 1 })).rejects.toThrow(/between 1 and 200/);
+    for (const durationMs of [0, -1, 31_536_000_001, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      await expect(schedule(`duration-${durationMs}`, { durationMs })).rejects.toThrow(/duration/i);
+    }
+    await expect(schedule("invalid-date", { wakeAt: new Date(Number.NaN) })).rejects.toThrow(
+      /finite|valid/i,
+    );
+    await expect(
+      schedule("too-far", { wakeAt: new Date(Date.now() + 365 * 86_400_000 + 60_000) }),
+    ).rejects.toThrow(/365 days/);
+    await expect(
+      pool.query(`SELECT * FROM workhorse.schedule_wait_v1($1, $2, $3, 'neither', NULL, NULL)`, [
+        id,
+        "bounds-worker",
+        job!.fenceToken.toString(),
+      ]),
+    ).rejects.toThrow(/exactly one/);
+    await expect(
+      pool.query(
+        `SELECT * FROM workhorse.schedule_wait_v1(
+          $1, $2, $3, 'both', 1, clock_timestamp() + interval '1 second'
+        )`,
+        [id, "bounds-worker", job!.fenceToken.toString()],
+      ),
+    ).rejects.toThrow(/exactly one/);
+    await expect(
+      pool.query(
+        `SELECT * FROM workhorse.schedule_wait_v1($1, $2, $3, 'infinite', NULL, 'infinity')`,
+        [id, "bounds-worker", job!.fenceToken.toString()],
+      ),
+    ).rejects.toThrow(/finite/);
+    await expect(queue.getWait(id, "too-far")).resolves.toBeNull();
+
+    const maximum = await schedule("maximum", { durationMs: 31_536_000_000 });
+    expect(maximum.status).toBe("scheduled");
+    expect(maximum.wait.durationMs).toBe(31_536_000_000);
+  });
+
+  it("returns limit_exceeded after 1,000 retained wait names", async () => {
+    const id = await queue.enqueue("wait-limit", {});
+    const job = await queue.claim("limit-worker");
+    await pool.query(
+      `INSERT INTO workhorse.job_wait(
+         job_id, wait_name, mode, duration_ms, wake_at, attempt, fence_token, worker_id
+       )
+       SELECT $1, 'seed-' || value, 'relative', 1,
+              clock_timestamp() + interval '1 millisecond', 1, $2, $3
+         FROM generate_series(1, 1000) AS value`,
+      [id, job!.fenceToken.toString(), "limit-worker"],
+    );
+
+    await expect(
+      queue.scheduleWait(job!, "limit-worker", "overflow", { durationMs: 1 }),
+    ).rejects.toMatchObject({ name: "WaitLimitExceededError" });
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.job_wait WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0].count,
+    ).toBe(1_000);
+    await expect(queue.getWait(id, "overflow")).resolves.toBeNull();
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active" });
+  });
+
+  it("records a past-due first target without releasing active ownership", async () => {
+    const id = await queue.enqueue("wait-past-due", {});
+    const job = await queue.claim("past-due-worker");
+    const target = new Date(Date.now() - 1_000);
+
+    const result = await queue.scheduleWait(job!, "past-due-worker", "already-open", {
+      wakeAt: target,
+    });
+
+    expect(result).toMatchObject({
+      status: "elapsed",
+      wait: { name: "already-open", requestedWakeAt: target, wakeAt: target },
+    });
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "active",
+      fenceToken: job!.fenceToken,
+    });
+    const event = await pool.query<{ details: Record<string, unknown> }>(
+      `SELECT details FROM workhorse.job_event
+        WHERE job_id = $1 AND event_type = 'wait_elapsed'`,
+      [id],
+    );
+    expect(event.rows[0]!.details).toMatchObject({
+      name: "already-open",
+      mode: "absolute",
+      reason: "already_due",
+      wake_at: expect.any(String),
+    });
+    expect(new Date(String(event.rows[0]!.details.wake_at))).toEqual(target);
+  });
+
+  it("rejects stale generations and non-active runtime states without writing waits", async () => {
+    const callSql = async (id: string, workerId: string, fenceToken: bigint, name: string) =>
+      (
+        await pool.query<{ status: string }>(
+          `SELECT status FROM workhorse.schedule_wait_v1($1, $2, $3, $4, 1, NULL)`,
+          [id, workerId, fenceToken.toString(), name],
+        )
+      ).rows[0]!.status;
+
+    const recoveredId = await queue.enqueue("wait-stale", {}, { maxAttempts: 2 });
+    const stale = await queue.claim("stale-worker", { leaseMs: 100 });
+    await sleep(130);
+    expect(await queue.recoverExpired()).toBe(1);
+    await expect(
+      queue.scheduleWait(stale!, "stale-worker", "stale", { durationMs: 1 }),
+    ).rejects.toMatchObject({ name: "WaitLeaseLostError" });
+    expect(await callSql(recoveredId, "stale-worker", stale!.fenceToken, "ready")).toBe("stale");
+
+    const scheduledId = await queue.enqueue("wait-scheduled", {});
+    const scheduledClaim = await queue.claim("scheduled-worker");
+    await queue.scheduleWait(scheduledClaim!, "scheduled-worker", "current", {
+      durationMs: 60_000,
+    });
+    expect(
+      await callSql(scheduledId, "scheduled-worker", scheduledClaim!.fenceToken, "other"),
+    ).toBe("stale");
+
+    const terminalId = await queue.enqueue("wait-terminal", {});
+    const terminalClaim = await queue.claim("terminal-worker");
+    expect(await queue.complete(terminalClaim!, "terminal-worker", null)).toBe(true);
+    expect(
+      await callSql(terminalId, "terminal-worker", terminalClaim!.fenceToken, "terminal"),
+    ).toBe("stale");
+
+    expect(
+      (
+        await pool.query(
+          `SELECT count(*)::integer AS count FROM workhorse.job_wait
+            WHERE job_id = ANY($1::uuid[])`,
+          [[recoveredId, scheduledId, terminalId]],
+        )
+      ).rows[0].count,
+    ).toBe(1);
+  });
+
+  it("rechecks wait lease expiry after waiting for the runtime lock", async () => {
+    const id = await queue.enqueue("wait-lock-expiry", {});
+    const job = await queue.claim("wait-lock-worker", { leaseMs: 100 });
+    const blocker = await pool.connect();
+
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [id]);
+      const scheduling = queue
+        .scheduleWait(job!, "wait-lock-worker", "expired-while-blocked", { durationMs: 1_000 })
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      await sleep(130);
+      await blocker.query("COMMIT");
+
+      await expect(scheduling).resolves.toMatchObject({ name: "WaitLeaseLostError" });
+      await expect(queue.getWait(id, "expired-while-blocked")).resolves.toBeNull();
+      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "active" });
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
+  it.each(["complete", "fail", "recover"] as const)(
+    "serializes wait scheduling behind concurrent %s",
+    async (transitionKind) => {
+      const id = await queue.enqueue(`wait-race-${transitionKind}`, {}, { maxAttempts: 2 });
+      const leaseMs = transitionKind === "recover" ? 100 : 10_000;
+      const job = await queue.claim("race-worker", { leaseMs });
+      const transition = await pool.connect();
+
+      try {
+        await transition.query("BEGIN");
+        await transition.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [
+          id,
+        ]);
+        const scheduling = queue
+          .scheduleWait(job!, "race-worker", "racing-wait", { durationMs: 1_000 })
+          .then(
+            () => null,
+            (error: unknown) => error,
+          );
+        await sleep(20);
+
+        if (transitionKind === "complete") {
+          await transition.query("SELECT workhorse.complete_v1($1, $2, $3, '{}'::jsonb)", [
+            id,
+            "race-worker",
+            job!.fenceToken.toString(),
+          ]);
+        } else if (transitionKind === "fail") {
+          await transition.query("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, 0)", [
+            id,
+            "race-worker",
+            job!.fenceToken.toString(),
+            JSON.stringify({ message: "retry" }),
+          ]);
+        } else {
+          await sleep(110);
+          await transition.query("SELECT workhorse.recover_expired_v1(100)");
+        }
+        await transition.query("COMMIT");
+
+        await expect(scheduling).resolves.toMatchObject({ name: "WaitLeaseLostError" });
+        await expect(queue.getWait(id, "racing-wait")).resolves.toBeNull();
+        await expect(queue.getJob(id)).resolves.toMatchObject({
+          state: transitionKind === "complete" ? "succeeded" : "ready",
+        });
+      } finally {
+        await transition.query("ROLLBACK").catch(() => undefined);
+        transition.release();
+      }
+    },
+  );
+
+  it("carries the wait marker through due promotion and emits lifecycle events", async () => {
+    const id = await queue.enqueue("wait-promotion", {});
+    const job = await queue.claim("promotion-worker");
+    const scheduled = await queue.scheduleWait(job!, "promotion-worker", "promotion-boundary", {
+      durationMs: 30,
+    });
+    await sleep(50);
+
+    expect(await queue.promote()).toBe(1);
+    const runtime = await pool.query<{
+      state: string;
+      wait_name: string | null;
+      attempt_started_at: Date;
+    }>("SELECT state, wait_name, attempt_started_at FROM workhorse.job_runtime WHERE job_id = $1", [
+      id,
+    ]);
+    expect(runtime.rows[0]).toMatchObject({
+      state: "ready",
+      wait_name: null,
+      attempt_started_at: expect.any(Date),
+    });
+
+    const events = await pool.query<{ event_type: string; details: Record<string, unknown> }>(
+      `SELECT event_type, details FROM workhorse.job_event
+        WHERE job_id = $1 AND event_type IN ('wait_scheduled', 'wait_elapsed')
+        ORDER BY event_id`,
+      [id],
+    );
+    expect(events.rows).toEqual([
+      {
+        event_type: "wait_scheduled",
+        details: expect.objectContaining({
+          name: "promotion-boundary",
+          mode: "relative",
+          duration_ms: 30,
+          wake_at: expect.any(String),
+        }),
+      },
+      {
+        event_type: "wait_elapsed",
+        details: {
+          name: "promotion-boundary",
+          reason: "due",
+          wake_at: expect.any(String),
+        },
+      },
+    ]);
+    expect(new Date(String(events.rows[0]!.details.wake_at))).toEqual(scheduled.wait.wakeAt);
+    expect(new Date(String(events.rows[1]!.details.wake_at))).toEqual(scheduled.wait.wakeAt);
+  });
+
+  it("preserves one logical attempt across suspension and records truthful claim timestamps", async () => {
+    const id = await queue.enqueue("wait-success", {});
+    let handlerRuns = 0;
+    const worker = new Worker(queue, {
+      workerId: "wait-success-worker",
+      maintenanceIntervalMs: 100,
+    }).handle("wait-success", async (_payload, context) => {
+      handlerRuns += 1;
+      await context.sleep("brief-pause", 30);
+      return { handlerRuns };
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    const suspended = await pool.query<{ attempt_started_at: Date }>(
+      "SELECT attempt_started_at FROM workhorse.job_runtime WHERE job_id = $1",
+      [id],
+    );
+    await sleep(110);
+    expect(await worker.runOnce()).toBe(true);
+
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "succeeded",
+      currentAttempt: 1,
+      result: { handlerRuns: 2 },
+    });
+    const attempts = await pool.query<{
+      attempt: number;
+      outcome: string;
+      started_at: Date;
+      claimed_at: Date;
+    }>(
+      `SELECT attempt, outcome, started_at, claimed_at
+         FROM workhorse.attempt_history
+        WHERE job_id = $1`,
+      [id],
+    );
+    expect(attempts.rows).toHaveLength(1);
+    expect(attempts.rows[0]).toMatchObject({ attempt: 1, outcome: "succeeded" });
+    expect(attempts.rows[0]!.started_at).toEqual(suspended.rows[0]!.attempt_started_at);
+    expect(attempts.rows[0]!.claimed_at.getTime()).toBeGreaterThan(
+      attempts.rows[0]!.started_at.getTime(),
+    );
+    const claims = await pool.query<{ count: number }>(
+      `SELECT count(*)::integer AS count FROM workhorse.job_event
+        WHERE job_id = $1 AND event_type = 'claimed'`,
+      [id],
+    );
+    expect(claims.rows[0]!.count).toBe(2);
+  });
+
+  it("closes the same logical attempt when the handler fails after waking", async () => {
+    const id = await queue.enqueue("wait-then-fail", {}, { maxAttempts: 1 });
+    let handlerRuns = 0;
+    const worker = new Worker(queue, {
+      workerId: "wait-failure-worker",
+      maintenanceIntervalMs: 100,
+    }).handle("wait-then-fail", async (_payload, context) => {
+      handlerRuns += 1;
+      await context.sleep("before-failure", 30);
+      throw new Error("failed after wake");
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    await sleep(110);
+    expect(await worker.runOnce()).toBe(true);
+
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "failed", currentAttempt: 1 });
+    expect(handlerRuns).toBe(2);
+    const attempts = await pool.query(
+      "SELECT attempt, outcome FROM workhorse.attempt_history WHERE job_id = $1",
+      [id],
+    );
+    expect(attempts.rows).toEqual([{ attempt: 1, outcome: "failed" }]);
+  });
+
+  it("supports multiple distinct durable waits in one logical attempt", async () => {
+    const id = await queue.enqueue("multiple-waits", {});
+    let handlerRuns = 0;
+    let secondTarget: Date | undefined;
+    const observedFirstWaits: Array<string | null> = [];
+    const worker = new Worker(queue, {
+      workerId: "multiple-waits-worker",
+      maintenanceIntervalMs: 100,
+    }).handle("multiple-waits", async (_payload, context) => {
+      handlerRuns += 1;
+      observedFirstWaits.push((await context.getWait("first"))?.name ?? null);
+      await context.sleep("first", 30);
+      secondTarget ??= new Date(Date.now() + 30);
+      await context.sleepUntil("second", secondTarget);
+      return { handlerRuns };
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    await sleep(110);
+    expect(await worker.runOnce()).toBe(true);
+    await sleep(110);
+    expect(await worker.runOnce()).toBe(true);
+
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "succeeded",
+      currentAttempt: 1,
+      result: { handlerRuns: 3 },
+    });
+    expect(observedFirstWaits).toEqual([null, "first", "first"]);
+    const waits = await queue.listWaits(id);
+    expect(waits.map((wait) => [wait.name, wait.mode])).toEqual([
+      ["first", "relative"],
+      ["second", "absolute"],
+    ]);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0].count,
+    ).toBe(1);
+  });
+
+  it("retains waits through terminal outcome and cascades them with the parent job", async () => {
+    const id = await queue.enqueue("wait-retention", {});
+    const job = await queue.claim("retention-worker");
+    const wait = await queue.scheduleWait(job!, "retention-worker", "past", {
+      wakeAt: new Date(Date.now() - 1),
+    });
+    expect(await queue.complete(job!, "retention-worker", { ok: true })).toBe(true);
+
+    await expect(queue.getWait(id, "past")).resolves.toEqual(wait.wait);
+    await expect(queue.listWaits(id)).resolves.toEqual([wait.wait]);
+    await pool.query("DELETE FROM workhorse.job WHERE id = $1", [id]);
+    await expect(queue.getWait(id, "past")).resolves.toBeNull();
+    await expect(queue.listWaits(id)).resolves.toEqual([]);
+  });
+
+  it("releases the worker slot immediately when a handler suspends", async () => {
+    const waitingId = await queue.enqueue("slot-waiting", {});
+    const followingId = await queue.enqueue("slot-following", {});
+    const handled: string[] = [];
+    const worker = new Worker(queue, { workerId: "slot-worker" })
+      .handle("slot-waiting", async (_payload, context) => {
+        handled.push("waiting");
+        await context.sleep("long-wait", 60_000);
+        return null;
+      })
+      .handle("slot-following", () => {
+        handled.push("following");
+        return { ok: true };
+      });
+
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.getJob(waitingId)).resolves.toMatchObject({ state: "scheduled" });
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.getJob(followingId)).resolves.toMatchObject({ state: "succeeded" });
+    expect(handled).toEqual(["waiting", "following"]);
+  });
+
+  it("replays handler code without repeating checkpointed work", async () => {
+    const id = await queue.enqueue("checkpoint-before-wait", {});
+    let handlerRuns = 0;
+    let expensiveOperations = 0;
+    const worker = new Worker(queue, {
+      workerId: "checkpoint-wait-worker",
+      maintenanceIntervalMs: 100,
+    }).handle("checkpoint-before-wait", async (_payload, context) => {
+      handlerRuns += 1;
+      const prepared = await context.checkpoint("prepare", () => {
+        expensiveOperations += 1;
+        return { operation: expensiveOperations };
+      });
+      await context.sleep("after-prepare", 30);
+      return { prepared, handlerRuns };
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    await sleep(110);
+    expect(await worker.runOnce()).toBe(true);
+
+    expect(handlerRuns).toBe(2);
+    expect(expensiveOperations).toBe(1);
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "succeeded",
+      result: { prepared: { operation: 1 }, handlerRuns: 2 },
+    });
+  });
+
+  it("does not complete or fail when application code catches the suspension sentinel", async () => {
+    const id = await queue.enqueue("caught-wait-sentinel", {});
+    let caught = false;
+    let codeAfterCatch = false;
+    const worker = new Worker(queue, { workerId: "caught-sentinel-worker" }).handle(
+      "caught-wait-sentinel",
+      async (_payload, context) => {
+        try {
+          await context.sleep("caught", 60_000);
+        } catch {
+          caught = true;
+        }
+        codeAfterCatch = true;
+        return { shouldNotComplete: true };
+      },
+    );
+
+    expect(await worker.runOnce()).toBe(true);
+    expect(caught).toBe(true);
+    expect(codeAfterCatch).toBe(true);
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
+    const events = await pool.query<{ event_type: string }>(
+      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
+      [id],
+    );
+    expect(events.rows.map((row) => row.event_type)).toEqual([
+      "enqueued",
+      "claimed",
+      "wait_scheduled",
+    ]);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0].count,
+    ).toBe(0);
+  });
+
   it("records immutable retry and success attempts", async () => {
     const id = await queue.enqueue("email", { to: "a@example.com" }, { maxAttempts: 2 });
     const first = await queue.claim("worker-a");
@@ -1398,7 +2040,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(6);
+    expect(health.schemaVersion).toBe(7);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(1);
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
@@ -1417,8 +2059,9 @@ describe("live-runtime queue protocol", () => {
     );
     await pool.query(
       `INSERT INTO workhorse.attempt_history(
-         job_id, attempt, fence_token, worker_id, outcome, started_at, finished_at, occurred_at
-       ) VALUES ($1, 1, 1, 'fallback-worker', 'succeeded', $2, $2, $2)`,
+         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
+         finished_at, occurred_at
+       ) VALUES ($1, 1, 1, 'fallback-worker', 'succeeded', $2, $2, $2, $2)`,
       [historicalJobId, historicalTimestamp],
     );
     const fallbackRelations = await pool.query<{ relation: string }>(
