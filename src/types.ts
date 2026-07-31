@@ -33,6 +33,8 @@ export interface EnqueueRequest<TPayload extends Json = Json> {
 export const MAX_ENQUEUE_BATCH_SIZE = 1_000;
 /** Maximum PostgreSQL canonical JSONB text size accepted for one durable checkpoint value. */
 export const MAX_CHECKPOINT_VALUE_BYTES = 1_048_576;
+/** Maximum relative duration or first absolute target horizon for one durable wait (365 days). */
+export const MAX_WAIT_DURATION_MS = 31_536_000_000;
 
 export interface ClaimedJob<TPayload = Json> {
   /** Stable job identity across all attempts. */
@@ -56,6 +58,25 @@ export interface JobCheckpoint<TValue extends Json = Json> {
   /** Attempt that first persisted this checkpoint. */
   attempt: number;
   /** Ownership generation that authorized the checkpoint write. */
+  fenceToken: bigint;
+  workerId: string;
+  createdAt: Date;
+}
+
+/** One immutable named durable timer boundary. */
+export interface JobWait {
+  jobId: string;
+  name: string;
+  mode: "relative" | "absolute";
+  /** First committed relative duration. Later relative arguments for this name are ignored. */
+  durationMs: number | null;
+  /** Exact caller target for an absolute wait, or null for a relative wait. */
+  requestedWakeAt: Date | null;
+  /** PostgreSQL-computed durable target used by promotion. */
+  wakeAt: Date;
+  /** Logical attempt that first persisted this wait. */
+  attempt: number;
+  /** Ownership generation that authorized the first write. */
   fenceToken: bigint;
   workerId: string;
   createdAt: Date;
