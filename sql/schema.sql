@@ -74,6 +74,29 @@ CREATE TABLE IF NOT EXISTS workhorse.job_checkpoint (
   PRIMARY KEY (job_id, checkpoint_name)
 );
 
+-- Immutable named durable timer boundaries. Relative waits preserve the first PostgreSQL-computed
+-- target, while absolute waits preserve the caller's exact target for deterministic replay.
+CREATE TABLE IF NOT EXISTS workhorse.job_wait (
+  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  wait_name text NOT NULL CHECK (wait_name <> '' AND char_length(wait_name) <= 200),
+  mode text NOT NULL CHECK (mode IN ('relative', 'absolute')),
+  duration_ms bigint,
+  requested_wake_at timestamptz,
+  wake_at timestamptz NOT NULL CHECK (isfinite(wake_at)),
+  attempt integer NOT NULL CHECK (attempt >= 1),
+  fence_token bigint NOT NULL CHECK (fence_token > 0),
+  worker_id text NOT NULL CHECK (worker_id <> ''),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (job_id, wait_name),
+  CHECK (
+    (mode = 'relative' AND duration_ms BETWEEN 1 AND 31536000000
+      AND requested_wake_at IS NULL)
+    OR
+    (mode = 'absolute' AND duration_ms IS NULL AND requested_wake_at IS NOT NULL
+      AND isfinite(requested_wake_at) AND wake_at = requested_wake_at)
+  )
+);
+
 -- Monotonic ownership generations and FIFO placement generations.
 CREATE SEQUENCE IF NOT EXISTS workhorse.fence_token_seq;
 CREATE SEQUENCE IF NOT EXISTS workhorse.ready_sequence_seq;
@@ -93,18 +116,25 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
   acquired_at timestamptz,
   heartbeat_at timestamptz,
   expires_at timestamptz,
+  wait_name text,
+  attempt_started_at timestamptz,
   error jsonb,
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CHECK (wait_name IS NULL OR (wait_name <> '' AND char_length(wait_name) <= 200)),
   CHECK (
     (state = 'scheduled' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NULL
-      AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL)
+      AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL
+      AND fence_token = 0
+      AND ((wait_name IS NULL AND attempt_started_at IS NULL)
+        OR (wait_name IS NOT NULL AND attempt_started_at IS NOT NULL)))
     OR
     (state = 'ready' AND ready_at IS NOT NULL AND sequence IS NOT NULL AND worker_id IS NULL
-      AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL)
+      AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL
+      AND fence_token = 0 AND wait_name IS NULL)
     OR
     (state = 'active' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NOT NULL
       AND acquired_at IS NOT NULL AND heartbeat_at IS NOT NULL AND expires_at IS NOT NULL
-      AND fence_token > 0)
+      AND fence_token > 0 AND wait_name IS NULL AND attempt_started_at IS NOT NULL)
   )
 ) WITH (fillfactor = 70);
 CREATE INDEX IF NOT EXISTS job_runtime_ready_idx
@@ -151,6 +181,7 @@ CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
   worker_id text NOT NULL,
   outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed', 'retry', 'lease_expired')),
   started_at timestamptz NOT NULL,
+  claimed_at timestamptz NOT NULL,
   finished_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   error jsonb,
   occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
@@ -513,21 +544,28 @@ DECLARE
   v_count integer;
 BEGIN
   WITH due AS (
-    SELECT r.job_id FROM workhorse.job_runtime r
+    SELECT r.job_id, r.wait_name, r.run_at AS wake_at FROM workhorse.job_runtime r
      WHERE r.state = 'scheduled' AND r.run_at <= clock_timestamp()
      ORDER BY r.run_at, r.job_id FOR UPDATE SKIP LOCKED
      LIMIT GREATEST(1, LEAST(p_limit, 10000))
   ), promoted AS (
     UPDATE workhorse.job_runtime r
        SET state = 'ready', ready_at = clock_timestamp(),
-           sequence = nextval('workhorse.ready_sequence_seq'), updated_at = clock_timestamp()
+           sequence = nextval('workhorse.ready_sequence_seq'), wait_name = NULL,
+           updated_at = clock_timestamp()
       FROM due d WHERE r.job_id = d.job_id AND r.state = 'scheduled'
-    RETURNING r.job_id, r.queue_name
+    RETURNING r.job_id, r.queue_name, r.current_attempt, d.wait_name, d.wake_at
   ), events AS (
-    INSERT INTO workhorse.job_event(job_id, event_type)
-      SELECT job_id, 'promoted' FROM promoted RETURNING 1
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      SELECT job_id, current_attempt, 'promoted', '{}'::jsonb FROM promoted
+      UNION ALL
+      SELECT job_id, current_attempt, 'wait_elapsed',
+             jsonb_build_object('name', wait_name, 'wake_at', wake_at, 'reason', 'due')
+        FROM promoted WHERE wait_name IS NOT NULL
+    RETURNING 1
   )
-  SELECT count(*)::integer INTO v_count FROM events;
+  SELECT count(*)::integer INTO v_count FROM promoted
+   WHERE (SELECT count(*) FROM events) >= 0;
   IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
   RETURN v_count;
 END;
@@ -569,7 +607,9 @@ BEGIN
   UPDATE workhorse.job_runtime r
      SET state = 'active', fence_token = v_fence, worker_id = p_worker_id,
          acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
-         ready_at = NULL, sequence = NULL, error = NULL, updated_at = v_now
+         ready_at = NULL, sequence = NULL, wait_name = NULL,
+         attempt_started_at = COALESCE(r.attempt_started_at, v_now),
+         error = NULL, updated_at = v_now
     FROM candidate c WHERE r.job_id = c.job_id AND r.state = 'ready'
   RETURNING r.* INTO v_runtime;
   IF NOT FOUND THEN RETURN; END IF;
@@ -694,6 +734,187 @@ BEGIN
 END;
 $$;
 
+-- Atomically record or replay one named durable timer boundary while the caller owns the exact
+-- active, unexpired runtime generation. Wait rows are immutable after their first committed write.
+CREATE OR REPLACE FUNCTION workhorse.schedule_wait_v1(
+  p_job_id uuid,
+  p_worker_id text,
+  p_fence_token bigint,
+  p_wait_name text,
+  p_duration_ms bigint,
+  p_wake_at timestamptz
+) RETURNS TABLE (
+  status text,
+  wait_name text,
+  mode text,
+  duration_ms bigint,
+  requested_wake_at timestamptz,
+  wake_at timestamptz,
+  attempt integer,
+  fence_token bigint,
+  worker_id text,
+  created_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_wait workhorse.job_wait%ROWTYPE;
+  v_mode text;
+  v_now timestamptz;
+  v_requested_target timestamptz;
+BEGIN
+  IF p_wait_name IS NULL OR p_wait_name = '' OR char_length(p_wait_name) > 200 THEN
+    RAISE EXCEPTION 'wait_name must contain between 1 and 200 characters';
+  END IF;
+  IF (p_duration_ms IS NULL) = (p_wake_at IS NULL) THEN
+    RAISE EXCEPTION 'exactly one of duration_ms or wake_at is required';
+  END IF;
+  IF p_duration_ms IS NOT NULL AND p_duration_ms NOT BETWEEN 1 AND 31536000000 THEN
+    RAISE EXCEPTION 'duration_ms must be between 1 and 31536000000';
+  END IF;
+  IF p_wake_at IS NOT NULL AND NOT isfinite(p_wake_at) THEN
+    RAISE EXCEPTION 'wake_at must be finite';
+  END IF;
+  v_mode := CASE WHEN p_duration_ms IS NOT NULL THEN 'relative' ELSE 'absolute' END;
+
+  SELECT * INTO v_runtime
+    FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id
+     AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id
+     AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  v_now := clock_timestamp();
+  IF NOT FOUND OR v_runtime.expires_at <= v_now THEN
+    RETURN QUERY VALUES (
+      'stale'::text, NULL::text, NULL::text, NULL::bigint, NULL::timestamptz,
+      NULL::timestamptz, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
+    );
+    RETURN;
+  END IF;
+
+  v_requested_target := CASE
+    WHEN p_duration_ms IS NOT NULL
+      THEN v_now + make_interval(secs => p_duration_ms::double precision / 1000.0)
+    ELSE p_wake_at
+  END;
+
+  SELECT * INTO v_wait
+    FROM workhorse.job_wait stored
+   WHERE stored.job_id = p_job_id AND stored.wait_name = p_wait_name;
+  IF FOUND THEN
+    IF v_wait.mode <> v_mode
+       OR (v_mode = 'absolute' AND v_wait.requested_wake_at IS DISTINCT FROM p_wake_at) THEN
+      RETURN QUERY VALUES (
+        'conflict'::text, v_wait.wait_name, v_wait.mode, v_wait.duration_ms,
+        v_wait.requested_wake_at, v_wait.wake_at, v_wait.attempt, v_wait.fence_token,
+        v_wait.worker_id, v_wait.created_at
+      );
+      RETURN;
+    END IF;
+
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id,
+        v_runtime.current_attempt,
+        'wait_replayed',
+        jsonb_build_object(
+          'name', p_wait_name,
+          'mode', v_mode,
+          'requested_duration_ms', p_duration_ms,
+          'stored_duration_ms', v_wait.duration_ms,
+          'requested_wake_at', v_requested_target,
+          'stored_wake_at', v_wait.wake_at,
+          'fence_token', p_fence_token
+        )
+      );
+    RETURN QUERY VALUES (
+      'elapsed'::text, v_wait.wait_name, v_wait.mode, v_wait.duration_ms,
+      v_wait.requested_wake_at, v_wait.wake_at, v_wait.attempt, v_wait.fence_token,
+      v_wait.worker_id, v_wait.created_at
+    );
+    RETURN;
+  END IF;
+
+  IF p_wake_at IS NOT NULL AND p_wake_at > v_now + interval '365 days' THEN
+    RAISE EXCEPTION 'wake_at must be no more than 365 days in the future';
+  END IF;
+  IF (SELECT count(*) FROM workhorse.job_wait stored WHERE stored.job_id = p_job_id) >= 1000 THEN
+    RETURN QUERY VALUES (
+      'limit_exceeded'::text, NULL::text, NULL::text, NULL::bigint, NULL::timestamptz,
+      NULL::timestamptz, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
+    );
+    RETURN;
+  END IF;
+
+  INSERT INTO workhorse.job_wait(
+    job_id, wait_name, mode, duration_ms, requested_wake_at, wake_at,
+    attempt, fence_token, worker_id
+  ) VALUES (
+    p_job_id, p_wait_name, v_mode, p_duration_ms, p_wake_at, v_requested_target,
+    v_runtime.current_attempt, p_fence_token, p_worker_id
+  )
+  RETURNING * INTO v_wait;
+
+  IF v_wait.wake_at <= v_now THEN
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id,
+        v_runtime.current_attempt,
+        'wait_elapsed',
+        jsonb_build_object(
+          'name', p_wait_name,
+          'mode', v_mode,
+          'wake_at', v_wait.wake_at,
+          'reason', 'already_due',
+          'fence_token', p_fence_token
+        )
+      );
+    RETURN QUERY VALUES (
+      'elapsed'::text, v_wait.wait_name, v_wait.mode, v_wait.duration_ms,
+      v_wait.requested_wake_at, v_wait.wake_at, v_wait.attempt, v_wait.fence_token,
+      v_wait.worker_id, v_wait.created_at
+    );
+    RETURN;
+  END IF;
+
+  UPDATE workhorse.job_runtime runtime
+     SET state = 'scheduled', run_at = v_wait.wake_at, fence_token = 0,
+         ready_at = NULL, sequence = NULL, worker_id = NULL, acquired_at = NULL,
+         heartbeat_at = NULL, expires_at = NULL, wait_name = p_wait_name,
+         error = NULL, updated_at = clock_timestamp()
+   WHERE runtime.job_id = p_job_id
+     AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id
+     AND runtime.fence_token = p_fence_token
+     AND runtime.expires_at > clock_timestamp();
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'active runtime ownership changed while scheduling wait';
+  END IF;
+
+  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    VALUES (
+      p_job_id,
+      v_runtime.current_attempt,
+      'wait_scheduled',
+      jsonb_build_object(
+        'name', p_wait_name,
+        'mode', v_mode,
+        'duration_ms', p_duration_ms,
+        'requested_wake_at', p_wake_at,
+        'wake_at', v_wait.wake_at,
+        'fence_token', p_fence_token
+      )
+    );
+  RETURN QUERY VALUES (
+    'scheduled'::text, v_wait.wait_name, v_wait.mode, v_wait.duration_ms,
+    v_wait.requested_wake_at, v_wait.wake_at, v_wait.attempt, v_wait.fence_token,
+    v_wait.worker_id, v_wait.created_at
+  );
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.complete_v1(
   p_job_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb DEFAULT 'null'::jsonb
 ) RETURNS boolean
@@ -709,8 +930,12 @@ BEGIN
 
   INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, result)
     VALUES (p_job_id, 'succeeded', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, p_result);
-  INSERT INTO workhorse.attempt_history(job_id, attempt, fence_token, worker_id, outcome, started_at)
-    VALUES (p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'succeeded', v_runtime.acquired_at);
+  INSERT INTO workhorse.attempt_history(
+    job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at
+  ) VALUES (
+    p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'succeeded',
+    v_runtime.attempt_started_at, v_runtime.acquired_at
+  );
   INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
     VALUES (p_job_id, v_runtime.current_attempt, 'succeeded', jsonb_build_object('fence_token', p_fence_token));
   RETURN true;
@@ -729,6 +954,7 @@ DECLARE
   v_run_at timestamptz;
   v_state text;
   v_started_at timestamptz;
+  v_claimed_at timestamptz;
   v_retry_count integer;
   v_retry_delay_seconds double precision;
 BEGIN
@@ -740,7 +966,8 @@ BEGIN
   SELECT * INTO STRICT v_job FROM workhorse.job j WHERE j.id = p_job_id;
 
   IF v_runtime.current_attempt < v_job.max_attempts THEN
-    v_started_at := v_runtime.acquired_at;
+    v_started_at := v_runtime.attempt_started_at;
+    v_claimed_at := v_runtime.acquired_at;
     IF p_retry_delay_ms IS NULL THEN
       -- Sidekiq-inspired retry count is zero-based: the first failed attempt has count 0.
       v_retry_count := v_runtime.current_attempt - 1;
@@ -757,15 +984,18 @@ BEGIN
            ready_at = CASE WHEN v_state = 'ready' THEN clock_timestamp() END,
            sequence = CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
            worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
+           wait_name = NULL, attempt_started_at = NULL,
            error = p_error, updated_at = clock_timestamp()
      WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
        AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
     RETURNING * INTO v_runtime;
     IF NOT FOUND THEN RETURN 'stale'; END IF;
     IF v_state = 'ready' THEN PERFORM pg_notify('workhorse_jobs', v_job.queue_name); END IF;
-    INSERT INTO workhorse.attempt_history(job_id, attempt, fence_token, worker_id, outcome, started_at, error)
+    INSERT INTO workhorse.attempt_history(
+      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+    )
       VALUES (p_job_id, v_runtime.current_attempt - 1, p_fence_token, p_worker_id, 'retry',
-        v_started_at, p_error);
+        v_started_at, v_claimed_at, p_error);
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
       VALUES (p_job_id, v_runtime.current_attempt - 1, 'retry_scheduled',
         jsonb_build_object('next_attempt', v_runtime.current_attempt, 'run_at', v_run_at, 'error', p_error));
@@ -778,8 +1008,12 @@ BEGIN
     v_state := 'failed';
     INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, error)
       VALUES (p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, p_error);
-    INSERT INTO workhorse.attempt_history(job_id, attempt, fence_token, worker_id, outcome, started_at, error)
-      VALUES (p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'failed', v_runtime.acquired_at, p_error);
+    INSERT INTO workhorse.attempt_history(
+      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+    ) VALUES (
+      p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'failed',
+      v_runtime.attempt_started_at, v_runtime.acquired_at, p_error
+    );
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
       VALUES (p_job_id, v_runtime.current_attempt, 'failed', jsonb_build_object('error', p_error));
   END IF;
@@ -816,6 +1050,7 @@ BEGIN
              ready_at = CASE WHEN v_state = 'ready' THEN clock_timestamp() END,
              sequence = CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
              worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
+             wait_name = NULL, attempt_started_at = NULL,
              error = v_error, updated_at = clock_timestamp()
        WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp();
@@ -830,9 +1065,11 @@ BEGIN
         VALUES (v_runtime.job_id, 'failed', v_runtime.current_attempt, v_runtime.fence_token,
           v_runtime.run_at, v_error);
     END IF;
-    INSERT INTO workhorse.attempt_history(job_id, attempt, fence_token, worker_id, outcome, started_at, error)
+    INSERT INTO workhorse.attempt_history(
+      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+    )
       VALUES (v_runtime.job_id, v_runtime.current_attempt, v_runtime.fence_token, v_runtime.worker_id,
-        'lease_expired', v_runtime.acquired_at, v_error);
+        'lease_expired', v_runtime.attempt_started_at, v_runtime.acquired_at, v_error);
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
       VALUES (v_runtime.job_id, v_runtime.current_attempt, 'lease_expired',
         jsonb_build_object('fence_token', v_runtime.fence_token, 'next_state', v_state));
@@ -1005,7 +1242,7 @@ BEGIN
     'INSERT INTO workhorse.%I (event_id, job_id, attempt, event_type, details, occurred_at) OVERRIDING SYSTEM VALUE SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM %I',
     v_event_partition, v_event_staging);
   EXECUTE format(
-    'INSERT INTO workhorse.%I (attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, finished_at, error, occurred_at) OVERRIDING SYSTEM VALUE SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, finished_at, error, occurred_at FROM %I',
+    'INSERT INTO workhorse.%I (attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at) OVERRIDING SYSTEM VALUE SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at FROM %I',
     v_attempt_partition, v_attempt_staging);
   EXECUTE format('DROP TABLE %I', v_event_staging);
   EXECUTE format('DROP TABLE %I', v_attempt_staging);
@@ -1029,7 +1266,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (6) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (7) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
   FROM generate_series(0, 4) AS weeks(week_offset);
 
