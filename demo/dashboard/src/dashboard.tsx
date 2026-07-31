@@ -191,7 +191,7 @@ function activityChartKey(group: string): string {
 }
 
 type PageRoute = "/tasks" | "/cron" | "/queues" | "/system" | "/workers" | "/settings";
-type DemoJobKind = "success" | "retry" | "durable" | "failure" | "long-running";
+type DemoJobKind = "success" | "retry" | "durable" | "timer" | "failure" | "long-running";
 type DurableDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
@@ -347,6 +347,64 @@ function formatDuration(milliseconds: number | null | undefined): string {
   return `${Math.round(milliseconds / 60_000)} min`;
 }
 
+/** Wall-clock time of day, used when a date alone would be too long for a table row. */
+function formatClock(value: string | null | undefined): string {
+  if (!value) return "—";
+  return getDateTimeFormatter({
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZone: displayTimeZone ?? undefined,
+  }).format(new Date(value));
+}
+
+/**
+ * Remaining time until a target, clamped at zero. A durable wait target that has
+ * passed is not negative time; the task is simply eligible to be claimed again.
+ */
+function formatCountdown(targetIso: string, nowMs: number): string {
+  const remainingMs = Math.max(0, new Date(targetIso).getTime() - nowMs);
+  if (remainingMs < 1_000) return "0s";
+  const totalSeconds = Math.floor(remainingMs / 1_000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/** True once the target has passed; re-renders once at the target instead of ticking. */
+function useElapsed(targetIso: string | null): boolean {
+  const [elapsed, setElapsed] = useState(
+    () => targetIso !== null && new Date(targetIso).getTime() <= Date.now(),
+  );
+  useEffect(() => {
+    if (targetIso === null) return;
+    const remainingMs = new Date(targetIso).getTime() - Date.now();
+    if (remainingMs <= 0) {
+      setElapsed(true);
+      return;
+    }
+    setElapsed(false);
+    const timer = setTimeout(() => setElapsed(true), remainingMs);
+    return () => clearTimeout(timer);
+  }, [targetIso]);
+  return elapsed;
+}
+
+/** Ticking clock for countdowns. Pass `false` to stop ticking when nothing counts down. */
+function useNow(active: boolean, intervalMs = 1_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [active, intervalMs]);
+  return now;
+}
+
 function checkpointOutput(value: unknown): string {
   if (value && typeof value === "object" && "output" in value) {
     const output = (value as { output?: unknown }).output;
@@ -443,7 +501,8 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
         </Stepper.Completed>
       </Stepper>
       <Text c="dimmed" size="xs" mt="sm">
-        The step plan belongs to this demo. Workhorse stores only the completed checkpoint evidence.
+        The step plan belongs to this demo. Workhorse stores checkpoint and wait evidence, not a
+        workflow graph.
       </Text>
       {unmatchedCheckpoints.length > 0 ? (
         <Box mt="md">
@@ -519,6 +578,297 @@ function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
   );
 }
 
+type DurableWait = DashboardJobDetail["waits"][number];
+type JobEvent = DashboardJobDetail["events"][number];
+type WaitPhase = "sleeping" | "waking" | "resumed";
+
+const waitPhaseLabel: Record<WaitPhase, string> = {
+  sleeping: "Sleeping",
+  waking: "Waking",
+  resumed: "Resumed",
+};
+const waitPhaseColor: Record<WaitPhase, string> = {
+  sleeping: "indigo",
+  waking: "cyan",
+  resumed: "teal",
+};
+
+/** Exact replay wording for a durable wait boundary; kept verbatim on purpose. */
+const waitReplayWording =
+  "When the target elapses, the next claim restarts the handler from its entry point within the same logical attempt.";
+
+/**
+ * Phase of one stored wait. Only the runtime row currently marked with this wait
+ * name is still suspended; anything else means the handler already restarted.
+ */
+function waitPhaseFor(job: DashboardJobDetail, wait: DurableWait, nowMs: number): WaitPhase {
+  const runtime = job.current.runtime;
+  if (!runtime || runtime.waitName !== wait.name) return "resumed";
+  return new Date(wait.wakeAt).getTime() > nowMs ? "sleeping" : "waking";
+}
+
+function eventDetail(event: JobEvent, key: string): string | null {
+  const details = event.details;
+  if (!details || typeof details !== "object") return null;
+  const value = (details as Record<string, unknown>)[key];
+  if (value === null || value === undefined) return null;
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+const boundaryEventTypes = new Set([
+  "wait_scheduled",
+  "wait_elapsed",
+  "wait_replayed",
+  "claimed",
+  "checkpoint_saved",
+]);
+
+const boundaryEventLabels: Record<string, string> = {
+  wait_scheduled: "Wait scheduled",
+  wait_elapsed: "Wait elapsed",
+  wait_replayed: "Wait replayed",
+  claimed: "Claimed",
+  checkpoint_saved: "Checkpoint saved",
+};
+
+const boundaryEventColors: Record<string, string> = {
+  wait_scheduled: "indigo",
+  wait_elapsed: "cyan",
+  wait_replayed: "grape",
+  claimed: "blue",
+  checkpoint_saved: "teal",
+};
+
+/**
+ * Compact ordered view of the recorded boundary events for this task. Repeated
+ * claims inside one attempt are called out, because a durable wait releases
+ * ownership without closing the logical attempt.
+ */
+function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
+  const events = job.events.filter((event) => boundaryEventTypes.has(event.type));
+  if (events.length === 0) return null;
+  const claimsPerAttempt = new Map<number | null, number>();
+  const claimOrdinals = new Map<string, number>();
+  for (const event of events) {
+    if (event.type !== "claimed") continue;
+    const ordinal = (claimsPerAttempt.get(event.attempt) ?? 0) + 1;
+    claimsPerAttempt.set(event.attempt, ordinal);
+    claimOrdinals.set(event.id, ordinal);
+  }
+  const repeatedClaimAttempts: Array<number | null> = [];
+  for (const [attempt, count] of claimsPerAttempt) {
+    if (count > 1) repeatedClaimAttempts.push(attempt);
+  }
+  return (
+    <Box mt="md">
+      <Text fw={600} size="xs" mb={6}>
+        Boundary timeline
+      </Text>
+      <Stack gap={4}>
+        {events.map((event) => {
+          const claimIndex = claimOrdinals.get(event.id) ?? null;
+          const name = eventDetail(event, "name");
+          const fence = eventDetail(event, "fence_token");
+          const worker = eventDetail(event, "worker_id");
+          const reason = eventDetail(event, "reason");
+          const parts = [
+            name,
+            worker,
+            fence === null ? null : `fence ${fence}`,
+            reason === null ? null : `reason ${reason}`,
+          ].filter((part): part is string => part !== null);
+          return (
+            <Group key={event.id} gap="xs" wrap="nowrap" align="flex-start">
+              <Badge
+                size="xs"
+                variant="light"
+                color={boundaryEventColors[event.type] ?? "gray"}
+                tt="none"
+                miw={116}
+              >
+                {boundaryEventLabels[event.type] ?? event.type}
+              </Badge>
+              <Text c="dimmed" size="xs" style={{ flex: 1, minWidth: 0 }} lineClamp={1}>
+                {event.attempt === null ? "no attempt" : `attempt ${event.attempt}`}
+                {claimIndex === null ? "" : ` · claim ${claimIndex}`}
+                {parts.length > 0 ? ` · ${parts.join(" · ")}` : ""}
+              </Text>
+              <Text c="dimmed" size="xs" title={formatExact(event.occurredAt)} ta="right">
+                {formatClock(event.occurredAt)}
+              </Text>
+            </Group>
+          );
+        })}
+      </Stack>
+      {repeatedClaimAttempts.length > 0 ? (
+        <Text c="dimmed" size="xs" mt={6}>
+          {repeatedClaimAttempts.length === 1
+            ? `Attempt ${repeatedClaimAttempts[0]} was claimed ${claimsPerAttempt.get(repeatedClaimAttempts[0]!)} times.`
+            : `Attempts ${repeatedClaimAttempts.join(", ")} were each claimed more than once.`}{" "}
+          A durable wait releases ownership without closing the logical attempt, so one attempt can
+          hold several claims with different fence tokens.
+        </Text>
+      ) : null}
+    </Box>
+  );
+}
+
+/** One stored wait row rendered with its release proof and immutable provenance. */
+function DurableWaitCard({
+  job,
+  wait,
+  nowMs,
+}: {
+  job: DashboardJobDetail;
+  wait: DurableWait;
+  nowMs: number;
+}) {
+  const phase = waitPhaseFor(job, wait, nowMs);
+  const runtime = job.current.runtime;
+  const suspended = phase !== "resumed" && runtime !== null;
+  return (
+    <Paper withBorder p="sm">
+      <Group justify="space-between" align="flex-start">
+        <Box style={{ minWidth: 0 }}>
+          <Text fw={600} size="sm">
+            {wait.name}
+          </Text>
+          <Text c="dimmed" size="xs">
+            {wait.mode === "relative"
+              ? `Relative · requested ${formatDuration(wait.durationMs)}`
+              : `Absolute · requested ${formatExact(wait.requestedWakeAt)}`}
+          </Text>
+        </Box>
+        <Badge variant="light" color={waitPhaseColor[phase]} tt="none">
+          {waitPhaseLabel[phase]}
+        </Badge>
+      </Group>
+      <Divider my="sm" />
+      <Stack gap={4}>
+        <Group justify="space-between" gap="xs" wrap="nowrap">
+          <Text c="dimmed" size="xs">
+            Not before
+          </Text>
+          <Text size="xs" ta="right">
+            {formatExact(wait.wakeAt)}
+          </Text>
+        </Group>
+        <Group justify="space-between" gap="xs" wrap="nowrap">
+          <Text c="dimmed" size="xs">
+            {phase === "resumed" ? "Target passed" : "Time remaining"}
+          </Text>
+          <Text size="xs" ta="right">
+            {phase === "resumed"
+              ? formatRelative(wait.wakeAt)
+              : formatCountdown(wait.wakeAt, nowMs)}
+          </Text>
+        </Group>
+      </Stack>
+      <Divider my="sm" />
+      <Text fw={600} size="xs" mb={4}>
+        {suspended ? "Ownership released while scheduled" : "Ownership at this boundary"}
+      </Text>
+      {suspended ? (
+        <Stack gap={2}>
+          <Text c="dimmed" size="xs">
+            Worker {runtime.workerId === null ? "null" : runtime.workerId} · fence{" "}
+            {runtime.fenceToken}
+          </Text>
+          <Text c="dimmed" size="xs">
+            Lease expiry {runtime.expiresAt === null ? "null" : formatExact(runtime.expiresAt)} ·
+            heartbeat {runtime.heartbeatAt === null ? "null" : formatExact(runtime.heartbeatAt)}
+          </Text>
+          <Text c="dimmed" size="xs">
+            Runtime state {runtime.state} · wait marker{" "}
+            {runtime.waitName === null ? "null" : runtime.waitName}
+          </Text>
+        </Stack>
+      ) : (
+        <Text c="dimmed" size="xs">
+          This wait is no longer the current runtime marker, so its release is recorded in the
+          events below rather than in live runtime columns.
+        </Text>
+      )}
+      <Divider my="sm" />
+      <Text fw={600} size="xs" mb={4}>
+        Attempt preserved across the wait
+      </Text>
+      <Stack gap={2}>
+        <Text c="dimmed" size="xs">
+          Wait recorded on attempt {wait.attempt}
+          {runtime ? ` · runtime attempt ${runtime.attempt}` : ""}
+        </Text>
+        {runtime?.attemptStartedAt ? (
+          <Text c="dimmed" size="xs" title={formatExact(runtime.attemptStartedAt)}>
+            Logical attempt started {formatRelative(runtime.attemptStartedAt)}
+          </Text>
+        ) : null}
+      </Stack>
+      <Divider my="sm" />
+      <Text fw={600} size="xs" mb={4}>
+        Immutable wait provenance
+      </Text>
+      <Text c="dimmed" size="xs" title={formatExact(wait.createdAt)}>
+        Authorized by {wait.workerId} · fence {wait.fenceToken} · attempt {wait.attempt} ·{" "}
+        {formatRelative(wait.createdAt)}
+      </Text>
+    </Paper>
+  );
+}
+
+/**
+ * Durable wait evidence for one task. Waits are stored rows, not a workflow graph,
+ * so this panel reports only what Workhorse recorded.
+ */
+function DurableWaits({ job }: { job: DashboardJobDetail }) {
+  const runtimeWaitName = job.current.runtime?.waitName ?? null;
+  const nowMs = useNow(runtimeWaitName !== null);
+  if (job.waits.length === 0) return null;
+  const planNames = new Set((job.durability?.steps ?? []).map((step) => step.name));
+  const unmatchedWaits = job.waits.filter((wait) => !planNames.has(wait.name));
+  const matchedWaits = job.waits.filter((wait) => planNames.has(wait.name));
+  return (
+    <Box>
+      <Group justify="space-between" mb="xs">
+        <Text fw={600} size="sm">
+          Durable wait
+        </Text>
+        <Badge variant="light" color="indigo">
+          {job.waits.length}
+        </Badge>
+      </Group>
+      <Stack gap="sm">
+        {matchedWaits.map((wait) => (
+          <DurableWaitCard key={wait.name} job={job} wait={wait} nowMs={nowMs} />
+        ))}
+      </Stack>
+      {unmatchedWaits.length > 0 ? (
+        <Box mt={matchedWaits.length > 0 ? "md" : undefined}>
+          {matchedWaits.length > 0 ? (
+            <Text fw={600} size="xs" mb={4}>
+              Additional wait evidence
+            </Text>
+          ) : null}
+          <Stack gap="sm">
+            {unmatchedWaits.map((wait) => (
+              <DurableWaitCard key={wait.name} job={job} wait={wait} nowMs={nowMs} />
+            ))}
+          </Stack>
+        </Box>
+      ) : null}
+      <Text c="dimmed" size="xs" mt="sm">
+        A stored target is a not-before time. Promotion cadence, queue pause, worker availability,
+        and database availability can make the actual wake later, so the elapsed wall-clock time is
+        at least the requested duration. {waitReplayWording}
+      </Text>
+      <Text c="dimmed" size="xs" mt={6}>
+        Workhorse stores checkpoint and wait evidence, not a workflow graph.
+      </Text>
+      <BoundaryTimeline job={job} />
+    </Box>
+  );
+}
+
 function DurableProgressBadge({ job }: { job: DashboardJobRow }) {
   if (!job.durability) return null;
   return (
@@ -556,7 +906,7 @@ const activityStatusColors: Record<string, string> = {
 
 function StatusBadge({ state }: { state: string }) {
   return (
-    <Badge color={statusColor(state)} variant="light" tt="capitalize">
+    <Badge color={statusColor(state)} variant="light" tt="capitalize" style={{ flexShrink: 0 }}>
       {state}
     </Badge>
   );
@@ -566,7 +916,11 @@ function StatusBadge({ state }: { state: string }) {
 function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
   let detail: string | null = null;
   let exactTime: string | null = null;
-  if (job.state === "scheduled" && job.runAt) {
+  if (job.state === "scheduled" && job.wait) {
+    // A durable wait is a scheduled restart boundary, not an owned execution.
+    detail = `sleeping until ${formatClock(job.wait.wakeAt)} · ${job.wait.name}`;
+    exactTime = formatExact(job.wait.wakeAt);
+  } else if (job.state === "scheduled" && job.runAt) {
     detail = `runs ${formatRelative(job.runAt)}`;
     exactTime = formatExact(job.runAt);
   } else if (job.state === "active" && job.workerId) detail = `on ${job.workerId}`;
@@ -586,6 +940,29 @@ function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
     >
       {detail}
     </Text>
+  );
+}
+
+/**
+ * Badge for a scheduled durable wait. "Waking" means the stored target has passed
+ * and the task is eligible for promotion and a fresh claim, not that a worker holds it.
+ */
+function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
+  const scheduledWait = job.state === "scheduled" ? job.wait : null;
+  const due = useElapsed(scheduledWait?.wakeAt ?? null);
+  if (!scheduledWait) return null;
+  return (
+    <Badge
+      size="sm"
+      variant="light"
+      color={due ? "cyan" : "indigo"}
+      leftSection={<Clock size={11} weight="bold" />}
+      tt="none"
+      title={`Durable wait ${scheduledWait.name} · not before ${formatExact(scheduledWait.wakeAt)}`}
+      style={{ flexShrink: 0 }}
+    >
+      {due ? "Waking" : "Sleeping"}
+    </Badge>
   );
 }
 
@@ -1083,6 +1460,12 @@ function TasksPage({
                     Durable · report publication · 3 steps
                   </Menu.Item>
                   <Menu.Item
+                    leftSection={<Clock size={16} />}
+                    onClick={() => void runDemoJob("timer")}
+                  >
+                    Durable wait · named timer boundary
+                  </Menu.Item>
+                  <Menu.Item
                     leftSection={<XCircle size={16} />}
                     color="red"
                     onClick={() => void runDemoJob("failure")}
@@ -1135,7 +1518,7 @@ function TasksPage({
                 <Table.Th>Task</Table.Th>
                 <Table.Th>Queue</Table.Th>
                 <Table.Th>Args</Table.Th>
-                <Table.Th>Status</Table.Th>
+                <Table.Th miw={280}>Status</Table.Th>
                 <Table.Th ta="right">Attempt</Table.Th>
                 <Table.Th ta="right">Duration</Table.Th>
                 <Table.Th ta="right">Updated</Table.Th>
@@ -1194,6 +1577,7 @@ function TasksPage({
                     <Table.Td>
                       <Group gap="xs" wrap="nowrap">
                         <StatusBadge state={job.state} />
+                        <TaskWaitBadge job={job} />
                         <TaskStatusDetail job={job} />
                       </Group>
                     </Table.Td>
@@ -3045,6 +3429,7 @@ export function Dashboard() {
               <Code block>{JSON.stringify(selectedJob.payload, null, 2)}</Code>
             </Box>
             <JobCheckpoints job={selectedJob} />
+            <DurableWaits job={selectedJob} />
             <Box>
               <Text fw={600} size="sm" mb="xs">
                 Attempt history
@@ -3063,8 +3448,13 @@ export function Dashboard() {
                         </Text>
                         <StatusBadge state={attempt.outcome} />
                       </Group>
-                      <Text c="dimmed" size="xs" mt={4}>
-                        {attempt.workerId} · {formatDuration(attempt.durationMs)}
+                      <Text c="dimmed" size="xs" mt={4} title={formatExact(attempt.startedAt)}>
+                        {attempt.workerId} · executing {formatDuration(attempt.executionMs)} ·
+                        elapsed {formatDuration(attempt.elapsedMs)}
+                      </Text>
+                      <Text c="dimmed" size="xs" title={formatExact(attempt.claimedAt)}>
+                        Logical start {formatClock(attempt.startedAt)} · final claim{" "}
+                        {formatClock(attempt.claimedAt)}
                       </Text>
                       {attempt.error ? (
                         <Code block mt="sm">
