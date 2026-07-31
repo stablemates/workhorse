@@ -10,7 +10,7 @@ body {
 
 .workhorse-brand__mark {
   align-items: center;
-  background: #0b0d10;
+  background: transparent;
   border-radius: 9px;
   display: flex;
   height: 38px;
@@ -107,6 +107,10 @@ html[data-theme="workhorse"] .workhorse-brand__mark {
 
 html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
   filter: none;
+}
+
+html[data-mantine-color-scheme="dark"] .workhorse-brand__mark {
+  background: #0b0d10;
 }
 
 @media (max-width: 36em) {
