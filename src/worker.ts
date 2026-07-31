@@ -206,18 +206,31 @@ export class Worker {
 
     try {
       await this.inject("beforeHandler", job);
-      const [prefetchedCheckpoints, prefetchedWaits] = await Promise.all([
-        this.queue.listCheckpoints(job.id),
-        this.queue.listWaits(job.id),
-      ]);
-      const checkpoints = new Map(prefetchedCheckpoints.map((item) => [item.name, item]));
-      const waits = new Map(prefetchedWaits.map((item) => [item.name, item]));
+      let checkpoints: Map<string, JobCheckpoint> | undefined;
+      let checkpointsLoad: Promise<Map<string, JobCheckpoint>> | undefined;
+      const loadCheckpoints = (): Promise<Map<string, JobCheckpoint>> => {
+        checkpointsLoad ??= this.queue.listCheckpoints(job.id).then((items) => {
+          checkpoints = new Map(items.map((item) => [item.name, item]));
+          return checkpoints;
+        });
+        return checkpointsLoad;
+      };
+      let waits: Map<string, JobWait> | undefined;
+      let waitsLoad: Promise<Map<string, JobWait>> | undefined;
+      const loadWaits = (): Promise<Map<string, JobWait>> => {
+        waitsLoad ??= this.queue.listWaits(job.id).then((items) => {
+          waits = new Map(items.map((item) => [item.name, item]));
+          return waits;
+        });
+        return waitsLoad;
+      };
       // No database transaction or row lock spans this call. Handlers are at least once and must
       // use external idempotency for effects that cannot safely repeat.
       const getCheckpoint: HandlerContext["getCheckpoint"] = async <TValue extends Json>(
         name: string,
-      ) => (checkpoints.get(name) as JobCheckpoint<TValue> | undefined) ?? null;
-      const getWait: HandlerContext["getWait"] = async (name: string) => waits.get(name) ?? null;
+      ) => ((await loadCheckpoints()).get(name) as JobCheckpoint<TValue> | undefined) ?? null;
+      const getWait: HandlerContext["getWait"] = async (name: string) =>
+        (await loadWaits()).get(name) ?? null;
       const inFlightCheckpoints = new Map<string, Promise<Json>>();
       const checkpoint: HandlerContext["checkpoint"] = async <TValue extends Json>(
         name: string,
@@ -226,13 +239,14 @@ export class Worker {
         const pending = inFlightCheckpoints.get(name);
         if (pending) return (await pending) as TValue;
         const execution = (async (): Promise<TValue> => {
-          const existing = checkpoints.get(name) as JobCheckpoint<TValue> | undefined;
+          const checkpointCache = await loadCheckpoints();
+          const existing = checkpointCache.get(name) as JobCheckpoint<TValue> | undefined;
           if (existing) return existing.value;
           if (controller.signal.aborted)
             throw controller.signal.reason ?? new Error("Job lease was lost");
           const value = await operation();
           const saved = await this.queue.saveCheckpoint(job, this.workerId, name, value);
-          checkpoints.set(name, saved);
+          checkpointCache.set(name, saved);
           return saved.value;
         })();
         inFlightCheckpoints.set(name, execution);
@@ -254,7 +268,7 @@ export class Worker {
             throw controller.signal.reason ?? new Error("Job lease was lost");
           }
           const scheduled = await this.queue.scheduleWait(job, this.workerId, name, request);
-          waits.set(name, scheduled.wait);
+          waits?.set(name, scheduled.wait);
           if (scheduled.status === "scheduled") {
             durablySuspended = true;
             controller.abort(DURABLE_WAIT_SUSPENSION);
