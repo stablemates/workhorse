@@ -26,10 +26,14 @@ const RETRY_JOB_TYPE = "demo.retry";
 const RETRY_CHECKPOINT_NAME = "reserve-capacity";
 const FAILURE_JOB_TYPE = "demo.failure";
 const LONG_RUNNING_JOB_TYPE = "demo.long-running";
+export const DURABLE_TIMER_JOB_TYPE = "demo.durable-timer";
+export const DURABLE_TIMER_PREPARE_CHECKPOINT = "prepare-publication";
+export const DURABLE_TIMER_WAIT_NAME = "publication-delay";
+export const DURABLE_TIMER_PUBLISH_CHECKPOINT = "publish-after-wait";
 const RECURRING_JOB_TYPE = "demo.recurring";
 const REPORT_JOB_TYPE = "demo.report";
 const DEMO_QUEUE = "demo";
-const REPRESENTATIVE_SEED_NAME = "default-dashboard-v4";
+const REPRESENTATIVE_SEED_NAME = "default-dashboard-v5";
 const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
@@ -38,6 +42,7 @@ export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
 export const DEMO_HOUSEKEEPING_INTERVAL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_DURABLE_STEP_MS = 2_000;
+export const DEMO_DURABLE_TIMER_WAIT_MS = 10_000;
 export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
 export const REPORT_SCHEDULE_NAME = "demo.report";
@@ -47,6 +52,7 @@ const DEMO_INDEX = {
     "POST /orders",
     "POST /demo/retries",
     "POST /demo/durable",
+    "POST /demo/timers",
     "POST /demo/failures",
     "GET /orders/:id",
     "GET /jobs/:id",
@@ -75,10 +81,16 @@ export interface CreateDemoApplicationOptions {
   housekeepingIntervalMs?: number;
   longRunningJobMs?: number;
   durableStepMs?: number;
+  durableTimerWaitMs?: number;
   onDurableStepOperation?: (
     scenario: DurableDemoScenario,
     stepName: string,
     attempt: number,
+  ) => void;
+  onDurableTimerOperation?: (
+    operation: "prepare" | "publish",
+    attempt: number,
+    fenceToken: bigint,
   ) => void;
 }
 
@@ -92,7 +104,7 @@ export interface AuditContext {
 export interface DashboardOperator {
   mode: "read-only" | "local";
   enqueueTest?: (
-    kind: "success" | "retry" | "durable" | "failure" | "long-running",
+    kind: "success" | "retry" | "durable" | "timer" | "failure" | "long-running",
     audit: AuditContext,
     scenario?: DurableDemoScenario,
   ) => Promise<{ jobId: string }>;
@@ -460,6 +472,14 @@ function demoTestJob(
       tags: ["demo-test", "durable-checkpoint", scenario],
     };
   }
+  if (kind === "timer") {
+    return {
+      type: DURABLE_TIMER_JOB_TYPE,
+      payload: { source: "operator" },
+      maxAttempts: 1,
+      tags: ["demo-test", "durable-checkpoint", "durable-timer"],
+    };
+  }
   if (kind === "failure") {
     return {
       type: FAILURE_JOB_TYPE,
@@ -621,6 +641,7 @@ export function createDemoApplication(
   const maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS;
   const housekeepingIntervalMs = options.housekeepingIntervalMs ?? DEMO_HOUSEKEEPING_INTERVAL_MS;
   const durableStepMs = options.durableStepMs ?? DEMO_DURABLE_STEP_MS;
+  const durableTimerWaitMs = options.durableTimerWaitMs ?? DEMO_DURABLE_TIMER_WAIT_MS;
   const dashboardRefresh = options.dashboardRefresh ?? new DashboardRefreshHub();
   const environment = options.environment ?? "development";
   // Worker pause state belongs to this application process and intentionally resets on restart.
@@ -724,6 +745,58 @@ export function createDemoApplication(
             };
           },
         );
+        worker.handle<{ source: string }>(DURABLE_TIMER_JOB_TYPE, async ({ source }, context) => {
+          const currentFence = context.job.fenceToken.toString();
+          const prepared = await context.checkpoint(DURABLE_TIMER_PREPARE_CHECKPOINT, () => {
+            options.onDurableTimerOperation?.(
+              "prepare",
+              context.job.attempt,
+              context.job.fenceToken,
+            );
+            return {
+              artifactId: randomUUID(),
+              preparedAt: new Date().toISOString(),
+              preparedOnAttempt: context.job.attempt,
+              preparedOnFence: currentFence,
+            };
+          });
+          dashboardRefresh.publish("worker");
+
+          const existingWait = await context.getWait(DURABLE_TIMER_WAIT_NAME);
+          await context.sleep(DURABLE_TIMER_WAIT_NAME, durableTimerWaitMs);
+          const durableWait = await context.getWait(DURABLE_TIMER_WAIT_NAME);
+          if (!durableWait) throw new Error("Durable timer wait was not replayed");
+
+          const publication = await context.checkpoint(DURABLE_TIMER_PUBLISH_CHECKPOINT, () => {
+            options.onDurableTimerOperation?.(
+              "publish",
+              context.job.attempt,
+              context.job.fenceToken,
+            );
+            return {
+              publicationId: randomUUID(),
+              publishedAt: new Date().toISOString(),
+              publishedOnAttempt: context.job.attempt,
+              publishedOnFence: currentFence,
+            };
+          });
+          dashboardRefresh.publish("worker");
+
+          return {
+            source,
+            completed: true,
+            attempt: context.job.attempt,
+            prepareCheckpointReused: prepared.preparedOnFence !== currentFence,
+            waitReplayed: existingWait !== null,
+            wait: {
+              name: durableWait.name,
+              wakeAt: new Date(durableWait.wakeAt).toISOString(),
+              firstFence: durableWait.fenceToken.toString(),
+            },
+            prepared,
+            publication,
+          };
+        });
         worker.handle<{ source: string }>(RECURRING_JOB_TYPE, async ({ source }, { job }) => {
           dashboardRefresh.publish("worker");
           return { source, recurring: true, attempt: job.attempt };
@@ -831,6 +904,25 @@ export function createDemoApplication(
           scenario,
           checkpointPlan: definition.steps.map((step) => step.name),
           expectedAttempts: 2,
+        },
+        202,
+      );
+    })
+    .post("/demo/timers", async (context) => {
+      const jobId = await context.var.workhorse.queue.enqueue(
+        DURABLE_TIMER_JOB_TYPE,
+        { source: "http" },
+        { maxAttempts: 1, tags: ["demo-test", "durable-checkpoint", "durable-timer"] },
+      );
+      dashboardRefresh.publish("enqueue");
+      return context.json(
+        {
+          jobId,
+          status: "queued",
+          expectedAttempt: 1,
+          prepareCheckpoint: DURABLE_TIMER_PREPARE_CHECKPOINT,
+          waitName: DURABLE_TIMER_WAIT_NAME,
+          publishCheckpoint: DURABLE_TIMER_PUBLISH_CHECKPOINT,
         },
         202,
       );
@@ -966,13 +1058,14 @@ async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
     `);
     await transaction.execute(sql`
       INSERT INTO workhorse.attempt_history
-        (job_id, attempt, fence_token, worker_id, outcome, started_at, finished_at, error, occurred_at)
+        (job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
+         finished_at, error, occurred_at)
       VALUES ${sql.join(
         jobs.flatMap((job) =>
           job.attempts.map(
             (attempt) => sql`(
               ${job.id}, ${attempt.attempt}, ${attempt.fenceToken}, ${attempt.workerId},
-              ${attempt.outcome}, ${attempt.startedAt}, ${attempt.finishedAt},
+              ${attempt.outcome}, ${attempt.startedAt}, ${attempt.startedAt}, ${attempt.finishedAt},
               ${jsonbValue(attempt.error)}, ${attempt.finishedAt}
             )`,
           ),
@@ -1005,6 +1098,13 @@ export async function seedDemoData(database: DemoDatabase) {
     });
     seededJobIds.push(
       await workhorse.queue.enqueue(ORDER_JOB_TYPE, { orderId }, { tags: ["billing"] }),
+    );
+    seededJobIds.push(
+      await workhorse.queue.enqueue(
+        DURABLE_TIMER_JOB_TYPE,
+        { source: "representative-seed" },
+        { maxAttempts: 1, tags: ["demo-test", "durable-checkpoint", "durable-timer"] },
+      ),
     );
     seededJobIds.push(
       await workhorse.queue.enqueue(

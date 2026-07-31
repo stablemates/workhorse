@@ -16,9 +16,11 @@ The demo now proves these paths against PostgreSQL rather than mocks:
   reuses the checkpoint value when attempt 2 succeeds;
 - three demo-declared pipelines expose multi-step checkpoint progress for order fulfillment, customer
   onboarding, and report publication without treating the presentation plan as a core workflow graph;
+- a named durable timer demo checkpoints preparation, suspends with no active lease, and later reclaims the
+  same logical attempt with a new fence; replay reuses preparation exactly once before publishing;
 - the worker-owned scheduler synchronizes and fires a recurring definition with occurrence deduplication;
-- the typed oRPC snapshot exposes queues, jobs, checkpoint provenance, demo-owned progress plans,
-  schedules, workers, failures, and database health;
+- the typed oRPC snapshot exposes queues, jobs, checkpoint and wait provenance, logical and final-claim
+  attempt timestamps, demo-owned progress plans, schedules, workers, failures, and database health;
 - the dashboard can be omitted without changing core queue behavior;
 - `pnpm demo` recreates only a purpose-guarded demo database, builds the workspace, and serves the app.
 
@@ -31,6 +33,17 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 | Integration | A dashboard coupled to process startup would make the queue unusable in API-only deployments.                 | Added `{ dashboard: false }` and an integration test that proves workers and Hono routes remain functional.   |
 | Correctness | Transactional enqueue was documented but not demonstrated through an ORM-owned request transaction.           | Added a test comparing PostgreSQL `xmin` for the application row and accepted job.                            |
 | Operations  | Browser polling would repeatedly read queue tables even when nothing changed.                                 | Added coalesced SSE invalidation hints backed by local events, PostgreSQL `LISTEN`, and a bounded fallback.   |
+| Timing      | A sleeping job could look worker-owned or inflate execution time across the sleep.                            | Project current ownership separately from last-held provenance and compute execution from final `claimed_at`. |
+
+The timer demo deliberately uses only a named relative wait as its primary proof. The visible default is ten
+seconds so operators can inspect the sleeping row. The approximately one-second maintenance cadence is only
+a floor and queue state, process downtime, conservative worker polling, or worker availability can delay
+promotion and claim. Test-only options shorten the wait and observe checkpoint callbacks without changing
+the normal path.
+
+Named waits persist timer boundaries, not JavaScript stacks. A resumed handler starts from its entry point,
+so side effects before `sleep` must be checkpointed or independently idempotent. The demo's prepare/wait/
+publish narrative is presentation and handler structure, not a persisted workflow graph.
 
 ## Remaining API gaps
 
@@ -106,7 +119,7 @@ with an explicit mounting API. Keep the dashboard optional and avoid adding Reac
 
 ### D1. Schema upgrades are not documented because they do not exist
 
-`installSchema()` intentionally rejects non-v6 or mixed installations. The live demo exposed how quickly
+`installSchema()` intentionally rejects non-v7 or mixed installations. The live demo exposed how quickly
 that clean-install boundary becomes user-visible.
 
 **Needed:** ordered transactional migrations, independent schema and protocol versions, dry-run/status

@@ -28,11 +28,11 @@ development proxy. The JSON API index remains available at `http://workhorse.loc
 Each run allocates a free internal Hono port so multiple worktrees can run concurrently. Set
 `WORKHORSE_API_PORT` only when an explicit internal port is required, or `WORKHORSE_WORKER_POLL_MS` to
 override the workers' 15-second idle polling delay.
-Startup seeds one successful transactional order, one checkpointed recoverable retry, three multi-step
-durable pipelines, one terminal failure, and one future scheduled job. The durable pipelines cover order
+Startup seeds one successful transactional order, one named durable timer, one checkpointed recoverable
+retry, three multi-step durable pipelines, one terminal failure, and one future scheduled job. The durable pipelines cover order
 fulfillment, customer onboarding, and report publication. Each intentionally crashes after a different
 checkpoint on attempt 1, then resumes without repeating the completed operations. Use the dashboard's
-**enqueue test job** menu to create fresh success, retry, durable pipeline, failure, and 20-second
+**enqueue test job** menu to create fresh success, retry, durable pipeline, durable timer, failure, and 20-second
 long-running paths. Durable rows show a violet **Durable N/M** badge, and their task drawer uses a Mantine
 Stepper to show saved, running, and pending restart boundaries. Each new durable operation takes two
 seconds so progress remains visible. Set `SEED_DEMO_DATA=false` to start empty instead. The versioned seed
@@ -74,6 +74,24 @@ then the handler crashes deliberately. Attempt 2 reuses both checkpoint values b
 `authorize-payment` and `arrange-shipment`. The Stepper plan is demo-owned presentation metadata;
 Workhorse itself stores only immutable checkpoint evidence. The other supported scenarios are
 `customer-onboarding` and `report-publication`.
+
+Create a publication job that prepares once, releases its lease into a named durable timer, and publishes
+after a later claim:
+
+```bash
+curl --fail-with-body --request POST http://workhorse.localhost:43155/demo/timers
+```
+
+The first activation saves `prepare-publication`, schedules the immutable `publication-delay` wait, and
+returns ownership to PostgreSQL without consuming attempt 1. The task row remains scheduled with no active
+worker, while retaining the wait name, wake time, and last-held worker provenance. After promotion, a new
+claim gets a new fence in the same logical attempt. Handler code restarts, reuses the prepare checkpoint,
+replays the named wait, saves `publish-after-wait`, and succeeds. The normal demo uses a ten-second wait so
+the Sleeping state remains visible. Its approximately one-second maintenance cadence is only a scheduling
+floor; queue pause, downtime, the conservative worker poll, and worker availability can make wake-up later.
+
+This is explicit replay, not stack persistence. Code before the wait runs again unless it is protected by a
+checkpoint or application idempotency, and Workhorse does not build a workflow graph from these boundaries.
 
 Create a terminal failure for the Failures view:
 
