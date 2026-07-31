@@ -1168,7 +1168,7 @@ function TasksActivityChart({
         </Group>
       </Group>
       <BarChart
-        h={260}
+        h={320}
         data={chartData}
         dataKey="bucket"
         type="stacked"
