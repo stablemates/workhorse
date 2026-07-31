@@ -676,12 +676,23 @@ export class Queue {
       this.database.query<{
         ready: string;
         scheduled: string;
+        sleeping: string;
+        overdue_waits: string;
+        next_wake_at: Date | null;
         active: string;
         expired: string;
         oldest_ready_age_ms: number | null;
       }>(`
         SELECT count(*) FILTER (WHERE state = 'ready')::text AS ready,
                count(*) FILTER (WHERE state = 'scheduled')::text AS scheduled,
+               count(*) FILTER (WHERE state = 'scheduled' AND wait_name IS NOT NULL)::text AS sleeping,
+               count(*) FILTER (
+                 WHERE state = 'scheduled' AND wait_name IS NOT NULL
+                   AND run_at <= clock_timestamp()
+               )::text AS overdue_waits,
+               min(run_at) FILTER (
+                 WHERE state = 'scheduled' AND wait_name IS NOT NULL
+               ) AS next_wake_at,
                count(*) FILTER (WHERE state = 'active')::text AS active,
                count(*) FILTER (WHERE state = 'active' AND expires_at <= clock_timestamp())::text AS expired,
                extract(epoch FROM clock_timestamp() - min(ready_at) FILTER (WHERE state = 'ready')) * 1000
@@ -731,6 +742,9 @@ export class Queue {
       counts: stateCounts,
       readyDepth: Number(depth.ready),
       scheduledDepth: Number(depth.scheduled),
+      sleepingJobs: Number(depth.sleeping),
+      overdueWaits: Number(depth.overdue_waits),
+      nextWakeAt: depth.next_wake_at,
       activeLeases: Number(depth.active),
       expiredLeases: Number(depth.expired),
       oldestReadyAgeMs:
