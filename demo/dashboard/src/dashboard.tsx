@@ -174,16 +174,16 @@ interface ActivityData {
 }
 
 const activitySeriesColors = [
-  "teal.6",
-  "indigo.6",
-  "orange.6",
-  "grape.6",
-  "cyan.6",
-  "lime.6",
-  "red.6",
-  "yellow.6",
-  "blue.6",
-  "pink.6",
+  "#7fa9bc",
+  "#c5a184",
+  "#9bb392",
+  "#aa96bc",
+  "#b8aa6d",
+  "#6cafaf",
+  "#b58ca1",
+  "#8e9dca",
+  "#7eaf91",
+  "#d0a2b3",
 ];
 
 // Recharts treats dots in dataKey as nested paths (task types like "demo.failure").
