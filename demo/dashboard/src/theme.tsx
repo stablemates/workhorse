@@ -12,12 +12,11 @@ import {
 } from "@mantine/core";
 import { Moon, Palette, Sun } from "@phosphor-icons/react";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { WorkhorseMark } from "./brand";
 
-export type WorkhorseThemeScheme = "light" | "dark" | "workhorse";
+export type DashboardColorScheme = "light" | "dark";
 
 const themeStorageKey = "workhorse-theme-scheme";
-const themeSchemes = new Set<WorkhorseThemeScheme>(["light", "dark", "workhorse"]);
+const themeSchemes = new Set<DashboardColorScheme>(["light", "dark"]);
 
 const theme = createTheme({
   primaryColor: "steel",
@@ -47,38 +46,34 @@ const theme = createTheme({
 });
 
 interface ThemeContextValue {
-  scheme: WorkhorseThemeScheme;
-  setScheme: (scheme: WorkhorseThemeScheme) => void;
+  scheme: DashboardColorScheme;
+  setScheme: (scheme: DashboardColorScheme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-function readInitialScheme(): WorkhorseThemeScheme {
-  const stored = localStorage.getItem(themeStorageKey) as WorkhorseThemeScheme | null;
+function readInitialScheme(): DashboardColorScheme {
+  const stored = localStorage.getItem(themeStorageKey) as DashboardColorScheme | null;
   if (stored && themeSchemes.has(stored)) return stored;
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 export function WorkhorseThemeProvider({ children }: { children: ReactNode }) {
-  const [scheme, setScheme] = useState<WorkhorseThemeScheme>(readInitialScheme);
+  const [scheme, setScheme] = useState<DashboardColorScheme>(readInitialScheme);
 
   useEffect(() => {
     localStorage.setItem(themeStorageKey, scheme);
-    document.documentElement.dataset.theme = scheme;
-    document.documentElement.style.colorScheme = scheme === "light" ? "light" : "dark";
+    document.documentElement.style.colorScheme = scheme;
 
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-    themeColor?.setAttribute(
-      "content",
-      scheme === "light" ? "#f7f8fa" : scheme === "dark" ? "#1a1b1e" : "#090b0e",
-    );
+    themeColor?.setAttribute("content", scheme === "light" ? "#f7f8fa" : "#1a1b1e");
   }, [scheme]);
 
   const contextValue = useMemo(() => ({ scheme, setScheme }), [scheme]);
 
   return (
     <ThemeContext.Provider value={contextValue}>
-      <MantineProvider theme={theme} forceColorScheme={scheme === "light" ? "light" : "dark"}>
+      <MantineProvider theme={theme} forceColorScheme={scheme}>
         {children}
       </MantineProvider>
     </ThemeContext.Provider>
@@ -92,17 +87,12 @@ export function useWorkhorseTheme() {
 }
 
 const options: Array<{
-  value: WorkhorseThemeScheme;
+  value: DashboardColorScheme;
   label: string;
   icon: ReactNode;
 }> = [
   { value: "light", label: "Light", icon: <Sun size={14} /> },
   { value: "dark", label: "Dark", icon: <Moon size={14} /> },
-  {
-    value: "workhorse",
-    label: "Workhorse",
-    icon: <WorkhorseMark label="" w={15} h={15} />,
-  },
 ];
 
 function ThemeOptionLabel({ icon, label }: { icon: ReactNode; label: string }) {
@@ -125,7 +115,7 @@ export function ThemeSchemeSwitch() {
         <SegmentedControl
           size="xs"
           value={scheme}
-          onChange={(value) => setScheme(value as WorkhorseThemeScheme)}
+          onChange={(value) => setScheme(value as DashboardColorScheme)}
           aria-label="Color theme"
           className="theme-switch"
           data={options.map((option) => ({
