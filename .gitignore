@@ -9,3 +9,4 @@ dist/
 benchmark*.json
 benchmark-artifacts/
 health*.json
+.jcode/
