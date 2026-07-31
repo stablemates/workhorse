@@ -473,7 +473,7 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
         iconSize={28}
         allowNextStepsSelect={false}
         completedIcon={<CheckCircle size={15} weight="bold" />}
-        progressIcon={<Clock size={14} weight="bold" />}
+        progressIcon={<Clock size={14} weight="bold" style={{ display: "block" }} />}
       >
         {plan.steps.map((step, stepIndex) => {
           const checkpoint = checkpoints.get(step.name);
