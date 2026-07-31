@@ -28,10 +28,10 @@ development proxy. The JSON API index remains available at `http://workhorse.loc
 Each run allocates a free internal Hono port so multiple worktrees can run concurrently. Set
 `WORKHORSE_API_PORT` only when an explicit internal port is required, or `WORKHORSE_WORKER_POLL_MS` to
 override the workers' 15-second idle polling delay.
-Startup seeds one successful transactional order, one recoverable retry, one terminal failure, and one
+Startup seeds one successful transactional order, one checkpointed recoverable retry, one terminal failure, and one
 future scheduled job, so Tasks, Schedules, Workers, and System Health are useful immediately. Use the
 dashboard's **enqueue test job** menu to create fresh success, retry, failure, and 20-second long-running
-paths, then open a task to inspect its payload and immutable attempt history. The long-running case gives
+paths, then open a task to inspect its payload, durable checkpoints, and immutable attempt history. The long-running case gives
 the Running and Workers views enough time to show an active lease. Set `SEED_DEMO_DATA=false` to start
 empty instead. The versioned seed marker makes direct application restarts idempotent.
 
@@ -52,8 +52,11 @@ Create a job that deliberately fails once, then succeeds on its second attempt:
 curl --fail-with-body --request POST http://workhorse.localhost:43155/demo/retries
 ```
 
-The response contains a `jobId`. The job view shows attempt 2 after recovery, while immutable attempt
-history records the first `retry` outcome followed by `succeeded`.
+The response contains a `jobId` and the expected `reserve-capacity` checkpoint name. Attempt 1 stores a
+simulated capacity reservation and then fails deliberately. Attempt 2 reuses that exact reservation instead
+of running the checkpoint operation again. The task drawer labels the checkpoint
+**Persisted across retry**, shows its attempt and worker provenance, and keeps the immutable `retry` then
+`succeeded` attempt history alongside it.
 
 Create a terminal failure for the Failures view:
 

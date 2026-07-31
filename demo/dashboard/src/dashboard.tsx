@@ -345,6 +345,56 @@ function formatDuration(milliseconds: number | null | undefined): string {
   return `${Math.round(milliseconds / 60_000)} min`;
 }
 
+function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
+  const currentAttempt = job.current.outcome?.attempt ?? job.current.runtime?.attempt ?? 1;
+  return (
+    <Box>
+      <Group justify="space-between" mb="xs">
+        <Text fw={600} size="sm">
+          Durable checkpoints
+        </Text>
+        <Badge variant="light" color={job.checkpoints.length > 0 ? "teal" : "gray"}>
+          {job.checkpoints.length}
+        </Badge>
+      </Group>
+      {job.checkpoints.length === 0 ? (
+        <Text c="dimmed" size="sm">
+          This task has not completed a named restart boundary.
+        </Text>
+      ) : (
+        <Stack gap="sm">
+          {job.checkpoints.map((checkpoint) => {
+            const persistedAcrossRetry = currentAttempt > checkpoint.attempt;
+            return (
+              <Paper key={checkpoint.name} withBorder p="sm">
+                <Group justify="space-between" align="flex-start">
+                  <Box>
+                    <Text fw={600} size="sm">
+                      {checkpoint.name}
+                    </Text>
+                    <Text c="dimmed" size="xs" title={formatExact(checkpoint.createdAt)}>
+                      Attempt {checkpoint.attempt} · {checkpoint.workerId}
+                    </Text>
+                    <Text c="dimmed" size="xs" title={formatExact(checkpoint.createdAt)}>
+                      Fence {checkpoint.fenceToken} · {formatRelative(checkpoint.createdAt)}
+                    </Text>
+                  </Box>
+                  <Badge variant="light" color={persistedAcrossRetry ? "violet" : "teal"}>
+                    {persistedAcrossRetry ? "Persisted across retry" : "Saved"}
+                  </Badge>
+                </Group>
+                <Code block mt="sm">
+                  {JSON.stringify(checkpoint.value, null, 2)}
+                </Code>
+              </Paper>
+            );
+          })}
+        </Stack>
+      )}
+    </Box>
+  );
+}
+
 /** Trim a `queue.` prefix from a task type since the queue has its own column. */
 function taskDisplayName(type: string, queue: string): string {
   return type.startsWith(`${queue}.`) ? type.slice(queue.length + 1) : type;
@@ -2833,6 +2883,7 @@ export function Dashboard() {
               </Text>
               <Code block>{JSON.stringify(selectedJob.payload, null, 2)}</Code>
             </Box>
+            <JobCheckpoints job={selectedJob} />
             <Box>
               <Text fw={600} size="sm" mb="xs">
                 Attempt history

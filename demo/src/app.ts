@@ -16,12 +16,13 @@ import { orders } from "./schema.js";
 
 const ORDER_JOB_TYPE = "order.process";
 const RETRY_JOB_TYPE = "demo.retry";
+const RETRY_CHECKPOINT_NAME = "reserve-capacity";
 const FAILURE_JOB_TYPE = "demo.failure";
 const LONG_RUNNING_JOB_TYPE = "demo.long-running";
 const RECURRING_JOB_TYPE = "demo.recurring";
 const REPORT_JOB_TYPE = "demo.report";
 const DEMO_QUEUE = "demo";
-const REPRESENTATIVE_SEED_NAME = "default-dashboard-v2";
+const REPRESENTATIVE_SEED_NAME = "default-dashboard-v3";
 const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
@@ -423,7 +424,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
           failure: FAILURE_JOB_TYPE,
           "long-running": LONG_RUNNING_JOB_TYPE,
         }[kind];
-        const failUntilAttempt = kind === "retry" ? 1 + Math.floor(Math.random() * 10) : null;
+        const failUntilAttempt = kind === "retry" ? 1 : null;
         const maxAttempts =
           kind === "failure" ? 1 : failUntilAttempt !== null ? failUntilAttempt + 2 : undefined;
         const payload: Json =
@@ -434,7 +435,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
               : { label: `operator-${kind}` };
         const jobId = await workhorse.queue.enqueue(type, payload, {
           ...(maxAttempts === undefined ? {} : { maxAttempts }),
-          tags: ["demo-test"],
+          tags: kind === "retry" ? ["demo-test", "durable-checkpoint"] : ["demo-test"],
         });
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
@@ -605,13 +606,24 @@ export function createDemoApplication(
         });
         worker.handle<{ label: string; failUntilAttempt?: number }>(
           RETRY_JOB_TYPE,
-          async ({ label, failUntilAttempt }, { job }) => {
+          async ({ label, failUntilAttempt }, { checkpoint, job }) => {
             const failuresBefore = failUntilAttempt ?? 1;
+            const reservation = await checkpoint(RETRY_CHECKPOINT_NAME, () => ({
+              reservationId: randomUUID(),
+              reservedAt: new Date().toISOString(),
+              reservedOnAttempt: job.attempt,
+            }));
+            dashboardRefresh.publish("worker");
             if (job.attempt <= failuresBefore) {
               throw new Error(`Intentional demo failure ${job.attempt}/${failuresBefore}`);
             }
-            dashboardRefresh.publish("worker");
-            return { label, recovered: true, attempt: job.attempt };
+            return {
+              label,
+              recovered: true,
+              attempt: job.attempt,
+              checkpointReused: reservation.reservedOnAttempt < job.attempt,
+              reservation,
+            };
           },
         );
         worker.handle<{ source: string }>(RECURRING_JOB_TYPE, async ({ source }, { job }) => {
@@ -676,14 +688,22 @@ export function createDemoApplication(
       const failUntilAttempt =
         typeof requested === "number" && Number.isInteger(requested) && requested >= 1
           ? Math.min(requested, 10)
-          : 1 + Math.floor(Math.random() * 10);
+          : 1;
       const jobId = await context.var.workhorse.queue.enqueue(
         RETRY_JOB_TYPE,
-        { label: "recover-after-random-failures", failUntilAttempt },
-        { maxAttempts: failUntilAttempt + 2, tags: ["demo-test"] },
+        { label: "recover-with-durable-checkpoint", failUntilAttempt },
+        { maxAttempts: failUntilAttempt + 2, tags: ["demo-test", "durable-checkpoint"] },
       );
       dashboardRefresh.publish("enqueue");
-      return context.json({ jobId, status: "queued", expectedAttempts: failUntilAttempt + 1 }, 202);
+      return context.json(
+        {
+          jobId,
+          status: "queued",
+          expectedAttempts: failUntilAttempt + 1,
+          expectedCheckpoint: RETRY_CHECKPOINT_NAME,
+        },
+        202,
+      );
     })
     .post("/demo/failures", async (context) => {
       const jobId = await context.var.workhorse.queue.enqueue(
