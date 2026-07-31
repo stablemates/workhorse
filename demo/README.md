@@ -29,14 +29,17 @@ Each run allocates a free internal Hono port so multiple worktrees can run concu
 `WORKHORSE_API_PORT` only when an explicit internal port is required, or `WORKHORSE_WORKER_POLL_MS` to
 override the workers' 15-second idle polling delay.
 Startup seeds one successful transactional order, one named durable timer, one checkpointed recoverable
-retry, three multi-step durable pipelines, one terminal failure, and one future scheduled job. The durable pipelines cover order
-fulfillment, customer onboarding, and report publication. Each intentionally crashes after a different
-checkpoint on attempt 1, then resumes without repeating the completed operations. Use the dashboard's
-**enqueue test job** menu to create fresh success, retry, durable pipeline, durable timer, failure, and 20-second
-long-running paths. Durable rows show a violet **Durable N/M** badge, and their task drawer uses a Mantine
-Stepper to show saved, running, and pending restart boundaries. Each new durable operation takes two
-seconds so progress remains visible. Set `SEED_DEMO_DATA=false` to start empty instead. The versioned seed
-marker makes direct application restarts idempotent.
+retry, three recoverable multi-step durable pipelines, three intentionally persistent durable pipelines,
+one terminal failure, and one future scheduled job. The durable pipelines cover order fulfillment,
+customer onboarding, and report publication. Recoverable examples crash after different checkpoints on
+attempt 1, then continue without repeating completed operations. The persistent examples preserve the same
+checkpoint evidence but deliberately fail every attempt; their next attempts remain visibly scheduled about
+5, 7, and 10 minutes later. Use the dashboard's **enqueue test job** menu to create fresh success, retry,
+durable pipeline, durable timer, failure, and 20-second long-running paths. Durable rows show a violet
+**Durable N/M** badge, and their task drawer uses a Mantine Stepper to show saved, running, and pending
+restart boundaries. Each new durable operation takes two seconds so progress remains visible. Set
+`SEED_DEMO_DATA=false` to start empty instead. The versioned seed marker makes direct application restarts
+idempotent.
 
 Create an order:
 
