@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { CronExpressionParser } from "cron-parser";
 import { Queue } from "./queue.js";
 import type { MaintenancePhaseResult } from "./queue.js";
-import type { ClaimedJob, Json } from "./types.js";
+import type { ClaimedJob, JobCheckpoint, Json } from "./types.js";
 
 export type Failpoint =
   | "afterClaim"
@@ -10,9 +10,24 @@ export type Failpoint =
   | "afterHandler"
   | "beforeComplete"
   | "afterComplete";
+export interface HandlerContext<TPayload = Json> {
+  job: ClaimedJob<TPayload>;
+  signal: AbortSignal;
+  /** Read a previously persisted restart boundary without executing user code. */
+  getCheckpoint<TValue extends Json = Json>(name: string): Promise<JobCheckpoint<TValue> | null>;
+  /**
+   * Return the persisted value when this name already exists. Otherwise run the operation and
+   * immutably persist its JSON result under the current fenced lease.
+   */
+  checkpoint<TValue extends Json>(
+    name: string,
+    operation: () => Promise<TValue> | TValue,
+  ): Promise<TValue>;
+}
+
 export type Handler<TPayload = Json, TResult extends Json = Json> = (
   payload: TPayload,
-  context: { job: ClaimedJob<TPayload>; signal: AbortSignal },
+  context: HandlerContext<TPayload>,
 ) => Promise<TResult> | TResult;
 
 export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
@@ -184,7 +199,37 @@ export class Worker {
       await this.inject("beforeHandler", job);
       // No database transaction or row lock spans this call. Handlers are at least once and must
       // use external idempotency for effects that cannot safely repeat.
-      const result = await handler(job.payload, { job, signal: controller.signal });
+      const getCheckpoint: HandlerContext["getCheckpoint"] = <TValue extends Json>(name: string) =>
+        this.queue.getCheckpoint<TValue>(job.id, name);
+      const inFlightCheckpoints = new Map<string, Promise<Json>>();
+      const checkpoint: HandlerContext["checkpoint"] = async <TValue extends Json>(
+        name: string,
+        operation: () => Promise<TValue> | TValue,
+      ): Promise<TValue> => {
+        const pending = inFlightCheckpoints.get(name);
+        if (pending) return (await pending) as TValue;
+        const execution = (async (): Promise<TValue> => {
+          const existing = await this.queue.getCheckpoint<TValue>(job.id, name);
+          if (existing) return existing.value;
+          if (controller.signal.aborted)
+            throw controller.signal.reason ?? new Error("Job lease was lost");
+          const value = await operation();
+          const saved = await this.queue.saveCheckpoint(job, this.workerId, name, value);
+          return saved.value;
+        })();
+        inFlightCheckpoints.set(name, execution);
+        try {
+          return await execution;
+        } finally {
+          if (inFlightCheckpoints.get(name) === execution) inFlightCheckpoints.delete(name);
+        }
+      };
+      const result = await handler(job.payload, {
+        job,
+        signal: controller.signal,
+        getCheckpoint,
+        checkpoint,
+      });
       await this.inject("afterHandler", job);
       if (leaseLost || controller.signal.aborted)
         throw controller.signal.reason ?? new Error("Job lease was lost");

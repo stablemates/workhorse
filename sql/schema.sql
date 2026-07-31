@@ -56,6 +56,24 @@ $$;
 -- GIN indexes array elements so overlap and containment tag filters avoid scanning every job row.
 CREATE INDEX IF NOT EXISTS job_tags_gin_idx ON workhorse.job USING gin (tags);
 
+-- Immutable explicit restart boundaries. A name can be completed once for a stable job identity and
+-- remains available across retries and terminal materialization.
+CREATE TABLE IF NOT EXISTS workhorse.job_checkpoint (
+  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  checkpoint_name text NOT NULL CHECK (
+    checkpoint_name <> '' AND char_length(checkpoint_name) <= 200
+  ),
+  checkpoint_value jsonb NOT NULL
+    CONSTRAINT job_checkpoint_value_size CHECK (
+      octet_length(checkpoint_value::text) <= 1048576
+    ),
+  attempt integer NOT NULL CHECK (attempt >= 1),
+  fence_token bigint NOT NULL CHECK (fence_token > 0),
+  worker_id text NOT NULL CHECK (worker_id <> ''),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (job_id, checkpoint_name)
+);
+
 -- Monotonic ownership generations and FIFO placement generations.
 CREATE SEQUENCE IF NOT EXISTS workhorse.fence_token_seq;
 CREATE SEQUENCE IF NOT EXISTS workhorse.ready_sequence_seq;
@@ -583,6 +601,99 @@ BEGIN
 END;
 $$;
 
+-- Persist one immutable named checkpoint only while the caller owns the active, unexpired lease.
+-- Locking the runtime row serializes this write with completion, failure, and expiry recovery.
+CREATE OR REPLACE FUNCTION workhorse.save_checkpoint_v1(
+  p_job_id uuid,
+  p_worker_id text,
+  p_fence_token bigint,
+  p_checkpoint_name text,
+  p_checkpoint_value jsonb
+) RETURNS TABLE (
+  status text,
+  checkpoint_value jsonb,
+  attempt integer,
+  fence_token bigint,
+  worker_id text,
+  created_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_checkpoint workhorse.job_checkpoint%ROWTYPE;
+BEGIN
+  IF p_checkpoint_name IS NULL OR p_checkpoint_name = '' OR char_length(p_checkpoint_name) > 200 THEN
+    RAISE EXCEPTION 'checkpoint_name must contain between 1 and 200 characters';
+  END IF;
+  IF p_checkpoint_value IS NULL THEN
+    RAISE EXCEPTION 'checkpoint_value must be JSON, including JSON null when appropriate';
+  END IF;
+  IF octet_length(p_checkpoint_value::text) > 1048576 THEN
+    RAISE EXCEPTION 'checkpoint_value must be at most 1048576 bytes';
+  END IF;
+
+  SELECT * INTO v_runtime
+    FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id
+     AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id
+     AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  -- Recheck expiry after acquiring the row lock. A pre-lock predicate can become stale while this
+  -- transaction waits behind another lifecycle operation that does not modify the runtime row.
+  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp() THEN
+    RETURN QUERY VALUES (
+      'stale'::text, NULL::jsonb, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
+    );
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_checkpoint
+    FROM workhorse.job_checkpoint checkpoint
+   WHERE checkpoint.job_id = p_job_id AND checkpoint.checkpoint_name = p_checkpoint_name;
+  IF FOUND THEN
+    RETURN QUERY VALUES (
+      CASE
+        WHEN v_checkpoint.checkpoint_value IS NOT DISTINCT FROM p_checkpoint_value
+          THEN 'existing'::text
+        ELSE 'conflict'::text
+      END,
+      v_checkpoint.checkpoint_value,
+      v_checkpoint.attempt,
+      v_checkpoint.fence_token,
+      v_checkpoint.worker_id,
+      v_checkpoint.created_at
+    );
+    RETURN;
+  END IF;
+
+  INSERT INTO workhorse.job_checkpoint(
+    job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id
+  ) VALUES (
+    p_job_id, p_checkpoint_name, p_checkpoint_value, v_runtime.current_attempt,
+    p_fence_token, p_worker_id
+  )
+  RETURNING * INTO v_checkpoint;
+  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    VALUES (
+      p_job_id,
+      v_runtime.current_attempt,
+      'checkpoint_saved',
+      jsonb_build_object('name', p_checkpoint_name, 'fence_token', p_fence_token)
+    );
+
+  RETURN QUERY VALUES (
+    'saved'::text,
+    v_checkpoint.checkpoint_value,
+    v_checkpoint.attempt,
+    v_checkpoint.fence_token,
+    v_checkpoint.worker_id,
+    v_checkpoint.created_at
+  );
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.complete_v1(
   p_job_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb DEFAULT 'null'::jsonb
 ) RETURNS boolean
@@ -918,7 +1029,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (5) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (6) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
   FROM generate_series(0, 4) AS weeks(week_offset);
 
