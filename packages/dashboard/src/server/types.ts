@@ -9,6 +9,10 @@ export interface DashboardAuditContext {
   occurredAt?: string;
 }
 
+export interface DashboardCancellationAuditContext extends Omit<DashboardAuditContext, "reason"> {
+  reason: string | null;
+}
+
 export interface DashboardOperator {
   mode: "read-only" | "local";
   enqueueTest?: (
@@ -51,7 +55,10 @@ export interface DashboardCancelTaskResult {
 }
 
 export interface DashboardTaskController {
-  cancelTask?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardCancelTaskResult>;
+  cancelTask?: (
+    jobId: string,
+    audit: DashboardCancellationAuditContext,
+  ) => Promise<DashboardCancelTaskResult>;
 }
 
 export interface DashboardWorkerRuntimeState {

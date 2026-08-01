@@ -58,6 +58,7 @@ export const DEMO_WORKER_CONCURRENCY: Readonly<Record<(typeof DEMO_WORKERS)[numb
 export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
 export const DEMO_HOUSEKEEPING_INTERVAL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
+export const DEMO_LONG_RUNNING_SEED_DELAY_MS = 10_000;
 export const DEMO_LONG_RUNNING_SEED_JOBS = [
   { label: "archive-validation" },
   { label: "partner-catalog-sync" },
@@ -169,6 +170,10 @@ export interface AuditContext {
   occurredAt?: string;
 }
 
+export interface CancellationAuditContext extends Omit<AuditContext, "reason"> {
+  reason: string | null;
+}
+
 export interface DashboardOperator {
   mode: "read-only" | "local";
   enqueueTest?: (
@@ -215,7 +220,7 @@ export interface DemoCancelTaskResult {
 }
 
 export interface TaskController {
-  cancelTask?: (jobId: string, audit: AuditContext) => Promise<DemoCancelTaskResult>;
+  cancelTask?: (jobId: string, audit: CancellationAuditContext) => Promise<DemoCancelTaskResult>;
 }
 
 export interface WorkerController {
@@ -501,7 +506,9 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
     CREATE TABLE IF NOT EXISTS public.workhorse_demo_audit (
       id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       actor text NOT NULL CHECK (actor <> ''),
-      reason text NOT NULL CHECK (reason <> ''),
+      reason text CONSTRAINT workhorse_demo_audit_reason_check CHECK (
+        reason IS NULL OR reason <> ''
+      ),
       request_id text NOT NULL CHECK (request_id <> ''),
       occurred_at timestamptz NOT NULL DEFAULT clock_timestamp(),
       action text NOT NULL CHECK (action <> ''),
@@ -510,6 +517,14 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
       after jsonb,
       status text NOT NULL CHECK (status IN ('succeeded', 'failed'))
     )
+  `);
+  // Cancellation can be intentionally reasonless. Other operator RPCs still require a reason at
+  // their contract boundary, while this shared audit table permits null for cancellation rows.
+  await database.execute(sql`
+    ALTER TABLE public.workhorse_demo_audit
+      ALTER COLUMN reason DROP NOT NULL,
+      DROP CONSTRAINT IF EXISTS workhorse_demo_audit_reason_check,
+      ADD CONSTRAINT workhorse_demo_audit_reason_check CHECK (reason IS NULL OR reason <> '')
   `);
   await database.execute(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS workhorse_demo_audit_request_id_idx
@@ -851,7 +866,8 @@ function isoTimestamp(value: Date | string | null): string | null {
  *
  * The cancellation and its audit row share one transaction, so an operator action is never
  * recorded without the lifecycle transition it claims to describe, and never applied without a
- * recorded actor, reason, and request id. The stored `after` payload keeps the exact status
+ * recorded actor and request id. When supplied, the optional reason is stored on both the lifecycle
+ * transition and audit row. The stored `after` payload keeps the exact status
  * PostgreSQL returned, including `cancel_requested`, so a later reader can tell an immediate
  * cancellation apart from a cooperative request that an active handler still had to observe.
  * Canceling one occurrence of a recurring schedule cancels only that task; the schedule
@@ -871,7 +887,7 @@ export function createLocalTaskController(database: DemoDatabase): TaskControlle
         `);
         const result = await workhorse.queue.cancel(jobId, {
           requestedBy: audit.actor,
-          reason: audit.reason,
+          reason: audit.reason ?? undefined,
         });
         const projected: DemoCancelTaskResult = {
           status: result.status,
@@ -1512,12 +1528,17 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
 
     const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
     const jobIds: string[] = [];
+    const runAt = new Date(Date.now() + DEMO_LONG_RUNNING_SEED_DELAY_MS);
     for (const job of DEMO_LONG_RUNNING_SEED_JOBS) {
       jobIds.push(
         await workhorse.queue.enqueue(
           LONG_RUNNING_JOB_TYPE,
           { source: "long-running-seed", label: job.label },
-          { maxAttempts: 1, tags: ["demo-test", "long-running", "low-resource"] },
+          {
+            maxAttempts: 1,
+            runAt,
+            tags: ["demo-test", "long-running", "low-resource"],
+          },
         ),
       );
     }
@@ -1526,8 +1547,8 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
 }
 
 export async function seedDemoData(database: DemoDatabase) {
-  // These jobs are inserted first so a fresh demo immediately shows active work. Their handler only
-  // awaits a Node timer, so they occupy execution slots without burning CPU or growing memory.
+  // These jobs are inserted first but start after a short grace period, so startup work is never
+  // starved. Their handler only awaits a Node timer, occupying slots without burning CPU or memory.
   const longRunningJobIds = await seedLongRunningDemoData(database);
   const representativeJobIds = await database.transaction(async (transaction) => {
     const marker = await transaction.execute<{ name: string }>(sql`

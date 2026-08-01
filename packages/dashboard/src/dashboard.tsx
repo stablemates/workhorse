@@ -1098,8 +1098,8 @@ function canCancelTask(job: DashboardJobDetail): boolean {
 /**
  * Audited cancellation for one task.
  *
- * The action is a two-step confirmation with a required, concise reason, because cancellation is
- * irreversible: a canceled outcome is immutable and there is no uncancel. Wording changes with
+ * The action is a two-step confirmation with an optional reason. Cancellation is irreversible: a
+ * canceled outcome is immutable and there is no uncancel. Wording changes with
  * the task's state, and for a running task it says plainly that cancellation is cooperative and
  * that external effects can continue until the handler observes the signal. Nothing here claims
  * force, immediacy, or that anything already done externally is undone.
@@ -1187,8 +1187,8 @@ function CancelTaskPanel({
             <TextInput
               ref={reasonRef}
               size="xs"
-              label="Reason"
-              description="Recorded with your cancellation in the operator audit trail."
+              label="Reason (optional)"
+              description="When provided, it is recorded with the cancellation in the operator audit trail."
               placeholder="Why is this task being canceled?"
               value={reason}
               disabled={pending}
@@ -1203,7 +1203,7 @@ function CancelTaskPanel({
                 color="red"
                 variant="light"
                 loading={pending}
-                disabled={pending || trimmedReason.length === 0}
+                disabled={pending}
                 onClick={() => cancelTask(job.identity.id, trimmedReason)}
               >
                 {running ? "Request cancellation" : "Cancel task"}
@@ -3952,8 +3952,8 @@ function useDashboardController(
   /**
    * Request cancellation of one task and report exactly what PostgreSQL did.
    *
-   * The reason the operator typed is sent as the audit reason and stored as the cancellation
-   * reason, so the two can never disagree. The drawer is refreshed from the server afterwards
+   * When the operator supplies a reason, it is sent as the audit reason and stored as the
+   * cancellation reason, so the two can never disagree. The drawer is refreshed from the server afterwards
    * rather than optimistically edited, because whether an active task is now canceled or only
    * cancel-requested is a durable fact this dashboard does not get to guess.
    */
@@ -3967,7 +3967,7 @@ function useDashboardController(
           id,
           audit: {
             actor: auditActor,
-            reason,
+            reason: reason || null,
             requestId: crypto.randomUUID(),
           },
         });

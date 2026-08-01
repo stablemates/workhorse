@@ -22,6 +22,10 @@ export interface DashboardAuditInput {
   requestId: string;
 }
 
+export interface DashboardCancellationAuditInput extends Omit<DashboardAuditInput, "reason"> {
+  reason?: string | null;
+}
+
 export type DashboardDemoJobKind =
   | "success"
   | "retry"
@@ -99,7 +103,7 @@ export interface DashboardClient {
     paused: boolean;
     audit: DashboardAuditInput;
   }): Promise<unknown>;
-  cancelTask(input: { id: string; audit: DashboardAuditInput }): Promise<{
+  cancelTask(input: { id: string; audit: DashboardCancellationAuditInput }): Promise<{
     status: DashboardCancelStatus;
     state: string | null;
     finishedAt: string | null;
