@@ -48,17 +48,23 @@ The suite also performs equal-load fixed-rate producer-consumer churn. Both desi
 
 The lifecycle suite runs deterministic operational scenarios with hard invariants:
 
-| Scenario                    | Evidence produced                                                                              |
-| --------------------------- | ---------------------------------------------------------------------------------------------- |
-| `scheduled-promotion-drift` | bounded promotion batches and due-time drift distribution                                      |
-| `heartbeat-fencing`         | accepted heartbeat cost and stale-fence rejection cost                                         |
-| `crash-before-completion`   | durable state at all five worker crash boundaries                                              |
-| `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection                            |
-| `retry-paths`               | immediate, delayed, promoted, and terminal retry transitions                                   |
-| `retention-pruning`         | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity |
-| `health-snapshot`           | health-query latency and internally consistent degraded-state counts                           |
+| Scenario                    | Evidence produced                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `scheduled-promotion-drift` | bounded promotion batches and due-time drift distribution                                                    |
+| `heartbeat-fencing`         | accepted heartbeat cost and stale-fence rejection cost                                                       |
+| `crash-before-completion`   | durable state at all five worker crash boundaries                                                            |
+| `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection                                          |
+| `retry-paths`               | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion |
+| `retention-pruning`         | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity               |
+| `health-snapshot`           | health-query latency and internally consistent degraded-state counts                                         |
 
 Scenario invariant failures abort the suite. This prevents a fast but semantically incorrect run from being treated as evidence.
+
+`retry-paths` records the selected fixed, exponential, and decorrelated-jitter delays plus the
+client-observed duration of each failure transition and their total. These timings include the full SQL
+transition and event append, not an isolated policy-function microbenchmark. Policy normalization and
+delay selection are expected to be negligible beside the existing row-lock, update, and history work,
+but no numerical overhead claim is supported until an actual benchmark artifact is recorded.
 
 ## Safety and prerequisites
 

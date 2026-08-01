@@ -2,6 +2,8 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
+The current clean-install protocol is schema version 9.
+
 ## Design objective
 
 Dispatch cost should scale with live work, not lifetime completed work. Schema version 2 therefore stores:
@@ -48,6 +50,7 @@ erDiagram
     text job_type
     jsonb payload
     int max_attempts
+    jsonb retry_policy
     timestamptz created_at
   }
   job_runtime {
@@ -62,6 +65,7 @@ erDiagram
     timestamptz expires_at
     text wait_name
     timestamptz attempt_started_at
+    bigint previous_retry_delay_ms
   }
   job_outcome {
     uuid job_id PK
@@ -100,6 +104,7 @@ erDiagram
     text queue_name
     text job_type
     jsonb payload
+    jsonb retry_policy
     boolean enabled
   }
   schedule_occurrence {
@@ -114,7 +119,7 @@ For every accepted job, exactly one of `job_runtime` and `job_outcome` must exis
 
 ### `job`
 
-Insert-only identity, routing, payload, retry budget, and acceptance time. Dispatch reads payload only after a runtime row has been claimed.
+Insert-only identity, routing, payload, retry budget, normalized optional retry policy, and acceptance time. Dispatch reads payload only after a runtime row has been claimed. The policy is one of fixed `{delayMs}`, exponential `{initialDelayMs,multiplier,maxDelayMs}`, or decorrelated jitter `{baseDelayMs,maxDelayMs}`.
 
 ### `job_runtime`
 
@@ -124,7 +129,11 @@ The only mutable lifecycle relation. Its check constraint makes state-specific f
 - `ready`: `ready_at` and FIFO `sequence` are populated; ownership fields and `wait_name` are null; a resumed timer may preserve `attempt_started_at`
 - `active`: worker, acquisition, heartbeat, expiry, positive fence, and logical `attempt_started_at` are populated; ready placement and `wait_name` are null
 
-Retry and recovery increment `current_attempt` while moving the same row back to ready or scheduled. Named durable timer suspension preserves `current_attempt`, because waiting is successful control flow rather than failure; promotion and the next claim continue the same logical attempt with a new fence. Handler failures default to a SQL-owned, Sidekiq-inspired delay of `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds, where `count` is the zero-based retry count. The default 25-attempt budget produces a roughly 20-day retry window. An explicit caller delay still overrides the formula, including zero for immediate retry. Heartbeats update only the matching active generation.
+Retry and recovery increment `current_attempt` while moving the same row back to ready or scheduled. Named durable timer suspension preserves `current_attempt`, because waiting is successful control flow rather than failure; promotion and the next claim continue the same logical attempt with a new fence. `previous_retry_delay_ms` stores only the previous decorrelated-jitter selection needed for the next deterministic step and is cleared for other policy types.
+
+PostgreSQL validates policy shape and numeric bounds, selects the delay, performs the state transition, and writes provenance. Explicit persisted policies apply consistently to handler failure and expired-lease recovery. When policy is omitted, compatibility remains path-specific: handler failure uses the legacy Sidekiq-inspired random delay `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds, while lease recovery is immediate. Numeric `Queue.fail` delays, numeric or callback-derived `WorkerOptions.retryDelayMs`, and explicit `Queue.recoverExpired` delays take precedence, including zero. Retry-budget enforcement remains in SQL regardless of delay source.
+
+All delay fields are integers from zero through 31,536,000,000 milliseconds (365 days). Exponential `multiplier` is an integer from 1 through 100, and `maxDelayMs` must be at least `initialDelayMs` or `baseDelayMs`. Decorrelated jitter hashes stable job identity, current attempt, and persisted previous delay, so replay and `Queue` recreation select the same value.
 
 Selective indexes keep unrelated states out of each access path:
 
@@ -184,15 +193,15 @@ stateDiagram-v2
   ready --> active: claim
   active --> active: heartbeat
   active --> scheduled: named durable wait, same attempt
-  active --> ready: fail/recover, explicit immediate retry
-  active --> scheduled: fail with default backoff / delayed retry
+  active --> ready: fail/recover, selected or overridden zero delay
+  active --> scheduled: fail/recover, selected or overridden positive delay
   active --> succeeded: complete
   active --> failed: exhausted fail/recovery
 ```
 
 ### Enqueue
 
-`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp. One statement inserts `job`, `job_runtime`, and `enqueued` events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
+`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp, including optional persisted retry policies. One statement inserts `job`, `job_runtime`, and `enqueued` events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
 
 ### Promotion
 
@@ -216,7 +225,7 @@ Suspension aborts the handler's cooperative signal and exits through private wor
 
 ### Claim
 
-`claim_v1` selects one queue-local ready row by FIFO sequence with `SKIP LOCKED`. One runtime update changes it to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The claim event is appended before the function returns identity and payload. No transaction remains open while user code runs.
+`claim_v1` selects one queue-local ready row by FIFO sequence with `SKIP LOCKED`. One runtime update changes it to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The claim event is appended before the function returns identity, payload, and normalized `retryPolicy`. No transaction remains open while user code runs.
 
 ### Heartbeat
 
@@ -224,9 +233,9 @@ Suspension aborts the handler's cooperative signal and exits through private wor
 
 ### Retry and recovery
 
-`fail_v1` locks the matching unexpired active generation. If budget remains, a compare-and-set runtime update increments the attempt and places the row in ready or scheduled state. Otherwise it deletes runtime and inserts a failed outcome. In both cases it closes attempt history and appends an event atomically.
+`fail_v1` locks the matching unexpired active generation. If budget remains, it calls the PostgreSQL delay selector, compare-and-set increments the attempt, persists any next jitter state, and places the row in ready or scheduled state. Otherwise it deletes runtime and inserts a failed outcome. In both cases it closes attempt history and appends an event atomically. `retry_scheduled` details include `retry_policy`, `retry_delay_ms`, and `retry_delay_source`.
 
-`recover_expired_v1` cooperatively locks expired active rows in bounded batches. It performs the same increment-and-requeue or delete-and-outcome transition using the observed fence and expiry as CAS guards. Old workers cannot later complete because their active generation no longer exists.
+`recover_expired_v1` cooperatively locks expired active rows in bounded batches. It performs the same policy selection and increment-and-requeue or delete-and-outcome transition using the observed fence and expiry as CAS guards. `Queue.recoverExpired(limit)` passes an omitted delay as SQL `NULL`, allowing persisted policy selection; an explicit number remains an override. `lease_expired` details include the policy, selected delay, and source. Old workers cannot later complete because their active generation no longer exists.
 
 ### Terminal transitions
 
@@ -234,7 +243,7 @@ Suspension aborts the handler's cooperative signal and exits through private wor
 
 ## Read models and health
 
-`Queue.getJob(id)` joins immutable `job` to both lifecycle relations and coalesces the one that exists, preserving the public `JobSnapshot` shape. Health state counts union runtime and outcome. Ready, scheduled, active, expired-active, and oldest-ready metrics come directly from `job_runtime`.
+`Queue.getJob(id)` joins immutable `job` to both lifecycle relations and coalesces the one that exists, preserving the public `JobSnapshot` shape including `retryPolicy`. Health state counts union runtime and outcome. Ready, scheduled, active, expired-active, and oldest-ready metrics come directly from `job_runtime`.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live jobs are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary week.
 
@@ -248,7 +257,7 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 
 `Queue.syncSchedules(namespace, definitions, { prune })` is a desired-state reconciler:
 
-1. It validates stable namespace and schedule names plus queue job definitions.
+1. It validates stable namespace and schedule names plus queue job definitions, including optional retry policies.
 2. It atomically upserts target definitions and by default deactivates omitted names through `sync_schedule_definitions_v1`.
 3. A per-namespace advisory lock serializes concurrent deployments of the same namespace.
 

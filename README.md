@@ -20,6 +20,8 @@ The current implementation remains an evidence-first validation release rather t
 - one live-only runtime relation with selective ready, scheduled, and expired-lease indexes;
 - `FOR UPDATE SKIP LOCKED` claims with monotonically increasing fence tokens;
 - fenced heartbeat, completion, retry, and expired-lease recovery;
+- optional PostgreSQL-validated fixed, exponential, and decorrelated-jitter retry policies persisted
+  with jobs and recurring schedule definitions;
 - append-only, time-partitioned lifecycle events and finalized attempts;
 - immutable named handler checkpoints that survive retry and are fenced against stale workers;
 - named durable timer waits that release the worker lease and restart in the same logical attempt;
@@ -36,6 +38,37 @@ The current implementation remains an evidence-first validation release rather t
 - a reproducible conventional-table versus live-runtime benchmark.
 
 Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
+
+### Persisted retry policies
+
+Schema version 9 accepts an optional `retryPolicy` on enqueue requests and recurring schedule job
+definitions:
+
+```ts
+type RetryPolicy =
+  | { type: "fixed"; delayMs: number }
+  | {
+      type: "exponential";
+      initialDelayMs: number;
+      multiplier: number;
+      maxDelayMs: number;
+    }
+  | { type: "decorrelated-jitter"; baseDelayMs: number; maxDelayMs: number };
+```
+
+PostgreSQL validates and normalizes the policy, selects each delay, performs the retry or recovery
+transition, and records policy provenance. Explicit policies apply equally to handler failure and
+expired-lease recovery. Omitting the policy preserves compatibility: handler failure uses the legacy
+Sidekiq-inspired random backoff, while lease recovery is immediate. Numeric `Queue.fail` delays and
+`WorkerOptions.retryDelayMs` are higher-precedence manual overrides; an omitted
+`Queue.recoverExpired` delay is passed as SQL `NULL` so PostgreSQL can select the persisted policy.
+
+Decorrelated jitter is deterministic from the stable job identity, attempt, and persisted previous
+delay, so replay and `Queue` recreation cannot change the selected value. Every delay is an integer
+from zero through 365 days, exponential multipliers are integers from 1 through 100, and exponential
+or jitter maxima must be at least their initial or base delay. Claims and `JobSnapshot` expose the
+persisted policy. `retry_scheduled` and `lease_expired` event details expose `retry_policy`,
+`retry_delay_ms`, and `retry_delay_source`.
 
 ## Development
 

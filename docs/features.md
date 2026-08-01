@@ -1,23 +1,23 @@
 # Feature support matrix
 
-This is the authoritative implementation snapshot for schema version 8. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
+This is the authoritative implementation snapshot for schema version 9. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
 
 ## At a glance
 
-| Supported core                                 | Partial today                          | Not supported today                            |
-| ---------------------------------------------- | -------------------------------------- | ---------------------------------------------- |
-| Transactional immediate/delayed batch enqueue  | One-handler-at-a-time worker instances | Priorities and enqueue idempotency             |
-| FIFO `SKIP LOCKED` claims                      | Polling despite `NOTIFY` hints         | Cancellation, deadlines, progress              |
-| Leases, heartbeats, fencing, recovery          |                                        | Concurrency policies and rate limiting         |
-| Deploy-synchronized worker-owned schedules     | Point-in-time health snapshot          | Arbitrary scheduled SQL                        |
-| Immediate/delayed retries and terminal failure | Success-path comparative baseline      | Dead letters, redrive, dependencies, workflows |
-| Queue pause/resume/purge controls              | Demo-only operations dashboard         | RBAC, OpenTelemetry, additional integrations   |
-| Drizzle provider and Hono lifecycle package    | Clean-install schema only              | Online production migration guarantees         |
-| Live runtime plus immutable outcomes           |                                        |                                                |
-| Append-only events and attempt history         |                                        |                                                |
-| Immutable named checkpoint replay              |                                        |                                                |
-| Lease-releasing named durable timer waits      |                                        |                                                |
-| Bounded attribution-safe automated retention   |                                        |                                                |
+| Supported core                                | Partial today                          | Not supported today                            |
+| --------------------------------------------- | -------------------------------------- | ---------------------------------------------- |
+| Transactional immediate/delayed batch enqueue | One-handler-at-a-time worker instances | Priorities and enqueue idempotency             |
+| FIFO `SKIP LOCKED` claims                     | Polling despite `NOTIFY` hints         | Cancellation, deadlines, progress              |
+| Leases, heartbeats, fencing, recovery         |                                        | Concurrency policies and rate limiting         |
+| Deploy-synchronized worker-owned schedules    | Point-in-time health snapshot          | Arbitrary scheduled SQL                        |
+| Persisted retry policies and terminal failure | Success-path comparative baseline      | Dead letters, redrive, dependencies, workflows |
+| Queue pause/resume/purge controls             | Demo-only operations dashboard         | RBAC, OpenTelemetry, additional integrations   |
+| Drizzle provider and Hono lifecycle package   | Clean-install schema only              | Online production migration guarantees         |
+| Live runtime plus immutable outcomes          |                                        |                                                |
+| Append-only events and attempt history        |                                        |                                                |
+| Immutable named checkpoint replay             |                                        |                                                |
+| Lease-releasing named durable timer waits     |                                        |                                                |
+| Bounded attribution-safe automated retention  |                                        |                                                |
 
 ## Core job and dispatch
 
@@ -32,6 +32,7 @@ This is the authoritative implementation snapshot for schema version 8. “Suppo
 | Immediate and delayed enqueue     | Supported     | Due jobs enter ready runtime; future jobs enter scheduled runtime.                                                                                 |
 | Atomic batch enqueue              | Supported     | Up to 1,000 mixed requests share one classification timestamp, return IDs in order, and roll back together.                                        |
 | Transactional application enqueue | Supported     | An active `Queryable`/`PoolClient` controls the transaction.                                                                                       |
+| Persisted enqueue retry policy    | Supported     | `retryPolicy` accepts fixed, exponential, or decorrelated-jitter configuration and is validated and normalized by PostgreSQL.                      |
 | Coalesced wake notifications      | Supported     | One commit-delivered notification is emitted per distinct queue gaining ready work. Polling remains authoritative.                                 |
 | Bounded promotion                 | Supported     | `promote_v1` uses the selective scheduled index and `FOR UPDATE SKIP LOCKED`.                                                                      |
 | Multi-worker claim                | Supported     | `claim_v1` locks one FIFO ready runtime and changes it to active with one state update.                                                            |
@@ -40,25 +41,32 @@ This is the authoritative implementation snapshot for schema version 8. “Suppo
 | Declarative recurring jobs        | Supported     | Namespaced definitions synchronize into the target database and fire from the worker's in-process scheduler through the normal Workhorse protocol. |
 | Schedule revision fencing         | Supported     | Changed definitions increment a revision; stale cron commands become no-ops instead of running new payloads at an old cadence.                     |
 | Schedule occurrence deduplication | Supported     | One durable `(namespace, schedule, second)` key prevents duplicate enqueue for the same supplied or observed fire second.                          |
+| Persisted schedule retry policy   | Supported     | Recurring job definitions persist the same optional policy and copy it to every fired job identity.                                                |
 | Priorities                        | Not supported | Ordering is FIFO only.                                                                                                                             |
 | Enqueue idempotency               | Not supported | Repeating enqueue creates another identity.                                                                                                        |
 
 ## Ownership, retry, and failure
 
-| Feature                            | Status        | Current behavior and limits                                                                                                                                    |
-| ---------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Lease ownership                    | Supported     | Active runtime stores worker, fence, acquisition, heartbeat, and expiry.                                                                                       |
-| Global fencing                     | Supported     | Each claim allocates a monotonic fence; stale generations cannot mutate a newer lifecycle.                                                                     |
-| Heartbeat                          | Supported     | CAS update requires job, active state, worker, fence, and unexpired ownership.                                                                                 |
-| Expiry recovery                    | Supported     | Bounded cooperative recovery locks expired active runtimes and requeues or terminally fails them.                                                              |
-| Centralized maintenance            | Supported     | Advisory-lock-coordinated worker passes promote due jobs and recover expired leases every tick (`tick_v1`) and run slower housekeeping off the claim hot path. |
-| Immediate/delayed retry            | Supported     | `fail_v1` increments attempt and CAS-updates the same runtime to ready or scheduled.                                                                           |
-| Retry budget                       | Supported     | Exhaustion atomically removes runtime and creates failed outcome.                                                                                              |
-| Terminal success                   | Supported     | Completion atomically removes runtime and creates succeeded outcome plus attempt/event history.                                                                |
-| Terminal failure                   | Supported     | Handler exhaustion or lease exhaustion creates immutable failed outcome.                                                                                       |
-| Immutable terminal materialization | Supported     | Terminal jobs occupy `job_outcome`, not dispatch indexes.                                                                                                      |
-| Dead-letter queue and redrive      | Not supported | Failed outcomes are queryable but no DLQ projection or redrive API exists.                                                                                     |
-| Backoff policy                     | Supported     | SQL applies Sidekiq-inspired quartic backoff with jitter by default; callers can explicitly override the delay.                                                |
+| Feature                            | Status        | Current behavior and limits                                                                                                                                              |
+| ---------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Lease ownership                    | Supported     | Active runtime stores worker, fence, acquisition, heartbeat, and expiry.                                                                                                 |
+| Global fencing                     | Supported     | Each claim allocates a monotonic fence; stale generations cannot mutate a newer lifecycle.                                                                               |
+| Heartbeat                          | Supported     | CAS update requires job, active state, worker, fence, and unexpired ownership.                                                                                           |
+| Expiry recovery                    | Supported     | Bounded cooperative recovery locks expired active runtimes and requeues or terminally fails them.                                                                        |
+| Centralized maintenance            | Supported     | Advisory-lock-coordinated worker passes promote due jobs and recover expired leases every tick (`tick_v1`) and run slower housekeeping off the claim hot path.           |
+| Immediate/delayed retry            | Supported     | `fail_v1` increments attempt and CAS-updates the same runtime to ready or scheduled.                                                                                     |
+| Built-in retry policies            | Supported     | Fixed `{delayMs}`, exponential `{initialDelayMs,multiplier,maxDelayMs}`, and decorrelated jitter `{baseDelayMs,maxDelayMs}` apply to handler failure and lease recovery. |
+| PostgreSQL-owned selection         | Supported     | PostgreSQL validates policy, selects delay, performs the transition, persists jitter state, and records policy, selected delay, and source in lifecycle events.          |
+| Deterministic decorrelated jitter  | Supported     | Selection derives from stable job identity, attempt, and persisted previous delay; replay and `Queue` recreation do not change it.                                       |
+| Retry-policy bounds                | Supported     | Delays are integers from 0 through 31,536,000,000 ms; multiplier is an integer from 1 through 100; maximum must be at least initial/base.                                |
+| Omitted-policy compatibility       | Supported     | Handler failure retains legacy Sidekiq-inspired random backoff; expired-lease recovery remains immediate.                                                                |
+| Manual retry-delay override        | Supported     | Numeric `Queue.fail`, `WorkerOptions.retryDelayMs`, and explicit recovery delays take precedence while PostgreSQL still enforces the attempt budget.                     |
+| Retry budget                       | Supported     | Exhaustion atomically removes runtime and creates failed outcome.                                                                                                        |
+| Terminal success                   | Supported     | Completion atomically removes runtime and creates succeeded outcome plus attempt/event history.                                                                          |
+| Terminal failure                   | Supported     | Handler exhaustion or lease exhaustion creates immutable failed outcome.                                                                                                 |
+| Immutable terminal materialization | Supported     | Terminal jobs occupy `job_outcome`, not dispatch indexes.                                                                                                                |
+| Dead-letter queue and redrive      | Not supported | Failed outcomes are queryable but no DLQ projection or redrive API exists.                                                                                               |
+| Retry policy exposure              | Supported     | Enqueue and schedule definitions accept `retryPolicy`; claims and `JobSnapshot` return the normalized persisted value.                                                   |
 
 ## Durable execution boundaries
 
@@ -86,7 +94,7 @@ These primitives make selected handler boundaries durable while preserving Workh
 | Closed attempt history             | Supported     | Success, terminal failure, retry, and lease expiry append one immutable row per logical attempt; `started_at` spans timer suspensions and `claimed_at` records the final activation.       |
 | Weekly history partitions          | Supported     | Monday-aligned partitions are precreated four weeks ahead; housekeeping independently retires fully expired event and attempt weeks plus bounded default rows.                             |
 | Current/terminal lookup            | Supported     | `Queue.getJob(id)` coalesces the sole live runtime or terminal outcome into the stable `JobSnapshot` shape.                                                                                |
-| Queue health                       | Supported     | Reports schema version 8; live/runtime diagnostics; durable waits; persisted retention policy, lag, oldest boundaries, eligible partitions, fallback rows; and PostgreSQL diagnostics.     |
+| Queue health                       | Supported     | Reports schema version 9; live/runtime diagnostics; durable waits; persisted retention policy, lag, oldest boundaries, eligible partitions, fallback rows; and PostgreSQL diagnostics.     |
 | Crash-boundary harness             | Supported     | Worker failpoints model process loss before and after handler/completion boundaries.                                                                                                       |
 | Job/outcome retention              | Supported     | Persisted opt-in minimum windows drive bounded terminal-only deletion. Live jobs and identities still referenced by retained events, attempts, or schedule occurrences are never selected. |
 | Event and attempt retention        | Supported     | Independent nullable windows drop only fully expired completed weekly partitions and bounded-delete expired fallback rows.                                                                 |
@@ -103,7 +111,7 @@ These primitives make selected handler boundaries durable while preserving Workh
 | Drizzle ORM provider                  | Supported     | Separate package adapts node-postgres Drizzle databases and caller-owned transactions without adding Drizzle to core.                                                                                                                                                                                 |
 | Hono lifecycle integration            | Supported     | Separate package provides typed middleware, explicit worker startup, and idempotent graceful Node server shutdown.                                                                                                                                                                                    |
 | TypeScript schedule synchronization   | Supported     | Deploy-time sync reconciles owned schedule definitions; status APIs expose occurrences and recent fires.                                                                                                                                                                                              |
-| Versioned SQL API                     | Supported     | Existing `_v1` call shapes remain compatible; schema version 8 adds persisted retention policy and bounded cleanup primitives while preserving prior lifecycle transitions.                                                                                                                           |
+| Versioned SQL API                     | Supported     | Existing `_v1` call shapes remain compatible; schema version 9 adds persisted retry policies while retaining persisted retention and prior lifecycle contracts.                                                                                                                                       |
 | Graceful worker stop                  | Supported     | Stop prevents further claims and waits for in-flight work.                                                                                                                                                                                                                                            |
 | Worker pause/resume                   | Supported     | `Worker.pause()`/`resume()` stop new claims while active jobs finish and heartbeats continue; demo exposes audited per-worker toggles.                                                                                                                                                                |
 | Worker concurrency                    | Partial       | One worker runs one handler at a time; scale with multiple instances.                                                                                                                                                                                                                                 |

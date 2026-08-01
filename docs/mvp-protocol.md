@@ -1,21 +1,21 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 8 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema includes explicit durable checkpoints, named timer waits, and persisted automated retention.
+This is the compact schema version 9 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema includes persisted retry policies, explicit durable checkpoints, named timer waits, and persisted automated retention.
 
 ## Storage model
 
-| Relation              | Role                                                  | Mutation model                                                          |
-| --------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------- |
-| `job`                 | Immutable identity, queue, type, payload, retry limit | Insert once                                                             |
-| `job_runtime`         | Sole live row for scheduled, ready, or active work    | Insert at enqueue; CAS-update while live; delete at terminal transition |
-| `job_checkpoint`      | Immutable named handler restart boundaries            | Insert once per job and checkpoint name under a fenced active lease     |
-| `job_wait`            | Immutable named timer restart boundaries              | Insert once per job and wait name under a fenced active lease           |
-| `job_outcome`         | Terminal success or failure                           | Insert once after runtime deletion                                      |
-| `job_event`           | Lifecycle audit                                       | Append-only, weekly range partitions                                    |
-| `attempt_history`     | Closed attempt records                                | Append-only, weekly range partitions                                    |
-| `schedule_definition` | Namespaced recurring-job desired state                | Deploy upsert; omitted definitions are disabled                         |
-| `schedule_occurrence` | Deduplicated schedule fire mapped to a job            | Insert once per schedule second; job ID populated atomically            |
-| `retention_policy`    | Authoritative cleanup windows and bounded work limits | Singleton deploy synchronization                                        |
+| Relation              | Role                                                             | Mutation model                                                          |
+| --------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `job`                 | Immutable identity, queue, type, payload, retry limit and policy | Insert once                                                             |
+| `job_runtime`         | Sole live row plus persisted previous jitter delay               | Insert at enqueue; CAS-update while live; delete at terminal transition |
+| `job_checkpoint`      | Immutable named handler restart boundaries                       | Insert once per job and checkpoint name under a fenced active lease     |
+| `job_wait`            | Immutable named timer restart boundaries                         | Insert once per job and wait name under a fenced active lease           |
+| `job_outcome`         | Terminal success or failure                                      | Insert once after runtime deletion                                      |
+| `job_event`           | Lifecycle audit                                                  | Append-only, weekly range partitions                                    |
+| `attempt_history`     | Closed attempt records                                           | Append-only, weekly range partitions                                    |
+| `schedule_definition` | Namespaced recurring-job desired state including retry policy    | Deploy upsert; omitted definitions are disabled                         |
+| `schedule_occurrence` | Deduplicated schedule fire mapped to a job                       | Insert once per schedule second; job ID populated atomically            |
+| `retention_policy`    | Authoritative cleanup windows and bounded work limits            | Singleton deploy synchronization                                        |
 
 A committed job has exactly one live runtime or one terminal outcome, never both. Version 1 write tables and compatibility write views are absent.
 
@@ -35,19 +35,19 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 4. `heartbeat_v1` CAS-updates only the matching unexpired active runtime.
 5. `save_checkpoint_v1` locks the matching unexpired active generation and inserts one immutable named JSON result plus a `checkpoint_saved` event. Repeated equal values return the stored checkpoint; different values conflict; stale owners are rejected.
 6. `schedule_wait_v1` locks and revalidates the matching active generation, inserts at most one named relative or absolute timer definition, and either returns an elapsed boundary or changes runtime to wait-marked scheduled state without incrementing the attempt. Relative replay is first-write-wins; absolute target or mode changes conflict; each job is limited to 1,000 names.
-7. `fail_v1` locks the matching active generation. Retry CAS-updates the same runtime, increments attempt, clears wait continuation metadata, and schedules Sidekiq-inspired quartic backoff with jitter unless the caller explicitly overrides the delay. Exhaustion deletes runtime and inserts failed outcome.
-8. `recover_expired_v1` locks expired active runtimes in bounded batches and performs the same attempt increment/requeue or terminal delete/outcome transition with observed fence and expiry guards.
+7. `fail_v1` locks the matching active generation. Retry asks PostgreSQL to select the persisted policy delay, CAS-updates the same runtime, increments attempt, persists any next jitter state, clears wait continuation metadata, and requeues ready or scheduled. Exhaustion deletes runtime and inserts failed outcome.
+8. `recover_expired_v1` locks expired active runtimes in bounded batches and performs the same policy selection and attempt increment/requeue or terminal delete/outcome transition with observed fence and expiry guards.
 9. `complete_v1` deletes only the matching unexpired active runtime and inserts succeeded outcome, closed attempt history, and event atomically.
 10. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
 11. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID.
 12. `sync_retention_policy_v1` stores explicit nullable minimum windows and work bounds, rejecting policies that could delete identity before retained outcome, event, attempt, or occurrence attribution.
 13. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. Every promoted row emits `promoted`; timer-backed promotion also carries and clears `wait_name` and appends `wait_elapsed`. `housekeep_v1` replenishes the history-partition horizon, retires event and attempt history independently, prunes occurrence keys, and removes safe terminal-job bundles under the separate `workhorse:housekeeping` lock. Every phase is isolated in an exception subtransaction. Both entry points return `(phase, rows_affected, duration_ms, skipped_lock, error)` telemetry.
 
-Every closed logical attempt has one immutable `attempt_history` row. `started_at` spans timer suspensions and `claimed_at` identifies the final activation that closed it. Every lifecycle boundary appends a `job_event`; timer control flow uses `wait_scheduled`, `wait_elapsed`, and `wait_replayed`.
+Every closed logical attempt has one immutable `attempt_history` row. `started_at` spans timer suspensions and `claimed_at` identifies the final activation that closed it. Every lifecycle boundary appends a `job_event`; timer control flow uses `wait_scheduled`, `wait_elapsed`, and `wait_replayed`. `retry_scheduled` and `lease_expired` details include `retry_policy`, `retry_delay_ms`, and `retry_delay_source`.
 
 ## Batch enqueue contract
 
-`Queue.enqueueMany(requests, transaction?)` accepts at most **1,000 requests**. Each request contains `queue`, `type`, `payload`, ISO-8601 `runAt`, and `maxAttempts`.
+`Queue.enqueueMany(requests, transaction?)` accepts at most **1,000 requests**. Each request contains `queue`, `type`, `payload`, ISO-8601 `runAt`, `maxAttempts`, and optional `retryPolicy`.
 
 - Ready and scheduled jobs may be mixed.
 - Returned UUIDs match input order.
@@ -58,6 +58,37 @@ Every closed logical attempt has one immutable `attempt_history` row. `started_a
 - An active caller `PoolClient` controls commit or rollback.
 - `NOTIFY workhorse_jobs` is commit-delivered and coalesced to one message per distinct queue gaining ready work.
 - Scheduled-only queues are notified only after promotion.
+
+## Persisted retry-policy contract
+
+The optional union is:
+
+```ts
+type RetryPolicy =
+  | { type: "fixed"; delayMs: number }
+  | {
+      type: "exponential";
+      initialDelayMs: number;
+      multiplier: number;
+      maxDelayMs: number;
+    }
+  | { type: "decorrelated-jitter"; baseDelayMs: number; maxDelayMs: number };
+```
+
+- `retryPolicy` is accepted by enqueue requests and recurring schedule job definitions, persisted on
+  the stable job identity, and returned by claims and `JobSnapshot`.
+- PostgreSQL is authoritative for exact-object validation, normalization, delay selection, state
+  transition, persisted jitter state, and lifecycle-event provenance.
+- Explicit policies apply to both handler failure and expired-lease recovery.
+- Omitted policy preserves compatibility: handler failure selects legacy Sidekiq-inspired random
+  backoff, while lease recovery selects zero for immediate readiness.
+- Numeric `Queue.fail` delay and numeric or callback-derived `WorkerOptions.retryDelayMs` are
+  higher-precedence manual overrides. `Queue.recoverExpired(limit)` passes omitted delay as SQL `NULL`
+  so persisted policy selection remains authoritative; an explicit recovery delay also overrides.
+- Decorrelated jitter is deterministic from stable job identity, attempt, and persisted previous
+  selected delay. Replaying the selector or recreating `Queue` cannot change the value.
+- Every delay is an integer between 0 and 31,536,000,000 ms. Exponential `multiplier` is an integer
+  between 1 and 100. Exponential and jitter maxima must be at least their initial or base delay.
 
 ## Ownership and crashes
 

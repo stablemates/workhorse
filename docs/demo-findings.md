@@ -14,6 +14,8 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 - a Hono-managed worker processes the job and shuts down through the integration lifecycle;
 - an intentional handler saves a named capacity-reservation checkpoint, records a `retry` attempt, and
   reuses the checkpoint value when attempt 2 succeeds;
+- fixed, exponential, and decorrelated-jitter seeds persist their policy, expose it through the read
+  model and task drawer, and show PostgreSQL-selected delay and source in the lifecycle timeline;
 - three demo-declared pipelines expose multi-step checkpoint progress for order fulfillment, customer
   onboarding, and report publication without treating the presentation plan as a core workflow graph;
 - a named durable timer demo checkpoints preparation, suspends with no active lease, and later reclaims the
@@ -26,14 +28,15 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 
 ## Gaps fixed while building the demo
 
-| Area        | Finding                                                                                                       | Resolution                                                                                                    |
-| ----------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| DX          | Reusing `workhorse_dev` made the documented command fail when that database contained an old or mixed schema. | Added the suffix-guarded `workhorse_demo` database and made `pnpm demo` recreate only that disposable target. |
-| Packaging   | Starting the source demo without building workspace package outputs depended on stale local `dist` files.     | Made `pnpm demo` build core, integrations, and the demo before startup.                                       |
-| Integration | A dashboard coupled to process startup would make the queue unusable in API-only deployments.                 | Added `{ dashboard: false }` and an integration test that proves workers and Hono routes remain functional.   |
-| Correctness | Transactional enqueue was documented but not demonstrated through an ORM-owned request transaction.           | Added a test comparing PostgreSQL `xmin` for the application row and accepted job.                            |
-| Operations  | Browser polling would repeatedly read queue tables even when nothing changed.                                 | Added coalesced SSE invalidation hints backed by local events, PostgreSQL `LISTEN`, and a bounded fallback.   |
-| Timing      | A sleeping job could look worker-owned or inflate execution time across the sleep.                            | Project current ownership separately from last-held provenance and compute execution from final `claimed_at`. |
+| Area        | Finding                                                                                                       | Resolution                                                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| DX          | Reusing `workhorse_dev` made the documented command fail when that database contained an old or mixed schema. | Added the suffix-guarded `workhorse_demo` database and made `pnpm demo` recreate only that disposable target.                            |
+| Packaging   | Starting the source demo without building workspace package outputs depended on stale local `dist` files.     | Made `pnpm demo` build core, integrations, and the demo before startup.                                                                  |
+| Integration | A dashboard coupled to process startup would make the queue unusable in API-only deployments.                 | Added `{ dashboard: false }` and an integration test that proves workers and Hono routes remain functional.                              |
+| Correctness | Transactional enqueue was documented but not demonstrated through an ORM-owned request transaction.           | Added a test comparing PostgreSQL `xmin` for the application row and accepted job.                                                       |
+| Operations  | Browser polling would repeatedly read queue tables even when nothing changed.                                 | Added coalesced SSE invalidation hints backed by local events, PostgreSQL `LISTEN`, and a bounded fallback.                              |
+| Timing      | A sleeping job could look worker-owned or inflate execution time across the sleep.                            | Project current ownership separately from last-held provenance and compute execution from final `claimed_at`.                            |
+| Retry       | Retry configuration was process-local callback logic with no durable policy or provenance.                    | Added PostgreSQL-owned persisted policies, deterministic jitter, compatibility defaults, and policy/delay/source inspection in the demo. |
 
 The timer demo deliberately uses only a named relative wait as its primary proof. The visible default is ten
 seconds so operators can inspect the sleeping row. The approximately one-second maintenance cadence is only
@@ -56,14 +59,6 @@ internals, so a schema evolution can break an otherwise type-safe dashboard.
 **Needed:** a typed, cursor-based read API for job lists, queue pressure, lifecycle timelines, schedule
 status, worker observations, failures, and health. Keep payload inclusion bounded and support redaction.
 This is tracked primarily by **P2-01 Query and listing API** and **P0-06 Consistent operational snapshots**.
-
-### A2. Retry configuration is a callback, not a durable policy
-
-The demo uses `retryDelayMs: attempt => attempt * 100`. It is easy to start with, but the selected policy
-and its inputs are not named or persisted, and callers must implement overflow, jitter, and cap behavior.
-
-**Needed:** built-in fixed, exponential, and decorrelated-jitter policies with persisted inputs and
-bounded validation. This is tracked by **P0-05 Built-in retry policies**.
 
 ### A3. Framework integrations do not own schedule deployment
 
@@ -119,7 +114,7 @@ with an explicit mounting API. Keep the dashboard optional and avoid adding Reac
 
 ### D1. Schema upgrades are not documented because they do not exist
 
-`installSchema()` intentionally rejects non-v7 or mixed installations. The live demo exposed how quickly
+`installSchema()` intentionally rejects non-v9 or mixed installations. The live demo exposed how quickly
 that clean-install boundary becomes user-visible.
 
 **Needed:** ordered transactional migrations, independent schema and protocol versions, dry-run/status
@@ -174,8 +169,9 @@ job's event timeline, immutable attempts, payload/result redaction state, or red
 
 ## Priority conclusion
 
-The demo validates the current write path and lifecycle semantics. The highest-leverage next production
-work remains the existing P0 sequence: retention, telemetry, concurrency, notification-assisted dispatch,
-built-in retry policies, consistent snapshots, and release compatibility. The demo specifically raises
+The demo validates the current write path, persisted retry policies, and lifecycle semantics. The
+highest-leverage next production work remains the roadmap sequence after completed retention and retry
+policy work: idempotency, concurrency, notification-assisted dispatch, job controls, stable operational
+reads, consistent snapshots, release compatibility, and finally telemetry. The demo specifically raises
 the importance of a stable operational read API and schema migrations before the dashboard can become a
 separately supported product surface.

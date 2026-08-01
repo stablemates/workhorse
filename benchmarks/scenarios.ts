@@ -144,13 +144,28 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   },
   {
     name: "retry-paths",
-    purpose: "Exercise immediate retry, delayed retry promotion, and terminal exhaustion.",
+    purpose:
+      "Exercise manual overrides, persisted fixed/exponential/decorrelated-jitter selection, delayed promotion, and terminal exhaustion.",
     invariants: [
       "zero-delay failure returns ready",
       "positive-delay failure returns scheduled and later promotes",
+      "persisted retry policies record their PostgreSQL-selected delay and provenance",
+      "decorrelated jitter replays deterministically from persisted inputs",
       "a job at its attempt budget enters failed",
     ],
-    metrics: ["immediateAttempts", "delayedAttempts", "delayedPromoted", "exhaustedAttempts"],
+    metrics: [
+      "immediateAttempts",
+      "delayedAttempts",
+      "delayedPromoted",
+      "fixedDelayMs",
+      "fixedSelectionMs",
+      "exponentialDelayMs",
+      "exponentialSelectionMs",
+      "jitterDelayMs",
+      "jitterSelectionMs",
+      "policySelectionTotalMs",
+      "exhaustedAttempts",
+    ],
   },
   {
     name: "retention-pruning",
@@ -271,6 +286,25 @@ export function mean(samples: readonly number[]): number | null {
   const finite = samples.filter(Number.isFinite);
   if (finite.length === 0) return null;
   return finite.reduce((total, value) => total + value, 0) / finite.length;
+}
+
+function canonicalJson(value: unknown): string {
+  return (
+    JSON.stringify(value, (_key, nested) =>
+      nested !== null && typeof nested === "object" && !Array.isArray(nested)
+        ? Object.fromEntries(
+            // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries returns a fresh array.
+            Object.entries(nested as Record<string, unknown>).sort(([left], [right]) =>
+              left.localeCompare(right),
+            ),
+          )
+        : nested,
+    ) ?? "undefined"
+  );
+}
+
+function jsonEquivalent(actual: unknown, expected: unknown): boolean {
+  return canonicalJson(actual) === canonicalJson(expected);
 }
 
 export function recordInvariant(
@@ -617,12 +651,32 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
   const queue = new Queue(context.pool, context.queueName);
   const assertions: ScenarioAssertion[] = [];
 
+  type RetryEventRow = {
+    retry_policy: unknown;
+    retry_delay_ms: string;
+    retry_delay_source: string;
+  };
+
+  const retryEvent = async (jobId: string): Promise<RetryEventRow> => {
+    const result = await context.pool.query<RetryEventRow>(
+      `SELECT details->'retry_policy' AS retry_policy,
+              details->>'retry_delay_ms' AS retry_delay_ms,
+              details->>'retry_delay_source' AS retry_delay_source
+         FROM workhorse.job_event
+        WHERE job_id = $1 AND event_type = 'retry_scheduled'
+        ORDER BY event_id DESC
+        LIMIT 1`,
+      [jobId],
+    );
+    return result.rows[0]!;
+  };
+
   const immediateId = await queue.enqueue("retry-immediate", {}, { maxAttempts: 2 });
   const immediateFirst = await queue.claim("retry-worker");
   recordInvariant(
     assertions,
     "immediate retry enters ready",
-    await queue.fail(immediateFirst!, "retry-worker", new Error("retry now")),
+    await queue.fail(immediateFirst!, "retry-worker", new Error("retry now"), 0),
     "ready",
   );
   const immediateSecond = await queue.claim("retry-worker");
@@ -665,6 +719,142 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
     true,
   );
 
+  const fixedPolicy = { type: "fixed", delayMs: 1 } as const;
+  const fixedId = await queue.enqueue(
+    "retry-fixed",
+    {},
+    { maxAttempts: 2, retryPolicy: fixedPolicy },
+  );
+  const fixedFirst = await queue.claim("retry-worker");
+  const [fixedState, fixedSelectionMs] = await measured(context.now, () =>
+    queue.fail(fixedFirst!, "retry-worker", new Error("fixed policy")),
+  );
+  const fixedEvent = await retryEvent(fixedId);
+  recordInvariant(assertions, "fixed policy schedules retry", fixedState, "scheduled");
+  recordInvariant(assertions, "fixed policy delay selected", Number(fixedEvent.retry_delay_ms), 1);
+  recordInvariant(
+    assertions,
+    "fixed policy source recorded",
+    fixedEvent.retry_delay_source,
+    "policy:fixed",
+  );
+  recordInvariant(
+    assertions,
+    "fixed policy provenance recorded",
+    fixedEvent.retry_policy,
+    fixedPolicy,
+    jsonEquivalent,
+  );
+
+  const exponentialPolicy = {
+    type: "exponential",
+    initialDelayMs: 1,
+    multiplier: 2,
+    maxDelayMs: 4,
+  } as const;
+  const exponentialId = await queue.enqueue(
+    "retry-exponential",
+    {},
+    {
+      maxAttempts: 2,
+      retryPolicy: exponentialPolicy,
+    },
+  );
+  const exponentialFirst = await queue.claim("retry-worker");
+  const [exponentialState, exponentialSelectionMs] = await measured(context.now, () =>
+    queue.fail(exponentialFirst!, "retry-worker", new Error("exponential policy")),
+  );
+  const exponentialEvent = await retryEvent(exponentialId);
+  recordInvariant(assertions, "exponential policy schedules retry", exponentialState, "scheduled");
+  recordInvariant(
+    assertions,
+    "exponential policy delay selected",
+    Number(exponentialEvent.retry_delay_ms),
+    1,
+  );
+  recordInvariant(
+    assertions,
+    "exponential policy source recorded",
+    exponentialEvent.retry_delay_source,
+    "policy:exponential",
+  );
+  recordInvariant(
+    assertions,
+    "exponential policy provenance recorded",
+    exponentialEvent.retry_policy,
+    exponentialPolicy,
+    jsonEquivalent,
+  );
+
+  const jitterPolicy = { type: "decorrelated-jitter", baseDelayMs: 1, maxDelayMs: 3 } as const;
+  const jitterId = await queue.enqueue(
+    "retry-jitter",
+    {},
+    {
+      maxAttempts: 2,
+      retryPolicy: jitterPolicy,
+    },
+  );
+  const jitterFirst = await queue.claim("retry-worker");
+  const [jitterState, jitterSelectionMs] = await measured(context.now, () =>
+    queue.fail(jitterFirst!, "retry-worker", new Error("jitter policy")),
+  );
+  const jitterEvent = await retryEvent(jitterId);
+  const jitterDelayMs = Number(jitterEvent.retry_delay_ms);
+  const replayedJitter = await context.pool.query<{ delay_ms: string }>(
+    `SELECT delay_ms
+       FROM workhorse.retry_delay_v1($1, $2, $3::jsonb, $4, $5, $6)`,
+    [jitterId, 1, JSON.stringify(jitterPolicy), null, null, "legacy-handler"],
+  );
+  const recreatedQueue = new Queue(context.pool, context.queueName);
+  recordInvariant(assertions, "jitter policy schedules retry", jitterState, "scheduled");
+  recordInvariant(
+    assertions,
+    "jitter policy delay is bounded",
+    jitterDelayMs >= jitterPolicy.baseDelayMs && jitterDelayMs <= jitterPolicy.maxDelayMs,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "jitter policy source recorded",
+    jitterEvent.retry_delay_source,
+    "policy:decorrelated-jitter",
+  );
+  recordInvariant(
+    assertions,
+    "jitter policy provenance recorded",
+    jitterEvent.retry_policy,
+    jitterPolicy,
+    jsonEquivalent,
+  );
+  recordInvariant(
+    assertions,
+    "jitter replay selects the same delay",
+    Number(replayedJitter.rows[0]!.delay_ms),
+    jitterDelayMs,
+  );
+  recordInvariant(
+    assertions,
+    "queue recreation preserves persisted jitter policy",
+    (await recreatedQueue.getJob(jitterId))?.retryPolicy,
+    jitterPolicy,
+    jsonEquivalent,
+  );
+
+  await context.sleep(8);
+  const policyPromoted = await queue.promote(context.options.batchSize);
+  recordInvariant(assertions, "all policy retries promote", policyPromoted, 3);
+  for (const policyName of ["fixed", "exponential", "jitter"]) {
+    const policyRetry = await queue.claim("retry-worker");
+    recordInvariant(assertions, `${policyName} retry is attempt two`, policyRetry?.attempt, 2);
+    recordInvariant(
+      assertions,
+      `${policyName} retry completes`,
+      await queue.complete(policyRetry!, "retry-worker", { ok: true }),
+      true,
+    );
+  }
+
   const exhaustedId = await queue.enqueue("retry-exhausted", {}, { maxAttempts: 1 });
   const exhausted = await queue.claim("retry-worker");
   recordInvariant(
@@ -687,6 +877,13 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
       immediateAttempts: (await queue.getJob(immediateId))?.currentAttempt ?? null,
       delayedAttempts: (await queue.getJob(delayedId))?.currentAttempt ?? null,
       delayedPromoted,
+      fixedDelayMs: Number(fixedEvent.retry_delay_ms),
+      fixedSelectionMs,
+      exponentialDelayMs: Number(exponentialEvent.retry_delay_ms),
+      exponentialSelectionMs,
+      jitterDelayMs,
+      jitterSelectionMs,
+      policySelectionTotalMs: fixedSelectionMs + exponentialSelectionMs + jitterSelectionMs,
       exhaustedAttempts: (await queue.getJob(exhaustedId))?.currentAttempt ?? null,
     },
     assertions,

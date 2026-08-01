@@ -1,6 +1,6 @@
 # Future feature roadmap
 
-This roadmap starts from the schema version 8 validation MVP described in
+This roadmap starts from the schema version 9 validation MVP described in
 [`docs/features.md`](docs/features.md). Items are ordered by product risk and dependency, not by
 feature visibility. A feature is complete only when its SQL contract, TypeScript API, integration
 tests, operational diagnostics, documentation, and benchmark impact are addressed.
@@ -18,16 +18,15 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P0-05 Built-in retry policies**
-2. **P1-01 Enqueue idempotency keys**
-3. **P0-03 Configurable worker concurrency**
-4. **P0-04 Notification-assisted dispatch**
-5. **P1-02 Cancellation**
-6. **P1-03 Deadlines and execution timeouts**
-7. **P1-04 Dead-letter views and redrive**
-8. **P2-01 Query and listing API**
-9. **P1-09 Progress and job metadata**
-10. **P0-02 Production telemetry**
+1. **P1-01 Enqueue idempotency keys**
+2. **P0-03 Configurable worker concurrency**
+3. **P0-04 Notification-assisted dispatch**
+4. **P1-02 Cancellation**
+5. **P1-03 Deadlines and execution timeouts**
+6. **P1-04 Dead-letter views and redrive**
+7. **P2-01 Query and listing API**
+8. **P1-09 Progress and job metadata**
+9. **P0-02 Production telemetry**
 
 The demo and initial integration packages are complete. Full OpenTelemetry support is deliberately
 sequenced after the next product and reliability features; each earlier feature must still ship the
@@ -121,15 +120,21 @@ not depend on the later full OpenTelemetry and metrics package.
 - [ ] Bound idle polling so lost notifications cannot strand ready work.
 - [ ] Measure idle database load and enqueue-to-claim latency against polling-only behavior.
 
-### [ ] P0-05 Built-in retry policies
+### [x] P0-05 Built-in retry policies
 
 **Depends on:** none
 
-- [ ] Add fixed, exponential, and decorrelated-jitter retry policies.
-- [ ] Persist the selected policy inputs needed for deterministic retry scheduling.
-- [ ] Support explicit handler overrides without bypassing retry-budget enforcement.
-- [ ] Cap delays and reject overflow or invalid policy configuration.
-- [ ] Add deterministic tests for delay sequences and terminal exhaustion.
+- [x] Add fixed, exponential, and decorrelated-jitter policies to enqueue and recurring schedule
+      definitions, claims, snapshots, demo seeds, the task drawer, and lifecycle timelines.
+- [x] Persist normalized policy inputs and the previous decorrelated-jitter delay so PostgreSQL owns
+      deterministic selection across replay, lease recovery, and `Queue` recreation.
+- [x] Preserve numeric `Queue.fail` and `WorkerOptions.retryDelayMs` as higher-precedence manual
+      overrides without bypassing retry-budget enforcement.
+- [x] Cap delays at 365 days, require integer multipliers from 1 through 100, require maxima at least
+      initial/base delays, and reject overflow or invalid policy configuration in PostgreSQL.
+- [x] Cover policy delay sequences, handler failure, lease recovery, compatibility defaults,
+      provenance events, manual overrides, queue recreation, and terminal exhaustion with deterministic
+      integration tests and the extended `retry-paths` lifecycle benchmark.
 
 ### [ ] P0-06 Consistent operational snapshots
 
