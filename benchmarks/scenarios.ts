@@ -2,16 +2,18 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import type { QueryResult, QueryResultRow } from "pg";
 import {
+  CancellationRequestedError,
   EnqueueIdempotencyConflictError,
   InjectedCrashError,
   Queue,
   Worker,
 } from "../src/index.js";
-import type { Failpoint, Queryable, QueueHealth } from "../src/index.js";
+import type { ClaimedJob, Failpoint, Queryable, QueueHealth } from "../src/index.js";
 
 export const operationalScenarioNames = [
   "scheduled-promotion-drift",
   "heartbeat-fencing",
+  "cancellation-lifecycle",
   "crash-before-completion",
   "lease-expiry-recovery",
   "retry-paths",
@@ -128,6 +130,35 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "acceptedMeanMs",
       "staleMeanMs",
       "staleOverheadMs",
+    ],
+  },
+  {
+    name: "cancellation-lifecycle",
+    purpose:
+      "Exercise immediate, cooperative, expired-lease, race, attempt-history, and recurring-occurrence cancellation semantics.",
+    invariants: [
+      "ready and scheduled jobs cancel immediately without inventing attempt history",
+      "a waiting job cancels immediately and records history only because its logical attempt started",
+      "active cancellation is delivered through heartbeat status and AbortSignal then acknowledged by the exact fence",
+      "an ignored active cancellation materializes as canceled at lease expiry instead of retrying",
+      "completion, failure, heartbeat, and wrong-fence acknowledgement cannot overwrite cancellation",
+      "repeated requests create no duplicate terminal outcome or cancellation events",
+      "cancellation versus completion or failure is first-committer-wins",
+      "canceling one recurring occurrence leaves the schedule enabled and the next occurrence independent",
+    ],
+    metrics: [
+      "readyCancelMs",
+      "scheduledCancelMs",
+      "waitingCancelMs",
+      "activeRequestMs",
+      "activeRepeatRequestMs",
+      "activeAcknowledgeMs",
+      "ignoredRequestMs",
+      "expiryMaterializationMs",
+      "terminalReplayMs",
+      "stateQueryMs",
+      "eventQueryMs",
+      "recurringNextOccurrenceMs",
     ],
   },
   {
@@ -601,6 +632,382 @@ async function heartbeatFencing(
     },
     assertions,
   };
+}
+
+async function cancellationLifecycle(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const queue = new Queue(context.pool, context.queueName);
+  const assertions: ScenarioAssertion[] = [];
+  const metrics: Record<string, ScenarioMetric> = {};
+  const request = { requestedBy: "benchmark-operator", reason: "deterministic lifecycle proof" };
+
+  const readyJobId = await queue.enqueue("cancel-ready", {});
+  const [readyCancel, readyCancelMs] = await measured(context.now, () =>
+    queue.cancel(readyJobId, request),
+  );
+  metrics.readyCancelMs = readyCancelMs;
+  recordInvariant(assertions, "ready cancellation is immediate", readyCancel.status, "canceled");
+  recordInvariant(
+    assertions,
+    "ready cancellation creates no attempt history",
+    await rowCount(context.pool, "attempt_history", readyJobId),
+    0,
+  );
+
+  const scheduledJobId = await queue.enqueue(
+    "cancel-scheduled",
+    {},
+    { runAt: new Date(Date.now() + 60_000) },
+  );
+  const [scheduledCancel, scheduledCancelMs] = await measured(context.now, () =>
+    queue.cancel(scheduledJobId, request),
+  );
+  metrics.scheduledCancelMs = scheduledCancelMs;
+  recordInvariant(
+    assertions,
+    "scheduled cancellation is immediate",
+    scheduledCancel.status,
+    "canceled",
+  );
+  recordInvariant(
+    assertions,
+    "scheduled cancellation creates no attempt history",
+    await rowCount(context.pool, "attempt_history", scheduledJobId),
+    0,
+  );
+
+  const waitingJobId = await queue.enqueue("cancel-waiting", {});
+  const waitingClaim = await queue.claim("waiting-worker", { leaseMs: 1_000 });
+  recordInvariant(assertions, "waiting seed claimed", waitingClaim?.id, waitingJobId);
+  const wait = await queue.scheduleWait(waitingClaim!, "waiting-worker", "benchmark-wait", {
+    durationMs: 60_000,
+  });
+  recordInvariant(assertions, "waiting seed suspended", wait.status, "scheduled");
+  const [waitingCancel, waitingCancelMs] = await measured(context.now, () =>
+    queue.cancel(waitingJobId, request),
+  );
+  metrics.waitingCancelMs = waitingCancelMs;
+  recordInvariant(
+    assertions,
+    "waiting cancellation is immediate",
+    waitingCancel.status,
+    "canceled",
+  );
+  recordInvariant(
+    assertions,
+    "waiting cancellation closes its started logical attempt",
+    await rowCount(context.pool, "attempt_history", waitingJobId),
+    1,
+  );
+
+  let activeJob: ClaimedJob | undefined;
+  let observedSignal: AbortSignal | undefined;
+  let handlerStartedResolve!: () => void;
+  const handlerStarted = new Promise<void>((resolve) => {
+    handlerStartedResolve = resolve;
+  });
+  const activeWorker = new Worker(queue, {
+    queue: context.queueName,
+    workerId: "cancel-active-worker",
+    leaseMs: Math.max(200, context.options.leaseMs * 4),
+    heartbeatMs: 20,
+    pollMs: 1,
+  }).handle("cancel-active", async (_payload, handlerContext) => {
+    activeJob = handlerContext.job;
+    observedSignal = handlerContext.signal;
+    handlerStartedResolve();
+    if (!handlerContext.signal.aborted) {
+      await new Promise<void>((resolve) =>
+        handlerContext.signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+    }
+    throw handlerContext.signal.reason;
+  });
+  const activeJobId = await queue.enqueue("cancel-active", {});
+  const activeExecution = activeWorker.runOnce();
+  await handlerStarted;
+  const [activeRequest, activeRequestMs] = await measured(context.now, () =>
+    queue.cancel(activeJobId, request),
+  );
+  const [activeRepeat, activeRepeatRequestMs] = await measured(context.now, () =>
+    queue.cancel(activeJobId, { requestedBy: "ignored-repeat", reason: "ignored-repeat" }),
+  );
+  metrics.activeRequestMs = activeRequestMs;
+  metrics.activeRepeatRequestMs = activeRepeatRequestMs;
+  recordInvariant(
+    assertions,
+    "active cancellation becomes a request",
+    activeRequest.status,
+    "cancel_requested",
+  );
+  recordInvariant(
+    assertions,
+    "repeated active request remains requested",
+    activeRepeat.status,
+    "cancel_requested",
+  );
+  recordInvariant(
+    assertions,
+    "first active request owns attribution",
+    activeRepeat.requestedBy,
+    request.requestedBy,
+  );
+  recordInvariant(
+    assertions,
+    "wrong fence cannot acknowledge cancellation",
+    await queue.acknowledgeCancel(
+      { ...activeJob!, fenceToken: activeJob!.fenceToken + 1n },
+      "cancel-active-worker",
+    ),
+    false,
+  );
+  const acknowledgeStarted = context.now();
+  await activeExecution;
+  metrics.activeAcknowledgeMs = Math.max(0, context.now() - acknowledgeStarted);
+  recordInvariant(assertions, "handler AbortSignal was delivered", observedSignal?.aborted, true);
+  recordInvariant(
+    assertions,
+    "handler AbortSignal carries cancellation reason",
+    observedSignal?.reason instanceof CancellationRequestedError,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "exact fence materializes canceled",
+    (await queue.getJob(activeJobId))?.state,
+    "canceled",
+  );
+  recordInvariant(
+    assertions,
+    "active cancellation records one attempt",
+    await rowCount(context.pool, "attempt_history", activeJobId),
+    1,
+  );
+  recordInvariant(
+    assertions,
+    "stale completion cannot overwrite cancellation",
+    await queue.complete(activeJob!, "cancel-active-worker", { stale: true }),
+    false,
+  );
+  recordInvariant(
+    assertions,
+    "stale failure cannot overwrite cancellation",
+    await queue.fail(activeJob!, "cancel-active-worker", new Error("stale"), 0),
+    "stale",
+  );
+  recordInvariant(
+    assertions,
+    "stale heartbeat status cannot overwrite cancellation",
+    await queue.heartbeatStatus(activeJob!, "cancel-active-worker", 200),
+    "stale",
+  );
+  recordInvariant(
+    assertions,
+    "heartbeat_v1 compatibility rejects canceled ownership",
+    await queue.heartbeat(activeJob!, "cancel-active-worker", 200),
+    false,
+  );
+
+  const ignoredJobId = await queue.enqueue("cancel-ignored", {}, { maxAttempts: 3 });
+  const ignoredClaim = await queue.claim("cancel-ignored-worker", {
+    leaseMs: Math.max(100, context.options.leaseMs),
+  });
+  recordInvariant(assertions, "ignored-signal seed claimed", ignoredClaim?.id, ignoredJobId);
+  const [ignoredRequest, ignoredRequestMs] = await measured(context.now, () =>
+    queue.cancel(ignoredJobId, request),
+  );
+  metrics.ignoredRequestMs = ignoredRequestMs;
+  recordInvariant(
+    assertions,
+    "ignored signal remains requested while leased",
+    ignoredRequest.status,
+    "cancel_requested",
+  );
+  await context.sleep(Math.max(100, context.options.leaseMs) + 5);
+  const [expiredMaterialized, expiryMaterializationMs] = await measured(context.now, () =>
+    queue.recoverExpired(context.options.batchSize),
+  );
+  metrics.expiryMaterializationMs = expiryMaterializationMs;
+  recordInvariant(assertions, "expiry materializes requested cancellation", expiredMaterialized, 1);
+  recordInvariant(
+    assertions,
+    "expired request becomes canceled",
+    (await queue.getJob(ignoredJobId))?.state,
+    "canceled",
+  );
+  recordInvariant(
+    assertions,
+    "expired requested lease does not create a retry attempt",
+    (await queue.getJob(ignoredJobId))?.currentAttempt,
+    1,
+  );
+  recordInvariant(
+    assertions,
+    "expired requested lease closes one canceled attempt",
+    await rowCount(context.pool, "attempt_history", ignoredJobId),
+    1,
+  );
+
+  const [terminalReplay, terminalReplayMs] = await measured(context.now, () =>
+    queue.cancel(activeJobId, { requestedBy: "ignored-terminal-repeat" }),
+  );
+  metrics.terminalReplayMs = terminalReplayMs;
+  recordInvariant(
+    assertions,
+    "terminal cancellation replay is idempotent",
+    terminalReplay.status,
+    "canceled",
+  );
+  const [activeEventRows, eventQueryMs] = await measured(context.now, () =>
+    context.pool.query<{ event_type: string; count: string }>(
+      `SELECT event_type, count(*)::text AS count
+         FROM workhorse.job_event
+        WHERE job_id = $1 AND event_type IN ('cancel_requested', 'canceled')
+        GROUP BY event_type ORDER BY event_type`,
+      [activeJobId],
+    ),
+  );
+  metrics.eventQueryMs = eventQueryMs;
+  const activeEventCounts = Object.fromEntries(
+    activeEventRows.rows.map((row) => [row.event_type, Number(row.count)]),
+  );
+  recordInvariant(
+    assertions,
+    "repeated requests emit one request event",
+    activeEventCounts.cancel_requested,
+    1,
+  );
+  recordInvariant(
+    assertions,
+    "repeated requests emit one terminal event",
+    activeEventCounts.canceled,
+    1,
+  );
+  recordInvariant(
+    assertions,
+    "repeated requests retain one terminal outcome",
+    await rowCount(context.pool, "job_outcome", activeJobId),
+    1,
+  );
+
+  const completionWinsId = await queue.enqueue("cancel-race-complete", {});
+  const completionWinsClaim = await queue.claim("cancel-race-complete-worker", { leaseMs: 1_000 });
+  recordInvariant(
+    assertions,
+    "completion race seed claimed",
+    completionWinsClaim?.id,
+    completionWinsId,
+  );
+  recordInvariant(
+    assertions,
+    "completion can commit before cancellation",
+    await queue.complete(completionWinsClaim!, "cancel-race-complete-worker", {
+      winner: "complete",
+    }),
+    true,
+  );
+  const completionLostCancel = await queue.cancel(completionWinsId, request);
+  recordInvariant(
+    assertions,
+    "cancellation observes committed success",
+    completionLostCancel.status,
+    "already_terminal",
+  );
+  recordInvariant(assertions, "success remains immutable", completionLostCancel.state, "succeeded");
+
+  const failureWinsId = await queue.enqueue("cancel-race-fail", {}, { maxAttempts: 1 });
+  const failureWinsClaim = await queue.claim("cancel-race-fail-worker", { leaseMs: 1_000 });
+  recordInvariant(assertions, "failure race seed claimed", failureWinsClaim?.id, failureWinsId);
+  recordInvariant(
+    assertions,
+    "failure can commit before cancellation",
+    await queue.fail(failureWinsClaim!, "cancel-race-fail-worker", new Error("winner")),
+    "failed",
+  );
+  const failureLostCancel = await queue.cancel(failureWinsId, request);
+  recordInvariant(
+    assertions,
+    "cancellation observes committed failure",
+    failureLostCancel.status,
+    "already_terminal",
+  );
+  recordInvariant(assertions, "failure remains immutable", failureLostCancel.state, "failed");
+
+  const scheduleNamespace = `${context.queueName}-namespace`;
+  await queue.syncSchedules(scheduleNamespace, [
+    {
+      name: "cancel-one-occurrence",
+      schedule: "* * * * *",
+      job: { type: "recurring-cancel", payload: { source: "schedule" }, queue: context.queueName },
+    },
+  ]);
+  const schedule = (await queue.schedules([scheduleNamespace]))[0]!;
+  const occurrenceBase = Math.floor(Date.now() / 60_000) * 60_000 - 120_000;
+  const firstOccurrenceAt = new Date(occurrenceBase);
+  const nextOccurrenceAt = new Date(occurrenceBase + 60_000);
+  const firstOccurrenceId = await queue.fireSchedule(
+    scheduleNamespace,
+    schedule.name,
+    schedule.revision,
+    firstOccurrenceAt,
+  );
+  recordInvariant(assertions, "first recurring occurrence fired", firstOccurrenceId !== null, true);
+  recordInvariant(
+    assertions,
+    "one recurring occurrence can be canceled",
+    (await queue.cancel(firstOccurrenceId!, request)).status,
+    "canceled",
+  );
+  const [nextOccurrenceId, recurringNextOccurrenceMs] = await measured(context.now, () =>
+    queue.fireSchedule(scheduleNamespace, schedule.name, schedule.revision, nextOccurrenceAt),
+  );
+  metrics.recurringNextOccurrenceMs = recurringNextOccurrenceMs;
+  recordInvariant(
+    assertions,
+    "next recurring occurrence still fires",
+    nextOccurrenceId !== null,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "next recurring occurrence is independent",
+    nextOccurrenceId !== firstOccurrenceId,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "next recurring occurrence remains ready",
+    (await queue.getJob(nextOccurrenceId!))?.state,
+    "ready",
+  );
+  const enabledSchedule = await context.pool.query<{ enabled: boolean }>(
+    `SELECT enabled FROM workhorse.schedule_definition
+      WHERE namespace = $1 AND schedule_name = $2`,
+    [scheduleNamespace, schedule.name],
+  );
+  recordInvariant(
+    assertions,
+    "canceling an occurrence leaves schedule enabled",
+    enabledSchedule.rows[0]?.enabled,
+    true,
+  );
+
+  const [stateRows, stateQueryMs] = await measured(context.now, () =>
+    context.pool.query<{ state: string; count: string }>(
+      `SELECT state, count(*)::text AS count
+         FROM workhorse.job_outcome
+        GROUP BY state ORDER BY state`,
+    ),
+  );
+  metrics.stateQueryMs = stateQueryMs;
+  metrics.canceledOutcomes = Number(
+    stateRows.rows.find((row) => row.state === "canceled")?.count ?? 0,
+  );
+  metrics.jobsExercised = 9;
+
+  return { name: "cancellation-lifecycle", durationMs: 0, metrics, assertions };
 }
 
 async function crashBeforeCompletion(
@@ -1737,6 +2144,7 @@ export const operationalScenarioImplementations: Readonly<
 > = {
   "scheduled-promotion-drift": scheduledPromotionDrift,
   "heartbeat-fencing": heartbeatFencing,
+  "cancellation-lifecycle": cancellationLifecycle,
   "crash-before-completion": crashBeforeCompletion,
   "lease-expiry-recovery": leaseExpiryRecovery,
   "retry-paths": retryPaths,

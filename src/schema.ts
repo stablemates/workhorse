@@ -26,11 +26,11 @@ export async function installSchema(database: Queryable): Promise<void> {
     );
     if (
       versions.rows.length !== 1 ||
-      versions.rows[0]?.version !== 10 ||
+      versions.rows[0]?.version !== 11 ||
       state.legacy_relation_exists
     )
       throw new Error(
-        "refusing to treat an existing non-v10 or mixed workhorse schema as a clean installation",
+        "refusing to treat an existing non-v11 or mixed workhorse schema as a clean installation",
       );
   }
   const schemaUrl = new URL("../sql/schema.sql", import.meta.url);

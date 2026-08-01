@@ -1,8 +1,8 @@
 # Workhorse validation MVP
 
-Workhorse is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, immutable history, and a live-only dispatch relation.
+Workhorse is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, cooperative cancellation, immutable history, and a live-only dispatch relation.
 
-The current implementation remains an evidence-first validation release rather than a production-support promise. Its purpose is to validate transactional enqueue, declarative worker-scheduled recurring jobs, fenced ownership, immutable attempt history, durable checkpoint replay, lease-releasing timer waits, attribution-safe automated retention, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
+The current implementation remains an evidence-first validation release rather than a production-support promise. Its purpose is to validate transactional enqueue, declarative worker-scheduled recurring jobs, fenced ownership, cooperative cancellation, immutable attempt history, durable checkpoint replay, lease-releasing timer waits, attribution-safe automated retention, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
 
 ## Documentation
 
@@ -14,6 +14,7 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/demo-findings.md`](docs/demo-findings.md): API, packaging, documentation, and developer-experience gaps found by the end-to-end demo.
 - [`demo/README.md`](demo/README.md): interactive Workhorse demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
 - [`docs/decisions/0009-enqueue-idempotency-keys.md`](docs/decisions/0009-enqueue-idempotency-keys.md): scoped enqueue-key ownership, request equivalence, safe diagnostics, expiry, and cleanup.
+- [`docs/decisions/0010-cooperative-job-cancellation.md`](docs/decisions/0010-cooperative-job-cancellation.md): cooperative delivery, exact-fence acknowledgement, race ownership, truthful history, recurring behavior, and non-goals.
 
 ## Included scope
 
@@ -21,7 +22,7 @@ The current implementation remains an evidence-first validation release rather t
 - optional PostgreSQL-owned scoped enqueue idempotency with atomic exact replay and conflict rollback;
 - one live-only runtime relation with selective ready, scheduled, and expired-lease indexes;
 - `FOR UPDATE SKIP LOCKED` claims with monotonically increasing fence tokens;
-- fenced heartbeat, completion, retry, and expired-lease recovery;
+- fenced heartbeat, completion, retry, cancellation, and expired-lease recovery;
 - optional PostgreSQL-validated fixed, exponential, and decorrelated-jitter retry policies persisted
   with jobs and recurring schedule definitions;
 - append-only, time-partitioned lifecycle events and finalized attempts;
@@ -33,17 +34,41 @@ The current implementation remains an evidence-first validation release rather t
 - worker-owned in-process cron scheduling with advisory-lock coordination and SQL occurrence deduplication;
 - centralized promotion and lease recovery off the worker claim hot path;
 - a TypeScript `pg` client and worker runtime with configurable per-instance concurrency;
+- immediate cancellation for queued, scheduled, and durable-wait work plus cooperative requests for
+  active handlers;
 - separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
 - an optional React operator dashboard with a typed oRPC boundary and audited local controls;
 - deterministic worker crash failpoints;
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.
 
-Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, cross-queue concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
+Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
+
+### Cooperative cancellation
+
+Schema version 11 adds `Queue.cancel(jobId, { requestedBy?, reason? })`. Ready, future-scheduled,
+and durable-wait jobs become terminal `canceled` immediately. Active jobs retain their fenced lease
+and record one cancellation request. `heartbeat_v2` returns `accepted`, `cancel_requested`, or `stale`;
+the worker converts `cancel_requested` into a `CancellationRequestedError` on the handler's
+`AbortSignal` and acknowledges only with the exact worker/fence generation. Boolean `heartbeat_v1`
+remains available and maps only `accepted` to `true`.
+
+Cancellation is cooperative. JavaScript is not forcibly preempted. A handler should observe its
+`AbortSignal`, stop starting new effects, settle promptly, and leave external side effects idempotent.
+If it ignores the signal until its lease expires, bounded recovery materializes the requested
+cancellation rather than creating another attempt. A canceled outcome is immutable, stale completion,
+failure, checkpoint, wait, heartbeat, or acknowledgement writes cannot replace it, and cancellation
+races with completion/failure use first-committer-wins ordering.
+
+Never-started jobs have no attempt-history row. A canceled active or previously started durable-wait
+attempt has exactly one `canceled` attempt row. Repeated requests return the existing request or outcome
+without duplicate terminal rows or events. `requestedBy` is audit attribution, not authorization, so
+applications and operator layers must enforce their own permission checks. Canceling a job created by a
+recurring schedule affects only that occurrence and does not disable the schedule or later occurrences.
 
 ### Enqueue idempotency keys
 
-Schema version 10 accepts `options.idempotency` on `Queue.enqueue()` and each `Queue.enqueueMany()`
+Schema version 11 accepts `options.idempotency` on `Queue.enqueue()` and each `Queue.enqueueMany()`
 request:
 
 ```ts
@@ -82,7 +107,7 @@ once and still require provider idempotency, an outbox/inbox, or compensation.
 
 ### Persisted retry policies
 
-Schema version 10 accepts an optional `retryPolicy` on enqueue requests and recurring schedule job
+Schema version 11 accepts an optional `retryPolicy` on enqueue requests and recurring schedule job
 definitions:
 
 ```ts

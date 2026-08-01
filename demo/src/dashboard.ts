@@ -225,6 +225,127 @@ export function idempotencyEvidenceLine(evidence: IdempotencyEvidence): string {
 /** Detail keys the dashboard is allowed to read. Exported so tests can pin the safe surface. */
 export const idempotencyEventDetailKeys: readonly string[] = idempotencyDetailKeys;
 
+/**
+ * Cooperative cancellation recorded against one live task.
+ *
+ * A request is only ever a request. PostgreSQL removes a scheduled or ready task from dispatch
+ * immediately, so that cancellation is already final when the call returns. An active task keeps
+ * running until its handler observes the abort signal, so the request is stored beside the live
+ * runtime row and the task stays active until the handler stops.
+ */
+export interface DashboardCancellationRequest {
+  requestedAt: string;
+  requestedBy: string | null;
+  reason: string | null;
+}
+
+/** Terminal states a task can hold. Cancellation is never folded into failure. */
+export type DashboardTerminalState = "succeeded" | "failed" | "canceled";
+
+/** Every lifecycle state the demo read model can project for one task. */
+export type DashboardLifecycleState =
+  | "scheduled"
+  | "ready"
+  | "active"
+  | DashboardTerminalState
+  | "unknown";
+
+const terminalStates = new Set<string>(["succeeded", "failed", "canceled"]);
+
+/** True for a state that can no longer change, so no operator action may be offered for it. */
+export function isTerminalTaskState(state: string): boolean {
+  return terminalStates.has(state);
+}
+
+/** Statuses `Queue.cancel` can report, mirrored so the demo never invents its own vocabulary. */
+export type DashboardCancelStatus =
+  | "canceled"
+  | "cancel_requested"
+  | "already_terminal"
+  | "not_found";
+
+export interface CancelOutcomeDescription {
+  /** Short badge text. Never the raw status string. */
+  label: string;
+  /** One sentence an operator can act on. Complete on its own without colour or icon. */
+  summary: string;
+  /** Precise wording, including the external-effect caveat where it applies. */
+  exact: string;
+}
+
+/**
+ * Cancellation wording that matches what PostgreSQL actually did.
+ *
+ * The active case deliberately does not promise force, immediacy, or exactly-once cleanup: the
+ * handler owns when it observes the signal, and external effects it already started can continue
+ * until then. Saying otherwise here would be a stronger claim than the product makes.
+ */
+export function describeCancelOutcome(
+  status: DashboardCancelStatus,
+  context: { state?: string | null } = {},
+): CancelOutcomeDescription {
+  if (status === "canceled") {
+    return {
+      label: "Canceled",
+      summary: "This task was canceled before it started, so no handler ran",
+      exact:
+        "PostgreSQL removed the task from dispatch and recorded an immutable canceled outcome. " +
+        "No handler ran for it, so there is no external effect to reconcile.",
+    };
+  }
+  if (status === "cancel_requested") {
+    return {
+      label: "Cancellation requested",
+      summary:
+        "Cooperative cancellation was requested; the running handler stops when it observes the signal",
+      exact:
+        "The task is still active. Cancellation is cooperative: the handler is signaled and stops " +
+        "at its next check, so external effects it already started can continue until it observes " +
+        "the signal. The task becomes canceled only once the handler stops.",
+    };
+  }
+  if (status === "already_terminal") {
+    return {
+      label: "Already finished",
+      summary: `This task had already finished${
+        context.state ? ` as ${context.state}` : ""
+      }, so nothing was canceled`,
+      exact:
+        "A terminal outcome is immutable. The recorded outcome was left exactly as it was and no " +
+        "cancellation was applied.",
+    };
+  }
+  return {
+    label: "Task not found",
+    summary: "This task no longer exists, so nothing was canceled",
+    exact:
+      "No job identity matched this id. It may have been removed by retention after it finished.",
+  };
+}
+
+/**
+ * How a live task's pending cancellation reads in a list row or drawer.
+ *
+ * Returns null when nothing was requested, so an untouched task keeps exactly the surface it had.
+ */
+export function describeCancellationRequest(
+  request: DashboardCancellationRequest | null,
+): CancelOutcomeDescription | null {
+  if (request === null) return null;
+  const described = describeCancelOutcome("cancel_requested");
+  const attribution = [
+    request.requestedBy === null ? null : `requested by ${request.requestedBy}`,
+    request.reason === null ? null : `reason: ${request.reason}`,
+  ].filter((part): part is string => part !== null);
+  return {
+    label: described.label,
+    summary: described.summary,
+    exact: `Requested at ${request.requestedAt}${
+      attribution.length > 0 ? `; ${attribution.join("; ")}` : ""
+    }. ${described.exact}`,
+  };
+}
+
 export interface DashboardQueueRow {
   queue: string;
   state: string;
@@ -240,6 +361,8 @@ export interface DashboardManagedQueueRow {
   active: number;
   succeeded: number;
   failed: number;
+  /** Operator-canceled tasks. Kept separate from `failed` so a cancellation never reads as a bug. */
+  canceled: number;
   terminalCountsApproximate: boolean;
 }
 
@@ -259,6 +382,11 @@ export interface DashboardJobRow extends Record<string, unknown> {
    * metadata on the initial `enqueued` event, so an unkeyed task stays exactly as it was.
    */
   keyed: boolean;
+  /**
+   * Cooperative cancellation recorded against this live task, or null when none was requested.
+   * A canceled task carries its request on the terminal outcome instead and reports null here.
+   */
+  cancellation: DashboardCancellationRequest | null;
   runAt: string | null;
   workerId: string | null;
   lastWorkerId: string | null;
@@ -345,7 +473,8 @@ export type DashboardTaskFilter =
   | "queued"
   | "running"
   | "completed"
-  | "discarded";
+  | "discarded"
+  | "canceled";
 
 export type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 
@@ -409,6 +538,8 @@ export interface DashboardSystemOutcomeBucket {
   failed: number;
   retry: number;
   leaseExpired: number;
+  /** Operator-canceled attempts. Reported separately so cancellation never inflates failures. */
+  canceled: number;
 }
 
 export interface DashboardSystemRetryBucket {
@@ -564,6 +695,8 @@ export interface DashboardJobDetail {
       expiresAt: string | null;
       waitName: string | null;
       attemptStartedAt: string | null;
+      /** Cooperative cancellation requested against this live runtime, if any. */
+      cancellation: DashboardCancellationRequest | null;
       error: unknown;
     } | null;
     outcome: {
@@ -621,7 +754,12 @@ export interface DashboardSnapshot {
   operatorPolicy: {
     mode: "read-only" | "local";
     supportedMutations: Array<
-      "enqueueTest" | "setScheduleEnabled" | "setQueuePaused" | "purgeQueue" | "setWorkerPaused"
+      | "enqueueTest"
+      | "setScheduleEnabled"
+      | "setQueuePaused"
+      | "purgeQueue"
+      | "setWorkerPaused"
+      | "cancelTask"
     >;
     requiredAuditContext: readonly ["actor", "reason", "requestId", "occurredAt"];
   };
@@ -644,6 +782,25 @@ function toIso(value: Date | string): string {
 
 function toIsoOrNull(value: Date | string | null): string | null {
   return value ? toIso(value) : null;
+}
+
+/**
+ * Cooperative cancellation stored beside one live runtime row, or null when none was requested.
+ *
+ * The three columns move together in SQL, so an incomplete record is treated as absent rather than
+ * partially rendered: a half-populated cancellation claim would be worse than saying nothing.
+ */
+function cancellationRequest(
+  requestedAt: Date | string | null,
+  requestedBy: string | null,
+  reason: string | null,
+): DashboardCancellationRequest | null {
+  if (requestedAt === null) return null;
+  return {
+    requestedAt: toIso(requestedAt),
+    requestedBy: requestedBy && requestedBy.length > 0 ? requestedBy : null,
+    reason: reason && reason.length > 0 ? reason : null,
+  };
 }
 
 /** Extract the human-readable message from a stored error envelope without shipping stacks. */
@@ -673,6 +830,7 @@ function operatorPolicy(
       "setQueuePaused",
       "purgeQueue",
       "setWorkerPaused",
+      "cancelTask",
     ],
     requiredAuditContext: ["actor", "reason", "requestId", "occurredAt"],
   };
@@ -698,7 +856,10 @@ function taskFilterCondition(filter: DashboardTaskFilter) {
   if (filter === "queued") return sql`state = 'ready'`;
   if (filter === "running") return sql`state = 'active'`;
   if (filter === "completed") return sql`state = 'succeeded'`;
+  // Discarded means the handler exhausted its attempts. An operator-canceled task never lands
+  // here: cancellation is its own terminal state and is never folded into failure.
   if (filter === "discarded") return sql`state = 'failed'`;
+  if (filter === "canceled") return sql`state = 'canceled'`;
   return sql`true`;
 }
 
@@ -772,9 +933,10 @@ export async function readDashboardTaskCounts(
       FROM workhorse.job_runtime
   `);
   const live = runtimeRows.rows[0]!;
-  const [completed, discarded, retriedTerminal] = await Promise.all([
+  const [completed, discarded, canceled, retriedTerminal] = await Promise.all([
     estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'succeeded'`),
     estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'failed'`),
+    estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'canceled'`),
     estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE current_attempt > 1`),
   ]);
 
@@ -786,6 +948,7 @@ export async function readDashboardTaskCounts(
     running: live.running_count,
     completed,
     discarded,
+    canceled,
   };
 }
 
@@ -798,6 +961,7 @@ async function readDashboardTaskCountsExact(database: DemoDatabase): Promise<Das
     running_count: number;
     completed_count: number;
     discarded_count: number;
+    canceled_count: number;
   }>(sql`
     WITH tasks AS (
       SELECT COALESCE(r.state, o.state) AS state,
@@ -812,7 +976,8 @@ async function readDashboardTaskCountsExact(database: DemoDatabase): Promise<Das
            count(*) FILTER (WHERE state = 'ready')::integer AS queued_count,
            count(*) FILTER (WHERE state = 'active')::integer AS running_count,
            count(*) FILTER (WHERE state = 'succeeded')::integer AS completed_count,
-           count(*) FILTER (WHERE state = 'failed')::integer AS discarded_count
+           count(*) FILTER (WHERE state = 'failed')::integer AS discarded_count,
+           count(*) FILTER (WHERE state = 'canceled')::integer AS canceled_count
       FROM tasks
   `);
   const counts = countRows.rows[0]!;
@@ -825,6 +990,7 @@ async function readDashboardTaskCountsExact(database: DemoDatabase): Promise<Das
     running: counts.running_count,
     completed: counts.completed_count,
     discarded: counts.discarded_count,
+    canceled: counts.canceled_count,
   };
 }
 
@@ -865,11 +1031,11 @@ export async function readDashboardQueues(database: DemoDatabase): Promise<Dashb
   ]);
   const approximate = Number(relationRows.rows[0]?.estimate ?? -1) >= approximateCountThreshold;
 
-  let terminalCounts: Map<string, { succeeded: number; failed: number }>;
+  let terminalCounts: Map<string, { succeeded: number; failed: number; canceled: number }>;
   if (approximate) {
     const estimates = await Promise.all(
       queueRows.rows.map(async (row) => {
-        const [succeeded, failed] = await Promise.all([
+        const [succeeded, failed, canceled] = await Promise.all([
           estimateRows(
             database,
             sql`SELECT 1 FROM workhorse.job_outcome outcome
@@ -882,8 +1048,14 @@ export async function readDashboardQueues(database: DemoDatabase): Promise<Dashb
                   JOIN workhorse.job job ON job.id = outcome.job_id
                  WHERE job.queue_name = ${row.queue} AND outcome.state = 'failed'`,
           ),
+          estimateRows(
+            database,
+            sql`SELECT 1 FROM workhorse.job_outcome outcome
+                  JOIN workhorse.job job ON job.id = outcome.job_id
+                 WHERE job.queue_name = ${row.queue} AND outcome.state = 'canceled'`,
+          ),
         ]);
-        return [row.queue, { succeeded, failed }] as const;
+        return [row.queue, { succeeded, failed, canceled }] as const;
       }),
     );
     terminalCounts = new Map(estimates);
@@ -892,16 +1064,21 @@ export async function readDashboardQueues(database: DemoDatabase): Promise<Dashb
       queue: string;
       succeeded: number;
       failed: number;
+      canceled: number;
     }>(sql`
       SELECT job.queue_name AS queue,
              count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS succeeded,
-             count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed
+             count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed,
+             count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS canceled
         FROM workhorse.job_outcome outcome
         JOIN workhorse.job job ON job.id = outcome.job_id
        GROUP BY job.queue_name
     `);
     terminalCounts = new Map(
-      exactRows.rows.map((row) => [row.queue, { succeeded: row.succeeded, failed: row.failed }]),
+      exactRows.rows.map((row) => [
+        row.queue,
+        { succeeded: row.succeeded, failed: row.failed, canceled: row.canceled },
+      ]),
     );
   }
 
@@ -915,6 +1092,7 @@ export async function readDashboardQueues(database: DemoDatabase): Promise<Dashb
       active: row.active,
       succeeded: terminalCounts.get(row.queue)?.succeeded ?? 0,
       failed: terminalCounts.get(row.queue)?.failed ?? 0,
+      canceled: terminalCounts.get(row.queue)?.canceled ?? 0,
       terminalCountsApproximate: approximate,
     })),
   };
@@ -1100,6 +1278,9 @@ export async function readDashboardTasks(
       wait_name: string | null;
       wake_at: Date | string | null;
       wait_mode: "relative" | "absolute" | null;
+      cancel_requested_at: Date | string | null;
+      cancel_requested_by: string | null;
+      cancel_reason: string | null;
       enqueued_details: unknown;
     }>(sql`
       WITH tasks AS (
@@ -1116,6 +1297,9 @@ export async function readDashboardTasks(
                j.created_at,
                COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
                r.wait_name,
+               r.cancel_requested_at,
+               r.cancel_requested_by,
+               r.cancel_reason,
                durable_wait.wake_at,
                durable_wait.mode AS wait_mode,
                enqueued_event.details AS enqueued_details,
@@ -1173,6 +1357,11 @@ export async function readDashboardTasks(
         tags: row.tags,
         keyed:
           readIdempotencyEvidence({ type: "enqueued", details: row.enqueued_details }) !== null,
+        cancellation: cancellationRequest(
+          row.cancel_requested_at,
+          row.cancel_requested_by,
+          row.cancel_reason,
+        ),
         runAt: toIsoOrNull(row.run_at),
         workerId: row.current_worker_id,
         lastWorkerId: row.worker_id,
@@ -1539,6 +1728,7 @@ export async function readDashboardSystem(
       failed: number;
       retry: number;
       lease_expired: number;
+      canceled: number;
     }>(sql`
       WITH buckets AS (
         SELECT generate_series(
@@ -1559,7 +1749,8 @@ export async function readDashboardSystem(
                count(*) FILTER (WHERE outcome = 'succeeded')::integer AS succeeded,
                count(*) FILTER (WHERE outcome = 'failed')::integer AS failed,
                count(*) FILTER (WHERE outcome = 'retry')::integer AS retry,
-               count(*) FILTER (WHERE outcome = 'lease_expired')::integer AS lease_expired
+               count(*) FILTER (WHERE outcome = 'lease_expired')::integer AS lease_expired,
+               count(*) FILTER (WHERE outcome = 'canceled')::integer AS canceled
           FROM workhorse.attempt_history
          WHERE occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
            AND finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
@@ -1569,7 +1760,8 @@ export async function readDashboardSystem(
              COALESCE(a.succeeded, 0)::integer AS succeeded,
              COALESCE(a.failed, 0)::integer AS failed,
              COALESCE(a.retry, 0)::integer AS retry,
-             COALESCE(a.lease_expired, 0)::integer AS lease_expired
+             COALESCE(a.lease_expired, 0)::integer AS lease_expired,
+             COALESCE(a.canceled, 0)::integer AS canceled
         FROM buckets b
         LEFT JOIN events e USING (bucket_start)
         LEFT JOIN attempts a USING (bucket_start)
@@ -1589,17 +1781,17 @@ export async function readDashboardSystem(
           WHERE occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
             AND event_type = 'enqueued') AS current_enqueued,
         count(*) FILTER (WHERE finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-          AND outcome IN ('succeeded', 'failed'))::integer AS current_completed,
+          AND outcome IN ('succeeded', 'failed', 'canceled'))::integer AS current_completed,
         count(*) FILTER (WHERE finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds}))::integer
           AS current_attempts,
         count(*) FILTER (WHERE finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-          AND outcome <> 'succeeded')::integer AS current_errors,
+          AND outcome NOT IN ('succeeded', 'canceled'))::integer AS current_errors,
         count(*) FILTER (WHERE finished_at < clock_timestamp() - make_interval(secs => ${windowSeconds})
           AND finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds * 2}))::integer
           AS previous_attempts,
         count(*) FILTER (WHERE finished_at < clock_timestamp() - make_interval(secs => ${windowSeconds})
           AND finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds * 2})
-          AND outcome <> 'succeeded')::integer AS previous_errors,
+          AND outcome NOT IN ('succeeded', 'canceled'))::integer AS previous_errors,
         count(*) FILTER (WHERE finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
           AND outcome = 'lease_expired')::integer AS recovered
         FROM workhorse.attempt_history
@@ -1698,7 +1890,7 @@ export async function readDashboardSystem(
           FROM workhorse.attempt_history a JOIN workhorse.job j ON j.id = a.job_id
          WHERE a.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
            AND a.finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-           AND a.outcome IN ('succeeded', 'failed') GROUP BY j.queue_name
+           AND a.outcome IN ('succeeded', 'failed', 'canceled') GROUP BY j.queue_name
       )
       SELECT q.queue_name AS queue, COALESCE(c.paused, false) AS paused,
              COALESCE(r.ready, 0)::integer AS ready, r.oldest_ready_ms,
@@ -1731,7 +1923,7 @@ export async function readDashboardSystem(
       last_seen_at: Date | string;
     }>(sql`
       SELECT j.queue_name AS queue, j.job_type AS type, count(*)::integer AS attempts,
-             count(*) FILTER (WHERE a.outcome <> 'succeeded')::integer AS errors,
+             count(*) FILTER (WHERE a.outcome NOT IN ('succeeded', 'canceled'))::integer AS errors,
              count(*) FILTER (WHERE a.outcome = 'failed')::integer AS terminal_failures,
              (array_agg(COALESCE(a.error->>'message', a.error->>'code', a.error::text)
                ORDER BY a.finished_at DESC) FILTER (WHERE a.error IS NOT NULL))[1] AS last_error,
@@ -1740,7 +1932,7 @@ export async function readDashboardSystem(
        WHERE a.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
          AND a.finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
        GROUP BY j.queue_name, j.job_type
-      HAVING count(*) FILTER (WHERE a.outcome <> 'succeeded') > 0
+      HAVING count(*) FILTER (WHERE a.outcome NOT IN ('succeeded', 'canceled')) > 0
        ORDER BY errors DESC, last_seen_at DESC
        LIMIT 8
     `),
@@ -1862,6 +2054,7 @@ export async function readDashboardSystem(
       failed: row.failed,
       retry: row.retry,
       leaseExpired: row.lease_expired,
+      canceled: row.canceled,
     })),
     queues,
     retryStorm: { buckets: retryBuckets, topTypes: retryTypeRows.rows },
@@ -1997,6 +2190,9 @@ export async function readDashboardSnapshot(
         error: unknown;
         created_at: Date | string;
         updated_at: Date | string;
+        cancel_requested_at: Date | string | null;
+        cancel_requested_by: string | null;
+        cancel_reason: string | null;
         enqueued_details: unknown;
       }>(sql`
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
@@ -2008,6 +2204,7 @@ export async function readDashboardSnapshot(
                COALESCE(o.error, r.error) AS error,
                j.created_at,
                COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+               r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
                enqueued_event.details AS enqueued_details
           FROM workhorse.job j
           LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
@@ -2165,6 +2362,13 @@ export async function readDashboardSnapshot(
       // Derived from the same initial `enqueued` event the task list reads, so a keyed task is
       // never reported as unkeyed just because it was observed through the snapshot instead.
       keyed: readIdempotencyEvidence({ type: "enqueued", details: row.enqueued_details }) !== null,
+      // Read from the same runtime columns as the task list, so a pending cancellation is never
+      // reported differently depending on which projection an operator happened to open.
+      cancellation: cancellationRequest(
+        row.cancel_requested_at,
+        row.cancel_requested_by,
+        row.cancel_reason,
+      ),
       runAt: toIsoOrNull(row.run_at),
       workerId: row.worker_id,
       lastWorkerId: row.worker_id,
@@ -2266,6 +2470,9 @@ export async function readDashboardJobDetail(
       expires_at: Date | string | null;
       wait_name: string | null;
       attempt_started_at: Date | string | null;
+      cancel_requested_at: Date | string | null;
+      cancel_requested_by: string | null;
+      cancel_reason: string | null;
       runtime_error: unknown;
       outcome_state: string | null;
       outcome_attempt: number | null;
@@ -2278,6 +2485,7 @@ export async function readDashboardJobDetail(
              r.state AS runtime_state, r.current_attempt AS runtime_attempt, r.run_at, r.ready_at,
              r.worker_id, r.fence_token::text, r.acquired_at, r.heartbeat_at, r.expires_at,
              r.wait_name, r.attempt_started_at,
+             r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
              r.error AS runtime_error,
              o.state AS outcome_state, o.current_attempt AS outcome_attempt, o.finished_at,
              o.result, o.error AS outcome_error
@@ -2377,6 +2585,11 @@ export async function readDashboardJobDetail(
             expiresAt: toIsoOrNull(job.expires_at),
             waitName: job.wait_name,
             attemptStartedAt: toIsoOrNull(job.attempt_started_at),
+            cancellation: cancellationRequest(
+              job.cancel_requested_at,
+              job.cancel_requested_by,
+              job.cancel_reason,
+            ),
             error: job.runtime_error,
           }
         : null,

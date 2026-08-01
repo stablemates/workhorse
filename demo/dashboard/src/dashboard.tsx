@@ -44,6 +44,7 @@ import {
   ListChecks,
   MagnifyingGlass,
   PlayCircle,
+  Prohibit,
   Pulse,
   Robot,
   WarningCircle,
@@ -61,14 +62,19 @@ import {
 } from "react";
 import type { RetryPolicy } from "@workhorse/core";
 import {
+  describeCancellationRequest,
+  describeCancelOutcome,
   describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
   formatRetryDelay,
   idempotencyEvidenceLine,
+  isTerminalTaskState,
   readIdempotencyEvidence,
 } from "../../src/dashboard";
 import type {
+  DashboardCancellationRequest,
+  DashboardCancelStatus,
   DashboardCronPage,
   DashboardJobDetail,
   DashboardJobRow,
@@ -110,6 +116,7 @@ interface SystemOutcomeChartPoint {
   failed: number;
   retry: number;
   leaseExpired: number;
+  canceled: number;
 }
 
 const SystemOutcomeChart = lazy(async () => {
@@ -148,6 +155,8 @@ const SystemOutcomeChart = lazy(async () => {
           <Bar dataKey="failed" stackId="outcomes" fill="var(--mantine-color-red-6)" />
           <Bar dataKey="retry" stackId="outcomes" fill="var(--mantine-color-orange-6)" />
           <Bar dataKey="leaseExpired" stackId="outcomes" fill="var(--mantine-color-grape-6)" />
+          {/* Cancellation is deliberate operator action, so it never joins the failure series. */}
+          <Bar dataKey="canceled" stackId="outcomes" fill="var(--mantine-color-gray-6)" />
           <Line
             dataKey="enqueued"
             type="monotone"
@@ -242,10 +251,17 @@ const taskFilters: ReadonlyArray<{
   { value: "running", label: "Running", icon: PlayCircle },
   { value: "completed", label: "Completed", icon: CheckCircle },
   { value: "discarded", label: "Discarded", icon: XCircle },
+  // Cancellation is a distinct terminal state, never folded into discarded work.
+  { value: "canceled", label: "Canceled", icon: Prohibit },
 ];
 const healthyStates = new Set(["succeeded", "ready", "active", "busy"]);
 const failureStates = new Set(["failed", "discarded"]);
 const warningStates = new Set(["scheduled", "retryable", "recent"]);
+/**
+ * Cancellation is neither success nor failure, so it gets its own neutral treatment. Colour is
+ * decoration only; the badge text still says "Canceled" on its own.
+ */
+const canceledStates = new Set(["canceled", "cancel_requested"]);
 
 /** Header badge color for the deployment environment label. */
 function environmentColor(environment: string): string {
@@ -665,6 +681,8 @@ const boundaryEventTypes = new Set([
   "claimed",
   "checkpoint_saved",
   "retry_scheduled",
+  "cancel_requested",
+  "canceled",
 ]);
 
 const boundaryEventLabels: Record<string, string> = {
@@ -675,6 +693,8 @@ const boundaryEventLabels: Record<string, string> = {
   claimed: "Claimed",
   checkpoint_saved: "Checkpoint saved",
   retry_scheduled: "Retry scheduled",
+  cancel_requested: "Cancellation requested",
+  canceled: "Canceled",
 };
 
 const boundaryEventColors: Record<string, string> = {
@@ -685,7 +705,47 @@ const boundaryEventColors: Record<string, string> = {
   claimed: "blue",
   checkpoint_saved: "teal",
   retry_scheduled: "orange",
+  // Neutral, not red: an operator stopped this task, it did not break.
+  cancel_requested: "gray",
+  canceled: "gray",
 };
+
+/**
+ * How one recorded cancellation boundary reads.
+ *
+ * `cancel_requested` is only a request. `canceled` is final, and its `source` says how it became
+ * final: `immediate` when PostgreSQL removed a task that had not started, `acknowledged` when the
+ * running handler observed the signal and stopped, and `recovered` when the lease expired after a
+ * request. None of these claim that external effects were undone.
+ */
+function cancelEventDescription(event: JobEvent): { text: string; title: string } | null {
+  if (event.type !== "cancel_requested" && event.type !== "canceled") return null;
+  const source = eventDetail(event, "source");
+  if (event.type === "cancel_requested") {
+    const described = describeCancelOutcome("cancel_requested");
+    return { text: "awaiting handler", title: described.exact };
+  }
+  if (source === "acknowledged") {
+    return {
+      text: "handler observed the signal",
+      title:
+        "The running handler observed the cancellation signal and stopped, and PostgreSQL recorded " +
+        "an immutable canceled outcome. External effects the handler had already started are not " +
+        "undone by cancellation.",
+    };
+  }
+  if (source === "recovered") {
+    return {
+      text: "lease expired after the request",
+      title:
+        "The lease expired before the handler acknowledged the request, so recovery finalized the " +
+        "cancellation instead of retrying. Whatever the lost handler had already done externally " +
+        "is not undone by cancellation.",
+    };
+  }
+  const described = describeCancelOutcome("canceled");
+  return { text: "before any handler ran", title: described.exact };
+}
 
 /**
  * Accepted deduplication evidence for one task, if PostgreSQL recorded any.
@@ -751,6 +811,189 @@ function retryEventDescription(event: JobEvent): { text: string; title: string }
       ? `${described.exact} ${described.summary}.`
       : `${described.exact} Chosen delay ${delayMs} ms. ${described.summary}.`;
   return { text, title };
+}
+
+/**
+ * Result of the last cancellation this dashboard requested, kept so the drawer can report what
+ * PostgreSQL actually did rather than assuming the action succeeded.
+ */
+interface CancelFeedback {
+  jobId: string;
+  status: DashboardCancelStatus;
+  state: string | null;
+  /** Exact timestamp of the request or the recorded outcome, for a title attribute. */
+  at: string | null;
+}
+
+/** The lifecycle states an operator may cancel. Everything else is terminal or unknown. */
+function canCancelTask(job: DashboardJobDetail): boolean {
+  const runtime = job.current.runtime;
+  if (runtime === null) return false;
+  if (isTerminalTaskState(job.identity.state)) return false;
+  // A scheduled task covers both a plain future run and a suspended durable wait, which the demo
+  // shows as "waiting". Both are cancelable because neither is executing right now.
+  return runtime.state === "scheduled" || runtime.state === "ready" || runtime.state === "active";
+}
+
+/**
+ * Audited cancellation for one task.
+ *
+ * The action is a two-step confirmation with a required, concise reason, because cancellation is
+ * irreversible: a canceled outcome is immutable and there is no uncancel. Wording changes with
+ * the task's state, and for a running task it says plainly that cancellation is cooperative and
+ * that external effects can continue until the handler observes the signal. Nothing here claims
+ * force, immediacy, or that anything already done externally is undone.
+ */
+function CancelTaskPanel({
+  job,
+  confirming,
+  setConfirming,
+  reason,
+  setReason,
+  pending,
+  feedback,
+  error,
+  cancelTask,
+}: {
+  job: DashboardJobDetail;
+  confirming: boolean;
+  setConfirming: (confirming: boolean) => void;
+  reason: string;
+  setReason: (reason: string) => void;
+  pending: boolean;
+  feedback: CancelFeedback | null;
+  error: string | null;
+  cancelTask: (id: string, reason: string) => void;
+}) {
+  const reasonRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (confirming) reasonRef.current?.focus();
+  }, [confirming]);
+
+  const cancellation = job.current.runtime?.cancellation ?? null;
+  const requested = describeCancellationRequest(cancellation);
+  const cancelable = canCancelTask(job);
+  const running = job.current.runtime?.state === "active";
+  const waiting =
+    job.current.runtime?.state === "scheduled" && job.current.runtime.waitName !== null;
+  const trimmedReason = reason.trim();
+  const forThisJob = feedback !== null && feedback.jobId === job.identity.id;
+  const described = forThisJob
+    ? describeCancelOutcome(feedback.status, { state: feedback.state })
+    : null;
+
+  // Everything an assistive technology needs is in text: the heading, the current state sentence,
+  // and the live region below. Colour and the icon add nothing that is not already written out.
+  return (
+    <Box>
+      <Group gap="xs" mb="xs" align="baseline">
+        <Text fw={600} size="sm">
+          Cancellation
+        </Text>
+        {requested === null ? null : (
+          <Badge size="xs" variant="light" color="gray" tt="none" title={requested.exact}>
+            {requested.label}
+          </Badge>
+        )}
+      </Group>
+      {requested === null ? null : (
+        <Text c="dimmed" size="xs" mb="xs" title={requested.exact}>
+          {requested.summary}.{" "}
+          {cancellation === null ? null : (
+            <span title={formatExact(cancellation.requestedAt)}>
+              Requested {formatRelative(cancellation.requestedAt)}
+              {cancellation.requestedBy === null ? "" : ` by ${cancellation.requestedBy}`}
+              {cancellation.reason === null ? "" : ` · ${cancellation.reason}`}.
+            </span>
+          )}
+        </Text>
+      )}
+      {cancelable ? (
+        confirming ? (
+          <Stack gap="xs">
+            <Text size="xs" c="dimmed">
+              {running
+                ? "Cancellation is cooperative. The running handler is signaled and stops when it " +
+                  "observes the signal, so external effects it already started can continue until " +
+                  "then. This is not a forced stop."
+                : waiting
+                  ? "This task is suspended at a durable wait. Canceling it closes the started " +
+                    "attempt without resuming the handler. External effects from before the wait " +
+                    "are not undone."
+                  : "This task has not started, so canceling it now is immediate and no handler " +
+                    "will run for it."}{" "}
+              A canceled outcome is immutable and cannot be undone.
+            </Text>
+            <TextInput
+              ref={reasonRef}
+              size="xs"
+              label="Reason"
+              description="Recorded with your cancellation in the operator audit trail."
+              placeholder="Why is this task being canceled?"
+              value={reason}
+              disabled={pending}
+              onChange={(event) => setReason(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && !pending) setConfirming(false);
+              }}
+            />
+            <Group gap="xs">
+              <Button
+                size="xs"
+                color="red"
+                variant="light"
+                loading={pending}
+                disabled={pending || trimmedReason.length === 0}
+                onClick={() => cancelTask(job.identity.id, trimmedReason)}
+              >
+                {running ? "Request cancellation" : "Cancel task"}
+              </Button>
+              <Button
+                size="xs"
+                variant="default"
+                disabled={pending}
+                onClick={() => setConfirming(false)}
+              >
+                Keep running
+              </Button>
+            </Group>
+          </Stack>
+        ) : (
+          <Button
+            size="xs"
+            variant="default"
+            leftSection={<Prohibit size={14} />}
+            disabled={pending}
+            onClick={() => setConfirming(true)}
+          >
+            Cancel task
+          </Button>
+        )
+      ) : (
+        <Text c="dimmed" size="xs">
+          {isTerminalTaskState(job.identity.state)
+            ? `This task already finished as ${job.identity.state}, and a terminal outcome is immutable, so it cannot be canceled.`
+            : "This task has no live runtime, so there is nothing to cancel."}
+        </Text>
+      )}
+      {/* One live region for both success and failure, so a screen reader hears every result. */}
+      <Box role="status" aria-live="polite" mt={error || described ? "xs" : 0}>
+        {error ? (
+          <Text c="red" size="xs">
+            {error}
+          </Text>
+        ) : described && forThisJob ? (
+          <Text
+            c="dimmed"
+            size="xs"
+            title={feedback.at ? formatExact(feedback.at) : described.exact}
+          >
+            {described.summary}.
+          </Text>
+        ) : null}
+      </Box>
+    </Box>
+  );
 }
 
 /**
@@ -826,12 +1069,14 @@ function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
           const worker = eventDetail(event, "worker_id");
           const reason = eventDetail(event, "reason");
           const retry = retryEventDescription(event);
+          const cancel = cancelEventDescription(event);
           const parts = [
             name,
             worker,
             fence === null ? null : `fence ${fence}`,
             reason === null ? null : `reason ${reason}`,
             retry?.text ?? null,
+            cancel?.text ?? null,
           ].filter((part): part is string => part !== null);
           return (
             <Group key={event.id} gap="xs" wrap="nowrap" align="flex-start">
@@ -849,7 +1094,7 @@ function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
                 size="xs"
                 style={{ flex: 1, minWidth: 0 }}
                 lineClamp={1}
-                title={retry?.title}
+                title={cancel?.title ?? retry?.title}
               >
                 {event.attempt === null ? "no attempt" : `attempt ${event.attempt}`}
                 {claimIndex === null ? "" : ` · claim ${claimIndex}`}
@@ -1056,6 +1301,7 @@ function taskDisplayName(type: string, queue: string): string {
 function statusColor(state: string): string {
   if (healthyStates.has(state)) return "teal";
   if (failureStates.has(state) || state === "unhealthy" || state === "offline") return "red";
+  if (canceledStates.has(state)) return "gray";
   if (warningStates.has(state)) return "yellow";
   return "gray";
 }
@@ -1066,12 +1312,42 @@ const activityStatusColors: Record<string, string> = {
   active: "blue.6",
   succeeded: "teal.6",
   failed: "red.6",
+  canceled: "gray.6",
 };
 
 function StatusBadge({ state }: { state: string }) {
   return (
     <Badge color={statusColor(state)} variant="light" tt="capitalize" style={{ flexShrink: 0 }}>
       {state}
+    </Badge>
+  );
+}
+
+/**
+ * Pending cooperative cancellation on a live task.
+ *
+ * The wording never promises the handler stopped: it says the request was made and that the task
+ * is still running until the handler observes the signal. The badge text carries that meaning on
+ * its own, so the neutral colour is decoration.
+ */
+function CancelRequestedBadge({
+  cancellation,
+}: {
+  cancellation: DashboardCancellationRequest | null;
+}) {
+  const described = describeCancellationRequest(cancellation);
+  if (described === null || cancellation === null) return null;
+  return (
+    <Badge
+      size="sm"
+      variant="light"
+      color="gray"
+      leftSection={<Prohibit size={11} weight="bold" />}
+      tt="none"
+      title={`${described.exact} Requested ${formatExact(cancellation.requestedAt)}.`}
+      style={{ flexShrink: 0 }}
+    >
+      Cancellation requested
     </Badge>
   );
 }
@@ -1090,7 +1366,12 @@ function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
     if (job.attempt > 1) detail += ` · ${describeRetryPolicy(job.retryPolicy).label}`;
   } else if (job.state === "active" && job.workerId) detail = `on ${job.workerId}`;
   else if (job.state === "failed" && job.errorMessage) detail = job.errorMessage;
-  else if (job.state === "succeeded" && job.finishedAt) {
+  else if (job.state === "canceled" && job.finishedAt) {
+    // Canceled work reads as a deliberate stop, never as an error, even though the stored
+    // cancellation envelope lives in the same column a failure would use.
+    detail = `canceled ${formatRelative(job.finishedAt)}`;
+    exactTime = formatExact(job.finishedAt);
+  } else if (job.state === "succeeded" && job.finishedAt) {
     detail = `finished ${formatRelative(job.finishedAt)}`;
     exactTime = formatExact(job.finishedAt);
   }
@@ -1767,6 +2048,7 @@ function TasksPage({
                     <Table.Td>
                       <Group gap="xs" wrap="nowrap">
                         <StatusBadge state={job.state} />
+                        <CancelRequestedBadge cancellation={job.cancellation} />
                         <TaskWaitBadge job={job} />
                         <TaskStatusDetail job={job} />
                       </Group>
@@ -2483,6 +2765,7 @@ function SystemPage({
     failed: bucket.failed,
     retry: bucket.retry,
     leaseExpired: bucket.leaseExpired,
+    canceled: bucket.canceled,
   }));
   const retention = data.integrity.retention;
   const defaultSpill =
@@ -3119,6 +3402,11 @@ function useDashboardController() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedJob, setSelectedJob] = useState<DashboardJobDetail | null>(null);
   const [jobDetailError, setJobDetailError] = useState<string | null>(null);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
+  const [cancelFeedback, setCancelFeedback] = useState<CancelFeedback | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<RefreshIntervalValue>(readStoredRefreshInterval);
   const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(() => {
@@ -3368,12 +3656,59 @@ function useDashboardController() {
     setSelectedJobId(id);
     setSelectedJob(null);
     setJobDetailError(null);
+    // Opening a different task must never inherit the previous task's confirmation or result.
+    setConfirmingCancel(false);
+    setCancelReason("");
+    setCancelError(null);
+    setCancelFeedback(null);
     try {
       setSelectedJob(await rpcClient.dashboard.jobDetail({ id }));
     } catch (cause) {
       setJobDetailError(cause instanceof Error ? cause.message : "Unable to load the task");
     }
   }, []);
+
+  /**
+   * Request cancellation of one task and report exactly what PostgreSQL did.
+   *
+   * The reason the operator typed is sent as the audit reason and stored as the cancellation
+   * reason, so the two can never disagree. The drawer is refreshed from the server afterwards
+   * rather than optimistically edited, because whether an active task is now canceled or only
+   * cancel-requested is a durable fact this dashboard does not get to guess.
+   */
+  const cancelTask = useCallback(
+    async (id: string, reason: string) => {
+      setCancelingJobId(id);
+      setCancelError(null);
+      setCancelFeedback(null);
+      try {
+        const result = await rpcClient.dashboard.cancelTask({
+          id,
+          audit: {
+            actor: "local-demo",
+            reason,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        setCancelFeedback({
+          jobId: id,
+          status: result.status,
+          state: result.state,
+          at: result.finishedAt ?? result.requestedAt,
+        });
+        setConfirmingCancel(false);
+        setCancelReason("");
+        const detail = await rpcClient.dashboard.jobDetail({ id }).catch(() => null);
+        if (detail) setSelectedJob(detail);
+        await loadPage();
+      } catch (cause) {
+        setCancelError(cause instanceof Error ? cause.message : "Unable to cancel the task");
+      } finally {
+        setCancelingJobId(null);
+      }
+    },
+    [loadPage],
+  );
 
   useEffect(() => {
     const onPopState = () => {
@@ -3532,6 +3867,14 @@ function useDashboardController() {
     setSelectedJob,
     jobDetailError,
     setJobDetailError,
+    confirmingCancel,
+    setConfirmingCancel,
+    cancelReason,
+    setCancelReason,
+    cancelingJobId,
+    cancelFeedback,
+    cancelError,
+    cancelTask,
   };
 }
 
@@ -3557,6 +3900,14 @@ export function Dashboard() {
     setSelectedJob,
     jobDetailError,
     setJobDetailError,
+    confirmingCancel,
+    setConfirmingCancel,
+    cancelReason,
+    setCancelReason,
+    cancelingJobId,
+    cancelFeedback,
+    cancelError,
+    cancelTask,
   } = controller;
 
   return (
@@ -3778,6 +4129,17 @@ export function Dashboard() {
               <Code block>{JSON.stringify(selectedJob.payload, null, 2)}</Code>
             </Box>
             <IdempotencySection job={selectedJob} />
+            <CancelTaskPanel
+              job={selectedJob}
+              confirming={confirmingCancel}
+              setConfirming={setConfirmingCancel}
+              reason={cancelReason}
+              setReason={setCancelReason}
+              pending={cancelingJobId === selectedJob.identity.id}
+              feedback={cancelFeedback}
+              error={cancelError}
+              cancelTask={cancelTask}
+            />
             <JobCheckpoints job={selectedJob} />
             <DurableWaits job={selectedJob} />
             <Box>

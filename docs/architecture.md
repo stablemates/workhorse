@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 10.
+The current clean-install protocol is schema version 11.
 
 ## Design objective
 
@@ -21,7 +21,8 @@ No compatibility write views are installed for the version 1 projection tables.
 flowchart LR
   App[Application transaction] -->|enqueue_many_v1 / enqueue_v1| PG[(PostgreSQL)]
   Deploy[Deployment] -->|schedule sync| PG
-  Worker[TypeScript Worker] -->|claim / heartbeat| PG
+  Worker[TypeScript Worker] -->|claim / heartbeat_v2 / acknowledge_cancel_v1| PG
+  Operator[Authorized application or operator layer] -->|cancel_v1 with attribution| PG
   Worker -->|fire_schedule_v1 / tick_v1 / housekeep_v1, advisory-lock coordinated| PG
   PG -->|payload + attempt + fence| Worker
   Worker -->|handler outside SQL transaction| Effects[External effects]
@@ -74,6 +75,9 @@ erDiagram
     timestamptz expires_at
     text wait_name
     timestamptz attempt_started_at
+    timestamptz cancel_requested_at
+    text cancel_requested_by
+    text cancel_reason
     bigint previous_retry_delay_ms
   }
   job_outcome {
@@ -144,7 +148,7 @@ The only mutable lifecycle relation. Its check constraint makes state-specific f
 
 - `scheduled`: `run_at` is populated; ready and ownership fields are null; `wait_name` and `attempt_started_at` are either both null for enqueue/retry delay or both populated for a durable timer
 - `ready`: `ready_at` and FIFO `sequence` are populated; ownership fields and `wait_name` are null; a resumed timer may preserve `attempt_started_at`
-- `active`: worker, acquisition, heartbeat, expiry, positive fence, and logical `attempt_started_at` are populated; ready placement and `wait_name` are null
+- `active`: worker, acquisition, heartbeat, expiry, positive fence, and logical `attempt_started_at` are populated; ready placement and `wait_name` are null; optional cancellation-request timestamp, attribution, and reason are all present or all absent
 
 Retry and recovery increment `current_attempt` while moving the same row back to ready or scheduled. Named durable timer suspension preserves `current_attempt`, because waiting is successful control flow rather than failure; promotion and the next claim continue the same logical attempt with a new fence. `previous_retry_delay_ms` stores only the previous decorrelated-jitter selection needed for the next deterministic step and is cleared for other policy types.
 
@@ -164,7 +168,7 @@ The table uses fillfactor 70 because heartbeat and lifecycle updates are intenti
 
 ### `job_outcome`
 
-Insert-only terminal state. Completion or terminal failure deletes the active runtime row and inserts the outcome in one transaction. Succeeded rows contain `result`; failed rows contain `error`. Terminal jobs no longer occupy dispatch indexes. Automated retention never deletes an outcome alone: it removes the stable terminal job only after both identity and outcome minimum windows have elapsed and no retained history still attributes to that identity.
+Insert-only terminal state. Completion, terminal failure, or cancellation deletes runtime and inserts the outcome in one transaction. Succeeded rows contain `result`; failed rows contain `error`; canceled rows contain the bounded cancellation envelope. Never-started cancellation uses fence zero and has no attempt row, while started cancellation retains ownership provenance. Terminal jobs no longer occupy dispatch indexes. Automated retention never deletes an outcome alone: it removes the stable terminal job only after both identity and outcome minimum windows have elapsed and no retained history still attributes to that identity.
 
 ### `job_checkpoint`
 
@@ -188,7 +192,7 @@ Identity is the attribution anchor. Finite terminal-job retention requires both 
 
 ### History
 
-`job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed logical attempt, including retry, lease expiry, success, and terminal failure. Its `started_at` preserves the logical attempt start across timer suspensions, while `claimed_at` identifies the final activation that closed it. Timer suspension itself emits events but does not close attempt history. Both history relations have cascading foreign keys to `job`, which provide referential locking against concurrent terminal retention, and use Monday-aligned weekly range partitions with default fallbacks. Clean installation creates the current week plus four future weeks, and the housekeeping pass (`housekeep_v1`) continuously replenishes and repairs that horizon.
+`job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed logical attempt, including retry, lease expiry, success, terminal failure, and cancellation after an attempt actually started. Its `started_at` preserves the logical attempt start across timer suspensions, while `claimed_at` identifies the final activation that closed it. Timer suspension itself emits events but does not close attempt history. Both history relations have cascading foreign keys to `job`, which provide referential locking against concurrent terminal retention, and use Monday-aligned weekly range partitions with default fallbacks. Clean installation creates the current week plus four future weeks, and the housekeeping pass (`housekeep_v1`) continuously replenishes and repairs that horizon.
 
 Event and attempt retention are independent housekeeping phases. Each drops only fully expired completed weekly partitions, retires at most the configured number per pass, skips busy week locks, caps DDL lock waits at 250 ms, and bounded-deletes expired rows from its own default partition. The existing explicit week creation and paired retirement functions remain available for controlled operator work. Default partitions preserve insert availability when partition maintenance is late, while health reports exact counts through 10,000 rows and explicit capped lower bounds beyond that so fallback spill cannot remain invisible or make health unbounded.
 
@@ -206,9 +210,12 @@ Scheduling metadata lives entirely in the target database. Workers evaluate cron
 stateDiagram-v2
   [*] --> ready: enqueue due
   [*] --> scheduled: enqueue future
+  ready --> canceled: cancel immediately
+  scheduled --> canceled: cancel immediately
   scheduled --> ready: promote
   ready --> active: claim
-  active --> active: heartbeat
+  active --> active: heartbeat / cancel request
+  active --> canceled: exact-fence acknowledgement or requested lease expiry
   active --> scheduled: named durable wait, same attempt
   active --> ready: fail/recover, selected or overridden zero delay
   active --> scheduled: fail/recover, selected or overridden positive delay
@@ -265,17 +272,29 @@ not impose global rate limits, queue weights, or concurrency budgets across work
 
 ### Heartbeat
 
-`heartbeat_v1` is a compare-and-set update over job ID, active state, worker ID, fence token, and unexpired lease. `false` means ownership is stale.
+`heartbeat_v2` locks the exact active worker/fence generation and returns `accepted`, `cancel_requested`, or `stale`. It extends the lease only for `accepted`. Additive `heartbeat_v1` compatibility returns `true` only for `accepted`, so existing callers still stop treating canceled or stale work as owned.
+
+### Cancellation
+
+`cancel_v1` locks the sole runtime row, serializing cancellation with completion, failure, checkpoint, wait, heartbeat, and recovery. Ready, future-scheduled, and durable-wait continuations delete runtime and insert one immutable `canceled` outcome immediately. Never-started work emits no attempt history. A durable wait whose logical attempt already started closes exactly one canceled attempt using retained provenance.
+
+For active work, the first request stores its timestamp, optional `requestedBy`, and optional reason, then appends one `cancel_requested` event. Repeats retain the first committed metadata. Heartbeat status aborts the handler's `AbortSignal` with `CancellationRequestedError`. `acknowledge_cancel_v1` accepts only the exact unexpired worker/fence and creates one canceled outcome, attempt row, and terminal event. If the handler ignores the signal until expiry, bounded recovery materializes cancellation instead of retrying.
+
+Cancellation is cooperative, not an out-of-band lease revocation. JavaScript cannot be forcibly interrupted and external effects remain at least once. Handlers should observe `AbortSignal`, stop beginning new effects, and use provider idempotency, outbox/inbox, or compensation. `requestedBy` is audit attribution only; authorization belongs to the calling application or operator layer.
+
+Cancellation versus completion or failure is first-committer-wins because all terminal paths own the same runtime lock and exclusivity invariant. After cancellation commits, stale completion, failure, checkpoint, wait, heartbeat, and acknowledgement calls cannot recreate runtime or overwrite outcome. After success or failure commits, cancellation reports that existing terminal state. Repeated terminal requests do not duplicate events, outcomes, or attempt history.
+
+A recurring schedule owns definitions and occurrence deduplication, not the lifecycle of every fired job. Canceling one occurrence does not disable the definition, change its revision, or prevent the next occurrence from enqueueing independently.
 
 ### Retry and recovery
 
 `fail_v1` locks the matching unexpired active generation. If budget remains, it calls the PostgreSQL delay selector, compare-and-set increments the attempt, persists any next jitter state, and places the row in ready or scheduled state. Otherwise it deletes runtime and inserts a failed outcome. In both cases it closes attempt history and appends an event atomically. `retry_scheduled` details include `retry_policy`, `retry_delay_ms`, and `retry_delay_source`.
 
-`recover_expired_v1` cooperatively locks expired active rows in bounded batches. It performs the same policy selection and increment-and-requeue or delete-and-outcome transition using the observed fence and expiry as CAS guards. `Queue.recoverExpired(limit)` passes an omitted delay as SQL `NULL`, allowing persisted policy selection; an explicit number remains an override. `lease_expired` details include the policy, selected delay, and source. Old workers cannot later complete because their active generation no longer exists.
+`recover_expired_v1` cooperatively locks expired active rows in bounded batches. A row carrying a cancellation request becomes canceled and does not retry. Other rows perform policy selection and increment-and-requeue or delete-and-outcome transition using the observed fence and expiry as CAS guards. `Queue.recoverExpired(limit)` passes an omitted delay as SQL `NULL`, allowing persisted policy selection; an explicit number remains an override. `lease_expired` details include the policy, selected delay, and source. Old workers cannot later complete because their active generation no longer exists.
 
 ### Terminal transitions
 
-`complete_v1` and exhausted failure consume only the matching unexpired active row. Runtime deletion, outcome insertion, attempt closure, and event append commit or roll back together.
+`complete_v1`, exhausted failure, and cancellation consume the matching runtime row. Runtime deletion, outcome insertion, any truthful attempt closure, and event append commit or roll back together. Completion and failure reject a runtime that already carries a cancellation request.
 
 ### Enqueue and replay
 
@@ -283,7 +302,7 @@ not impose global rate limits, queue weights, or concurrency budgets across work
 
 ## Read models and health
 
-`Queue.getJob(id)` joins immutable `job` to both lifecycle relations and coalesces the one that exists, preserving the public `JobSnapshot` shape including `retryPolicy`. Health state counts union runtime and outcome. Ready, scheduled, active, expired-active, and oldest-ready metrics come directly from `job_runtime`.
+`Queue.getJob(id)` joins immutable `job` to both lifecycle relations and coalesces the one that exists, preserving `retryPolicy` plus cancellation-request metadata for active work. Health state counts union runtime and outcome, including canceled outcomes. Ready, scheduled, active, expired-active, and oldest-ready metrics come directly from `job_runtime`.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live jobs are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary week.
 

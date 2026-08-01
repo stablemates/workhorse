@@ -10,7 +10,9 @@ import { streamSSE } from "hono/streaming";
 import {
   EnqueueIdempotencyConflictError,
   Queue,
+  type CancelStatus,
   type Json,
+  type JobState,
   type RetryPolicy,
   type Worker,
 } from "@workhorse/core";
@@ -135,6 +137,7 @@ export interface CreateDemoApplicationOptions {
   operator?: DashboardOperator;
   scheduleController?: ScheduleController;
   queueController?: QueueController;
+  taskController?: TaskController;
   workerController?: WorkerController;
   workerPollMs?: number;
   maintenanceIntervalMs?: number;
@@ -186,6 +189,28 @@ export interface QueueController {
     audit: AuditContext,
   ) => Promise<{ paused: boolean }>;
   purgeQueue?: (queueName: string, audit: AuditContext) => Promise<{ deletedCount: number }>;
+}
+
+/**
+ * Result of one audited operator cancellation, projected for the dashboard.
+ *
+ * `status` is reported exactly as PostgreSQL returned it so the drawer can tell an operator the
+ * truth: a scheduled or ready task is already canceled when this resolves, while an active task
+ * has only been asked to stop and continues until its handler observes the signal.
+ */
+export interface DemoCancelTaskResult {
+  status: CancelStatus;
+  jobId: string;
+  state: JobState | null;
+  currentAttempt: number | null;
+  requestedAt: string | null;
+  requestedBy: string | null;
+  reason: string | null;
+  finishedAt: string | null;
+}
+
+export interface TaskController {
+  cancelTask?: (jobId: string, audit: AuditContext) => Promise<DemoCancelTaskResult>;
 }
 
 export interface WorkerController {
@@ -805,6 +830,70 @@ export function createLocalQueueController(database: DemoDatabase): QueueControl
   };
 }
 
+/**
+ * Normalize a cancellation timestamp to ISO-8601.
+ *
+ * `CancelResult` is typed with `Date`, but a driver may hand back the raw `timestamptz` string
+ * depending on how the transaction is issued. Both are accepted here so the projected result and
+ * the audit row can never disagree about the shape of a recorded time.
+ */
+function isoTimestamp(value: Date | string | null): string | null {
+  return value === null ? null : new Date(value).toISOString();
+}
+
+/**
+ * Audited cancellation of one task.
+ *
+ * The cancellation and its audit row share one transaction, so an operator action is never
+ * recorded without the lifecycle transition it claims to describe, and never applied without a
+ * recorded actor, reason, and request id. The stored `after` payload keeps the exact status
+ * PostgreSQL returned, including `cancel_requested`, so a later reader can tell an immediate
+ * cancellation apart from a cooperative request that an active handler still had to observe.
+ * Canceling one occurrence of a recurring schedule cancels only that task; the schedule
+ * definition is untouched and keeps firing.
+ */
+export function createLocalTaskController(database: DemoDatabase): TaskController {
+  return {
+    async cancelTask(jobId, audit) {
+      return database.transaction(async (transaction) => {
+        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+        const beforeRows = await transaction.execute<{ state: string | null }>(sql`
+          SELECT COALESCE(r.state, o.state) AS state
+            FROM workhorse.job j
+            LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+            LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+           WHERE j.id = ${jobId}
+        `);
+        const result = await workhorse.queue.cancel(jobId, {
+          requestedBy: audit.actor,
+          reason: audit.reason,
+        });
+        const projected: DemoCancelTaskResult = {
+          status: result.status,
+          jobId: result.jobId,
+          state: result.state,
+          currentAttempt: result.currentAttempt,
+          requestedAt: isoTimestamp(result.requestedAt),
+          requestedBy: result.requestedBy,
+          reason: result.reason,
+          finishedAt: isoTimestamp(result.finishedAt),
+        };
+        await transaction.execute(sql`
+          INSERT INTO public.workhorse_demo_audit
+            (actor, reason, request_id, occurred_at, action, target, before, after, status)
+          VALUES
+            (${audit.actor}, ${audit.reason}, ${audit.requestId},
+             ${audit.occurredAt ?? new Date().toISOString()}, 'cancelTask', ${`job:${jobId}`},
+             ${JSON.stringify({ state: beforeRows.rows[0]?.state ?? null })}::jsonb,
+             ${JSON.stringify(projected)}::jsonb,
+             ${result.status === "not_found" ? "failed" : "succeeded"})
+        `);
+        return projected;
+      });
+    },
+  };
+}
+
 export function createLocalWorkerController(
   database: DemoDatabase,
   workers: ReadonlyMap<string, Worker>,
@@ -866,6 +955,11 @@ export function createDemoApplication(
   const workerRegistry = new Map<string, Worker>();
   const workerController =
     options.workerController ?? createLocalWorkerController(database, workerRegistry);
+  // Cancellation is offered only where the rest of the mutating operator surface is. A read-only
+  // deployment keeps exactly the dashboard it had, with no cancel action anywhere.
+  const taskController =
+    options.taskController ??
+    (options.operator?.mode === "local" ? createLocalTaskController(database) : undefined);
   const adapter = createDrizzleAdapter(database, {
     defaultQueue: DEMO_QUEUE,
     close: options.close,
@@ -1303,6 +1397,7 @@ export function createDemoApplication(
           operator: options.operator ?? createReadOnlyOperator(),
           scheduleController: options.scheduleController,
           queueController: options.queueController,
+          taskController,
           workerController,
         },
       });

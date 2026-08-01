@@ -19,7 +19,7 @@ export type {
   ScheduleJobDefinition,
   StoredSchedule,
 } from "./queue.js";
-export { InjectedCrashError, Worker } from "./worker.js";
+export { CancellationRequestedError, InjectedCrashError, Worker } from "./worker.js";
 export type {
   Failpoint,
   Handler,
@@ -30,6 +30,9 @@ export type {
 } from "./worker.js";
 export type {
   ClaimedJob,
+  CancellationRequest,
+  CancelResult,
+  CancelStatus,
   EnqueueIdempotency,
   EnqueueIdempotencyConflictDetails,
   EnqueueIdempotencyConflictField,
@@ -39,6 +42,7 @@ export type {
   JobSnapshot,
   JobState,
   JobWait,
+  HeartbeatStatus,
   Json,
   Queryable,
   QueueHealth,
@@ -51,6 +55,8 @@ export {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
   MAX_CHECKPOINT_VALUE_BYTES,
+  MAX_CANCELLATION_REASON_CHARACTERS,
+  MAX_CANCELLATION_REQUESTED_BY_CHARACTERS,
   MAX_ENQUEUE_BATCH_SIZE,
   MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_IDEMPOTENCY_SCOPE_BYTES,

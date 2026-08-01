@@ -48,17 +48,18 @@ The suite also performs equal-load fixed-rate producer-consumer churn. Both desi
 
 The lifecycle suite runs deterministic operational scenarios with hard invariants:
 
-| Scenario                    | Evidence produced                                                                                                          |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `scheduled-promotion-drift` | bounded promotion batches and due-time drift distribution                                                                  |
-| `heartbeat-fencing`         | accepted heartbeat cost and stale-fence rejection cost                                                                     |
-| `crash-before-completion`   | durable state at all five worker crash boundaries                                                                          |
-| `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection                                                        |
-| `retry-paths`               | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion               |
-| `idempotent-ingress`        | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants               |
-| `retention-pruning`         | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                             |
-| `health-snapshot`           | health-query latency and internally consistent degraded-state counts                                                       |
-| `worker-concurrency`        | 1/4/8-slot timing, overlap/slot bounds, polling-window claim pressure, heartbeats, first-null, pause, and drain invariants |
+| Scenario                    | Evidence produced                                                                                                                       |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `scheduled-promotion-drift` | bounded promotion batches and due-time drift distribution                                                                               |
+| `heartbeat-fencing`         | accepted heartbeat cost and stale-fence rejection cost                                                                                  |
+| `cancellation-lifecycle`    | immediate/waiting cancellation, active signal/ack, expiry materialization, stale races, truthful history, recurrence, and query timings |
+| `crash-before-completion`   | durable state at all five worker crash boundaries                                                                                       |
+| `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection                                                                     |
+| `retry-paths`               | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion                            |
+| `idempotent-ingress`        | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants                            |
+| `retention-pruning`         | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                          |
+| `health-snapshot`           | health-query latency and internally consistent degraded-state counts                                                                    |
+| `worker-concurrency`        | 1/4/8-slot timing, overlap/slot bounds, polling-window claim pressure, heartbeats, first-null, pause, and drain invariants              |
 
 Scenario invariant failures abort the suite. This prevents a fast but semantically incorrect run from being treated as evidence.
 
@@ -74,6 +75,16 @@ hard invariants verify stable replay identity; no duplicate job, binding, event,
 whole-batch conflict rollback; duplicate result ordering alongside unchanged unkeyed behavior; and transfer
 of scoped ownership after expiry. These are full SQL transition timings. No latency or overhead number is
 claimed until a benchmark artifact containing this scenario is recorded.
+
+`cancellation-lifecycle` records client-observed full-transition timings for immediate ready,
+scheduled, and durable-wait cancellation; active request, repeated request, exact-fence settlement,
+ignored-signal expiry materialization, and terminal replay; plus bounded state/event queries and firing
+the next recurring occurrence. Its hard invariants prove `heartbeat_v2` and `AbortSignal` delivery,
+wrong/stale fence rejection, immutable first-committer-wins outcomes, one request/terminal event,
+attempt-history truthfulness, no retry after an expired request, and schedule independence. These are
+operational observations from a small deterministic scenario, not an SLA, throughput result, latency
+target, forced-interruption guarantee, or exactly-once claim. No cancellation performance claim is
+supported until a recorded artifact is published and interpreted in its environment.
 
 `worker-concurrency` seeds work before measurement, then times the complete worker run so no claim query is
 excluded from the throughput window. It records 1/4/8-slot durations and derived jobs/second, maximum
@@ -203,6 +214,7 @@ Lifecycle only or one scenario:
 pnpm benchmark -- --suite lifecycle --profile smoke --output lifecycle.json
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario lease-expiry-recovery
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario idempotent-ingress
+pnpm benchmark -- --suite lifecycle --profile smoke --scenario cancellation-lifecycle
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario worker-concurrency
 ```
 
@@ -254,7 +266,7 @@ Also record storage type, VM/container status, concurrent workloads, held transa
 
 ## Remaining evidence gaps
 
-V2 closes the original equivalent-semantics, confidence interval, comparative-worker, churn, telemetry, and lifecycle-scenario gaps. Schema v10 retires the prior missing idempotency-workload limitation with `idempotent-ingress`, and P0-03 adds the invariant-gated `worker-concurrency` scenario. A commercial build decision still needs recorded live artifacts for those newer scenarios, larger retained-history horizons, deliberately held old snapshots or replication horizons, production-shaped payloads, reference-system comparisons, multiple PostgreSQL versions, and repeated runs on production-class hardware.
+V2 closes the original equivalent-semantics, confidence interval, comparative-worker, churn, telemetry, and lifecycle-scenario gaps. Schema v11 adds invariant-gated `idempotent-ingress`, `worker-concurrency`, and `cancellation-lifecycle` coverage after the historical artifacts below were recorded. A commercial build decision still needs recorded live artifacts for those newer scenarios, larger retained-history horizons, deliberately held old snapshots or replication horizons, production-shaped payloads, reference-system comparisons, multiple PostgreSQL versions, and repeated runs on production-class hardware.
 
 ## Troubleshooting
 

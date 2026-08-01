@@ -26,6 +26,10 @@ Raw artifacts:
 This historical artifact predates the P0-03 `worker-concurrency` lifecycle scenario. Its comparative
 1/4/8-worker results use separate serial worker loops and are not evidence for the later single-worker
 `WorkerOptions.concurrency` contract, slot bounds, per-job heartbeat overlap, or graceful drain behavior.
+It also predates schema v11 and the `cancellation-lifecycle` scenario. The recorded 90/90 assertions and
+seven-scenario count therefore provide no evidence for cancellation transition timing, cooperative
+`AbortSignal` delivery, expiry materialization, race ownership, attempt-history truthfulness, or recurring
+occurrence behavior. Use a fresh live artifact before making any cancellation performance claim.
 
 ## What changed from v2
 
@@ -52,7 +56,8 @@ Both final artifacts record clean source commit `477eee40f5870ca671cd86634736359
 - Three paired repetitions at 1, 4, and 8 workers.
 - Seeded, shuffled execution plan with per-worker counterbalanced first-design order.
 - Equal-load churn: 500 jobs at 100 jobs/s, batch size 25, four workers.
-- Seven deterministic lifecycle scenarios.
+- Seven deterministic lifecycle scenarios in this historical artifact; later schema v11 runs add
+  `worker-concurrency`, `idempotent-ingress`, and `cancellation-lifecycle` coverage.
 
 The paired intervals below are Student-t intervals over only three repetition-level ratios. With two degrees of freedom, they are nominal stability summaries, not defensible 95% coverage guarantees.
 

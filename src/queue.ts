@@ -1,5 +1,7 @@
 import { CronExpressionParser } from "cron-parser";
 import type {
+  CancellationRequest,
+  CancelResult,
   ClaimedJob,
   EnqueueIdempotency,
   EnqueueIdempotencyConflictDetails,
@@ -9,6 +11,7 @@ import type {
   JobCheckpoint,
   JobSnapshot,
   JobWait,
+  HeartbeatStatus,
   Json,
   Queryable,
   QueueHealth,
@@ -73,6 +76,16 @@ type ClaimRow = {
   retry_policy: RetryPolicy | null;
   fence_token: string;
   lease_expires_at: Date;
+};
+
+type CancelRow = {
+  status: CancelResult["status"];
+  state: CancelResult["state"];
+  current_attempt: number | null;
+  requested_at: Date | null;
+  requested_by: string | null;
+  reason: string | null;
+  finished_at: Date | null;
 };
 
 type CheckpointRow = {
@@ -618,6 +631,27 @@ export class Queue {
     return result.rows[0]!.job_id;
   }
 
+  async cancel(jobId: string, request: CancellationRequest = {}): Promise<CancelResult> {
+    // PostgreSQL validates metadata and serializes cancellation with every lifecycle transition.
+    // requestedBy is caller attribution only; this API does not claim authorization.
+    const result = await this.database.query<CancelRow>(
+      `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at
+         FROM workhorse.cancel_v1($1, $2, $3)`,
+      [jobId, request.requestedBy ?? null, request.reason ?? null],
+    );
+    const row = result.rows[0]!;
+    return {
+      status: row.status,
+      jobId,
+      state: row.state,
+      currentAttempt: row.current_attempt,
+      requestedAt: row.requested_at,
+      requestedBy: row.requested_by,
+      reason: row.reason,
+      finishedAt: row.finished_at,
+    };
+  }
+
   async claim<TPayload = Json>(
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
@@ -643,11 +677,27 @@ export class Queue {
   }
 
   async heartbeat(job: ClaimedJob<unknown>, workerId: string, leaseMs = 30_000): Promise<boolean> {
-    // False means the worker/fence is stale or the lease already expired. The caller must stop
-    // treating the job as owned even if local handler code is still running.
-    const result = await this.database.query<{ accepted: boolean }>(
-      "SELECT workhorse.heartbeat_v1($1, $2, $3, $4) AS accepted",
+    return (await this.heartbeatStatus(job, workerId, leaseMs)) === "accepted";
+  }
+
+  async heartbeatStatus(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    leaseMs = 30_000,
+  ): Promise<HeartbeatStatus> {
+    // Cancellation and stale ownership both stop compatibility callers, while workers can use the
+    // status API to deliver a distinct cooperative cancellation signal.
+    const result = await this.database.query<{ status: HeartbeatStatus }>(
+      "SELECT workhorse.heartbeat_v2($1, $2, $3, $4) AS status",
       [job.id, workerId, job.fenceToken.toString(), leaseMs],
+    );
+    return result.rows[0]!.status;
+  }
+
+  async acknowledgeCancel(job: ClaimedJob<unknown>, workerId: string): Promise<boolean> {
+    const result = await this.database.query<{ accepted: boolean }>(
+      "SELECT workhorse.acknowledge_cancel_v1($1, $2, $3) AS accepted",
+      [job.id, workerId, job.fenceToken.toString()],
     );
     return result.rows[0]!.accepted;
   }
@@ -814,20 +864,19 @@ export class Queue {
     workerId: string,
     error: unknown,
     retryDelayMs?: number,
-  ): Promise<"ready" | "scheduled" | "failed" | "stale"> {
+  ): Promise<"ready" | "scheduled" | "failed" | "cancel_requested" | "stale"> {
     // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
     // creating the next projection. Undefined selects SQL-owned backoff; a number explicitly
     // overrides it, including zero for an immediate retry.
-    const result = await this.database.query<{ state: "ready" | "scheduled" | "failed" | "stale" }>(
-      "SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, $5) AS state",
-      [
-        job.id,
-        workerId,
-        job.fenceToken.toString(),
-        JSON.stringify(errorEnvelope(error)),
-        retryDelayMs ?? null,
-      ],
-    );
+    const result = await this.database.query<{
+      state: "ready" | "scheduled" | "failed" | "cancel_requested" | "stale";
+    }>("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, $5) AS state", [
+      job.id,
+      workerId,
+      job.fenceToken.toString(),
+      JSON.stringify(errorEnvelope(error)),
+      retryDelayMs ?? null,
+    ]);
     return result.rows[0]!.state;
   }
 
@@ -857,6 +906,9 @@ export class Queue {
       run_at: Date;
       result: TResult | null;
       error: Json | null;
+      cancel_requested_at: Date | null;
+      cancel_requested_by: string | null;
+      cancel_reason: string | null;
       created_at: Date;
       updated_at: Date;
     }>(
@@ -865,7 +917,8 @@ export class Queue {
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
               COALESCE(r.run_at, o.run_at) AS run_at, o.result,
-              COALESCE(r.error, o.error) AS error, j.created_at,
+              COALESCE(r.error, o.error) AS error, r.cancel_requested_at,
+              r.cancel_requested_by, r.cancel_reason, j.created_at,
               COALESCE(r.updated_at, o.updated_at) AS updated_at
          FROM workhorse.job j
          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
@@ -889,6 +942,9 @@ export class Queue {
       runAt: row.run_at,
       result: row.result,
       error: row.error,
+      cancelRequestedAt: row.cancel_requested_at,
+      cancelRequestedBy: row.cancel_requested_by,
+      cancelReason: row.cancel_reason,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -1141,6 +1197,7 @@ export class Queue {
       active: 0,
       succeeded: 0,
       failed: 0,
+      canceled: 0,
     };
     for (const row of counts.rows) stateCounts[row.state] = Number(row.count);
     const depth = depths.rows[0]!;

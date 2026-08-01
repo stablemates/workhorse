@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CancellationRequestedError,
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
   EnqueueIdempotencyConflictError,
@@ -81,11 +82,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v10 with deterministic enqueue idempotency storage", async () => {
+  it("installs schema v11 with deterministic enqueue idempotency storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(10);
+    expect(version.rows[0]?.version).toBe(11);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -165,6 +166,516 @@ describe("live-runtime queue protocol", () => {
        ORDER BY column_name`);
     expect(idempotencyColumns.rows.map((row) => row.column_name)).toContain("idempotency_key_hash");
     expect(idempotencyColumns.rows.map((row) => row.column_name)).not.toContain("idempotency_key");
+  });
+
+  it("validates cancellation metadata and idempotently cancels never-started jobs", async () => {
+    const readyId = await queue.enqueue("cancel-ready", { value: 1 });
+    await expect(queue.cancel(readyId, { requestedBy: "" })).rejects.toThrow(
+      "requested_by must contain between 1 and 200 characters",
+    );
+    await expect(queue.cancel(readyId, { requestedBy: "x".repeat(201) })).rejects.toThrow(
+      "requested_by must contain between 1 and 200 characters",
+    );
+    await expect(queue.cancel(readyId, { reason: "" })).rejects.toThrow(
+      "reason must contain between 1 and 2000 characters",
+    );
+    await expect(queue.cancel(readyId, { reason: "x".repeat(2001) })).rejects.toThrow(
+      "reason must contain between 1 and 2000 characters",
+    );
+
+    const first = await queue.cancel(readyId, {
+      requestedBy: "integration-test",
+      reason: "no longer needed",
+    });
+    expect(first).toMatchObject({
+      status: "canceled",
+      jobId: readyId,
+      state: "canceled",
+      currentAttempt: 1,
+      requestedBy: "integration-test",
+      reason: "no longer needed",
+    });
+    expect(first.requestedAt).toBeInstanceOf(Date);
+    expect(first.finishedAt).toBeInstanceOf(Date);
+
+    const repeated = await queue.cancel(readyId, {
+      requestedBy: "ignored-retry",
+      reason: "ignored retry metadata",
+    });
+    expect(repeated).toEqual(first);
+    expect(await queue.getJob(readyId)).toMatchObject({
+      state: "canceled",
+      currentAttempt: 1,
+      fenceToken: 0n,
+      error: {
+        name: "CancellationRequested",
+        message: "job cancellation was requested",
+        requested_by: "integration-test",
+        reason: "no longer needed",
+      },
+    });
+
+    const scheduledId = await queue.enqueue("cancel-scheduled", null, {
+      runAt: new Date(Date.now() + 60_000),
+    });
+    expect((await queue.cancel(scheduledId)).status).toBe("canceled");
+    const neverStarted = await pool.query<{ job_id: string; attempts: number; events: number }>(
+      `SELECT job.id AS job_id,
+              (SELECT count(*)::integer FROM workhorse.attempt_history history
+                WHERE history.job_id = job.id) AS attempts,
+              (SELECT count(*)::integer FROM workhorse.job_event event
+                WHERE event.job_id = job.id AND event.event_type = 'canceled') AS events
+         FROM workhorse.job job WHERE job.id = ANY($1::uuid[]) ORDER BY job.id`,
+      [[readyId, scheduledId]],
+    );
+    expect(neverStarted.rows).toHaveLength(2);
+    expect(neverStarted.rows).toEqual(
+      expect.arrayContaining([
+        { job_id: readyId, attempts: 0, events: 1 },
+        { job_id: scheduledId, attempts: 0, events: 1 },
+      ]),
+    );
+
+    const missing = await queue.cancel("00000000-0000-4000-8000-000000000001");
+    expect(missing).toEqual({
+      status: "not_found",
+      jobId: "00000000-0000-4000-8000-000000000001",
+      state: null,
+      currentAttempt: null,
+      requestedAt: null,
+      requestedBy: null,
+      reason: null,
+      finishedAt: null,
+    });
+
+    const succeededId = await queue.enqueue("already-terminal", null);
+    const succeeded = await queue.claim("terminal-worker", { leaseMs: 5_000 });
+    expect(succeeded?.id).toBe(succeededId);
+    expect(await queue.complete(succeeded!, "terminal-worker", { ok: true })).toBe(true);
+    expect(await queue.cancel(succeededId)).toMatchObject({
+      status: "already_terminal",
+      state: "succeeded",
+      currentAttempt: 1,
+      requestedAt: null,
+    });
+  });
+
+  it("cancels a durable wait with the latest retained claim attribution", async () => {
+    const id = await queue.enqueue("cancel-wait", null);
+    const firstClaim = await queue.claim("wait-cancel-worker-1", { leaseMs: 5_000 });
+    expect(firstClaim?.id).toBe(id);
+    const originalClaim = await pool.query<{ attempt_started_at: Date; acquired_at: Date }>(
+      `SELECT attempt_started_at, acquired_at FROM workhorse.job_runtime WHERE job_id = $1`,
+      [id],
+    );
+    expect(
+      await queue.scheduleWait(firstClaim!, "wait-cancel-worker-1", "first-pause", {
+        durationMs: 1,
+      }),
+    ).toMatchObject({ status: "scheduled" });
+    await sleep(10);
+    expect(await queue.promote()).toBe(1);
+    const continuation = await queue.claim("wait-cancel-worker-2", { leaseMs: 5_000 });
+    expect(continuation?.id).toBe(id);
+    const latestClaim = await pool.query<{ acquired_at: Date }>(
+      `SELECT acquired_at FROM workhorse.job_runtime WHERE job_id = $1`,
+      [id],
+    );
+    const scheduled = await queue.scheduleWait(
+      continuation!,
+      "wait-cancel-worker-2",
+      "second-pause",
+      {
+        durationMs: 60_000,
+      },
+    );
+    expect(scheduled.status).toBe("scheduled");
+
+    expect(await queue.cancel(id, { reason: "timer is obsolete" })).toMatchObject({
+      status: "canceled",
+      state: "canceled",
+      currentAttempt: 1,
+      reason: "timer is obsolete",
+    });
+    const history = await pool.query<{
+      attempt: number;
+      fence_token: string;
+      worker_id: string;
+      outcome: string;
+      started_at: Date;
+      claimed_at: Date;
+    }>(
+      `SELECT attempt, fence_token::text, worker_id, outcome, started_at, claimed_at
+         FROM workhorse.attempt_history WHERE job_id = $1`,
+      [id],
+    );
+    expect(history.rows).toEqual([
+      {
+        attempt: 1,
+        fence_token: continuation!.fenceToken.toString(),
+        worker_id: "wait-cancel-worker-2",
+        outcome: "canceled",
+        started_at: originalClaim.rows[0]!.attempt_started_at,
+        claimed_at: latestClaim.rows[0]!.acquired_at,
+      },
+    ]);
+  });
+
+  it("requests active cancellation once and fences every later owner write", async () => {
+    const id = await queue.enqueue("cancel-active", null, { maxAttempts: 2 });
+    const claimed = await queue.claim("active-cancel-worker", { leaseMs: 5_000 });
+    expect(claimed?.id).toBe(id);
+
+    const first = await queue.cancel(id, { requestedBy: "operator-7", reason: "superseded" });
+    expect(first).toMatchObject({
+      status: "cancel_requested",
+      state: "active",
+      currentAttempt: 1,
+      requestedBy: "operator-7",
+      reason: "superseded",
+      finishedAt: null,
+    });
+    expect(await queue.cancel(id, { requestedBy: "operator-8", reason: "duplicate" })).toEqual(
+      first,
+    );
+    expect(await queue.getJob(id)).toMatchObject({
+      state: "active",
+      cancelRequestedAt: first.requestedAt,
+      cancelRequestedBy: "operator-7",
+      cancelReason: "superseded",
+    });
+    expect(await queue.heartbeatStatus(claimed!, "active-cancel-worker", 5_000)).toBe(
+      "cancel_requested",
+    );
+    expect(await queue.heartbeat(claimed!, "active-cancel-worker", 5_000)).toBe(false);
+    expect(await queue.complete(claimed!, "active-cancel-worker", null)).toBe(false);
+    expect(await queue.fail(claimed!, "active-cancel-worker", new Error("late failure"), 0)).toBe(
+      "cancel_requested",
+    );
+    await expect(
+      queue.saveCheckpoint(claimed!, "active-cancel-worker", "late", { value: 1 }),
+    ).rejects.toThrow("stale or expired");
+    await expect(
+      queue.scheduleWait(claimed!, "active-cancel-worker", "late", { durationMs: 1_000 }),
+    ).rejects.toThrow("stale or expired");
+
+    const requestEvents = await pool.query<{ count: number }>(
+      `SELECT count(*)::integer AS count FROM workhorse.job_event
+        WHERE job_id = $1 AND event_type = 'cancel_requested'`,
+      [id],
+    );
+    expect(requestEvents.rows[0]?.count).toBe(1);
+    expect(await queue.acknowledgeCancel(claimed!, "active-cancel-worker")).toBe(true);
+    expect(await queue.acknowledgeCancel(claimed!, "active-cancel-worker")).toBe(false);
+    expect(await queue.getJob(id)).toMatchObject({
+      state: "canceled",
+      cancelRequestedAt: null,
+      cancelRequestedBy: null,
+      cancelReason: null,
+    });
+    expect(await queue.heartbeatStatus(claimed!, "active-cancel-worker", 5_000)).toBe("stale");
+    expect(await queue.complete(claimed!, "active-cancel-worker", null)).toBe(false);
+    expect(await queue.fail(claimed!, "active-cancel-worker", new Error("stale"), 0)).toBe("stale");
+    const terminalRows = await pool.query<{ events: number; attempts: number }>(
+      `SELECT
+        (SELECT count(*)::integer FROM workhorse.job_event
+          WHERE job_id = $1 AND event_type = 'canceled') AS events,
+        (SELECT count(*)::integer FROM workhorse.attempt_history
+          WHERE job_id = $1 AND outcome = 'canceled') AS attempts`,
+      [id],
+    );
+    expect(terminalRows.rows[0]).toEqual({ events: 1, attempts: 1 });
+  });
+
+  it("delivers CancellationRequestedError and acknowledges cooperative handler settlement", async () => {
+    const started = deferred();
+    const aborted = deferred<unknown>();
+    const id = await queue.enqueue("cooperative-cancel", null);
+    const worker = new Worker(queue, {
+      workerId: "cooperative-cancel-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 100,
+      maintenanceIntervalMs: 100,
+      housekeepingIntervalMs: 100,
+    }).handle("cooperative-cancel", async (_payload, context) => {
+      started.resolve();
+      await new Promise<void>((_resolve, reject) => {
+        const onAbort = () => {
+          aborted.resolve(context.signal.reason);
+          reject(context.signal.reason);
+        };
+        if (context.signal.aborted) onAbort();
+        else context.signal.addEventListener("abort", onAbort, { once: true });
+      });
+      return null;
+    });
+
+    const execution = worker.runOnce();
+    await started.promise;
+    expect((await queue.cancel(id)).status).toBe("cancel_requested");
+    expect(await aborted.promise).toBeInstanceOf(CancellationRequestedError);
+    await execution;
+    expect(await queue.getJob(id)).toMatchObject({ state: "canceled" });
+  });
+
+  it("acknowledges cancellation after a default-concurrency handler ignores AbortSignal", async () => {
+    const started = deferred();
+    const aborted = deferred<unknown>();
+    const release = deferred();
+    const id = await queue.enqueue("ignore-cancel", null);
+    const worker = new Worker(queue, {
+      workerId: "ignore-cancel-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 100,
+      maintenanceIntervalMs: 100,
+      housekeepingIntervalMs: 100,
+    }).handle("ignore-cancel", async (_payload, context) => {
+      expect(worker.concurrency).toBe(1);
+      started.resolve();
+      context.signal.addEventListener("abort", () => aborted.resolve(context.signal.reason), {
+        once: true,
+      });
+      await release.promise;
+      return { ignored: true };
+    });
+
+    const execution = worker.runOnce();
+    await started.promise;
+    await queue.cancel(id);
+    expect(await aborted.promise).toBeInstanceOf(CancellationRequestedError);
+    expect(await queue.getJob(id)).toMatchObject({ state: "active" });
+    release.resolve();
+    await execution;
+    expect(await queue.getJob(id)).toMatchObject({ state: "canceled", result: null });
+  });
+
+  it("isolates cancellation across concurrent default-concurrency workers", async () => {
+    const ids = await Promise.all([
+      queue.enqueue("concurrent-worker-cancel", { sequence: 1 }),
+      queue.enqueue("concurrent-worker-cancel", { sequence: 2 }),
+    ]);
+    const started = new Set<string>();
+    const bothStarted = deferred();
+    const canceledSignal = deferred<unknown>();
+    const releaseSibling = deferred();
+    const handler = async (
+      _payload: unknown,
+      context: { job: { id: string }; signal: AbortSignal },
+    ) => {
+      started.add(context.job.id);
+      if (started.size === 2) bothStarted.resolve();
+      if (context.job.id === ids[0]) {
+        await new Promise<void>((_resolve, reject) => {
+          context.signal.addEventListener(
+            "abort",
+            () => {
+              canceledSignal.resolve(context.signal.reason);
+              reject(context.signal.reason);
+            },
+            { once: true },
+          );
+        });
+      } else {
+        await releaseSibling.promise;
+      }
+      return null;
+    };
+    const firstWorker = new Worker(queue, {
+      workerId: "concurrent-cancel-a",
+      leaseMs: 5_000,
+      heartbeatMs: 100,
+      maintenanceIntervalMs: 100,
+      housekeepingIntervalMs: 100,
+    }).handle("concurrent-worker-cancel", handler);
+    const secondWorker = new Worker(queue, {
+      workerId: "concurrent-cancel-b",
+      leaseMs: 5_000,
+      heartbeatMs: 100,
+      maintenanceIntervalMs: 100,
+      housekeepingIntervalMs: 100,
+    }).handle("concurrent-worker-cancel", handler);
+
+    expect(firstWorker.concurrency).toBe(1);
+    expect(secondWorker.concurrency).toBe(1);
+    const running = Promise.all([firstWorker.runOnce(), secondWorker.runOnce()]);
+    try {
+      await bothStarted.promise;
+      expect((await queue.cancel(ids[0]!)).status).toBe("cancel_requested");
+      expect(await canceledSignal.promise).toBeInstanceOf(CancellationRequestedError);
+      releaseSibling.resolve();
+      await running;
+      expect(await Promise.all(ids.map((id) => queue.getJob(id)))).toEqual([
+        expect.objectContaining({ id: ids[0], state: "canceled" }),
+        expect.objectContaining({ id: ids[1], state: "succeeded" }),
+      ]);
+    } finally {
+      releaseSibling.resolve();
+      await queue.cancel(ids[0]!).catch(() => undefined);
+      await running.catch(() => undefined);
+    }
+  });
+
+  it("materializes expired requested cancellation instead of retrying and rejects stale fencing", async () => {
+    const id = await queue.enqueue("recover-cancel", null, { maxAttempts: 3 });
+    const claimed = await queue.claim("recover-cancel-worker", { leaseMs: 5_000 });
+    expect(claimed?.id).toBe(id);
+    expect((await queue.cancel(id)).status).toBe("cancel_requested");
+    await pool.query(
+      `UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 second'
+        WHERE job_id = $1`,
+      [id],
+    );
+    expect(await queue.acknowledgeCancel(claimed!, "recover-cancel-worker")).toBe(false);
+    expect(await queue.recoverExpired()).toBe(1);
+    expect(await queue.getJob(id)).toMatchObject({ state: "canceled", currentAttempt: 1 });
+    expect(await queue.heartbeatStatus(claimed!, "recover-cancel-worker", 5_000)).toBe("stale");
+    expect(await queue.complete(claimed!, "recover-cancel-worker", null)).toBe(false);
+    expect(await queue.fail(claimed!, "recover-cancel-worker", new Error("late"), 0)).toBe("stale");
+    const history = await pool.query<{ attempt: number; outcome: string }>(
+      "SELECT attempt, outcome FROM workhorse.attempt_history WHERE job_id = $1",
+      [id],
+    );
+    expect(history.rows).toEqual([{ attempt: 1, outcome: "canceled" }]);
+  });
+
+  it("lock-orders cancellation against completion, failure, heartbeat, checkpoint, and wait", async () => {
+    const transitions: Array<{
+      name: string;
+      query: string;
+      expected: Record<string, unknown>;
+    }> = [
+      {
+        name: "complete",
+        query: "SELECT workhorse.complete_v1($1, $2, $3, 'null'::jsonb) AS accepted",
+        expected: { accepted: false },
+      },
+      {
+        name: "fail",
+        query: 'SELECT workhorse.fail_v1($1, $2, $3, \'{"name":"late"}\'::jsonb, 0) AS state',
+        expected: { state: "cancel_requested" },
+      },
+      {
+        name: "heartbeat",
+        query: "SELECT workhorse.heartbeat_v2($1, $2, $3, 5000) AS status",
+        expected: { status: "cancel_requested" },
+      },
+      {
+        name: "checkpoint",
+        query: "SELECT status FROM workhorse.save_checkpoint_v1($1, $2, $3, 'late', 'null'::jsonb)",
+        expected: { status: "stale" },
+      },
+      {
+        name: "wait",
+        query: "SELECT status FROM workhorse.schedule_wait_v1($1, $2, $3, 'late', 1000, NULL)",
+        expected: { status: "stale" },
+      },
+    ];
+
+    for (const transition of transitions) {
+      const workerId = `race-${transition.name}`;
+      const id = await queue.enqueue(`race-${transition.name}`, null, { maxAttempts: 1 });
+      const claimed = await queue.claim(workerId, { leaseMs: 5_000 });
+      expect(claimed?.id).toBe(id);
+      const locker = await pool.connect();
+      try {
+        await locker.query("BEGIN");
+        const requested = await locker.query<{ status: string }>(
+          "SELECT status FROM workhorse.cancel_v1($1, 'race-test', $2)",
+          [id, transition.name],
+        );
+        expect(requested.rows[0]?.status).toBe("cancel_requested");
+        const later = pool.query(transition.query, [id, workerId, claimed!.fenceToken.toString()]);
+        await locker.query("COMMIT");
+        expect((await later).rows[0]).toEqual(transition.expected);
+      } finally {
+        await locker.query("ROLLBACK").catch(() => undefined);
+        locker.release();
+      }
+      expect(await queue.acknowledgeCancel(claimed!, workerId)).toBe(true);
+    }
+
+    for (const terminal of ["complete", "fail"] as const) {
+      const workerId = `terminal-wins-${terminal}`;
+      const id = await queue.enqueue(`terminal-wins-${terminal}`, null, { maxAttempts: 1 });
+      const claimed = await queue.claim(workerId, { leaseMs: 5_000 });
+      const locker = await pool.connect();
+      try {
+        await locker.query("BEGIN");
+        let committedState: string | boolean;
+        if (terminal === "complete") {
+          committedState = (
+            await locker.query<{ accepted: boolean }>(
+              "SELECT workhorse.complete_v1($1, $2, $3, 'null'::jsonb) AS accepted",
+              [id, workerId, claimed!.fenceToken.toString()],
+            )
+          ).rows[0]!.accepted;
+        } else {
+          committedState = (
+            await locker.query<{ state: string }>(
+              'SELECT workhorse.fail_v1($1, $2, $3, \'{"name":"terminal"}\'::jsonb, 0) AS state',
+              [id, workerId, claimed!.fenceToken.toString()],
+            )
+          ).rows[0]!.state;
+        }
+        expect(committedState).toBe(terminal === "complete" ? true : "failed");
+        const cancellation = queue.cancel(id);
+        await locker.query("COMMIT");
+        expect(await cancellation).toMatchObject({
+          status: "already_terminal",
+          state: terminal === "complete" ? "succeeded" : "failed",
+        });
+      } finally {
+        await locker.query("ROLLBACK").catch(() => undefined);
+        locker.release();
+      }
+    }
+  });
+
+  it("cancels one recurring occurrence without disabling later occurrences", async () => {
+    await queue.syncSchedules("cancel-recurring", [
+      {
+        name: "pulse",
+        schedule: "* * * * *",
+        job: { type: "recurring-cancel", payload: { value: 1 } },
+      },
+    ]);
+    const [schedule] = await queue.schedules(["cancel-recurring"]);
+    const firstId = await queue.fireSchedule(
+      schedule!.namespace,
+      schedule!.name,
+      schedule!.revision,
+      new Date("2026-01-01T00:00:00.000Z"),
+    );
+    expect(firstId).not.toBeNull();
+    expect((await queue.cancel(firstId!)).status).toBe("canceled");
+    const secondId = await queue.fireSchedule(
+      schedule!.namespace,
+      schedule!.name,
+      schedule!.revision,
+      new Date("2026-01-01T00:01:00.000Z"),
+    );
+    expect(secondId).not.toBeNull();
+    expect(secondId).not.toBe(firstId);
+    expect(await queue.getJob(secondId!)).toMatchObject({ state: "ready" });
+    expect((await queue.schedules(["cancel-recurring"])).map((item) => item.name)).toEqual([
+      "pulse",
+    ]);
+  });
+
+  it("includes canceled jobs in health counts", async () => {
+    const canceledId = await queue.enqueue("health-canceled", null);
+    await queue.cancel(canceledId);
+    await queue.enqueue("health-ready", null);
+    const health = await queue.health();
+    expect(health.schemaVersion).toBe(11);
+    expect(health.counts).toEqual({
+      scheduled: 0,
+      ready: 1,
+      active: 0,
+      succeeded: 0,
+      failed: 0,
+      canceled: 1,
+    });
   });
 
   it("synchronizes namespaced worker schedules and safely prunes removed definitions", async () => {
@@ -576,7 +1087,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v10 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v11 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -1608,7 +2119,7 @@ describe("live-runtime queue protocol", () => {
     const ids = await Promise.all(
       [1, 2, 3].map((sequence) => queue.enqueue("paused-concurrency", { sequence })),
     );
-    const heartbeat = vi.spyOn(queue, "heartbeat");
+    const heartbeat = vi.spyOn(queue, "heartbeatStatus");
     const worker = new Worker(queue, {
       workerId: "paused-concurrency-worker",
       concurrency: 2,
@@ -1644,17 +2155,17 @@ describe("live-runtime queue protocol", () => {
 
   it("runs independent per-job heartbeats without overlapping a slow heartbeat", async () => {
     const releaseHandlers = deferred();
-    const heartbeatGates = new Map<string, ReturnType<typeof deferred<boolean>>[]>();
+    const heartbeatGates = new Map<string, ReturnType<typeof deferred<"accepted">>[]>();
     const heartbeatCalls = new Map<string, number>();
     const inFlight = new Map<string, number>();
     const maxInFlight = new Map<string, number>();
     for (const sequence of [1, 2]) await queue.enqueue("slow-heartbeat", { sequence });
-    const heartbeat = vi.spyOn(queue, "heartbeat").mockImplementation((job) => {
+    const heartbeat = vi.spyOn(queue, "heartbeatStatus").mockImplementation((job) => {
       const active = (inFlight.get(job.id) ?? 0) + 1;
       inFlight.set(job.id, active);
       maxInFlight.set(job.id, Math.max(maxInFlight.get(job.id) ?? 0, active));
       heartbeatCalls.set(job.id, (heartbeatCalls.get(job.id) ?? 0) + 1);
-      const gate = deferred<boolean>();
+      const gate = deferred<"accepted">();
       const gates = heartbeatGates.get(job.id) ?? [];
       gates.push(gate);
       heartbeatGates.set(job.id, gates);
@@ -1684,7 +2195,7 @@ describe("live-runtime queue protocol", () => {
       await sleep(40);
       expect(heartbeatCalls.get(firstId!)).toBe(1);
       expect(heartbeatCalls.get(secondId!)).toBe(1);
-      heartbeatGates.get(firstId!)![0]!.resolve(true);
+      heartbeatGates.get(firstId!)![0]!.resolve("accepted");
       await vi.waitFor(() => expect(heartbeatCalls.get(firstId!)).toBe(2));
 
       expect(heartbeatCalls.get(secondId!)).toBe(1);
@@ -1697,14 +2208,14 @@ describe("live-runtime queue protocol", () => {
       await expect(run).resolves.toBe(true);
       const callsAtSettlement = new Map(heartbeatCalls);
       for (const gates of heartbeatGates.values()) {
-        for (const gate of gates) gate.resolve(true);
+        for (const gate of gates) gate.resolve("accepted");
       }
       await sleep(30);
       expect(heartbeatCalls).toEqual(callsAtSettlement);
     } finally {
       releaseHandlers.resolve();
       for (const gates of heartbeatGates.values()) {
-        for (const gate of gates) gate.resolve(true);
+        for (const gate of gates) gate.resolve("accepted");
       }
       heartbeat.mockRestore();
     }
@@ -1767,7 +2278,7 @@ describe("live-runtime queue protocol", () => {
       ids.push(await queue.enqueue("signal-abort-drain", { sequence }));
     }
     const claim = vi.spyOn(queue, "claim");
-    const heartbeat = vi.spyOn(queue, "heartbeat");
+    const heartbeat = vi.spyOn(queue, "heartbeatStatus");
     const worker = new Worker(queue, {
       workerId: "signal-abort-drain-worker",
       concurrency: 2,
@@ -2647,10 +3158,11 @@ describe("live-runtime queue protocol", () => {
     const job = await queue.claim("limit-worker");
     await pool.query(
       `INSERT INTO workhorse.job_wait(
-         job_id, wait_name, mode, duration_ms, wake_at, attempt, fence_token, worker_id
+         job_id, wait_name, mode, duration_ms, wake_at, attempt, fence_token, worker_id, claimed_at
        )
        SELECT $1, 'seed-' || value, 'relative', 1,
-              clock_timestamp() + interval '1 millisecond', 1, $2, $3
+              clock_timestamp() + interval '1 millisecond', 1, $2, $3,
+              (SELECT acquired_at FROM workhorse.job_runtime WHERE job_id = $1)
          FROM generate_series(1, 1000) AS value`,
       [id, job!.fenceToken.toString(), "limit-worker"],
     );
@@ -3654,7 +4166,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(10);
+    expect(health.schemaVersion).toBe(11);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);

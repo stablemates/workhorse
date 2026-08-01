@@ -1,6 +1,6 @@
 # Future feature roadmap
 
-This roadmap starts from the schema version 10 validation MVP described in
+This roadmap starts from the schema version 11 validation MVP described in
 [`docs/features.md`](docs/features.md). Items are ordered by product risk and dependency, not by
 feature visibility. A feature is complete only when its SQL contract, TypeScript API, integration
 tests, operational diagnostics, documentation, and benchmark impact are addressed.
@@ -18,13 +18,11 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P0-03 Configurable worker concurrency** (complete prerequisite)
-2. **P1-02 Cancellation**
-3. **P1-03 Deadlines and execution timeouts**
-4. **P1-04 Dead-letter views and redrive**
-5. **P2-01 Query and listing API**
-6. **P1-09 Progress and job metadata**
-7. **P0-02 Production telemetry**
+1. **P1-03 Deadlines and execution timeouts**
+2. **P1-04 Dead-letter views and redrive**
+3. **P2-01 Query and listing API**
+4. **P1-09 Progress and job metadata**
+5. **P0-02 Production telemetry**
 
 The demo and initial integration packages are complete. Full OpenTelemetry support is deliberately
 sequenced after the next product and reliability features; each earlier feature must still ship the
@@ -175,15 +173,26 @@ not depend on the later full OpenTelemetry and metrics package.
 - [x] Document how enqueue deduplication differs from exactly-once handler effects and cover the ingress
       transitions with the `idempotent-ingress` operational benchmark scenario.
 
-### [ ] P1-02 Cancellation
+### [x] P1-02 Cancellation
 
 **Depends on:** P0-03
 
-- [ ] Add fenced cancellation transitions for scheduled, ready, and active jobs.
-- [ ] Define cooperative cancellation delivery to active handlers.
-- [ ] Materialize cancellation as an immutable terminal outcome with event and attempt history.
-- [ ] Ensure stale completion, failure, and heartbeat calls cannot overwrite cancellation.
-- [ ] Define cancellation behavior for recurring-job occurrences.
+- [x] Cancel scheduled, ready, and durable-wait continuations immediately; request cancellation for
+      active jobs without revoking their lease out of band.
+- [x] Deliver active requests additively through `heartbeat_v2` and handler `AbortSignal`, while
+      retaining boolean `heartbeat_v1` compatibility.
+- [x] Require the exact active worker and fence to acknowledge cancellation; if the handler ignores
+      the signal, materialize the requested cancellation when its lease expires instead of retrying.
+- [x] Materialize one immutable canceled outcome and lifecycle event, with canceled attempt history
+      only when an attempt actually started; repeated requests do not duplicate terminal evidence.
+- [x] Fence completion, failure, checkpoint, wait, heartbeat, and stale acknowledgement writes;
+      cancellation versus completion or failure is first-committer-wins.
+- [x] Keep `requestedBy` as bounded attribution rather than authorization, and explicitly avoid
+      forced interruption, exactly-once effects, or a claim that JavaScript can be preempted.
+- [x] Cancel only the targeted recurring occurrence; its schedule definition remains enabled and
+      later occurrences continue independently.
+- [x] Cover immediate, cooperative, ignored-signal expiry, race, history, duplicate, stale-fence,
+      query-timing, and recurring behavior in the `cancellation-lifecycle` operational scenario.
 
 ### [ ] P1-03 Deadlines and execution timeouts
 
