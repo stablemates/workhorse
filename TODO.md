@@ -385,6 +385,27 @@ and the compatibility policy is stable enough to define a real upgrade boundary.
 - [ ] Run example smoke tests in CI so package releases cannot silently break documented setups.
 - [ ] Link every integration package to its corresponding example and setup guide.
 
+### [ ] P2-09 Public API package and framework mounts
+
+**Depends on:** P2-01, P2-04
+
+**Design before implementation.** The demo must not become the accidental public API contract. Define a
+reusable, versioned Workhorse API package and its authorization boundary before exposing job operations over
+HTTP.
+
+- [ ] Define the supported read and mutation surface independently from the dashboard's private oRPC
+      transport.
+- [ ] Decide package boundaries for the transport-neutral API contract, typed client, and framework-specific
+      mounts such as Hono.
+- [ ] Support mounting below a caller-owned namespace such as `/workhorse` without taking over the host
+      application's unrelated routes or middleware.
+- [ ] Define authentication, RBAC, audit context, error mapping, pagination, redaction, and compatibility
+      semantics before stabilizing endpoints.
+- [ ] Keep schema installation, migrations, seed data, and application-specific job creation outside the API
+      package.
+- [ ] Add packed-consumer tests proving independent installation, namespace mounting, authorization, and
+      upgrades across supported API versions.
+
 ## P3: orchestration
 
 Do not start orchestration until cancellation, idempotency, concurrency controls, telemetry, and

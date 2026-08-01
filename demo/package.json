@@ -6,9 +6,10 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "dev:server": "tsx watch src/index.ts",
+    "dev:client": "vite",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.vite.json --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.11",
@@ -26,8 +27,13 @@
   "devDependencies": {
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.5",
+    "@vitejs/plugin-react": "^4.7.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-grab": "^0.1.50",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vite": "^7.1.7"
   },
   "engines": {
     "node": ">=22"

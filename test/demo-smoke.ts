@@ -45,26 +45,6 @@ function run(
   });
 }
 
-async function waitForJob(
-  baseUrl: string,
-  jobId: string,
-  expectedState: "succeeded" | "failed",
-  pollAttempts = 100,
-): Promise<Record<string, unknown>> {
-  for (let attempt = 0; attempt < pollAttempts; attempt += 1) {
-    const response = await fetch(`${baseUrl}/jobs/${jobId}`);
-    if (response.ok) {
-      const body = (await response.json()) as { job: Record<string, unknown> };
-      if (body.job.state === expectedState) return body.job;
-      if (body.job.state === "succeeded" || body.job.state === "failed") {
-        throw new Error(`Job ${jobId} reached unexpected state ${String(body.job.state)}`);
-      }
-    }
-    await sleep(50);
-  }
-  throw new Error(`Timed out waiting for job ${jobId}`);
-}
-
 let demo: ReturnType<typeof spawn> | undefined;
 let demoOutput = "";
 let installed = false;
@@ -124,8 +104,15 @@ try {
   for (let attempt = 0; attempt < 240; attempt += 1) {
     if (demo.exitCode !== null) throw new Error(`Demo exited before readiness\n${demoOutput}`);
     try {
-      const response = await fetch(`${baseUrl}/api`);
-      if (response.ok) {
+      const [page, api] = await Promise.all([
+        fetch(`${baseUrl}/workhorse/tasks`),
+        fetch(`${baseUrl}/workhorse/rpc/dashboard/meta`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      ]);
+      if (page.ok && api.ok) {
         ready = true;
         break;
       }
@@ -137,8 +124,40 @@ try {
   if (!ready) throw new Error(`Timed out waiting for demo readiness\n${demoOutput}`);
 
   const dashboard = await fetch(`${baseUrl}/workhorse/tasks`);
-  if (!dashboard.ok || !(await dashboard.text()).includes('<div id="root"></div>')) {
+  const dashboardHtml = await dashboard.text();
+  if (!dashboard.ok || !dashboardHtml.includes('<div id="root"></div>')) {
     throw new Error("Dashboard assets were not served from the clean checkout");
+  }
+  if (demoOutput.includes("building client environment for production")) {
+    throw new Error("The development demo unexpectedly built a production dashboard bundle");
+  }
+  for (const token of [
+    "/workhorse/@vite/client",
+    "/workhorse/@react-refresh",
+    "/workhorse/src/browser.tsx",
+    "react-grab.ts",
+  ]) {
+    if (!dashboardHtml.includes(token)) {
+      throw new Error(`Development dashboard HTML omitted ${token}`);
+    }
+  }
+  if (dashboardHtml.includes("/workhorse/workhorse/") || dashboardHtml.includes("/assets/index-")) {
+    throw new Error("Development dashboard HTML used an invalid or production asset path");
+  }
+  const reactGrabPath = dashboardHtml.match(/src="([^"]*react-grab\.ts)"/)?.[1];
+  const reactGrabEntry = reactGrabPath ? await fetch(`${baseUrl}${reactGrabPath}`) : undefined;
+  const reactGrabSource = reactGrabEntry ? await reactGrabEntry.text() : "";
+  if (!reactGrabEntry?.ok || !reactGrabSource.includes("react-grab")) {
+    throw new Error("Demo-owned React Grab source module was not transformed by Vite");
+  }
+  const dashboardSource = await fetch(`${baseUrl}/workhorse/src/browser.tsx`);
+  const dashboardSourceText = await dashboardSource.text();
+  if (
+    !dashboardSource.ok ||
+    !dashboardSourceText.includes("jsxDEV") ||
+    !dashboardSourceText.includes("createRoot")
+  ) {
+    throw new Error("Dashboard source was not served with React development transforms");
   }
   const legacyDashboard = await fetch(`${baseUrl}/tasks?filter=running`, { redirect: "manual" });
   if (
@@ -147,62 +166,6 @@ try {
   ) {
     throw new Error("Legacy dashboard URLs do not redirect into the Workhorse namespace");
   }
-
-  const orderResponse = await fetch(`${baseUrl}/orders`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      customerEmail: "clean-checkout@example.com",
-      description: "Prove the documented demo path",
-    }),
-  });
-  if (orderResponse.status !== 202)
-    throw new Error(`Order request returned ${orderResponse.status}`);
-  const order = (await orderResponse.json()) as { jobId: string };
-  const completedOrder = await waitForJob(baseUrl, order.jobId, "succeeded");
-  if (completedOrder.state !== "succeeded") throw new Error("Order worker did not succeed");
-
-  const retryResponse = await fetch(`${baseUrl}/demo/retries`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ failUntilAttempt: 1 }),
-  });
-  if (retryResponse.status !== 202)
-    throw new Error(`Retry request returned ${retryResponse.status}`);
-  const retry = (await retryResponse.json()) as { jobId: string; expectedAttempts: number };
-  const completedRetry = await waitForJob(baseUrl, retry.jobId, "succeeded");
-  if (completedRetry.currentAttempt !== retry.expectedAttempts) {
-    throw new Error(
-      `Expected retry attempt ${retry.expectedAttempts}, received ${String(completedRetry.currentAttempt)}`,
-    );
-  }
-
-  const timerResponse = await fetch(`${baseUrl}/demo/timers`, { method: "POST" });
-  if (timerResponse.status !== 202) {
-    throw new Error(`Durable timer request returned ${timerResponse.status}`);
-  }
-  const timer = (await timerResponse.json()) as { jobId: string; expectedAttempt: number };
-  const completedTimer = await waitForJob(baseUrl, timer.jobId, "succeeded", 400);
-  if (completedTimer.currentAttempt !== timer.expectedAttempt) {
-    throw new Error(
-      `Expected durable timer attempt ${timer.expectedAttempt}, received ${String(completedTimer.currentAttempt)}`,
-    );
-  }
-  const timerResult = completedTimer.result as
-    | { prepareCheckpointReused?: boolean; waitReplayed?: boolean }
-    | undefined;
-  if (timerResult?.prepareCheckpointReused !== true || timerResult.waitReplayed !== true) {
-    throw new Error(
-      `Durable timer did not replay persisted boundaries: ${JSON.stringify(timerResult)}`,
-    );
-  }
-
-  const failureResponse = await fetch(`${baseUrl}/demo/failures`, { method: "POST" });
-  if (failureResponse.status !== 202) {
-    throw new Error(`Failure request returned ${failureResponse.status}`);
-  }
-  const failure = (await failureResponse.json()) as { jobId: string };
-  const completedFailure = await waitForJob(baseUrl, failure.jobId, "failed");
 
   const tasksResponse = await fetch(`${baseUrl}/workhorse/rpc/dashboard/tasks`, {
     method: "POST",
@@ -218,12 +181,13 @@ try {
   const cronText = await cronResponse.text();
   if (
     !tasksResponse.ok ||
-    !tasksText.includes(order.jobId) ||
-    !tasksText.includes(retry.jobId) ||
-    !tasksText.includes(timer.jobId) ||
-    !tasksText.includes(failure.jobId) ||
+    !tasksText.includes("demo.retry") ||
+    !tasksText.includes("demo.durable-timer") ||
+    !tasksText.includes("demo.failure") ||
+    !tasksText.includes("demo.long-running") ||
     !cronResponse.ok ||
-    !cronText.includes("workhorse-demo")
+    !cronText.includes("workhorse-demo") ||
+    !cronText.includes("demo.long-running")
   ) {
     throw new Error(`Dashboard readers omitted smoke data: ${tasksText}\n${cronText}`);
   }
@@ -232,10 +196,11 @@ try {
     `JCODE_CHECKPOINT ${JSON.stringify({
       message: "Clean-checkout demo passed",
       dashboard: true,
-      orderState: completedOrder.state,
-      retryAttempt: completedRetry.currentAttempt,
-      durableTimerAttempt: completedTimer.currentAttempt,
-      failureState: completedFailure.state,
+      reactGrab: true,
+      viteDevelopmentSource: true,
+      productionPrebuildSkipped: true,
+      representativeJobs: true,
+      recurringLongRunningTask: true,
       recurringSchedule: true,
     })}`,
   );

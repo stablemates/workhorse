@@ -16,7 +16,11 @@ import { resolveDemoDatabaseUrl } from "./environment.js";
 
 const databaseUrl = resolveDemoDatabaseUrl();
 const port = Number(process.env.PORT ?? 3000);
-const environment = process.env.WORKHORSE_ENV ?? "development";
+const mode = process.env.WORKHORSE_DEMO_MODE ?? "production";
+if (mode !== "development" && mode !== "production") {
+  throw new Error("WORKHORSE_DEMO_MODE must be either development or production");
+}
+const environment = process.env.WORKHORSE_ENV ?? mode;
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
   ? Number(process.env.WORKHORSE_WORKER_POLL_MS)
   : undefined;

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
@@ -7,7 +7,6 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Hono } from "hono";
 import {
-  EnqueueIdempotencyConflictError,
   Queue,
   type CancelStatus,
   type Json,
@@ -16,7 +15,6 @@ import {
   type Worker,
 } from "@workhorse/core";
 import type { Pool } from "pg";
-import { z } from "zod";
 import {
   DURABLE_DEMO_JOB_TYPE,
   type DurableDemoPayload,
@@ -93,9 +91,7 @@ export const DEMO_RECOVERABLE_RETRY_POLICY: RetryPolicy = { type: "fixed", delay
 export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
 export const REPORT_SCHEDULE_NAME = "demo.report";
-/** Optional request headers that ask PostgreSQL to deduplicate this submission. */
-export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
-export const IDEMPOTENCY_SCOPE_HEADER = "Idempotency-Scope";
+export const LONG_RUNNING_SCHEDULE_NAME = "demo.long-running";
 /**
  * The demo always asks for the documented 24 hour retention window so a repeated submission is
  * still recognised across a demo session and an operator can see one stable retention claim.
@@ -111,26 +107,11 @@ export const DEMO_OPERATOR_IDEMPOTENCY_KEY = "operator-idempotent-task";
 /** Namespace and key for the single deterministic keyed seed shown on a fresh demo database. */
 export const DEMO_SEED_IDEMPOTENCY_SCOPE = "workhorse-demo:seed";
 export const DEMO_SEED_IDEMPOTENCY_KEY = "representative-keyed-task";
-/** Longest key the demo accepts, matching the core limit so callers fail fast with a clear 400. */
-export const MAX_DEMO_IDEMPOTENCY_KEY_BYTES = 512;
-export const MAX_DEMO_IDEMPOTENCY_SCOPE_BYTES = 256;
-const DEMO_INDEX = {
-  name: "Workhorse demo",
-  endpoints: [
-    "POST /orders",
-    "POST /demo/retries",
-    "POST /demo/durable",
-    "POST /demo/timers",
-    "POST /demo/failures",
-    "GET /orders/:id",
-    "GET /jobs/:id",
-    "GET /health",
-  ],
-};
 
-export interface DemoOrderRequest {
-  customerEmail: string;
-  description: string;
+interface DemoIdempotency {
+  key: string;
+  scope: string;
+  ttlMs: number;
 }
 
 export interface CreateDemoApplicationOptions {
@@ -138,6 +119,8 @@ export interface CreateDemoApplicationOptions {
   onWorkerError?: (error: unknown) => void;
   dashboardRefresh?: DashboardRefreshHub;
   dashboard?: boolean;
+  /** Trusted development modules injected before the dashboard browser entry. */
+  browserModules?: readonly string[];
   /** Display-only deployment environment label shown in the dashboard header. */
   environment?: string;
   operator?: DashboardOperator;
@@ -243,11 +226,6 @@ export interface DemoWorkerRuntimeState {
   activeSlots: number;
   draining: boolean;
 }
-
-const orderRequestSchema = z.object({
-  customerEmail: z.email().transform((value) => value.trim()),
-  description: z.string().trim().min(1),
-});
 
 export function createDemoDatabase(pool: Pool) {
   return drizzle({ client: pool, schema: { orders } });
@@ -481,6 +459,20 @@ function reportSchedule(enabled = true) {
   } as const;
 }
 
+function longRunningSchedule(enabled = true) {
+  return {
+    name: LONG_RUNNING_SCHEDULE_NAME,
+    schedule: "* * * * *",
+    enabled,
+    job: {
+      type: LONG_RUNNING_JOB_TYPE,
+      queue: DEMO_QUEUE,
+      payload: { source: "schedule", label: "recurring-lightweight-maintenance" },
+      maxAttempts: 1,
+    },
+  } as const;
+}
+
 export async function installDemoSchema(database: DemoDatabase): Promise<void> {
   await database.execute(sql`
     CREATE TABLE IF NOT EXISTS public.workhorse_demo_order (
@@ -544,131 +536,8 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
   await queue.syncSchedules(DEMO_SCHEDULE_NAMESPACE, [
     heartbeatSchedule(enabledByName.get(HEARTBEAT_SCHEDULE_NAME) ?? true),
     reportSchedule(enabledByName.get(REPORT_SCHEDULE_NAME) ?? true),
+    longRunningSchedule(enabledByName.get(LONG_RUNNING_SCHEDULE_NAME) ?? true),
   ]);
-}
-
-function parseOrderRequest(input: unknown): DemoOrderRequest | null {
-  const parsed = orderRequestSchema.safeParse(input);
-  return parsed.success ? parsed.data : null;
-}
-
-/** One caller-supplied deduplication identity, already validated against the core limits. */
-export interface DemoIdempotency {
-  key: string;
-  scope: string;
-  ttlMs: number;
-}
-
-/**
- * Read the optional idempotency headers for one route.
- *
- * Absent headers keep the historical behavior exactly: every submission creates a new identity.
- * A present but unusable key is rejected here rather than in SQL so the caller gets a plain 400
- * describing the limit instead of a database error string.
- */
-export function readIdempotencyHeaders(
-  headers: { key: string | null | undefined; scope: string | null | undefined },
-  defaultScope: string,
-): { idempotency: DemoIdempotency | null; error: string | null } {
-  const key = headers.key?.trim() ?? "";
-  const scopeHeader = headers.scope?.trim() ?? "";
-  if (key === "") {
-    if (scopeHeader !== "") {
-      return {
-        idempotency: null,
-        error: `${IDEMPOTENCY_SCOPE_HEADER} requires ${IDEMPOTENCY_KEY_HEADER}`,
-      };
-    }
-    return { idempotency: null, error: null };
-  }
-  if (Buffer.byteLength(key, "utf8") > MAX_DEMO_IDEMPOTENCY_KEY_BYTES) {
-    return {
-      idempotency: null,
-      error: `${IDEMPOTENCY_KEY_HEADER} must contain at most ${MAX_DEMO_IDEMPOTENCY_KEY_BYTES} UTF-8 bytes`,
-    };
-  }
-  const scope = scopeHeader === "" ? defaultScope : scopeHeader;
-  if (Buffer.byteLength(scope, "utf8") > MAX_DEMO_IDEMPOTENCY_SCOPE_BYTES) {
-    return {
-      idempotency: null,
-      error: `${IDEMPOTENCY_SCOPE_HEADER} must contain at most ${MAX_DEMO_IDEMPOTENCY_SCOPE_BYTES} UTF-8 bytes`,
-    };
-  }
-  return { idempotency: { key, scope, ttlMs: DEMO_IDEMPOTENCY_TTL_MS }, error: null };
-}
-
-/**
- * Derive a stable application row identity from the same scope and key PostgreSQL deduplicates on.
- *
- * The demo owns two effects per accepted order: an application row and a queued job. The queue
- * deduplicates the job, but the order insert is the demo's own effect and needs its own stable
- * identity, otherwise a repeated keyed submission would return one job and leave a second orphan
- * order row behind. Deriving the row ID from scope and key keeps both effects on one identity.
- */
-export function deterministicOrderId(scope: string, key: string): string {
-  const digest = createHash("sha256")
-    .update(`workhorse-demo-order\u0000${scope}\u0000${key}`)
-    .digest();
-  const bytes = Buffer.from(digest.subarray(0, 16));
-  // RFC 9562 §5.8 name-based-from-hash layout: pin the version and variant bits.
-  bytes[6] = (bytes[6]! & 0x0f) | 0x80;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-/**
- * Digest of the order fields the demo actually acts on.
- *
- * A keyed order carries this digest in its job payload so the queue's stored request fingerprint
- * reflects the submitted order, not only its derived row identity. Without it, reusing one key for
- * a different customer or description would look like an exact replay and be silently accepted.
- */
-export function orderRequestDigest(request: DemoOrderRequest): string {
-  return createHash("sha256")
-    .update(`${request.customerEmail}\u0000${request.description}`)
-    .digest("hex");
-}
-
-/**
- * Public shape of a rejected keyed submission.
- *
- * A conflict means the retained key already belongs to a materially different request. The response
- * deliberately carries no raw key: the caller already knows the key it sent, and every other reader
- * of this response, including logs and the dashboard, must not learn it.
- */
-export interface DemoIdempotencyConflictBody {
-  error: string;
-  reason: "idempotency-conflict";
-  scope: string;
-  keyDigest: string;
-  keyLength: number;
-  existingJobId: string;
-  /** Request fields that differ from the retained request, so a caller can see what changed. */
-  conflictingFields: string[];
-  storedRequestDigest: string;
-  rejectedRequestDigest: string;
-  retentionMs: number;
-}
-
-/** Translate a typed core conflict into a safe structured body, or null for any other error. */
-export function idempotencyConflictBody(error: unknown): DemoIdempotencyConflictBody | null {
-  if (!(error instanceof EnqueueIdempotencyConflictError)) return null;
-  return {
-    error:
-      "This idempotency key is retained for a different request. Use a new key, or repeat the original request exactly.",
-    reason: "idempotency-conflict",
-    scope: error.scope,
-    // `keyPreview` is deliberately omitted. Even a masked preview is unnecessary in a response
-    // that every proxy and log can observe; the digest and length identify the key safely.
-    keyDigest: error.keyDigest,
-    keyLength: error.keyLength,
-    existingJobId: error.existingJobId,
-    conflictingFields: [...error.conflictingFields],
-    storedRequestDigest: error.storedRequestDigest,
-    rejectedRequestDigest: error.rejectedRequestDigest,
-    retentionMs: DEMO_IDEMPOTENCY_TTL_MS,
-  };
 }
 
 export function createReadOnlyOperator(): DashboardOperator {
@@ -1173,247 +1042,10 @@ export function createDemoApplication(
       options.onWorkerError?.(error);
     },
   });
-  const app = new Hono()
-    .use("*", workhorse.middleware())
-    .get("/", (context) =>
-      options.dashboard === false ? context.json(DEMO_INDEX) : context.redirect("/workhorse/tasks"),
-    )
-    .get("/api", (context) => context.json(DEMO_INDEX))
-    .post("/orders", async (context) => {
-      const request = parseOrderRequest(await context.req.json().catch(() => null));
-      if (!request) {
-        return context.json({ error: "Expected customerEmail and a non-empty description" }, 400);
-      }
-
-      const headers = readIdempotencyHeaders(
-        {
-          key: context.req.header(IDEMPOTENCY_KEY_HEADER),
-          scope: context.req.header(IDEMPOTENCY_SCOPE_HEADER),
-        },
-        "workhorse-demo:orders",
-      );
-      if (headers.error) return context.json({ error: headers.error }, 400);
-      const idempotency = headers.idempotency;
-      // The order row and its job stay in one transaction. A keyed submission derives the row
-      // identity from the same scope and key the queue deduplicates on, so a repeat reuses the
-      // original row and the original job instead of leaving a second order behind. A conflict
-      // raised by the queue therefore rolls the whole statement back, including the order insert.
-      const orderId =
-        idempotency === null
-          ? randomUUID()
-          : deterministicOrderId(idempotency.scope, idempotency.key);
-      let accepted: { orderId: string; jobId: string };
-      try {
-        const jobId = await database.transaction(async (transaction) => {
-          await transaction
-            .insert(orders)
-            .values({
-              id: orderId,
-              customerEmail: request.customerEmail,
-              description: request.description,
-              status: "queued",
-            })
-            // Only a keyed repeat can collide here, and the queue is the authority on whether that
-            // repeat is an exact replay, so the insert defers instead of failing or overwriting.
-            .onConflictDoNothing({ target: orders.id });
-          return context.var.workhorse
-            .forTransaction(transaction)
-            .enqueue(
-              ORDER_JOB_TYPE,
-              idempotency === null
-                ? { orderId }
-                : { orderId, requestDigest: orderRequestDigest(request) },
-              {
-                tags: ["billing"],
-                ...(idempotency === null ? {} : { idempotency }),
-              },
-            );
-        });
-        accepted = { orderId, jobId };
-      } catch (error) {
-        const conflict = idempotencyConflictBody(error);
-        if (!conflict) throw error;
-        return context.json(conflict, 409);
-      }
-      dashboardRefresh.publish("enqueue");
-
-      return context.json({ ...accepted, status: "queued" }, 202);
-    })
-    .post("/demo/retries", async (context) => {
-      const body = (await context.req.json().catch(() => ({}))) as {
-        failUntilAttempt?: number;
-      };
-      const requested = body.failUntilAttempt;
-      const failUntilAttempt =
-        typeof requested === "number" && Number.isInteger(requested) && requested >= 1
-          ? Math.min(requested, 10)
-          : 1;
-      const headers = readIdempotencyHeaders(
-        {
-          key: context.req.header(IDEMPOTENCY_KEY_HEADER),
-          scope: context.req.header(IDEMPOTENCY_SCOPE_HEADER),
-        },
-        "workhorse-demo:retries",
-      );
-      if (headers.error) return context.json({ error: headers.error }, 400);
-      let jobId: string;
-      try {
-        jobId = await context.var.workhorse.queue.enqueue(
-          RETRY_JOB_TYPE,
-          { label: "recover-with-durable-checkpoint", failUntilAttempt },
-          {
-            maxAttempts: failUntilAttempt + 2,
-            tags: ["demo-test", "durable-checkpoint"],
-            ...(headers.idempotency === null ? {} : { idempotency: headers.idempotency }),
-          },
-        );
-      } catch (error) {
-        const conflict = idempotencyConflictBody(error);
-        if (!conflict) throw error;
-        return context.json(conflict, 409);
-      }
-      dashboardRefresh.publish("enqueue");
-      return context.json(
-        {
-          jobId,
-          status: "queued",
-          expectedAttempts: failUntilAttempt + 1,
-          expectedCheckpoint: RETRY_CHECKPOINT_NAME,
-        },
-        202,
-      );
-    })
-    .post("/demo/durable", async (context) => {
-      const body = (await context.req.json().catch(() => ({}))) as { scenario?: unknown };
-      const scenario = body.scenario
-        ? parseDurableDemoScenario(body.scenario)
-        : ("order-fulfillment" as const);
-      if (!scenario) {
-        return context.json(
-          { error: `Expected scenario: ${Object.keys(durableDemoScenarios).join(", ")}` },
-          400,
-        );
-      }
-      const definition = durableDemoScenarios[scenario];
-      const headers = readIdempotencyHeaders(
-        {
-          key: context.req.header(IDEMPOTENCY_KEY_HEADER),
-          scope: context.req.header(IDEMPOTENCY_SCOPE_HEADER),
-        },
-        "workhorse-demo:durable",
-      );
-      if (headers.error) return context.json({ error: headers.error }, 400);
-      let jobId: string;
-      try {
-        jobId = await context.var.workhorse.queue.enqueue(
-          DURABLE_DEMO_JOB_TYPE,
-          { scenario },
-          {
-            maxAttempts: 2,
-            tags: ["demo-test", "durable-checkpoint", scenario],
-            ...(headers.idempotency === null ? {} : { idempotency: headers.idempotency }),
-          },
-        );
-      } catch (error) {
-        const conflict = idempotencyConflictBody(error);
-        if (!conflict) throw error;
-        return context.json(conflict, 409);
-      }
-      dashboardRefresh.publish("enqueue");
-      return context.json(
-        {
-          jobId,
-          status: "queued",
-          scenario,
-          checkpointPlan: definition.steps.map((step) => step.name),
-          expectedAttempts: 2,
-        },
-        202,
-      );
-    })
-    .post("/demo/timers", async (context) => {
-      const headers = readIdempotencyHeaders(
-        {
-          key: context.req.header(IDEMPOTENCY_KEY_HEADER),
-          scope: context.req.header(IDEMPOTENCY_SCOPE_HEADER),
-        },
-        "workhorse-demo:timers",
-      );
-      if (headers.error) return context.json({ error: headers.error }, 400);
-      let jobId: string;
-      try {
-        jobId = await context.var.workhorse.queue.enqueue(
-          DURABLE_TIMER_JOB_TYPE,
-          { source: "http" },
-          {
-            maxAttempts: 1,
-            tags: ["demo-test", "durable-checkpoint", "durable-timer"],
-            ...(headers.idempotency === null ? {} : { idempotency: headers.idempotency }),
-          },
-        );
-      } catch (error) {
-        const conflict = idempotencyConflictBody(error);
-        if (!conflict) throw error;
-        return context.json(conflict, 409);
-      }
-      dashboardRefresh.publish("enqueue");
-      return context.json(
-        {
-          jobId,
-          status: "queued",
-          expectedAttempt: 1,
-          prepareCheckpoint: DURABLE_TIMER_PREPARE_CHECKPOINT,
-          waitName: DURABLE_TIMER_WAIT_NAME,
-          publishCheckpoint: DURABLE_TIMER_PUBLISH_CHECKPOINT,
-        },
-        202,
-      );
-    })
-    .post("/demo/failures", async (context) => {
-      const headers = readIdempotencyHeaders(
-        {
-          key: context.req.header(IDEMPOTENCY_KEY_HEADER),
-          scope: context.req.header(IDEMPOTENCY_SCOPE_HEADER),
-        },
-        "workhorse-demo:failures",
-      );
-      if (headers.error) return context.json({ error: headers.error }, 400);
-      let jobId: string;
-      try {
-        jobId = await context.var.workhorse.queue.enqueue(
-          FAILURE_JOB_TYPE,
-          { label: "terminal-failure" },
-          {
-            maxAttempts: 1,
-            tags: ["demo-test"],
-            ...(headers.idempotency === null ? {} : { idempotency: headers.idempotency }),
-          },
-        );
-      } catch (error) {
-        const conflict = idempotencyConflictBody(error);
-        if (!conflict) throw error;
-        return context.json(conflict, 409);
-      }
-      dashboardRefresh.publish("enqueue");
-      return context.json({ jobId, status: "queued", expectedOutcome: "failed" }, 202);
-    })
-    .get("/orders/:id", async (context) => {
-      const order = await database.query.orders.findFirst({
-        where: eq(orders.id, context.req.param("id")),
-      });
-      if (!order) return context.json({ error: "Order not found" }, 404);
-      return context.json({ order });
-    })
-    .get("/jobs/:id", async (context) => {
-      const job = await context.var.workhorse.queue.getJob(context.req.param("id"));
-      if (!job) return context.json({ error: "Job not found" }, 404);
-      return context.json({ job: { ...job, fenceToken: job.fenceToken.toString() } });
-    })
-    .get("/health", async (context) =>
-      context.json({ status: "ok", workhorse: await context.var.workhorse.queue.health() }),
-    );
+  const app = new Hono().use("*", workhorse.middleware());
 
   if (options.dashboard !== false) {
+    app.get("/", (context) => context.redirect("/workhorse/tasks"));
     for (const legacyRoute of ["/tasks", "/cron", "/queues", "/system", "/workers", "/settings"]) {
       app.get(legacyRoute, (context) => {
         const search = new URL(context.req.url).search;
@@ -1435,6 +1067,7 @@ export function createDemoApplication(
       projectDurability: durableDemoPlanForJob,
       refresh: dashboardRefresh,
       auditActor: "local-demo",
+      browserModules: options.browserModules,
     });
   }
 

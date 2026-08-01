@@ -12,7 +12,6 @@ import {
   createLocalQueueController,
   createLocalOperator,
   createLocalScheduleController,
-  DEMO_IDEMPOTENCY_TTL_MS,
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
   DEMO_SEED_IDEMPOTENCY_KEY,
@@ -27,16 +26,13 @@ import {
   DEMO_WORKER_POLL_MS,
   DEMO_WORKERS,
   DEMO_WORKER_CONCURRENCY,
-  deterministicOrderId,
   DURABLE_TIMER_JOB_TYPE,
   DURABLE_TIMER_PREPARE_CHECKPOINT,
   DURABLE_TIMER_PUBLISH_CHECKPOINT,
   DURABLE_TIMER_WAIT_NAME,
   HEARTBEAT_SCHEDULE_NAME,
-  IDEMPOTENCY_KEY_HEADER,
-  IDEMPOTENCY_SCOPE_HEADER,
   installDemoSchema,
-  MAX_DEMO_IDEMPOTENCY_KEY_BYTES,
+  LONG_RUNNING_SCHEDULE_NAME,
   REPORT_SCHEDULE_NAME,
   seedDemoData,
   syncDemoSchedules,
@@ -45,12 +41,7 @@ import type { CreateDemoApplicationOptions } from "../src/app.js";
 import type { DashboardRouter } from "@workhorse/dashboard/server";
 import { dashboardDatabase, readDashboardSnapshot } from "@workhorse/dashboard/server";
 import { durableDemoScenarios } from "../src/durable-demo.js";
-import {
-  describeIdempotency,
-  idempotencyEvidenceLine,
-  readIdempotencyEvidence,
-  type DashboardWorkerRow,
-} from "@workhorse/dashboard/model";
+import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/model";
 
 const databaseUrl = localDatabaseUrl("test");
 assertLocalDatabasePurpose(databaseUrl, "test");
@@ -96,22 +87,6 @@ afterAll(async () => {
   await pool.end();
 });
 
-async function postOrder(
-  app: ReturnType<typeof createDemoApplication>["app"],
-  body: { customerEmail: string; description: string },
-  idempotency?: { key: string; scope?: string },
-) {
-  return app.request("/orders", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(idempotency ? { [IDEMPOTENCY_KEY_HEADER]: idempotency.key } : {}),
-      ...(idempotency?.scope ? { [IDEMPOTENCY_SCOPE_HEADER]: idempotency.scope } : {}),
-    },
-    body: JSON.stringify(body),
-  });
-}
-
 function dashboardClient(
   app: ReturnType<typeof createDemoApplication>["app"],
 ): RouterClient<DashboardRouter> {
@@ -120,6 +95,23 @@ function dashboardClient(
       url: "http://demo.test/workhorse/rpc",
       fetch: (request) => app.request(request),
     }),
+  );
+}
+
+let demoTestRequest = 0;
+async function enqueueDemoTest(
+  kind: "success" | "retry" | "durable" | "timer" | "failure" | "idempotent" | "long-running",
+  scenario?: keyof typeof durableDemoScenarios,
+) {
+  demoTestRequest += 1;
+  return createLocalOperator(database).enqueueTest!(
+    kind,
+    {
+      actor: "integration-test",
+      reason: `exercise ${kind} worker behavior`,
+      requestId: `integration-${kind}-${demoTestRequest}`,
+    },
+    scenario,
   );
 }
 
@@ -169,6 +161,14 @@ describe("Workhorse demo", () => {
     expect(page.headers.get("content-type")).toContain("text/html");
     expect(html).toContain("window.workhorseDashboard=");
     expect(html).toContain('"basePath":"/workhorse"');
+    expect(html).not.toContain("react-grab");
+
+    const withDevelopmentModule = createTestApplication({
+      browserModules: ["/development/react-grab.ts"],
+    });
+    expect(await (await withDevelopmentModule.app.request("/workhorse/tasks")).text()).toContain(
+      '<script type="module" src="/development/react-grab.ts"></script>',
+    );
     const legacy = await app.request("/tasks?filter=running&page=2");
     expect(legacy.status).toBe(302);
     expect(legacy.headers.get("location")).toBe("/workhorse/tasks?filter=running&page=2");
@@ -186,7 +186,7 @@ describe("Workhorse demo", () => {
 
     expect(
       await pool.query(
-        `SELECT schedule_name, cron_expression, enabled
+        `SELECT schedule_name, cron_expression, job_type, enabled
            FROM workhorse.schedule_definition
           WHERE namespace = $1
           ORDER BY schedule_name`,
@@ -194,8 +194,24 @@ describe("Workhorse demo", () => {
       ),
     ).toMatchObject({
       rows: [
-        { schedule_name: REPORT_SCHEDULE_NAME, cron_expression: "*/5 * * * *", enabled: true },
-        { schedule_name: HEARTBEAT_SCHEDULE_NAME, cron_expression: "* * * * *", enabled: true },
+        {
+          schedule_name: LONG_RUNNING_SCHEDULE_NAME,
+          cron_expression: "* * * * *",
+          job_type: "demo.long-running",
+          enabled: true,
+        },
+        {
+          schedule_name: REPORT_SCHEDULE_NAME,
+          cron_expression: "*/5 * * * *",
+          job_type: "demo.report",
+          enabled: true,
+        },
+        {
+          schedule_name: HEARTBEAT_SCHEDULE_NAME,
+          cron_expression: "* * * * *",
+          job_type: "demo.recurring",
+          enabled: true,
+        },
       ],
     });
   });
@@ -833,158 +849,15 @@ describe("Workhorse demo", () => {
     }
   });
 
-  it("creates an application row and job atomically, then processes and exposes both", async () => {
-    const workerErrors: unknown[] = [];
-    const refreshReasons: string[] = [];
-    const { app, workhorse, dashboardRefresh } = createTestApplication({
-      onWorkerError: (error) => workerErrors.push(error),
-    });
-    const unsubscribe = dashboardRefresh.subscribe((event) => refreshReasons.push(event.reason));
-    workhorse.start();
-
-    try {
-      const rootResponse = await app.request("/");
-      expect(rootResponse.status).toBe(302);
-      expect(rootResponse.headers.get("location")).toBe("/workhorse/tasks");
-      expect(await (await app.request("/api")).json()).toMatchObject({
-        name: "Workhorse demo",
-      });
-      const response = await app.request("/orders", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          customerEmail: "operator@example.com",
-          description: "Validate the end-to-end demo",
-        }),
-      });
-      expect(response.status).toBe(202);
-      const accepted = (await response.json()) as { orderId: string; jobId: string };
-      const transactionIds = await pool.query<{
-        order_transaction: string;
-        job_transaction: string;
-      }>(
-        `SELECT application_order.xmin::text AS order_transaction,
-                accepted_job.xmin::text AS job_transaction
-           FROM public.workhorse_demo_order application_order
-           JOIN workhorse.job accepted_job ON accepted_job.id = $2
-          WHERE application_order.id = $1`,
-        [accepted.orderId, accepted.jobId],
-      );
-      expect(transactionIds.rows[0]!.order_transaction).toBe(
-        transactionIds.rows[0]!.job_transaction,
-      );
-
-      let orderStatus = "queued";
-      let job: { state: string; result: unknown } | undefined;
-      for (let attempt = 0; attempt < 40 && job?.state !== "succeeded"; attempt += 1) {
-        await sleep(25);
-        const orderResponse = await app.request(`/orders/${accepted.orderId}`);
-        const body = (await orderResponse.json()) as { order: { status: string } };
-        orderStatus = body.order.status;
-        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
-        job = ((await jobResponse.json()) as { job: typeof job }).job;
-      }
-
-      expect(orderStatus).toBe("processed");
-      const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
-      expect(jobResponse.status).toBe(200);
-      expect(await jobResponse.json()).toMatchObject({
-        job: { id: accepted.jobId, state: "succeeded", result: { processed: true } },
-      });
-      const client = dashboardClient(app);
-      expect(await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25 })).toMatchObject({
-        filter: "all",
-        page: 1,
-        total: 1,
-        jobs: [
-          {
-            id: accepted.jobId,
-            state: "succeeded",
-            payload: { orderId: accepted.orderId },
-            createdAt: expect.any(String),
-          },
-        ],
-        counts: { all: 1, completed: 1 },
-      });
-      expect(await client.dashboard.workers()).toMatchObject({
-        workers: [
-          { id: "demo-worker-1", status: expect.stringMatching(/active|idle|recent|offline/) },
-          { id: "demo-worker-2", status: expect.stringMatching(/active|idle|recent|offline/) },
-        ],
-      });
-      expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
-        window: "1h",
-        status: { level: "healthy", checks: [], criticalChecks: [], degradedChecks: [] },
-        kpis: {
-          drain: { completedPerMinute: expect.any(Number), enqueuedPerMinute: expect.any(Number) },
-          backlog: { ready: 0 },
-          errorRate: { current: 0 },
-          lease: { expired: 0 },
-        },
-        outcomes: expect.any(Array),
-        integrity: {
-          dueButUnpromoted: 0,
-          partitions: expect.any(Array),
-          defaultEventRows: 0,
-          defaultAttemptRows: 0,
-          retention: {
-            policyUpdatedAt: expect.any(String),
-            eligibleHistoryPartitions: { jobEvents: 0, attemptHistory: 0 },
-            defaultHistoryRows: { jobEvents: 0, attemptHistory: 0 },
-            defaultHistoryRowsCapped: { jobEvents: false, attemptHistory: false },
-          },
-        },
-      });
-      const detail = await client.dashboard.jobDetail({ id: accepted.jobId });
-      expect(detail).toMatchObject({
-        identity: { id: accepted.jobId, state: "succeeded" },
-        payload: { orderId: accepted.orderId },
-        current: { outcome: { state: "succeeded", result: { processed: true } } },
-        attempts: [{ attempt: 1, outcome: "succeeded" }],
-      });
-      expect(detail.events).toEqual(
-        expect.arrayContaining([expect.objectContaining({ type: "enqueued" })]),
-      );
-      expect(refreshReasons).toEqual(expect.arrayContaining(["enqueue", "worker"]));
-      expect(workerErrors).toEqual([]);
-    } finally {
-      unsubscribe();
-      await workhorse.stop();
-    }
-  });
-
-  it("rejects malformed order requests without writing an order or job", async () => {
-    const { app } = createTestApplication();
-    const response = await app.request("/orders", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ customerEmail: "invalid" }),
-    });
-
-    expect(response.status).toBe(400);
-    expect(
-      await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
-    ).toMatchObject({ rows: [{ count: 0 }] });
-    expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 0 }],
-    });
-  });
-
   it("retries an intentional handler failure and exposes both attempts in the dashboard", async () => {
     const { app, workhorse } = createTestApplication();
     workhorse.start();
 
     try {
-      const response = await app.request("/demo/retries", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ failUntilAttempt: 1 }),
-      });
-      expect(response.status).toBe(202);
-      const accepted = (await response.json()) as {
-        jobId: string;
-        expectedAttempts: number;
-        expectedCheckpoint: string;
+      const accepted = {
+        ...(await enqueueDemoTest("retry")),
+        expectedAttempts: 2,
+        expectedCheckpoint: "reserve-capacity",
       };
       expect(accepted.expectedAttempts).toBe(2);
       expect(accepted.expectedCheckpoint).toBe("reserve-capacity");
@@ -992,8 +865,7 @@ describe("Workhorse demo", () => {
       let job: { state: string; currentAttempt: number; result: unknown } | undefined;
       for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
         await sleep(25);
-        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
-        job = ((await jobResponse.json()) as { job: typeof job }).job;
+        job = (await workhorse.context.queue.getJob(accepted.jobId)) as typeof job;
       }
 
       expect(job).toMatchObject({
@@ -1108,14 +980,12 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      const response = await app.request("/demo/timers", { method: "POST" });
-      expect(response.status).toBe(202);
-      const accepted = (await response.json()) as {
-        jobId: string;
-        expectedAttempt: number;
-        prepareCheckpoint: string;
-        waitName: string;
-        publishCheckpoint: string;
+      const accepted = {
+        ...(await enqueueDemoTest("timer")),
+        expectedAttempt: 1,
+        prepareCheckpoint: DURABLE_TIMER_PREPARE_CHECKPOINT,
+        waitName: DURABLE_TIMER_WAIT_NAME,
+        publishCheckpoint: DURABLE_TIMER_PUBLISH_CHECKPOINT,
       };
       expect(accepted).toMatchObject({
         expectedAttempt: 1,
@@ -1257,20 +1127,19 @@ describe("Workhorse demo", () => {
         | {
             state: string;
             currentAttempt: number;
-            fenceToken: string;
+            fenceToken: bigint;
             result: Record<string, unknown>;
           }
         | undefined;
       for (let poll = 0; poll < 200 && finalJob?.state !== "succeeded"; poll += 1) {
         await sleep(10);
-        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
-        finalJob = ((await jobResponse.json()) as { job: typeof finalJob }).job;
+        finalJob = (await workhorse.context.queue.getJob(accepted.jobId)) as typeof finalJob;
       }
       expect(finalJob).toMatchObject({
         state: "succeeded",
         currentAttempt: 1,
         result: {
-          source: "http",
+          source: "operator",
           completed: true,
           attempt: 1,
           prepareCheckpointReused: true,
@@ -1294,7 +1163,7 @@ describe("Workhorse demo", () => {
       expect(claims.rows[0]!.fence_token).toBe(firstFence);
       const secondFence = claims.rows[1]!.fence_token;
       expect(secondFence).not.toBe(firstFence);
-      expect(finalJob!.fenceToken).toBe(secondFence);
+      expect(finalJob!.fenceToken).toBe(BigInt(secondFence));
       expect(operations).toEqual([
         { operation: "prepare", attempt: 1, fenceToken: firstFence },
         { operation: "publish", attempt: 1, fenceToken: secondFence },
@@ -1379,17 +1248,16 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      const response = await app.request("/demo/durable", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scenario: "order-fulfillment" }),
-      });
-      expect(response.status).toBe(202);
-      const accepted = (await response.json()) as {
-        jobId: string;
-        scenario: string;
-        checkpointPlan: string[];
-        expectedAttempts: number;
+      const accepted = {
+        ...(await enqueueDemoTest("durable", "order-fulfillment")),
+        scenario: "order-fulfillment",
+        checkpointPlan: [
+          "validate-order",
+          "reserve-inventory",
+          "authorize-payment",
+          "arrange-shipment",
+        ],
+        expectedAttempts: 2,
       };
       expect(accepted).toMatchObject({
         scenario: "order-fulfillment",
@@ -1405,8 +1273,7 @@ describe("Workhorse demo", () => {
       let job: { state: string; currentAttempt: number; result: unknown } | undefined;
       for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
         await sleep(25);
-        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
-        job = ((await jobResponse.json()) as { job: typeof job }).job;
+        job = (await workhorse.context.queue.getJob(accepted.jobId)) as typeof job;
       }
       expect(job).toMatchObject({
         state: "succeeded",
@@ -1500,18 +1367,6 @@ describe("Workhorse demo", () => {
           [accepted.jobId],
         ),
       ).toMatchObject({ rows: [{ count: 4 }] });
-
-      for (const scenario of ["unknown", "toString", "__proto__"]) {
-        expect(
-          (
-            await app.request("/demo/durable", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ scenario }),
-            })
-          ).status,
-        ).toBe(400);
-      }
     } finally {
       await workhorse.stop();
     }
@@ -1540,7 +1395,7 @@ describe("Workhorse demo", () => {
     },
   ] as const)("resumes $scenario from its distinct durable boundary", async (example) => {
     const operations: string[] = [];
-    const { app, workhorse } = createTestApplication({
+    const { workhorse } = createTestApplication({
       onDurableStepOperation(scenario, stepName, attempt) {
         operations.push(`${scenario}:${stepName}:${attempt}`);
       },
@@ -1548,17 +1403,11 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      const response = await app.request("/demo/durable", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scenario: example.scenario }),
-      });
-      const accepted = (await response.json()) as { jobId: string };
+      const accepted = await enqueueDemoTest("durable", example.scenario);
       let job: { state: string; currentAttempt: number; result: unknown } | undefined;
       for (let attempt = 0; attempt < 80 && job?.state !== "succeeded"; attempt += 1) {
         await sleep(25);
-        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
-        job = ((await jobResponse.json()) as { job: typeof job }).job;
+        job = (await workhorse.context.queue.getJob(accepted.jobId)) as typeof job;
       }
 
       expect(job).toMatchObject({
@@ -1598,16 +1447,12 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      const response = await app.request("/demo/failures", { method: "POST" });
-      expect(response.status).toBe(202);
-      const accepted = (await response.json()) as { jobId: string; expectedOutcome: string };
-      expect(accepted.expectedOutcome).toBe("failed");
+      const accepted = await enqueueDemoTest("failure");
 
       let state: string | undefined;
       for (let attempt = 0; attempt < 40 && state !== "failed"; attempt += 1) {
         await sleep(25);
-        const jobResponse = await app.request(`/jobs/${accepted.jobId}`);
-        state = ((await jobResponse.json()) as { job: { state: string } }).job.state;
+        state = (await workhorse.context.queue.getJob(accepted.jobId))?.state;
       }
       expect(state).toBe("failed");
 
@@ -1658,6 +1503,21 @@ describe("Workhorse demo", () => {
       expect(jobId).toBeDefined();
       expect(state).toBe("succeeded");
 
+      const longRunningJob = await waitFor(
+        async () => {
+          const occurrence = await pool.query<{ job_id: string | null }>(
+            `SELECT job_id FROM workhorse.schedule_occurrence
+              WHERE namespace = $1 AND schedule_name = $2
+              ORDER BY occurrence_at DESC LIMIT 1`,
+            [DEMO_SCHEDULE_NAMESPACE, LONG_RUNNING_SCHEDULE_NAME],
+          );
+          const recurringJobId = occurrence.rows[0]?.job_id;
+          return recurringJobId ? workhorse.context.queue.getJob(recurringJobId) : null;
+        },
+        (job) => job?.state === "succeeded",
+      );
+      expect(longRunningJob).toMatchObject({ type: "demo.long-running", state: "succeeded" });
+
       const client = dashboardClient(app);
       const cron = await client.dashboard.cron();
       expect(cron.schedules).toEqual(
@@ -1667,17 +1527,27 @@ describe("Workhorse demo", () => {
             name: HEARTBEAT_SCHEDULE_NAME,
             occurrenceCount: 1,
           }),
+          expect.objectContaining({
+            namespace: DEMO_SCHEDULE_NAMESPACE,
+            name: LONG_RUNNING_SCHEDULE_NAME,
+            occurrenceCount: 1,
+          }),
         ]),
       );
-      expect(
-        await client.dashboard.tasks({ filter: "completed", page: 1, pageSize: 25 }),
-      ).toMatchObject({
-        total: 2,
-        jobs: expect.arrayContaining([
-          expect.objectContaining({ id: jobId, type: "demo.recurring", state: "succeeded" }),
-          expect.objectContaining({ type: "demo.report", state: "succeeded" }),
-        ]),
+      const completed = await client.dashboard.tasks({
+        filter: "completed",
+        page: 1,
+        pageSize: 25,
       });
+      expect(completed.jobs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: jobId, type: "demo.recurring", state: "succeeded" }),
+          expect.objectContaining({
+            type: "demo.long-running",
+            state: "succeeded",
+          }),
+        ]),
+      );
     } finally {
       await workhorse.stop();
     }
@@ -2499,362 +2369,27 @@ describe("Workhorse demo", () => {
     ).toBe(health.retentionPolicy.scheduleOccurrenceRetentionDays);
   });
 
-  it("runs core Hono and worker flows without mounting dashboard routes", async () => {
+  it("runs workers without mounting dashboard routes", async () => {
     const { app, workhorse } = createTestApplication({ dashboard: false });
     workhorse.start();
 
     try {
-      expect(await (await app.request("/")).json()).toMatchObject({
-        name: "Workhorse demo",
-      });
+      expect((await app.request("/")).status).toBe(404);
       expect((await app.request("/workhorse/rpc/dashboard/tasks")).status).toBe(404);
       expect((await app.request("/workhorse/events")).status).toBe(404);
-      const response = await app.request("/orders", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          customerEmail: "headless@example.com",
-          description: "Run without the optional dashboard",
-        }),
-      });
-      expect(response.status).toBe(202);
+      const jobId = await workhorse.context.queue.enqueue(
+        "demo.recurring",
+        { source: "headless-test" },
+        { maxAttempts: 1, tags: ["demo-test"] },
+      );
+      const job = await waitFor(
+        () => workhorse.context.queue.getJob(jobId),
+        (candidate) => candidate?.state === "succeeded",
+      );
+      expect(job?.state).toBe("succeeded");
     } finally {
       await workhorse.stop();
     }
-  });
-
-  it("returns the same order and task for a repeated keyed submission", async () => {
-    const { app } = createTestApplication();
-    const order = {
-      customerEmail: "repeat@example.com",
-      description: "Submit the same order twice",
-    };
-
-    const first = await postOrder(app, order, { key: "order-repeat-1" });
-    const second = await postOrder(app, order, { key: "order-repeat-1" });
-    expect(first.status).toBe(202);
-    expect(second.status).toBe(202);
-    const accepted = (await first.json()) as { orderId: string; jobId: string };
-    expect(await second.json()).toEqual(await Promise.resolve({ ...accepted, status: "queued" }));
-
-    // Exactly one application row and one accepted job identity exist for the retained key.
-    expect(
-      (await pool.query(`SELECT count(*)::integer AS count FROM public.workhorse_demo_order`))
-        .rows[0],
-    ).toEqual({ count: 1 });
-    expect(
-      (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.job`)).rows[0],
-    ).toEqual({ count: 1 });
-    expect(accepted.orderId).toBe(deterministicOrderId("workhorse-demo:orders", "order-repeat-1"));
-
-    // A replay records no additional job event, so FIFO order and history stay untouched.
-    expect(
-      (
-        await pool.query<{ event_type: string }>(
-          `SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id`,
-          [accepted.jobId],
-        )
-      ).rows,
-    ).toEqual([{ event_type: "enqueued" }]);
-  });
-
-  it("keeps unkeyed submissions creating a new identity every time", async () => {
-    const { app } = createTestApplication();
-    const order = { customerEmail: "unkeyed@example.com", description: "No key supplied" };
-    const first = (await (await postOrder(app, order)).json()) as { orderId: string };
-    const second = (await (await postOrder(app, order)).json()) as { orderId: string };
-    expect(first.orderId).not.toBe(second.orderId);
-    expect(
-      (await pool.query(`SELECT count(*)::integer AS count FROM public.workhorse_demo_order`))
-        .rows[0],
-    ).toEqual({ count: 2 });
-  });
-
-  it("separates identical keys held in different scopes", async () => {
-    const { app } = createTestApplication();
-    const order = { customerEmail: "scoped@example.com", description: "Same key, two scopes" };
-    const first = (await (
-      await postOrder(app, order, { key: "shared", scope: "tenant-a" })
-    ).json()) as {
-      jobId: string;
-    };
-    const second = (await (
-      await postOrder(app, order, { key: "shared", scope: "tenant-b" })
-    ).json()) as { jobId: string };
-    expect(first.jobId).not.toBe(second.jobId);
-  });
-
-  it("rolls back the order insert when a changed request conflicts with a retained key", async () => {
-    const { app } = createTestApplication();
-    // Longer than the preview budget so the rejected response provably truncates the key.
-    const key = "order-conflict-key-long-enough-to-truncate";
-    const accepted = (await (
-      await postOrder(
-        app,
-        { customerEmail: "first@example.com", description: "Original order" },
-        { key },
-      )
-    ).json()) as { orderId: string; jobId: string };
-
-    const conflicted = await postOrder(
-      app,
-      { customerEmail: "second@example.com", description: "Different order under the same key" },
-      { key },
-    );
-    expect(conflicted.status).toBe(409);
-    const body = (await conflicted.json()) as Record<string, unknown>;
-    expect(body).toEqual({
-      error: expect.stringContaining("idempotency key"),
-      reason: "idempotency-conflict",
-      scope: "workhorse-demo:orders",
-      keyDigest: expect.stringMatching(/^[0-9a-f]{12}$/),
-      keyLength: key.length,
-      existingJobId: accepted.jobId,
-      // The demo puts a digest of the submitted order in the keyed payload, so a changed
-      // customer or description is reported as a real request difference.
-      conflictingFields: ["payload"],
-      storedRequestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
-      rejectedRequestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
-      retentionMs: DEMO_IDEMPOTENCY_TTL_MS,
-    });
-    expect(body.storedRequestDigest).not.toBe(body.rejectedRequestDigest);
-    // The rejected response identifies the key without ever reproducing it.
-    expect(JSON.stringify(body)).not.toContain(key);
-
-    // The whole statement rolled back: no second order row, and the original row is unchanged.
-    expect(
-      (
-        await pool.query<{ id: string; customer_email: string; description: string }>(
-          `SELECT id, customer_email, description FROM public.workhorse_demo_order`,
-        )
-      ).rows,
-    ).toEqual([
-      {
-        id: accepted.orderId,
-        customer_email: "first@example.com",
-        description: "Original order",
-      },
-    ]);
-    expect(
-      (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.job`)).rows[0],
-    ).toEqual({ count: 1 });
-  });
-
-  it("never publishes a raw idempotency key through RPC, events, or a conflict response", async () => {
-    const sentinel = "sentinel-raw-key-must-never-appear-7f3a91";
-    const { app } = createTestApplication({ operator: createLocalOperator(database) });
-    const client = dashboardClient(app);
-    const accepted = (await (
-      await postOrder(
-        app,
-        { customerEmail: "sentinel@example.com", description: "Leak regression" },
-        { key: sentinel },
-      )
-    ).json()) as { jobId: string };
-
-    const conflicted = await postOrder(
-      app,
-      { customerEmail: "sentinel@example.com", description: "Changed request" },
-      { key: sentinel },
-    );
-    expect(conflicted.status).toBe(409);
-
-    const surfaces = [
-      await conflicted.text(),
-      JSON.stringify(await client.dashboard.jobDetail({ id: accepted.jobId })),
-      JSON.stringify(await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25 })),
-      JSON.stringify(
-        (
-          await pool.query(`SELECT details FROM workhorse.job_event WHERE job_id = $1`, [
-            accepted.jobId,
-          ])
-        ).rows,
-      ),
-      await (await app.request(`/jobs/${accepted.jobId}`)).text(),
-    ];
-    for (const surface of surfaces) expect(surface).not.toContain(sentinel);
-  });
-
-  it("never reproduces a short idempotency key in a demo-rendered surface", async () => {
-    // Regression: core's own `key_preview` is a bounded prefix, so for a key shorter than the
-    // preview budget the "preview" is the entire key. Every surface this demo authors must
-    // therefore identify a key by digest and length only, never by preview.
-    const shortKey = "k1";
-    const { app } = createTestApplication();
-    const client = dashboardClient(app);
-    const accepted = (await (
-      await postOrder(
-        app,
-        { customerEmail: "short@example.com", description: "Short key" },
-        { key: shortKey },
-      )
-    ).json()) as { jobId: string };
-
-    const conflicted = await postOrder(
-      app,
-      { customerEmail: "short@example.com", description: "Changed under a short key" },
-      { key: shortKey },
-    );
-    expect(conflicted.status).toBe(409);
-    const conflictBody = await conflicted.text();
-    expect(conflictBody).not.toContain(`"${shortKey}"`);
-    expect(JSON.parse(conflictBody)).not.toHaveProperty("keyPreview");
-
-    // The evidence this demo derives, and the exact wording it renders from that evidence, are
-    // both free of the key even though the underlying core event still records a prefix preview.
-    const detail = await client.dashboard.jobDetail({ id: accepted.jobId });
-    const enqueued = detail.events.find((event) => event.type === "enqueued");
-    const evidence = readIdempotencyEvidence({
-      type: enqueued!.type,
-      details: enqueued!.details,
-    });
-    expect(evidence).not.toBeNull();
-    expect(evidence).not.toHaveProperty("keyPreview");
-    expect(JSON.stringify(evidence)).not.toContain(shortKey);
-    expect(describeIdempotency(evidence!).exact).not.toContain(shortKey);
-    expect(idempotencyEvidenceLine(evidence!)).not.toContain(shortKey);
-  });
-
-  it("exposes only safe deduplication metadata to the dashboard", async () => {
-    const { app } = createTestApplication();
-    const client = dashboardClient(app);
-    // Longer than the preview budget, so the recorded preview is provably a truncation rather
-    // than the whole key.
-    const key = "order-metadata-key-long-enough-to-truncate";
-    const keyed = (await (
-      await postOrder(
-        app,
-        { customerEmail: "metadata@example.com", description: "Show safe evidence" },
-        { key, scope: "tenant-metadata" },
-      )
-    ).json()) as { jobId: string };
-    const unkeyed = (await (
-      await postOrder(app, {
-        customerEmail: "plain@example.com",
-        description: "No deduplication surface",
-      })
-    ).json()) as { jobId: string };
-
-    const detail = await client.dashboard.jobDetail({ id: keyed.jobId });
-    const enqueued = detail.events.find((event) => event.type === "enqueued");
-    const evidence = readIdempotencyEvidence({
-      type: enqueued!.type,
-      details: enqueued!.details,
-    });
-    expect(evidence).toMatchObject({
-      scope: "tenant-metadata",
-      ttlMs: DEMO_IDEMPOTENCY_TTL_MS,
-      keyLength: key.length,
-    });
-    expect(evidence!.keyDigest).not.toContain(key);
-    expect(JSON.stringify(evidence)).not.toContain(key);
-    expect(Object.keys(evidence!)).toEqual([
-      "scope",
-      "keyDigest",
-      "keyLength",
-      "ttlMs",
-      "expiresAt",
-      "requestDigest",
-    ]);
-
-    const plainDetail = await client.dashboard.jobDetail({ id: unkeyed.jobId });
-    const plainEnqueued = plainDetail.events.find((event) => event.type === "enqueued");
-    expect(
-      readIdempotencyEvidence({ type: plainEnqueued!.type, details: plainEnqueued!.details }),
-    ).toBeNull();
-
-    const tasks = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25 });
-    expect(tasks.jobs.find((job) => job.id === keyed.jobId)?.keyed).toBe(true);
-    expect(tasks.jobs.find((job) => job.id === unkeyed.jobId)?.keyed).toBe(false);
-  });
-
-  it("reports the same keyed state through the snapshot projection as the task list", async () => {
-    // Regression: the snapshot used to hardcode `keyed: false`, so a keyed task was silently
-    // mislabelled depending only on which projection observed it.
-    const { app } = createTestApplication();
-    const client = dashboardClient(app);
-    const keyed = (await (
-      await postOrder(
-        app,
-        { customerEmail: "snapshot@example.com", description: "Snapshot agreement" },
-        { key: "snapshot-agreement-key" },
-      )
-    ).json()) as { jobId: string };
-    const unkeyed = (await (
-      await postOrder(app, {
-        customerEmail: "snapshot-plain@example.com",
-        description: "Snapshot agreement, unkeyed",
-      })
-    ).json()) as { jobId: string };
-
-    const snapshot = await readDashboardSnapshot(
-      dashboardDatabase(pool),
-      new Queue(pool, "demo"),
-      ["demo-worker"],
-      createLocalOperator(database),
-    );
-    const tasks = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 50 });
-    for (const id of [keyed.jobId, unkeyed.jobId]) {
-      const fromSnapshot = snapshot.jobs.find((job) => job.id === id);
-      const fromTasks = tasks.jobs.find((job) => job.id === id);
-      expect(fromSnapshot).toBeDefined();
-      expect(fromTasks).toBeDefined();
-      expect(fromSnapshot!.keyed).toBe(fromTasks!.keyed);
-    }
-    expect(snapshot.jobs.find((job) => job.id === keyed.jobId)!.keyed).toBe(true);
-    expect(snapshot.jobs.find((job) => job.id === unkeyed.jobId)!.keyed).toBe(false);
-  });
-
-  it("rejects an unusable idempotency header before touching the database", async () => {
-    const { app } = createTestApplication();
-    const order = { customerEmail: "limits@example.com", description: "Header validation" };
-    const oversized = await postOrder(app, order, {
-      key: "k".repeat(MAX_DEMO_IDEMPOTENCY_KEY_BYTES + 1),
-    });
-    expect(oversized.status).toBe(400);
-    expect(await oversized.json()).toMatchObject({
-      error: expect.stringContaining(IDEMPOTENCY_KEY_HEADER),
-    });
-
-    const scopeWithoutKey = await app.request("/orders", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        [IDEMPOTENCY_SCOPE_HEADER]: "tenant-a",
-      },
-      body: JSON.stringify(order),
-    });
-    expect(scopeWithoutKey.status).toBe(400);
-    expect(
-      (await pool.query(`SELECT count(*)::integer AS count FROM public.workhorse_demo_order`))
-        .rows[0],
-    ).toEqual({ count: 0 });
-  });
-
-  it("applies optional idempotency headers to every demo enqueue route", async () => {
-    const { app } = createTestApplication();
-    for (const [path, body] of [
-      ["/demo/retries", {}],
-      ["/demo/durable", { scenario: "order-fulfillment" }],
-      ["/demo/timers", {}],
-      ["/demo/failures", {}],
-    ] as const) {
-      const request = () =>
-        app.request(path, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            [IDEMPOTENCY_KEY_HEADER]: `route-key${path}`,
-          },
-          body: JSON.stringify(body),
-        });
-      const first = (await (await request()).json()) as { jobId: string };
-      const second = (await (await request()).json()) as { jobId: string };
-      expect(second.jobId).toBe(first.jobId);
-    }
-    expect(
-      (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.job`)).rows[0],
-    ).toEqual({ count: 4 });
   });
 
   it("opens the same task every time the operator repeats the idempotent scenario", async () => {

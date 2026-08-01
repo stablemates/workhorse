@@ -33,6 +33,8 @@ export interface MountWorkhorseDashboardOptions<TTransaction> {
   projectDurability?: DashboardDurabilityProjector;
   refresh?: DashboardRefreshHub;
   auditActor?: string;
+  /** Trusted host-owned ES modules loaded before the dashboard browser entry. */
+  browserModules?: readonly string[];
   /** Must explicitly authorize every dashboard, RPC, asset, and event-stream request. */
   authorize(request: Request): boolean | Response | Promise<boolean | Response>;
 }
@@ -50,6 +52,14 @@ const contentTypes: Readonly<Record<string, string>> = {
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
 };
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
 
 /**
  * Mount the complete Workhorse admin application into an existing Hono app.
@@ -165,15 +175,21 @@ export function mountWorkhorseDashboard<
     const runtime = {
       basePath: path,
       rpcUrl: `${path}/rpc`,
-      eventsUrl: `${path}/events`,
       auditActor: options.auditActor ?? "dashboard",
       demoTools: Boolean(options.operator?.enqueueTest),
     };
     return new Response(
-      template.replace(
-        "/*__WORKHORSE_RUNTIME_CONFIG__*/",
-        `window.workhorseDashboard=${JSON.stringify(runtime).replaceAll("<", "\\u003c")}`,
-      ),
+      template
+        .replace(
+          "/*__WORKHORSE_RUNTIME_CONFIG__*/",
+          `window.workhorseDashboard=${JSON.stringify(runtime).replaceAll("<", "\\u003c")}`,
+        )
+        .replace(
+          "<!--__WORKHORSE_BROWSER_MODULES__-->",
+          (options.browserModules ?? [])
+            .map((source) => `<script type="module" src="${escapeHtmlAttribute(source)}"></script>`)
+            .join("\n"),
+        ),
       { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } },
     );
   };
