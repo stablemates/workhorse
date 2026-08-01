@@ -16,6 +16,7 @@ import {
   DEMO_DURABLE_TIMER_WAIT_MS,
   DEMO_LONG_RUNNING_MS,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
+  DEMO_PERSISTENT_RETRY_POLICIES,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_POLL_MS,
   DEMO_WORKERS,
@@ -172,7 +173,7 @@ describe("Workhorse demo", () => {
     });
     expect(
       await pool.query(
-        `SELECT payload, max_attempts, tags FROM workhorse.job
+        `SELECT payload, max_attempts, retry_policy, tags FROM workhorse.job
           WHERE job_type = 'demo.retry' AND payload->>'label' = 'recover-with-durable-checkpoint'`,
       ),
     ).toMatchObject({
@@ -180,6 +181,7 @@ describe("Workhorse demo", () => {
         {
           payload: { label: "recover-with-durable-checkpoint", failUntilAttempt: 1 },
           max_attempts: 3,
+          retry_policy: { type: "fixed", delayMs: 100 },
           tags: ["demo-test", "durable-checkpoint"],
         },
       ],
@@ -212,10 +214,14 @@ describe("Workhorse demo", () => {
     });
     expect(
       await pool.query(
-        `SELECT payload, max_attempts, tags FROM workhorse.job
+        `SELECT payload, max_attempts, retry_policy, tags FROM workhorse.job
           WHERE job_type = 'demo.durable-pipeline'
             AND payload->>'failureMode' = 'continuous'
-          ORDER BY (payload->>'retryDelayMs')::integer`,
+          ORDER BY CASE payload->>'scenario'
+            WHEN 'order-fulfillment' THEN 1
+            WHEN 'customer-onboarding' THEN 2
+            ELSE 3
+          END`,
       ),
     ).toMatchObject({
       rows: [
@@ -223,10 +229,10 @@ describe("Workhorse demo", () => {
           payload: {
             scenario: "order-fulfillment",
             failureMode: "continuous",
-            retryDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[0],
             source: "persistent-failure-seed",
           },
           max_attempts: 25,
+          retry_policy: DEMO_PERSISTENT_RETRY_POLICIES[0],
           tags: [
             "demo-test",
             "durable-checkpoint",
@@ -239,10 +245,10 @@ describe("Workhorse demo", () => {
           payload: {
             scenario: "customer-onboarding",
             failureMode: "continuous",
-            retryDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[1],
             source: "persistent-failure-seed",
           },
           max_attempts: 25,
+          retry_policy: DEMO_PERSISTENT_RETRY_POLICIES[1],
           tags: [
             "demo-test",
             "durable-checkpoint",
@@ -255,10 +261,10 @@ describe("Workhorse demo", () => {
           payload: {
             scenario: "report-publication",
             failureMode: "continuous",
-            retryDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[2],
             source: "persistent-failure-seed",
           },
           max_attempts: 25,
+          retry_policy: DEMO_PERSISTENT_RETRY_POLICIES[2],
           tags: [
             "demo-test",
             "durable-checkpoint",
@@ -458,6 +464,8 @@ describe("Workhorse demo", () => {
       state: string;
       current_attempt: number;
       max_attempts: number;
+      retry_policy: unknown;
+      selected_delay_ms: number;
       remaining_ms: number;
       checkpoint_count: number;
       error_message: string;
@@ -469,7 +477,16 @@ describe("Workhorse demo", () => {
         rows = (
           await pool.query<PersistentFailureRow>(`
             SELECT job.payload->>'scenario' AS scenario,
-                   (job.payload->>'retryDelayMs')::integer AS retry_delay_ms,
+                   CASE job.payload->>'scenario'
+                     WHEN 'order-fulfillment' THEN ${DEMO_PERSISTENT_RETRY_DELAYS_MS[0]}
+                     WHEN 'customer-onboarding' THEN ${DEMO_PERSISTENT_RETRY_DELAYS_MS[1]}
+                     ELSE ${DEMO_PERSISTENT_RETRY_DELAYS_MS[2]}
+                   END AS retry_delay_ms,
+                   job.retry_policy,
+                   (SELECT (event.details->>'retry_delay_ms')::integer
+                      FROM workhorse.job_event event
+                     WHERE event.job_id = job.id AND event.event_type = 'retry_scheduled'
+                     ORDER BY event.event_id DESC LIMIT 1) AS selected_delay_ms,
                    runtime.state, runtime.current_attempt, job.max_attempts,
                    floor(extract(epoch FROM (runtime.run_at - clock_timestamp())) * 1000)::integer
                      AS remaining_ms,
@@ -479,7 +496,11 @@ describe("Workhorse demo", () => {
               FROM workhorse.job job
               JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
              WHERE job.payload->>'source' = 'persistent-failure-seed'
-             ORDER BY (job.payload->>'retryDelayMs')::integer
+             ORDER BY CASE job.payload->>'scenario'
+               WHEN 'order-fulfillment' THEN 1
+               WHEN 'customer-onboarding' THEN 2
+               ELSE 3
+             END
           `)
         ).rows;
         if (rows.length === 3 && rows.every((row) => row.state === "scheduled")) break;
@@ -490,6 +511,8 @@ describe("Workhorse demo", () => {
         const configuredDelay = DEMO_PERSISTENT_RETRY_DELAYS_MS[index]!;
         expect(row).toMatchObject({
           retry_delay_ms: configuredDelay,
+          retry_policy: DEMO_PERSISTENT_RETRY_POLICIES[index],
+          selected_delay_ms: configuredDelay,
           state: "scheduled",
           current_attempt: 2,
           max_attempts: 25,
@@ -508,15 +531,15 @@ describe("Workhorse demo", () => {
       const retried = await client.dashboard.tasks({ filter: "retried", page: 1, pageSize: 25 });
       expect(retried.jobs).toEqual(
         expect.arrayContaining(
-          DEMO_PERSISTENT_RETRY_DELAYS_MS.map((retryDelayMs) =>
+          DEMO_PERSISTENT_RETRY_DELAYS_MS.map((retryDelayMs, index) =>
             expect.objectContaining({
               state: "scheduled",
               attempt: 2,
               maxAttempts: 25,
+              retryPolicy: DEMO_PERSISTENT_RETRY_POLICIES[index],
               runAt: expect.any(String),
               payload: expect.objectContaining({
                 failureMode: "continuous",
-                retryDelayMs,
                 source: "persistent-failure-seed",
               }),
               tags: expect.arrayContaining(["intentionally-failing"]),
@@ -524,6 +547,8 @@ describe("Workhorse demo", () => {
           ),
         ),
       );
+      const detail = await client.dashboard.jobDetail({ id: retried.jobs[0]!.id });
+      expect(detail.identity.retryPolicy).toEqual(retried.jobs[0]!.retryPolicy);
       let system = await client.dashboard.system({ window: "1h" });
       for (let attempt = 0; attempt < 80 && system.kpis.retry.backoff !== 3; attempt += 1) {
         await sleep(25);

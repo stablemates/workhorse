@@ -1,7 +1,73 @@
 import { sql } from "drizzle-orm";
-import type { Queue } from "@workhorse/core";
+import type { Queue, RetryPolicy } from "@workhorse/core";
 import type { DashboardOperator, DemoDatabase } from "./app.js";
 import { durableDemoPlanForJob, type DurableDemoPlan } from "./durable-demo.js";
+
+export interface RetryPolicyDescription {
+  label: string;
+  summary: string;
+  exact: string;
+}
+
+export function formatRetryDelay(delayMs: number): string {
+  if (delayMs >= 60_000 && delayMs % 60_000 === 0) return `${delayMs / 60_000}m`;
+  if (delayMs >= 1_000 && delayMs % 1_000 === 0) return `${delayMs / 1_000}s`;
+  return `${delayMs}ms`;
+}
+
+export function describeRetryPolicy(policy: RetryPolicy | null): RetryPolicyDescription {
+  if (policy === null)
+    return {
+      label: "Default backoff",
+      summary: "Handler failures use legacy SQL backoff; lease recovery is immediate",
+      exact: "No persisted retry policy",
+    };
+  if (policy.type === "fixed")
+    return {
+      label: "Fixed",
+      summary: `Wait ${formatRetryDelay(policy.delayMs)} before every retry`,
+      exact: `Fixed delay ${policy.delayMs} ms`,
+    };
+  if (policy.type === "exponential")
+    return {
+      label: "Exponential",
+      // A cap at or below the initial delay removes all growth, so say so rather than implying it.
+      summary:
+        policy.initialDelayMs >= policy.maxDelayMs
+          ? `Held at the ${formatRetryDelay(policy.maxDelayMs)} cap from the first retry`
+          : `${formatRetryDelay(policy.initialDelayMs)} × ${policy.multiplier}, capped at ${formatRetryDelay(policy.maxDelayMs)}`,
+      exact: `Initial delay ${policy.initialDelayMs} ms; multiplier ${policy.multiplier}; maximum ${policy.maxDelayMs} ms`,
+    };
+  return {
+    label: "Decorrelated jitter",
+    // A cap equal to the base leaves no range to randomize, which is a deliberate demo choice.
+    summary:
+      policy.baseDelayMs >= policy.maxDelayMs
+        ? `Held at the ${formatRetryDelay(policy.maxDelayMs)} cap, so every retry waits the same`
+        : `${formatRetryDelay(policy.baseDelayMs)} base, capped at ${formatRetryDelay(policy.maxDelayMs)}`,
+    exact: `Base delay ${policy.baseDelayMs} ms; maximum ${policy.maxDelayMs} ms`,
+  };
+}
+
+export function describeRetryEventSource(
+  source: string | null,
+  policy: RetryPolicy | null,
+): RetryPolicyDescription {
+  if (source === "override")
+    return {
+      label: "Manual override",
+      summary: "This selected delay took precedence over the persisted policy",
+      exact: "Manual retry delay override",
+    };
+  if (source === "legacy-handler") return describeRetryPolicy(null);
+  if (source === "lease-recovery-immediate")
+    return {
+      label: "Immediate recovery",
+      summary: "No policy was persisted, so the expired lease requeued immediately",
+      exact: "Immediate lease-recovery compatibility default",
+    };
+  return describeRetryPolicy(policy);
+}
 
 export interface DashboardQueueRow {
   queue: string;
@@ -28,6 +94,8 @@ export interface DashboardJobRow extends Record<string, unknown> {
   state: string;
   attempt: number;
   maxAttempts: number;
+  /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */
+  retryPolicy: RetryPolicy | null;
   payload: unknown;
   tags: string[];
   runAt: string | null;
@@ -306,6 +374,9 @@ export interface DashboardJobDetail {
     type: string;
     state: string;
     createdAt: string;
+    /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */
+    retryPolicy: RetryPolicy | null;
+    maxAttempts: number;
   };
   payload: unknown;
   durability: DurableDemoPlan | null;
@@ -844,6 +915,7 @@ export async function readDashboardTasks(
       state: string;
       attempt: number;
       max_attempts: number;
+      retry_policy: RetryPolicy | null;
       payload: unknown;
       tags: string[];
       run_at: Date | string | null;
@@ -862,7 +934,7 @@ export async function readDashboardTasks(
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               j.max_attempts, j.payload, j.tags,
+               j.max_attempts, j.retry_policy, j.payload, j.tags,
                COALESCE(r.run_at, o.run_at) AS run_at,
                r.worker_id AS current_worker_id,
                COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id)
@@ -918,6 +990,7 @@ export async function readDashboardTasks(
         state: row.state,
         attempt: row.attempt,
         maxAttempts: row.max_attempts,
+        retryPolicy: row.retry_policy,
         payload: row.payload,
         tags: row.tags,
         runAt: toIsoOrNull(row.run_at),
@@ -1733,6 +1806,7 @@ export async function readDashboardSnapshot(
         state: string;
         attempt: number;
         max_attempts: number;
+        retry_policy: RetryPolicy | null;
         payload: unknown;
         run_at: Date | string | null;
         worker_id: string | null;
@@ -1744,7 +1818,7 @@ export async function readDashboardSnapshot(
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               j.max_attempts, j.payload,
+               j.max_attempts, j.retry_policy, j.payload,
                COALESCE(r.run_at, o.run_at) AS run_at,
                r.worker_id, o.finished_at,
                COALESCE(o.error, r.error) AS error,
@@ -1895,6 +1969,7 @@ export async function readDashboardSnapshot(
       state: row.state,
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
+      retryPolicy: row.retry_policy,
       payload: row.payload,
       tags: [],
       runAt: toIsoOrNull(row.run_at),
@@ -1979,6 +2054,8 @@ export async function readDashboardJobDetail(
       queue: string;
       type: string;
       payload: unknown;
+      max_attempts: number;
+      retry_policy: RetryPolicy | null;
       created_at: Date | string;
       runtime_state: string | null;
       runtime_attempt: number | null;
@@ -1998,7 +2075,8 @@ export async function readDashboardJobDetail(
       result: unknown;
       outcome_error: unknown;
     }>(sql`
-      SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.payload, j.created_at,
+      SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.payload, j.max_attempts,
+             j.retry_policy, j.created_at,
              r.state AS runtime_state, r.current_attempt AS runtime_attempt, r.run_at, r.ready_at,
              r.worker_id, r.fence_token::text, r.acquired_at, r.heartbeat_at, r.expires_at,
              r.wait_name, r.attempt_started_at,
@@ -2082,6 +2160,8 @@ export async function readDashboardJobDetail(
       type: job.type,
       state,
       createdAt: toIso(job.created_at),
+      retryPolicy: job.retry_policy,
+      maxAttempts: job.max_attempts,
     },
     payload: job.payload,
     durability: durableDemoPlanForJob(job.type, job.payload),

@@ -59,6 +59,12 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import type { RetryPolicy } from "@workhorse/core";
+import {
+  describeRetryEventSource,
+  describeRetryPolicy,
+  formatRetryDelay,
+} from "../../src/dashboard";
 import type {
   DashboardCronPage,
   DashboardJobDetail,
@@ -647,6 +653,7 @@ const boundaryEventTypes = new Set([
   "wait_replayed",
   "claimed",
   "checkpoint_saved",
+  "retry_scheduled",
 ]);
 
 const boundaryEventLabels: Record<string, string> = {
@@ -655,6 +662,7 @@ const boundaryEventLabels: Record<string, string> = {
   wait_replayed: "Wait replayed",
   claimed: "Claimed",
   checkpoint_saved: "Checkpoint saved",
+  retry_scheduled: "Retry scheduled",
 };
 
 const boundaryEventColors: Record<string, string> = {
@@ -663,7 +671,63 @@ const boundaryEventColors: Record<string, string> = {
   wait_replayed: "grape",
   claimed: "blue",
   checkpoint_saved: "teal",
+  retry_scheduled: "orange",
 };
+
+/**
+ * Retry evidence recorded with one `retry_scheduled` event. The stored policy, chosen delay, and
+ * delay source travel together, so an override reads differently from the job's persisted policy.
+ */
+function retryEventDescription(event: JobEvent): { text: string; title: string } | null {
+  if (event.type !== "retry_scheduled") return null;
+  const details = (event.details ?? {}) as Record<string, unknown>;
+  const rawPolicy = details.retry_policy;
+  const policy = (rawPolicy ?? null) as RetryPolicy | null;
+  const source = typeof details.retry_delay_source === "string" ? details.retry_delay_source : null;
+  const delayMs = typeof details.retry_delay_ms === "number" ? details.retry_delay_ms : null;
+  const described = describeRetryEventSource(source, policy);
+  const text =
+    delayMs === null ? described.label : `${described.label} · waits ${formatRetryDelay(delayMs)}`;
+  const title =
+    delayMs === null
+      ? `${described.exact} ${described.summary}.`
+      : `${described.exact} Chosen delay ${delayMs} ms. ${described.summary}.`;
+  return { text, title };
+}
+
+/**
+ * Persisted retry scheduling for one task. The policy is stated in words, never as a raw stored
+ * kind, and an exhausted attempt budget is called out because a stored policy stops scheduling
+ * once the final attempt has been used. Colour is decoration only; the label carries the meaning.
+ */
+function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
+  const policy = describeRetryPolicy(job.identity.retryPolicy);
+  const attempt = job.current.runtime?.attempt ?? job.current.outcome?.attempt ?? null;
+  const exhausted = attempt !== null && attempt >= job.identity.maxAttempts;
+  const budget =
+    attempt === null
+      ? `${job.identity.maxAttempts} attempt budget`
+      : `attempt ${attempt} of ${job.identity.maxAttempts}`;
+  const title = `${policy.exact}. ${
+    exhausted
+      ? "The attempt budget is exhausted, so no further retry will be scheduled."
+      : "Retries remain within the attempt budget."
+  }`;
+  return (
+    <Group gap="xs" mt="sm" align="baseline">
+      <Text c="dimmed" size="xs" fw={600}>
+        Retry policy
+      </Text>
+      <Badge size="xs" variant="light" color="orange" title={title} tt="none">
+        {policy.label}
+      </Badge>
+      <Text c="dimmed" size="xs" title={title}>
+        {policy.summary} · {budget}
+        {exhausted ? " · budget exhausted, no further retry is scheduled" : ""}
+      </Text>
+    </Group>
+  );
+}
 
 /**
  * Compact ordered view of the recorded boundary events for this task. Repeated
@@ -697,11 +761,13 @@ function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
           const fence = eventDetail(event, "fence_token");
           const worker = eventDetail(event, "worker_id");
           const reason = eventDetail(event, "reason");
+          const retry = retryEventDescription(event);
           const parts = [
             name,
             worker,
             fence === null ? null : `fence ${fence}`,
             reason === null ? null : `reason ${reason}`,
+            retry?.text ?? null,
           ].filter((part): part is string => part !== null);
           return (
             <Group key={event.id} gap="xs" wrap="nowrap" align="flex-start">
@@ -714,7 +780,13 @@ function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
               >
                 {boundaryEventLabels[event.type] ?? event.type}
               </Badge>
-              <Text c="dimmed" size="xs" style={{ flex: 1, minWidth: 0 }} lineClamp={1}>
+              <Text
+                c="dimmed"
+                size="xs"
+                style={{ flex: 1, minWidth: 0 }}
+                lineClamp={1}
+                title={retry?.title}
+              >
                 {event.attempt === null ? "no attempt" : `attempt ${event.attempt}`}
                 {claimIndex === null ? "" : ` · claim ${claimIndex}`}
                 {parts.length > 0 ? ` · ${parts.join(" · ")}` : ""}
@@ -849,7 +921,9 @@ function DurableWaitCard({
 function DurableWaits({ job }: { job: DashboardJobDetail }) {
   const runtimeWaitName = job.current.runtime?.waitName ?? null;
   const nowMs = useNow(runtimeWaitName !== null);
-  if (job.waits.length === 0) return null;
+  // A task can record retry and claim boundaries without ever suspending on a durable wait, so the
+  // timeline stands alone rather than disappearing with the wait panel.
+  if (job.waits.length === 0) return <BoundaryTimeline job={job} />;
   const planNames = new Set((job.durability?.steps ?? []).map((step) => step.name));
   const unmatchedWaits = job.waits.filter((wait) => !planNames.has(wait.name));
   const matchedWaits = job.waits.filter((wait) => planNames.has(wait.name));
@@ -949,6 +1023,7 @@ function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
   } else if (job.state === "scheduled" && job.runAt) {
     detail = `runs ${formatRelative(job.runAt)}`;
     exactTime = formatExact(job.runAt);
+    if (job.attempt > 1) detail += ` · ${describeRetryPolicy(job.retryPolicy).label}`;
   } else if (job.state === "active" && job.workerId) detail = `on ${job.workerId}`;
   else if (job.state === "failed" && job.errorMessage) detail = job.errorMessage;
   else if (job.state === "succeeded" && job.finishedAt) {
@@ -2245,7 +2320,7 @@ function SystemOperations({
               title="Retry pressure"
               value={data.kpis.retry.backoff}
               detail={`${data.kpis.retry.dueSoon} due in the next 5m`}
-              help="A current snapshot of jobs waiting in retry backoff. The secondary count shows how many scheduled retries become due within the next five minutes."
+              help="A current snapshot of jobs waiting for PostgreSQL-selected persisted-policy or compatibility backoff. The secondary count shows how many scheduled retries become due within the next five minutes."
               scope="now"
               color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
               icon={<ArrowCounterClockwise size={18} />}
@@ -3580,6 +3655,7 @@ export function Dashboard() {
                 <StatusBadge state={selectedJob.identity.state} />
               </Group>
               <Code fz="xs">{selectedJob.identity.id}</Code>
+              <RetryPolicyLine job={selectedJob} />
             </Box>
             <Box>
               <Text fw={600} size="sm" mb="xs">
