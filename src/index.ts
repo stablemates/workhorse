@@ -4,6 +4,7 @@ export { installSchema } from "./schema.js";
 export {
   CheckpointConflictError,
   CheckpointLeaseLostError,
+  EnqueueIdempotencyConflictError,
   Queue,
   WaitConflictError,
   WaitLeaseLostError,
@@ -28,6 +29,9 @@ export type {
 } from "./worker.js";
 export type {
   ClaimedJob,
+  EnqueueIdempotency,
+  EnqueueIdempotencyConflictDetails,
+  EnqueueIdempotencyConflictField,
   EnqueueOptions,
   EnqueueRequest,
   JobCheckpoint,
@@ -43,7 +47,12 @@ export type {
   RetentionPolicyDefinition,
 } from "./types.js";
 export {
+  DEFAULT_IDEMPOTENCY_SCOPE,
+  DEFAULT_IDEMPOTENCY_TTL_MS,
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
+  MAX_IDEMPOTENCY_KEY_BYTES,
+  MAX_IDEMPOTENCY_SCOPE_BYTES,
+  MAX_IDEMPOTENCY_TTL_MS,
   MAX_WAIT_DURATION_MS,
 } from "./types.js";

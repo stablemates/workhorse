@@ -13,10 +13,12 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
 - [`docs/demo-findings.md`](docs/demo-findings.md): API, packaging, documentation, and developer-experience gaps found by the end-to-end demo.
 - [`demo/README.md`](demo/README.md): interactive Workhorse demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
+- [`docs/decisions/0009-enqueue-idempotency-keys.md`](docs/decisions/0009-enqueue-idempotency-keys.md): scoped enqueue-key ownership, request equivalence, safe diagnostics, expiry, and cleanup.
 
 ## Included scope
 
 - enqueue inside an existing `pg` transaction;
+- optional PostgreSQL-owned scoped enqueue idempotency with atomic exact replay and conflict rollback;
 - one live-only runtime relation with selective ready, scheduled, and expired-lease indexes;
 - `FOR UPDATE SKIP LOCKED` claims with monotonically increasing fence tokens;
 - fenced heartbeat, completion, retry, and expired-lease recovery;
@@ -39,9 +41,48 @@ The current implementation remains an evidence-first validation release rather t
 
 Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
 
+### Enqueue idempotency keys
+
+Schema version 10 accepts `options.idempotency` on `Queue.enqueue()` and each `Queue.enqueueMany()`
+request:
+
+```ts
+await queue.enqueue(
+  "invoice.capture",
+  { invoiceId: "inv-1" },
+  {
+    queue: "billing",
+    idempotency: {
+      key: "capture:inv-1",
+      scope: "tenant-42", // defaults to "default"
+      ttlMs: 86_400_000, // defaults to 24 hours
+    },
+  },
+);
+```
+
+Keys are unique within their scope while retained. Keys are limited to 512 UTF-8 bytes, scopes to
+256 UTF-8 bytes, and TTLs to integer values from 1 millisecond through 365 days. An exact equivalent
+replay returns the original job ID without creating another job, event, FIFO placement, or notification.
+Material mismatch raises a structured conflict and rolls back the entire enqueue statement or batch.
+
+Equivalence covers queue, type, payload, sorted tags, `maxAttempts`, normalized `retryPolicy`, TTL, and
+an explicitly supplied `runAt`. For keyed immediate ingress, omitted `runAt` remains omitted in the
+fingerprint rather than being replaced by the current time, so a later retry can replay. Unkeyed enqueue
+retains its prior behavior and always creates a new job.
+
+Raw keys are never persisted. `workhorse.enqueue_idempotency` stores the scope plus a full SHA-256 key
+hash; events, UI projections, and errors use a bounded preview plus a 12-hex key digest. The initial
+`enqueued` event records that safe metadata once, while exact replay emits no event. Expired bindings can
+be reused; housekeeping removes them
+before terminal identity pruning, and purging queued or scheduled jobs releases their bindings.
+
+This deduplicates durable enqueue acceptance only. Handler delivery and external effects remain at least
+once and still require provider idempotency, an outbox/inbox, or compensation.
+
 ### Persisted retry policies
 
-Schema version 9 accepts an optional `retryPolicy` on enqueue requests and recurring schedule job
+Schema version 10 accepts an optional `retryPolicy` on enqueue requests and recurring schedule job
 definitions:
 
 ```ts
@@ -227,7 +268,7 @@ provides a Node server handle whose idempotent shutdown stops new claims, drains
 and requests, then closes explicitly provider-owned resources. See the package READMEs for complete
 configuration and ownership behavior.
 
-Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL, split across two cadences. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs and recovers expired leases, and also drives in-process schedule evaluation. A slower housekeeping pass (`workhorse.housekeep_v1`, once per minute by default) replenishes future history partitions; independently retires expired event and attempt partitions plus bounded fallback rows; prunes schedule occurrences; and removes only terminal jobs whose retained history no longer needs their identity. Slow cleanup therefore never delays dispatch. Transaction-scoped advisory locks inside `tick_v1`, `housekeep_v1`, and `workhorse.fire_schedule_v1` make concurrent passes from other workers cheap no-ops, so running many workers neither duplicates schedules nor multiplies maintenance load, and any surviving worker keeps schedules firing. Both entry points return per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and the `onMaintenance` callback.
+Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL, split across two cadences. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs and recovers expired leases, and also drives in-process schedule evaluation. A slower housekeeping pass (`workhorse.housekeep_v1`, once per minute by default) replenishes future history partitions; independently retires expired event and attempt partitions plus bounded fallback rows; prunes schedule occurrences; removes expired enqueue-idempotency bindings; and only then removes terminal jobs whose retained history no longer needs their identity. Slow cleanup therefore never delays dispatch. Transaction-scoped advisory locks inside `tick_v1`, `housekeep_v1`, and `workhorse.fire_schedule_v1` make concurrent passes from other workers cheap no-ops, so running many workers neither duplicates schedules nor multiplies maintenance load, and any surviving worker keeps schedules firing. Both entry points return per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and the `onMaintenance` callback.
 
 Handler failures use SQL-owned, Sidekiq-inspired retry scheduling. For zero-based retry count `count` (the first failed attempt is `0`), the delay is `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds. The default 25-attempt budget spreads retries across roughly 20 days. Keeping the calculation in `fail_v1` gives every client the same durable protocol; `WorkerOptions.retryDelayMs` remains an explicit override, including `0` for an immediate retry or a callback `(attempt, job) => milliseconds | undefined`; returning `undefined` defers to PostgreSQL's persisted policy or compatibility default.
 

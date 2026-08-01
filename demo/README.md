@@ -12,6 +12,12 @@ Workhorse's durable execution model is what the demo is designed to show.
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
+The demo installs schema version 10, including the core `options.idempotency: { key, scope?, ttlMs? }`
+enqueue contract. It does not add a dedicated idempotency-key seed or dashboard form. Application code
+using `Queue` or the Drizzle transaction adapter can opt in to scoped deduplication, while the demo keeps
+raw keys out of persistence and its UI, and preserves the distinction between enqueue replay and at-least-once handler
+effects.
+
 Prerequisites are Node.js 22+, pnpm 10+, workspace dependencies installed with `pnpm install`, and
 PostgreSQL 15+ with the local `workhorse` role described in the root README. No PostgreSQL extensions are
 required; recurring work runs through the workers themselves.

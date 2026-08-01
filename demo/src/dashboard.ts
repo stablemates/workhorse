@@ -69,6 +69,162 @@ export function describeRetryEventSource(
   return describeRetryPolicy(policy);
 }
 
+/**
+ * Safe deduplication evidence recorded by PostgreSQL on the single initial `enqueued` event.
+ *
+ * The raw idempotency key is never stored on the event and therefore never reaches the dashboard.
+ * Only a digest, the key length, the retained scope, and the retention window are available, which
+ * is enough to explain why a repeated submission reused this identity without publishing a caller
+ * secret to every dashboard reader. The event's own `key_preview` is deliberately not read: for a
+ * short key that preview is the entire key, so surfacing it would leak the secret it truncates.
+ */
+export interface IdempotencyEvidence {
+  scope: string;
+  keyDigest: string;
+  keyLength: number;
+  ttlMs: number;
+  expiresAt: string | null;
+  requestDigest: string;
+}
+
+/**
+ * Detail keys this dashboard reads from `enqueued` `details.idempotency`. A raw key is deliberately
+ * absent, and so is `key_preview`, which is only a prefix and therefore reproduces short keys whole.
+ */
+const idempotencyDetailKeys = [
+  "scope",
+  "key_digest",
+  "key_length",
+  "ttl_ms",
+  "expires_at",
+  "request_digest",
+] as const;
+
+function stringDetail(details: Record<string, unknown>, key: string): string | null {
+  const value = details[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberDetail(details: Record<string, unknown>, key: string): number | null {
+  const value = details[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Read the safe deduplication evidence from one recorded job event.
+ *
+ * Returns null for every event that is not the initial `enqueued` event and for every `enqueued`
+ * event that carries no idempotency metadata, so an unkeyed job produces no idempotency surface at
+ * all. A structurally incomplete record is also treated as absent rather than partially rendered,
+ * because a half-populated claim about deduplication would be worse than saying nothing.
+ */
+export function readIdempotencyEvidence(event: {
+  type: string;
+  details: unknown;
+}): IdempotencyEvidence | null {
+  if (event.type !== "enqueued") return null;
+  const details = event.details;
+  if (!details || typeof details !== "object") return null;
+  const raw = (details as Record<string, unknown>).idempotency;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const scope = stringDetail(record, "scope");
+  const keyDigest = stringDetail(record, "key_digest");
+  const requestDigest = stringDetail(record, "request_digest");
+  const keyLength = numberDetail(record, "key_length");
+  const ttlMs = numberDetail(record, "ttl_ms");
+  if (
+    scope === null ||
+    keyDigest === null ||
+    requestDigest === null ||
+    keyLength === null ||
+    ttlMs === null
+  ) {
+    return null;
+  }
+  return {
+    scope,
+    keyDigest,
+    keyLength,
+    ttlMs,
+    expiresAt: stringDetail(record, "expires_at"),
+    requestDigest,
+  };
+}
+
+/** True when any of a task's recorded events carries safe deduplication evidence. */
+export function hasIdempotencyEvidence(
+  events: ReadonlyArray<{ type: string; details: unknown }>,
+): boolean {
+  return events.some((event) => readIdempotencyEvidence(event) !== null);
+}
+
+/** Whole days, whole hours, then minutes. A retention window is never shown as false precision. */
+export function formatIdempotencyWindow(ttlMs: number): string {
+  const day = 86_400_000;
+  const hour = 3_600_000;
+  const minute = 60_000;
+  if (ttlMs >= day && ttlMs % day === 0) {
+    const days = ttlMs / day;
+    return days === 1 ? "24 hours" : `${days} days`;
+  }
+  if (ttlMs >= hour && ttlMs % hour === 0) {
+    const hours = ttlMs / hour;
+    return hours === 1 ? "1 hour" : `${hours} hours`;
+  }
+  if (ttlMs >= minute && ttlMs % minute === 0) {
+    const minutes = ttlMs / minute;
+    return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  }
+  return `${ttlMs} ms`;
+}
+
+/** Short digests keep the drawer readable; the full value stays available in the exact wording. */
+function shortDigest(digest: string): string {
+  return digest.length > 12 ? digest.slice(0, 12) : digest;
+}
+
+export interface IdempotencyDescription {
+  label: string;
+  summary: string;
+  exact: string;
+}
+
+/**
+ * State the deduplication contract in words rather than as stored field names.
+ *
+ * Wording is deliberately precise about what PostgreSQL actually guarantees: an identical repeat
+ * submission within the retained window returns this same task identity instead of creating a new
+ * one, and a changed request under the same key is refused rather than silently accepted.
+ */
+export function describeIdempotency(evidence: IdempotencyEvidence): IdempotencyDescription {
+  const window = formatIdempotencyWindow(evidence.ttlMs);
+  return {
+    label: "Keyed",
+    summary: `Repeating this exact request in scope ${evidence.scope} returns this same task for ${window}`,
+    exact:
+      `Scope ${evidence.scope}; key digest ${evidence.keyDigest}; ` +
+      `key length ${evidence.keyLength} bytes; ` +
+      `request digest ${evidence.requestDigest}; retained for ${evidence.ttlMs} ms` +
+      (evidence.expiresAt === null ? "" : `; retained until ${evidence.expiresAt}`) +
+      ". The raw key is never stored on the event and is never shown here.",
+  };
+}
+
+/** Compact one-line evidence used beside the drawer heading. */
+export function idempotencyEvidenceLine(evidence: IdempotencyEvidence): string {
+  const parts = [
+    `scope ${evidence.scope}`,
+    `key length ${evidence.keyLength}`,
+    `digest ${shortDigest(evidence.keyDigest)}`,
+    `request ${shortDigest(evidence.requestDigest)}`,
+  ];
+  return parts.join(" · ");
+}
+
+/** Detail keys the dashboard is allowed to read. Exported so tests can pin the safe surface. */
+export const idempotencyEventDetailKeys: readonly string[] = idempotencyDetailKeys;
+
 export interface DashboardQueueRow {
   queue: string;
   state: string;
@@ -98,6 +254,11 @@ export interface DashboardJobRow extends Record<string, unknown> {
   retryPolicy: RetryPolicy | null;
   payload: unknown;
   tags: string[];
+  /**
+   * True when the accepted enqueue recorded deduplication evidence. Derived only from the safe
+   * metadata on the initial `enqueued` event, so an unkeyed task stays exactly as it was.
+   */
+  keyed: boolean;
   runAt: string | null;
   workerId: string | null;
   lastWorkerId: string | null;
@@ -929,6 +1090,7 @@ export async function readDashboardTasks(
       wait_name: string | null;
       wake_at: Date | string | null;
       wait_mode: "relative" | "absolute" | null;
+      enqueued_details: unknown;
     }>(sql`
       WITH tasks AS (
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
@@ -946,6 +1108,7 @@ export async function readDashboardTasks(
                r.wait_name,
                durable_wait.wake_at,
                durable_wait.mode AS wait_mode,
+               enqueued_event.details AS enqueued_details,
                ARRAY(SELECT checkpoint.checkpoint_name
                        FROM workhorse.job_checkpoint checkpoint
                       WHERE checkpoint.job_id = j.id
@@ -955,6 +1118,11 @@ export async function readDashboardTasks(
           LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
           LEFT JOIN workhorse.job_wait durable_wait
             ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
+          LEFT JOIN LATERAL (
+            SELECT event.details FROM workhorse.job_event event
+             WHERE event.job_id = j.id AND event.event_type = 'enqueued'
+             ORDER BY event.occurred_at, event.event_id LIMIT 1
+          ) enqueued_event ON true
           LEFT JOIN LATERAL (
             SELECT ah.worker_id FROM workhorse.attempt_history ah
              WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
@@ -993,6 +1161,8 @@ export async function readDashboardTasks(
         retryPolicy: row.retry_policy,
         payload: row.payload,
         tags: row.tags,
+        keyed:
+          readIdempotencyEvidence({ type: "enqueued", details: row.enqueued_details }) !== null,
         runAt: toIsoOrNull(row.run_at),
         workerId: row.current_worker_id,
         lastWorkerId: row.worker_id,
@@ -1814,6 +1984,7 @@ export async function readDashboardSnapshot(
         error: unknown;
         created_at: Date | string;
         updated_at: Date | string;
+        enqueued_details: unknown;
       }>(sql`
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                COALESCE(r.state, o.state) AS state,
@@ -1823,10 +1994,16 @@ export async function readDashboardSnapshot(
                r.worker_id, o.finished_at,
                COALESCE(o.error, r.error) AS error,
                j.created_at,
-               COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at
+               COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+               enqueued_event.details AS enqueued_details
           FROM workhorse.job j
           LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
           LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+          LEFT JOIN LATERAL (
+            SELECT event.details FROM workhorse.job_event event
+             WHERE event.job_id = j.id AND event.event_type = 'enqueued'
+             ORDER BY event.occurred_at, event.event_id LIMIT 1
+          ) enqueued_event ON true
          ORDER BY COALESCE(r.updated_at, o.updated_at, j.created_at) DESC, j.id DESC
          LIMIT 50
       `),
@@ -1972,6 +2149,9 @@ export async function readDashboardSnapshot(
       retryPolicy: row.retry_policy,
       payload: row.payload,
       tags: [],
+      // Derived from the same initial `enqueued` event the task list reads, so a keyed task is
+      // never reported as unkeyed just because it was observed through the snapshot instead.
+      keyed: readIdempotencyEvidence({ type: "enqueued", details: row.enqueued_details }) !== null,
       runAt: toIsoOrNull(row.run_at),
       workerId: row.worker_id,
       lastWorkerId: row.worker_id,
