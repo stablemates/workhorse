@@ -26,6 +26,7 @@ const filters = new Set<DashboardTaskFilter>([
   "running",
   "completed",
   "discarded",
+  "canceled",
 ]);
 
 function optionalValue(parameters: URLSearchParams, key: string): string | null {

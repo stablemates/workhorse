@@ -49,4 +49,10 @@ describe("task location state", () => {
     expect(state.group).toBe("status");
     expect(taskLocationHref(state)).toBe("/tasks?group=status");
   });
+
+  it("round-trips the canceled task filter used by the sidebar", () => {
+    const state = parseTaskLocation("?filter=canceled");
+    expect(state.filter).toBe("canceled");
+    expect(taskLocationHref(state)).toBe("/tasks?filter=canceled");
+  });
 });
