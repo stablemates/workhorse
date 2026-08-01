@@ -9,6 +9,7 @@ import type {
   Json,
   Queryable,
   QueueHealth,
+  RetryPolicy,
   RetentionPolicy,
   RetentionPolicyDefinition,
 } from "./types.js";
@@ -18,6 +19,7 @@ export interface ScheduleJobDefinition {
   payload: Json;
   queue?: string;
   maxAttempts?: number;
+  retryPolicy?: RetryPolicy;
 }
 
 export interface ScheduleDefinition {
@@ -59,6 +61,7 @@ type ClaimRow = {
   payload: Json;
   attempt: number;
   max_attempts: number;
+  retry_policy: RetryPolicy | null;
   fence_token: string;
   lease_expires_at: Date;
 };
@@ -282,6 +285,7 @@ export class Queue {
       payload,
       runAt: (options.runAt ?? new Date()).toISOString(),
       maxAttempts: options.maxAttempts ?? 25,
+      retryPolicy: options.retryPolicy ?? null,
       tags: tags ?? options.tags ?? [],
     }));
     const result = await transaction.query<{ job_id: string }>(
@@ -385,6 +389,7 @@ export class Queue {
       type: definition.job.type,
       payload: definition.job.payload,
       maxAttempts: definition.job.maxAttempts ?? 25,
+      retryPolicy: definition.job.retryPolicy ?? null,
     }));
     await this.database.query("SELECT workhorse.sync_schedule_definitions_v1($1, $2::jsonb, $3)", [
       namespace,
@@ -454,6 +459,7 @@ export class Queue {
       payload: row.payload as TPayload,
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
+      retryPolicy: row.retry_policy,
       fenceToken: BigInt(row.fence_token),
       leaseExpiresAt: row.lease_expires_at,
     };
@@ -648,12 +654,12 @@ export class Queue {
     return result.rows[0]!.state;
   }
 
-  async recoverExpired(limit = 100, retryDelayMs = 0): Promise<number> {
+  async recoverExpired(limit = 100, retryDelayMs?: number): Promise<number> {
     // Recovery may be called by many workers. SKIP LOCKED inside the function partitions work
     // between callers while fence checks prevent an old lease from recovering a newer attempt.
     const result = await this.database.query<{ count: number }>(
       "SELECT workhorse.recover_expired_v1($1, $2) AS count",
-      [limit, retryDelayMs],
+      [limit, retryDelayMs ?? null],
     );
     return result.rows[0]!.count;
   }
@@ -669,6 +675,7 @@ export class Queue {
       state: JobSnapshot["state"];
       current_attempt: number;
       max_attempts: number;
+      retry_policy: RetryPolicy | null;
       version: string;
       run_at: Date;
       result: TResult | null;
@@ -676,7 +683,8 @@ export class Queue {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT j.id, j.queue_name, j.job_type, j.payload, j.tags, COALESCE(r.state, o.state) AS state,
+      `SELECT j.id, j.queue_name, j.job_type, j.payload, j.tags, j.retry_policy,
+              COALESCE(r.state, o.state) AS state,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
               COALESCE(r.run_at, o.run_at) AS run_at, o.result,
@@ -699,6 +707,7 @@ export class Queue {
       state: row.state,
       currentAttempt: row.current_attempt,
       maxAttempts: row.max_attempts,
+      retryPolicy: row.retry_policy,
       fenceToken: BigInt(row.version),
       runAt: row.run_at,
       result: row.result,

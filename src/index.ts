@@ -37,6 +37,7 @@ export type {
   Json,
   Queryable,
   QueueHealth,
+  RetryPolicy,
   RetentionCategoryValues,
   RetentionPolicy,
   RetentionPolicyDefinition,

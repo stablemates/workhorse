@@ -10,11 +10,23 @@ export interface Queryable {
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+/** PostgreSQL-validated retry scheduling persisted with the stable job identity. */
+export type RetryPolicy =
+  | { type: "fixed"; delayMs: number }
+  | {
+      type: "exponential";
+      initialDelayMs: number;
+      multiplier: number;
+      maxDelayMs: number;
+    }
+  | { type: "decorrelated-jitter"; baseDelayMs: number; maxDelayMs: number };
+
 /** Options persisted as part of the accepted job definition or initial dispatch projection. */
 export interface EnqueueOptions {
   queue?: string;
   runAt?: Date;
   maxAttempts?: number;
+  retryPolicy?: RetryPolicy;
   tags?: string[];
 }
 
@@ -44,6 +56,7 @@ export interface ClaimedJob<TPayload = Json> {
   /** One-based attempt number. Recovery and retry always create the next number. */
   attempt: number;
   maxAttempts: number;
+  retryPolicy: RetryPolicy | null;
   /** Ownership generation that must accompany heartbeat, completion, and failure. */
   fenceToken: bigint;
   /** Client-visible expiry snapshot. PostgreSQL remains authoritative. */
@@ -93,6 +106,7 @@ export interface JobSnapshot<TResult = Json> {
   state: JobState;
   currentAttempt: number;
   maxAttempts: number;
+  retryPolicy: RetryPolicy | null;
   /** Current ownership generation, or zero before the first claim. */
   fenceToken: bigint;
   runAt: Date;
