@@ -120,6 +120,19 @@ Checkpoint values are limited to 1 MiB of PostgreSQL's canonical JSONB text repr
 
 ## Worker-owned scheduling contract
 
+Before scheduling concerns, the worker execution contract is:
+
+- `WorkerOptions.concurrency` is an integer from 1 through 100 and defaults to 1.
+- `worker.concurrency` is readonly; `worker.runtimeState()` returns
+  `{ concurrency, activeSlots, paused, draining }` for this in-process worker.
+- A fill pass claims serially into free slots, starts one independent handler task per accepted job, never
+  exceeds the configured slot count, and stops at the first null claim.
+- Every active job has its own heartbeat, abort signal, and fenced completion/failure lifecycle.
+- `pause()` blocks new claims but does not cancel active handlers; `resume()` reopens claims immediately.
+- `stop()` blocks new claims and drains active handlers before `run()` resolves.
+- Concurrency is local execution capacity, not a durable worker registry, cross-process rate limit, queue
+  weighting policy, or exactly-once guarantee.
+
 `Queue.syncSchedules(namespace, definitions, { prune })` runs against the target database only, normally during deployment.
 
 - Namespaces and names are stable deployment identities using letters, digits, dot, underscore, and hyphen.

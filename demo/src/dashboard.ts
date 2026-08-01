@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { Queue, RetryPolicy } from "@workhorse/core";
-import type { DashboardOperator, DemoDatabase } from "./app.js";
+import type { DashboardOperator, DemoWorkerRuntimeState, DemoDatabase } from "./app.js";
 import { durableDemoPlanForJob, type DurableDemoPlan } from "./durable-demo.js";
 
 export interface RetryPolicyDescription {
@@ -310,7 +310,17 @@ export interface MaintenanceLoopCadences {
 
 export interface DashboardWorkerRow {
   id: string;
+  /**
+   * Jobs PostgreSQL currently reports as active for this worker. It is observed durable state and
+   * can briefly differ from `activeSlots`, which is the in-process handler count.
+   */
   activeJobs: number;
+  /** Declared execution slots configured for this worker, or null when it is not local. */
+  concurrency: number | null;
+  /** Handlers executing inside this process right now, or null when the worker is not local. */
+  activeSlots: number | null;
+  /** Stopping while in-flight handlers finish. New claims have already ceased. */
+  draining: boolean;
   completedAttempts: number;
   failedAttempts: number;
   averageExecutionMs: number | null;
@@ -1877,7 +1887,7 @@ export async function readDashboardSystem(
 export async function readDashboardWorkers(
   database: DemoDatabase,
   configuredWorkers: readonly string[],
-  workerStates: ReadonlyMap<string, { paused: boolean }> = new Map(),
+  workerStates: ReadonlyMap<string, DemoWorkerRuntimeState> = new Map(),
   canManageWorkers = false,
 ): Promise<DashboardWorkersPage> {
   const now = new Date();
@@ -1928,6 +1938,9 @@ export async function readDashboardWorkers(
       return {
         id: row.id,
         activeJobs: row.active_jobs,
+        concurrency: state?.concurrency ?? null,
+        activeSlots: state?.activeSlots ?? null,
+        draining: state?.draining ?? false,
         completedAttempts: row.completed_attempts,
         failedAttempts: row.failed_attempts,
         averageExecutionMs: row.average_execution_ms,
@@ -2187,6 +2200,11 @@ export async function readDashboardSnapshot(
     workers: workerRows.rows.map((row) => ({
       id: row.id,
       activeJobs: row.active_jobs,
+      // The snapshot is a pure SQL projection with no access to process-local worker objects, so
+      // declared capacity and in-process slot use are reported as unknown rather than guessed.
+      concurrency: null,
+      activeSlots: null,
+      draining: false,
       completedAttempts: row.completed_attempts,
       failedAttempts: 0,
       averageExecutionMs: null,

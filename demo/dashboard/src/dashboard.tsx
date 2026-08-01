@@ -2870,7 +2870,7 @@ function WorkersPage({
     <Stack gap="xl">
       <PageHeader
         title="Workers"
-        description="Live claim state and one-hour execution throughput for this demo process."
+        description="Declared concurrency, live claim state, and one-hour execution throughput for this demo process."
       />
       {actionError ? (
         <Text c="red" size="sm">
@@ -2882,12 +2882,13 @@ function WorkersPage({
       ) : (
         <Paper withBorder>
           <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={980}>
+            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1080}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Worker</Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th>Claims</Table.Th>
+                  <Table.Th ta="right">Slots in use</Table.Th>
                   <Table.Th ta="right">Current jobs</Table.Th>
                   <Table.Th ta="right">Attempts · 1h</Table.Th>
                   <Table.Th ta="right">Failures · 1h</Table.Th>
@@ -2914,6 +2915,11 @@ function WorkersPage({
                             Paused
                           </Badge>
                         ) : null}
+                        {worker.draining ? (
+                          <Badge color="orange" variant="light">
+                            Draining
+                          </Badge>
+                        ) : null}
                       </Group>
                     </Table.Td>
                     <Table.Td>
@@ -2933,6 +2939,29 @@ function WorkersPage({
                           />
                         </Box>
                       </Tooltip>
+                    </Table.Td>
+                    <Table.Td
+                      ta="right"
+                      // The compact "2 / 3" reading is ambiguous out of column context, so the cell
+                      // carries the spelled-out meaning for assistive technology.
+                      aria-label={
+                        worker.concurrency === null
+                          ? `${worker.id} slot use is unknown because it does not run in this process`
+                          : `${worker.id} is using ${worker.activeSlots ?? 0} of ${worker.concurrency} configured execution slots`
+                      }
+                    >
+                      {worker.concurrency === null ? (
+                        <Text c="dimmed" size="sm" title="This worker does not run in this process">
+                          —
+                        </Text>
+                      ) : (
+                        <Text
+                          size="sm"
+                          title={`${worker.activeSlots ?? 0} of ${worker.concurrency} configured execution slots busy`}
+                        >
+                          {worker.activeSlots ?? 0} / {worker.concurrency}
+                        </Text>
+                      )}
                     </Table.Td>
                     <Table.Td ta="right">{worker.activeJobs}</Table.Td>
                     <Table.Td ta="right">{worker.completedAttempts}</Table.Td>
@@ -2955,8 +2984,12 @@ function WorkersPage({
         </Paper>
       )}
       <Text c="dimmed" size="xs">
-        Pause stops new claims only. Active jobs keep heartbeating until they finish. Worker pause
-        state is held in this server process and clears on restart.
+        Slots in use counts handlers running inside this server process against the concurrency
+        declared at startup; current jobs is what PostgreSQL reports as active, so the two can
+        differ briefly. Concurrency is startup configuration and is not changeable at runtime. Pause
+        stops new claims only, and draining means shutdown is waiting on in-flight handlers. Active
+        jobs keep heartbeating until they finish. Worker pause state is held in this server process
+        and clears on restart.
       </Text>
     </Stack>
   );

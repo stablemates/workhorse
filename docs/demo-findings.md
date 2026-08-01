@@ -26,6 +26,9 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 - schema version 10 installs the core scoped enqueue-idempotency contract used by application ingress,
   although the demo does not add a dedicated idempotency-key form or seed;
 - the dashboard can be omitted without changing core queue behavior;
+- worker instances expose bounded local concurrency and `{ concurrency, activeSlots, paused, draining }`
+  runtime state, while the demo intentionally keeps two default-concurrency workers rather than presenting
+  an unrecorded performance comparison;
 - `pnpm demo` recreates only a purpose-guarded demo database, builds the workspace, and serves the app.
 
 ## Gaps fixed while building the demo
@@ -74,13 +77,14 @@ API, but should be designed before adding more framework integrations.
 
 ### A4. Worker identity is observational only
 
-The worker view infers active workers from leases and recent workers from attempt history. There is no
-registry, start time, declared concurrency, build version, graceful-stop state, or authoritative liveness
-record.
+The worker view infers active workers from leases and recent workers from attempt history. A live Worker
+now exposes its declared concurrency, active slots, pause state, and drain state in process, but there is no
+durable registry, start time, build version, graceful-stop record, or authoritative liveness record.
 
 **Needed:** decide whether production telemetry is sufficient or whether Workhorse needs a bounded,
 expiring worker registry. Any registry must avoid turning worker heartbeats into unbounded write load.
-This decision belongs with **P0-02 Production telemetry** and **P0-03 Configurable worker concurrency**.
+P0-03 supplies the local runtime contract. The remaining durable-registry decision belongs with **P0-02
+Production telemetry**.
 
 ### A5. Operator mutations still need cancellation and redrive contracts
 

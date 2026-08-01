@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import type { QueryResult, QueryResultRow } from "pg";
 import {
   EnqueueIdempotencyConflictError,
   InjectedCrashError,
@@ -17,6 +18,7 @@ export const operationalScenarioNames = [
   "idempotent-ingress",
   "retention-pruning",
   "health-snapshot",
+  "worker-concurrency",
 ] as const;
 
 export type OperationalScenarioName = (typeof operationalScenarioNames)[number];
@@ -226,6 +228,28 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "snapshotMs",
     ],
   },
+  {
+    name: "worker-concurrency",
+    purpose:
+      "Exercise bounded concurrent worker slots while recording throughput and database-pressure proxies without excluding claim work from timing.",
+    invariants: [
+      "concurrency levels preserve the configured slot bound and expose accurate runtime state",
+      "claims remain serial, never exceed free slots, and are all included in timed execution",
+      "after backlog exhaustion, serial null-claim pressure is bounded by elapsed polling windows rather than configured concurrency",
+      "each active job retains an independent heartbeat and completes without an expired lease",
+      "pause prevents claims and stop prevents new claims while draining active handlers",
+    ],
+    metrics: [
+      "concurrencyLevels",
+      "jobsPerLevel",
+      "throughput timing and jobs per second by level",
+      "maximum handler, slot, query, and claim overlap by level",
+      "claim attempts, null claims, polling-window bounds, and heartbeat calls by level",
+      "maximum null claims per polling window across concurrency levels",
+      "first-null claim count",
+      "shutdown claimed, succeeded, and remaining-ready counts",
+    ],
+  },
 ] as const;
 
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
@@ -317,6 +341,15 @@ export function mean(samples: readonly number[]): number | null {
   return finite.reduce((total, value) => total + value, 0) / finite.length;
 }
 
+export function pollingClaimUpperBound(
+  jobCount: number,
+  durationMs: number,
+  pollMs: number,
+  schedulingSlack = 2,
+): number {
+  return jobCount + Math.ceil(durationMs / pollMs) + schedulingSlack;
+}
+
 function canonicalJson(value: unknown): string {
   return (
     JSON.stringify(value, (_key, nested) =>
@@ -373,6 +406,79 @@ async function rowCount(pool: Queryable, relation: string, jobId?: string): Prom
     jobId === undefined ? [] : [jobId],
   );
   return Number(result.rows[0]?.count ?? 0);
+}
+
+interface QueryPressureSnapshot {
+  queries: number;
+  claimCalls: number;
+  heartbeatCalls: number;
+  maxConcurrentQueries: number;
+  maxConcurrentClaims: number;
+  claimsWithoutFreeSlot: number;
+}
+
+class QueryPressureProbe implements Queryable {
+  private activeQueries = 0;
+  private activeClaims = 0;
+  private queries = 0;
+  private claimCalls = 0;
+  private heartbeatCalls = 0;
+  private maxConcurrentQueries = 0;
+  private maxConcurrentClaims = 0;
+  private claimsWithoutFreeSlot = 0;
+
+  constructor(
+    private readonly target: Queryable,
+    private readonly freeClaimSlots?: () => number,
+  ) {}
+
+  async query<R extends QueryResultRow = QueryResultRow>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<QueryResult<R>> {
+    const claim = text.includes("workhorse.claim_v1");
+    this.queries += 1;
+    this.activeQueries += 1;
+    this.maxConcurrentQueries = Math.max(this.maxConcurrentQueries, this.activeQueries);
+    if (claim) {
+      this.claimCalls += 1;
+      this.activeClaims += 1;
+      this.maxConcurrentClaims = Math.max(this.maxConcurrentClaims, this.activeClaims);
+      if (this.freeClaimSlots !== undefined && this.freeClaimSlots() < 1) {
+        this.claimsWithoutFreeSlot += 1;
+      }
+    }
+    if (text.includes("workhorse.heartbeat_v1")) this.heartbeatCalls += 1;
+    try {
+      return await this.target.query<R>(text, values);
+    } finally {
+      this.activeQueries -= 1;
+      if (claim) this.activeClaims -= 1;
+    }
+  }
+
+  snapshot(): QueryPressureSnapshot {
+    return {
+      queries: this.queries,
+      claimCalls: this.claimCalls,
+      heartbeatCalls: this.heartbeatCalls,
+      maxConcurrentQueries: this.maxConcurrentQueries,
+      maxConcurrentClaims: this.maxConcurrentClaims,
+      claimsWithoutFreeSlot: this.claimsWithoutFreeSlot,
+    };
+  }
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  description: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
+    await delay(1);
+  }
 }
 
 async function scheduledPromotionDrift(
@@ -1303,6 +1409,329 @@ async function healthSnapshot(
   };
 }
 
+async function workerConcurrency(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  const assertions: ScenarioAssertion[] = [];
+  const metrics: Record<string, ScenarioMetric> = {};
+  const concurrencyLevels = [1, 4, 8];
+  const leaseMs = Math.max(200, context.options.leaseMs * 4);
+  const heartbeatMs = Math.max(20, Math.min(40, Math.floor(leaseMs / 4)));
+  const handlerDelayMs = heartbeatMs * 3;
+  const pollMs = 10;
+  const pollingSchedulingSlack = 2;
+  const nullClaimRates: number[] = [];
+  const pollingPressureChecks: boolean[] = [];
+
+  metrics.concurrencyLevels = concurrencyLevels.join(",");
+  metrics.jobsPerLevel = context.options.jobCount;
+  metrics.handlerDelayMs = handlerDelayMs;
+  metrics.leaseMs = leaseMs;
+  metrics.heartbeatMs = heartbeatMs;
+  metrics.pollMs = pollMs;
+  metrics.pollingSchedulingSlack = pollingSchedulingSlack;
+
+  for (const concurrency of concurrencyLevels) {
+    await reset(context.pool);
+    const seedQueue = new Queue(context.pool, context.queueName);
+    for (let index = 0; index < context.options.jobCount; index += 1) {
+      await seedQueue.enqueue("concurrency-throughput", { index });
+    }
+
+    let worker!: Worker;
+    const probe = new QueryPressureProbe(
+      context.pool,
+      () => concurrency - worker.runtimeState().activeSlots,
+    );
+    worker = new Worker(new Queue(probe, context.queueName), {
+      concurrency,
+      workerId: `benchmark-concurrency-${concurrency}`,
+      leaseMs,
+      heartbeatMs,
+      pollMs,
+      maintenanceIntervalMs: 100,
+      housekeepingIntervalMs: 100,
+    });
+    let activeHandlers = 0;
+    let maxHandlerOverlap = 0;
+    let maxActiveSlots = 0;
+    let completedHandlers = 0;
+    worker.handle("concurrency-throughput", async () => {
+      activeHandlers += 1;
+      maxHandlerOverlap = Math.max(maxHandlerOverlap, activeHandlers);
+      maxActiveSlots = Math.max(maxActiveSlots, worker.runtimeState().activeSlots);
+      await context.sleep(handlerDelayMs);
+      activeHandlers -= 1;
+      completedHandlers += 1;
+      if (completedHandlers === context.options.jobCount) worker.stop();
+      return { ok: true };
+    });
+
+    const beforeTiming = probe.snapshot();
+    const started = context.now();
+    const monitor = setInterval(() => {
+      maxActiveSlots = Math.max(maxActiveSlots, worker.runtimeState().activeSlots);
+    }, 1);
+    monitor.unref();
+    try {
+      await worker.run();
+    } finally {
+      clearInterval(monitor);
+    }
+    const durationMs = Math.max(0, context.now() - started);
+    const afterTiming = probe.snapshot();
+    await context.sleep(heartbeatMs);
+    const afterWindow = probe.snapshot();
+    const succeeded = await rowCount(context.pool, "job_outcome");
+    const health = await seedQueue.health();
+    const runtimeState = worker.runtimeState();
+    const prefix = `concurrency${concurrency}`;
+    const claimCalls = afterTiming.claimCalls - beforeTiming.claimCalls;
+    const nullClaimCalls = Math.max(0, claimCalls - context.options.jobCount);
+    const elapsedPollingWindows = Math.ceil(durationMs / pollMs);
+    const claimCallUpperBound = pollingClaimUpperBound(
+      context.options.jobCount,
+      durationMs,
+      pollMs,
+      pollingSchedulingSlack,
+    );
+    const nullClaimRate = nullClaimCalls / Math.max(1, elapsedPollingWindows);
+    nullClaimRates.push(nullClaimRate);
+    pollingPressureChecks.push(claimCalls <= claimCallUpperBound);
+
+    metrics[`${prefix}DurationMs`] = durationMs;
+    metrics[`${prefix}JobsPerSecond`] =
+      durationMs === 0 ? null : (context.options.jobCount * 1_000) / durationMs;
+    metrics[`${prefix}MaxHandlerOverlap`] = maxHandlerOverlap;
+    metrics[`${prefix}MaxActiveSlots`] = maxActiveSlots;
+    metrics[`${prefix}QueryCalls`] = afterTiming.queries - beforeTiming.queries;
+    metrics[`${prefix}ClaimCalls`] = claimCalls;
+    metrics[`${prefix}NullClaimCalls`] = nullClaimCalls;
+    metrics[`${prefix}ElapsedPollingWindows`] = elapsedPollingWindows;
+    metrics[`${prefix}ClaimCallUpperBound`] = claimCallUpperBound;
+    metrics[`${prefix}NullClaimsPerPollingWindow`] = nullClaimRate;
+    metrics[`${prefix}HeartbeatCalls`] = afterTiming.heartbeatCalls - beforeTiming.heartbeatCalls;
+    metrics[`${prefix}MaxConcurrentQueries`] = afterTiming.maxConcurrentQueries;
+    metrics[`${prefix}MaxConcurrentClaims`] = afterTiming.maxConcurrentClaims;
+
+    recordInvariant(
+      assertions,
+      `${prefix} exposes readonly concurrency`,
+      worker.concurrency,
+      concurrency,
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} runtime state concurrency`,
+      runtimeState.concurrency,
+      concurrency,
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} completes all handlers`,
+      completedHandlers,
+      context.options.jobCount,
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} persists all outcomes`,
+      succeeded,
+      context.options.jobCount,
+    );
+    recordInvariant(assertions, `${prefix} leaves no active leases`, health.activeLeases, 0);
+    recordInvariant(assertions, `${prefix} leaves no expired leases`, health.expiredLeases, 0);
+    recordInvariant(
+      assertions,
+      `${prefix} handler overlap respects slots`,
+      maxHandlerOverlap,
+      Math.min(concurrency, context.options.jobCount),
+      (actual, expected) => Number(actual) <= Number(expected) && Number(actual) >= 1,
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} runtime slots stay bounded`,
+      maxActiveSlots,
+      concurrency,
+      (actual, expected) => Number(actual) <= Number(expected) && Number(actual) >= 1,
+    );
+    recordInvariant(assertions, `${prefix} claims are serial`, afterTiming.maxConcurrentClaims, 1);
+    recordInvariant(
+      assertions,
+      `${prefix} claims only use free slots`,
+      afterTiming.claimsWithoutFreeSlot - beforeTiming.claimsWithoutFreeSlot,
+      0,
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} polling claim pressure is duration bounded`,
+      claimCalls,
+      claimCallUpperBound,
+      (actual, expected) => Number(actual) <= Number(expected),
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} connection pressure tracks slots`,
+      afterTiming.maxConcurrentQueries,
+      concurrency * 2 + 1,
+      (actual, expected) => Number(actual) <= Number(expected),
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} every job receives a heartbeat`,
+      afterTiming.heartbeatCalls - beforeTiming.heartbeatCalls,
+      context.options.jobCount,
+      (actual, expected) => Number(actual) >= Number(expected),
+    );
+    recordInvariant(
+      assertions,
+      `${prefix} has no claims outside timed window`,
+      afterWindow.claimCalls,
+      afterTiming.claimCalls,
+    );
+    recordInvariant(assertions, `${prefix} drains active slots`, runtimeState.activeSlots, 0);
+  }
+
+  metrics.maxNullClaimsPerPollingWindow = Math.max(...nullClaimRates);
+  recordInvariant(
+    assertions,
+    "null-claim pressure follows polling windows instead of concurrency",
+    pollingPressureChecks.every(Boolean),
+    true,
+  );
+
+  await reset(context.pool);
+  const firstNullQueue = new Queue(context.pool, context.queueName);
+  await firstNullQueue.enqueue("first-null", { only: true });
+  const firstNullProbe = new QueryPressureProbe(context.pool);
+  const firstNullWorker = new Worker(new Queue(firstNullProbe, context.queueName), {
+    concurrency: 4,
+    workerId: "benchmark-first-null",
+    leaseMs,
+    heartbeatMs,
+    pollMs: 1,
+    maintenanceIntervalMs: 100,
+    housekeepingIntervalMs: 100,
+  });
+  let firstNullHandled = 0;
+  firstNullWorker.handle("first-null", () => {
+    firstNullHandled += 1;
+    return { ok: true };
+  });
+  await firstNullWorker.runOnce();
+  const firstNullPressure = firstNullProbe.snapshot();
+  metrics.firstNullClaimCalls = firstNullPressure.claimCalls;
+  recordInvariant(assertions, "first-null run handles one job", firstNullHandled, 1);
+  recordInvariant(
+    assertions,
+    "first-null run stops after job plus null",
+    firstNullPressure.claimCalls,
+    2,
+  );
+  recordInvariant(
+    assertions,
+    "first-null claims remain serial",
+    firstNullPressure.maxConcurrentClaims,
+    1,
+  );
+
+  await reset(context.pool);
+  const pauseQueue = new Queue(context.pool, context.queueName);
+  await pauseQueue.enqueue("pause-guard", { paused: true });
+  const pauseProbe = new QueryPressureProbe(context.pool);
+  const pauseWorker = new Worker(new Queue(pauseProbe, context.queueName), {
+    concurrency: 4,
+    workerId: "benchmark-pause",
+    leaseMs,
+    heartbeatMs,
+    pollMs: 1,
+    maintenanceIntervalMs: 100,
+    housekeepingIntervalMs: 100,
+  });
+  pauseWorker.handle("pause-guard", () => ({ ok: true }));
+  pauseWorker.pause();
+  const pausedWorked = await pauseWorker.runOnce();
+  const pausedState = pauseWorker.runtimeState();
+  metrics.pausedClaimCalls = pauseProbe.snapshot().claimCalls;
+  recordInvariant(assertions, "pause reports paused state", pausedState.paused, true);
+  recordInvariant(assertions, "pause keeps active slots empty", pausedState.activeSlots, 0);
+  recordInvariant(assertions, "pause runOnce reports no work", pausedWorked, false);
+  recordInvariant(assertions, "pause blocks claims", pauseProbe.snapshot().claimCalls, 0);
+  pauseWorker.resume();
+  recordInvariant(
+    assertions,
+    "resume clears paused state",
+    pauseWorker.runtimeState().paused,
+    false,
+  );
+
+  await reset(context.pool);
+  const shutdownConcurrency = 4;
+  const shutdownJobs = shutdownConcurrency + 2;
+  const shutdownQueue = new Queue(context.pool, context.queueName);
+  for (let index = 0; index < shutdownJobs; index += 1) {
+    await shutdownQueue.enqueue("shutdown-drain", { index });
+  }
+  const shutdownProbe = new QueryPressureProbe(context.pool);
+  const shutdownWorker = new Worker(new Queue(shutdownProbe, context.queueName), {
+    concurrency: shutdownConcurrency,
+    workerId: "benchmark-shutdown",
+    leaseMs,
+    heartbeatMs,
+    pollMs: 1,
+    maintenanceIntervalMs: 100,
+    housekeepingIntervalMs: 100,
+  });
+  let shutdownActive = 0;
+  let releaseShutdown!: () => void;
+  const shutdownGate = new Promise<void>((resolve) => {
+    releaseShutdown = resolve;
+  });
+  shutdownWorker.handle("shutdown-drain", async () => {
+    shutdownActive += 1;
+    await shutdownGate;
+    shutdownActive -= 1;
+    return { ok: true };
+  });
+  const shutdownRun = shutdownWorker.run();
+  await waitFor(
+    () => shutdownActive === shutdownConcurrency,
+    "all shutdown-test slots to become active",
+  );
+  shutdownWorker.stop();
+  const drainingState = shutdownWorker.runtimeState();
+  const claimsAtStop = shutdownProbe.snapshot().claimCalls;
+  releaseShutdown();
+  await shutdownRun;
+  const claimsAfterDrain = shutdownProbe.snapshot().claimCalls;
+  const shutdownHealth = await shutdownQueue.health();
+  const shutdownSucceeded = await rowCount(context.pool, "job_outcome");
+  const drainedState = shutdownWorker.runtimeState();
+  metrics.shutdownClaimsAtStop = claimsAtStop;
+  metrics.shutdownClaimsAfterDrain = claimsAfterDrain;
+  metrics.shutdownSucceeded = shutdownSucceeded;
+  metrics.shutdownReady = shutdownHealth.readyDepth;
+  recordInvariant(assertions, "stop enters draining state", drainingState.draining, true);
+  recordInvariant(
+    assertions,
+    "stop drains configured active slots",
+    claimsAtStop,
+    shutdownConcurrency,
+  );
+  recordInvariant(
+    assertions,
+    "stop prevents claims while draining",
+    claimsAfterDrain,
+    claimsAtStop,
+  );
+  recordInvariant(assertions, "stop completes active jobs", shutdownSucceeded, shutdownConcurrency);
+  recordInvariant(assertions, "stop leaves unclaimed jobs ready", shutdownHealth.readyDepth, 2);
+  recordInvariant(assertions, "stop finishes with no active slots", drainedState.activeSlots, 0);
+  recordInvariant(assertions, "stop leaves no active leases", shutdownHealth.activeLeases, 0);
+  recordInvariant(assertions, "stop leaves no expired leases", shutdownHealth.expiredLeases, 0);
+
+  return { name: "worker-concurrency", durationMs: 0, metrics, assertions };
+}
+
 export const operationalScenarioImplementations: Readonly<
   Record<OperationalScenarioName, OperationalScenarioRunner>
 > = {
@@ -1314,6 +1743,7 @@ export const operationalScenarioImplementations: Readonly<
   "idempotent-ingress": idempotentIngress,
   "retention-pruning": retentionPruning,
   "health-snapshot": healthSnapshot,
+  "worker-concurrency": workerConcurrency,
 };
 
 export async function runOperationalScenarios(

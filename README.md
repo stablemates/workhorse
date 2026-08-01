@@ -32,14 +32,14 @@ The current implementation remains an evidence-first validation release rather t
 - namespaced declarative recurring jobs synchronized into the target database during deployment;
 - worker-owned in-process cron scheduling with advisory-lock coordination and SQL occurrence deduplication;
 - centralized promotion and lease recovery off the worker claim hot path;
-- a single TypeScript `pg` client and worker runtime;
+- a TypeScript `pg` client and worker runtime with configurable per-instance concurrency;
 - separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
 - an optional React operator dashboard with a typed oRPC boundary and audited local controls;
 - deterministic worker crash failpoints;
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.
 
-Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
+Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, cross-queue concurrency policies, signals, child jobs, arbitrary scheduled SQL, and unsupported performance claims.
 
 ### Enqueue idempotency keys
 
@@ -219,6 +219,8 @@ await queue.enqueue("email", { to: "person@example.com" });
 
 const worker = new Worker(queue, {
   workerId: "email-1",
+  // Integer 1..100. The default is 1 for backward-compatible serial execution.
+  concurrency: 4,
   // This worker also evaluates and fires this namespace's recurring schedules.
   scheduleNamespaces: ["billing-production"],
 }).handle("email", async ({ to }, { checkpoint, sleep }) => {
@@ -237,6 +239,15 @@ const worker = new Worker(queue, {
 
 await worker.runOnce();
 ```
+
+`worker.concurrency` is readonly. `worker.runtimeState()` returns
+`{ concurrency, activeSlots, paused, draining }` for local lifecycle inspection. A claim pass issues
+one claim at a time, starts each claimed job in its own handler slot, never claims beyond the configured
+bound, and stops filling the pass at the first null claim. Every active job owns its own heartbeat and
+fence lifecycle. `pause()` blocks new claims without interrupting active handlers; `resume()` reopens
+claims immediately. `stop()` blocks new claims and resolves `run()` only after active handlers drain.
+These are process-local controls and observations, not a durable worker registry or a cross-worker rate
+limit.
 
 To enqueue atomically with application writes, pass the active `PoolClient` as the fourth argument to `enqueue`.
 

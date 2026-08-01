@@ -18,12 +18,13 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P1-02 Cancellation**
-2. **P1-03 Deadlines and execution timeouts**
-3. **P1-04 Dead-letter views and redrive**
-4. **P2-01 Query and listing API**
-5. **P1-09 Progress and job metadata**
-6. **P0-02 Production telemetry**
+1. **P0-03 Configurable worker concurrency** (complete prerequisite)
+2. **P1-02 Cancellation**
+3. **P1-03 Deadlines and execution timeouts**
+4. **P1-04 Dead-letter views and redrive**
+5. **P2-01 Query and listing API**
+6. **P1-09 Progress and job metadata**
+7. **P0-02 Production telemetry**
 
 The demo and initial integration packages are complete. Full OpenTelemetry support is deliberately
 sequenced after the next product and reliability features; each earlier feature must still ship the
@@ -93,19 +94,23 @@ understandable, installable, and useful.
 - [ ] Propagate caller trace context through job metadata without mutating the job payload.
 - [ ] Document dashboards and alert thresholds for stalled queues and degraded maintenance.
 
-### [ ] P0-03 Configurable worker concurrency
+### [x] P0-03 Configurable worker concurrency
 
 **Depends on:** none
 
 Configurable concurrency must ship focused lease, shutdown, and benchmark diagnostics, but it does
 not depend on the later full OpenTelemetry and metrics package.
 
-- [ ] Allow one worker process to execute a bounded number of jobs concurrently.
-- [ ] Preserve per-job heartbeat and fence ownership while handlers overlap.
-- [ ] Add fair queue scheduling and avoid claim bursts that exceed available handler slots.
-- [ ] Make shutdown stop new claims and wait for all in-flight handlers.
-- [ ] Benchmark throughput, connection use, lease safety, and shutdown behavior across concurrency
-      levels.
+- [x] Accept integer `WorkerOptions.concurrency` values from 1 through 100, default to 1, and expose
+      readonly `worker.concurrency` plus `{ concurrency, activeSlots, paused, draining }` runtime state.
+- [x] Preserve per-job heartbeat, abort, and fence ownership while handlers overlap.
+- [x] Fill only free slots with serial claims, stop at the first null claim, and never exceed the
+      configured handler bound.
+- [x] Make pause block claims and make shutdown stop new claims while draining all in-flight handlers.
+- [x] Add the invariant-gated `worker-concurrency` operational scenario for concurrency levels,
+      claim-inclusive throughput timing, overlap and slot bounds, connection/claim pressure proxies,
+      lease safety, first-null behavior, pause, and graceful shutdown. A recorded live artifact is still
+      required before making performance or scale claims.
 
 ### [ ] P0-04 Notification-assisted dispatch
 

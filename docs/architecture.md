@@ -244,6 +244,25 @@ Suspension aborts the handler's cooperative signal and exits through private wor
 
 `claim_v1` selects one queue-local ready row by FIFO sequence with `SKIP LOCKED`. One runtime update changes it to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The claim event is appended before the function returns identity, payload, and normalized `retryPolicy`. No transaction remains open while user code runs.
 
+### Worker concurrency and lifecycle
+
+`WorkerOptions.concurrency` accepts an integer from 1 through 100 and defaults to 1. The configured value
+is exposed as readonly `worker.concurrency`. `worker.runtimeState()` returns the process-local snapshot
+`{ concurrency, activeSlots, paused, draining }`; it is an operational view of this object, not durable
+liveness or membership state.
+
+One claim pass fills only currently free slots. Claims remain serial because each `claim_v1` transition is
+an independent correctness-sensitive database operation. Each successful claim starts one independent
+per-job handler task; the fill loop stops when all free slots are occupied or the first claim returns null.
+This bounds claim and connection pressure without serializing user handlers. A handler slot remains active
+through completion, retry/failure handling, or durable-wait suspension, and every active job owns its own
+heartbeat timer, abort controller, fence checks, and final transition.
+
+`pause()` prevents later claims while maintenance and active jobs continue. `resume()` clears the pause and
+makes claims immediately eligible. `stop()` enters draining state, prevents later claims, and allows every
+already active handler and its final fenced transition to finish before `run()` resolves. These controls do
+not impose global rate limits, queue weights, or concurrency budgets across worker processes.
+
 ### Heartbeat
 
 `heartbeat_v1` is a compare-and-set update over job ID, active state, worker ID, fence token, and unexpired lease. `false` means ownership is stale.

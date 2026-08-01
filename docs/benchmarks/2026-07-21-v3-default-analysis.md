@@ -23,6 +23,10 @@ Raw artifacts:
 - [`results/2026-07-21-v3-smoke.json`](results/2026-07-21-v3-smoke.json)
 - [`results/2026-07-21-v3-default.json`](results/2026-07-21-v3-default.json)
 
+This historical artifact predates the P0-03 `worker-concurrency` lifecycle scenario. Its comparative
+1/4/8-worker results use separate serial worker loops and are not evidence for the later single-worker
+`WorkerOptions.concurrency` contract, slot bounds, per-job heartbeat overlap, or graceful drain behavior.
+
 ## What changed from v2
 
 V3 implements the highest-priority actions from the v2 analysis:
