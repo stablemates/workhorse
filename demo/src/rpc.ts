@@ -153,7 +153,7 @@ export const dashboardRouter = {
     system: procedure
       .input(systemInput)
       .handler(({ context, input }) =>
-        readDashboardSystem(context.database, input.window as DashboardSystemWindow),
+        readDashboardSystem(context.database, context.queue, input.window as DashboardSystemWindow),
       ),
     workers: procedure.handler(({ context }) => {
       const canManageWorkers =

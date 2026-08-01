@@ -9,6 +9,7 @@ import {
   MAX_ENQUEUE_BATCH_SIZE,
   Queue,
   type Queryable,
+  type RetentionPolicyDefinition,
   Worker,
 } from "../src/index.js";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../src/local-database.js";
@@ -17,6 +18,17 @@ const databaseUrl = localDatabaseUrl("test");
 assertLocalDatabasePurpose(databaseUrl, "test");
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 const queue = new Queue(pool);
+const defaultRetentionPolicy: RetentionPolicyDefinition = {
+  jobIdentityRetentionDays: null,
+  terminalOutcomeRetentionDays: null,
+  jobEventRetentionDays: null,
+  attemptHistoryRetentionDays: null,
+  scheduleOccurrenceRetentionDays: 30,
+  terminalJobPruneLimit: 1_000,
+  historyPartitionsPerPass: 4,
+  defaultPartitionRowsPerPass: 10_000,
+  occurrenceRowsPerPass: 10_000,
+};
 
 beforeAll(async () => {
   await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
@@ -30,6 +42,7 @@ beforeEach(async () => {
     workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
+  await queue.syncRetentionPolicy(defaultRetentionPolicy);
 });
 
 afterAll(async () => {
@@ -37,11 +50,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v7 without compatibility write tables", async () => {
+  it("installs schema v8 without compatibility write tables", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(7);
+    expect(version.rows[0]?.version).toBe(8);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -353,8 +366,29 @@ describe("live-runtime queue protocol", () => {
           error: null,
         },
         {
+          phase: "event_retention",
+          rowsAffected: 0,
+          durationMs: expect.any(Number),
+          skippedLock: false,
+          error: null,
+        },
+        {
+          phase: "attempt_retention",
+          rowsAffected: 0,
+          durationMs: expect.any(Number),
+          skippedLock: false,
+          error: null,
+        },
+        {
           phase: "schedule_occurrences",
           rowsAffected: 1,
+          durationMs: expect.any(Number),
+          skippedLock: false,
+          error: null,
+        },
+        {
+          phase: "terminal_jobs",
+          rowsAffected: 0,
           durationMs: expect.any(Number),
           skippedLock: false,
           error: null,
@@ -390,7 +424,28 @@ describe("live-runtime queue protocol", () => {
           error: null,
         },
         {
+          phase: "event_retention",
+          rowsAffected: 0,
+          durationMs: 0,
+          skippedLock: true,
+          error: null,
+        },
+        {
+          phase: "attempt_retention",
+          rowsAffected: 0,
+          durationMs: 0,
+          skippedLock: true,
+          error: null,
+        },
+        {
           phase: "schedule_occurrences",
+          rowsAffected: 0,
+          durationMs: 0,
+          skippedLock: true,
+          error: null,
+        },
+        {
+          phase: "terminal_jobs",
           rowsAffected: 0,
           durationMs: 0,
           skippedLock: true,
@@ -440,7 +495,7 @@ describe("live-runtime queue protocol", () => {
         skippedLock: false,
         error: { message: "forced partition replenishment failure" },
       });
-      expect(results[1]).toMatchObject({
+      expect(results[3]).toMatchObject({
         phase: "schedule_occurrences",
         rowsAffected: 1,
         skippedLock: false,
@@ -458,7 +513,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v7 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v8 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -803,13 +858,16 @@ describe("live-runtime queue protocol", () => {
       "tick:promote",
       "tick:recover",
       "housekeeping:history_partitions",
+      "housekeeping:event_retention",
+      "housekeeping:attempt_retention",
       "housekeeping:schedule_occurrences",
+      "housekeeping:terminal_jobs",
     ]);
     expect(worker.maintenanceTelemetry()).toEqual(telemetry);
 
     await sleep(110);
     expect(await worker.runOnce()).toBe(false);
-    expect(telemetry.slice(4).map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
+    expect(telemetry.slice(7).map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
       "tick:promote",
       "tick:recover",
     ]);
@@ -829,7 +887,28 @@ describe("live-runtime queue protocol", () => {
         error: null,
       },
       {
+        phase: "event_retention",
+        rowsAffected: 0,
+        durationMs: 0,
+        skippedLock: false,
+        error: null,
+      },
+      {
+        phase: "attempt_retention",
+        rowsAffected: 0,
+        durationMs: 0,
+        skippedLock: false,
+        error: null,
+      },
+      {
         phase: "schedule_occurrences",
+        rowsAffected: 0,
+        durationMs: 0,
+        skippedLock: false,
+        error: null,
+      },
+      {
+        phase: "terminal_jobs",
         rowsAffected: 0,
         durationMs: 0,
         skippedLock: false,
@@ -2169,7 +2248,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(7);
+    expect(health.schemaVersion).toBe(8);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -2178,6 +2257,332 @@ describe("live-runtime queue protocol", () => {
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
     expect(health.lockWaitCount).toBeGreaterThanOrEqual(0);
     expect(health.notificationQueueUsage).toBeGreaterThanOrEqual(0);
+  });
+
+  it("round trips retention policy defaults and rejects unsafe or malformed policies in PostgreSQL", async () => {
+    await expect(queue.getRetentionPolicy()).resolves.toMatchObject(defaultRetentionPolicy);
+
+    const definition: RetentionPolicyDefinition = {
+      jobIdentityRetentionDays: 90,
+      terminalOutcomeRetentionDays: 60,
+      jobEventRetentionDays: 30,
+      attemptHistoryRetentionDays: 45,
+      scheduleOccurrenceRetentionDays: 14,
+      terminalJobPruneLimit: 17,
+      historyPartitionsPerPass: 2,
+      defaultPartitionRowsPerPass: 23,
+      occurrenceRowsPerPass: 29,
+    };
+    const persisted = await queue.syncRetentionPolicy(definition);
+    expect(persisted).toEqual({ ...definition, updatedAt: expect.any(Date) });
+    await expect(queue.getRetentionPolicy()).resolves.toEqual(persisted);
+
+    await expect(
+      queue.syncRetentionPolicy({
+        ...definition,
+        jobIdentityRetentionDays: 10,
+        jobEventRetentionDays: 11,
+      }),
+    ).rejects.toThrow(/retention_policy_check/);
+    await expect(
+      queue.syncRetentionPolicy({
+        ...definition,
+        jobIdentityRetentionDays: null,
+      }),
+    ).rejects.toThrow(/retention_policy_check/);
+    await expect(
+      pool.query(
+        `UPDATE workhorse.retention_policy
+            SET job_identity_retention_days = 30,
+                terminal_outcome_retention_days = NULL
+          WHERE singleton`,
+      ),
+    ).rejects.toThrow(/retention_policy_check/);
+    await expect(
+      queue.syncRetentionPolicy({ ...definition, historyPartitionsPerPass: 0 }),
+    ).rejects.toThrow(/history_partitions_per_pass/);
+
+    const withoutLimits = await queue.syncRetentionPolicy({
+      jobIdentityRetentionDays: null,
+      terminalOutcomeRetentionDays: null,
+      jobEventRetentionDays: null,
+      attemptHistoryRetentionDays: null,
+      scheduleOccurrenceRetentionDays: 30,
+    });
+    expect(withoutLimits).toMatchObject({
+      terminalJobPruneLimit: definition.terminalJobPruneLimit,
+      historyPartitionsPerPass: definition.historyPartitionsPerPass,
+      defaultPartitionRowsPerPass: definition.defaultPartitionRowsPerPass,
+      occurrenceRowsPerPass: definition.occurrenceRowsPerPass,
+    });
+  });
+
+  it("retires event and attempt partitions independently and bounds partition/default work", async () => {
+    const firstWeek = "2018-01-01";
+    const secondWeek = "2018-01-08";
+    for (const week of [firstWeek, secondWeek]) {
+      await pool.query("SELECT workhorse.retire_history_week_v1($1)", [week]);
+      await pool.query("SELECT workhorse.create_history_week_v1($1)", [week]);
+    }
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobEventRetentionDays: 1,
+      historyPartitionsPerPass: 1,
+    });
+
+    const firstPass = await queue.housekeep();
+    expect(firstPass[0]).toMatchObject({ phase: "history_partitions" });
+    expect(firstPass[1]).toMatchObject({
+      phase: "event_retention",
+      rowsAffected: 1,
+      error: null,
+    });
+    expect(firstPass[2]).toMatchObject({
+      phase: "attempt_retention",
+      rowsAffected: 0,
+      error: null,
+    });
+    expect(
+      (
+        await pool.query(
+          `SELECT to_regclass('workhorse.job_event_2018w01') AS first_event,
+                  to_regclass('workhorse.job_event_2018w02') AS second_event,
+                  to_regclass('workhorse.attempt_history_2018w01') AS first_attempt,
+                  to_regclass('workhorse.attempt_history_2018w02') AS second_attempt`,
+        )
+      ).rows[0],
+    ).toEqual({
+      first_event: null,
+      second_event: "job_event_2018w02",
+      first_attempt: "attempt_history_2018w01",
+      second_attempt: "attempt_history_2018w02",
+    });
+
+    await pool.query(
+      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+       SELECT gen_random_uuid(), 'old-default', '2017-01-01'::timestamptz
+         FROM generate_series(1, 3)`,
+    );
+    await pool.query(
+      `INSERT INTO workhorse.attempt_history(
+         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, occurred_at
+       )
+       SELECT gen_random_uuid(), 1, 1, 'retention-worker', 'succeeded',
+              '2017-01-01'::timestamptz, '2017-01-01'::timestamptz, '2017-01-01'::timestamptz
+         FROM generate_series(1, 3)`,
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+      historyPartitionsPerPass: 1,
+      defaultPartitionRowsPerPass: 2,
+    });
+    const boundedPass = await queue.housekeep();
+    expect(boundedPass[1]).toMatchObject({ phase: "event_retention", rowsAffected: 3 });
+    expect(boundedPass[2]).toMatchObject({ phase: "attempt_retention", rowsAffected: 3 });
+    expect(
+      (
+        await pool.query(`SELECT
+          (SELECT count(*)::integer FROM workhorse.job_event_default) AS events,
+          (SELECT count(*)::integer FROM workhorse.attempt_history_default) AS attempts`)
+      ).rows[0],
+    ).toEqual({ events: 1, attempts: 1 });
+  });
+
+  it("deletes only safely unattributed terminal jobs and never live jobs", async () => {
+    const finish = async (type: string) => {
+      const id = await queue.enqueue(type, {});
+      const job = await queue.claim("retention-worker");
+      expect(job?.id).toBe(id);
+      expect(await queue.complete(job!, "retention-worker", { done: true })).toBe(true);
+      await pool.query(
+        `UPDATE workhorse.job
+            SET created_at = clock_timestamp() - interval '40 days' WHERE id = $1`,
+        [id],
+      );
+      await pool.query(
+        `UPDATE workhorse.job_outcome
+            SET finished_at = clock_timestamp() - interval '40 days' WHERE job_id = $1`,
+        [id],
+      );
+      return id;
+    };
+
+    const deletable = await finish("deletable");
+    const secondDeletable = await finish("second-deletable");
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = clock_timestamp() - interval '39 days' WHERE job_id = $1`,
+      [secondDeletable],
+    );
+    const eventGuard = await finish("event-guard");
+    const attemptGuard = await finish("attempt-guard");
+    const occurrenceGuard = await finish("occurrence-guard");
+    const recentOutcome = await finish("recent-outcome");
+    const live = await queue.enqueue("live", {});
+    await pool.query(
+      `UPDATE workhorse.job SET created_at = clock_timestamp() - interval '40 days' WHERE id = $1`,
+      [live],
+    );
+
+    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = ANY($1::uuid[])", [
+      [deletable, secondDeletable, attemptGuard, occurrenceGuard, recentOutcome],
+    ]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = ANY($1::uuid[])", [
+      [deletable, secondDeletable, eventGuard, occurrenceGuard, recentOutcome],
+    ]);
+    await pool.query(
+      `UPDATE workhorse.job_outcome SET finished_at = clock_timestamp() WHERE job_id = $1`,
+      [recentOutcome],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.job_checkpoint(
+         job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id
+       ) VALUES ($1, 'retained-until-delete', '{}'::jsonb, 1, 1, 'retention-worker')`,
+      [deletable],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.schedule_definition(
+         namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts
+       ) VALUES ('retention', 'guard', '0 * * * *', 'default', 'guard', '{}'::jsonb, 1)`,
+    );
+    await pool.query(
+      `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at, job_id)
+       VALUES ('retention', 'guard', clock_timestamp(), $1)`,
+      [occurrenceGuard],
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobIdentityRetentionDays: 30,
+      terminalOutcomeRetentionDays: 30,
+      jobEventRetentionDays: 30,
+      attemptHistoryRetentionDays: 30,
+      scheduleOccurrenceRetentionDays: 30,
+      terminalJobPruneLimit: 1,
+    });
+
+    expect((await queue.housekeep())[4]).toMatchObject({
+      phase: "terminal_jobs",
+      rowsAffected: 1,
+      error: null,
+    });
+    expect(await queue.getJob(deletable)).toBeNull();
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.job_checkpoint WHERE job_id = $1",
+          [deletable],
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+    expect(await queue.getJob(secondDeletable)).not.toBeNull();
+    expect((await queue.housekeep())[4]).toMatchObject({
+      phase: "terminal_jobs",
+      rowsAffected: 1,
+      error: null,
+    });
+    expect(await queue.getJob(secondDeletable)).toBeNull();
+    for (const retained of [eventGuard, attemptGuard, occurrenceGuard, recentOutcome, live]) {
+      expect(await queue.getJob(retained)).not.toBeNull();
+    }
+  });
+
+  it("reports retention boundaries, lag, eligible partitions, and exact default counts", async () => {
+    const oldWeek = "2016-01-04";
+    await pool.query("SELECT workhorse.retire_history_week_v1($1)", [oldWeek]);
+    await pool.query("SELECT workhorse.create_history_week_v1($1)", [oldWeek]);
+    await pool.query(
+      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+       VALUES (gen_random_uuid(), 'old-default', '2015-01-01');
+       INSERT INTO workhorse.attempt_history(
+         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, occurred_at
+       ) VALUES (
+         gen_random_uuid(), 1, 1, 'health-worker', 'succeeded', '2015-01-01', '2015-01-01',
+         '2015-01-01'
+       )`,
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobEventRetentionDays: 30,
+      attemptHistoryRetentionDays: 30,
+    });
+
+    const health = await queue.health();
+    expect(health.retentionPolicy).toMatchObject({
+      jobEventRetentionDays: 30,
+      attemptHistoryRetentionDays: 30,
+    });
+    expect(health.oldestRetainedAt.jobEvents?.toISOString().slice(0, 10)).toBe("2015-01-01");
+    expect(health.oldestRetainedAt.attemptHistory?.toISOString().slice(0, 10)).toBe("2015-01-01");
+    expect(health.retentionLagMs.jobEvents).toBeGreaterThan(0);
+    expect(health.retentionLagMs.attemptHistory).toBeGreaterThan(0);
+    expect(health.eligibleHistoryPartitions).toMatchObject({ jobEvents: 1, attemptHistory: 1 });
+    expect(health.defaultHistoryRows).toEqual({ jobEvents: 1, attemptHistory: 1 });
+  });
+
+  it("computes identity lag from terminal jobs and ignores a partial history boundary week", async () => {
+    await queue.enqueue("live-boundary", {});
+    const boundary = await pool.query<{ week_start: string }>(
+      `SELECT date_trunc('week', clock_timestamp() - interval '30 days')::date::text
+         AS week_start`,
+    );
+    await pool.query("SELECT workhorse.create_history_week_v1($1)", [boundary.rows[0]!.week_start]);
+    await pool.query(
+      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+       VALUES (
+         gen_random_uuid(), 'partial-boundary',
+         date_trunc('week', clock_timestamp() - interval '30 days') + interval '1 day'
+       )`,
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobEventRetentionDays: 30,
+    });
+
+    const health = await queue.health();
+    expect(health.oldestRetainedAt.jobIdentity).toBeNull();
+    expect(health.retentionLagMs.jobEvents).toBe(0);
+  });
+
+  it("does not report terminal outcome lag before the identity anchor is eligible", async () => {
+    const id = await queue.enqueue("terminal-lag-gates", {});
+    const job = await queue.claim("retention-health-worker");
+    expect(job?.id).toBe(id);
+    expect(await queue.complete(job!, "retention-health-worker", { done: true })).toBe(true);
+    await pool.query(
+      `UPDATE workhorse.job
+          SET created_at = clock_timestamp() - interval '30 days' WHERE id = $1`,
+      [id],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = clock_timestamp() - interval '30 days' WHERE job_id = $1`,
+      [id],
+    );
+    await queue.syncRetentionPolicy({
+      jobIdentityRetentionDays: 365,
+      terminalOutcomeRetentionDays: 1,
+      jobEventRetentionDays: 365,
+      attemptHistoryRetentionDays: 365,
+      scheduleOccurrenceRetentionDays: 365,
+    });
+
+    const protectedHealth = await queue.health();
+    expect(protectedHealth.oldestRetainedAt.terminalOutcome).not.toBeNull();
+    expect(protectedHealth.retentionLagMs.jobIdentity).toBeNull();
+    expect(protectedHealth.retentionLagMs.terminalOutcome).toBeNull();
+
+    await queue.syncRetentionPolicy({
+      jobIdentityRetentionDays: 1,
+      terminalOutcomeRetentionDays: 1,
+      jobEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+      scheduleOccurrenceRetentionDays: 1,
+    });
+    const eligible = await queue.health();
+    expect(eligible.retentionLagMs.jobIdentity).toBeGreaterThan(0);
+    expect(eligible.retentionLagMs.terminalOutcome).toBeGreaterThan(0);
   });
 
   it("creates and retires completed weekly history partitions", async () => {
@@ -2258,7 +2663,10 @@ describe("live-runtime queue protocol", () => {
       $$`);
     expect(await queue.housekeep()).toMatchObject([
       { phase: "history_partitions", rowsAffected: 2, skippedLock: false, error: null },
+      { phase: "event_retention", skippedLock: false, error: null },
+      { phase: "attempt_retention", skippedLock: false, error: null },
       { phase: "schedule_occurrences", skippedLock: false, error: null },
+      { phase: "terminal_jobs", skippedLock: false, error: null },
     ]);
     const horizon = await pool.query<{ missing: number }>(`
       SELECT count(*) FILTER (

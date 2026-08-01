@@ -37,6 +37,9 @@ export type {
   Json,
   Queryable,
   QueueHealth,
+  RetentionCategoryValues,
+  RetentionPolicy,
+  RetentionPolicyDefinition,
 } from "./types.js";
 export {
   MAX_CHECKPOINT_VALUE_BYTES,

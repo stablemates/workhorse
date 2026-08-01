@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import { installSchema } from "@workhorse/core";
+import { installSchema, Queue } from "@workhorse/core";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../src/local-database.js";
@@ -56,6 +56,17 @@ beforeEach(async () => {
     workhorse.job_wait, workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
     workhorse.queue_control, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
+  await new Queue(pool).syncRetentionPolicy({
+    jobIdentityRetentionDays: null,
+    terminalOutcomeRetentionDays: null,
+    jobEventRetentionDays: null,
+    attemptHistoryRetentionDays: null,
+    scheduleOccurrenceRetentionDays: 30,
+    terminalJobPruneLimit: 1_000,
+    historyPartitionsPerPass: 4,
+    defaultPartitionRowsPerPass: 10_000,
+    occurrenceRowsPerPass: 10_000,
+  });
 });
 
 afterAll(async () => {
@@ -266,6 +277,18 @@ describe("Workhorse demo", () => {
       completed: 346,
       discarded: 16,
       retried: 22,
+    });
+    // Seeds must never manufacture a retention problem: startup stays healthy and deterministic.
+    await expect(client.dashboard.system({ window: "1h" })).resolves.toMatchObject({
+      status: { level: "healthy", checks: [], criticalChecks: [], degradedChecks: [] },
+      integrity: {
+        retention: {
+          maxLagMs: null,
+          maxLagCategory: null,
+          eligibleHistoryPartitions: { jobEvents: 0, attemptHistory: 0 },
+          defaultHistoryRows: { jobEvents: 0, attemptHistory: 0 },
+        },
+      },
     });
     const firstPage = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25 });
     const secondPage = await client.dashboard.tasks({ filter: "all", page: 2, pageSize: 25 });
@@ -600,7 +623,7 @@ describe("Workhorse demo", () => {
       });
       expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
         window: "1h",
-        status: { level: "healthy", checks: [] },
+        status: { level: "healthy", checks: [], criticalChecks: [], degradedChecks: [] },
         kpis: {
           drain: { completedPerMinute: expect.any(Number), enqueuedPerMinute: expect.any(Number) },
           backlog: { ready: 0 },
@@ -608,7 +631,17 @@ describe("Workhorse demo", () => {
           lease: { expired: 0 },
         },
         outcomes: expect.any(Array),
-        integrity: { dueButUnpromoted: 0, partitions: expect.any(Array) },
+        integrity: {
+          dueButUnpromoted: 0,
+          partitions: expect.any(Array),
+          defaultEventRows: 0,
+          defaultAttemptRows: 0,
+          retention: {
+            policyUpdatedAt: expect.any(String),
+            eligibleHistoryPartitions: { jobEvents: 0, attemptHistory: 0 },
+            defaultHistoryRows: { jobEvents: 0, attemptHistory: 0 },
+          },
+        },
       });
       const detail = await client.dashboard.jobDetail({ id: accepted.jobId });
       expect(detail).toMatchObject({
@@ -1833,6 +1866,119 @@ describe("Workhorse demo", () => {
         }),
       ]),
     );
+  });
+
+  it("reports history spill as degraded rather than critical", async () => {
+    // A timestamp older than every weekly partition lands in the catch-all partition, which is
+    // exactly the condition operators need to see. No sleeping or seed data is involved.
+    await pool.query(
+      `INSERT INTO workhorse.job_event (job_id, attempt, event_type, details, occurred_at)
+       VALUES ($1, 1, 'enqueued', '{}'::jsonb, timestamptz '2000-01-01T00:00:00Z')`,
+      ["00000000-0000-4000-8000-000000000001"],
+    );
+
+    const { app } = createTestApplication();
+    const client = dashboardClient(app);
+    const system = await client.dashboard.system({ window: "1h" });
+
+    expect(system.status.level).toBe("degraded");
+    expect(system.status.criticalChecks).toEqual([]);
+    expect(system.status.degradedChecks).toEqual(["History rows outside weekly partitions (1)"]);
+    expect(system.status.checks).toEqual(system.status.degradedChecks);
+    expect(system.integrity.retention.defaultHistoryRows).toEqual({
+      jobEvents: 1,
+      attemptHistory: 0,
+    });
+    // The row predates every partition cutoff, so it is spill rather than an un-dropped week.
+    expect(system.integrity.retention.eligibleHistoryPartitions).toEqual({
+      jobEvents: 0,
+      attemptHistory: 0,
+    });
+    expect(system.integrity.defaultEventRows).toBe(1);
+    expect(system.integrity.retention.oldestRetainedAt).toBe("2000-01-01T00:00:00.000Z");
+    expect(system.integrity.retention.oldestRetainedCategory).toBe("jobEvents");
+
+    // Retention is disabled by default in the demo, so no category can report lag.
+    expect(system.integrity.retention.maxLagMs).toBeNull();
+    expect(system.integrity.retention.categories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "jobEvents",
+          label: "Task events",
+          lagMs: null,
+          prunedByPartition: true,
+        }),
+      ]),
+    );
+  });
+
+  it("reports a row-level retention category that is past its cutoff as degraded", async () => {
+    // Schedule runs are the one row-level category the shipped policy enables (30 days), so this
+    // needs no policy mutation and cannot collide with the identity-dependency check constraint.
+    await syncDemoSchedules(pool);
+    // Relative interval arithmetic keeps this free of time-zone and ISO-week dependence.
+    await pool.query(
+      `INSERT INTO workhorse.schedule_occurrence
+         (namespace, schedule_name, occurrence_at, job_id, fired_at)
+       VALUES ($1, $2, clock_timestamp() - interval '60 days', NULL,
+               clock_timestamp() - interval '60 days')`,
+      [DEMO_SCHEDULE_NAMESPACE, HEARTBEAT_SCHEDULE_NAME],
+    );
+
+    const { app } = createTestApplication();
+    const system = await dashboardClient(app).dashboard.system({ window: "1h" });
+
+    expect(system.status.level).toBe("degraded");
+    expect(system.status.criticalChecks).toEqual([]);
+    expect(system.status.degradedChecks).toEqual(["Retention behind: schedule runs"]);
+    expect(system.status.checks).toEqual(system.status.degradedChecks);
+
+    const scheduleRuns = system.integrity.retention.categories.find(
+      (row) => row.category === "scheduleOccurrences",
+    );
+    expect(scheduleRuns).toMatchObject({
+      label: "Schedule runs",
+      retentionDays: 30,
+      prunedByPartition: false,
+      oldestRetainedAt: expect.any(String),
+    });
+    // Roughly 30 days past the cutoff; a wide band keeps clock skew from making this flaky.
+    expect(scheduleRuns?.lagMs).toBeGreaterThan(29 * 24 * 60 * 60 * 1000);
+    expect(scheduleRuns?.lagMs).toBeLessThan(31 * 24 * 60 * 60 * 1000);
+    expect(system.integrity.retention.maxLagCategory).toBe("scheduleOccurrences");
+    expect(system.integrity.retention.maxLagMs).toBe(scheduleRuns?.lagMs);
+    expect(system.integrity.retention.oldestRetainedCategory).toBe("scheduleOccurrences");
+
+    // Categories the policy leaves disabled report no window and no lag rather than a false zero.
+    expect(
+      system.integrity.retention.categories.find((row) => row.category === "jobEvents"),
+    ).toMatchObject({ retentionDays: null, lagMs: null });
+    // Retention never escalates past degraded, and nothing spilled outside weekly storage.
+    expect(system.integrity.retention.defaultHistoryRows).toEqual({
+      jobEvents: 0,
+      attemptHistory: 0,
+    });
+  });
+
+  it("keeps the retention policy read model aligned with the queue read model", async () => {
+    const queue = new Queue(pool, "demo");
+    const [health, { app }] = [await queue.health(), createTestApplication()];
+    const system = await dashboardClient(app).dashboard.system({ window: "1h" });
+
+    expect(system.integrity.retention.policyUpdatedAt).toBe(
+      health.retentionPolicy.updatedAt.toISOString(),
+    );
+    expect(system.integrity.retention.categories.map((row) => row.category)).toEqual([
+      "jobIdentity",
+      "terminalOutcome",
+      "jobEvents",
+      "attemptHistory",
+      "scheduleOccurrences",
+    ]);
+    expect(
+      system.integrity.retention.categories.find((row) => row.category === "scheduleOccurrences")
+        ?.retentionDays,
+    ).toBe(health.retentionPolicy.scheduleOccurrenceRetentionDays);
   });
 
   it("runs core Hono and worker flows without mounting dashboard routes", async () => {

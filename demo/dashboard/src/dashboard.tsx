@@ -359,6 +359,31 @@ function formatClock(value: string | null | undefined): string {
   }).format(new Date(value));
 }
 
+/** Calendar day without a time, so a week boundary reads plainly instead of as an ISO week code. */
+function formatDay(value: string | null | undefined): string {
+  if (!value) return "—";
+  return getDateTimeFormatter({
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: displayTimeZone ?? undefined,
+  }).format(new Date(value));
+}
+
+/**
+ * Coarse span for retention ages, which run to days rather than the milliseconds and minutes
+ * `formatDuration` targets. Rounds down so a reported span never overstates the real lag.
+ */
+function formatSpan(milliseconds: number | null | undefined): string {
+  if (milliseconds === null || milliseconds === undefined) return "—";
+  if (milliseconds < 60_000) return "under a minute";
+  const minutes = Math.floor(milliseconds / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} hr`;
+  return `${Math.floor(hours / 24)} days`;
+}
+
 /**
  * Remaining time until a target, clamped at zero. A durable wait target that has
  * passed is not negative time; the task is simply eligible to be claimed again.
@@ -2292,7 +2317,9 @@ function SystemPage({
   setWindow: (window: DashboardSystemWindow) => void;
   navigate: (href: string) => void;
 }) {
-  const systemStatusColor = data.status.level === "critical" ? "red" : "teal";
+  // Level is also spelled out in the badge text so status never depends on color alone.
+  const systemStatusColor =
+    data.status.level === "critical" ? "red" : data.status.level === "degraded" ? "yellow" : "teal";
   const outcomeChartData = data.outcomes.map((bucket) => ({
     bucket: systemBucketLabel(bucket.bucketStart, data.window),
     enqueued: bucket.enqueued,
@@ -2301,7 +2328,39 @@ function SystemPage({
     retry: bucket.retry,
     leaseExpired: bucket.leaseExpired,
   }));
-  const defaultSpill = data.integrity.defaultEventRows + data.integrity.defaultAttemptRows;
+  const retention = data.integrity.retention;
+  const defaultSpill =
+    retention.defaultHistoryRows.jobEvents + retention.defaultHistoryRows.attemptHistory;
+  const eligiblePartitions =
+    retention.eligibleHistoryPartitions.jobEvents +
+    retention.eligibleHistoryPartitions.attemptHistory;
+  const enabledRetention = retention.categories.filter((row) => row.retentionDays !== null);
+  const retentionDetail =
+    enabledRetention.length === 0
+      ? "No category is set to delete history, so nothing can fall behind."
+      : enabledRetention
+          .map(
+            (row) =>
+              `${row.label}: keeps ${row.retentionDays} days, ${
+                row.lagMs === null
+                  ? "nothing retained yet"
+                  : row.lagMs === 0
+                    ? "inside the window"
+                    : `${formatSpan(row.lagMs)} past cutoff`
+              }${
+                row.oldestRetainedAt === null
+                  ? ""
+                  : ` (oldest ${formatExact(row.oldestRetainedAt)})`
+              }`,
+          )
+          .join(" · ");
+  const oldestRetained = retention.categories.find(
+    (row) => row.category === retention.oldestRetainedCategory,
+  );
+  // Only a lag check should tint the lag badge; spill and expired weeks have their own rows.
+  const retentionBehind = data.status.degradedChecks.some((check) =>
+    check.startsWith("Retention behind"),
+  );
 
   return (
     <Stack gap="xl">
@@ -2311,22 +2370,22 @@ function SystemPage({
             <Title order={1}>System Health</Title>
             <HelpButton
               label="System Health"
-              help="Operational health captured at the time shown on the right. The window selector controls rate, error, wait, recovery, and historical metrics; current-state counts and forward-looking deadlines are labeled separately."
+              help="Operational health captured at the time shown on the right. Critical means work is stopping or being lost: expired leases, stalled promotion, or a missing future history partition. Degraded means retained history is growing beyond policy, which costs storage but does not stop work. The window selector controls rate, error, wait, recovery, and historical metrics; current-state counts and forward-looking deadlines are labeled separately."
             />
             <Badge color={systemStatusColor} variant="light" size="lg" tt="capitalize">
               {data.status.level}
             </Badge>
           </Group>
           <Group gap="xs">
-            {data.status.checks.slice(0, 3).map((check) => (
-              <Text
-                key={check}
-                c={systemStatusColor === "teal" ? "dimmed" : `${systemStatusColor}.7`}
-                size="sm"
-              >
-                {check}
-              </Text>
-            ))}
+            {data.status.checks.slice(0, 3).map((check) => {
+              // Each check keeps its own severity so a degraded note is not painted as critical.
+              const isCritical = data.status.criticalChecks.includes(check);
+              return (
+                <Text key={check} c={isCritical ? "red.7" : "yellow.8"} size="sm">
+                  {isCritical ? "Critical" : "Degraded"}: {check}
+                </Text>
+              );
+            })}
             {data.status.checks.length === 0 ? (
               <Text c="dimmed" size="sm">
                 No operator checks need attention.
@@ -2466,11 +2525,11 @@ function SystemPage({
               <Text fw={650}>Integrity</Text>
               <HelpButton
                 label="Integrity"
-                help="Checks whether scheduled work is being promoted now and whether history partitions exist for the current and next four weeks. Default-partition spill counts rows written during the selected window."
+                help="Checks whether scheduled work is being promoted now, whether history storage exists for the current and next four weeks, and whether old history is being deleted on schedule. Promotion and missing future storage are critical. Retention findings are degraded: they cost storage but do not stop work. All counts here are current totals and ignore the window selector."
               />
             </Group>
             <Text c="dimmed" size="xs" mb="lg">
-              Tick proxy and weekly history coverage
+              Promotion, weekly history coverage, and history cleanup
             </Text>
             <Group justify="space-between" mb="lg">
               <Box>
@@ -2489,22 +2548,32 @@ function SystemPage({
                 {data.integrity.dueButUnpromoted}
               </Badge>
             </Group>
-            <Table verticalSpacing={6} horizontalSpacing="xs">
+            <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top">
+              <Table.Caption ta="left" c="dimmed" fz="xs" mt={0} mb={4}>
+                Storage prepared for upcoming history
+              </Table.Caption>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>Week</Table.Th>
-                  <Table.Th ta="center">Events</Table.Th>
-                  <Table.Th ta="center">Attempts</Table.Th>
+                  <Table.Th scope="col">Week starting</Table.Th>
+                  <Table.Th scope="col" ta="center">
+                    Task events
+                  </Table.Th>
+                  <Table.Th scope="col" ta="center">
+                    Attempt history
+                  </Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
                 {data.integrity.partitions.map((partition) => (
                   <Table.Tr key={partition.week}>
-                    <Table.Td>
-                      <Text size="xs" title={formatExact(partition.startsAt)}>
-                        {partition.week}
+                    <Table.Th scope="row" fw={400}>
+                      <Text
+                        size="xs"
+                        title={`${partition.week} · ${formatExact(partition.startsAt)}`}
+                      >
+                        {formatDay(partition.startsAt)}
                       </Text>
-                    </Table.Td>
+                    </Table.Th>
                     <Table.Td ta="center">
                       <Badge color={partition.eventExists ? "teal" : "red"} variant="dot" size="sm">
                         {partition.eventExists ? "Ready" : "Missing"}
@@ -2524,15 +2593,103 @@ function SystemPage({
               </Table.Tbody>
             </Table>
             <Divider my="md" />
-            <Group justify="space-between">
-              <Text size="sm" fw={600}>
-                Default partition spill
-              </Text>
-              <Badge color={defaultSpill > 0 ? "yellow" : "teal"} variant="light">
-                {data.integrity.defaultEventRows} events · {data.integrity.defaultAttemptRows}{" "}
-                attempts
-              </Badge>
-            </Group>
+            <Stack gap="md">
+              <Group justify="space-between" wrap="nowrap" align="flex-start">
+                <Box>
+                  <Group gap={4} wrap="nowrap">
+                    <Text size="sm" fw={600}>
+                      Retention lag
+                    </Text>
+                    <HelpButton label="Retention lag" help={retentionDetail} />
+                  </Group>
+                  <Text c="dimmed" size="xs">
+                    {enabledRetention.length === 0
+                      ? "No category deletes history"
+                      : retention.maxLagMs === null || retention.maxLagMs === 0
+                        ? "Every category is inside its keep-for window"
+                        : `Furthest behind: ${
+                            retention.categories.find(
+                              (row) => row.category === retention.maxLagCategory,
+                            )?.label ?? retention.maxLagCategory
+                          }`}
+                  </Text>
+                </Box>
+                <Badge
+                  color={retentionBehind ? "yellow" : "teal"}
+                  variant="light"
+                  title={retentionDetail}
+                >
+                  {enabledRetention.length === 0
+                    ? "Not applicable"
+                    : retention.maxLagMs === null || retention.maxLagMs === 0
+                      ? "On time"
+                      : `${formatSpan(retention.maxLagMs)} behind`}
+                </Badge>
+              </Group>
+              <Group justify="space-between" wrap="nowrap" align="flex-start">
+                <Box>
+                  <Text size="sm" fw={600}>
+                    Oldest retained
+                  </Text>
+                  <Text c="dimmed" size="xs">
+                    {oldestRetained ? oldestRetained.label : "No history retained yet"}
+                  </Text>
+                </Box>
+                <Badge
+                  color="gray"
+                  variant="light"
+                  title={formatExact(retention.oldestRetainedAt ?? undefined)}
+                >
+                  {retention.oldestRetainedAt === null
+                    ? "—"
+                    : formatRelative(retention.oldestRetainedAt)}
+                </Badge>
+              </Group>
+              <Group justify="space-between" wrap="nowrap" align="flex-start">
+                <Box>
+                  <Group gap={4} wrap="nowrap">
+                    <Text size="sm" fw={600}>
+                      Expired weeks awaiting cleanup
+                    </Text>
+                    <HelpButton
+                      label="Expired weeks awaiting cleanup"
+                      help="Whole weeks of history that are already past their keep-for window and are waiting for background cleanup to drop them. Cleanup removes a bounded number per pass, so this total shows the remaining backlog."
+                    />
+                  </Group>
+                  <Text c="dimmed" size="xs">
+                    Current total, not windowed
+                  </Text>
+                </Box>
+                <Badge
+                  color={eligiblePartitions > 0 ? "yellow" : "teal"}
+                  variant="light"
+                  title={`${retention.eligibleHistoryPartitions.jobEvents} task-event weeks, ${retention.eligibleHistoryPartitions.attemptHistory} attempt-history weeks`}
+                >
+                  {retention.eligibleHistoryPartitions.jobEvents} events ·{" "}
+                  {retention.eligibleHistoryPartitions.attemptHistory} attempts
+                </Badge>
+              </Group>
+              <Group justify="space-between" wrap="nowrap" align="flex-start">
+                <Box>
+                  <Group gap={4} wrap="nowrap">
+                    <Text size="sm" fw={600}>
+                      Rows outside weekly storage
+                    </Text>
+                    <HelpButton
+                      label="Rows outside weekly storage"
+                      help="Cumulative rows that landed in the catch-all area because no weekly storage covered their timestamp. This is a running total for the whole database, not a count for the selected window. Background cleanup clears expired rows when retention is enabled for that history category."
+                    />
+                  </Group>
+                  <Text c="dimmed" size="xs">
+                    Cumulative total, not windowed
+                  </Text>
+                </Box>
+                <Badge color={defaultSpill > 0 ? "yellow" : "teal"} variant="light">
+                  {retention.defaultHistoryRows.jobEvents} events ·{" "}
+                  {retention.defaultHistoryRows.attemptHistory} attempts
+                </Badge>
+              </Group>
+            </Stack>
           </Paper>
         </Grid.Col>
       </Grid>

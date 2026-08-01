@@ -1,8 +1,8 @@
 # Workhorse demo
 
 This is the end-to-end product demo for Workhorse. It lets you create live jobs, watch workers process
-them, inspect retries and terminal failures, and observe recurring work and queue health from the
-operator dashboard.
+them, inspect retries and terminal failures, and observe recurring work, retention health, and queue
+health from the operator dashboard.
 
 The demo application uses Hono and Drizzle to exercise both integration packages in a realistic setup.
 An order and its durable job are committed in one Drizzle transaction, two Hono-managed workers process
@@ -123,6 +123,13 @@ then refreshes only the active page through its dedicated oRPC reader. Task filt
 happen in PostgreSQL, so the client never downloads the full task list. A 15-second SSE safety hint
 covers transitions that do not currently emit a PostgreSQL notification and connection loss without
 treating notifications as truth.
+
+The System Health integrity panel shows future weekly partition coverage, persisted retention lag,
+oldest retained data, fully expired weeks awaiting bounded cleanup, and cumulative rows in the default
+history partitions. Retention backlog is shown as degraded because it consumes storage without stopping
+dispatch; expired leases, stalled promotion, or missing future partitions remain critical. Demo seeds
+intentionally represent a healthy retention state rather than manufacturing time-dependent cleanup
+failures.
 
 The reusable `createDemoApplication` boundary remains read-only by default. The one-command local demo
 injects a deliberately narrow writable operator that can enqueue test jobs and enable or disable its

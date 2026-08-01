@@ -199,13 +199,53 @@ export interface DashboardSystemFailingType {
   lastSeenAt: string;
 }
 
+/** Retention categories exposed by `Queue.health()`, ordered from identity outward. */
+export type DashboardRetentionCategory =
+  | "jobIdentity"
+  | "terminalOutcome"
+  | "jobEvents"
+  | "attemptHistory"
+  | "scheduleOccurrences";
+
+export interface DashboardRetentionCategoryRow {
+  category: DashboardRetentionCategory;
+  /** Operator-facing name; avoids table and partition jargon. */
+  label: string;
+  /** Configured minimum window in days, or null when the category is never pruned. */
+  retentionDays: number | null;
+  /** How far past the policy cutoff the oldest retained row still is. */
+  lagMs: number | null;
+  oldestRetainedAt: string | null;
+  /** Partitioned categories are pruned a whole week at a time, so lag alone is expected. */
+  prunedByPartition: boolean;
+}
+
+export interface DashboardSystemRetention {
+  policyUpdatedAt: string;
+  categories: DashboardRetentionCategoryRow[];
+  /** Largest lag across categories with retention enabled, or null when all are disabled. */
+  maxLagMs: number | null;
+  maxLagCategory: DashboardRetentionCategory | null;
+  /** Oldest retained timestamp across every category that still holds data. */
+  oldestRetainedAt: string | null;
+  oldestRetainedCategory: DashboardRetentionCategory | null;
+  /** Weekly history partitions already past their cutoff but not yet dropped. */
+  eligibleHistoryPartitions: { jobEvents: number; attemptHistory: number };
+  /** Cumulative rows that landed in the catch-all partitions; never window-scoped. */
+  defaultHistoryRows: { jobEvents: number; attemptHistory: number };
+}
+
 export interface DashboardSystemPage {
   capturedAt: string;
   window: DashboardSystemWindow;
   windowSeconds: number;
   status: {
-    level: "healthy" | "critical";
+    level: "healthy" | "degraded" | "critical";
     checks: string[];
+    /** Checks that forced `critical`; empty when the page is healthy or only degraded. */
+    criticalChecks: string[];
+    /** Checks that only warrant `degraded`; reported even while `critical` is active. */
+    degradedChecks: string[];
   };
   pausedQueues: string[];
   kpis: {
@@ -235,8 +275,10 @@ export interface DashboardSystemPage {
       eventExists: boolean;
       attemptExists: boolean;
     }>;
+    /** Cumulative catch-all partition rows, mirrored from `retention.defaultHistoryRows`. */
     defaultEventRows: number;
     defaultAttemptRows: number;
+    retention: DashboardSystemRetention;
   };
 }
 
@@ -1080,8 +1122,143 @@ const dashboardRetryBucketLabels: DashboardSystemRetryBucket["label"][] = [
   "later",
 ];
 
+type QueueHealthSnapshot = Awaited<ReturnType<Queue["health"]>>;
+
+/** Only the day-window knobs of the policy; the per-pass limits are not operator-facing here. */
+type RetentionDaysKey = {
+  [Key in keyof QueueHealthSnapshot["retentionPolicy"]]: QueueHealthSnapshot["retentionPolicy"][Key] extends
+    | number
+    | null
+    ? Key
+    : never;
+}[keyof QueueHealthSnapshot["retentionPolicy"]];
+
+const dashboardRetentionCategories: ReadonlyArray<{
+  category: DashboardRetentionCategory;
+  label: string;
+  policyKey: RetentionDaysKey;
+  prunedByPartition: boolean;
+}> = [
+  {
+    category: "jobIdentity",
+    label: "Task records",
+    policyKey: "jobIdentityRetentionDays",
+    prunedByPartition: false,
+  },
+  {
+    category: "terminalOutcome",
+    label: "Finished results",
+    policyKey: "terminalOutcomeRetentionDays",
+    prunedByPartition: false,
+  },
+  {
+    category: "jobEvents",
+    label: "Task events",
+    policyKey: "jobEventRetentionDays",
+    prunedByPartition: true,
+  },
+  {
+    category: "attemptHistory",
+    label: "Attempt history",
+    policyKey: "attemptHistoryRetentionDays",
+    prunedByPartition: true,
+  },
+  {
+    category: "scheduleOccurrences",
+    label: "Schedule runs",
+    policyKey: "scheduleOccurrenceRetentionDays",
+    prunedByPartition: false,
+  },
+];
+
+// Row cleanup runs every minute, while partition cleanup can legitimately wait for a whole weekly
+// boundary and is bounded per pass. Grace avoids turning normal maintenance cadence into an alert.
+const rowRetentionLagGraceMs = 6 * 60 * 60 * 1_000;
+const partitionRetentionLagGraceMs = 8 * 24 * 60 * 60 * 1_000;
+const eligiblePartitionGrace = 2;
+
+/**
+ * Flatten `Queue.health()` retention fields into an operator-ready projection. Numeric policy
+ * values are normalized because PostgreSQL bigint columns can arrive as strings.
+ */
+function dashboardRetention(health: QueueHealthSnapshot): DashboardSystemRetention {
+  const categories = dashboardRetentionCategories.map((definition) => {
+    const configured = health.retentionPolicy[definition.policyKey];
+    const oldest = health.oldestRetainedAt[definition.category];
+    const lag = health.retentionLagMs[definition.category];
+    return {
+      category: definition.category,
+      label: definition.label,
+      retentionDays: configured === null || configured === undefined ? null : Number(configured),
+      lagMs: lag === null || lag === undefined ? null : Number(lag),
+      oldestRetainedAt: oldest ? toIso(oldest) : null,
+      prunedByPartition: definition.prunedByPartition,
+    };
+  });
+
+  let maxLag: DashboardRetentionCategoryRow | null = null;
+  let oldest: DashboardRetentionCategoryRow | null = null;
+  for (const row of categories) {
+    if (row.lagMs !== null && row.lagMs > 0 && (maxLag === null || row.lagMs > maxLag.lagMs!)) {
+      maxLag = row;
+    }
+    if (
+      row.oldestRetainedAt !== null &&
+      (oldest === null ||
+        Date.parse(row.oldestRetainedAt) < Date.parse(oldest.oldestRetainedAt ?? ""))
+    ) {
+      oldest = row;
+    }
+  }
+
+  return {
+    policyUpdatedAt: toIso(health.retentionPolicy.updatedAt),
+    categories,
+    maxLagMs: maxLag?.lagMs ?? null,
+    maxLagCategory: maxLag?.category ?? null,
+    oldestRetainedAt: oldest?.oldestRetainedAt ?? null,
+    oldestRetainedCategory: oldest?.category ?? null,
+    eligibleHistoryPartitions: {
+      jobEvents: Number(health.eligibleHistoryPartitions.jobEvents),
+      attemptHistory: Number(health.eligibleHistoryPartitions.attemptHistory),
+    },
+    defaultHistoryRows: {
+      jobEvents: Number(health.defaultHistoryRows.jobEvents),
+      attemptHistory: Number(health.defaultHistoryRows.attemptHistory),
+    },
+  };
+}
+
+/**
+ * Retention problems degrade the page but never make it critical: history falling behind costs
+ * storage, while expired leases, stalled promotion, and missing future partitions stop or lose
+ * work outright.
+ */
+function retentionDegradedChecks(retention: DashboardSystemRetention): string[] {
+  const checks: string[] = [];
+  const behind = retention.categories.filter(
+    (row) =>
+      row.lagMs !== null &&
+      row.lagMs > (row.prunedByPartition ? partitionRetentionLagGraceMs : rowRetentionLagGraceMs),
+  );
+  if (behind.length > 0) {
+    checks.push(`Retention behind: ${behind.map((row) => row.label.toLowerCase()).join(", ")}`);
+  }
+  const eligible =
+    retention.eligibleHistoryPartitions.jobEvents +
+    retention.eligibleHistoryPartitions.attemptHistory;
+  if (eligible > eligiblePartitionGrace) {
+    checks.push(`Expired history weeks awaiting cleanup (${eligible})`);
+  }
+  const spill =
+    retention.defaultHistoryRows.jobEvents + retention.defaultHistoryRows.attemptHistory;
+  if (spill > 0) checks.push(`History rows outside weekly partitions (${spill})`);
+  return checks;
+}
+
 export async function readDashboardSystem(
   database: DemoDatabase,
+  queue: Queue,
   window: DashboardSystemWindow = "1h",
 ): Promise<DashboardSystemPage> {
   const windowSeconds = dashboardSystemWindowSeconds[window];
@@ -1095,7 +1272,7 @@ export async function readDashboardSystem(
     retryTypeRows,
     failingTypeRows,
     partitionRows,
-    defaultRows,
+    health,
   ] = await Promise.all([
     database.execute<{
       bucket_start: Date | string;
@@ -1324,18 +1501,14 @@ export async function readDashboardSystem(
           date_trunc('week', current_date) + interval '4 weeks', interval '1 week') week_start
        ORDER BY week_start
     `),
-    database.execute<{ event_rows: number; attempt_rows: number }>(sql`
-      SELECT (SELECT count(*)::integer FROM workhorse.job_event_default
-               WHERE occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})) AS event_rows,
-             (SELECT count(*)::integer FROM workhorse.attempt_history_default
-               WHERE occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})) AS attempt_rows
-    `),
+    // Retention facts come from the canonical queue read model rather than duplicated SQL here.
+    queue.health(),
   ]);
 
   const summary = summaryRows.rows[0]!;
   const runtime = runtimeRows.rows[0]!;
   const wait = waitRows.rows[0]!;
-  const defaults = defaultRows.rows[0]!;
+  const retention = dashboardRetention(health);
   const minutes = windowSeconds / 60;
   const errorRate =
     summary.current_attempts === 0 ? 0 : summary.current_errors / summary.current_attempts;
@@ -1359,10 +1532,16 @@ export async function readDashboardSystem(
       ? "History partitions missing"
       : null,
   ].filter((check): check is string => check !== null);
-  const status =
-    criticalChecks.length > 0
-      ? { level: "critical" as const, checks: criticalChecks }
-      : { level: "healthy" as const, checks: [] };
+  // Critical means work is stopping or being lost. Retention only costs storage, so it degrades.
+  const degradedChecks = retentionDegradedChecks(retention);
+  const level =
+    criticalChecks.length > 0 ? "critical" : degradedChecks.length > 0 ? "degraded" : "healthy";
+  const status = {
+    level: level as DashboardSystemPage["status"]["level"],
+    checks: [...criticalChecks, ...degradedChecks],
+    criticalChecks,
+    degradedChecks,
+  };
 
   const queues = queueRows.rows
     .map((row) => ({
@@ -1440,8 +1619,9 @@ export async function readDashboardSystem(
     integrity: {
       dueButUnpromoted: runtime.due_but_unpromoted,
       partitions,
-      defaultEventRows: defaults.event_rows,
-      defaultAttemptRows: defaults.attempt_rows,
+      defaultEventRows: retention.defaultHistoryRows.jobEvents,
+      defaultAttemptRows: retention.defaultHistoryRows.attemptHistory,
+      retention,
     },
   };
 }
