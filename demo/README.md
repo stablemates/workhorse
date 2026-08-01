@@ -36,7 +36,9 @@ packages, then starts a watched Hono API and a Vite development frontend at
 development metadata, HMR, source maps, and the demo-owned React Grab module. It does not run a production
 dashboard bundle first. The Hono API remains mounted below `/workhorse`; the demo intentionally exposes no
 ad hoc public job API. Set
-`WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay.
+`WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay. Each development run
+allocates a free private Hono API port. Set `WORKHORSE_API_PORT` to a positive value only when a fixed
+internal port is required; `0` or an omitted value requests automatic allocation.
 Startup seeds one successful transactional order, one named durable timer, fixed, exponential, and
 decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
 durable pipelines, three intentionally persistent durable pipelines, one terminal failure, and one future
