@@ -11,6 +11,7 @@ import type { WorkerOptions } from "./worker.js";
  * construction, and an idempotent resource shutdown hook.
  */
 export interface WorkhorseAdapter<TTransaction = Queryable> {
+  readonly database: Queryable;
   readonly queue: Queue;
   forTransaction(transaction: TTransaction): Queue;
   createWorker(options?: WorkerOptions): Worker;
@@ -32,6 +33,7 @@ export function createWorkhorseAdapter<TTransaction = Queryable>(
   let closePromise: Promise<void> | undefined;
 
   return {
+    database: options.database,
     queue,
     forTransaction(transaction) {
       return new Queue(options.adaptTransaction(transaction), queue.defaultQueue);

@@ -1,12 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createDrizzleAdapter } from "@workhorse/drizzle";
-import { HonoWorkhorse } from "@workhorse/hono";
-import { RPCHandler } from "@orpc/server/fetch";
+import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
+import { DashboardRefreshHub } from "@workhorse/dashboard/server";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Hono } from "hono";
-import { streamSSE } from "hono/streaming";
 import {
   EnqueueIdempotencyConflictError,
   Queue,
@@ -18,16 +17,15 @@ import {
 } from "@workhorse/core";
 import type { Pool } from "pg";
 import { z } from "zod";
-import { DashboardRefreshHub } from "./dashboard-refresh.js";
 import {
   DURABLE_DEMO_JOB_TYPE,
   type DurableDemoPayload,
   type DurableDemoScenario,
   durableDemoScenarios,
+  durableDemoPlanForJob,
   parseDurableDemoScenario,
   persistentFailureFor,
 } from "./durable-demo.js";
-import { dashboardRouter } from "./rpc.js";
 import { orders } from "./schema.js";
 
 const ORDER_JOB_TYPE = "order.process";
@@ -1153,12 +1151,10 @@ export function createDemoApplication(
       options.onWorkerError?.(error);
     },
   });
-  const rpcHandler = new RPCHandler(dashboardRouter);
-
   const app = new Hono()
     .use("*", workhorse.middleware())
     .get("/", (context) =>
-      options.dashboard === false ? context.json(DEMO_INDEX) : context.redirect("/tasks"),
+      options.dashboard === false ? context.json(DEMO_INDEX) : context.redirect("/workhorse/tasks"),
     )
     .get("/api", (context) => context.json(DEMO_INDEX))
     .post("/orders", async (context) => {
@@ -1396,51 +1392,22 @@ export function createDemoApplication(
     );
 
   if (options.dashboard !== false) {
-    app.all("/rpc/*", async (context) => {
-      const { response } = await rpcHandler.handle(context.req.raw, {
-        prefix: "/rpc",
-        context: {
-          database,
-          queue: context.var.workhorse.queue,
-          configuredWorkers: DEMO_WORKERS,
-          environment,
-          maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs, housekeepingIntervalMs },
-          operator: options.operator ?? createReadOnlyOperator(),
-          scheduleController: options.scheduleController,
-          queueController: options.queueController,
-          taskController,
-          workerController,
-        },
-      });
-      return response ?? context.notFound();
+    mountWorkhorseDashboard(app, {
+      path: "/workhorse",
+      workhorse,
+      authorize: () => true,
+      environment,
+      configuredWorkers: DEMO_WORKERS,
+      maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs, housekeepingIntervalMs },
+      operator: options.operator ?? createReadOnlyOperator(),
+      scheduleController: options.scheduleController,
+      queueController: options.queueController,
+      taskController,
+      workerController,
+      projectDurability: durableDemoPlanForJob,
+      refresh: dashboardRefresh,
+      auditActor: "local-demo",
     });
-    app.get("/dashboard/events", (context) =>
-      streamSSE(context, async (stream) => {
-        let writes = Promise.resolve();
-        const publish = (event: { reason: string; occurredAt: string }) => {
-          writes = writes.then(() =>
-            stream.writeSSE({ event: "refresh", data: JSON.stringify(event) }),
-          );
-        };
-        const unsubscribe = dashboardRefresh.subscribe(publish);
-        const fallback = setInterval(
-          () => publish({ reason: "fallback", occurredAt: new Date().toISOString() }),
-          15_000,
-        );
-        fallback.unref();
-        publish({ reason: "connected", occurredAt: new Date().toISOString() });
-
-        try {
-          await new Promise<void>((resolve) => {
-            context.req.raw.signal.addEventListener("abort", () => resolve(), { once: true });
-          });
-        } finally {
-          clearInterval(fallback);
-          unsubscribe();
-          await writes.catch(() => undefined);
-        }
-      }),
-    );
   }
 
   return { app, workhorse, dashboardRefresh, workerController };

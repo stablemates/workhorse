@@ -1,11 +1,13 @@
 import { Box, Group, type BoxProps } from "@mantine/core";
+import workhorseMarkUrl from "./assets/workhorse-mark.png";
+import workhorseWordmarkUrl from "./assets/workhorse-wordmark.png";
 
 interface WorkhorseMarkProps extends BoxProps {
   label?: string;
 }
 
 export function WorkhorseMark({ label = "Workhorse", ...props }: WorkhorseMarkProps) {
-  return <Box component="img" src="/brand/workhorse-mark.png" alt={label} {...props} />;
+  return <Box component="img" src={workhorseMarkUrl} alt={label} {...props} />;
 }
 
 export function WorkhorseBrand() {
@@ -16,7 +18,7 @@ export function WorkhorseBrand() {
       </Box>
       <Box
         component="img"
-        src="/brand/workhorse-wordmark.png"
+        src={workhorseWordmarkUrl}
         alt="Workhorse"
         className="workhorse-brand__wordmark"
       />

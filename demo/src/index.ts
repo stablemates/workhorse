@@ -1,5 +1,4 @@
 import { serveWithWorkhorse } from "@workhorse/hono";
-import { serveStatic } from "@hono/node-server/serve-static";
 import { installSchema } from "@workhorse/core";
 import { Client, Pool } from "pg";
 import {
@@ -12,7 +11,7 @@ import {
   seedDemoData,
   syncDemoSchedules,
 } from "./app.js";
-import { DashboardRefreshHub } from "./dashboard-refresh.js";
+import { DashboardRefreshHub } from "@workhorse/dashboard/server";
 import { resolveDemoDatabaseUrl } from "./environment.js";
 
 const databaseUrl = resolveDemoDatabaseUrl();
@@ -51,14 +50,6 @@ const { app, workhorse } = createDemoApplication(database, {
   },
   onWorkerError: (error) => console.error("Workhorse worker stopped", error),
 });
-app.use("/assets/*", serveStatic({ root: "./dist/dashboard" }));
-const serveDashboard = serveStatic({
-  root: "./dist/dashboard",
-  rewriteRequestPath: () => "/index.html",
-});
-for (const route of ["/tasks", "/cron", "/queues", "/system", "/workers", "/settings"]) {
-  app.get(route, serveDashboard);
-}
 if (process.env.SEED_DEMO_DATA !== "false") {
   const seed = await seedDemoData(database);
   console.log(

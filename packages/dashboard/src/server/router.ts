@@ -1,18 +1,18 @@
 import { ORPCError, os } from "@orpc/server";
 import type { Queue } from "@workhorse/core";
+import type { DashboardSystemWindow, MaintenanceLoopCadences } from "../model.js";
 import { z } from "zod";
 import type {
-  AuditContext,
+  DashboardAuditContext,
+  DashboardDurabilityProjector,
   DashboardOperator,
-  DemoDatabase,
-  QueueController,
-  ScheduleController,
-  TaskController,
-  WorkerController,
-} from "./app.js";
+  DashboardQueueController,
+  DashboardScheduleController,
+  DashboardTaskController,
+  DashboardWorkerController,
+} from "./types.js";
+import type { DashboardDatabase } from "./sql.js";
 import {
-  type DashboardSystemWindow,
-  type MaintenanceLoopCadences,
   readDashboardActivity,
   readDashboardCron,
   readDashboardJobDetail,
@@ -22,19 +22,20 @@ import {
   readDashboardTaskCounts,
   readDashboardTasks,
   readDashboardWorkers,
-} from "./dashboard.js";
+} from "./read-model.js";
 
 export interface DashboardRpcContext {
-  database: DemoDatabase;
+  database: DashboardDatabase;
   queue: Queue;
   configuredWorkers: readonly string[];
   environment: string;
   maintenanceLoops: MaintenanceLoopCadences;
   operator: DashboardOperator;
-  scheduleController?: ScheduleController;
-  queueController?: QueueController;
-  taskController?: TaskController;
-  workerController?: WorkerController;
+  scheduleController?: DashboardScheduleController;
+  queueController?: DashboardQueueController;
+  taskController?: DashboardTaskController;
+  workerController?: DashboardWorkerController;
+  projectDurability?: DashboardDurabilityProjector;
 }
 
 const procedure = os.$context<DashboardRpcContext>();
@@ -120,7 +121,7 @@ const cancelTaskInput = z.object({
 
 function auditWithOccurredAt(
   audit: z.infer<typeof auditSchema>,
-): AuditContext & { occurredAt: string } {
+): DashboardAuditContext & { occurredAt: string } {
   return { ...audit, occurredAt: new Date().toISOString() };
 }
 
@@ -141,6 +142,7 @@ export const dashboardRouter = {
           input.search,
           input.worker,
           input.jobType,
+          context.projectDurability,
         ),
       ),
     taskFacets: procedure.handler(({ context }) =>
@@ -179,7 +181,11 @@ export const dashboardRouter = {
       );
     }),
     jobDetail: procedure.input(jobDetailInput).handler(async ({ context, input }) => {
-      const detail = await readDashboardJobDetail(context.database, input.id);
+      const detail = await readDashboardJobDetail(
+        context.database,
+        input.id,
+        context.projectDurability,
+      );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
       return detail;
     }),

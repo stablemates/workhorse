@@ -41,15 +41,15 @@ import {
   syncDemoSchedules,
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
-import type { DashboardRouter } from "../src/rpc.js";
+import type { DashboardRouter } from "@workhorse/dashboard/server";
+import { dashboardDatabase, readDashboardSnapshot } from "@workhorse/dashboard/server";
 import { durableDemoScenarios } from "../src/durable-demo.js";
 import {
   describeIdempotency,
   idempotencyEvidenceLine,
-  readDashboardSnapshot,
   readIdempotencyEvidence,
-} from "../src/dashboard.js";
-import type { DashboardWorkerRow } from "../src/dashboard.js";
+  type DashboardWorkerRow,
+} from "@workhorse/dashboard/model";
 
 const databaseUrl = localDatabaseUrl("test");
 assertLocalDatabasePurpose(databaseUrl, "test");
@@ -115,7 +115,10 @@ function dashboardClient(
   app: ReturnType<typeof createDemoApplication>["app"],
 ): RouterClient<DashboardRouter> {
   return createORPCClient(
-    new RPCLink({ url: "http://demo.test/rpc", fetch: (request) => app.request(request) }),
+    new RPCLink({
+      url: "http://demo.test/workhorse/rpc",
+      fetch: (request) => app.request(request),
+    }),
   );
 }
 
@@ -153,6 +156,21 @@ async function waitForWorker(
 }
 
 describe("Workhorse demo", () => {
+  it("mounts the packaged dashboard under /workhorse", async () => {
+    const { app } = createTestApplication();
+    const root = await app.request("/");
+    expect(root.status).toBe(302);
+    expect(root.headers.get("location")).toBe("/workhorse/tasks");
+
+    const page = await app.request("/workhorse/tasks");
+    const html = await page.text();
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    expect(html).toContain("window.workhorseDashboard=");
+    expect(html).toContain('"basePath":"/workhorse"');
+    expect((await app.request("/tasks")).status).toBe(404);
+  });
+
   it("uses a conservative worker polling interval for the demo", () => {
     expect(DEMO_WORKER_POLL_MS).toBe(15_000);
     expect(DEMO_LONG_RUNNING_MS).toBe(20_000);
@@ -800,7 +818,7 @@ describe("Workhorse demo", () => {
     try {
       const rootResponse = await app.request("/");
       expect(rootResponse.status).toBe(302);
-      expect(rootResponse.headers.get("location")).toBe("/tasks");
+      expect(rootResponse.headers.get("location")).toBe("/workhorse/tasks");
       expect(await (await app.request("/api")).json()).toMatchObject({
         name: "Workhorse demo",
       });
@@ -2094,7 +2112,7 @@ describe("Workhorse demo", () => {
       );
 
       const snapshot = await readDashboardSnapshot(
-        database,
+        dashboardDatabase(pool),
         new Queue(pool, "demo"),
         DEMO_WORKERS,
         createLocalOperator(database),
@@ -2462,8 +2480,8 @@ describe("Workhorse demo", () => {
       expect(await (await app.request("/")).json()).toMatchObject({
         name: "Workhorse demo",
       });
-      expect((await app.request("/rpc/dashboard/tasks")).status).toBe(404);
-      expect((await app.request("/dashboard/events")).status).toBe(404);
+      expect((await app.request("/workhorse/rpc/dashboard/tasks")).status).toBe(404);
+      expect((await app.request("/workhorse/events")).status).toBe(404);
       const response = await app.request("/orders", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2743,7 +2761,7 @@ describe("Workhorse demo", () => {
     ).json()) as { jobId: string };
 
     const snapshot = await readDashboardSnapshot(
-      database,
+      dashboardDatabase(pool),
       new Queue(pool, "demo"),
       ["demo-worker"],
       createLocalOperator(database),

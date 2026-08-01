@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTaskLocation, taskLocationHref } from "./task-location";
+import { parseTaskLocation, taskLocationHref } from "./task-location.js";
 
 describe("task location state", () => {
   it("round-trips shareable task filters and omits defaults", () => {

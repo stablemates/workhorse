@@ -136,7 +136,7 @@ try {
   }
   if (!ready) throw new Error(`Timed out waiting for demo readiness\n${demoOutput}`);
 
-  const dashboard = await fetch(`${baseUrl}/tasks`);
+  const dashboard = await fetch(`${baseUrl}/workhorse/tasks`);
   if (!dashboard.ok || !(await dashboard.text()).includes('<div id="root"></div>')) {
     throw new Error("Dashboard assets were not served from the clean checkout");
   }
@@ -197,13 +197,13 @@ try {
   const failure = (await failureResponse.json()) as { jobId: string };
   const completedFailure = await waitForJob(baseUrl, failure.jobId, "failed");
 
-  const tasksResponse = await fetch(`${baseUrl}/rpc/dashboard/tasks`, {
+  const tasksResponse = await fetch(`${baseUrl}/workhorse/rpc/dashboard/tasks`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ json: { filter: "all", page: 1, pageSize: 100 } }),
   });
   const tasksText = await tasksResponse.text();
-  const cronResponse = await fetch(`${baseUrl}/rpc/dashboard/cron`, {
+  const cronResponse = await fetch(`${baseUrl}/workhorse/rpc/dashboard/cron`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}",

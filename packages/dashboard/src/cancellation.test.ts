@@ -3,7 +3,7 @@ import {
   describeCancelOutcome,
   describeCancellationRequest,
   isTerminalTaskState,
-} from "../../src/dashboard";
+} from "./model.js";
 
 /**
  * These tests pin the promises the cancellation copy is allowed to make.

@@ -1,10 +1,14 @@
 # `@workhorse/hono`
 
-Hono middleware and Node.js lifecycle integration for Workhorse.
+Hono lifecycle integration and a complete mountable Workhorse admin application.
 
 ```ts
-import { HonoWorkhorse, serveWithWorkhorse } from "@workhorse/hono";
+import { installSchema } from "@workhorse/core";
+import { HonoWorkhorse, mountWorkhorseDashboard, serveWithWorkhorse } from "@workhorse/hono";
 import { Hono } from "hono";
+
+// Installation is an explicit deployment/startup step. Mounting never changes the schema.
+await installSchema(database);
 
 const workhorse = new HonoWorkhorse(adapter, {
   workers: [
@@ -21,9 +25,21 @@ const app = new Hono().use(workhorse.middleware()).post("/jobs", async (c) => {
   return c.json({ id }, 202);
 });
 
+mountWorkhorseDashboard(app, {
+  path: "/workhorse",
+  workhorse,
+  environment: "production",
+  authorize: (request) => isAdmin(request),
+});
+
 const server = await serveWithWorkhorse({ fetch: app.fetch, workhorse, port: 3000 });
 process.once("SIGTERM", () => void server.shutdown());
 ```
+
+The mount owns `/workhorse/*`, including the packaged React application, static assets, oRPC API,
+and SSE refresh stream. Authorization is required explicitly. The adapter checks that the installed
+schema is compatible and returns `503` when it is not, but it never installs or migrates database
+objects.
 
 Shutdown first stops accepting HTTP connections and stops new worker claims. It then waits for
 in-flight requests and handlers before closing provider-owned resources.
