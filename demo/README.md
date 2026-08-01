@@ -28,9 +28,10 @@ development proxy. The JSON API index remains available at `http://workhorse.loc
 Each run allocates a free internal Hono port so multiple worktrees can run concurrently. Set
 `WORKHORSE_API_PORT` only when an explicit internal port is required, or `WORKHORSE_WORKER_POLL_MS` to
 override the workers' 15-second idle polling delay.
-Startup seeds one successful transactional order, one named durable timer, one checkpointed recoverable
-retry, three recoverable multi-step durable pipelines, three intentionally persistent durable pipelines,
-one terminal failure, and one future scheduled job. The durable pipelines cover order fulfillment,
+Startup seeds one successful transactional order, one named durable timer, fixed, exponential, and
+decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
+durable pipelines, three intentionally persistent durable pipelines, one terminal failure, and one future
+scheduled job. The durable pipelines cover order fulfillment,
 customer onboarding, and report publication. Recoverable examples crash after different checkpoints on
 attempt 1, then continue without repeating completed operations. The persistent examples preserve the same
 checkpoint evidence but deliberately fail every attempt; their next attempts remain visibly scheduled about
@@ -62,7 +63,15 @@ The response contains a `jobId` and the expected `reserve-capacity` checkpoint n
 simulated capacity reservation and then fails deliberately. Attempt 2 reuses that exact reservation instead
 of running the checkpoint operation again. The task drawer labels the checkpoint
 **Persisted across retry**, shows its attempt and worker provenance, and keeps the immutable `retry` then
-`succeeded` attempt history alongside it.
+`succeeded` attempt history alongside it. Retry-policy rows and the drawer show the persisted fixed,
+exponential, or decorrelated-jitter configuration. The lifecycle timeline shows PostgreSQL's selected
+delay and whether its source was the persisted policy, a manual override, the legacy handler default, or
+immediate lease recovery.
+
+These policies are durable job data, not worker callback configuration. PostgreSQL validates them,
+selects the delay for handler failure and lease recovery, and records provenance. Decorrelated jitter is
+deterministic from job identity, attempt, and persisted previous delay, so refreshing the dashboard or
+recreating a `Queue` does not alter the next selection.
 
 Create a four-step order-fulfillment pipeline:
 
