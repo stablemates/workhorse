@@ -27,6 +27,8 @@ The current implementation remains an evidence-first validation release rather t
   with jobs and recurring schedule definitions;
 - append-only, time-partitioned lifecycle events and finalized attempts;
 - immutable named handler checkpoints that survive retry and are fenced against stale workers;
+- persisted terminal outcomes/results and checkpoint-backed interim artifacts inspectable in the existing
+  demo task drawer;
 - named durable timer waits that release the worker lease and restart in the same logical attempt;
 - persisted, bounded retention for terminal jobs, history partitions, fallback rows, and schedule
   occurrences, with live-job and retained-attribution safety guards;
@@ -43,6 +45,9 @@ The current implementation remains an evidence-first validation release rather t
 - a reproducible conventional-table versus live-runtime benchmark.
 
 Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
+
+Checkpoint outputs are immutable evidence, not mutable progress updates. Their task-drawer visibility does
+not complete roadmap item **P1-09 Progress and job metadata**.
 
 ### Cooperative cancellation
 
@@ -194,8 +199,11 @@ package, installs the application schema, starts the Hono worker, and serves the
 pnpm demo
 ```
 
-Open `http://localhost:3000/`; it redirects to the operator dashboard. The default startup seeds successful, retried, and failed jobs
-so the operational views are populated; set `SEED_DEMO_DATA=false` for an empty console. The recurring
+Open `http://localhost:3000/`; it redirects to the operator dashboard. The default startup seeds successful,
+retried, and failed jobs so the operational views are populated. Three durable seeds persistently fail at
+configured stage boundaries, never execute later stages, and retry at about 5, 7, and 10 minutes. Their
+checkpoint-backed interim artifacts, attempt failures, and eventual terminal result or failure evidence are
+inspectable in the existing task drawer. Set `SEED_DEMO_DATA=false` for an empty console. The recurring
 heartbeat demonstration runs on the worker's built-in scheduler with no extra infrastructure. See the
 demo README for curl requests and connection overrides.
 

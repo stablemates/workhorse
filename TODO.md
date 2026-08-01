@@ -257,8 +257,10 @@ not depend on the later full OpenTelemetry and metrics package.
 
 **Depends on:** P1-02
 
-Progress remains observable through the query and dashboard contracts; full trace and metric export
-is a later integration rather than a prerequisite.
+Immutable checkpoint outputs can already serve as inspectable interim artifacts in the demo task drawer,
+but they are not mutable progress. P1-09 remains open for a distinct fenced, bounded update contract.
+Progress remains observable through the query and dashboard contracts; full trace and metric export is a
+later integration rather than a prerequisite.
 
 - [ ] Add fenced, bounded progress updates for active jobs.
 - [ ] Keep mutable progress out of immutable payload and outcome fields.
@@ -277,6 +279,8 @@ is a later integration rather than a prerequisite.
       coalesces overlapping same-name calls.
 - [x] Reject repeated names with materially different values and document the external-effect crash
       window without making an exactly-once claim.
+- [x] Expose schema v11 terminal results or failure evidence and checkpoint-backed interim artifacts in the
+      existing task drawer, including representative persistent-failure seeds between retries.
 
 ### [x] P1-11 Named durable timer waits
 

@@ -25,6 +25,7 @@ import {
   type DurableDemoScenario,
   durableDemoScenarios,
   parseDurableDemoScenario,
+  persistentFailureFor,
 } from "./durable-demo.js";
 import { dashboardRouter } from "./rpc.js";
 import { orders } from "./schema.js";
@@ -1031,6 +1032,7 @@ export function createDemoApplication(
               }
             > = {};
             const operationDelayMs = failureMode === "continuous" ? 0 : durableStepMs;
+            const persistentFailAfterStep = persistentFailureFor(scenario).afterStepIndex;
 
             for (const [stepIndex, step] of definition.steps.entries()) {
               const artifact = await checkpoint(step.name, async () => {
@@ -1046,13 +1048,22 @@ export function createDemoApplication(
               artifacts[step.name] = artifact;
               dashboardRefresh.publish("worker");
 
-              if (job.attempt === 1 && stepIndex === definition.failAfterStep) {
+              if (failureMode === "continuous" && stepIndex === persistentFailAfterStep) {
+                const nextStep = definition.steps[stepIndex + 1];
+                throw new Error(
+                  nextStep
+                    ? `Intentional persistent demo failure between durable stages ${step.name} and ${nextStep.name}`
+                    : `Intentional persistent demo failure at the boundary after durable stage ${step.name}`,
+                );
+              }
+
+              if (
+                failureMode !== "continuous" &&
+                job.attempt === 1 &&
+                stepIndex === definition.failAfterStep
+              ) {
                 throw new Error(`Intentional crash after durable step ${step.name}`);
               }
-            }
-
-            if (failureMode === "continuous") {
-              throw new Error(`Intentional persistent failure after durable scenario ${scenario}`);
             }
 
             return {

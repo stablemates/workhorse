@@ -4,22 +4,23 @@ This is the authoritative implementation snapshot for schema version 11. “Supp
 
 ## At a glance
 
-| Supported core                                           | Partial today                     | Not supported today                              |
-| -------------------------------------------------------- | --------------------------------- | ------------------------------------------------ |
-| Transactional idempotent immediate/delayed batch enqueue | Polling despite `NOTIFY` hints    | Priorities                                       |
-| FIFO `SKIP LOCKED` claims                                |                                   | Deadlines, progress                              |
-| Leases, heartbeats, fencing, recovery                    |                                   | Cross-queue concurrency policies and rate limits |
-| Deploy-synchronized worker-owned schedules               | Point-in-time health snapshot     | Arbitrary scheduled SQL                          |
-| Persisted retry policies and terminal failure            | Success-path comparative baseline | Dead letters, redrive, dependencies, workflows   |
-| Queue pause/resume/purge controls                        | Demo-only operations dashboard    | RBAC, OpenTelemetry, additional integrations     |
-| Drizzle provider and Hono lifecycle package              | Clean-install schema only         | Online production migration guarantees           |
-| Live runtime plus immutable outcomes                     |                                   |                                                  |
-| Append-only events and attempt history                   |                                   |                                                  |
-| Immutable named checkpoint replay                        |                                   |                                                  |
-| Lease-releasing named durable timer waits                |                                   |                                                  |
-| Bounded attribution-safe automated retention             |                                   |                                                  |
-| Configurable bounded worker concurrency                  |                                   |                                                  |
-| Immediate and cooperative fenced cancellation            |                                   |                                                  |
+| Supported core                                           | Partial today                                 | Not supported today                              |
+| -------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------ |
+| Transactional idempotent immediate/delayed batch enqueue | Polling despite `NOTIFY` hints                | Priorities                                       |
+| FIFO `SKIP LOCKED` claims                                |                                               | Deadlines, progress                              |
+| Leases, heartbeats, fencing, recovery                    |                                               | Cross-queue concurrency policies and rate limits |
+| Deploy-synchronized worker-owned schedules               | Point-in-time health snapshot                 | Arbitrary scheduled SQL                          |
+| Persisted retry policies and terminal failure            | Success-path comparative baseline             | Dead letters, redrive, dependencies, workflows   |
+| Queue pause/resume/purge controls                        | Demo-only operations dashboard                | RBAC, OpenTelemetry, additional integrations     |
+| Drizzle provider and Hono lifecycle package              | Clean-install schema only                     | Online production migration guarantees           |
+| Live runtime plus immutable outcomes                     |                                               |                                                  |
+| Append-only events and attempt history                   |                                               |                                                  |
+| Immutable named checkpoint replay                        |                                               |                                                  |
+|                                                          | Task-drawer outcome and checkpoint inspection |                                                  |
+| Lease-releasing named durable timer waits                |                                               |                                                  |
+| Bounded attribution-safe automated retention             |                                               |                                                  |
+| Configurable bounded worker concurrency                  |                                               |                                                  |
+| Immediate and cooperative fenced cancellation            |                                               |                                                  |
 
 ## Core job and dispatch
 
@@ -85,19 +86,19 @@ This is the authoritative implementation snapshot for schema version 11. “Supp
 
 These primitives make selected handler boundaries durable while preserving Workhorse's restart-from-entry execution model. They do not persist a JavaScript stack or provide a workflow graph.
 
-| Feature                                | Status        | Current behavior and limits                                                                                                                                                                                                            |
-| -------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Named checkpoint execution             | Supported     | `context.checkpoint(name, operation)` reuses a completed name on replay; otherwise it runs the operation and persists its JSON result under the current lease. Overlapping same-name calls in one activation are coalesced.            |
-| Checkpoint reads                       | Supported     | Handlers expose `getCheckpoint`; `Queue.getCheckpoint` and `listCheckpoints` provide low-level reads with attempt, fence, worker, and creation-time provenance.                                                                        |
-| Checkpoint immutability and fencing    | Supported     | `Queue.saveCheckpoint` accepts only the exact active, unexpired worker/fence generation. Reusing a name with materially different JSON raises `CheckpointConflictError`; stale ownership raises `CheckpointLeaseLostError`.            |
-| Checkpoint value limits                | Supported     | Names contain 1 to 200 characters and each PostgreSQL-canonical JSONB value is limited to 1 MiB. The external-effect-to-checkpoint crash window remains at least once and requires application idempotency.                            |
-| Relative durable timer                 | Supported     | `context.sleep(name, durationMs)` stores the first relative duration and PostgreSQL-computed wake target, releases ownership into the scheduled index, and suspends without consuming the logical attempt.                             |
-| Absolute durable timer                 | Supported     | `context.sleepUntil(name, wakeAt)` persists an immutable absolute target. Reusing the name with a different mode or target raises `WaitConflictError`.                                                                                 |
-| Timer replay and inspection            | Supported     | A due timer is promoted and reclaimed with a new fence in the same logical attempt. `context.getWait`, `Queue.getWait`, and `listWaits` expose the committed boundary and provenance. Handler code restarts from entry on every claim. |
-| Timer bounds and lease safety          | Supported     | Wait names contain 1 to 200 characters; each job retains at most 1,000 waits; first targets are limited to a 365-day future horizon. Stale ownership and wait-limit failures have typed errors.                                        |
-| Durable lifecycle history              | Supported     | Checkpoint creation and timer scheduling, elapsed reclaim, and replay append explicit lifecycle events. One finalized attempt-history row spans all timer suspensions in that logical attempt.                                         |
-| Durable health visibility              | Supported     | Queue health reports sleeping jobs, overdue waits, and the next durable wake target. The demo dashboard shows checkpoint progress, wait targets, and replay activity.                                                                  |
-| Signals, early wake, and workflow DAGs | Not supported | Timer waits are time-based only. There is no signal delivery, operator early-wake contract, dependency graph, child-job join, deterministic workflow runtime, or persisted continuation stack.                                         |
+| Feature                                | Status        | Current behavior and limits                                                                                                                                                                                                                                                                  |
+| -------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Named checkpoint execution             | Supported     | `context.checkpoint(name, operation)` reuses a completed name on replay; otherwise it runs the operation and persists its JSON result under the current lease. Overlapping same-name calls in one activation are coalesced.                                                                  |
+| Checkpoint reads                       | Supported     | Handlers expose `getCheckpoint`; `Queue.getCheckpoint` and `listCheckpoints` provide low-level reads with attempt, fence, worker, and creation-time provenance. The existing demo task drawer renders the same immutable outputs as checkpoint-backed interim artifacts.                     |
+| Checkpoint immutability and fencing    | Supported     | `Queue.saveCheckpoint` accepts only the exact active, unexpired worker/fence generation. Reusing a name with materially different JSON raises `CheckpointConflictError`; stale ownership raises `CheckpointLeaseLostError`.                                                                  |
+| Checkpoint value limits                | Supported     | Names contain 1 to 200 characters and each PostgreSQL-canonical JSONB value is limited to 1 MiB. The external-effect-to-checkpoint crash window remains at least once and requires application idempotency.                                                                                  |
+| Relative durable timer                 | Supported     | `context.sleep(name, durationMs)` stores the first relative duration and PostgreSQL-computed wake target, releases ownership into the scheduled index, and suspends without consuming the logical attempt.                                                                                   |
+| Absolute durable timer                 | Supported     | `context.sleepUntil(name, wakeAt)` persists an immutable absolute target. Reusing the name with a different mode or target raises `WaitConflictError`.                                                                                                                                       |
+| Timer replay and inspection            | Supported     | A due timer is promoted and reclaimed with a new fence in the same logical attempt. `context.getWait`, `Queue.getWait`, and `listWaits` expose the committed boundary and provenance. Handler code restarts from entry on every claim.                                                       |
+| Timer bounds and lease safety          | Supported     | Wait names contain 1 to 200 characters; each job retains at most 1,000 waits; first targets are limited to a 365-day future horizon. Stale ownership and wait-limit failures have typed errors.                                                                                              |
+| Durable lifecycle history              | Supported     | Checkpoint creation and timer scheduling, elapsed reclaim, and replay append explicit lifecycle events. One finalized attempt-history row spans all timer suspensions in that logical attempt.                                                                                               |
+| Durable health visibility              | Supported     | Queue health reports sleeping jobs, overdue waits, and the next durable wake target. The demo dashboard shows checkpoint-backed interim artifacts, wait targets, and replay activity. These immutable outputs are not mutable progress; fenced, bounded progress updates remain unsupported. |
+| Signals, early wake, and workflow DAGs | Not supported | Timer waits are time-based only. There is no signal delivery, operator early-wake contract, dependency graph, child-job join, deterministic workflow runtime, or persisted continuation stack.                                                                                               |
 
 ## History, reads, and observability
 
@@ -107,6 +108,7 @@ These primitives make selected handler boundaries durable while preserving Workh
 | Closed attempt history             | Supported     | Success, terminal failure, cancellation after an attempt starts, retry, and lease expiry append one immutable row per logical attempt; `started_at` spans timer suspensions and `claimed_at` records the final activation. |
 | Weekly history partitions          | Supported     | Monday-aligned partitions are precreated four weeks ahead; housekeeping independently retires fully expired event and attempt weeks plus bounded default rows.                                                             |
 | Current/terminal lookup            | Supported     | `Queue.getJob(id)` coalesces the sole live runtime or terminal outcome into the stable `JobSnapshot` shape.                                                                                                                |
+| Terminal result inspection         | Supported     | Schema v11 already persists terminal outcomes and their JSON results in `job_outcome`; the existing demo task drawer exposes the result or terminal failure evidence alongside immutable attempt history.                  |
 | Queue health                       | Supported     | Reports schema version 11, including canceled counts; live/runtime diagnostics; durable waits; persisted retention policy and lag; history boundaries; and PostgreSQL diagnostics.                                         |
 | Crash-boundary harness             | Supported     | Worker failpoints model process loss before and after handler/completion boundaries.                                                                                                                                       |
 | Job/outcome retention              | Supported     | Persisted opt-in minimum windows drive bounded terminal-only deletion. Live jobs and identities still referenced by retained events, attempts, or schedule occurrences are never selected.                                 |

@@ -38,6 +38,7 @@ import {
   CalendarDots,
   CheckCircle,
   Clock,
+  Copy,
   GearSix,
   Info,
   ListDashes,
@@ -72,6 +73,11 @@ import {
   isTerminalTaskState,
   readIdempotencyEvidence,
 } from "../../src/dashboard";
+import {
+  describeDurableBoundary,
+  readTaskResultEvidence,
+  type TaskResultState,
+} from "../../src/durable-demo";
 import type {
   DashboardCancellationRequest,
   DashboardCancelStatus,
@@ -471,12 +477,177 @@ function checkpointOutput(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** SQL NULL and missing values both mean there is no inspectable JSON evidence. */
+function hasStoredValue(value: unknown): boolean {
+  return value !== undefined && value !== null;
+}
+
+function formatJson(value: unknown): string {
+  return JSON.stringify(value, null, 2) ?? "";
+}
+
+/**
+ * Bounded viewer for one stored JSON value.
+ *
+ * Every stored value in this drawer is operator evidence, so it is shown in full rather than
+ * truncated, but its height is capped and it scrolls inside its own box so one large payload
+ * cannot push the rest of the drawer off screen. The copy action carries the exact bytes, because
+ * a value an operator can read but not extract is not usable evidence.
+ *
+ * When nothing is stored, `emptyLabel` is shown instead. No placeholder value is ever invented.
+ */
+function JsonValue({
+  label,
+  value,
+  emptyLabel,
+  copyLabel,
+  maxHeight = 220,
+}: {
+  label: string;
+  value: unknown;
+  emptyLabel: string;
+  /** What to name this value to a screen reader on the copy control. */
+  copyLabel: string;
+  maxHeight?: number;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const present = hasStoredValue(value);
+  const text = present ? formatJson(value) : "";
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2_000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copy = useCallback(() => {
+    setCopyError(null);
+    if (!navigator.clipboard) {
+      setCopyError("Copying is not available in this browser. Select the text to copy it.");
+      return;
+    }
+    void navigator.clipboard.writeText(text).then(
+      () => setCopied(true),
+      () => setCopyError("Copying is not available in this browser. Select the text to copy it."),
+    );
+  }, [text]);
+  return (
+    <Box>
+      <Group justify="space-between" align="center" mb={4} wrap="nowrap">
+        <Text fw={600} size="xs">
+          {label}
+        </Text>
+        {present ? (
+          <Tooltip label={copied ? "Copied" : `Copy ${copyLabel}`} withArrow>
+            <ActionIcon
+              size="sm"
+              variant="subtle"
+              color={copied ? "teal" : "gray"}
+              aria-label={copied ? `${copyLabel} copied to the clipboard` : `Copy ${copyLabel}`}
+              onClick={copy}
+            >
+              {copied ? <CheckCircle size={14} weight="bold" /> : <Copy size={14} />}
+            </ActionIcon>
+          </Tooltip>
+        ) : null}
+      </Group>
+      {present ? (
+        <>
+          <ScrollArea.Autosize mah={maxHeight} type="auto">
+            <Code block fz="xs">
+              {text}
+            </Code>
+          </ScrollArea.Autosize>
+          {/* Copy feedback is announced, not only coloured, so the result is never icon-only. */}
+          <Box role="status" aria-live="polite">
+            {copyError ? (
+              <Text c="red" size="xs" mt={4}>
+                {copyError}
+              </Text>
+            ) : copied ? (
+              <Text c="dimmed" size="xs" mt={4}>
+                Copied {copyLabel} to the clipboard.
+              </Text>
+            ) : null}
+          </Box>
+        </>
+      ) : (
+        <Text c="dimmed" size="xs">
+          {emptyLabel}
+        </Text>
+      )}
+    </Box>
+  );
+}
+
+const outcomeStateColor: Record<TaskResultState, string> = {
+  succeeded: "teal",
+  failed: "red",
+  canceled: "gray",
+  pending: "yellow",
+};
+
+/**
+ * Final outcome of one task, stated before any interim evidence.
+ *
+ * An operator opening this drawer is usually asking "did this finish, and what did it produce?".
+ * That question is answered from the stored terminal row alone: a task that has not finished says
+ * so instead of showing an empty result, and a retrying task's latest error is labelled as an
+ * attempt error so it is never mistaken for a terminal one.
+ */
+function TaskOutcome({ job }: { job: DashboardJobDetail }) {
+  const outcome = job.current.outcome;
+  const evidence = readTaskResultEvidence({
+    state: job.identity.state,
+    outcome,
+    runtimeError: job.current.runtime?.error,
+    currentError: job.current.error,
+    blockedByPersistentFailure: job.durability?.persistentFailure != null,
+  });
+  const described = evidence.description;
+  return (
+    <Box component="section" aria-labelledby="task-outcome-heading">
+      <Group justify="space-between" align="center" mb={4} wrap="nowrap">
+        <Text id="task-outcome-heading" component="h3" fw={600} size="sm" my={0}>
+          Outcome
+        </Text>
+        <Badge
+          variant="light"
+          color={outcomeStateColor[described.state]}
+          tt="none"
+          title={outcome ? `Finished ${formatExact(outcome.finishedAt)}` : described.summary}
+        >
+          {described.label}
+        </Badge>
+      </Group>
+      <Text c="dimmed" size="xs" mb="xs">
+        {described.summary}
+      </Text>
+      {outcome ? (
+        <Text c="dimmed" size="xs" mb="xs" title={formatExact(outcome.finishedAt)}>
+          Attempt {outcome.attempt} finished {formatRelative(outcome.finishedAt)}
+        </Text>
+      ) : null}
+      <JsonValue
+        label={described.valueLabel ?? "Final result"}
+        value={evidence.value}
+        emptyLabel={described.emptyLabel ?? "Nothing was stored."}
+        copyLabel={(described.valueLabel ?? "final result").toLowerCase()}
+      />
+    </Box>
+  );
+}
+
 function plannedStepDescription(
   job: DashboardJobDetail,
   checkpoint: DashboardJobDetail["checkpoints"][number] | undefined,
   stepIndex: number,
   activeStep: number,
 ) {
+  const boundary = describeDurableBoundary({
+    stepIndex,
+    hasCheckpoint: checkpoint !== undefined,
+    persistentFailureAfterStepIndex: job.durability?.persistentFailure?.afterStepIndex ?? null,
+  });
   if (checkpoint) {
     return (
       <Stack gap={2} mt={2}>
@@ -486,9 +657,17 @@ function plannedStepDescription(
         <Code fz="xs" title={JSON.stringify(checkpoint.value)}>
           {checkpointOutput(checkpoint.value)}
         </Code>
+        {boundary.state === "blocked" ? (
+          <Text c="dimmed" size="xs">
+            {boundary.label}. {boundary.summary}
+          </Text>
+        ) : null}
       </Stack>
     );
   }
+  // A stage past a declared persistent failure can never run again, so it is reported as never
+  // reached rather than as waiting its turn.
+  if (boundary.state === "not-reached") return `${boundary.label}. ${boundary.summary}`;
   if (stepIndex !== activeStep) return "Pending durable boundary";
   if (job.identity.state === "active") return "Operation running; checkpoint not saved yet";
   if (job.identity.state === "ready") return "Waiting for the next worker attempt";
@@ -507,6 +686,13 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
   );
   const activeStep = plan.steps.findIndex((step) => !checkpoints.has(step.name));
   const resolvedActiveStep = activeStep === -1 ? plan.steps.length : activeStep;
+  const persistentFailure = plan.persistentFailure;
+  const hasEvidencePastPersistentBoundary =
+    persistentFailure !== null &&
+    plan.steps.some(
+      (step, stepIndex) =>
+        stepIndex > persistentFailure.afterStepIndex && checkpoints.has(step.name),
+    );
   return (
     <Box>
       <Group justify="space-between" align="flex-start" mb="sm">
@@ -522,6 +708,25 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
           {completedPlanSteps}/{plan.steps.length} durable
         </Badge>
       </Group>
+      {persistentFailure ? (
+        /* State is carried by the heading text and the icon, never by colour alone. */
+        <Paper withBorder p="xs" mb="sm">
+          <Group gap={6} align="center" wrap="nowrap" mb={2}>
+            <Prohibit size={13} weight="bold" aria-hidden />
+            <Text fw={600} size="xs">
+              {hasEvidencePastPersistentBoundary
+                ? "Earlier demo evidence detected"
+                : "Intentionally blocked between stages"}
+            </Text>
+          </Group>
+          <Text c="dimmed" size="xs">
+            {hasEvidencePastPersistentBoundary
+              ? "This task contains checkpoint outputs beyond its current configured failure boundary, recorded by an earlier demo version. Stored evidence wins and remains visible below. "
+              : "Interim results already recorded stay durable. "}
+            {persistentFailure.reason}
+          </Text>
+        </Paper>
+      ) : null}
       <Stepper
         active={resolvedActiveStep}
         orientation="vertical"
@@ -530,32 +735,55 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
         iconSize={28}
         allowNextStepsSelect={false}
         completedIcon={<CheckCircle size={15} weight="bold" />}
-        progressIcon={<Clock size={14} weight="bold" style={{ display: "block" }} />}
+        progressIcon={
+          // A blocked task is not waiting for anything, so it never shows a waiting clock.
+          persistentFailure && !hasEvidencePastPersistentBoundary ? (
+            <Prohibit size={14} weight="bold" style={{ display: "block" }} />
+          ) : (
+            <Clock size={14} weight="bold" style={{ display: "block" }} />
+          )
+        }
       >
         {plan.steps.map((step, stepIndex) => {
           const checkpoint = checkpoints.get(step.name);
+          const boundary = describeDurableBoundary({
+            stepIndex,
+            hasCheckpoint: checkpoint !== undefined,
+            persistentFailureAfterStepIndex: persistentFailure?.afterStepIndex ?? null,
+          });
           return (
             <Stepper.Step
               key={step.name}
               label={step.label}
               description={plannedStepDescription(job, checkpoint, stepIndex, resolvedActiveStep)}
-              loading={job.identity.state === "active" && stepIndex === resolvedActiveStep}
+              loading={
+                !persistentFailure &&
+                job.identity.state === "active" &&
+                stepIndex === resolvedActiveStep
+              }
               allowStepSelect={false}
-              aria-label={`${step.label}: ${checkpoint ? "checkpoint saved" : "not completed"}`}
+              aria-label={`${step.label}: ${boundary.label}. ${boundary.summary}`}
             />
           );
         })}
         <Stepper.Completed>
-          <Text
-            c={job.identity.state === "succeeded" ? "teal" : "violet"}
-            fw={600}
-            size="sm"
-            mt="xs"
-          >
-            {job.identity.state === "succeeded"
-              ? "All declared boundaries are durable and the pipeline completed."
-              : "All declared boundaries are durable; the current attempt has not completed yet."}
-          </Text>
+          {persistentFailure && !hasEvidencePastPersistentBoundary ? (
+            <Text c="dimmed" fw={600} size="sm" mt="xs">
+              Every declared boundary that can be reached is durable, but this task is intentionally
+              blocked, so it never records a final result.
+            </Text>
+          ) : (
+            <Text
+              c={job.identity.state === "succeeded" ? "teal" : "violet"}
+              fw={600}
+              size="sm"
+              mt="xs"
+            >
+              {job.identity.state === "succeeded"
+                ? "All declared boundaries are durable and the pipeline completed."
+                : "All declared boundaries are durable; the current attempt has not completed yet."}
+            </Text>
+          )}
         </Stepper.Completed>
       </Stepper>
       <Text c="dimmed" size="xs" mt="sm">
@@ -565,17 +793,18 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
       {unmatchedCheckpoints.length > 0 ? (
         <Box mt="md">
           <Text fw={600} size="xs" mb={4}>
-            Additional checkpoint evidence
+            Additional interim results
           </Text>
           <Stack gap="xs">
             {unmatchedCheckpoints.map((checkpoint) => (
               <Paper key={checkpoint.name} withBorder p="xs">
-                <Text fw={600} size="xs">
-                  {checkpoint.name}
-                </Text>
-                <Code block mt={4} fz="xs">
-                  {JSON.stringify(checkpoint.value, null, 2)}
-                </Code>
+                <JsonValue
+                  label={checkpoint.name}
+                  value={checkpoint.value}
+                  emptyLabel="This checkpoint stored no value."
+                  copyLabel={`the ${checkpoint.name} interim result`}
+                  maxHeight={160}
+                />
               </Paper>
             ))}
           </Stack>
@@ -586,19 +815,26 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
 }
 
 function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
-  if (job.durability) return <PlannedDurability job={job} />;
   const currentAttempt = job.current.outcome?.attempt ?? job.current.runtime?.attempt ?? 1;
   return (
-    <Box>
+    <Box component="section" aria-labelledby="interim-results-heading">
       <Group justify="space-between" mb="xs">
-        <Text fw={600} size="sm">
-          Durable checkpoints
+        <Text id="interim-results-heading" component="h3" fw={600} size="sm" my={0}>
+          Interim results
         </Text>
         <Badge variant="light" color={job.checkpoints.length > 0 ? "teal" : "gray"}>
           {job.checkpoints.length}
         </Badge>
       </Group>
-      {job.checkpoints.length === 0 ? (
+      {/* Named once, here, so the rest of the section never has to re-explain what it is showing. */}
+      <Text c="dimmed" size="xs" mb="sm">
+        Interim results are immutable checkpoint outputs. Each was stored once at a named restart
+        boundary and is replayed unchanged by every later attempt, so this is durable evidence of
+        completed work, not mutable progress.
+      </Text>
+      {job.durability ? (
+        <PlannedDurability job={job} />
+      ) : job.checkpoints.length === 0 ? (
         <Text c="dimmed" size="sm">
           This task has not completed a named restart boundary.
         </Text>
@@ -624,9 +860,14 @@ function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
                     {persistedAcrossRetry ? "Persisted across retry" : "Saved"}
                   </Badge>
                 </Group>
-                <Code block mt="sm">
-                  {JSON.stringify(checkpoint.value, null, 2)}
-                </Code>
+                <Box mt="sm">
+                  <JsonValue
+                    label="Checkpoint output"
+                    value={checkpoint.value}
+                    emptyLabel="This checkpoint stored no value."
+                    copyLabel={`the ${checkpoint.name} interim result`}
+                  />
+                </Box>
               </Paper>
             );
           })}
@@ -4104,7 +4345,11 @@ export function Dashboard() {
           setSelectedJob(null);
           setJobDetailError(null);
         }}
-        title="Task details"
+        title={
+          <Text component="h2" fw={600} size="md" my={0}>
+            Task details
+          </Text>
+        }
         position="right"
         size="lg"
       >
@@ -4123,11 +4368,14 @@ export function Dashboard() {
               <RetryPolicyLine job={selectedJob} />
             </Box>
             <Box>
-              <Text fw={600} size="sm" mb="xs">
-                Payload
-              </Text>
-              <Code block>{JSON.stringify(selectedJob.payload, null, 2)}</Code>
+              <JsonValue
+                label="Payload"
+                value={selectedJob.payload}
+                emptyLabel="This task was enqueued without a payload."
+                copyLabel="the task payload"
+              />
             </Box>
+            <TaskOutcome job={selectedJob} />
             <IdempotencySection job={selectedJob} />
             <CancelTaskPanel
               job={selectedJob}

@@ -42,6 +42,7 @@ import {
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
 import type { DashboardRouter } from "../src/rpc.js";
+import { durableDemoScenarios } from "../src/durable-demo.js";
 import {
   describeIdempotency,
   idempotencyEvidenceLine,
@@ -516,16 +517,18 @@ describe("Workhorse demo", () => {
     });
   });
 
-  it("keeps seeded durable failures retrying in visible five-to-ten-minute windows", async () => {
+  it("keeps seeded durable failures pinned to their persistent boundary across retries", async () => {
     const workerErrors: unknown[] = [];
     const { app, workhorse } = createTestApplication({
       durableTimerWaitMs: 1,
+      maintenanceIntervalMs: 100,
       onWorkerError: (error) => workerErrors.push(error),
     });
     await seedDemoData(database);
     workhorse.start();
 
     type PersistentFailureRow = {
+      job_id: string;
       scenario: string;
       retry_delay_ms: number;
       state: string;
@@ -537,63 +540,185 @@ describe("Workhorse demo", () => {
       checkpoint_count: number;
       error_message: string;
     };
-    let rows: PersistentFailureRow[] = [];
+    type PersistentCheckpointRow = {
+      scenario: string;
+      checkpoint_name: string;
+      checkpoint_value: {
+        operationId: string;
+        completedAt: string;
+        completedOnAttempt: number;
+        output: string;
+      };
+      attempt: number;
+      fence_token: string;
+      worker_id: string;
+    };
+    const persistentScenarios = Object.entries(durableDemoScenarios).map(
+      ([scenario, definition], index) => {
+        const boundaryIndex = definition.persistentFailAfterStep;
+        const checkpointNames = definition.steps
+          .slice(0, boundaryIndex + 1)
+          .map((step) => step.name);
+        const boundaryStep = definition.steps[boundaryIndex]!;
+        const nextStep = definition.steps[boundaryIndex + 1];
+        return {
+          scenario,
+          checkpointNames,
+          retryDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[index]!,
+          retryPolicy: DEMO_PERSISTENT_RETRY_POLICIES[index]!,
+          errorMessage: nextStep
+            ? `Intentional persistent demo failure between durable stages ${boundaryStep.name} and ${nextStep.name}`
+            : `Intentional persistent demo failure at the boundary after durable stage ${boundaryStep.name}`,
+        };
+      },
+    );
+    const readPersistentRows = async () =>
+      (
+        await pool.query<PersistentFailureRow>(`
+          SELECT job.id AS job_id, job.payload->>'scenario' AS scenario,
+                 CASE job.payload->>'scenario'
+                   WHEN 'order-fulfillment' THEN ${DEMO_PERSISTENT_RETRY_DELAYS_MS[0]}
+                   WHEN 'customer-onboarding' THEN ${DEMO_PERSISTENT_RETRY_DELAYS_MS[1]}
+                   ELSE ${DEMO_PERSISTENT_RETRY_DELAYS_MS[2]}
+                 END AS retry_delay_ms,
+                 job.retry_policy,
+                 (SELECT (event.details->>'retry_delay_ms')::integer
+                    FROM workhorse.job_event event
+                   WHERE event.job_id = job.id AND event.event_type = 'retry_scheduled'
+                   ORDER BY event.event_id DESC LIMIT 1) AS selected_delay_ms,
+                 runtime.state, runtime.current_attempt, job.max_attempts,
+                 floor(extract(epoch FROM (runtime.run_at - clock_timestamp())) * 1000)::integer
+                   AS remaining_ms,
+                 (SELECT count(*)::integer FROM workhorse.job_checkpoint checkpoint
+                   WHERE checkpoint.job_id = job.id) AS checkpoint_count,
+                 runtime.error->>'message' AS error_message
+            FROM workhorse.job job
+            JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
+           WHERE job.payload->>'source' = 'persistent-failure-seed'
+           ORDER BY CASE job.payload->>'scenario'
+             WHEN 'order-fulfillment' THEN 1
+             WHEN 'customer-onboarding' THEN 2
+             ELSE 3
+           END
+        `)
+      ).rows;
+    const readPersistentCheckpoints = async () =>
+      (
+        await pool.query<PersistentCheckpointRow>(`
+          SELECT job.payload->>'scenario' AS scenario, checkpoint.checkpoint_name,
+                 checkpoint.checkpoint_value, checkpoint.attempt,
+                 checkpoint.fence_token::text, checkpoint.worker_id
+            FROM workhorse.job_checkpoint checkpoint
+            JOIN workhorse.job job ON job.id = checkpoint.job_id
+           WHERE job.payload->>'source' = 'persistent-failure-seed'
+           ORDER BY CASE job.payload->>'scenario'
+             WHEN 'order-fulfillment' THEN 1
+             WHEN 'customer-onboarding' THEN 2
+             ELSE 3
+           END, checkpoint.created_at, checkpoint.checkpoint_name
+        `)
+      ).rows;
     try {
-      for (let attempt = 0; attempt < 160; attempt += 1) {
-        await sleep(25);
-        rows = (
-          await pool.query<PersistentFailureRow>(`
-            SELECT job.payload->>'scenario' AS scenario,
-                   CASE job.payload->>'scenario'
-                     WHEN 'order-fulfillment' THEN ${DEMO_PERSISTENT_RETRY_DELAYS_MS[0]}
-                     WHEN 'customer-onboarding' THEN ${DEMO_PERSISTENT_RETRY_DELAYS_MS[1]}
-                     ELSE ${DEMO_PERSISTENT_RETRY_DELAYS_MS[2]}
-                   END AS retry_delay_ms,
-                   job.retry_policy,
-                   (SELECT (event.details->>'retry_delay_ms')::integer
-                      FROM workhorse.job_event event
-                     WHERE event.job_id = job.id AND event.event_type = 'retry_scheduled'
-                     ORDER BY event.event_id DESC LIMIT 1) AS selected_delay_ms,
-                   runtime.state, runtime.current_attempt, job.max_attempts,
-                   floor(extract(epoch FROM (runtime.run_at - clock_timestamp())) * 1000)::integer
-                     AS remaining_ms,
-                   (SELECT count(*)::integer FROM workhorse.job_checkpoint checkpoint
-                     WHERE checkpoint.job_id = job.id) AS checkpoint_count,
-                   runtime.error->>'message' AS error_message
-              FROM workhorse.job job
-              JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
+      const firstAttemptRows = await waitFor(
+        readPersistentRows,
+        (rows) =>
+          rows.length === persistentScenarios.length &&
+          rows.every((row) => row.state === "scheduled" && row.current_attempt === 2),
+      );
+
+      for (const [index, row] of firstAttemptRows.entries()) {
+        const expected = persistentScenarios[index]!;
+        expect(row).toMatchObject({
+          scenario: expected.scenario,
+          retry_delay_ms: expected.retryDelayMs,
+          retry_policy: expected.retryPolicy,
+          selected_delay_ms: expected.retryDelayMs,
+          state: "scheduled",
+          current_attempt: 2,
+          max_attempts: 25,
+          checkpoint_count: expected.checkpointNames.length,
+          error_message: expected.errorMessage,
+        });
+        expect(row.remaining_ms).toBeGreaterThan(expected.retryDelayMs - 15_000);
+        expect(row.remaining_ms).toBeLessThanOrEqual(expected.retryDelayMs);
+      }
+      const firstCheckpoints = await readPersistentCheckpoints();
+      expect(
+        firstCheckpoints.map((checkpoint) => ({
+          scenario: checkpoint.scenario,
+          name: checkpoint.checkpoint_name,
+          attempt: checkpoint.attempt,
+        })),
+      ).toEqual(
+        persistentScenarios.flatMap((expected) =>
+          expected.checkpointNames.map((name) => ({
+            scenario: expected.scenario,
+            name,
+            attempt: 1,
+          })),
+        ),
+      );
+      for (const checkpoint of firstCheckpoints) {
+        expect(checkpoint).toMatchObject({
+          checkpoint_value: {
+            operationId: expect.any(String),
+            completedAt: expect.any(String),
+            completedOnAttempt: 1,
+            output: expect.stringMatching(/ completed$/),
+          },
+          fence_token: expect.any(String),
+          worker_id: expect.stringMatching(/^demo-worker-/),
+        });
+      }
+      await pool.query(`
+        UPDATE workhorse.job_runtime runtime
+           SET run_at = clock_timestamp()
+          FROM workhorse.job job
+         WHERE runtime.job_id = job.id
+           AND runtime.state = 'scheduled'
+           AND job.payload->>'source' = 'persistent-failure-seed'
+      `);
+      const secondAttemptRows = await waitFor(
+        readPersistentRows,
+        (rows) =>
+          rows.length === persistentScenarios.length &&
+          rows.every((row) => row.state === "scheduled" && row.current_attempt === 3),
+      );
+      for (const [index, row] of secondAttemptRows.entries()) {
+        const expected = persistentScenarios[index]!;
+        expect(row).toMatchObject({
+          scenario: expected.scenario,
+          retry_policy: expected.retryPolicy,
+          state: "scheduled",
+          current_attempt: 3,
+          max_attempts: 25,
+          checkpoint_count: expected.checkpointNames.length,
+          error_message: expected.errorMessage,
+        });
+        expect(row.remaining_ms).toBeGreaterThan(0);
+      }
+      expect(await readPersistentCheckpoints()).toEqual(firstCheckpoints);
+      expect(
+        (
+          await pool.query<{ scenario: string; attempt: number; outcome: string }>(`
+            SELECT job.payload->>'scenario' AS scenario, history.attempt, history.outcome
+              FROM workhorse.attempt_history history
+              JOIN workhorse.job job ON job.id = history.job_id
              WHERE job.payload->>'source' = 'persistent-failure-seed'
              ORDER BY CASE job.payload->>'scenario'
                WHEN 'order-fulfillment' THEN 1
                WHEN 'customer-onboarding' THEN 2
                ELSE 3
-             END
+             END, history.attempt
           `)
-        ).rows;
-        if (rows.length === 3 && rows.every((row) => row.state === "scheduled")) break;
-      }
+        ).rows,
+      ).toEqual(
+        persistentScenarios.flatMap((expected) => [
+          { scenario: expected.scenario, attempt: 1, outcome: "retry" },
+          { scenario: expected.scenario, attempt: 2, outcome: "retry" },
+        ]),
+      );
 
-      expect(rows).toHaveLength(3);
-      for (const [index, row] of rows.entries()) {
-        const configuredDelay = DEMO_PERSISTENT_RETRY_DELAYS_MS[index]!;
-        expect(row).toMatchObject({
-          retry_delay_ms: configuredDelay,
-          retry_policy: DEMO_PERSISTENT_RETRY_POLICIES[index],
-          selected_delay_ms: configuredDelay,
-          state: "scheduled",
-          current_attempt: 2,
-          max_attempts: 25,
-          error_message: expect.stringContaining("Intentional"),
-        });
-        expect(row.remaining_ms).toBeGreaterThan(configuredDelay - 15_000);
-        expect(row.remaining_ms).toBeLessThanOrEqual(configuredDelay);
-        expect(row.checkpoint_count).toBeGreaterThan(0);
-      }
-      expect(rows.map((row) => row.scenario)).toEqual([
-        "order-fulfillment",
-        "customer-onboarding",
-        "report-publication",
-      ]);
       const client = dashboardClient(app);
       const retried = await client.dashboard.tasks({ filter: "retried", page: 1, pageSize: 25 });
       expect(retried.jobs).toEqual(
@@ -601,7 +726,7 @@ describe("Workhorse demo", () => {
           DEMO_PERSISTENT_RETRY_DELAYS_MS.map((retryDelayMs, index) =>
             expect.objectContaining({
               state: "scheduled",
-              attempt: 2,
+              attempt: 3,
               maxAttempts: 25,
               retryPolicy: DEMO_PERSISTENT_RETRY_POLICIES[index],
               runAt: expect.any(String),
@@ -614,21 +739,49 @@ describe("Workhorse demo", () => {
           ),
         ),
       );
-      const detail = await client.dashboard.jobDetail({ id: retried.jobs[0]!.id });
-      expect(detail.identity.retryPolicy).toEqual(retried.jobs[0]!.retryPolicy);
-      let system = await client.dashboard.system({ window: "1h" });
-      for (let attempt = 0; attempt < 80 && system.kpis.retry.backoff !== 3; attempt += 1) {
-        await sleep(25);
-        system = await client.dashboard.system({ window: "1h" });
+      for (const [index, row] of secondAttemptRows.entries()) {
+        const expected = persistentScenarios[index]!;
+        const detail = await client.dashboard.jobDetail({ id: row.job_id });
+        expect(detail).toMatchObject({
+          identity: {
+            id: row.job_id,
+            state: "scheduled",
+            retryPolicy: expected.retryPolicy,
+            maxAttempts: 25,
+          },
+          current: {
+            runtime: {
+              state: "scheduled",
+              attempt: 3,
+              error: { message: expected.errorMessage },
+            },
+            error: { message: expected.errorMessage },
+          },
+          attempts: [
+            { attempt: 1, outcome: "retry", error: { message: expected.errorMessage } },
+            { attempt: 2, outcome: "retry", error: { message: expected.errorMessage } },
+          ],
+        });
+        expect(
+          detail.checkpoints.map((checkpoint) => ({
+            name: checkpoint.name,
+            value: checkpoint.value,
+            attempt: checkpoint.attempt,
+            fenceToken: checkpoint.fenceToken,
+            workerId: checkpoint.workerId,
+          })),
+        ).toEqual(
+          firstCheckpoints
+            .filter((checkpoint) => checkpoint.scenario === expected.scenario)
+            .map((checkpoint) => ({
+              name: checkpoint.checkpoint_name,
+              value: checkpoint.checkpoint_value,
+              attempt: checkpoint.attempt,
+              fenceToken: checkpoint.fence_token,
+              workerId: checkpoint.worker_id,
+            })),
+        );
       }
-      expect(system.kpis.retry).toMatchObject({
-        backoff: 3,
-        dueSoon: 1,
-        buckets: expect.arrayContaining([
-          { label: "5m", count: 1 },
-          { label: "15m", count: 2 },
-        ]),
-      });
       expect(workerErrors).toEqual([]);
     } finally {
       await workhorse.stop();
