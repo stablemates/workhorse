@@ -2498,6 +2498,14 @@ describe("live-runtime queue protocol", () => {
       defaultPartitionRowsPerPass: definition.defaultPartitionRowsPerPass,
       occurrenceRowsPerPass: definition.occurrenceRowsPerPass,
     });
+
+    await queue.syncRetentionPolicy({
+      ...withoutLimits,
+      occurrenceRowsPerPass: 1_000_000,
+    });
+    await expect(
+      pool.query("SELECT workhorse.prune_schedule_occurrences_v1(clock_timestamp(), 1000000)"),
+    ).resolves.toMatchObject({ rows: [{ prune_schedule_occurrences_v1: 0 }] });
   });
 
   it("retires event and attempt partitions independently and bounds partition/default work", async () => {
@@ -2541,19 +2549,28 @@ describe("live-runtime queue protocol", () => {
       second_attempt: "attempt_history_2018w02",
     });
 
-    await pool.query(
-      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
-       SELECT gen_random_uuid(), 'old-default', '2017-01-01'::timestamptz
-         FROM generate_series(1, 3)`,
-    );
-    await pool.query(
-      `INSERT INTO workhorse.attempt_history(
-         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, occurred_at
-       )
-       SELECT gen_random_uuid(), 1, 1, 'retention-worker', 'succeeded',
-              '2017-01-01'::timestamptz, '2017-01-01'::timestamptz, '2017-01-01'::timestamptz
-         FROM generate_series(1, 3)`,
-    );
+    await pool.query(`
+      WITH identities AS (
+        INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts, created_at)
+        SELECT 'default', 'old-event', '{}'::jsonb, 1, '2017-01-01'::timestamptz
+          FROM generate_series(1, 3)
+        RETURNING id
+      )
+      INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+      SELECT id, 'old-default', '2017-01-01'::timestamptz FROM identities`);
+    await pool.query(`
+      WITH identities AS (
+        INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts, created_at)
+        SELECT 'default', 'old-attempt', '{}'::jsonb, 1, '2017-01-01'::timestamptz
+          FROM generate_series(1, 3)
+        RETURNING id
+      )
+      INSERT INTO workhorse.attempt_history(
+        job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, occurred_at
+      )
+      SELECT id, 1, 1, 'retention-worker', 'succeeded',
+             '2017-01-01'::timestamptz, '2017-01-01'::timestamptz, '2017-01-01'::timestamptz
+        FROM identities`);
     await queue.syncRetentionPolicy({
       ...defaultRetentionPolicy,
       jobEventRetentionDays: 1,
@@ -2671,20 +2688,80 @@ describe("live-runtime queue protocol", () => {
     }
   });
 
+  it("serializes terminal deletion with concurrent history insertion", async () => {
+    const id = await queue.enqueue("retention-race", {});
+    const job = await queue.claim("retention-race-worker");
+    expect(job?.id).toBe(id);
+    expect(await queue.complete(job!, "retention-race-worker", { done: true })).toBe(true);
+    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = $1", [id]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = $1", [id]);
+    await pool.query(
+      `UPDATE workhorse.job
+          SET created_at = clock_timestamp() - interval '40 days' WHERE id = $1`,
+      [id],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = clock_timestamp() - interval '40 days' WHERE job_id = $1`,
+      [id],
+    );
+
+    const deleting = await pool.connect();
+    const inserting = await pool.connect();
+    try {
+      await deleting.query("BEGIN");
+      await expect(
+        deleting.query(
+          `SELECT workhorse.prune_terminal_jobs_v1(
+             clock_timestamp() - interval '30 days',
+             clock_timestamp() - interval '30 days', 1
+           ) AS pruned`,
+        ),
+      ).resolves.toMatchObject({ rows: [{ pruned: 1 }] });
+
+      const insert = inserting.query(
+        `INSERT INTO workhorse.job_event(job_id, event_type) VALUES ($1, 'concurrent')`,
+        [id],
+      );
+      await sleep(25);
+      await deleting.query("COMMIT");
+      await expect(insert).rejects.toMatchObject({ code: "23503" });
+    } finally {
+      await deleting.query("ROLLBACK").catch(() => undefined);
+      deleting.release();
+      inserting.release();
+    }
+    await expect(queue.getJob(id)).resolves.toBeNull();
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.job_event WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+  });
+
   it("reports retention boundaries, lag, eligible partitions, and exact default counts", async () => {
     const oldWeek = "2016-01-04";
     await pool.query("SELECT workhorse.retire_history_week_v1($1)", [oldWeek]);
     await pool.query("SELECT workhorse.create_history_week_v1($1)", [oldWeek]);
-    await pool.query(
-      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
-       VALUES (gen_random_uuid(), 'old-default', '2015-01-01');
-       INSERT INTO workhorse.attempt_history(
-         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, occurred_at
-       ) VALUES (
-         gen_random_uuid(), 1, 1, 'health-worker', 'succeeded', '2015-01-01', '2015-01-01',
-         '2015-01-01'
-       )`,
-    );
+    await pool.query(`
+      WITH identities AS (
+        INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts, created_at)
+        VALUES ('default', 'health-event', '{}'::jsonb, 1, '2015-01-01'),
+               ('default', 'health-attempt', '{}'::jsonb, 1, '2015-01-01')
+        RETURNING id, job_type
+      )
+      INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+      SELECT id, 'old-default', '2015-01-01' FROM identities WHERE job_type = 'health-event';
+      WITH identity AS (
+        SELECT id FROM workhorse.job WHERE job_type = 'health-attempt'
+      )
+      INSERT INTO workhorse.attempt_history(
+        job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, occurred_at
+      ) SELECT id, 1, 1, 'health-worker', 'succeeded', '2015-01-01', '2015-01-01',
+               '2015-01-01' FROM identity`);
     await queue.syncRetentionPolicy({
       ...defaultRetentionPolicy,
       jobEventRetentionDays: 30,
@@ -2702,6 +2779,25 @@ describe("live-runtime queue protocol", () => {
     expect(health.retentionLagMs.attemptHistory).toBeGreaterThan(0);
     expect(health.eligibleHistoryPartitions).toMatchObject({ jobEvents: 1, attemptHistory: 1 });
     expect(health.defaultHistoryRows).toEqual({ jobEvents: 1, attemptHistory: 1 });
+    expect(health.defaultHistoryRowsCapped).toEqual({ jobEvents: false, attemptHistory: false });
+  });
+
+  it("caps fallback-row health scans and marks the reported lower bound", async () => {
+    await pool.query(`
+      WITH identities AS (
+        INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts, created_at)
+        SELECT 'default', 'health-cap', '{}'::jsonb, 1, '2001-01-01'::timestamptz
+          FROM generate_series(1, 10002)
+        RETURNING id
+      )
+      INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+      SELECT id, 'health-cap', '2001-01-01'::timestamptz FROM identities`);
+
+    const health = await queue.health();
+    expect(health.defaultHistoryRows.jobEvents).toBe(10_001);
+    expect(health.defaultHistoryRowsCapped.jobEvents).toBe(true);
+    expect(health.defaultHistoryRows.attemptHistory).toBe(0);
+    expect(health.defaultHistoryRowsCapped.attemptHistory).toBe(false);
   });
 
   it("computes identity lag from terminal jobs and ignores a partial history boundary week", async () => {
@@ -2711,12 +2807,14 @@ describe("live-runtime queue protocol", () => {
          AS week_start`,
     );
     await pool.query("SELECT workhorse.create_history_week_v1($1)", [boundary.rows[0]!.week_start]);
+    const partialBoundaryJob = await queue.enqueue("partial-boundary", {});
     await pool.query(
       `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
        VALUES (
-         gen_random_uuid(), 'partial-boundary',
+         $1, 'partial-boundary',
          date_trunc('week', clock_timestamp() - interval '30 days') + interval '1 day'
        )`,
+      [partialBoundaryJob],
     );
     await queue.syncRetentionPolicy({
       ...defaultRetentionPolicy,
@@ -2772,6 +2870,11 @@ describe("live-runtime queue protocol", () => {
     const oldWeek = "2020-01-06";
     const historicalTimestamp = "2020-01-08T12:00:00.000Z";
     const historicalJobId = "00000000-0000-4000-8000-000000000001";
+    await pool.query(
+      `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
+       VALUES ($1, 'default', 'historical', '{}'::jsonb, 1, $2)`,
+      [historicalJobId, historicalTimestamp],
+    );
     await pool.query(
       `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
        VALUES ($1, 'fallback', $2)`,
@@ -2864,5 +2967,61 @@ describe("live-runtime queue protocol", () => {
             FROM generate_series(0, 4) AS weeks(week_offset)
         ) expected`);
     expect(horizon.rows[0]?.missing).toBe(0);
+  });
+
+  it("repairs a partially missing weekly history partition", async () => {
+    const week = "2021-02-01";
+    await pool.query("SELECT workhorse.retire_history_week_v1($1)", [week]);
+    await pool.query("SELECT workhorse.create_history_week_v1($1)", [week]);
+    await pool.query("DROP TABLE workhorse.attempt_history_2021w05");
+
+    await expect(
+      pool.query("SELECT workhorse.create_history_week_v1($1)", [week]),
+    ).resolves.toBeDefined();
+    expect(
+      (
+        await pool.query(
+          `SELECT to_regclass('workhorse.job_event_2021w05') IS NOT NULL AS event_exists,
+                  to_regclass('workhorse.attempt_history_2021w05') IS NOT NULL AS attempt_exists`,
+        )
+      ).rows[0],
+    ).toEqual({ event_exists: true, attempt_exists: true });
+  });
+
+  it("retires the discovered qualified partition without waiting indefinitely for DDL locks", async () => {
+    await pool.query("DROP SCHEMA IF EXISTS retention_external CASCADE");
+    await pool.query("CREATE SCHEMA retention_external");
+    await pool.query(`
+      CREATE TABLE retention_external.job_event_2014w10
+        PARTITION OF workhorse.job_event
+        FOR VALUES FROM ('2014-03-03') TO ('2014-03-10')`);
+
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("LOCK TABLE retention_external.job_event_2014w10 IN ACCESS SHARE MODE");
+      const startedAt = Date.now();
+      await expect(
+        pool.query("SELECT workhorse.retire_history_partitions_v1('job_event', $1, 1) AS retired", [
+          "2014-03-10",
+        ]),
+      ).resolves.toMatchObject({ rows: [{ retired: 0 }] });
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+      await blocker.query("COMMIT");
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+
+    await expect(
+      pool.query("SELECT workhorse.retire_history_partitions_v1('job_event', $1, 1) AS retired", [
+        "2014-03-10",
+      ]),
+    ).resolves.toMatchObject({ rows: [{ retired: 1 }] });
+    expect(
+      (await pool.query("SELECT to_regclass('retention_external.job_event_2014w10') AS relation"))
+        .rows[0]?.relation,
+    ).toBeNull();
+    await pool.query("DROP SCHEMA retention_external");
   });
 });

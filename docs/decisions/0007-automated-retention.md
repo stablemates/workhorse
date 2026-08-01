@@ -34,7 +34,7 @@ A terminal job may be deleted only when all of the following are true:
 4. no retained attempt references the job;
 5. no retained schedule occurrence references the job.
 
-Deleting the stable identity then cascades its terminal outcome, checkpoints, and timer waits in the existing schema. This preserves the lifecycle invariant and prevents a retained historical row from becoming unattributable.
+Event and attempt rows carry cascading foreign keys to the stable identity. PostgreSQL therefore serializes every history insert with identity deletion: a late insert either completes before selection and protects the identity, is removed by the same delete, or fails after the identity has gone, but it cannot commit as an orphan. Deleting the stable identity also cascades its terminal outcome, checkpoints, and timer waits. This preserves the lifecycle invariant and prevents a retained historical row from becoming unattributable.
 
 Enabling finite identity and outcome retention requires both terminal windows to be finite, finite dependent retention windows, and an identity minimum at least as long as every dependent minimum. PostgreSQL rejects configurations that cannot satisfy those constraints. Windows are minimums rather than deletion deadlines: bounded cleanup, retained attribution, or a long-running job can extend actual retention.
 
@@ -45,6 +45,7 @@ Event and attempt retention run as separate housekeeping phases. Each phase:
 - drops only fully expired, completed weekly partitions;
 - retires at most the configured number of partitions per pass;
 - uses the same per-week advisory-lock namespace as explicit partition creation and retirement;
+- skips a busy week lock and caps each partition-drop lock wait at 250 ms so DDL cannot wait indefinitely behind dispatch;
 - bounded-deletes expired rows from its default partition;
 - leaves current and partially covered weeks attached.
 
@@ -54,7 +55,7 @@ Separating the two histories allows different minimum windows without requiring 
 
 `housekeep_v1` remains the slow-cadence entry point and preserves its existing call shape. Under the existing `workhorse:housekeeping` try-lock it runs partition replenishment, event retention, attempt retention, occurrence retention, and terminal-job retention as individually reported exception-isolated phases. Existing explicit occurrence arguments remain overrides for compatibility; otherwise the persisted policy is authoritative.
 
-Queue health reports the active policy, per-category retention lag, oldest retained boundaries, eligible history partitions, and cumulative default-partition usage. Lag is informational while bounded cleanup catches up. Unsafe policy is rejected at synchronization time rather than surfaced later as best-effort deletion.
+Queue health reports the active policy, per-category retention lag, oldest retained boundaries, eligible history partitions, and bounded default-partition usage. Each fallback count is exact through 10,000 rows; a separate capped flag marks 10,001 as a lower bound so health never performs an unbounded history scan. Lag is informational while bounded cleanup catches up. Unsafe policy is rejected at synchronization time rather than surfaced later as best-effort deletion.
 
 ## Consequences
 

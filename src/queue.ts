@@ -812,6 +812,8 @@ export class Queue {
             eligible_attempt_partitions: string;
             default_event_rows: string;
             default_attempt_rows: string;
+            default_event_rows_capped: boolean;
+            default_attempt_rows_capped: boolean;
           }
         >(`
         WITH policy AS (
@@ -894,6 +896,20 @@ export class Queue {
                 AND upper_bound <= date_trunc('week', clock_timestamp())
             )::text AS eligible_attempt_partitions
           FROM partitions CROSS JOIN policy
+        ), default_rows AS (
+          SELECT event_rows::text AS default_event_rows,
+                 attempt_rows::text AS default_attempt_rows,
+                 event_rows > 10000 AS default_event_rows_capped,
+                 attempt_rows > 10000 AS default_attempt_rows_capped
+            FROM (
+              SELECT
+                (SELECT count(*) FROM (
+                  SELECT 1 FROM workhorse.job_event_default LIMIT 10001
+                ) sampled_events) AS event_rows,
+                (SELECT count(*) FROM (
+                  SELECT 1 FROM workhorse.attempt_history_default LIMIT 10001
+                ) sampled_attempts) AS attempt_rows
+            ) sampled
         )
         SELECT policy.*, boundaries.*,
                CASE WHEN policy.job_identity_retention_days IS NULL
@@ -938,11 +954,8 @@ export class Queue {
                       - make_interval(days => policy.schedule_occurrence_retention_days)
                       - boundaries.oldest_schedule_occurrence_at) * 1000) END
                  AS schedule_occurrence_lag_ms,
-               eligible.*,
-               (SELECT count(*)::text FROM workhorse.job_event_default) AS default_event_rows,
-               (SELECT count(*)::text FROM workhorse.attempt_history_default)
-                 AS default_attempt_rows
-          FROM policy CROSS JOIN boundaries CROSS JOIN eligible`),
+               eligible.*, default_rows.*
+          FROM policy CROSS JOIN boundaries CROSS JOIN eligible CROSS JOIN default_rows`),
       ]);
 
     const stateCounts: QueueHealth["counts"] = {
@@ -1002,6 +1015,10 @@ export class Queue {
       defaultHistoryRows: {
         jobEvents: Number(retentionRow.default_event_rows),
         attemptHistory: Number(retentionRow.default_attempt_rows),
+      },
+      defaultHistoryRowsCapped: {
+        jobEvents: retentionRow.default_event_rows_capped,
+        attemptHistory: retentionRow.default_attempt_rows_capped,
       },
       relations: relations.rows.map((row) => ({
         relation: row.relation,

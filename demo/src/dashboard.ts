@@ -233,6 +233,7 @@ export interface DashboardSystemRetention {
   eligibleHistoryPartitions: { jobEvents: number; attemptHistory: number };
   /** Cumulative rows that landed in the catch-all partitions; never window-scoped. */
   defaultHistoryRows: { jobEvents: number; attemptHistory: number };
+  defaultHistoryRowsCapped: { jobEvents: boolean; attemptHistory: boolean };
 }
 
 export interface DashboardSystemPage {
@@ -1225,6 +1226,10 @@ function dashboardRetention(health: QueueHealthSnapshot): DashboardSystemRetenti
     defaultHistoryRows: {
       jobEvents: Number(health.defaultHistoryRows.jobEvents),
       attemptHistory: Number(health.defaultHistoryRows.attemptHistory),
+    },
+    defaultHistoryRowsCapped: {
+      jobEvents: health.defaultHistoryRowsCapped.jobEvents,
+      attemptHistory: health.defaultHistoryRowsCapped.attemptHistory,
     },
   };
 }
