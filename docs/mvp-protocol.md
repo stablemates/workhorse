@@ -83,8 +83,10 @@ type RetryPolicy =
 - Omitted policy preserves compatibility: handler failure selects legacy Sidekiq-inspired random
   backoff, while lease recovery selects zero for immediate readiness.
 - Numeric `Queue.fail` delay and numeric or callback-derived `WorkerOptions.retryDelayMs` are
-  higher-precedence manual overrides. `Queue.recoverExpired(limit)` passes omitted delay as SQL `NULL`
-  so persisted policy selection remains authoritative; an explicit recovery delay also overrides.
+  higher-precedence manual overrides. A worker callback can return `undefined` to defer to the
+  persisted policy or compatibility default. `Queue.recoverExpired(limit)` passes omitted delay as
+  SQL `NULL` so persisted policy selection remains authoritative; an explicit recovery delay also
+  overrides.
 - Decorrelated jitter is deterministic from stable job identity, attempt, and persisted previous
   selected delay. Replaying the selector or recreating `Queue` cannot change the value.
 - Every delay is an integer between 0 and 31,536,000,000 ms. Exponential `multiplier` is an integer

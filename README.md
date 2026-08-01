@@ -60,7 +60,8 @@ PostgreSQL validates and normalizes the policy, selects each delay, performs the
 transition, and records policy provenance. Explicit policies apply equally to handler failure and
 expired-lease recovery. Omitting the policy preserves compatibility: handler failure uses the legacy
 Sidekiq-inspired random backoff, while lease recovery is immediate. Numeric `Queue.fail` delays and
-`WorkerOptions.retryDelayMs` are higher-precedence manual overrides; an omitted
+`WorkerOptions.retryDelayMs` are higher-precedence manual overrides; a callback may return
+`undefined` to defer to the persisted policy or compatibility default. An omitted
 `Queue.recoverExpired` delay is passed as SQL `NULL` so PostgreSQL can select the persisted policy.
 
 Decorrelated jitter is deterministic from the stable job identity, attempt, and persisted previous
@@ -228,7 +229,7 @@ configuration and ownership behavior.
 
 Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL, split across two cadences. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs and recovers expired leases, and also drives in-process schedule evaluation. A slower housekeeping pass (`workhorse.housekeep_v1`, once per minute by default) replenishes future history partitions; independently retires expired event and attempt partitions plus bounded fallback rows; prunes schedule occurrences; and removes only terminal jobs whose retained history no longer needs their identity. Slow cleanup therefore never delays dispatch. Transaction-scoped advisory locks inside `tick_v1`, `housekeep_v1`, and `workhorse.fire_schedule_v1` make concurrent passes from other workers cheap no-ops, so running many workers neither duplicates schedules nor multiplies maintenance load, and any surviving worker keeps schedules firing. Both entry points return per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and the `onMaintenance` callback.
 
-Handler failures use SQL-owned, Sidekiq-inspired retry scheduling. For zero-based retry count `count` (the first failed attempt is `0`), the delay is `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds. The default 25-attempt budget spreads retries across roughly 20 days. Keeping the calculation in `fail_v1` gives every client the same durable protocol; `WorkerOptions.retryDelayMs` remains an explicit override, including `0` for an immediate retry or a callback `(attempt, job) => milliseconds` for a deliberate per-job policy.
+Handler failures use SQL-owned, Sidekiq-inspired retry scheduling. For zero-based retry count `count` (the first failed attempt is `0`), the delay is `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds. The default 25-attempt budget spreads retries across roughly 20 days. Keeping the calculation in `fail_v1` gives every client the same durable protocol; `WorkerOptions.retryDelayMs` remains an explicit override, including `0` for an immediate retry or a callback `(attempt, job) => milliseconds | undefined`; returning `undefined` defers to PostgreSQL's persisted policy or compatibility default.
 
 Definitions contain typed Workhorse jobs rather than arbitrary SQL. Workers parse cron expressions in process and call revision-fenced `workhorse.fire_schedule_v1` with the planned occurrence second, which a durable `schedule_occurrence` key deduplicates in SQL. Schedule names are stable deployment identities; synchronization updates changed definitions and disables omitted definitions atomically in the target database. A stale definition revision cannot execute a newly committed payload at its old cadence.
 

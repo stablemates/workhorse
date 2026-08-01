@@ -72,7 +72,8 @@ export interface WorkerOptions {
   /** Maximum missed occurrences fired for one schedule in one maintenance pass. */
   scheduleCatchupLimit?: number;
   /** Override SQL-owned retry backoff, either fixed or derived from the attempt and claimed job. */
-  retryDelayMs?: number | ((attempt: number, job: ClaimedJob) => number);
+  /** Return undefined to defer to the job's persisted policy or SQL compatibility default. */
+  retryDelayMs?: number | ((attempt: number, job: ClaimedJob) => number | undefined);
   /** Test-only crash hook. Injected crashes deliberately bypass normal fail/retry handling. */
   failpoint?: Failpoint | ((point: Failpoint, job: ClaimedJob) => boolean | Promise<boolean>);
 }

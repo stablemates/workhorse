@@ -7,7 +7,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { Queue, type Json, type Worker } from "@workhorse/core";
+import { Queue, type Json, type RetryPolicy, type Worker } from "@workhorse/core";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { DashboardRefreshHub } from "./dashboard-refresh.js";
@@ -44,6 +44,29 @@ export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_DURABLE_STEP_MS = 2_000;
 export const DEMO_DURABLE_TIMER_WAIT_MS = 10_000;
 export const DEMO_PERSISTENT_RETRY_DELAYS_MS = [5 * 60_000, 7 * 60_000, 10 * 60_000] as const;
+/**
+ * One persisted policy per intentionally failing seed. Each policy is chosen so the first
+ * scheduled retry lands in the same 5, 7, and 10 minute analytic window the demo has always
+ * shown, while PostgreSQL, not the worker, now owns the delay.
+ */
+export const DEMO_PERSISTENT_RETRY_POLICIES: readonly RetryPolicy[] = [
+  { type: "fixed", delayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[0] },
+  {
+    type: "exponential",
+    initialDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[1],
+    multiplier: 2,
+    maxDelayMs: 30 * 60_000,
+  },
+  // The jitter cap deliberately equals its base so the published ten minute window stays exact and
+  // deterministic for the demo and its assertions while still exercising the jitter code path.
+  {
+    type: "decorrelated-jitter",
+    baseDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[2],
+    maxDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[2],
+  },
+] as const;
+/** The recoverable retry seed stays fixed and fast so it still recovers while the demo is watched. */
+export const DEMO_RECOVERABLE_RETRY_POLICY: RetryPolicy = { type: "fixed", delayMs: 100 };
 export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
 export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
 export const REPORT_SCHEDULE_NAME = "demo.report";
@@ -662,26 +685,9 @@ export function createDemoApplication(
         pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
         maintenanceIntervalMs,
         housekeepingIntervalMs,
-        retryDelayMs: (attempt, job) => {
-          if (
-            job.type === DURABLE_DEMO_JOB_TYPE &&
-            job.payload !== null &&
-            typeof job.payload === "object" &&
-            !Array.isArray(job.payload)
-          ) {
-            const requested = job.payload.retryDelayMs;
-            if (
-              job.payload.failureMode === "continuous" &&
-              typeof requested === "number" &&
-              Number.isSafeInteger(requested) &&
-              requested >= DEMO_PERSISTENT_RETRY_DELAYS_MS[0] &&
-              requested <= DEMO_PERSISTENT_RETRY_DELAYS_MS.at(-1)!
-            ) {
-              return requested;
-            }
-          }
-          return attempt * 100;
-        },
+        // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
+        // Returning undefined omits the worker override and lets SQL select the stored policy.
+        retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
       },
       configure(worker) {
         workerRegistry.set(workerId, worker);
@@ -1135,7 +1141,13 @@ export async function seedDemoData(database: DemoDatabase) {
       await workhorse.queue.enqueue(
         RETRY_JOB_TYPE,
         { label: "recover-with-durable-checkpoint", failUntilAttempt: 1 },
-        { maxAttempts: 3, tags: ["demo-test", "durable-checkpoint"] },
+        {
+          maxAttempts: 3,
+          // The recoverable seed keeps a fixed policy at the previous worker-side delay, so the
+          // drawer shows a persisted policy without slowing the visible recovery.
+          retryPolicy: DEMO_RECOVERABLE_RETRY_POLICY,
+          tags: ["demo-test", "durable-checkpoint"],
+        },
       ),
     );
     seededJobIds.push(
@@ -1158,17 +1170,18 @@ export async function seedDemoData(database: DemoDatabase) {
       Object.keys(durableDemoScenarios) as DurableDemoScenario[]
     ).entries()) {
       const retryDelayMs = DEMO_PERSISTENT_RETRY_DELAYS_MS[index]!;
+      const retryPolicy = DEMO_PERSISTENT_RETRY_POLICIES[index]!;
       seededJobIds.push(
         await workhorse.queue.enqueue(
           DURABLE_DEMO_JOB_TYPE,
           {
             scenario,
             failureMode: "continuous",
-            retryDelayMs,
             source: "persistent-failure-seed",
           },
           {
             maxAttempts: 25,
+            retryPolicy,
             tags: [
               "demo-test",
               "durable-checkpoint",
