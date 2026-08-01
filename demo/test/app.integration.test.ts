@@ -25,6 +25,7 @@ import {
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_POLL_MS,
   DEMO_WORKERS,
+  DEMO_WORKER_CONCURRENCY,
   deterministicOrderId,
   DURABLE_TIMER_JOB_TYPE,
   DURABLE_TIMER_PREPARE_CHECKPOINT,
@@ -47,6 +48,7 @@ import {
   readDashboardSnapshot,
   readIdempotencyEvidence,
 } from "../src/dashboard.js";
+import type { DashboardWorkerRow } from "../src/dashboard.js";
 
 const databaseUrl = localDatabaseUrl("test");
 assertLocalDatabasePurpose(databaseUrl, "test");
@@ -114,6 +116,39 @@ function dashboardClient(
   return createORPCClient(
     new RPCLink({ url: "http://demo.test/rpc", fetch: (request) => app.request(request) }),
   );
+}
+
+/**
+ * Poll a read model until it satisfies a predicate. The demo has no synchronous hook into worker
+ * slot transitions, so the tests bound the wait instead of sleeping for a fixed guessed duration.
+ */
+async function waitFor<T>(
+  read: () => Promise<T>,
+  matches: (value: T) => boolean,
+  attempts = 200,
+): Promise<T> {
+  let latest = await read();
+  for (let attempt = 0; attempt < attempts && !matches(latest); attempt += 1) {
+    await sleep(5);
+    latest = await read();
+  }
+  expect(matches(latest)).toBe(true);
+  return latest;
+}
+
+async function waitForWorker(
+  client: RouterClient<DashboardRouter>,
+  workerId: string,
+  matches: (worker: DashboardWorkerRow) => boolean,
+): Promise<DashboardWorkerRow> {
+  const page = await waitFor(
+    () => client.dashboard.workers(),
+    (value) => {
+      const worker = value.workers.find((candidate) => candidate.id === workerId);
+      return worker !== undefined && matches(worker);
+    },
+  );
+  return page.workers.find((candidate) => candidate.id === workerId)!;
 }
 
 describe("Workhorse demo", () => {
@@ -1746,6 +1781,227 @@ describe("Workhorse demo", () => {
         },
       ]);
     } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("declares deterministic demo worker concurrency and projects it through RPC", async () => {
+    expect(DEMO_WORKER_CONCURRENCY).toEqual({ "demo-worker-1": 3, "demo-worker-2": 1 });
+
+    const { app, workhorse } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    // Worker objects are registered synchronously by start(), so the projection needs no waiting.
+    workhorse.start();
+
+    try {
+      await expect(client.dashboard.workers()).resolves.toMatchObject({
+        workers: [
+          {
+            id: "demo-worker-1",
+            concurrency: 3,
+            activeSlots: 0,
+            activeJobs: 0,
+            paused: false,
+            draining: false,
+          },
+          {
+            id: "demo-worker-2",
+            concurrency: 1,
+            activeSlots: 0,
+            activeJobs: 0,
+            paused: false,
+            draining: false,
+          },
+        ],
+      });
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("reports overlapping slots and keeps active work running when a worker is paused", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+      longRunningJobMs: 400,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      // Parking the single-slot worker makes every claim below land on the three-slot worker.
+      await client.dashboard.setWorkerPaused({
+        workerId: DEMO_WORKERS[1],
+        paused: true,
+        audit: { actor: "operator", reason: "isolate slot use", requestId: "slots-isolate" },
+      });
+
+      const enqueued = await Promise.all([
+        client.dashboard.enqueueTest({
+          kind: "long-running",
+          audit: { actor: "operator", reason: "fill slots", requestId: "slots-one" },
+        }),
+        client.dashboard.enqueueTest({
+          kind: "long-running",
+          audit: { actor: "operator", reason: "fill slots", requestId: "slots-two" },
+        }),
+      ]);
+
+      const overlapped = await waitForWorker(
+        client,
+        DEMO_WORKERS[0],
+        (worker) => worker.activeSlots === 2,
+      );
+      expect(overlapped).toMatchObject({ concurrency: 3, activeSlots: 2, paused: false });
+      // SQL-observed active jobs and in-process slots describe the same overlap from two sources.
+      expect(overlapped.activeJobs).toBe(2);
+
+      await expect(
+        client.dashboard.setWorkerPaused({
+          workerId: DEMO_WORKERS[0],
+          paused: true,
+          audit: { actor: "operator", reason: "pause while busy", requestId: "slots-pause" },
+        }),
+      ).resolves.toEqual({ paused: true });
+
+      // Pause stops new claims only, so both in-flight handlers keep their slots.
+      const paused = (await client.dashboard.workers()).workers.find(
+        (worker) => worker.id === DEMO_WORKERS[0],
+      );
+      expect(paused).toMatchObject({ paused: true, activeSlots: 2, concurrency: 3 });
+
+      for (const { jobId } of enqueued) {
+        const detail = await waitFor(
+          () => client.dashboard.jobDetail({ id: jobId }),
+          (value) => value.identity.state === "succeeded",
+        );
+        expect(detail.identity.state).toBe("succeeded");
+      }
+
+      const drained = await waitForWorker(
+        client,
+        DEMO_WORKERS[0],
+        (worker) => worker.activeSlots === 0,
+      );
+      expect(drained).toMatchObject({ paused: true, activeSlots: 0, draining: false });
+
+      expect(
+        (
+          await pool.query(
+            `SELECT target, before, after FROM public.workhorse_demo_audit
+              WHERE request_id = 'slots-pause'`,
+          )
+        ).rows,
+      ).toEqual([
+        {
+          target: `worker:${DEMO_WORKERS[0]}`,
+          before: { paused: false },
+          after: { paused: true },
+        },
+      ]);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("reports unknown capacity for a worker that is not running in this process", async () => {
+    // A supplied controller that knows no workers stands in for an out-of-process fleet: capacity
+    // is genuinely unknown, so the read model must say so instead of implying zero or one slot.
+    const { app } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerController: { workerStates: () => new Map() },
+    });
+
+    await expect(dashboardClient(app).dashboard.workers()).resolves.toMatchObject({
+      canManageWorkers: false,
+      workers: [
+        { id: "demo-worker-1", concurrency: null, activeSlots: null, draining: false },
+        { id: "demo-worker-2", concurrency: null, activeSlots: null, draining: false },
+      ],
+    });
+  });
+
+  it("separates SQL-observed active jobs from unknown declared capacity in the snapshot", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+      longRunningJobMs: 400,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      await client.dashboard.enqueueTest({
+        kind: "long-running",
+        audit: { actor: "operator", reason: "snapshot capacity", requestId: "snapshot-slots" },
+      });
+      await waitFor(
+        () => client.dashboard.workers(),
+        (page) => page.workers.some((worker) => worker.activeSlots === 1),
+      );
+
+      const snapshot = await readDashboardSnapshot(
+        database,
+        new Queue(pool, "demo"),
+        DEMO_WORKERS,
+        createLocalOperator(database),
+      );
+      // The snapshot has no process-local worker handle, so it reports observed active work while
+      // leaving declared capacity and in-process slot use explicitly unknown.
+      expect(snapshot.workers.map((worker) => worker.activeJobs).reduce((a, b) => a + b, 0)).toBe(
+        1,
+      );
+      for (const worker of snapshot.workers) {
+        expect(worker).toMatchObject({ concurrency: null, activeSlots: null, draining: false });
+      }
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("reports a worker as draining while shutdown waits on an in-flight handler", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+      longRunningJobMs: 400,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+    let quiesced: Promise<void> | null = null;
+
+    try {
+      const enqueued = await client.dashboard.enqueueTest({
+        kind: "long-running",
+        audit: { actor: "operator", reason: "observe draining", requestId: "drain-one" },
+      });
+      const busy = await waitFor(
+        () => client.dashboard.workers(),
+        (page) => page.workers.some((worker) => worker.activeSlots === 1),
+      );
+      const busyWorker = busy.workers.find((worker) => worker.activeSlots === 1)!;
+      expect(busyWorker.draining).toBe(false);
+
+      // quiesce stops claiming immediately and then waits for the running handler to finish.
+      quiesced = workhorse.quiesce();
+      const draining = await waitForWorker(
+        client,
+        busyWorker.id,
+        (worker) => worker.draining || worker.activeSlots === 0,
+      );
+      expect(draining).toMatchObject({ draining: true, activeSlots: 1 });
+
+      await quiesced;
+      quiesced = null;
+      await expect(client.dashboard.jobDetail({ id: enqueued.jobId })).resolves.toMatchObject({
+        identity: { state: "succeeded" },
+      });
+      await expect(client.dashboard.workers()).resolves.toMatchObject({
+        workers: expect.arrayContaining([
+          expect.objectContaining({ id: busyWorker.id, draining: false, activeSlots: 0 }),
+        ]),
+      });
+    } finally {
+      if (quiesced) await quiesced;
       await workhorse.stop();
     }
   });

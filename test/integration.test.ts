@@ -35,6 +35,20 @@ const safeKeyPreview = (key: string) => {
   }
   return `${characters.slice(0, 8).join("")}…${characters.slice(-4).join("")}`;
 };
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 const defaultRetentionPolicy: RetentionPolicyDefinition = {
   jobIdentityRetentionDays: null,
   terminalOutcomeRetentionDays: null,
@@ -1476,6 +1490,566 @@ describe("live-runtime queue protocol", () => {
       result: { completedWhilePaused: true },
     });
     expect(await worker.runOnce()).toBe(false);
+  });
+
+  it("bounds overlap, claims only free slots, and breaks the claim loop on the first null", async () => {
+    const release = deferred();
+    let active = 0;
+    let maxActive = 0;
+    for (const sequence of [1, 2]) await queue.enqueue("bounded-batch", { sequence });
+    const claim = vi.spyOn(queue, "claim");
+    const worker = new Worker(queue, {
+      workerId: "bounded-batch-worker",
+      concurrency: 5,
+      pollMs: 0,
+    }).handle("bounded-batch", async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await release.promise;
+      active -= 1;
+      return null;
+    });
+
+    try {
+      const run = worker.runOnce();
+      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
+
+      expect(claim).toHaveBeenCalledTimes(3);
+      expect(worker.runtimeState()).toEqual({
+        concurrency: 5,
+        activeSlots: 2,
+        paused: false,
+        draining: false,
+      });
+
+      release.resolve();
+      await expect(run).resolves.toBe(true);
+      expect(maxActive).toBe(2);
+      expect(worker.runtimeState().activeSlots).toBe(0);
+    } finally {
+      claim.mockRestore();
+    }
+  });
+
+  it("refills a freed run slot while a sibling handler remains blocked", async () => {
+    const firstRelease = deferred();
+    const secondRelease = deferred();
+    const thirdRelease = deferred();
+    const thirdStarted = deferred();
+    const started: number[] = [];
+    let secondBlocked = true;
+    for (const sequence of [1, 2, 3]) await queue.enqueue("continuous-refill", { sequence });
+    const worker = new Worker(queue, {
+      workerId: "continuous-refill-worker",
+      concurrency: 2,
+      pollMs: 1_000,
+    }).handle<{ sequence: number }>("continuous-refill", async ({ sequence }) => {
+      started.push(sequence);
+      if (sequence === 1) await firstRelease.promise;
+      if (sequence === 2) {
+        await secondRelease.promise;
+        secondBlocked = false;
+      }
+      if (sequence === 3) {
+        thirdStarted.resolve();
+        await thirdRelease.promise;
+      }
+      return { sequence };
+    });
+
+    const running = worker.run();
+    try {
+      await vi.waitFor(() => expect(started).toEqual([1, 2]));
+      firstRelease.resolve();
+      await thirdStarted.promise;
+
+      expect(secondBlocked).toBe(true);
+      expect(started).toEqual([1, 2, 3]);
+      expect(worker.runtimeState().activeSlots).toBe(2);
+    } finally {
+      worker.stop();
+      firstRelease.resolve();
+      secondRelease.resolve();
+      thirdRelease.resolve();
+      await running;
+    }
+  });
+
+  it("serializes public runOnce calls and preserves default single-job compatibility", async () => {
+    const firstRelease = deferred();
+    const secondRelease = deferred();
+    const started: number[] = [];
+    for (const sequence of [1, 2]) await queue.enqueue("serialized-run-once", { sequence });
+    const worker = new Worker(queue, {
+      workerId: "serialized-run-once-worker",
+      pollMs: 0,
+    }).handle<{ sequence: number }>("serialized-run-once", async ({ sequence }) => {
+      started.push(sequence);
+      await (sequence === 1 ? firstRelease.promise : secondRelease.promise);
+      return { sequence };
+    });
+
+    const first = worker.runOnce();
+    const second = worker.runOnce();
+    await vi.waitFor(() => expect(started).toEqual([1]));
+    expect(worker.concurrency).toBe(1);
+    expect(worker.runtimeState().activeSlots).toBe(1);
+
+    firstRelease.resolve();
+    await expect(first).resolves.toBe(true);
+    await vi.waitFor(() => expect(started).toEqual([1, 2]));
+    secondRelease.resolve();
+    await expect(second).resolves.toBe(true);
+    expect(worker.runtimeState().activeSlots).toBe(0);
+  });
+
+  it("keeps per-job heartbeats running while paused and does not claim more work", async () => {
+    const release = deferred();
+    const ids = await Promise.all(
+      [1, 2, 3].map((sequence) => queue.enqueue("paused-concurrency", { sequence })),
+    );
+    const heartbeat = vi.spyOn(queue, "heartbeat");
+    const worker = new Worker(queue, {
+      workerId: "paused-concurrency-worker",
+      concurrency: 2,
+      heartbeatMs: 20,
+      leaseMs: 500,
+      pollMs: 0,
+    }).handle("paused-concurrency", async () => {
+      await release.promise;
+      return null;
+    });
+
+    try {
+      const run = worker.runOnce();
+      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
+      worker.pause();
+      await vi.waitFor(() => {
+        const heartbeatingIds = new Set(heartbeat.mock.calls.map(([job]) => job.id));
+        expect(heartbeatingIds.size).toBe(2);
+        expect([...heartbeatingIds].every((id) => ids.includes(id))).toBe(true);
+      });
+
+      expect(worker.runtimeState()).toMatchObject({ activeSlots: 2, paused: true });
+      release.resolve();
+      await expect(run).resolves.toBe(true);
+      expect(await worker.runOnce()).toBe(false);
+      const states = await Promise.all(ids.map(async (id) => (await queue.getJob(id))?.state));
+      expect(states.filter((state) => state === "ready")).toHaveLength(1);
+      expect(states.filter((state) => state === "succeeded")).toHaveLength(2);
+    } finally {
+      heartbeat.mockRestore();
+    }
+  });
+
+  it("runs independent per-job heartbeats without overlapping a slow heartbeat", async () => {
+    const releaseHandlers = deferred();
+    const heartbeatGates = new Map<string, ReturnType<typeof deferred<boolean>>[]>();
+    const heartbeatCalls = new Map<string, number>();
+    const inFlight = new Map<string, number>();
+    const maxInFlight = new Map<string, number>();
+    for (const sequence of [1, 2]) await queue.enqueue("slow-heartbeat", { sequence });
+    const heartbeat = vi.spyOn(queue, "heartbeat").mockImplementation((job) => {
+      const active = (inFlight.get(job.id) ?? 0) + 1;
+      inFlight.set(job.id, active);
+      maxInFlight.set(job.id, Math.max(maxInFlight.get(job.id) ?? 0, active));
+      heartbeatCalls.set(job.id, (heartbeatCalls.get(job.id) ?? 0) + 1);
+      const gate = deferred<boolean>();
+      const gates = heartbeatGates.get(job.id) ?? [];
+      gates.push(gate);
+      heartbeatGates.set(job.id, gates);
+      return gate.promise.finally(() => {
+        inFlight.set(job.id, (inFlight.get(job.id) ?? 1) - 1);
+      });
+    });
+    const worker = new Worker(queue, {
+      workerId: "slow-heartbeat-worker",
+      concurrency: 2,
+      heartbeatMs: 10,
+      leaseMs: 500,
+      pollMs: 0,
+    }).handle("slow-heartbeat", async () => {
+      await releaseHandlers.promise;
+      return null;
+    });
+
+    try {
+      const run = worker.runOnce();
+      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
+      await vi.waitFor(() => expect(heartbeatGates.size).toBe(2));
+      const [firstId, secondId] = [...heartbeatGates.keys()];
+      expect(firstId).toBeDefined();
+      expect(secondId).toBeDefined();
+
+      await sleep(40);
+      expect(heartbeatCalls.get(firstId!)).toBe(1);
+      expect(heartbeatCalls.get(secondId!)).toBe(1);
+      heartbeatGates.get(firstId!)![0]!.resolve(true);
+      await vi.waitFor(() => expect(heartbeatCalls.get(firstId!)).toBe(2));
+
+      expect(heartbeatCalls.get(secondId!)).toBe(1);
+      expect(inFlight.get(firstId!)).toBe(1);
+      expect(inFlight.get(secondId!)).toBe(1);
+      expect(maxInFlight.get(firstId!)).toBe(1);
+      expect(maxInFlight.get(secondId!)).toBe(1);
+
+      releaseHandlers.resolve();
+      await expect(run).resolves.toBe(true);
+      const callsAtSettlement = new Map(heartbeatCalls);
+      for (const gates of heartbeatGates.values()) {
+        for (const gate of gates) gate.resolve(true);
+      }
+      await sleep(30);
+      expect(heartbeatCalls).toEqual(callsAtSettlement);
+    } finally {
+      releaseHandlers.resolve();
+      for (const gates of heartbeatGates.values()) {
+        for (const gate of gates) gate.resolve(true);
+      }
+      heartbeat.mockRestore();
+    }
+  });
+
+  it("stops new claims and resolves run only after every active slot drains", async () => {
+    const release = deferred();
+    const ids = await Promise.all(
+      [1, 2, 3].map((sequence) => queue.enqueue("graceful-concurrency-drain", { sequence })),
+    );
+    const worker = new Worker(queue, {
+      workerId: "graceful-concurrency-drain-worker",
+      concurrency: 2,
+      pollMs: 0,
+    }).handle("graceful-concurrency-drain", async () => {
+      await release.promise;
+      return null;
+    });
+
+    const running = worker.run();
+    await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(2));
+    const blockedRunOnce = worker.runOnce();
+    let runOnceResolved = false;
+    void blockedRunOnce.then(() => {
+      runOnceResolved = true;
+    });
+    await sleep(20);
+    expect(runOnceResolved).toBe(false);
+
+    worker.stop();
+    expect(worker.runtimeState()).toMatchObject({ activeSlots: 2, draining: true });
+    let resolved = false;
+    void running.then(() => {
+      resolved = true;
+    });
+    await sleep(20);
+    expect(resolved).toBe(false);
+
+    release.resolve();
+    await expect(running).resolves.toBeUndefined();
+    await expect(blockedRunOnce).resolves.toBe(false);
+    expect(worker.runtimeState()).toEqual({
+      concurrency: 2,
+      activeSlots: 0,
+      paused: false,
+      draining: false,
+    });
+    const states = await Promise.all(ids.map(async (id) => (await queue.getJob(id))?.state));
+    expect(states.filter((state) => state === "ready")).toHaveLength(1);
+    expect(states.filter((state) => state === "succeeded")).toHaveLength(2);
+  });
+
+  it("drains both active handlers after signal abort without claiming queued work", async () => {
+    const controller = new AbortController();
+    const releases = [deferred(), deferred()];
+    const bothStarted = deferred();
+    const startedIds: string[] = [];
+    const ids: string[] = [];
+    for (const sequence of [0, 1, 2]) {
+      ids.push(await queue.enqueue("signal-abort-drain", { sequence }));
+    }
+    const claim = vi.spyOn(queue, "claim");
+    const heartbeat = vi.spyOn(queue, "heartbeat");
+    const worker = new Worker(queue, {
+      workerId: "signal-abort-drain-worker",
+      concurrency: 2,
+      heartbeatMs: 10,
+      leaseMs: 500,
+      pollMs: 0,
+    }).handle<{ sequence: number }>("signal-abort-drain", async ({ sequence }, context) => {
+      startedIds.push(context.job.id);
+      if (startedIds.length === 2) bothStarted.resolve();
+      await releases[sequence]!.promise;
+      return { sequence };
+    });
+
+    const heartbeatCount = (id: string) =>
+      heartbeat.mock.calls.filter(([job]) => job.id === id).length;
+    const running = worker.run(controller.signal);
+
+    try {
+      await bothStarted.promise;
+      expect(startedIds).toEqual(ids.slice(0, 2));
+      expect(worker.runtimeState()).toMatchObject({ activeSlots: 2, paused: false });
+
+      const countsAtAbort = new Map(ids.slice(0, 2).map((id) => [id, heartbeatCount(id)]));
+      controller.abort();
+      await vi.waitFor(() => {
+        for (const id of ids.slice(0, 2)) {
+          expect(heartbeatCount(id)).toBeGreaterThan(countsAtAbort.get(id)!);
+        }
+      });
+      expect(claim).toHaveBeenCalledTimes(2);
+      await expect(queue.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
+
+      let runSettled = false;
+      void running.then(() => {
+        runSettled = true;
+      });
+      releases[0]!.resolve();
+      await vi.waitFor(async () => expect((await queue.getJob(ids[0]!))?.state).toBe("succeeded"));
+      expect(runSettled).toBe(false);
+      expect(worker.runtimeState().activeSlots).toBe(1);
+
+      const secondCountAfterFirstRelease = heartbeatCount(ids[1]!);
+      await vi.waitFor(() =>
+        expect(heartbeatCount(ids[1]!)).toBeGreaterThan(secondCountAfterFirstRelease),
+      );
+      expect(claim).toHaveBeenCalledTimes(2);
+      await expect(queue.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
+
+      releases[1]!.resolve();
+      await expect(running).resolves.toBeUndefined();
+      expect(worker.runtimeState().activeSlots).toBe(0);
+      await expect(Promise.all(ids.slice(0, 2).map((id) => queue.getJob(id)))).resolves.toEqual(
+        ids.slice(0, 2).map((id) => expect.objectContaining({ id, state: "succeeded" })),
+      );
+      await expect(queue.getJob(ids[2]!)).resolves.toMatchObject({ state: "ready" });
+    } finally {
+      controller.abort();
+      for (const release of releases) release.resolve();
+      await running.catch(() => undefined);
+      claim.mockRestore();
+      heartbeat.mockRestore();
+    }
+  });
+
+  it("honors a same-turn stop before run starts without claiming", async () => {
+    const id = await queue.enqueue("same-turn-stop", {});
+    const claim = vi.spyOn(queue, "claim");
+    const worker = new Worker(queue, { workerId: "same-turn-stop-worker" }).handle(
+      "same-turn-stop",
+      () => null,
+    );
+
+    try {
+      const running = worker.run();
+      worker.stop();
+      await expect(running).resolves.toBeUndefined();
+      expect(claim).not.toHaveBeenCalled();
+      await expect(queue.getJob(id)).resolves.toMatchObject({ state: "ready" });
+    } finally {
+      claim.mockRestore();
+    }
+  });
+
+  it("honors stop while run is queued behind runOnce without claiming again", async () => {
+    const release = deferred();
+    const started = deferred();
+    const firstId = await queue.enqueue("queued-run-stop", { sequence: 1 });
+    const secondId = await queue.enqueue("queued-run-stop", { sequence: 2 });
+    const claim = vi.spyOn(queue, "claim");
+    const worker = new Worker(queue, {
+      workerId: "queued-run-stop-worker",
+      pollMs: 0,
+    }).handle("queued-run-stop", async () => {
+      started.resolve();
+      await release.promise;
+      return null;
+    });
+
+    try {
+      const once = worker.runOnce();
+      await started.promise;
+      const queuedRun = worker.run();
+      worker.stop();
+      release.resolve();
+
+      await expect(once).resolves.toBe(true);
+      await expect(queuedRun).resolves.toBeUndefined();
+      expect(claim).toHaveBeenCalledTimes(1);
+      await expect(queue.getJob(firstId)).resolves.toMatchObject({ state: "succeeded" });
+      await expect(queue.getJob(secondId)).resolves.toMatchObject({ state: "ready" });
+    } finally {
+      release.resolve();
+      claim.mockRestore();
+    }
+  });
+
+  it.each([
+    { maxAttempts: 2, expectedState: "ready", expectedAttempt: 2 },
+    { maxAttempts: 1, expectedState: "failed", expectedAttempt: 1 },
+  ] as const)(
+    "settles successful siblings and recovers a concurrent crash with maxAttempts $maxAttempts",
+    async ({ maxAttempts, expectedState, expectedAttempt }) => {
+      const siblingsStarted = deferred();
+      const releaseSiblings = deferred();
+      const startedSiblings = new Set<number>();
+      let crashedClaim:
+        | { id: string; attempt: number; fenceToken: bigint; leaseExpiresAt: Date }
+        | undefined;
+      const [crashedId, ...siblingIds] = await Promise.all([
+        queue.enqueue("batch-crash-settlement", { sequence: 1 }, { maxAttempts }),
+        queue.enqueue("batch-crash-settlement", { sequence: 2 }),
+        queue.enqueue("batch-crash-settlement", { sequence: 3 }),
+      ]);
+      const workerId = `batch-crash-settlement-${maxAttempts}`;
+      const worker = new Worker(queue, {
+        workerId,
+        concurrency: 3,
+        leaseMs: 10_000,
+        heartbeatMs: 1_000,
+        pollMs: 0,
+        failpoint: (point, job) => {
+          const shouldCrash =
+            point === "beforeHandler" && (job.payload as { sequence: number }).sequence === 1;
+          if (shouldCrash) {
+            crashedClaim = {
+              id: job.id,
+              attempt: job.attempt,
+              fenceToken: job.fenceToken,
+              leaseExpiresAt: job.leaseExpiresAt,
+            };
+          }
+          return shouldCrash;
+        },
+      }).handle<{ sequence: number }>("batch-crash-settlement", async ({ sequence }) => {
+        startedSiblings.add(sequence);
+        if (startedSiblings.size === 2) siblingsStarted.resolve();
+        await releaseSiblings.promise;
+        return { sequence };
+      });
+
+      const run = worker.runOnce();
+      await siblingsStarted.promise;
+      expect(crashedClaim).toBeDefined();
+      const crash = crashedClaim!;
+      expect(crash).toMatchObject({ id: crashedId, attempt: 1 });
+
+      let settled = false;
+      void run.catch(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      releaseSiblings.resolve();
+      await expect(run).rejects.toMatchObject({
+        name: "InjectedCrashError",
+        failpoint: "beforeHandler",
+      });
+      expect(worker.runtimeState().activeSlots).toBe(0);
+      await expect(Promise.all(siblingIds.map((id) => queue.getJob(id)))).resolves.toEqual(
+        siblingIds.map((id) => expect.objectContaining({ id, state: "succeeded" })),
+      );
+
+      const active = await pool.query<{
+        state: string;
+        current_attempt: number;
+        fence_token: string;
+        worker_id: string | null;
+        expires_at: Date | null;
+      }>(
+        `SELECT state, current_attempt, fence_token::text, worker_id, expires_at
+         FROM workhorse.job_runtime WHERE job_id = $1`,
+        [crashedId],
+      );
+      expect(active.rows[0]).toEqual({
+        state: "active",
+        current_attempt: 1,
+        fence_token: crash.fenceToken.toString(),
+        worker_id: workerId,
+        expires_at: crash.leaseExpiresAt,
+      });
+      await expect(queue.getJob(crashedId)).resolves.toMatchObject({
+        state: "active",
+        currentAttempt: 1,
+        fenceToken: crash.fenceToken,
+        result: null,
+        error: null,
+      });
+      expect(
+        (
+          await pool.query<{ count: number }>(
+            "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
+            [crashedId],
+          )
+        ).rows[0]!.count,
+      ).toBe(0);
+
+      await pool.query(
+        "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE job_id = $1",
+        [crashedId],
+      );
+      expect(await queue.recoverExpired(100, 0)).toBe(1);
+      await expect(queue.getJob(crashedId)).resolves.toMatchObject({
+        state: expectedState,
+        currentAttempt: expectedAttempt,
+        result: null,
+      });
+
+      const recoveredRuntime = await pool.query<{
+        state: string;
+        current_attempt: number;
+        fence_token: string;
+        worker_id: string | null;
+        expires_at: Date | null;
+      }>(
+        `SELECT state, current_attempt, fence_token::text, worker_id, expires_at
+         FROM workhorse.job_runtime WHERE job_id = $1`,
+        [crashedId],
+      );
+      const expectedRuntimeRows =
+        expectedState === "ready"
+          ? [
+              {
+                state: "ready",
+                current_attempt: 2,
+                fence_token: "0",
+                worker_id: null,
+                expires_at: null,
+              },
+            ]
+          : [];
+      expect(recoveredRuntime.rows).toEqual(expectedRuntimeRows);
+    },
+  );
+
+  it("keeps run maintenance cadence independent from active handlers", async () => {
+    const release = deferred();
+    await queue.enqueue("maintenance-during-handler", {});
+    const tick = vi.spyOn(queue, "tick");
+    const worker = new Worker(queue, {
+      workerId: "maintenance-during-handler-worker",
+      heartbeatMs: 50,
+      leaseMs: 500,
+      maintenanceIntervalMs: 100,
+      housekeepingIntervalMs: 1_000,
+      pollMs: 1_000,
+    }).handle("maintenance-during-handler", async () => {
+      await release.promise;
+      return null;
+    });
+
+    try {
+      const running = worker.run();
+      await vi.waitFor(() => expect(worker.runtimeState().activeSlots).toBe(1));
+      await vi.waitFor(() => expect(tick).toHaveBeenCalledTimes(2), { timeout: 500 });
+
+      worker.stop();
+      release.resolve();
+      await expect(running).resolves.toBeUndefined();
+    } finally {
+      tick.mockRestore();
+    }
   });
 
   it("runs tick and housekeeping on independent worker cadences with phase telemetry", async () => {

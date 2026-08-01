@@ -41,4 +41,47 @@ describe("createWorkhorseAdapter", () => {
     await Promise.all([adapter.close(), adapter.close()]);
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  it("defaults worker concurrency to one and exposes synchronous runtime state", () => {
+    const adapter = createWorkhorseAdapter({
+      database: queryable(),
+      adaptTransaction: (transaction: Queryable) => transaction,
+    });
+
+    const worker = adapter.createWorker();
+
+    expect(worker.concurrency).toBe(1);
+    expect(worker.runtimeState()).toEqual({
+      concurrency: 1,
+      activeSlots: 0,
+      paused: false,
+      draining: false,
+    });
+    worker.pause();
+    expect(worker.isPaused()).toBe(true);
+    expect(worker.runtimeState()).toMatchObject({ paused: true, draining: false });
+  });
+
+  it.each([0, -1, 101, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53])(
+    "rejects invalid worker concurrency %s",
+    (concurrency) => {
+      const adapter = createWorkhorseAdapter({
+        database: queryable(),
+        adaptTransaction: (transaction: Queryable) => transaction,
+      });
+
+      expect(() => adapter.createWorker({ concurrency })).toThrow(
+        "concurrency must be a safe integer between 1 and 100",
+      );
+    },
+  );
+
+  it.each([1, 100])("accepts worker concurrency boundary %s", (concurrency) => {
+    const adapter = createWorkhorseAdapter({
+      database: queryable(),
+      adaptTransaction: (transaction: Queryable) => transaction,
+    });
+
+    expect(adapter.createWorker({ concurrency }).runtimeState()).toMatchObject({ concurrency });
+  });
 });

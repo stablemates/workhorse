@@ -26,6 +26,7 @@ export type {
   HandlerContext,
   WorkerMaintenanceTelemetry,
   WorkerOptions,
+  WorkerRuntimeState,
 } from "./worker.js";
 export type {
   ClaimedJob,

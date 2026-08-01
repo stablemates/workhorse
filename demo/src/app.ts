@@ -44,6 +44,15 @@ const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
 export const DEMO_WORKER_POLL_MS = 15_000;
+/**
+ * Declared execution slots per demo worker. The values are deliberately different and fixed so the
+ * dashboard shows a heterogeneous, reproducible fleet: one worker overlaps handlers while the other
+ * stays strictly serial. Concurrency is configuration, not a runtime control, so nothing mutates it.
+ */
+export const DEMO_WORKER_CONCURRENCY: Readonly<Record<(typeof DEMO_WORKERS)[number], number>> = {
+  "demo-worker-1": 3,
+  "demo-worker-2": 1,
+};
 export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
 export const DEMO_HOUSEKEEPING_INTERVAL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
@@ -180,12 +189,24 @@ export interface QueueController {
 }
 
 export interface WorkerController {
-  workerStates(): ReadonlyMap<string, { paused: boolean }>;
+  workerStates(): ReadonlyMap<string, DemoWorkerRuntimeState>;
   setWorkerPaused?: (
     workerId: string,
     paused: boolean,
     audit: AuditContext,
   ) => Promise<{ paused: boolean }>;
+}
+
+/**
+ * Process-local view of one running worker. `concurrency` is the declared slot budget from startup
+ * configuration, while `activeSlots` counts handlers currently executing inside this process. Both
+ * are distinct from the SQL-observed active job count the read model reports separately.
+ */
+export interface DemoWorkerRuntimeState {
+  paused: boolean;
+  concurrency: number;
+  activeSlots: number;
+  draining: boolean;
 }
 
 const orderRequestSchema = z.object({
@@ -791,7 +812,18 @@ export function createLocalWorkerController(
   return {
     workerStates() {
       return new Map(
-        [...workers].map(([workerId, worker]) => [workerId, { paused: worker.isPaused() }]),
+        [...workers].map(([workerId, worker]) => {
+          const state = worker.runtimeState();
+          return [
+            workerId,
+            {
+              paused: state.paused,
+              concurrency: state.concurrency,
+              activeSlots: state.activeSlots,
+              draining: state.draining,
+            },
+          ] as const;
+        }),
       );
     },
     async setWorkerPaused(workerId, paused, audit) {
@@ -845,6 +877,8 @@ export function createDemoApplication(
         workerId,
         scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
         pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
+        // Declared once at startup. The demo deliberately offers no runtime concurrency control.
+        concurrency: DEMO_WORKER_CONCURRENCY[workerId],
         maintenanceIntervalMs,
         housekeepingIntervalMs,
         // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.

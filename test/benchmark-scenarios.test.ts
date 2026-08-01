@@ -6,6 +6,7 @@ import {
   operationalScenarioContracts,
   operationalScenarioNames,
   percentile,
+  pollingClaimUpperBound,
   recordInvariant,
   resetWorkhorseStateSql,
   retireHistoryWeekV1Sql,
@@ -132,6 +133,12 @@ describe("scenario metric helpers", () => {
   it("calculates a finite-only arithmetic mean", () => {
     expect(mean([1, 2, 3, Number.NaN, Infinity])).toBe(2);
     expect(mean([])).toBeNull();
+  });
+
+  it("bounds successful claims plus one serial fallback per elapsed polling window", () => {
+    expect(pollingClaimUpperBound(12, 181, 10)).toBe(33);
+    expect(pollingClaimUpperBound(12, 180, 10)).toBe(32);
+    expect(pollingClaimUpperBound(12, 180, 10, 3)).toBe(33);
   });
 
   it("records passing invariants and throws immediately on failure", () => {

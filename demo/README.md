@@ -132,6 +132,12 @@ an explicit refresh. Both workers use a 15-second idle polling delay by default;
 `createDemoApplication` to override it. Mantine follows the browser's preferred light or dark color
 scheme.
 
+Both demo workers retain the `concurrency: 1` default. Core workers may configure an integer from 1 through
+100 and expose local `{ concurrency, activeSlots, paused, draining }` state, but the demo's two-worker shape
+is for lifecycle visibility and failover behavior, not a measured throughput comparison. Use the
+`worker-concurrency` lifecycle benchmark against a `_bench` database for invariant-gated concurrency
+evidence, and do not infer performance from the dashboard.
+
 The browser does not poll job rows. It receives Server-Sent Event invalidation hints from local
 enqueue and worker activity plus PostgreSQL's `workhorse_jobs` notification channel, coalesces bursts,
 then refreshes only the active page through its dedicated oRPC reader. Task filtering and pagination
