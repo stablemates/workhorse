@@ -44,10 +44,19 @@ try {
     tarballs,
   ]);
   await run("pnpm", ["--silent", "--dir", "packages/hono", "pack", "--pack-destination", tarballs]);
+  await run("pnpm", [
+    "--silent",
+    "--dir",
+    "packages/dashboard",
+    "pack",
+    "--pack-destination",
+    tarballs,
+  ]);
 
   const coreTarball = path.join(tarballs, "workhorse-core-0.1.0.tgz");
   const drizzleTarball = path.join(tarballs, "workhorse-drizzle-0.1.0.tgz");
   const honoTarball = path.join(tarballs, "workhorse-hono-0.1.0.tgz");
+  const dashboardTarball = path.join(tarballs, "workhorse-dashboard-0.1.0.tgz");
   const extracted = path.join(scratch, "core");
   await mkdir(extracted);
   await run("tar", ["-xzf", coreTarball, "-C", extracted]);
@@ -71,6 +80,26 @@ try {
     }
   }
 
+  const dashboardExtracted = path.join(scratch, "dashboard");
+  await mkdir(dashboardExtracted);
+  await run("tar", ["-xzf", dashboardTarball, "-C", dashboardExtracted]);
+  for (const required of [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/model.js",
+    "dist/model.d.ts",
+    "dist/rpc-client.js",
+    "dist/rpc-client.d.ts",
+    "dist/server/index.js",
+    "dist/server/index.d.ts",
+    "dist/app/index.html",
+    "dist/styles.css",
+    "dist/assets/workhorse-mark.png",
+    "dist/assets/workhorse-wordmark.png",
+  ]) {
+    await readFile(path.join(dashboardExtracted, "package", required));
+  }
+
   const consumer = path.join(scratch, "consumer");
   await mkdir(consumer);
   await writeFile(
@@ -84,6 +113,7 @@ try {
           "@workhorse/core": `file:${coreTarball}`,
           "@workhorse/drizzle": `file:${drizzleTarball}`,
           "@workhorse/hono": `file:${honoTarball}`,
+          "@workhorse/dashboard": `file:${dashboardTarball}`,
           "@hono/node-server": "2.0.11",
           "drizzle-orm": "0.45.2",
           hono: "4.12.31",
@@ -91,6 +121,10 @@ try {
           typescript: "5.8.3",
           "@types/node": "24.1.0",
           "@types/pg": "8.15.5",
+          react: "19.1.1",
+          "react-dom": "19.1.1",
+          "@types/react": "19.1.10",
+          "@types/react-dom": "19.1.7",
         },
       },
       null,
@@ -118,16 +152,26 @@ try {
   await writeFile(
     path.join(consumer, "type-smoke.ts"),
     `import { createDrizzleAdapter } from "@workhorse/drizzle";
-import { HonoWorkhorse } from "@workhorse/hono";
+import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
+import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";
+import type { DashboardTaskCounts } from "@workhorse/dashboard/model";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { Hono } from "hono";
 import { Pool } from "pg";
 
 const pool = new Pool();
 const db = drizzle({ client: pool });
 const adapter = createDrizzleAdapter(db);
 const integration = new HonoWorkhorse(adapter);
+const app = new Hono();
+mountWorkhorseDashboard(app, { workhorse: integration, authorize: () => true });
 void integration.context.queue;
 void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { ok: true }));
+declare const dashboardClient: DashboardClient;
+const dashboardProps: DashboardProps = { client: dashboardClient, eventsUrl: null };
+const dashboardCountsPromise: Promise<DashboardTaskCounts> = dashboardClient.taskCounts();
+void dashboardProps;
+void dashboardCountsPromise;
 `,
   );
   await writeFile(
@@ -138,7 +182,7 @@ void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { 
   await run("pnpm", ["install", "--ignore-scripts", "--frozen-lockfile=false"], consumer);
   await run("pnpm", ["exec", "tsc", "-p", "tsconfig.json"], consumer);
   await run("node", ["integration.mjs"], consumer);
-  process.stdout.write("Packed core, Drizzle, and Hono consumer tests passed.\n");
+  process.stdout.write("Packed core, Drizzle, Hono, and dashboard consumer tests passed.\n");
 } finally {
   await rm(scratch, { recursive: true, force: true });
 }

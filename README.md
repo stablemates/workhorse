@@ -39,7 +39,8 @@ The current implementation remains an evidence-first validation release rather t
 - immediate cancellation for queued, scheduled, and durable-wait work plus cooperative requests for
   active handlers;
 - separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
-- an optional React operator dashboard with a typed oRPC boundary and audited local controls;
+- a separately packaged `@workhorse/dashboard` React operator dashboard with an injected,
+  transport-neutral client boundary, package-owned styles/assets, and audited local controls;
 - deterministic worker crash failpoints;
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.

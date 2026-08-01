@@ -2,13 +2,15 @@ import { Hono } from "hono";
 import type { WorkhorseAdapter, Queryable, Worker } from "@workhorse/core";
 import { Queue as WorkhorseQueue } from "@workhorse/core";
 import { describe, expect, it, vi } from "vitest";
-import { HonoWorkhorse, serveWithWorkhorse } from "../src/index.js";
+import { HonoWorkhorse, mountWorkhorseDashboard, serveWithWorkhorse } from "../src/index.js";
 
 function adapter(overrides: Partial<WorkhorseAdapter<{ transaction: true }>> = {}) {
-  const queue = new WorkhorseQueue({
+  const database = {
     query: vi.fn<Queryable["query"]>(),
-  } as unknown as Queryable);
+  } as unknown as Queryable;
+  const queue = new WorkhorseQueue(database);
   return {
+    database,
     queue,
     forTransaction: vi.fn<WorkhorseAdapter<{ transaction: true }>["forTransaction"]>(() => queue),
     createWorker: vi.fn<WorkhorseAdapter<{ transaction: true }>["createWorker"]>(),
@@ -18,6 +20,20 @@ function adapter(overrides: Partial<WorkhorseAdapter<{ transaction: true }>> = {
 }
 
 describe("HonoWorkhorse", () => {
+  it("requires authorization at both the dashboard namespace root and nested routes", async () => {
+    const runtimeAdapter = adapter();
+    const integration = new HonoWorkhorse(runtimeAdapter);
+    const app = new Hono();
+    mountWorkhorseDashboard(app, {
+      workhorse: integration,
+      authorize: () => false,
+    });
+
+    expect((await app.request("/workhorse")).status).toBe(403);
+    expect((await app.request("/workhorse/tasks")).status).toBe(403);
+    expect(runtimeAdapter.database.query).not.toHaveBeenCalled();
+  });
+
   it("provides the adapter queue and transaction bridge through typed middleware", async () => {
     const runtimeAdapter = adapter();
     const integration = new HonoWorkhorse(runtimeAdapter);

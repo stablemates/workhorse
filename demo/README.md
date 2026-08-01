@@ -7,6 +7,10 @@ An order and its durable job are committed in one Drizzle transaction, two Hono-
 the queue, and worker-owned in-process scheduling drives recurring work. Those frameworks support the demo;
 Workhorse's durable execution model is what the demo is designed to show.
 
+The demo imports the complete admin application from the publishable packages. `@workhorse/hono`
+mounts `@workhorse/dashboard` below `/workhorse`, including its packaged browser assets, oRPC API,
+and SSE stream. The demo contributes only demo-owned workers, controllers, projections, and seed data.
+
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
@@ -26,11 +30,10 @@ pnpm demo
 ```
 
 The command recreates only the purpose-guarded `workhorse_demo` database, builds the runtime packages,
-then starts Vite with HMR at `http://workhorse.localhost:43155/` and a watched Hono process behind its
-development proxy. The JSON API index remains available at `http://workhorse.localhost:43155/api`.
-Each run allocates a free internal Hono port so multiple worktrees can run concurrently. Set
-`WORKHORSE_API_PORT` only when an explicit internal port is required, or `WORKHORSE_WORKER_POLL_MS` to
-override the workers' 15-second idle polling delay.
+then starts one watched Hono process at `http://workhorse.localhost:43155/`. Hono serves the dashboard
+package and the JSON API from the same application; the API index remains available at
+`http://workhorse.localhost:43155/api`. Set `WORKHORSE_WORKER_POLL_MS` to override the workers'
+15-second idle polling delay.
 Startup seeds one successful transactional order, one named durable timer, fixed, exponential, and
 decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
 durable pipelines, three intentionally persistent durable pipelines, one terminal failure, and one future
@@ -132,10 +135,11 @@ Jobs discarded tab and PostgreSQL health data. Schema v11 already persisted term
 results; selecting a terminal task now exposes its stored result or failure evidence in the existing task
 drawer alongside checkpoint outputs and immutable attempt history.
 
-Open `http://workhorse.localhost:43155/tasks` for the Mantine operator dashboard. Its full-width application shell
-keeps the header and responsive sidebar in place while browser URLs switch between `/tasks`, `/cron`,
-`/system`, and `/workers`. Task filters are nested under Current Tasks and persist as the `filter`
-query parameter, with pagination persisted as `page`.
+Open `http://workhorse.localhost:43155/workhorse/tasks` for the Mantine operator dashboard. Its
+full-width application shell keeps the header and responsive sidebar in place while browser URLs switch
+between `/workhorse/tasks`, `/workhorse/cron`, `/workhorse/system`, and `/workhorse/workers`. Task
+filters are nested under Current Tasks and persist as the `filter` query parameter, with pagination
+persisted as `page`.
 
 The demo starts `demo-worker-1` and `demo-worker-2`. Worker status is explicit: `busy` owns an active
 lease, `recent` completed an attempt during the bounded five-minute observation window, and `idle` is a

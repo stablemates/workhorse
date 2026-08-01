@@ -1,7 +1,7 @@
 import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
 import { createMiddleware } from "hono/factory";
-import type { WorkhorseAdapter, Queue, Worker, WorkerOptions } from "@workhorse/core";
+import type { WorkhorseAdapter, Queryable, Queue, Worker, WorkerOptions } from "@workhorse/core";
 
 export interface HonoWorkhorseContext<TTransaction> {
   readonly queue: Queue;
@@ -26,6 +26,7 @@ export interface HonoWorkhorseOptions {
 
 /** Owns Workhorse worker startup and shutdown for one Hono application process. */
 export class HonoWorkhorse<TTransaction> {
+  readonly database: Queryable;
   readonly context: HonoWorkhorseContext<TTransaction>;
   private readonly workers: Worker[] = [];
   private readonly runs: Promise<void>[] = [];
@@ -37,6 +38,7 @@ export class HonoWorkhorse<TTransaction> {
     private readonly adapter: WorkhorseAdapter<TTransaction>,
     private readonly options: HonoWorkhorseOptions = {},
   ) {
+    this.database = adapter.database;
     this.context = {
       queue: adapter.queue,
       forTransaction: (transaction) => adapter.forTransaction(transaction),
@@ -144,3 +146,6 @@ export async function serveWithWorkhorse<TTransaction>(
     },
   };
 }
+
+export { mountWorkhorseDashboard } from "./dashboard.js";
+export type { MountWorkhorseDashboardOptions } from "./dashboard.js";

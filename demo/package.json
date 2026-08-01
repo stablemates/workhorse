@@ -5,42 +5,29 @@
   "description": "Interactive end-to-end demo of Workhorse",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.dashboard.json --noEmit && vite build",
-    "dev": "pnpm run \"/^dev:.*/\"",
-    "dev:api": "tsx watch src/dev.ts",
-    "dev:dashboard": "vite",
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.dashboard.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.11",
-    "@mantine/charts": "^8.3.18",
-    "@mantine/core": "^8.3.14",
-    "@mantine/hooks": "^8.3.14",
     "@orpc/client": "^1.14.8",
     "@orpc/server": "^1.14.8",
-    "@phosphor-icons/react": "^2.1.10",
     "@workhorse/core": "workspace:*",
+    "@workhorse/dashboard": "workspace:*",
     "@workhorse/drizzle": "workspace:*",
     "@workhorse/hono": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.31",
     "pg": "^8.16.3",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "recharts": "^3.10.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.5",
-    "@types/react": "^19.1.10",
-    "@types/react-dom": "^19.1.7",
-    "@vitejs/plugin-react": "^4.7.0",
-    "react-grab": "^0.1.50",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3",
-    "vite": "^7.1.7"
+    "typescript": "^5.8.3"
   },
   "engines": {
     "node": ">=22"

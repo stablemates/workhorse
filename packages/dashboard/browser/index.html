@@ -4,32 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#1a1b1e" />
-    <link rel="icon" type="image/png" href="/brand/workhorse-mark.png" />
     <script>
       (() => {
-        const key = "workhorse-theme-scheme";
-        const allowed = new Set(["light", "dark"]);
-        let scheme;
-
-        try {
-          const stored = localStorage.getItem(key);
-          scheme = allowed.has(stored)
+        const stored = localStorage.getItem("workhorse-theme-scheme");
+        const scheme =
+          stored === "light" || stored === "dark"
             ? stored
             : matchMedia("(prefers-color-scheme: dark)").matches
               ? "dark"
               : "light";
-        } catch {
-          scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-        }
-
         document.documentElement.dataset.mantineColorScheme = scheme;
         document.documentElement.style.colorScheme = scheme;
       })();
+    </script>
+    <script>
+      /*__WORKHORSE_RUNTIME_CONFIG__*/
     </script>
     <title>Workhorse Operations</title>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="/src/browser.tsx"></script>
   </body>
 </html>

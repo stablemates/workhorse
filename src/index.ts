@@ -1,6 +1,11 @@
 export { createWorkhorseAdapter } from "./adapter.js";
 export type { WorkhorseAdapter, WorkhorseAdapterOptions } from "./adapter.js";
-export { installSchema } from "./schema.js";
+export {
+  assertSchemaCompatible,
+  installSchema,
+  readSchemaVersion,
+  WORKHORSE_SCHEMA_VERSION,
+} from "./schema.js";
 export {
   CheckpointConflictError,
   CheckpointLeaseLostError,

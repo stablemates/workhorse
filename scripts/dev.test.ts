@@ -63,13 +63,12 @@ describe("demo development supervisor", () => {
           ...process.env,
           PATH: `${directory}:${process.env.PATH ?? ""}`,
           PROCESS_ID_LOG: processIdLog,
-          WORKHORSE_API_PORT: "43123",
         },
         stdio: "ignore",
       });
 
       try {
-        const processIds = await waitForProcessIds(processIdLog, 2);
+        const processIds = await waitForProcessIds(processIdLog, 1);
         for (const processId of processIds) spawnedProcessIds.add(processId);
 
         supervisor.kill("SIGINT");

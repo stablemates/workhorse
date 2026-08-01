@@ -7,7 +7,7 @@ import {
   idempotencyEvidenceLine,
   readIdempotencyEvidence,
   type IdempotencyEvidence,
-} from "../../src/dashboard";
+} from "./model.js";
 
 const rawKey = "order-9f3a-super-secret-caller-key";
 

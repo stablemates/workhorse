@@ -52,9 +52,11 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 import {
+  createContext,
   lazy,
   Suspense,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -72,12 +74,8 @@ import {
   idempotencyEvidenceLine,
   isTerminalTaskState,
   readIdempotencyEvidence,
-} from "../../src/dashboard";
-import {
-  describeDurableBoundary,
-  readTaskResultEvidence,
-  type TaskResultState,
-} from "../../src/durable-demo";
+} from "./model.js";
+import { describeDurableBoundary, readTaskResultEvidence, type TaskResultState } from "./model.js";
 import type {
   DashboardCancellationRequest,
   DashboardCancelStatus,
@@ -93,17 +91,25 @@ import type {
   DashboardTaskFilter,
   DashboardTasksPage,
   DashboardWorkersPage,
-} from "../../src/dashboard";
-import { rpcClient } from "../lib/rpc";
-import { WorkhorseBrand } from "./brand";
+} from "./model.js";
+import type { DashboardClient, DashboardDemoTools } from "./client.js";
+import { WorkhorseBrand } from "./brand.js";
 import {
   parseTaskLocation,
   taskLocationHref,
   taskPageSizes,
   type TaskLocationState,
   type TaskPageSize,
-} from "./task-location";
-import { ThemeSchemeSwitch } from "./theme";
+} from "./task-location.js";
+import { ThemeSchemeSwitch } from "./theme.js";
+
+const DashboardClientContext = createContext<DashboardClient | null>(null);
+
+function useDashboardClient(): DashboardClient {
+  const client = useContext(DashboardClientContext);
+  if (!client) throw new Error("Dashboard must receive a client");
+  return client;
+}
 
 type ActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
 const activityPeriods: ActivityPeriod[] = ["15m", "1h", "6h", "24h", "7d"];
@@ -278,12 +284,25 @@ function environmentColor(environment: string): string {
   return "blue";
 }
 
-function readLocation(): {
+function normalizeBasePath(basePath: string): string {
+  const normalized = `/${basePath}`.replaceAll(/\/+/g, "/").replace(/\/$/, "");
+  return normalized === "/" ? "" : normalized;
+}
+
+function mountedHref(basePath: string, href: string): string {
+  return `${basePath}${href}` || "/";
+}
+
+function readLocation(basePath = ""): {
   route: PageRoute;
 } & TaskLocationState {
-  const route = pageRoutes.has(window.location.pathname as PageRoute)
-    ? (window.location.pathname as PageRoute)
-    : "/tasks";
+  const pathname =
+    basePath && window.location.pathname.startsWith(`${basePath}/`)
+      ? window.location.pathname.slice(basePath.length)
+      : window.location.pathname === basePath
+        ? "/tasks"
+        : window.location.pathname;
+  const route = pageRoutes.has(pathname as PageRoute) ? (pathname as PageRoute) : "/tasks";
   const storedPeriod = localStorage.getItem("workhorse-activity-period") as ActivityPeriod | null;
   const storedGroup = localStorage.getItem("workhorse-activity-group") as ActivityGroupBy | null;
   return {
@@ -1762,6 +1781,7 @@ function TasksActivityChart({
   worker: string | null;
   updateLocation: (updates: Partial<TaskLocationState>) => void;
 }) {
+  const client = useDashboardClient();
   const [activity, setActivity] = useState<ActivityData | null>(null);
   const changePeriod = (value: string) => {
     const next = activityPeriods.includes(value as ActivityPeriod)
@@ -1781,7 +1801,7 @@ function TasksActivityChart({
   useEffect(() => {
     let cancelled = false;
     const load = () =>
-      void rpcClient.dashboard
+      void client
         .activity({ filter, period, groupBy, tags, queue, worker })
         .then((page) => {
           if (!cancelled) setActivity(page);
@@ -1793,7 +1813,7 @@ function TasksActivityChart({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [filter, period, groupBy, tags, queue, worker]);
+  }, [client, filter, period, groupBy, tags, queue, worker]);
 
   const labelFormat = (value: string): string => {
     const date = new Date(value);
@@ -1910,6 +1930,7 @@ function useTaskFacets({
   jobType,
   tags,
 }: Pick<DashboardTasksPage, "queue" | "worker" | "jobType" | "tags">) {
+  const client = useDashboardClient();
   const [facets, setFacets] = useState<DashboardTaskFacets | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1926,7 +1947,7 @@ function useTaskFacets({
     const activeGeneration = generation.current;
     setLoading(true);
     setError(null);
-    request.current = rpcClient.dashboard
+    request.current = client
       .taskFacets()
       .then((nextFacets) => {
         if (generation.current === activeGeneration) setFacets(nextFacets);
@@ -1942,7 +1963,7 @@ function useTaskFacets({
           setLoading(false);
         }
       });
-  }, [facets]);
+  }, [client, facets]);
   const values = facets ?? { queues: [], workers: [], jobTypes: [], tags: [] };
   return {
     facets: {
@@ -2038,7 +2059,7 @@ function TasksPage({
   navigate: (href: string) => void;
   replace: (href: string) => void;
   taskLocation: TaskLocationState;
-  runDemoJob: (kind: DemoJobKind, scenario?: DurableDemoScenario) => Promise<void>;
+  runDemoJob: ((kind: DemoJobKind, scenario?: DurableDemoScenario) => Promise<void>) | null;
   runningDemoJob: DemoJobKind | null;
   actionError: string | null;
   inspectJob: (id: string) => void;
@@ -2110,77 +2131,79 @@ function TasksPage({
               onChange={(event) => toggleFullArgs(event.currentTarget.checked)}
             />
             <Group gap="xs">
-              <Menu position="bottom-start" withinPortal>
-                <Menu.Target>
-                  <Button
-                    variant="default"
-                    size="xs"
-                    radius="xl"
-                    leftSection={<PlayCircle size={16} />}
-                    loading={runningDemoJob !== null}
-                  >
-                    enqueue test job
-                  </Button>
-                </Menu.Target>
-                <Menu.Dropdown>
-                  <Menu.Label>Execution path</Menu.Label>
-                  <Menu.Item
-                    leftSection={<CheckCircle size={16} />}
-                    onClick={() => void runDemoJob("success")}
-                  >
-                    Successful job
-                  </Menu.Item>
-                  <Menu.Item
-                    leftSection={<ArrowCounterClockwise size={16} />}
-                    onClick={() => void runDemoJob("retry")}
-                  >
-                    Retry once
-                  </Menu.Item>
-                  <Menu.Item
-                    leftSection={<CheckCircle size={16} />}
-                    onClick={() => void runDemoJob("idempotent")}
-                  >
-                    Idempotent · repeating opens the same task
-                  </Menu.Item>
-                  <Menu.Item
-                    leftSection={<ListChecks size={16} />}
-                    onClick={() => void runDemoJob("durable", "order-fulfillment")}
-                  >
-                    Durable · order fulfillment · 4 steps
-                  </Menu.Item>
-                  <Menu.Item
-                    leftSection={<ListChecks size={16} />}
-                    onClick={() => void runDemoJob("durable", "customer-onboarding")}
-                  >
-                    Durable · customer onboarding · 3 steps
-                  </Menu.Item>
-                  <Menu.Item
-                    leftSection={<ListChecks size={16} />}
-                    onClick={() => void runDemoJob("durable", "report-publication")}
-                  >
-                    Durable · report publication · 3 steps
-                  </Menu.Item>
-                  <Menu.Item
-                    leftSection={<Clock size={16} />}
-                    onClick={() => void runDemoJob("timer")}
-                  >
-                    Durable wait · named timer boundary
-                  </Menu.Item>
-                  <Menu.Item
-                    leftSection={<XCircle size={16} />}
-                    color="red"
-                    onClick={() => void runDemoJob("failure")}
-                  >
-                    Terminal failure
-                  </Menu.Item>
-                  <Menu.Item
-                    leftSection={<Clock size={16} />}
-                    onClick={() => void runDemoJob("long-running")}
-                  >
-                    Long-running · 20s
-                  </Menu.Item>
-                </Menu.Dropdown>
-              </Menu>
+              {runDemoJob ? (
+                <Menu position="bottom-start" withinPortal>
+                  <Menu.Target>
+                    <Button
+                      variant="default"
+                      size="xs"
+                      radius="xl"
+                      leftSection={<PlayCircle size={16} />}
+                      loading={runningDemoJob !== null}
+                    >
+                      enqueue test job
+                    </Button>
+                  </Menu.Target>
+                  <Menu.Dropdown>
+                    <Menu.Label>Execution path</Menu.Label>
+                    <Menu.Item
+                      leftSection={<CheckCircle size={16} />}
+                      onClick={() => void runDemoJob("success")}
+                    >
+                      Successful job
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<ArrowCounterClockwise size={16} />}
+                      onClick={() => void runDemoJob("retry")}
+                    >
+                      Retry once
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<CheckCircle size={16} />}
+                      onClick={() => void runDemoJob("idempotent")}
+                    >
+                      Idempotent · repeating opens the same task
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<ListChecks size={16} />}
+                      onClick={() => void runDemoJob("durable", "order-fulfillment")}
+                    >
+                      Durable · order fulfillment · 4 steps
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<ListChecks size={16} />}
+                      onClick={() => void runDemoJob("durable", "customer-onboarding")}
+                    >
+                      Durable · customer onboarding · 3 steps
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<ListChecks size={16} />}
+                      onClick={() => void runDemoJob("durable", "report-publication")}
+                    >
+                      Durable · report publication · 3 steps
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<Clock size={16} />}
+                      onClick={() => void runDemoJob("timer")}
+                    >
+                      Durable wait · named timer boundary
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<XCircle size={16} />}
+                      color="red"
+                      onClick={() => void runDemoJob("failure")}
+                    >
+                      Terminal failure
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<Clock size={16} />}
+                      onClick={() => void runDemoJob("long-running")}
+                    >
+                      Long-running · 20s
+                    </Menu.Item>
+                  </Menu.Dropdown>
+                </Menu>
+              ) : null}
               <Select
                 size="xs"
                 w={76}
@@ -3604,12 +3627,18 @@ function routeTitle(route: PageRoute): string {
   return "current tasks";
 }
 
-function useDashboardController() {
+function useDashboardController(
+  eventsUrl: string | null,
+  auditActor: string,
+  demoTools: DashboardDemoTools | null,
+  basePath: string,
+) {
+  const client = useDashboardClient();
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
   // Timestamps format through module-level displayTimeZone; re-render everything on change.
   const [, setTimeZoneTick] = useState(0);
   useEffect(() => subscribeTimeZone(() => setTimeZoneTick((tick) => tick + 1)), []);
-  const [location, setLocation] = useState(readLocation);
+  const [location, setLocation] = useState(() => readLocation(basePath));
   const [loadState, setLoadState] = useState<LoadState>({
     status: "loading",
     data: null,
@@ -3619,7 +3648,7 @@ function useDashboardController() {
   const [environment, setEnvironment] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    void rpcClient.dashboard
+    void client
       .meta()
       .then((meta) => {
         if (!cancelled) setEnvironment(meta.environment);
@@ -3628,7 +3657,7 @@ function useDashboardController() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [client]);
   const [runningDemoJob, setRunningDemoJob] = useState<DemoJobKind | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [togglingSchedule, setTogglingSchedule] = useState<string | null>(null);
@@ -3651,22 +3680,26 @@ function useDashboardController() {
   const [refreshInterval, setRefreshInterval] =
     useState<RefreshIntervalValue>(readStoredRefreshInterval);
   const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(() => {
-    const initial = readLocation();
+    const initial = readLocation(basePath);
     return initial.route === "/system" &&
       systemWindows.includes(initial.period as DashboardSystemWindow)
       ? (initial.period as DashboardSystemWindow)
       : readStoredSystemWindow();
   });
-  const changeSystemWindow = useCallback((nextWindow: DashboardSystemWindow) => {
-    setSystemWindow(nextWindow);
-    localStorage.setItem(systemWindowStorageKey, nextWindow);
-    const parameters = new URLSearchParams(window.location.search);
-    if (nextWindow === "1h") parameters.delete("period");
-    else parameters.set("period", nextWindow);
-    const query = parameters.toString();
-    window.history.pushState(null, "", query ? `/system?${query}` : "/system");
-    setLocation(readLocation());
-  }, []);
+  const changeSystemWindow = useCallback(
+    (nextWindow: DashboardSystemWindow) => {
+      setSystemWindow(nextWindow);
+      localStorage.setItem(systemWindowStorageKey, nextWindow);
+      const parameters = new URLSearchParams(window.location.search);
+      if (nextWindow === "1h") parameters.delete("period");
+      else parameters.set("period", nextWindow);
+      const query = parameters.toString();
+      const href = query ? `/system?${query}` : "/system";
+      window.history.pushState(null, "", mountedHref(basePath, href));
+      setLocation(readLocation(basePath));
+    },
+    [basePath],
+  );
   const changeRefreshInterval = useCallback((value: RefreshIntervalValue) => {
     setRefreshInterval(value);
     localStorage.setItem(refreshStorageKey, value);
@@ -3675,16 +3708,19 @@ function useDashboardController() {
 
   const navigate = useCallback(
     (href: string) => {
-      window.history.pushState(null, "", href);
-      setLocation(readLocation());
+      window.history.pushState(null, "", mountedHref(basePath, href));
+      setLocation(readLocation(basePath));
       closeNavbar();
     },
-    [closeNavbar],
+    [basePath, closeNavbar],
   );
-  const replace = useCallback((href: string) => {
-    window.history.replaceState(null, "", href);
-    setLocation(readLocation());
-  }, []);
+  const replace = useCallback(
+    (href: string) => {
+      window.history.replaceState(null, "", mountedHref(basePath, href));
+      setLocation(readLocation(basePath));
+    },
+    [basePath],
+  );
 
   const handleLink = useCallback(
     (event: MouseEvent<HTMLElement>, href: string) => {
@@ -3709,7 +3745,7 @@ function useDashboardController() {
       if (location.route === "/tasks") {
         data = {
           route: "/tasks",
-          value: await rpcClient.dashboard.tasks({
+          value: await client.tasks({
             filter: location.filter,
             queue: location.queue,
             worker: location.worker,
@@ -3721,20 +3757,20 @@ function useDashboardController() {
           }),
         };
       } else if (location.route === "/cron") {
-        data = { route: "/cron", value: await rpcClient.dashboard.cron() };
+        data = { route: "/cron", value: await client.cron() };
       } else if (location.route === "/queues") {
-        data = { route: "/queues", value: await rpcClient.dashboard.queues() };
+        data = { route: "/queues", value: await client.queues() };
       } else if (location.route === "/system") {
         data = {
           route: "/system",
-          value: await rpcClient.dashboard.system({ window: systemWindow }),
+          value: await client.system({ window: systemWindow }),
         };
       } else if (location.route === "/settings") {
         data = { route: "/settings", value: null };
       } else {
         data = {
           route: "/workers",
-          value: await rpcClient.dashboard.workers(),
+          value: await client.workers(),
         };
       }
       if (activeRequest === requestId.current) {
@@ -3750,26 +3786,27 @@ function useDashboardController() {
         }));
       }
     }
-  }, [location, systemWindow]);
+  }, [client, location, systemWindow]);
 
   const loadTaskCounts = useCallback(async () => {
     try {
-      setTaskCounts(await rpcClient.dashboard.taskCounts());
+      setTaskCounts(await client.taskCounts());
     } catch {
       // The active page owns the connection state; keep the last navigation counts on failure.
     }
-  }, []);
+  }, [client]);
 
   const runDemoJob = useCallback(
     async (kind: DemoJobKind, scenario?: DurableDemoScenario) => {
       setRunningDemoJob(kind);
       setActionError(null);
       try {
-        await rpcClient.dashboard.enqueueTest({
+        if (!demoTools) return;
+        await demoTools.enqueueTest({
           kind,
           ...(scenario ? { scenario } : {}),
           audit: {
-            actor: "local-demo",
+            actor: auditActor,
             reason: `Demonstrate the ${scenario ?? kind} execution path`,
             requestId: crypto.randomUUID(),
           },
@@ -3782,7 +3819,7 @@ function useDashboardController() {
         setRunningDemoJob(null);
       }
     },
-    [loadPage, location.filter, location.page, navigate],
+    [auditActor, demoTools, loadPage, location.filter, location.page, navigate],
   );
 
   const toggleSchedule = useCallback(
@@ -3791,13 +3828,13 @@ function useDashboardController() {
       setTogglingSchedule(scheduleKey);
       setScheduleActionError(null);
       try {
-        await rpcClient.dashboard.setScheduleEnabled({
+        await client.setScheduleEnabled({
           kind: "user",
           namespace,
           name,
           enabled,
           audit: {
-            actor: "local-demo",
+            actor: auditActor,
             reason: `${enabled ? "Enable" : "Disable"} ${namespace}/${name} from the dashboard`,
             requestId: crypto.randomUUID(),
           },
@@ -3811,7 +3848,7 @@ function useDashboardController() {
         setTogglingSchedule(null);
       }
     },
-    [loadPage],
+    [auditActor, client, loadPage],
   );
 
   const toggleQueue = useCallback(
@@ -3820,11 +3857,11 @@ function useDashboardController() {
       setQueueActionError(null);
       setQueueActionFeedback(null);
       try {
-        await rpcClient.dashboard.setQueuePaused({
+        await client.setQueuePaused({
           queue,
           paused,
           audit: {
-            actor: "local-demo",
+            actor: auditActor,
             reason: `${paused ? "Pause" : "Resume"} ${queue} from the dashboard`,
             requestId: crypto.randomUUID(),
           },
@@ -3836,7 +3873,7 @@ function useDashboardController() {
         setTogglingQueue(null);
       }
     },
-    [loadPage],
+    [auditActor, client, loadPage],
   );
 
   const clearQueue = useCallback(
@@ -3845,10 +3882,10 @@ function useDashboardController() {
       setQueueActionError(null);
       setQueueActionFeedback(null);
       try {
-        const result = await rpcClient.dashboard.purgeQueue({
+        const result = await client.purgeQueue({
           queue,
           audit: {
-            actor: "local-demo",
+            actor: auditActor,
             reason: `Clear waiting work from ${queue} from the dashboard`,
             requestId: crypto.randomUUID(),
           },
@@ -3864,7 +3901,7 @@ function useDashboardController() {
         setPurgingQueue(null);
       }
     },
-    [loadPage],
+    [auditActor, client, loadPage],
   );
 
   const toggleWorker = useCallback(
@@ -3872,11 +3909,11 @@ function useDashboardController() {
       setTogglingWorker(workerId);
       setWorkerActionError(null);
       try {
-        await rpcClient.dashboard.setWorkerPaused({
+        await client.setWorkerPaused({
           workerId,
           paused,
           audit: {
-            actor: "local-demo",
+            actor: auditActor,
             reason: `${paused ? "Pause" : "Resume"} ${workerId} from the dashboard`,
             requestId: crypto.randomUUID(),
           },
@@ -3890,24 +3927,27 @@ function useDashboardController() {
         setTogglingWorker(null);
       }
     },
-    [loadPage],
+    [auditActor, client, loadPage],
   );
 
-  const inspectJob = useCallback(async (id: string) => {
-    setSelectedJobId(id);
-    setSelectedJob(null);
-    setJobDetailError(null);
-    // Opening a different task must never inherit the previous task's confirmation or result.
-    setConfirmingCancel(false);
-    setCancelReason("");
-    setCancelError(null);
-    setCancelFeedback(null);
-    try {
-      setSelectedJob(await rpcClient.dashboard.jobDetail({ id }));
-    } catch (cause) {
-      setJobDetailError(cause instanceof Error ? cause.message : "Unable to load the task");
-    }
-  }, []);
+  const inspectJob = useCallback(
+    async (id: string) => {
+      setSelectedJobId(id);
+      setSelectedJob(null);
+      setJobDetailError(null);
+      // Opening a different task must never inherit the previous task's confirmation or result.
+      setConfirmingCancel(false);
+      setCancelReason("");
+      setCancelError(null);
+      setCancelFeedback(null);
+      try {
+        setSelectedJob(await client.jobDetail({ id }));
+      } catch (cause) {
+        setJobDetailError(cause instanceof Error ? cause.message : "Unable to load the task");
+      }
+    },
+    [client],
+  );
 
   /**
    * Request cancellation of one task and report exactly what PostgreSQL did.
@@ -3923,10 +3963,10 @@ function useDashboardController() {
       setCancelError(null);
       setCancelFeedback(null);
       try {
-        const result = await rpcClient.dashboard.cancelTask({
+        const result = await client.cancelTask({
           id,
           audit: {
-            actor: "local-demo",
+            actor: auditActor,
             reason,
             requestId: crypto.randomUUID(),
           },
@@ -3939,7 +3979,7 @@ function useDashboardController() {
         });
         setConfirmingCancel(false);
         setCancelReason("");
-        const detail = await rpcClient.dashboard.jobDetail({ id }).catch(() => null);
+        const detail = await client.jobDetail({ id }).catch(() => null);
         if (detail) setSelectedJob(detail);
         await loadPage();
       } catch (cause) {
@@ -3948,12 +3988,12 @@ function useDashboardController() {
         setCancelingJobId(null);
       }
     },
-    [loadPage],
+    [auditActor, client, loadPage],
   );
 
   useEffect(() => {
     const onPopState = () => {
-      const next = readLocation();
+      const next = readLocation(basePath);
       setLocation(next);
       if (
         next.route === "/system" &&
@@ -3973,12 +4013,13 @@ function useDashboardController() {
   }, [loadPage, loadTaskCounts, location.route]);
 
   useEffect(() => {
-    const events = new EventSource("/dashboard/events");
+    if (eventsUrl === null) return;
+    const events = new EventSource(eventsUrl);
     const handleRefresh = () => {
       void loadPage();
       if (location.route !== "/tasks") void loadTaskCounts();
       if (selectedJobId) {
-        void rpcClient.dashboard
+        void client
           .jobDetail({ id: selectedJobId })
           .then(setSelectedJob)
           .catch(() => undefined);
@@ -3989,7 +4030,7 @@ function useDashboardController() {
       events.removeEventListener("refresh", handleRefresh);
       events.close();
     };
-  }, [loadPage, loadTaskCounts, location.route, selectedJobId]);
+  }, [client, eventsUrl, loadPage, loadTaskCounts, location.route, selectedJobId]);
 
   useEffect(() => {
     const intervalMs = refreshIntervals.find((option) => option.value === refreshInterval)?.ms;
@@ -4038,7 +4079,7 @@ function useDashboardController() {
         navigate={navigate}
         replace={replace}
         taskLocation={location}
-        runDemoJob={runDemoJob}
+        runDemoJob={demoTools ? runDemoJob : null}
         runningDemoJob={runningDemoJob}
         actionError={actionError}
         inspectJob={(id) => void inspectJob(id)}
@@ -4119,8 +4160,17 @@ function useDashboardController() {
   };
 }
 
-export function Dashboard() {
-  const controller = useDashboardController();
+function DashboardContent({
+  eventsUrl,
+  auditActor,
+  demoTools,
+  basePath,
+}: Required<Pick<DashboardProps, "auditActor">> & {
+  eventsUrl: string | null;
+  demoTools: DashboardDemoTools | null;
+  basePath: string;
+}) {
+  const controller = useDashboardController(eventsUrl, auditActor, demoTools, basePath);
   const {
     navbarOpened,
     toggleNavbar,
@@ -4264,7 +4314,7 @@ export function Dashboard() {
                 <NavLink
                   key={filter.value}
                   component="a"
-                  href={href}
+                  href={mountedHref(basePath, href)}
                   active={location.route === "/tasks" && location.filter === filter.value}
                   label={filter.label}
                   leftSection={<Icon size={18} />}
@@ -4288,7 +4338,7 @@ export function Dashboard() {
             </Text>
             <NavLink
               component="a"
-              href="/cron"
+              href={mountedHref(basePath, "/cron")}
               active={location.route === "/cron"}
               label="Schedules"
               leftSection={<CalendarDots size={18} />}
@@ -4297,7 +4347,7 @@ export function Dashboard() {
             />
             <NavLink
               component="a"
-              href="/queues"
+              href={mountedHref(basePath, "/queues")}
               active={location.route === "/queues"}
               label="Queues"
               leftSection={<ListDashes size={18} />}
@@ -4306,7 +4356,7 @@ export function Dashboard() {
             />
             <NavLink
               component="a"
-              href="/system"
+              href={mountedHref(basePath, "/system")}
               active={location.route === "/system"}
               label="System Health"
               leftSection={<Pulse size={18} />}
@@ -4315,7 +4365,7 @@ export function Dashboard() {
             />
             <NavLink
               component="a"
-              href="/workers"
+              href={mountedHref(basePath, "/workers")}
               active={location.route === "/workers"}
               label="Workers"
               leftSection={<Robot size={18} />}
@@ -4324,7 +4374,7 @@ export function Dashboard() {
             />
             <NavLink
               component="a"
-              href="/settings"
+              href={mountedHref(basePath, "/settings")}
               active={location.route === "/settings"}
               label="Settings"
               leftSection={<GearSix size={18} />}
@@ -4434,5 +4484,38 @@ export function Dashboard() {
         )}
       </Drawer>
     </AppShell>
+  );
+}
+
+export interface DashboardProps {
+  client: DashboardClient;
+  /** Server-sent event stream that emits `refresh`; null disables push refresh. */
+  eventsUrl?: string | null;
+  /** Actor stored in audit metadata for mutations initiated by this dashboard. */
+  auditActor?: string;
+  /** Optional demo job seeding controls. Omit this in normal application dashboards. */
+  demoTools?: DashboardDemoTools;
+  /** URL namespace where the dashboard is mounted, for example `/workhorse`. */
+  basePath?: string;
+}
+
+export function Dashboard({
+  client,
+  eventsUrl: eventsUrlInput = undefined,
+  auditActor = "dashboard",
+  demoTools = undefined,
+  basePath: basePathInput = "",
+}: DashboardProps) {
+  const basePath = normalizeBasePath(basePathInput);
+  const eventsUrl = eventsUrlInput === undefined ? `${basePath}/events` : eventsUrlInput;
+  return (
+    <DashboardClientContext.Provider value={client}>
+      <DashboardContent
+        eventsUrl={eventsUrl}
+        auditActor={auditActor}
+        demoTools={demoTools ?? null}
+        basePath={basePath}
+      />
+    </DashboardClientContext.Provider>
   );
 }

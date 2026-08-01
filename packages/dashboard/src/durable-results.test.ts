@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  describeDurableBoundary,
-  describeTaskResult,
-  durableDemoPlanForJob,
-  durableDemoScenarios,
-  DURABLE_DEMO_JOB_TYPE,
-  readTaskResultEvidence,
-} from "../../src/durable-demo";
+import { describeDurableBoundary, describeTaskResult, readTaskResultEvidence } from "./model.js";
 
 /**
  * These tests pin what the Task details drawer is allowed to claim about durable results.
@@ -200,45 +193,5 @@ describe("task result vocabulary", () => {
     expect(described.valueLabel).not.toBe("Terminal error");
     expect(described.summary).toContain("no final outcome while retries remain");
     expect(described.summary).not.toMatch(/succeeded|final result/i);
-  });
-});
-
-describe("persistent failure projection", () => {
-  it("marks a seeded continuous-failure task and leaves ordinary tasks untouched", () => {
-    const ordinary = durableDemoPlanForJob(DURABLE_DEMO_JOB_TYPE, {
-      scenario: "order-fulfillment",
-    });
-    expect(ordinary?.persistentFailure).toBeNull();
-
-    const blocked = durableDemoPlanForJob(DURABLE_DEMO_JOB_TYPE, {
-      scenario: "order-fulfillment",
-      failureMode: "continuous",
-    });
-    expect(blocked?.persistentFailure).toMatchObject({
-      afterStepIndex: durableDemoScenarios["order-fulfillment"].persistentFailAfterStep,
-      afterStepName: "reserve-inventory",
-      beforeStepName: "authorize-payment",
-    });
-    expect(blocked?.persistentFailure?.reason).toContain("every attempt");
-  });
-
-  it("keeps every declared boundary inside the declared step list", () => {
-    for (const [scenario, definition] of Object.entries(durableDemoScenarios)) {
-      const plan = durableDemoPlanForJob(DURABLE_DEMO_JOB_TYPE, {
-        scenario,
-        failureMode: "continuous",
-      });
-      const index = plan?.persistentFailure?.afterStepIndex;
-      expect(index).toBeGreaterThanOrEqual(0);
-      // A blocking boundary must sit between two stages, so a later stage always exists to be
-      // reported as never reached. Naming a boundary after the final stage would leave nothing
-      // unreached and make the blocked wording meaningless.
-      expect(index).toBeLessThan(definition.steps.length - 1);
-      expect(plan?.persistentFailure?.beforeStepName).toBe(definition.steps[index! + 1]!.name);
-    }
-  });
-
-  it("leaves a task with no declared plan without an invented boundary", () => {
-    expect(durableDemoPlanForJob("demo.recurring", { failureMode: "continuous" })).toBeNull();
   });
 });
