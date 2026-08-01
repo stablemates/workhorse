@@ -168,7 +168,9 @@ describe("Workhorse demo", () => {
     expect(page.headers.get("content-type")).toContain("text/html");
     expect(html).toContain("window.workhorseDashboard=");
     expect(html).toContain('"basePath":"/workhorse"');
-    expect((await app.request("/tasks")).status).toBe(404);
+    const legacy = await app.request("/tasks?filter=running&page=2");
+    expect(legacy.status).toBe(302);
+    expect(legacy.headers.get("location")).toBe("/workhorse/tasks?filter=running&page=2");
   });
 
   it("uses a conservative worker polling interval for the demo", () => {
