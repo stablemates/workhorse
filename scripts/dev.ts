@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
+import { resolveInternalApiPort } from "./development-port.js";
 
 const usesProcessGroups = process.platform !== "win32";
 const forceKillAfterMs = 5_000;
 
 const publicPort = Number(process.env.PORT ?? 3000);
-const apiPort = Number(process.env.WORKHORSE_API_PORT ?? publicPort + 1);
+const apiPort = await resolveInternalApiPort(process.env.WORKHORSE_API_PORT);
 const commands = [
   {
     command: "pnpm",
@@ -13,6 +14,7 @@ const commands = [
       ...process.env,
       PORT: String(apiPort),
       PORTLESS_URL: "",
+      WORKHORSE_API_PORT: String(apiPort),
       WORKHORSE_DEMO_MODE: "development",
     },
   },
