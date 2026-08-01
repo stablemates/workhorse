@@ -4,19 +4,19 @@ This is the authoritative implementation snapshot for schema version 7. “Suppo
 
 ## At a glance
 
-| Supported core                                 | Partial today                          | Not supported today                            |
-| ---------------------------------------------- | -------------------------------------- | ---------------------------------------------- |
-| Transactional immediate/delayed batch enqueue  | One-handler-at-a-time worker instances | Priorities and enqueue idempotency             |
-| FIFO `SKIP LOCKED` claims                      | Polling despite `NOTIFY` hints         | Cancellation, deadlines, progress              |
-| Leases, heartbeats, fencing, recovery          | Manual partition lifecycle             | Concurrency policies and rate limiting         |
-| Deploy-synchronized worker-owned schedules     | One-handler-at-a-time worker instances | Arbitrary scheduled SQL                        |
-| Immediate/delayed retries and terminal failure | Point-in-time health snapshot          | Dead letters, redrive, dependencies, workflows |
-| Queue pause/resume/purge controls              | Success-path comparative baseline      | RBAC, OpenTelemetry, additional integrations   |
-| Drizzle provider and Hono lifecycle package    | Demo-only operations dashboard         | Online production migration guarantees         |
-| Live runtime plus immutable outcomes           | Clean-install schema only              |                                                |
-| Append-only events and attempt history         |                                        |                                                |
-| Immutable fenced handler checkpoints           |                                        |                                                |
-| Named durable timer waits                      |                                        |                                                |
+| Supported core                                 | Partial today                                       | Not supported today                            |
+| ---------------------------------------------- | --------------------------------------------------- | ---------------------------------------------- |
+| Transactional immediate/delayed batch enqueue  | One-handler-at-a-time worker instances              | Priorities and enqueue idempotency             |
+| FIFO `SKIP LOCKED` claims                      | Polling despite `NOTIFY` hints                      | Cancellation, deadlines, progress              |
+| Leases, heartbeats, fencing, recovery          | Automated partition creation, manual retirement     | Concurrency policies and rate limiting         |
+| Deploy-synchronized worker-owned schedules     | Point-in-time health snapshot                       | Arbitrary scheduled SQL                        |
+| Immediate/delayed retries and terminal failure | Success-path comparative baseline                   | Dead letters, redrive, dependencies, workflows |
+| Queue pause/resume/purge controls              | Demo-only operations dashboard                      | RBAC, OpenTelemetry, additional integrations   |
+| Drizzle provider and Hono lifecycle package    | Clean-install schema only                           | Online production migration guarantees         |
+| Live runtime plus immutable outcomes           | Checkpoint and timer retention follows job identity |                                                |
+| Append-only events and attempt history         |                                                     |                                                |
+| Immutable named checkpoint replay              |                                                     |                                                |
+| Lease-releasing named durable timer waits      |                                                     |                                                |
 
 ## Core job and dispatch
 
@@ -44,22 +44,38 @@ This is the authoritative implementation snapshot for schema version 7. “Suppo
 
 ## Ownership, retry, and failure
 
-| Feature                            | Status        | Current behavior and limits                                                                                                                                                                                                                                                                                             |
-| ---------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Lease ownership                    | Supported     | Active runtime stores worker, fence, acquisition, heartbeat, and expiry.                                                                                                                                                                                                                                                |
-| Global fencing                     | Supported     | Each claim allocates a monotonic fence; stale generations cannot mutate a newer lifecycle.                                                                                                                                                                                                                              |
-| Heartbeat                          | Supported     | CAS update requires job, active state, worker, fence, and unexpired ownership.                                                                                                                                                                                                                                          |
-| Expiry recovery                    | Supported     | Bounded cooperative recovery locks expired active runtimes and requeues or terminally fails them.                                                                                                                                                                                                                       |
-| Centralized maintenance            | Supported     | Advisory-lock-coordinated worker passes promote due jobs and recover expired leases every tick (`tick_v1`) and prune occurrence keys plus replenish history partitions on a slower housekeeping cadence (`housekeep_v1`), off the claim hot path.                                                                       |
-| Immediate/delayed retry            | Supported     | `fail_v1` increments attempt and CAS-updates the same runtime to ready or scheduled.                                                                                                                                                                                                                                    |
-| Retry budget                       | Supported     | Exhaustion atomically removes runtime and creates failed outcome.                                                                                                                                                                                                                                                       |
-| Terminal success                   | Supported     | Completion atomically removes runtime and creates succeeded outcome plus attempt/event history.                                                                                                                                                                                                                         |
-| Terminal failure                   | Supported     | Handler exhaustion or lease exhaustion creates immutable failed outcome.                                                                                                                                                                                                                                                |
-| Immutable terminal materialization | Supported     | Terminal jobs occupy `job_outcome`, not dispatch indexes.                                                                                                                                                                                                                                                               |
-| Dead-letter queue and redrive      | Not supported | Failed outcomes are queryable but no DLQ projection or redrive API exists.                                                                                                                                                                                                                                              |
-| Backoff policy                     | Supported     | SQL applies Sidekiq-inspired quartic backoff with jitter by default; callers can explicitly override the delay.                                                                                                                                                                                                         |
-| Explicit durable checkpoints       | Supported     | Handlers can persist immutable named JSON results of at most 1 MiB through `context.checkpoint`; completed names are reused by later attempts and writes require the exact unexpired worker/fence generation.                                                                                                           |
-| Named durable timer waits          | Supported     | `context.sleep` and `sleepUntil` atomically release active ownership into the scheduled index, restart the handler after due promotion in the same logical attempt, and retain up to 1,000 named boundaries of at most 365 days each. Handler code replays from entry; there is no stack persistence or workflow graph. |
+| Feature                            | Status        | Current behavior and limits                                                                                                                                    |
+| ---------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lease ownership                    | Supported     | Active runtime stores worker, fence, acquisition, heartbeat, and expiry.                                                                                       |
+| Global fencing                     | Supported     | Each claim allocates a monotonic fence; stale generations cannot mutate a newer lifecycle.                                                                     |
+| Heartbeat                          | Supported     | CAS update requires job, active state, worker, fence, and unexpired ownership.                                                                                 |
+| Expiry recovery                    | Supported     | Bounded cooperative recovery locks expired active runtimes and requeues or terminally fails them.                                                              |
+| Centralized maintenance            | Supported     | Advisory-lock-coordinated worker passes promote due jobs and recover expired leases every tick (`tick_v1`) and run slower housekeeping off the claim hot path. |
+| Immediate/delayed retry            | Supported     | `fail_v1` increments attempt and CAS-updates the same runtime to ready or scheduled.                                                                           |
+| Retry budget                       | Supported     | Exhaustion atomically removes runtime and creates failed outcome.                                                                                              |
+| Terminal success                   | Supported     | Completion atomically removes runtime and creates succeeded outcome plus attempt/event history.                                                                |
+| Terminal failure                   | Supported     | Handler exhaustion or lease exhaustion creates immutable failed outcome.                                                                                       |
+| Immutable terminal materialization | Supported     | Terminal jobs occupy `job_outcome`, not dispatch indexes.                                                                                                      |
+| Dead-letter queue and redrive      | Not supported | Failed outcomes are queryable but no DLQ projection or redrive API exists.                                                                                     |
+| Backoff policy                     | Supported     | SQL applies Sidekiq-inspired quartic backoff with jitter by default; callers can explicitly override the delay.                                                |
+
+## Durable execution boundaries
+
+These primitives make selected handler boundaries durable while preserving Workhorse's restart-from-entry execution model. They do not persist a JavaScript stack or provide a workflow graph.
+
+| Feature                                | Status        | Current behavior and limits                                                                                                                                                                                                            |
+| -------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Named checkpoint execution             | Supported     | `context.checkpoint(name, operation)` reuses a completed name on replay; otherwise it runs the operation and persists its JSON result under the current lease. Overlapping same-name calls in one activation are coalesced.            |
+| Checkpoint reads                       | Supported     | Handlers expose `getCheckpoint`; `Queue.getCheckpoint` and `listCheckpoints` provide low-level reads with attempt, fence, worker, and creation-time provenance.                                                                        |
+| Checkpoint immutability and fencing    | Supported     | `Queue.saveCheckpoint` accepts only the exact active, unexpired worker/fence generation. Reusing a name with materially different JSON raises `CheckpointConflictError`; stale ownership raises `CheckpointLeaseLostError`.            |
+| Checkpoint value limits                | Supported     | Names contain 1 to 200 characters and each PostgreSQL-canonical JSONB value is limited to 1 MiB. The external-effect-to-checkpoint crash window remains at least once and requires application idempotency.                            |
+| Relative durable timer                 | Supported     | `context.sleep(name, durationMs)` stores the first relative duration and PostgreSQL-computed wake target, releases ownership into the scheduled index, and suspends without consuming the logical attempt.                             |
+| Absolute durable timer                 | Supported     | `context.sleepUntil(name, wakeAt)` persists an immutable absolute target. Reusing the name with a different mode or target raises `WaitConflictError`.                                                                                 |
+| Timer replay and inspection            | Supported     | A due timer is promoted and reclaimed with a new fence in the same logical attempt. `context.getWait`, `Queue.getWait`, and `listWaits` expose the committed boundary and provenance. Handler code restarts from entry on every claim. |
+| Timer bounds and lease safety          | Supported     | Wait names contain 1 to 200 characters; each job retains at most 1,000 waits; first targets are limited to a 365-day future horizon. Stale ownership and wait-limit failures have typed errors.                                        |
+| Durable lifecycle history              | Supported     | Checkpoint creation and timer scheduling, elapsed reclaim, and replay append explicit lifecycle events. One finalized attempt-history row spans all timer suspensions in that logical attempt.                                         |
+| Durable health visibility              | Supported     | Queue health reports sleeping jobs, overdue waits, and the next durable wake target. The demo dashboard shows checkpoint progress, wait targets, and replay activity.                                                                  |
+| Signals, early wake, and workflow DAGs | Not supported | Timer waits are time-based only. There is no signal delivery, operator early-wake contract, dependency graph, child-job join, deterministic workflow runtime, or persisted continuation stack.                                         |
 
 ## History, reads, and observability
 
