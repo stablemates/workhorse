@@ -95,6 +95,13 @@ import type {
 import type { DashboardClient, DashboardDemoTools } from "./client.js";
 import { WorkhorseBrand } from "./brand.js";
 import {
+  dashboardRefreshIntervalMs,
+  dashboardRefreshIntervals,
+  defaultDashboardRefreshInterval,
+  startDashboardPolling,
+  type DashboardRefreshIntervalValue,
+} from "./refresh-policy.js";
+import {
   parseTaskLocation,
   taskLocationHref,
   taskPageSizes,
@@ -1539,16 +1546,22 @@ function DurableWaits({ job }: { job: DashboardJobDetail }) {
 }
 
 function DurableProgressBadge({ job }: { job: DashboardJobRow }) {
-  if (!job.durability) return null;
+  if (!job.durability) {
+    return (
+      <Text size="sm" c="dimmed">
+        —
+      </Text>
+    );
+  }
   return (
     <Badge
       size="xs"
       variant="light"
       color="violet"
-      leftSection={<CheckCircle size={11} weight="bold" />}
       tt="none"
+      title={`${job.durability.completedSteps} of ${job.durability.totalSteps} durable steps completed`}
     >
-      Durable {job.durability.completedSteps}/{job.durability.totalSteps}
+      {job.durability.completedSteps}/{job.durability.totalSteps}
     </Badge>
   );
 }
@@ -2234,7 +2247,7 @@ function TasksPage({
             highlightOnHover
             verticalSpacing={6}
             horizontalSpacing="sm"
-            miw={fullArgs ? 960 : 840}
+            miw={fullArgs ? 1020 : 900}
           >
             <Table.Thead>
               <Table.Tr>
@@ -2243,6 +2256,7 @@ function TasksPage({
                 <Table.Th>Queue</Table.Th>
                 <Table.Th>Args</Table.Th>
                 <Table.Th miw={280}>Status</Table.Th>
+                <Table.Th ta="right">Steps</Table.Th>
                 <Table.Th ta="right">Attempt</Table.Th>
                 <Table.Th ta="right">Duration</Table.Th>
                 <Table.Th ta="right">Updated</Table.Th>
@@ -2251,7 +2265,7 @@ function TasksPage({
             <Table.Tbody>
               {data.jobs.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={8}>
+                  <Table.Td colSpan={9}>
                     <Center mih={120}>
                       <Text c="dimmed" size="sm">
                         No tasks match this filter.
@@ -2280,7 +2294,6 @@ function TasksPage({
                         <Text fw={600} size="sm" lh={1.3} title={job.type}>
                           {taskDisplayName(job.type, job.queue)}
                         </Text>
-                        <DurableProgressBadge job={job} />
                         {job.keyed ? (
                           <Badge
                             size="xs"
@@ -2316,6 +2329,9 @@ function TasksPage({
                         <TaskWaitBadge job={job} />
                         <TaskStatusDetail job={job} />
                       </Group>
+                    </Table.Td>
+                    <Table.Td ta="right">
+                      <DurableProgressBadge job={job} />
                     </Table.Td>
                     <Table.Td ta="right">
                       <Text
@@ -3599,23 +3615,13 @@ function SettingsPage() {
   );
 }
 
-/** Auto refresh cadence for the whole dashboard; "off" relies on SSE pushes only. */
-const refreshIntervals = [
-  { value: "off", label: "Auto refresh off", ms: null },
-  { value: "5s", label: "Every 5s", ms: 5_000 },
-  { value: "15s", label: "Every 15s", ms: 15_000 },
-  { value: "30s", label: "Every 30s", ms: 30_000 },
-  { value: "1m", label: "Every minute", ms: 60_000 },
-  { value: "5m", label: "Every 5 minutes", ms: 300_000 },
-] as const;
-type RefreshIntervalValue = (typeof refreshIntervals)[number]["value"];
 const refreshStorageKey = "workhorse-auto-refresh";
 
-function readStoredRefreshInterval(): RefreshIntervalValue {
+function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
   const stored = localStorage.getItem(refreshStorageKey);
-  return refreshIntervals.some((option) => option.value === stored)
-    ? (stored as RefreshIntervalValue)
-    : "30s";
+  return dashboardRefreshIntervals.some((option) => option.value === stored)
+    ? (stored as DashboardRefreshIntervalValue)
+    : defaultDashboardRefreshInterval;
 }
 
 function routeTitle(route: PageRoute): string {
@@ -3628,7 +3634,6 @@ function routeTitle(route: PageRoute): string {
 }
 
 function useDashboardController(
-  eventsUrl: string | null,
   auditActor: string,
   demoTools: DashboardDemoTools | null,
   basePath: string,
@@ -3678,7 +3683,7 @@ function useDashboardController(
   const [cancelFeedback, setCancelFeedback] = useState<CancelFeedback | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
-    useState<RefreshIntervalValue>(readStoredRefreshInterval);
+    useState<DashboardRefreshIntervalValue>(readStoredRefreshInterval);
   const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(() => {
     const initial = readLocation(basePath);
     return initial.route === "/system" &&
@@ -3700,7 +3705,7 @@ function useDashboardController(
     },
     [basePath],
   );
-  const changeRefreshInterval = useCallback((value: RefreshIntervalValue) => {
+  const changeRefreshInterval = useCallback((value: DashboardRefreshIntervalValue) => {
     setRefreshInterval(value);
     localStorage.setItem(refreshStorageKey, value);
   }, []);
@@ -4013,33 +4018,10 @@ function useDashboardController(
   }, [loadPage, loadTaskCounts, location.route]);
 
   useEffect(() => {
-    if (eventsUrl === null) return;
-    const events = new EventSource(eventsUrl);
-    const handleRefresh = () => {
+    return startDashboardPolling(dashboardRefreshIntervalMs(refreshInterval), () => {
       void loadPage();
       if (location.route !== "/tasks") void loadTaskCounts();
-      if (selectedJobId) {
-        void client
-          .jobDetail({ id: selectedJobId })
-          .then(setSelectedJob)
-          .catch(() => undefined);
-      }
-    };
-    events.addEventListener("refresh", handleRefresh);
-    return () => {
-      events.removeEventListener("refresh", handleRefresh);
-      events.close();
-    };
-  }, [client, eventsUrl, loadPage, loadTaskCounts, location.route, selectedJobId]);
-
-  useEffect(() => {
-    const intervalMs = refreshIntervals.find((option) => option.value === refreshInterval)?.ms;
-    if (!intervalMs) return;
-    const timer = setInterval(() => {
-      void loadPage();
-      if (location.route !== "/tasks") void loadTaskCounts();
-    }, intervalMs);
-    return () => clearInterval(timer);
+    });
   }, [refreshInterval, loadPage, loadTaskCounts, location.route]);
 
   const connected = loadState.status !== "error" && loadState.data !== null;
@@ -4161,16 +4143,14 @@ function useDashboardController(
 }
 
 function DashboardContent({
-  eventsUrl,
   auditActor,
   demoTools,
   basePath,
 }: Required<Pick<DashboardProps, "auditActor">> & {
-  eventsUrl: string | null;
   demoTools: DashboardDemoTools | null;
   basePath: string;
 }) {
-  const controller = useDashboardController(eventsUrl, auditActor, demoTools, basePath);
+  const controller = useDashboardController(auditActor, demoTools, basePath);
   const {
     navbarOpened,
     toggleNavbar,
@@ -4282,7 +4262,7 @@ function DashboardContent({
                 </Menu.Target>
                 <Menu.Dropdown>
                   <Menu.Label>Auto refresh</Menu.Label>
-                  {refreshIntervals.map((option) => (
+                  {dashboardRefreshIntervals.map((option) => (
                     <Menu.Item
                       key={option.value}
                       onClick={() => changeRefreshInterval(option.value)}
@@ -4489,7 +4469,7 @@ function DashboardContent({
 
 export interface DashboardProps {
   client: DashboardClient;
-  /** Server-sent event stream that emits `refresh`; null disables push refresh. */
+  /** @deprecated Retained for API compatibility. Dashboard refresh is currently polling-only. */
   eventsUrl?: string | null;
   /** Actor stored in audit metadata for mutations initiated by this dashboard. */
   auditActor?: string;
@@ -4501,21 +4481,14 @@ export interface DashboardProps {
 
 export function Dashboard({
   client,
-  eventsUrl: eventsUrlInput = undefined,
   auditActor = "dashboard",
   demoTools = undefined,
   basePath: basePathInput = "",
 }: DashboardProps) {
   const basePath = normalizeBasePath(basePathInput);
-  const eventsUrl = eventsUrlInput === undefined ? `${basePath}/events` : eventsUrlInput;
   return (
     <DashboardClientContext.Provider value={client}>
-      <DashboardContent
-        eventsUrl={eventsUrl}
-        auditActor={auditActor}
-        demoTools={demoTools ?? null}
-        basePath={basePath}
-      />
+      <DashboardContent auditActor={auditActor} demoTools={demoTools ?? null} basePath={basePath} />
     </DashboardClientContext.Provider>
   );
 }

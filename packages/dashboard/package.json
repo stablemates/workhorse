@@ -31,7 +31,9 @@
     "provenance": true
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && cp src/styles.css dist/styles.css && cp -R src/assets dist/assets && vite build",
+    "build": "rm -rf dist && pnpm build:library && pnpm build:app",
+    "build:library": "tsc -p tsconfig.json && cp src/styles.css dist/styles.css && cp -R src/assets dist/assets",
+    "build:app": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

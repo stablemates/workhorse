@@ -3,14 +3,44 @@ import { spawn } from "node:child_process";
 const usesProcessGroups = process.platform !== "win32";
 const forceKillAfterMs = 5_000;
 
-const commands = [["pnpm", ["--filter", "@workhorse/demo", "dev"]]] as const;
-const children = commands.map(([command, arguments_]) =>
+const publicPort = Number(process.env.PORT ?? 3000);
+const apiPort = Number(process.env.WORKHORSE_API_PORT ?? publicPort + 1);
+const commands = [
+  {
+    command: "pnpm",
+    arguments: ["--filter", "@workhorse/demo", "dev:server"],
+    env: {
+      ...process.env,
+      PORT: String(apiPort),
+      PORTLESS_URL: "",
+      WORKHORSE_DEMO_MODE: "development",
+    },
+  },
+  {
+    command: "pnpm",
+    arguments: ["--filter", "@workhorse/demo", "dev:client"],
+    env: {
+      ...process.env,
+      PORT: String(publicPort),
+      WORKHORSE_API_PORT: String(apiPort),
+      WORKHORSE_DEMO_MODE: "development",
+    },
+  },
+] as const;
+const children = commands.map(({ command, arguments: arguments_, env }) =>
   spawn(command, arguments_, {
     detached: usesProcessGroups,
-    env: process.env,
+    env,
     stdio: "inherit",
   }),
 );
+
+console.log(
+  process.env.PORTLESS_URL
+    ? `Workhorse demo development environment available at ${process.env.PORTLESS_URL}`
+    : `Workhorse demo development environment available at http://localhost:${publicPort}`,
+);
+console.log(`Development API listening internally on http://localhost:${apiPort}`);
 
 let stopping = false;
 let shutdownRequested = false;

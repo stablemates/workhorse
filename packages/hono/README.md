@@ -41,5 +41,10 @@ and SSE refresh stream. Authorization is required explicitly. The adapter checks
 schema is compatible and returns `503` when it is not, but it never installs or migrates database
 objects.
 
+Hosts may provide trusted, host-owned ES modules through `browserModules`. The mount inserts those module
+URLs before the dashboard entry script; the host remains responsible for serving, securing, and versioning
+them. This is intended for private integration or development tooling and does not add those modules to
+`@workhorse/dashboard`.
+
 Shutdown first stops accepting HTTP connections and stops new worker claims. It then waits for
 in-flight requests and handlers before closing provider-owned resources.

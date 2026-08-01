@@ -9,7 +9,6 @@ import { WorkhorseThemeProvider } from "./theme.js";
 export interface WorkhorseDashboardRuntimeConfig {
   basePath: string;
   rpcUrl: string;
-  eventsUrl: string | null;
   auditActor: string;
   demoTools?: boolean;
 }
@@ -30,7 +29,6 @@ createRoot(document.getElementById("root")!).render(
       <Dashboard
         client={client}
         basePath={config.basePath}
-        eventsUrl={config.eventsUrl}
         auditActor={config.auditActor}
         demoTools={config.demoTools ? { enqueueTest: client.enqueueTest } : undefined}
       />
