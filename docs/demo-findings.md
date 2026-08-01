@@ -18,6 +18,12 @@ The demo now proves these paths against PostgreSQL rather than mocks:
   model and task drawer, and show PostgreSQL-selected delay and source in the lifecycle timeline;
 - three demo-declared pipelines expose multi-step checkpoint progress for order fulfillment, customer
   onboarding, and report publication without treating the presentation plan as a core workflow graph;
+- three representative durable seeds persistently fail at configured boundaries, preserve checkpoint-backed
+  interim artifacts and per-attempt errors, schedule retries at about 5, 7, and 10 minutes, and never execute
+  later planned stages;
+- schema v11 already persisted terminal outcomes/results and immutable checkpoint outputs as public data;
+  the existing task drawer now makes both the terminal result or failure evidence and checkpoint-backed
+  interim artifacts inspectable alongside attempt history;
 - a named durable timer demo checkpoints preparation, suspends with no active lease, and later reclaims the
   same logical attempt with a new fence; replay reuses preparation exactly once before publishing;
 - the worker-owned scheduler synchronizes and fires a recurring definition with occurrence deduplication;
@@ -29,6 +35,10 @@ The demo now proves these paths against PostgreSQL rather than mocks:
   runtime state, while the demo intentionally keeps two default-concurrency workers rather than presenting
   an unrecorded performance comparison;
 - `pnpm demo` recreates only a purpose-guarded demo database, builds the workspace, and serves the app.
+
+Checkpoint outputs are immutable durable evidence, not mutable progress updates. Their visibility does not
+complete **P1-09 Progress and job metadata**, which still requires fenced, bounded mutable updates with
+defined frequency and size limits.
 
 ## Gaps fixed while building the demo
 
@@ -169,10 +179,11 @@ listener setup still rely on process exit to release resources.
 **Needed:** a small acquisition/cleanup helper or integration lifecycle that disposes partially acquired
 resources in reverse order. Ownership must remain explicit so caller-owned pools are never closed.
 
-### X3. Job detail inspection is incomplete
+### X3. Broader job detail inspection is incomplete
 
-The dashboard shows a bounded recent-job row and current attempt count, but it does not expose a selected
-job's event timeline, immutable attempts, payload/result redaction state, or redrive lineage.
+The existing task drawer now exposes selected-job terminal results or failure evidence, immutable attempts,
+and checkpoint-backed interim artifacts. It still does not expose a complete event timeline,
+payload/result redaction state, or redrive lineage.
 
 **Needed:** implement this on the future P2-01 query API rather than adding more direct SQL to the demo.
 

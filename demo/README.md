@@ -34,11 +34,20 @@ override the workers' 15-second idle polling delay.
 Startup seeds one successful transactional order, one named durable timer, fixed, exponential, and
 decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
 durable pipelines, three intentionally persistent durable pipelines, one terminal failure, and one future
-scheduled job. The durable pipelines cover order fulfillment,
-customer onboarding, and report publication. Recoverable examples crash after different checkpoints on
-attempt 1, then continue without repeating completed operations. The persistent examples preserve the same
-checkpoint evidence but deliberately fail every attempt; their next attempts remain visibly scheduled about
-5, 7, and 10 minutes later. Use the dashboard's **enqueue test job** menu to create fresh success, retry,
+scheduled job. The durable pipelines cover order fulfillment, customer onboarding, and report publication.
+Recoverable examples crash after different checkpoints on attempt 1, then continue without repeating
+completed operations. Three representative persistent-failure seeds stop at their configured boundary on
+every attempt and never execute a later stage:
+
+- order fulfillment preserves its completed boundary evidence and schedules the next retry from its
+  configured fixed policy at about 5 minutes;
+- customer onboarding preserves its completed boundary evidence and schedules its next configured
+  exponential retry at about 7 minutes;
+- report publication preserves its completed boundary evidence and schedules its next configured
+  decorrelated-jitter retry at about 10 minutes.
+
+Their immutable checkpoint artifacts and per-attempt failure evidence remain visible between retries in the
+existing task drawer. Use the dashboard's **enqueue test job** menu to create fresh success, retry,
 durable pipeline, durable timer, failure, and 20-second long-running paths. Durable rows show a violet
 **Durable N/M** badge, and their task drawer uses a Mantine Stepper to show saved, running, and pending
 restart boundaries. Each new durable operation takes two seconds so progress remains visible. Set
@@ -90,6 +99,10 @@ then the handler crashes deliberately. Attempt 2 reuses both checkpoint values b
 Workhorse itself stores only immutable checkpoint evidence. The other supported scenarios are
 `customer-onboarding` and `report-publication`.
 
+The drawer treats saved checkpoint values as interim artifacts, not mutable progress. They were already
+public, durable schema v11 data and remain unchanged across retries. Fenced, bounded mutable progress is a
+separate roadmap feature and is not implied by this inspection view.
+
 Create a publication job that prepares once, releases its lease into a named durable timer, and publishes
 after a later claim:
 
@@ -115,7 +128,9 @@ curl --fail-with-body --request POST http://workhorse.localhost:43155/demo/failu
 ```
 
 This job has one allowed attempt, so the worker records an immutable failed outcome that appears in the
-Jobs discarded tab and PostgreSQL health data.
+Jobs discarded tab and PostgreSQL health data. Schema v11 already persisted terminal outcomes and JSON
+results; selecting a terminal task now exposes its stored result or failure evidence in the existing task
+drawer alongside checkpoint outputs and immutable attempt history.
 
 Open `http://workhorse.localhost:43155/tasks` for the Mantine operator dashboard. Its full-width application shell
 keeps the header and responsive sidebar in place while browser URLs switch between `/tasks`, `/cron`,
