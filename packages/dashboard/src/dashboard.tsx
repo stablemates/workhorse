@@ -949,6 +949,8 @@ const boundaryEventTypes = new Set([
   "checkpoint_saved",
   "retry_scheduled",
   "cancel_requested",
+  "succeeded",
+  "failed",
   "canceled",
 ]);
 
@@ -961,6 +963,8 @@ const boundaryEventLabels: Record<string, string> = {
   checkpoint_saved: "Checkpoint saved",
   retry_scheduled: "Retry scheduled",
   cancel_requested: "Cancellation requested",
+  succeeded: "Succeeded",
+  failed: "Failed",
   canceled: "Canceled",
 };
 
@@ -972,6 +976,8 @@ const boundaryEventColors: Record<string, string> = {
   claimed: "blue",
   checkpoint_saved: "teal",
   retry_scheduled: "orange",
+  succeeded: "green",
+  failed: "red",
   // Neutral, not red: an operator stopped this task, it did not break.
   cancel_requested: "gray",
   canceled: "gray",
@@ -1353,6 +1359,7 @@ function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
                 color={boundaryEventColors[event.type] ?? "gray"}
                 tt="none"
                 miw={116}
+                styles={{ root: { justifyContent: "start" } }}
               >
                 {boundaryEventLabels[event.type] ?? event.type}
               </Badge>
