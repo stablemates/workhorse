@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, immutable history, and a live-only dispatch relation.
 
-The current implementation remains an evidence-first validation release rather than a production-support promise. Its purpose is to validate transactional enqueue, declarative worker-scheduled recurring jobs, fenced ownership, immutable attempt history, durable checkpoint replay, lease-releasing timer waits, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
+The current implementation remains an evidence-first validation release rather than a production-support promise. Its purpose is to validate transactional enqueue, declarative worker-scheduled recurring jobs, fenced ownership, immutable attempt history, durable checkpoint replay, lease-releasing timer waits, attribution-safe automated retention, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
 
 ## Documentation
 
@@ -23,6 +23,8 @@ The current implementation remains an evidence-first validation release rather t
 - append-only, time-partitioned lifecycle events and finalized attempts;
 - immutable named handler checkpoints that survive retry and are fenced against stale workers;
 - named durable timer waits that release the worker lease and restart in the same logical attempt;
+- persisted, bounded retention for terminal jobs, history partitions, fallback rows, and schedule
+  occurrences, with live-job and retained-attribution safety guards;
 - namespaced declarative recurring jobs synchronized into the target database during deployment;
 - worker-owned in-process cron scheduling with advisory-lock coordination and SQL occurrence deduplication;
 - centralized promotion and lease recovery off the worker claim hot path;
@@ -122,6 +124,21 @@ await queue.syncSchedules("billing-production", [
   },
 ]);
 
+// Retention is persisted once for the database, so every worker applies the same policy.
+// Destructive job/event/attempt retention is disabled by default. These are minimum windows:
+// retained attribution or bounded catch-up can keep data longer, never shorter.
+await queue.syncRetentionPolicy({
+  jobIdentityRetentionDays: 180,
+  terminalOutcomeRetentionDays: 90,
+  jobEventRetentionDays: 90,
+  attemptHistoryRetentionDays: 90,
+  scheduleOccurrenceRetentionDays: 30,
+  terminalJobPruneLimit: 1_000,
+  historyPartitionsPerPass: 4,
+  defaultPartitionRowsPerPass: 10_000,
+  occurrenceRowsPerPass: 10_000,
+});
+
 // Jobs default to 25 total attempts. Override only when this job needs a different budget.
 await queue.enqueue("email", { to: "person@example.com" });
 
@@ -176,7 +193,7 @@ provides a Node server handle whose idempotent shutdown stops new claims, drains
 and requests, then closes explicitly provider-owned resources. See the package READMEs for complete
 configuration and ownership behavior.
 
-Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL, split across two cadences. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs and recovers expired leases, and also drives in-process schedule evaluation. A slower housekeeping pass (`workhorse.housekeep_v1`, once per minute by default) replenishes history partitions and deletes at most 10,000 occurrence keys older than 30 days, so slow cleanup can never delay dispatch. Transaction-scoped advisory locks inside `tick_v1`, `housekeep_v1`, and `workhorse.fire_schedule_v1` make concurrent passes from other workers cheap no-ops, so running many workers neither duplicates schedules nor multiplies maintenance load, and any surviving worker keeps schedules firing. Both entry points return per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and the `onMaintenance` callback.
+Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL, split across two cadences. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs and recovers expired leases, and also drives in-process schedule evaluation. A slower housekeeping pass (`workhorse.housekeep_v1`, once per minute by default) replenishes future history partitions; independently retires expired event and attempt partitions plus bounded fallback rows; prunes schedule occurrences; and removes only terminal jobs whose retained history no longer needs their identity. Slow cleanup therefore never delays dispatch. Transaction-scoped advisory locks inside `tick_v1`, `housekeep_v1`, and `workhorse.fire_schedule_v1` make concurrent passes from other workers cheap no-ops, so running many workers neither duplicates schedules nor multiplies maintenance load, and any surviving worker keeps schedules firing. Both entry points return per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and the `onMaintenance` callback.
 
 Handler failures use SQL-owned, Sidekiq-inspired retry scheduling. For zero-based retry count `count` (the first failed attempt is `0`), the delay is `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds. The default 25-attempt budget spreads retries across roughly 20 days. Keeping the calculation in `fail_v1` gives every client the same durable protocol; `WorkerOptions.retryDelayMs` remains an explicit override, including `0` for an immediate retry or a callback `(attempt, job) => milliseconds` for a deliberate per-job policy.
 

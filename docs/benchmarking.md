@@ -48,15 +48,15 @@ The suite also performs equal-load fixed-rate producer-consumer churn. Both desi
 
 The lifecycle suite runs deterministic operational scenarios with hard invariants:
 
-| Scenario                    | Evidence produced                                                    |
-| --------------------------- | -------------------------------------------------------------------- |
-| `scheduled-promotion-drift` | bounded promotion batches and due-time drift distribution            |
-| `heartbeat-fencing`         | accepted heartbeat cost and stale-fence rejection cost               |
-| `crash-before-completion`   | durable state at all five worker crash boundaries                    |
-| `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection  |
-| `retry-paths`               | immediate, delayed, promoted, and terminal retry transitions         |
-| `retention-pruning`         | bounded history retention behavior and retained job identity         |
-| `health-snapshot`           | health-query latency and internally consistent degraded-state counts |
+| Scenario                    | Evidence produced                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `scheduled-promotion-drift` | bounded promotion batches and due-time drift distribution                                      |
+| `heartbeat-fencing`         | accepted heartbeat cost and stale-fence rejection cost                                         |
+| `crash-before-completion`   | durable state at all five worker crash boundaries                                              |
+| `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection                            |
+| `retry-paths`               | immediate, delayed, promoted, and terminal retry transitions                                   |
+| `retention-pruning`         | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity |
+| `health-snapshot`           | health-query latency and internally consistent degraded-state counts                           |
 
 Scenario invariant failures abort the suite. This prevents a fast but semantically incorrect run from being treated as evidence.
 

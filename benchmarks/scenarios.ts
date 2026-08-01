@@ -187,7 +187,19 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
   workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
-ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1`;
+ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1;
+UPDATE workhorse.retention_policy
+   SET job_identity_retention_days = NULL,
+       terminal_outcome_retention_days = NULL,
+       job_event_retention_days = NULL,
+       attempt_history_retention_days = NULL,
+       schedule_occurrence_retention_days = 30,
+       terminal_job_prune_limit = 1000,
+       history_partitions_per_pass = 4,
+       default_partition_rows_per_pass = 10000,
+       occurrence_rows_per_pass = 10000,
+       updated_at = clock_timestamp()
+ WHERE singleton`;
 
 export const createHistoryWeekV1Sql = "SELECT workhorse.create_history_week_v1($1::date)";
 export const retireHistoryWeekV1Sql = "SELECT workhorse.retire_history_week_v1($1::date)";
@@ -711,11 +723,23 @@ async function retentionPruning(
   );
   const historyBefore =
     (await rowCount(context.pool, "job_event")) + (await rowCount(context.pool, "attempt_history"));
-  await context.pool.query(retireHistoryWeekV1Sql, [retiredWeekDate]);
+  await queue.syncRetentionPolicy({
+    jobIdentityRetentionDays: null,
+    terminalOutcomeRetentionDays: null,
+    jobEventRetentionDays: 7,
+    attemptHistoryRetentionDays: 7,
+    scheduleOccurrenceRetentionDays: 30,
+    terminalJobPruneLimit: context.options.pruneLimit,
+    historyPartitionsPerPass: 2,
+    defaultPartitionRowsPerPass: context.options.pruneLimit,
+    occurrenceRowsPerPass: context.options.pruneLimit,
+  });
+  const housekeeping = await queue.housekeep();
   const historyAfter =
     (await rowCount(context.pool, "job_event")) + (await rowCount(context.pool, "attempt_history"));
   const pruned = historyBefore - historyAfter;
   const retainedJobs = await rowCount(context.pool, "job");
+  const health = await queue.health();
   recordInvariant(assertions, "terminal history was seeded", historyBefore > 0, true);
   recordInvariant(
     assertions,
@@ -725,11 +749,45 @@ async function retentionPruning(
   );
   recordInvariant(assertions, "old history was removed", historyAfter, 0);
   recordInvariant(assertions, "current job identity is retained", retainedJobs, seededJobs);
+  recordInvariant(
+    assertions,
+    "event retention ran through housekeeping",
+    housekeeping.find((phase) => phase.phase === "event_retention")?.rowsAffected ?? 0,
+    1,
+  );
+  recordInvariant(
+    assertions,
+    "attempt retention ran through housekeeping",
+    housekeeping.find((phase) => phase.phase === "attempt_retention")?.rowsAffected ?? 0,
+    1,
+  );
+  recordInvariant(
+    assertions,
+    "retention health reports no expired event partitions",
+    health.eligibleHistoryPartitions.jobEvents,
+    0,
+  );
+  recordInvariant(
+    assertions,
+    "retention health reports no expired attempt partitions",
+    health.eligibleHistoryPartitions.attemptHistory,
+    0,
+  );
 
   return {
     name: "retention-pruning",
     durationMs: 0,
-    metrics: { seededJobs, historyBefore, pruned, historyAfter, retainedJobs },
+    metrics: {
+      seededJobs,
+      historyBefore,
+      pruned,
+      historyAfter,
+      retainedJobs,
+      eventRetentionUnits:
+        housekeeping.find((phase) => phase.phase === "event_retention")?.rowsAffected ?? 0,
+      attemptRetentionUnits:
+        housekeeping.find((phase) => phase.phase === "attempt_retention")?.rowsAffected ?? 0,
+    },
     assertions,
   };
 }

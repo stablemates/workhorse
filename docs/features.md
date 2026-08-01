@@ -1,22 +1,23 @@
 # Feature support matrix
 
-This is the authoritative implementation snapshot for schema version 7. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
+This is the authoritative implementation snapshot for schema version 8. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
 
 ## At a glance
 
-| Supported core                                 | Partial today                                       | Not supported today                            |
-| ---------------------------------------------- | --------------------------------------------------- | ---------------------------------------------- |
-| Transactional immediate/delayed batch enqueue  | One-handler-at-a-time worker instances              | Priorities and enqueue idempotency             |
-| FIFO `SKIP LOCKED` claims                      | Polling despite `NOTIFY` hints                      | Cancellation, deadlines, progress              |
-| Leases, heartbeats, fencing, recovery          | Automated partition creation, manual retirement     | Concurrency policies and rate limiting         |
-| Deploy-synchronized worker-owned schedules     | Point-in-time health snapshot                       | Arbitrary scheduled SQL                        |
-| Immediate/delayed retries and terminal failure | Success-path comparative baseline                   | Dead letters, redrive, dependencies, workflows |
-| Queue pause/resume/purge controls              | Demo-only operations dashboard                      | RBAC, OpenTelemetry, additional integrations   |
-| Drizzle provider and Hono lifecycle package    | Clean-install schema only                           | Online production migration guarantees         |
-| Live runtime plus immutable outcomes           | Checkpoint and timer retention follows job identity |                                                |
-| Append-only events and attempt history         |                                                     |                                                |
-| Immutable named checkpoint replay              |                                                     |                                                |
-| Lease-releasing named durable timer waits      |                                                     |                                                |
+| Supported core                                 | Partial today                          | Not supported today                            |
+| ---------------------------------------------- | -------------------------------------- | ---------------------------------------------- |
+| Transactional immediate/delayed batch enqueue  | One-handler-at-a-time worker instances | Priorities and enqueue idempotency             |
+| FIFO `SKIP LOCKED` claims                      | Polling despite `NOTIFY` hints         | Cancellation, deadlines, progress              |
+| Leases, heartbeats, fencing, recovery          |                                        | Concurrency policies and rate limiting         |
+| Deploy-synchronized worker-owned schedules     | Point-in-time health snapshot          | Arbitrary scheduled SQL                        |
+| Immediate/delayed retries and terminal failure | Success-path comparative baseline      | Dead letters, redrive, dependencies, workflows |
+| Queue pause/resume/purge controls              | Demo-only operations dashboard         | RBAC, OpenTelemetry, additional integrations   |
+| Drizzle provider and Hono lifecycle package    | Clean-install schema only              | Online production migration guarantees         |
+| Live runtime plus immutable outcomes           |                                        |                                                |
+| Append-only events and attempt history         |                                        |                                                |
+| Immutable named checkpoint replay              |                                        |                                                |
+| Lease-releasing named durable timer waits      |                                        |                                                |
+| Bounded attribution-safe automated retention   |                                        |                                                |
 
 ## Core job and dispatch
 
@@ -79,19 +80,20 @@ These primitives make selected handler boundaries durable while preserving Workh
 
 ## History, reads, and observability
 
-| Feature                            | Status        | Current behavior and limits                                                                                                                                                                                       |
-| ---------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Lifecycle events                   | Supported     | Every lifecycle boundary appends `job_event`.                                                                                                                                                                     |
-| Closed attempt history             | Supported     | Success, terminal failure, retry, and lease expiry append one immutable row per logical attempt; `started_at` spans timer suspensions and `claimed_at` records the final activation.                              |
-| Weekly history partitions          | Supported     | Monday-aligned partitions are precreated four weeks ahead and replenished by housekeeping, with explicit create and completed-week retirement functions plus default fallbacks.                                   |
-| Current/terminal lookup            | Supported     | `Queue.getJob(id)` coalesces the sole live runtime or terminal outcome into the stable `JobSnapshot` shape.                                                                                                       |
-| Queue health                       | Supported     | Reports schema version 7; live and terminal state counts; runtime depths; sleeping and overdue wait counts; next durable wake target; expired active rows; oldest ready age; relation and PostgreSQL diagnostics. |
-| Crash-boundary harness             | Supported     | Worker failpoints model process loss before and after handler/completion boundaries.                                                                                                                              |
-| Job/outcome retention              | Not supported | Immutable identity and terminal outcomes are not automatically archived or deleted.                                                                                                                               |
-| Checkpoint retention               | Partial       | Checkpoints remain with the stable job identity and are removed only when that parent job is deleted; deleting them independently could make a retry repeat a completed step.                                     |
-| Wait retention                     | Partial       | Named timer rows remain with the stable job identity and are removed only when that parent is deleted; no independent retention or early-wake contract exists.                                                    |
-| Consistent health snapshot         | Partial       | Diagnostics are independent read-only queries and statistics can lag.                                                                                                                                             |
-| OpenTelemetry and metrics endpoint | Not supported | Consumers must instrument calls externally.                                                                                                                                                                       |
+| Feature                            | Status        | Current behavior and limits                                                                                                                                                                |
+| ---------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Lifecycle events                   | Supported     | Every lifecycle boundary appends `job_event`.                                                                                                                                              |
+| Closed attempt history             | Supported     | Success, terminal failure, retry, and lease expiry append one immutable row per logical attempt; `started_at` spans timer suspensions and `claimed_at` records the final activation.       |
+| Weekly history partitions          | Supported     | Monday-aligned partitions are precreated four weeks ahead; housekeeping independently retires fully expired event and attempt weeks plus bounded default rows.                             |
+| Current/terminal lookup            | Supported     | `Queue.getJob(id)` coalesces the sole live runtime or terminal outcome into the stable `JobSnapshot` shape.                                                                                |
+| Queue health                       | Supported     | Reports schema version 8; live/runtime diagnostics; durable waits; persisted retention policy, lag, oldest boundaries, eligible partitions, fallback rows; and PostgreSQL diagnostics.     |
+| Crash-boundary harness             | Supported     | Worker failpoints model process loss before and after handler/completion boundaries.                                                                                                       |
+| Job/outcome retention              | Supported     | Persisted opt-in minimum windows drive bounded terminal-only deletion. Live jobs and identities still referenced by retained events, attempts, or schedule occurrences are never selected. |
+| Event and attempt retention        | Supported     | Independent nullable windows drop only fully expired completed weekly partitions and bounded-delete expired fallback rows.                                                                 |
+| Checkpoint retention               | Supported     | Checkpoints intentionally follow safe parent-identity deletion; independent removal is rejected because it could make a retry repeat a completed step.                                     |
+| Wait retention                     | Supported     | Named timer rows intentionally follow safe parent-identity deletion. Retention is supported; signal delivery and operator early wake remain separate unsupported capabilities.             |
+| Consistent health snapshot         | Partial       | Diagnostics are independent read-only queries and statistics can lag.                                                                                                                      |
+| OpenTelemetry and metrics endpoint | Not supported | Consumers must instrument calls externally.                                                                                                                                                |
 
 ## Runtime and product boundaries
 
@@ -101,7 +103,7 @@ These primitives make selected handler boundaries durable while preserving Workh
 | Drizzle ORM provider                  | Supported     | Separate package adapts node-postgres Drizzle databases and caller-owned transactions without adding Drizzle to core.                                                                                                                                                                                 |
 | Hono lifecycle integration            | Supported     | Separate package provides typed middleware, explicit worker startup, and idempotent graceful Node server shutdown.                                                                                                                                                                                    |
 | TypeScript schedule synchronization   | Supported     | Deploy-time sync reconciles owned schedule definitions; status APIs expose occurrences and recent fires.                                                                                                                                                                                              |
-| Versioned SQL API                     | Supported     | Existing `_v1` names and call shapes remain compatible; schema version 7 adds `schedule_wait_v1` without changing prior transition signatures.                                                                                                                                                        |
+| Versioned SQL API                     | Supported     | Existing `_v1` call shapes remain compatible; schema version 8 adds persisted retention policy and bounded cleanup primitives while preserving prior lifecycle transitions.                                                                                                                           |
 | Graceful worker stop                  | Supported     | Stop prevents further claims and waits for in-flight work.                                                                                                                                                                                                                                            |
 | Worker pause/resume                   | Supported     | `Worker.pause()`/`resume()` stop new claims while active jobs finish and heartbeats continue; demo exposes audited per-worker toggles.                                                                                                                                                                |
 | Worker concurrency                    | Partial       | One worker runs one handler at a time; scale with multiple instances.                                                                                                                                                                                                                                 |

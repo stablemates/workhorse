@@ -102,6 +102,32 @@ export interface JobSnapshot<TResult = Json> {
   updatedAt: Date;
 }
 
+/** All windows are explicit; null disables a category. Omitted work limits retain persisted values. */
+export interface RetentionPolicyDefinition {
+  jobIdentityRetentionDays: number | null;
+  terminalOutcomeRetentionDays: number | null;
+  jobEventRetentionDays: number | null;
+  attemptHistoryRetentionDays: number | null;
+  scheduleOccurrenceRetentionDays: number | null;
+  terminalJobPruneLimit?: number;
+  historyPartitionsPerPass?: number;
+  defaultPartitionRowsPerPass?: number;
+  occurrenceRowsPerPass?: number;
+}
+
+/** Persisted retention policy plus its PostgreSQL-owned update timestamp. */
+export interface RetentionPolicy extends Required<RetentionPolicyDefinition> {
+  updatedAt: Date;
+}
+
+export interface RetentionCategoryValues<T> {
+  jobIdentity: T;
+  terminalOutcome: T;
+  jobEvents: T;
+  attemptHistory: T;
+  scheduleOccurrences: T;
+}
+
 export interface QueueHealth {
   /** Canonical schema protocol version installed in this database. */
   schemaVersion: number | null;
@@ -117,6 +143,19 @@ export interface QueueHealth {
   activeLeases: number;
   expiredLeases: number;
   oldestReadyAgeMs: number | null;
+  retentionPolicy: RetentionPolicy;
+  /** Delay beyond each enabled policy cutoff. Null means disabled or no retained data. */
+  retentionLagMs: RetentionCategoryValues<number | null>;
+  /** Oldest retained timestamp used to compute category lag. */
+  oldestRetainedAt: RetentionCategoryValues<Date | null>;
+  eligibleHistoryPartitions: {
+    jobEvents: number;
+    attemptHistory: number;
+  };
+  defaultHistoryRows: {
+    jobEvents: number;
+    attemptHistory: number;
+  };
   /** PostgreSQL relation statistics are estimates and may lag until stats flush. */
   relations: Array<{
     relation: string;

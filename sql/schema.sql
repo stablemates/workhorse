@@ -55,6 +55,7 @@ END;
 $$;
 -- GIN indexes array elements so overlap and containment tag filters avoid scanning every job row.
 CREATE INDEX IF NOT EXISTS job_tags_gin_idx ON workhorse.job USING gin (tags);
+CREATE INDEX IF NOT EXISTS job_created_retention_idx ON workhorse.job (created_at, id);
 
 -- Immutable explicit restart boundaries. A name can be completed once for a stable job identity and
 -- remains available across retries and terminal materialization.
@@ -157,6 +158,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job_outcome (
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK ((state = 'succeeded' AND error IS NULL) OR state = 'failed')
 );
+CREATE INDEX IF NOT EXISTS job_outcome_retention_idx
+  ON workhorse.job_outcome (finished_at, job_id);
 
 -- Append-only lifecycle audit.
 CREATE TABLE IF NOT EXISTS workhorse.job_event (
@@ -171,6 +174,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job_event_default
   PARTITION OF workhorse.job_event DEFAULT;
 CREATE INDEX IF NOT EXISTS job_event_job_time_idx
   ON workhorse.job_event (job_id, occurred_at, event_id);
+CREATE INDEX IF NOT EXISTS job_event_retention_idx
+  ON workhorse.job_event (occurred_at, event_id);
 
 -- One immutable row for every closed attempt.
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
@@ -190,6 +195,8 @@ CREATE TABLE IF NOT EXISTS workhorse.attempt_history_default
   PARTITION OF workhorse.attempt_history DEFAULT;
 CREATE INDEX IF NOT EXISTS attempt_history_job_idx
   ON workhorse.attempt_history (job_id, attempt, occurred_at);
+CREATE INDEX IF NOT EXISTS attempt_history_retention_idx
+  ON workhorse.attempt_history (occurred_at, attempt_id);
 
 -- Declarative schedules are synchronized from application code and evaluated by worker processes.
 -- Payloads, occurrence ownership, and queue semantics remain owned by the Workhorse protocol.
@@ -224,6 +231,113 @@ CREATE INDEX IF NOT EXISTS schedule_occurrence_time_idx
   ON workhorse.schedule_occurrence (namespace, schedule_name, occurrence_at DESC);
 CREATE INDEX IF NOT EXISTS schedule_occurrence_retention_idx
   ON workhorse.schedule_occurrence (occurrence_at);
+CREATE INDEX IF NOT EXISTS schedule_occurrence_job_idx
+  ON workhorse.schedule_occurrence (job_id) WHERE job_id IS NOT NULL;
+
+-- One durable policy controls background retention. Null minimum windows disable that category.
+-- Identity remains the attribution anchor, so finite identity retention is accepted only when all
+-- dependent history has a finite window no longer than the identity window.
+CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  job_identity_retention_days integer CHECK (
+    job_identity_retention_days IS NULL OR job_identity_retention_days BETWEEN 1 AND 36500
+  ),
+  terminal_outcome_retention_days integer CHECK (
+    terminal_outcome_retention_days IS NULL OR terminal_outcome_retention_days BETWEEN 1 AND 36500
+  ),
+  job_event_retention_days integer CHECK (
+    job_event_retention_days IS NULL OR job_event_retention_days BETWEEN 1 AND 36500
+  ),
+  attempt_history_retention_days integer CHECK (
+    attempt_history_retention_days IS NULL OR attempt_history_retention_days BETWEEN 1 AND 36500
+  ),
+  schedule_occurrence_retention_days integer CHECK (
+    schedule_occurrence_retention_days IS NULL
+    OR schedule_occurrence_retention_days BETWEEN 1 AND 36500
+  ),
+  terminal_job_prune_limit integer NOT NULL CHECK (terminal_job_prune_limit BETWEEN 1 AND 100000),
+  history_partitions_per_pass integer NOT NULL CHECK (
+    history_partitions_per_pass BETWEEN 1 AND 52
+  ),
+  default_partition_rows_per_pass integer NOT NULL CHECK (
+    default_partition_rows_per_pass BETWEEN 1 AND 1000000
+  ),
+  occurrence_rows_per_pass integer NOT NULL CHECK (
+    occurrence_rows_per_pass BETWEEN 1 AND 1000000
+  ),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CHECK (
+    (terminal_outcome_retention_days IS NULL OR job_identity_retention_days IS NOT NULL)
+    AND (
+      job_identity_retention_days IS NULL
+      OR (
+      terminal_outcome_retention_days IS NOT NULL
+      AND job_event_retention_days IS NOT NULL
+      AND attempt_history_retention_days IS NOT NULL
+      AND schedule_occurrence_retention_days IS NOT NULL
+      AND job_identity_retention_days >= terminal_outcome_retention_days
+      AND job_identity_retention_days >= job_event_retention_days
+      AND job_identity_retention_days >= attempt_history_retention_days
+      AND job_identity_retention_days >= schedule_occurrence_retention_days
+      )
+    )
+  )
+);
+INSERT INTO workhorse.retention_policy(
+  singleton, job_identity_retention_days, terminal_outcome_retention_days,
+  job_event_retention_days, attempt_history_retention_days,
+  schedule_occurrence_retention_days, terminal_job_prune_limit,
+  history_partitions_per_pass, default_partition_rows_per_pass, occurrence_rows_per_pass
+) VALUES (true, NULL, NULL, NULL, NULL, 30, 1000, 4, 10000, 10000)
+ON CONFLICT (singleton) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION workhorse.sync_retention_policy_v1(
+  p_job_identity_retention_days integer,
+  p_terminal_outcome_retention_days integer,
+  p_job_event_retention_days integer,
+  p_attempt_history_retention_days integer,
+  p_schedule_occurrence_retention_days integer,
+  p_terminal_job_prune_limit integer DEFAULT NULL,
+  p_history_partitions_per_pass integer DEFAULT NULL,
+  p_default_partition_rows_per_pass integer DEFAULT NULL,
+  p_occurrence_rows_per_pass integer DEFAULT NULL
+) RETURNS workhorse.retention_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+BEGIN
+  UPDATE workhorse.retention_policy policy SET
+    job_identity_retention_days = p_job_identity_retention_days,
+    terminal_outcome_retention_days = p_terminal_outcome_retention_days,
+    job_event_retention_days = p_job_event_retention_days,
+    attempt_history_retention_days = p_attempt_history_retention_days,
+    schedule_occurrence_retention_days = p_schedule_occurrence_retention_days,
+    terminal_job_prune_limit = COALESCE(
+      p_terminal_job_prune_limit, policy.terminal_job_prune_limit
+    ),
+    history_partitions_per_pass = COALESCE(
+      p_history_partitions_per_pass, policy.history_partitions_per_pass
+    ),
+    default_partition_rows_per_pass = COALESCE(
+      p_default_partition_rows_per_pass, policy.default_partition_rows_per_pass
+    ),
+    occurrence_rows_per_pass = COALESCE(
+      p_occurrence_rows_per_pass, policy.occurrence_rows_per_pass
+    ),
+    updated_at = clock_timestamp()
+  WHERE singleton
+  RETURNING * INTO v_policy;
+  RETURN v_policy;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.get_retention_policy_v1()
+RETURNS workhorse.retention_policy
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT policy FROM workhorse.retention_policy policy WHERE singleton;
+$$;
 
 CREATE OR REPLACE FUNCTION workhorse.sync_schedule_definitions_v1(
   p_namespace text, p_definitions jsonb, p_prune boolean DEFAULT true
@@ -1140,9 +1254,127 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.retire_history_partitions_v1(
+  p_parent text, p_before timestamptz, p_limit integer
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_partition record;
+  v_count integer := 0;
+BEGIN
+  IF p_parent NOT IN ('job_event', 'attempt_history') THEN
+    RAISE EXCEPTION 'history parent must be job_event or attempt_history';
+  END IF;
+  IF p_before IS NULL OR NOT isfinite(p_before) THEN RAISE EXCEPTION 'retention cutoff is required'; END IF;
+  IF p_limit NOT BETWEEN 1 AND 52 THEN RAISE EXCEPTION 'partition limit must be between 1 and 52'; END IF;
+
+  FOR v_partition IN
+    SELECT child.relname,
+           ((regexp_match(
+             pg_get_expr(child.relpartbound, child.oid),
+             'TO \(''([^'']+)''\)'
+           ))[1])::timestamptz AS upper_bound
+      FROM pg_inherits inheritance
+      JOIN pg_class parent ON parent.oid = inheritance.inhparent
+      JOIN pg_namespace namespace ON namespace.oid = parent.relnamespace
+      JOIN pg_class child ON child.oid = inheritance.inhrelid
+     WHERE namespace.nspname = 'workhorse'
+       AND parent.relname = p_parent
+       AND child.relname <> p_parent || '_default'
+       AND ((regexp_match(
+             pg_get_expr(child.relpartbound, child.oid),
+             'TO \(''([^'']+)''\)'
+           ))[1])::timestamptz <= p_before
+       AND ((regexp_match(
+             pg_get_expr(child.relpartbound, child.oid),
+             'TO \(''([^'']+)''\)'
+           ))[1])::timestamptz <= date_trunc('week', clock_timestamp())
+     ORDER BY upper_bound, child.relname
+     LIMIT p_limit
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtextextended(
+      'workhorse:history-week:' || (v_partition.upper_bound - interval '1 week')::date,
+      0
+    ));
+    EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', v_partition.relname);
+    v_count := v_count + 1;
+  END LOOP;
+  RETURN v_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.prune_default_history_v1(
+  p_parent text, p_before timestamptz, p_limit integer
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE v_count integer;
+BEGIN
+  IF p_before IS NULL OR NOT isfinite(p_before) THEN RAISE EXCEPTION 'retention cutoff is required'; END IF;
+  IF p_limit NOT BETWEEN 1 AND 1000000 THEN RAISE EXCEPTION 'row limit must be between 1 and 1000000'; END IF;
+  IF p_parent = 'job_event' THEN
+    WITH candidates AS (
+      SELECT ctid FROM workhorse.job_event_default
+       WHERE occurred_at < p_before ORDER BY occurred_at, event_id
+       FOR UPDATE SKIP LOCKED LIMIT p_limit
+    )
+    DELETE FROM workhorse.job_event_default history USING candidates
+     WHERE history.ctid = candidates.ctid;
+  ELSIF p_parent = 'attempt_history' THEN
+    WITH candidates AS (
+      SELECT ctid FROM workhorse.attempt_history_default
+       WHERE occurred_at < p_before ORDER BY occurred_at, attempt_id
+       FOR UPDATE SKIP LOCKED LIMIT p_limit
+    )
+    DELETE FROM workhorse.attempt_history_default history USING candidates
+     WHERE history.ctid = candidates.ctid;
+  ELSE
+    RAISE EXCEPTION 'history parent must be job_event or attempt_history';
+  END IF;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.prune_terminal_jobs_v1(
+  p_identity_before timestamptz, p_outcome_before timestamptz, p_limit integer
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE v_count integer;
+BEGIN
+  IF p_identity_before IS NULL OR p_outcome_before IS NULL
+     OR NOT isfinite(p_identity_before) OR NOT isfinite(p_outcome_before) THEN
+    RAISE EXCEPTION 'identity and outcome cutoffs are required';
+  END IF;
+  IF p_limit NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'terminal job limit must be between 1 and 100000'; END IF;
+
+  WITH candidates AS (
+    SELECT job.id
+      FROM workhorse.job job
+      JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
+     WHERE job.created_at < p_identity_before
+       AND outcome.finished_at < p_outcome_before
+       AND NOT EXISTS (SELECT 1 FROM workhorse.job_runtime runtime WHERE runtime.job_id = job.id)
+       AND NOT EXISTS (SELECT 1 FROM workhorse.job_event event WHERE event.job_id = job.id)
+       AND NOT EXISTS (SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.job_id = job.id)
+       AND NOT EXISTS (
+         SELECT 1 FROM workhorse.schedule_occurrence occurrence WHERE occurrence.job_id = job.id
+       )
+     ORDER BY outcome.finished_at, job.id
+     FOR UPDATE OF job SKIP LOCKED
+     LIMIT p_limit
+  )
+  DELETE FROM workhorse.job job USING candidates WHERE job.id = candidates.id;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.housekeep_v1(
-  p_occurrence_retention_days integer DEFAULT 30,
-  p_occurrence_prune_limit integer DEFAULT 10000
+  p_occurrence_retention_days integer DEFAULT NULL,
+  p_occurrence_prune_limit integer DEFAULT NULL
 ) RETURNS TABLE (
   phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
 )
@@ -1152,14 +1384,31 @@ DECLARE
   v_started_at timestamptz;
   v_week_offset integer;
   v_suffix text;
+  v_policy workhorse.retention_policy%ROWTYPE;
+  v_occurrence_days integer;
+  v_occurrence_limit integer;
 BEGIN
-  IF p_occurrence_retention_days NOT BETWEEN 1 AND 3650 THEN
-    RAISE EXCEPTION 'occurrence retention days must be between 1 and 3650';
+  IF p_occurrence_retention_days IS NOT NULL
+     AND p_occurrence_retention_days NOT BETWEEN 1 AND 36500 THEN
+    RAISE EXCEPTION 'occurrence retention days must be between 1 and 36500';
   END IF;
+  IF p_occurrence_prune_limit IS NOT NULL
+     AND p_occurrence_prune_limit NOT BETWEEN 1 AND 1000000 THEN
+    RAISE EXCEPTION 'occurrence prune limit must be between 1 and 1000000';
+  END IF;
+  SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
+  v_occurrence_days := COALESCE(
+    p_occurrence_retention_days, v_policy.schedule_occurrence_retention_days
+  );
+  v_occurrence_limit := COALESCE(p_occurrence_prune_limit, v_policy.occurrence_rows_per_pass);
+
   IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:housekeeping', 0)) THEN
     RETURN QUERY VALUES
       ('history_partitions'::text, 0, 0, true, NULL::jsonb),
-      ('schedule_occurrences'::text, 0, 0, true, NULL::jsonb);
+      ('event_retention'::text, 0, 0, true, NULL::jsonb),
+      ('attempt_retention'::text, 0, 0, true, NULL::jsonb),
+      ('schedule_occurrences'::text, 0, 0, true, NULL::jsonb),
+      ('terminal_jobs'::text, 0, 0, true, NULL::jsonb);
     RETURN;
   END IF;
 
@@ -1190,15 +1439,86 @@ BEGIN
   );
   RETURN NEXT;
 
+  phase := 'event_retention';
+  rows_affected := 0;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    IF v_policy.job_event_retention_days IS NOT NULL THEN
+      rows_affected := workhorse.retire_history_partitions_v1(
+        'job_event',
+        clock_timestamp() - make_interval(days => v_policy.job_event_retention_days),
+        v_policy.history_partitions_per_pass
+      );
+      rows_affected := rows_affected + workhorse.prune_default_history_v1(
+        'job_event',
+        clock_timestamp() - make_interval(days => v_policy.job_event_retention_days),
+        v_policy.default_partition_rows_per_pass
+      );
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+
+  phase := 'attempt_retention';
+  rows_affected := 0;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    IF v_policy.attempt_history_retention_days IS NOT NULL THEN
+      rows_affected := workhorse.retire_history_partitions_v1(
+        'attempt_history',
+        clock_timestamp() - make_interval(days => v_policy.attempt_history_retention_days),
+        v_policy.history_partitions_per_pass
+      );
+      rows_affected := rows_affected + workhorse.prune_default_history_v1(
+        'attempt_history',
+        clock_timestamp() - make_interval(days => v_policy.attempt_history_retention_days),
+        v_policy.default_partition_rows_per_pass
+      );
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+
   phase := 'schedule_occurrences';
   rows_affected := 0;
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
-    rows_affected := workhorse.prune_schedule_occurrences_v1(
-      clock_timestamp() - make_interval(days => p_occurrence_retention_days),
-      p_occurrence_prune_limit
-    );
+    IF v_occurrence_days IS NOT NULL THEN
+      rows_affected := workhorse.prune_schedule_occurrences_v1(
+        clock_timestamp() - make_interval(days => v_occurrence_days), v_occurrence_limit
+      );
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+
+  phase := 'terminal_jobs';
+  rows_affected := 0;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    IF v_policy.job_identity_retention_days IS NOT NULL THEN
+      rows_affected := workhorse.prune_terminal_jobs_v1(
+        clock_timestamp() - make_interval(days => v_policy.job_identity_retention_days),
+        clock_timestamp() - make_interval(days => v_policy.terminal_outcome_retention_days),
+        v_policy.terminal_job_prune_limit
+      );
+    END IF;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
   END;
@@ -1276,7 +1596,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (7) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (8) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
   FROM generate_series(0, 4) AS weeks(week_offset);
 

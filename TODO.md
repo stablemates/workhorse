@@ -1,6 +1,6 @@
 # Future feature roadmap
 
-This roadmap starts from the schema version 7 validation MVP described in
+This roadmap starts from the schema version 8 validation MVP described in
 [`docs/features.md`](docs/features.md). Items are ordered by product risk and dependency, not by
 feature visibility. A feature is complete only when its SQL contract, TypeScript API, integration
 tests, operational diagnostics, documentation, and benchmark impact are addressed.
@@ -18,13 +18,20 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P0-00A Drizzle and Hono integration packages**
-2. **P0-00B Demo application and complete dashboard built with Drizzle and Hono**
-3. **P0-01 Automated history retention**
-4. **P0-02 Production telemetry**
-5. **P0-03 Configurable worker concurrency**
-6. **P0-04 Notification-assisted dispatch**
-7. **P0-05 Built-in retry policies**
+1. **P0-05 Built-in retry policies**
+2. **P1-01 Enqueue idempotency keys**
+3. **P0-03 Configurable worker concurrency**
+4. **P0-04 Notification-assisted dispatch**
+5. **P1-02 Cancellation**
+6. **P1-03 Deadlines and execution timeouts**
+7. **P1-04 Dead-letter views and redrive**
+8. **P2-01 Query and listing API**
+9. **P1-09 Progress and job metadata**
+10. **P0-02 Production telemetry**
+
+The demo and initial integration packages are complete. Full OpenTelemetry support is deliberately
+sequenced after the next product and reliability features; each earlier feature must still ship the
+focused diagnostics and benchmark evidence needed to validate its own correctness.
 
 ## P0: demo vertical slice and production hardening
 
@@ -66,16 +73,16 @@ understandable, installable, and useful.
 - [x] Use the demo to identify API, documentation, packaging, and developer-experience gaps.
 - [x] Add a smoke test that proves the documented demo path works from a clean checkout.
 
-### [ ] P0-01 Automated history retention
+### [x] P0-01 Automated history retention
 
 **Depends on:** none
 
 - [x] Precreate weekly `job_event` and `attempt_history` partitions four weeks ahead through the housekeeping pass (`housekeep_v1`).
-- [ ] Add bounded retirement or archival of completed history partitions.
-- [ ] Define independent retention for job identity, terminal outcomes, events, attempts, and
+- [x] Add bounded retirement or archival of completed history partitions.
+- [x] Define independent retention for job identity, terminal outcomes, events, attempts, and
       schedule occurrences.
-- [ ] Refuse unsafe retention that could remove live jobs or break lifecycle attribution.
-- [ ] Report retention lag, default-partition usage, and the oldest retained boundary in health
+- [x] Refuse unsafe retention that could remove live jobs or break lifecycle attribution.
+- [x] Report retention lag, default-partition usage, and the oldest retained boundary in health
       output.
 
 ### [ ] P0-02 Production telemetry
@@ -92,7 +99,10 @@ understandable, installable, and useful.
 
 ### [ ] P0-03 Configurable worker concurrency
 
-**Depends on:** P0-02
+**Depends on:** none
+
+Configurable concurrency must ship focused lease, shutdown, and benchmark diagnostics, but it does
+not depend on the later full OpenTelemetry and metrics package.
 
 - [ ] Allow one worker process to execute a bounded number of jobs concurrently.
 - [ ] Preserve per-job heartbeat and fence ownership while handlers overlap.
@@ -222,7 +232,10 @@ understandable, installable, and useful.
 
 ### [ ] P1-09 Progress and job metadata
 
-**Depends on:** P0-02, P1-02
+**Depends on:** P1-02
+
+Progress remains observable through the query and dashboard contracts; full trace and metric export
+is a later integration rather than a prerequisite.
 
 - [ ] Add fenced, bounded progress updates for active jobs.
 - [ ] Keep mutable progress out of immutable payload and outcome fields.
