@@ -3,7 +3,6 @@ import type { Queue } from "@workhorse/core";
 import type { DashboardSystemWindow, MaintenanceLoopCadences } from "../model.js";
 import { z } from "zod";
 import type {
-  DashboardAuditContext,
   DashboardDurabilityProjector,
   DashboardOperator,
   DashboardQueueController,
@@ -43,6 +42,17 @@ const procedure = os.$context<DashboardRpcContext>();
 const auditSchema = z.object({
   actor: z.string().trim().min(1),
   reason: z.string().trim().min(1),
+  requestId: z.string().trim().min(1),
+});
+const cancellationAuditSchema = z.object({
+  actor: z.string().trim().min(1),
+  reason: z
+    .string()
+    .trim()
+    .max(2_000)
+    .nullable()
+    .optional()
+    .transform((value) => value || null),
   requestId: z.string().trim().min(1),
 });
 
@@ -110,18 +120,15 @@ const setWorkerPausedInput = z.object({
   paused: z.boolean(),
   audit: auditSchema,
 });
-/**
- * One cancellation request. The audit reason is required and reused as the stored cancellation
- * reason, so a task can never be canceled without a recorded operator justification.
- */
+/** One cancellation request. Attribution is required; the operator reason is optional. */
 const cancelTaskInput = z.object({
   id: z.uuid(),
-  audit: auditSchema,
+  audit: cancellationAuditSchema,
 });
 
-function auditWithOccurredAt(
-  audit: z.infer<typeof auditSchema>,
-): DashboardAuditContext & { occurredAt: string } {
+function auditWithOccurredAt<
+  TAudit extends { actor: string; reason: string | null; requestId: string },
+>(audit: TAudit): TAudit & { occurredAt: string } {
   return { ...audit, occurredAt: new Date().toISOString() };
 }
 

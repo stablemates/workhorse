@@ -251,7 +251,10 @@ describe("Workhorse demo", () => {
     });
     expect(
       await pool.query(
-        `SELECT payload, max_attempts, tags FROM workhorse.job
+        `SELECT job.payload, job.max_attempts, job.tags, runtime.state,
+                runtime.run_at > clock_timestamp() AS is_future
+           FROM workhorse.job job
+           JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
           WHERE job_type = 'demo.long-running' AND payload->>'source' = 'long-running-seed'
           ORDER BY payload->>'label'`,
       ),
@@ -260,6 +263,8 @@ describe("Workhorse demo", () => {
         payload: { source: "long-running-seed", label },
         max_attempts: 1,
         tags: ["demo-test", "long-running", "low-resource"],
+        state: "scheduled",
+        is_future: true,
       })),
     });
     expect(
@@ -384,8 +389,8 @@ describe("Workhorse demo", () => {
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
       all: 377,
-      scheduled: 1,
-      queued: 14,
+      scheduled: 4,
+      queued: 11,
       completed: 346,
       discarded: 16,
       retried: 22,
@@ -410,7 +415,7 @@ describe("Workhorse demo", () => {
       page: 1,
       pageSize: 25,
       total: 377,
-      counts: { all: 377, scheduled: 1, queued: 14, completed: 346, discarded: 16 },
+      counts: { all: 377, scheduled: 4, queued: 11, completed: 346, discarded: 16 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -427,8 +432,10 @@ describe("Workhorse demo", () => {
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
-      total: 1,
-      jobs: [{ state: "scheduled", payload: { source: "scheduled-seed" } }],
+      total: 4,
+      jobs: expect.arrayContaining([
+        expect.objectContaining({ state: "scheduled", payload: { source: "scheduled-seed" } }),
+      ]),
     });
     await expect(
       client.dashboard.tasks({ filter: "all", page: 1, pageSize: 10 as 25 }),
@@ -2931,6 +2938,28 @@ describe("Workhorse demo", () => {
       before: { state: "ready" },
       after: { status: "canceled", state: "canceled" },
     });
+  });
+
+  it("allows canceling a task without a reason", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const jobId = await new Queue(pool, "demo").enqueue(
+      "demo.success",
+      { label: "cancel-without-reason" },
+      {},
+    );
+
+    await expect(
+      client.dashboard.cancelTask({
+        id: jobId,
+        audit: { actor: "operator", requestId: "cancel-without-reason" },
+      }),
+    ).resolves.toMatchObject({ status: "canceled", state: "canceled", reason: null });
+    await expect(
+      pool.query(`SELECT reason FROM public.workhorse_demo_audit WHERE request_id = $1`, [
+        "cancel-without-reason",
+      ]),
+    ).resolves.toMatchObject({ rows: [{ reason: null }] });
   });
 
   it("cancels a future-scheduled task without waiting for its run time", async () => {
