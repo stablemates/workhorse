@@ -41,6 +41,7 @@ const RECURRING_JOB_TYPE = "demo.recurring";
 const REPORT_JOB_TYPE = "demo.report";
 const DEMO_QUEUE = "demo";
 const REPRESENTATIVE_SEED_NAME = "default-dashboard-v7";
+const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v1";
 const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
@@ -57,6 +58,11 @@ export const DEMO_WORKER_CONCURRENCY: Readonly<Record<(typeof DEMO_WORKERS)[numb
 export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
 export const DEMO_HOUSEKEEPING_INTERVAL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
+export const DEMO_LONG_RUNNING_SEED_JOBS = [
+  { label: "archive-validation" },
+  { label: "partner-catalog-sync" },
+  { label: "quarterly-report-export" },
+] as const;
 export const DEMO_DURABLE_STEP_MS = 2_000;
 export const DEMO_DURABLE_TIMER_WAIT_MS = 10_000;
 export const DEMO_PERSISTENT_RETRY_DELAYS_MS = [5 * 60_000, 7 * 60_000, 10 * 60_000] as const;
@@ -1494,8 +1500,36 @@ async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
   });
 }
 
+async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]> {
+  return database.transaction(async (transaction) => {
+    const marker = await transaction.execute<{ name: string }>(sql`
+      INSERT INTO public.workhorse_demo_seed (name)
+      VALUES (${LONG_RUNNING_SEED_NAME})
+      ON CONFLICT (name) DO NOTHING
+      RETURNING name
+    `);
+    if (marker.rows.length === 0) return [];
+
+    const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+    const jobIds: string[] = [];
+    for (const job of DEMO_LONG_RUNNING_SEED_JOBS) {
+      jobIds.push(
+        await workhorse.queue.enqueue(
+          LONG_RUNNING_JOB_TYPE,
+          { source: "long-running-seed", label: job.label },
+          { maxAttempts: 1, tags: ["demo-test", "long-running", "low-resource"] },
+        ),
+      );
+    }
+    return jobIds;
+  });
+}
+
 export async function seedDemoData(database: DemoDatabase) {
-  const jobIds = await database.transaction(async (transaction) => {
+  // These jobs are inserted first so a fresh demo immediately shows active work. Their handler only
+  // awaits a Node timer, so they occupy execution slots without burning CPU or growing memory.
+  const longRunningJobIds = await seedLongRunningDemoData(database);
+  const representativeJobIds = await database.transaction(async (transaction) => {
     const marker = await transaction.execute<{ name: string }>(sql`
       INSERT INTO public.workhorse_demo_seed (name)
       VALUES (${REPRESENTATIVE_SEED_NAME})
@@ -1607,6 +1641,7 @@ export async function seedDemoData(database: DemoDatabase) {
   });
 
   const historicalJobCount = await seedHistoricalDemoData(database);
+  const jobIds = [...longRunningJobIds, ...representativeJobIds];
   return {
     seeded: jobIds.length > 0 || historicalJobCount > 0,
     jobIds,

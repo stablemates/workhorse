@@ -20,6 +20,7 @@ import {
   DEMO_DURABLE_STEP_MS,
   DEMO_DURABLE_TIMER_WAIT_MS,
   DEMO_LONG_RUNNING_MS,
+  DEMO_LONG_RUNNING_SEED_JOBS,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
   DEMO_SCHEDULE_NAMESPACE,
@@ -218,6 +219,9 @@ describe("Workhorse demo", () => {
         expect.any(String),
         expect.any(String),
         expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
       ],
       historicalJobCount: 362,
     });
@@ -230,7 +234,8 @@ describe("Workhorse demo", () => {
       await pool.query(
         `SELECT array_agg(DISTINCT version ORDER BY version) AS versions
            FROM (
-             SELECT xmin::text AS version FROM workhorse.job WHERE id = ANY($1::uuid[])
+             SELECT xmin::text AS version FROM workhorse.job
+               WHERE id = ANY($1::uuid[]) AND job_type <> 'demo.long-running'
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
             UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
                WHERE name = 'default-dashboard-v7'
@@ -242,7 +247,20 @@ describe("Workhorse demo", () => {
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 374 }],
+      rows: [{ count: 377 }],
+    });
+    expect(
+      await pool.query(
+        `SELECT payload, max_attempts, tags FROM workhorse.job
+          WHERE job_type = 'demo.long-running' AND payload->>'source' = 'long-running-seed'
+          ORDER BY payload->>'label'`,
+      ),
+    ).toMatchObject({
+      rows: DEMO_LONG_RUNNING_SEED_JOBS.map(({ label }) => ({
+        payload: { source: "long-running-seed", label },
+        max_attempts: 1,
+        tags: ["demo-test", "long-running", "low-resource"],
+      })),
     });
     expect(
       await pool.query(
@@ -365,9 +383,9 @@ describe("Workhorse demo", () => {
     });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 374,
+      all: 377,
       scheduled: 1,
-      queued: 11,
+      queued: 14,
       completed: 346,
       discarded: 16,
       retried: 22,
@@ -391,8 +409,8 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 374,
-      counts: { all: 374, scheduled: 1, queued: 11, completed: 346, discarded: 16 },
+      total: 377,
+      counts: { all: 377, scheduled: 1, queued: 14, completed: 346, discarded: 16 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -403,7 +421,7 @@ describe("Workhorse demo", () => {
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 374 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 377 });
     expect(secondPage.jobs).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
@@ -519,14 +537,14 @@ describe("Workhorse demo", () => {
       groups: [
         "demo.durable-pipeline",
         "demo.durable-timer",
-        "demo.failure",
+        "demo.long-running",
         "demo.recurring",
         "demo.report",
-        "demo.retry",
         "email.digest",
         "email.send",
         "order.process",
         "order.refund",
+        "other",
       ],
     });
     await expect(
