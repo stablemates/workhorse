@@ -22,6 +22,117 @@ AS $$
      );
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.normalize_retry_policy_v1(p_policy jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+  v_type text;
+  v_delay numeric;
+  v_initial numeric;
+  v_multiplier numeric;
+  v_max numeric;
+  v_base numeric;
+  v_max_delay constant numeric := 31536000000;
+BEGIN
+  IF p_policy IS NULL OR p_policy = 'null'::jsonb THEN RETURN NULL; END IF;
+  IF jsonb_typeof(p_policy) <> 'object' THEN RAISE EXCEPTION 'retryPolicy must be an object'; END IF;
+  v_type := p_policy->>'type';
+  IF v_type = 'fixed' THEN
+    IF p_policy <> jsonb_build_object('type', 'fixed', 'delayMs', p_policy->'delayMs')
+       OR jsonb_typeof(p_policy->'delayMs') <> 'number' THEN
+      RAISE EXCEPTION 'fixed retryPolicy requires exactly type and delayMs';
+    END IF;
+    v_delay := (p_policy->>'delayMs')::numeric;
+    IF v_delay <> trunc(v_delay) OR v_delay NOT BETWEEN 0 AND v_max_delay THEN
+      RAISE EXCEPTION 'fixed delayMs must be an integer between 0 and 31536000000';
+    END IF;
+    RETURN jsonb_build_object('type', 'fixed', 'delayMs', v_delay::bigint);
+  ELSIF v_type = 'exponential' THEN
+    IF p_policy <> jsonb_build_object('type', 'exponential', 'initialDelayMs', p_policy->'initialDelayMs', 'multiplier', p_policy->'multiplier', 'maxDelayMs', p_policy->'maxDelayMs')
+       OR jsonb_typeof(p_policy->'initialDelayMs') <> 'number'
+       OR jsonb_typeof(p_policy->'multiplier') <> 'number'
+       OR jsonb_typeof(p_policy->'maxDelayMs') <> 'number' THEN
+      RAISE EXCEPTION 'exponential retryPolicy requires exactly type, initialDelayMs, multiplier, and maxDelayMs';
+    END IF;
+    v_initial := (p_policy->>'initialDelayMs')::numeric;
+    v_multiplier := (p_policy->>'multiplier')::numeric;
+    v_max := (p_policy->>'maxDelayMs')::numeric;
+    IF v_initial <> trunc(v_initial) OR v_initial NOT BETWEEN 0 AND v_max_delay THEN RAISE EXCEPTION 'exponential initialDelayMs must be an integer between 0 and 31536000000'; END IF;
+    IF v_multiplier <> trunc(v_multiplier) OR v_multiplier NOT BETWEEN 1 AND 100 THEN RAISE EXCEPTION 'exponential multiplier must be an integer between 1 and 100'; END IF;
+    IF v_max <> trunc(v_max) OR v_max NOT BETWEEN 0 AND v_max_delay OR v_max < v_initial THEN RAISE EXCEPTION 'exponential maxDelayMs must be an integer between initialDelayMs and 31536000000'; END IF;
+    RETURN jsonb_build_object('type', 'exponential', 'initialDelayMs', v_initial::bigint, 'multiplier', v_multiplier::integer, 'maxDelayMs', v_max::bigint);
+  ELSIF v_type = 'decorrelated-jitter' THEN
+    IF p_policy <> jsonb_build_object('type', 'decorrelated-jitter', 'baseDelayMs', p_policy->'baseDelayMs', 'maxDelayMs', p_policy->'maxDelayMs')
+       OR jsonb_typeof(p_policy->'baseDelayMs') <> 'number'
+       OR jsonb_typeof(p_policy->'maxDelayMs') <> 'number' THEN
+      RAISE EXCEPTION 'decorrelated-jitter retryPolicy requires exactly type, baseDelayMs, and maxDelayMs';
+    END IF;
+    v_base := (p_policy->>'baseDelayMs')::numeric;
+    v_max := (p_policy->>'maxDelayMs')::numeric;
+    IF v_base <> trunc(v_base) OR v_base NOT BETWEEN 0 AND v_max_delay THEN RAISE EXCEPTION 'decorrelated-jitter baseDelayMs must be an integer between 0 and 31536000000'; END IF;
+    IF v_max <> trunc(v_max) OR v_max NOT BETWEEN 0 AND v_max_delay OR v_max < v_base THEN RAISE EXCEPTION 'decorrelated-jitter maxDelayMs must be an integer between baseDelayMs and 31536000000'; END IF;
+    RETURN jsonb_build_object('type', 'decorrelated-jitter', 'baseDelayMs', v_base::bigint, 'maxDelayMs', v_max::bigint);
+  END IF;
+  RAISE EXCEPTION 'retryPolicy type must be fixed, exponential, or decorrelated-jitter';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.retry_delay_v1(
+  p_job_id uuid, p_attempt integer, p_policy jsonb, p_previous_retry_delay_ms bigint,
+  p_override_delay_ms integer, p_omitted_source text
+) RETURNS TABLE (delay_ms bigint, source text, next_previous_retry_delay_ms bigint)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_policy jsonb := workhorse.normalize_retry_policy_v1(p_policy);
+  v_base bigint;
+  v_max bigint;
+  v_upper bigint;
+  v_hash bigint;
+BEGIN
+  IF p_job_id IS NULL OR p_attempt < 1 THEN RAISE EXCEPTION 'job identity and attempt are required'; END IF;
+  IF p_override_delay_ms IS NOT NULL THEN
+    delay_ms := GREATEST(0, p_override_delay_ms); source := 'override';
+  ELSIF v_policy IS NULL THEN
+    IF p_omitted_source = 'legacy-handler' THEN
+      delay_ms := round((power((p_attempt - 1)::double precision, 4) + 15 + floor(random() * 10) * p_attempt) * 1000)::bigint;
+      source := 'legacy-handler';
+    ELSIF p_omitted_source = 'lease-recovery-immediate' THEN
+      delay_ms := 0; source := 'lease-recovery-immediate';
+    ELSE
+      RAISE EXCEPTION 'unsupported omitted retry source %', p_omitted_source;
+    END IF;
+  ELSIF v_policy->>'type' = 'fixed' THEN
+    delay_ms := (v_policy->>'delayMs')::bigint; source := 'policy:fixed';
+  ELSIF v_policy->>'type' = 'exponential' THEN
+    delay_ms := LEAST((v_policy->>'maxDelayMs')::numeric, (v_policy->>'initialDelayMs')::numeric * power((v_policy->>'multiplier')::numeric, GREATEST(0, p_attempt - 1)))::bigint;
+    source := 'policy:exponential';
+  ELSE
+    v_base := (v_policy->>'baseDelayMs')::bigint;
+    v_max := (v_policy->>'maxDelayMs')::bigint;
+    v_upper := LEAST(v_max, GREATEST(v_base, COALESCE(p_previous_retry_delay_ms, v_base) * 3));
+    IF v_upper = v_base THEN delay_ms := v_base;
+    ELSE
+      v_hash := hashtextextended(
+        p_job_id::text || ':' || p_attempt::text || ':' ||
+        COALESCE(p_previous_retry_delay_ms::text, 'null'),
+        0
+      );
+      delay_ms := v_base + mod(mod(v_hash, v_upper - v_base + 1) +
+        (v_upper - v_base + 1), v_upper - v_base + 1);
+    END IF;
+    source := 'policy:decorrelated-jitter';
+  END IF;
+  next_previous_retry_delay_ms := CASE
+    WHEN v_policy->>'type' = 'decorrelated-jitter' THEN delay_ms
+  END;
+  RETURN NEXT;
+END;
+$$;
+
 -- Sparse per-queue operational control. The dispatch path remains a cheap anti-join when no queue
 -- has been explicitly managed.
 CREATE TABLE IF NOT EXISTS workhorse.queue_control (
@@ -39,6 +150,13 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
   tags text[] NOT NULL DEFAULT '{}'
     CONSTRAINT job_tags_valid CHECK (workhorse.valid_tags(tags)),
   max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
+  retry_policy jsonb
+    CONSTRAINT job_retry_policy_normalized CHECK (
+      retry_policy IS NULL OR (
+        retry_policy <> 'null'::jsonb
+        AND retry_policy = workhorse.normalize_retry_policy_v1(retry_policy)
+      )
+    ),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 ALTER TABLE workhorse.job ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
@@ -120,6 +238,9 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
   wait_name text,
   attempt_started_at timestamptz,
   error jsonb,
+  previous_retry_delay_ms bigint CHECK (
+    previous_retry_delay_ms BETWEEN 0 AND 31536000000
+  ),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (wait_name IS NULL OR (wait_name <> '' AND char_length(wait_name) <= 200)),
   CHECK (
@@ -208,6 +329,13 @@ CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
   job_type text NOT NULL CHECK (job_type <> ''),
   payload jsonb NOT NULL,
   max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
+  retry_policy jsonb
+    CONSTRAINT schedule_definition_retry_policy_normalized CHECK (
+      retry_policy IS NULL OR (
+        retry_policy <> 'null'::jsonb
+        AND retry_policy = workhorse.normalize_retry_policy_v1(retry_policy)
+      )
+    ),
   enabled boolean NOT NULL DEFAULT true,
   revision bigint NOT NULL DEFAULT 1 CHECK (revision > 0),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -359,6 +487,8 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'each schedule requires non-empty name/schedule/queue/type and maxAttempts between 1 and 100';
   END IF;
+  PERFORM workhorse.normalize_retry_policy_v1(definition->'retryPolicy')
+    FROM jsonb_array_elements(p_definitions) definition WHERE definition ? 'retryPolicy';
   IF (
     SELECT count(*) FROM jsonb_array_elements(p_definitions)
   ) <> (
@@ -370,26 +500,28 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:schedules:' || p_namespace, 0));
 
   INSERT INTO workhorse.schedule_definition AS existing(
-    namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts, enabled
+    namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts, retry_policy, enabled
   )
   SELECT p_namespace, definition->>'name', definition->>'schedule', definition->>'queue',
          definition->>'type', COALESCE(definition->'payload', 'null'::jsonb),
          COALESCE((definition->>'maxAttempts')::integer, 25),
+         workhorse.normalize_retry_policy_v1(definition->'retryPolicy'),
          COALESCE((definition->>'enabled')::boolean, true)
     FROM jsonb_array_elements(p_definitions) definition
   ON CONFLICT (namespace, schedule_name) DO UPDATE
     SET revision = existing.revision + CASE WHEN ROW(
           existing.cron_expression, existing.queue_name, existing.job_type, existing.payload,
-          existing.max_attempts, existing.enabled
+          existing.max_attempts, existing.retry_policy, existing.enabled
         ) IS DISTINCT FROM ROW(
           EXCLUDED.cron_expression, EXCLUDED.queue_name, EXCLUDED.job_type, EXCLUDED.payload,
-          EXCLUDED.max_attempts, EXCLUDED.enabled
+          EXCLUDED.max_attempts, EXCLUDED.retry_policy, EXCLUDED.enabled
         ) THEN 1 ELSE 0 END,
         cron_expression = EXCLUDED.cron_expression,
         queue_name = EXCLUDED.queue_name,
         job_type = EXCLUDED.job_type,
         payload = EXCLUDED.payload,
         max_attempts = EXCLUDED.max_attempts,
+        retry_policy = EXCLUDED.retry_policy,
         enabled = EXCLUDED.enabled,
         updated_at = clock_timestamp();
 
@@ -455,7 +587,9 @@ BEGIN
     v_definition.job_type,
     v_definition.payload,
     clock_timestamp(),
-    v_definition.max_attempts
+    v_definition.max_attempts,
+    '{}',
+    v_definition.retry_policy
   );
   UPDATE workhorse.schedule_occurrence occurrence
      SET job_id = v_job_id
@@ -530,6 +664,8 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'each request requires non-empty queue/type/runAt, maxAttempts between 1 and 100, and at most 20 non-empty tags of at most 100 characters';
   END IF;
+  PERFORM workhorse.normalize_retry_policy_v1(request->'retryPolicy')
+    FROM jsonb_array_elements(p_requests) request WHERE request ? 'retryPolicy';
 
   RETURN QUERY
   WITH parsed AS MATERIALIZED (
@@ -541,11 +677,12 @@ BEGIN
            ARRAY(SELECT jsonb_array_elements_text(COALESCE(request->'tags', '[]'::jsonb))) AS tags,
            (request->>'runAt')::timestamptz AS run_at,
            COALESCE((request->>'maxAttempts')::integer, 25) AS max_attempts,
+           workhorse.normalize_retry_policy_v1(request->'retryPolicy') AS retry_policy,
            CASE WHEN (request->>'runAt')::timestamptz <= v_now THEN 'ready' ELSE 'scheduled' END AS state
       FROM jsonb_array_elements(p_requests) WITH ORDINALITY input(request, ordinality)
   ), inserted_jobs AS (
-    INSERT INTO workhorse.job(id, queue_name, job_type, payload, tags, max_attempts)
-      SELECT p.job_id, p.queue_name, p.job_type, p.payload, p.tags, p.max_attempts
+    INSERT INTO workhorse.job(id, queue_name, job_type, payload, tags, max_attempts, retry_policy)
+      SELECT p.job_id, p.queue_name, p.job_type, p.payload, p.tags, p.max_attempts, p.retry_policy
         FROM parsed p ORDER BY p.ordinal
     RETURNING id
   ), inserted_runtime AS (
@@ -573,19 +710,22 @@ END;
 $$;
 
 DROP FUNCTION IF EXISTS workhorse.enqueue_v1(text, text, jsonb, timestamptz, integer);
+DROP FUNCTION IF EXISTS workhorse.enqueue_v1(text, text, jsonb, timestamptz, integer, text[]);
 CREATE OR REPLACE FUNCTION workhorse.enqueue_v1(
   p_queue_name text,
   p_job_type text,
   p_payload jsonb,
   p_run_at timestamptz DEFAULT clock_timestamp(),
   p_max_attempts integer DEFAULT 25,
-  p_tags text[] DEFAULT '{}'
+  p_tags text[] DEFAULT '{}',
+  p_retry_policy jsonb DEFAULT NULL
 ) RETURNS uuid
 LANGUAGE sql
 AS $$
   SELECT job_id FROM workhorse.enqueue_many_v1(jsonb_build_array(jsonb_build_object(
     'queue', p_queue_name, 'type', p_job_type, 'payload', COALESCE(p_payload, 'null'::jsonb),
-    'runAt', p_run_at, 'maxAttempts', p_max_attempts, 'tags', to_jsonb(COALESCE(p_tags, '{}'))
+    'runAt', p_run_at, 'maxAttempts', p_max_attempts, 'tags', to_jsonb(COALESCE(p_tags, '{}')),
+    'retryPolicy', p_retry_policy
   ))) ORDER BY ordinal LIMIT 1;
 $$;
 
@@ -685,13 +825,14 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS workhorse.claim_v1(text, text, integer);
 CREATE OR REPLACE FUNCTION workhorse.claim_v1(
   p_queue_name text,
   p_worker_id text,
   p_lease_ms integer DEFAULT 30000
 ) RETURNS TABLE (
   job_id uuid, job_type text, payload jsonb, attempt integer, max_attempts integer,
-  fence_token bigint, lease_expires_at timestamptz
+  retry_policy jsonb, fence_token bigint, lease_expires_at timestamptz
 )
 LANGUAGE plpgsql
 AS $$
@@ -732,7 +873,7 @@ BEGIN
     VALUES (v_runtime.job_id, v_runtime.current_attempt, 'claimed',
       jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
   RETURN QUERY
-    SELECT j.id, j.job_type, j.payload, v_runtime.current_attempt, j.max_attempts, v_fence, v_expires
+    SELECT j.id, j.job_type, j.payload, v_runtime.current_attempt, j.max_attempts, j.retry_policy, v_fence, v_expires
       FROM workhorse.job j WHERE j.id = v_runtime.job_id;
 END;
 $$;
@@ -1079,8 +1220,7 @@ DECLARE
   v_state text;
   v_started_at timestamptz;
   v_claimed_at timestamptz;
-  v_retry_count integer;
-  v_retry_delay_seconds double precision;
+  v_retry record;
 BEGIN
   SELECT * INTO v_runtime FROM workhorse.job_runtime r
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
@@ -1092,16 +1232,12 @@ BEGIN
   IF v_runtime.current_attempt < v_job.max_attempts THEN
     v_started_at := v_runtime.attempt_started_at;
     v_claimed_at := v_runtime.acquired_at;
-    IF p_retry_delay_ms IS NULL THEN
-      -- Sidekiq-inspired retry count is zero-based: the first failed attempt has count 0.
-      v_retry_count := v_runtime.current_attempt - 1;
-      v_retry_delay_seconds := power(v_retry_count::double precision, 4) + 15
-        + floor(random() * 10) * (v_retry_count + 1);
-    ELSE
-      v_retry_delay_seconds := GREATEST(0, p_retry_delay_ms)::double precision / 1000.0;
-    END IF;
-    v_run_at := clock_timestamp() + make_interval(secs => v_retry_delay_seconds);
-    v_state := CASE WHEN v_retry_delay_seconds <= 0 THEN 'ready' ELSE 'scheduled' END;
+    SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
+      p_job_id, v_runtime.current_attempt, v_job.retry_policy,
+      v_runtime.previous_retry_delay_ms, p_retry_delay_ms, 'legacy-handler'
+    );
+    v_run_at := clock_timestamp() + make_interval(secs => v_retry.delay_ms::double precision / 1000.0);
+    v_state := CASE WHEN v_retry.delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
     UPDATE workhorse.job_runtime r
        SET state = v_state, current_attempt = r.current_attempt + 1, fence_token = 0,
            run_at = v_run_at,
@@ -1109,6 +1245,7 @@ BEGIN
            sequence = CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
            worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
            wait_name = NULL, attempt_started_at = NULL,
+           previous_retry_delay_ms = v_retry.next_previous_retry_delay_ms,
            error = p_error, updated_at = clock_timestamp()
      WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
        AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
@@ -1122,7 +1259,9 @@ BEGIN
         v_started_at, v_claimed_at, p_error);
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
       VALUES (p_job_id, v_runtime.current_attempt - 1, 'retry_scheduled',
-        jsonb_build_object('next_attempt', v_runtime.current_attempt, 'run_at', v_run_at, 'error', p_error));
+        jsonb_build_object('next_attempt', v_runtime.current_attempt, 'run_at', v_run_at,
+          'error', p_error, 'retry_policy', v_job.retry_policy,
+          'retry_delay_ms', v_retry.delay_ms, 'retry_delay_source', v_retry.source));
   ELSE
     DELETE FROM workhorse.job_runtime r
      WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
@@ -1146,7 +1285,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.recover_expired_v1(
-  p_limit integer DEFAULT 100, p_retry_delay_ms integer DEFAULT 0
+  p_limit integer DEFAULT 100, p_retry_delay_ms integer DEFAULT NULL
 ) RETURNS integer
 LANGUAGE plpgsql
 AS $$
@@ -1157,6 +1296,9 @@ DECLARE
   v_run_at timestamptz;
   v_error jsonb := jsonb_build_object('name', 'LeaseExpired', 'message', 'worker lease expired');
   v_count integer := 0;
+  v_retry record;
+  v_retry_delay_ms bigint;
+  v_retry_source text;
 BEGIN
   FOR v_runtime IN
     SELECT r.* FROM workhorse.job_runtime r
@@ -1166,8 +1308,14 @@ BEGIN
   LOOP
     SELECT * INTO STRICT v_job FROM workhorse.job j WHERE j.id = v_runtime.job_id;
     IF v_runtime.current_attempt < v_job.max_attempts THEN
-      v_run_at := clock_timestamp() + make_interval(secs => GREATEST(0, p_retry_delay_ms)::double precision / 1000.0);
-      v_state := CASE WHEN p_retry_delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
+      SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
+        v_runtime.job_id, v_runtime.current_attempt, v_job.retry_policy,
+        v_runtime.previous_retry_delay_ms, p_retry_delay_ms, 'lease-recovery-immediate'
+      );
+      v_retry_delay_ms := v_retry.delay_ms;
+      v_retry_source := v_retry.source;
+      v_run_at := clock_timestamp() + make_interval(secs => v_retry_delay_ms::double precision / 1000.0);
+      v_state := CASE WHEN v_retry_delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
       UPDATE workhorse.job_runtime r
          SET state = v_state, current_attempt = r.current_attempt + 1, fence_token = 0,
              run_at = v_run_at,
@@ -1175,12 +1323,15 @@ BEGIN
              sequence = CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
              worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
              wait_name = NULL, attempt_started_at = NULL,
+             previous_retry_delay_ms = v_retry.next_previous_retry_delay_ms,
              error = v_error, updated_at = clock_timestamp()
        WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp();
       IF NOT FOUND THEN CONTINUE; END IF;
     ELSE
       v_state := 'failed';
+      v_retry_delay_ms := NULL;
+      v_retry_source := 'terminal';
       DELETE FROM workhorse.job_runtime r
        WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp();
@@ -1196,7 +1347,9 @@ BEGIN
         'lease_expired', v_runtime.attempt_started_at, v_runtime.acquired_at, v_error);
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
       VALUES (v_runtime.job_id, v_runtime.current_attempt, 'lease_expired',
-        jsonb_build_object('fence_token', v_runtime.fence_token::text, 'next_state', v_state));
+        jsonb_build_object('fence_token', v_runtime.fence_token::text, 'next_state', v_state,
+          'retry_policy', v_job.retry_policy, 'retry_delay_ms', v_retry_delay_ms,
+          'retry_delay_source', v_retry_source));
     v_count := v_count + 1;
   END LOOP;
   IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
@@ -1596,7 +1749,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (8) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (9) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
   FROM generate_series(0, 4) AS weeks(week_offset);
 
