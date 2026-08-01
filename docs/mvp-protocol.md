@@ -94,7 +94,7 @@ Checkpoint values are limited to 1 MiB of PostgreSQL's canonical JSONB text repr
 
 `attempt_history.started_at` records the beginning of the logical attempt even when it suspends through timers, while `claimed_at` records the final activation that produced retry, expiry, success, or terminal failure. Timer suspension emits lifecycle events but does not close an attempt row.
 
-The default partitions keep history inserts available if maintenance is late. `create_history_week_v1(week)` normalizes its argument to Monday, serializes creation for that boundary, and moves matching fallback rows into the new event and attempt partitions. `retire_history_week_v1(week)` remains an explicit paired primitive. Clean installation precreates the current week and four future weeks, while each `housekeep_v1` pass repairs that horizon.
+The default partitions keep history inserts available if maintenance is late. `create_history_week_v1(week)` normalizes its argument to Monday, serializes creation for that boundary, repairs either missing half of a partial event/attempt pair, and moves matching fallback rows into each newly created partition. `retire_history_week_v1(week)` remains an explicit paired primitive. Clean installation precreates the current week and four future weeks, while each `housekeep_v1` pass repairs that horizon.
 
 `Queue.syncRetentionPolicy` persists independent minimum windows for identity, outcome, events, attempts, and occurrences. Null disables a category. Job, outcome, event, and attempt deletion is opt-in; occurrences retain the 30-day default. Event and attempt phases independently drop only fully expired completed weeks and bounded-delete expired default rows.
 

@@ -287,6 +287,7 @@ describe("Workhorse demo", () => {
           maxLagCategory: null,
           eligibleHistoryPartitions: { jobEvents: 0, attemptHistory: 0 },
           defaultHistoryRows: { jobEvents: 0, attemptHistory: 0 },
+          defaultHistoryRowsCapped: { jobEvents: false, attemptHistory: false },
         },
       },
     });
@@ -640,6 +641,7 @@ describe("Workhorse demo", () => {
             policyUpdatedAt: expect.any(String),
             eligibleHistoryPartitions: { jobEvents: 0, attemptHistory: 0 },
             defaultHistoryRows: { jobEvents: 0, attemptHistory: 0 },
+            defaultHistoryRowsCapped: { jobEvents: false, attemptHistory: false },
           },
         },
       });
@@ -1871,6 +1873,11 @@ describe("Workhorse demo", () => {
   it("reports history spill as degraded rather than critical", async () => {
     // A timestamp older than every weekly partition lands in the catch-all partition, which is
     // exactly the condition operators need to see. No sleeping or seed data is involved.
+    await pool.query(
+      `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
+       VALUES ($1, 'demo', 'retention-spill', '{}'::jsonb, 1, timestamptz '2000-01-01T00:00:00Z')`,
+      ["00000000-0000-4000-8000-000000000001"],
+    );
     await pool.query(
       `INSERT INTO workhorse.job_event (job_id, attempt, event_type, details, occurred_at)
        VALUES ($1, 1, 'enqueued', '{}'::jsonb, timestamptz '2000-01-01T00:00:00Z')`,

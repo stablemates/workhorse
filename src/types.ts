@@ -170,6 +170,11 @@ export interface QueueHealth {
     jobEvents: number;
     attemptHistory: number;
   };
+  /** True when the corresponding fallback-row count hit the 10,001-row health scan cap. */
+  defaultHistoryRowsCapped: {
+    jobEvents: boolean;
+    attemptHistory: boolean;
+  };
   /** PostgreSQL relation statistics are estimates and may lag until stats flush. */
   relations: Array<{
     relation: string;

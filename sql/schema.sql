@@ -285,7 +285,8 @@ CREATE INDEX IF NOT EXISTS job_outcome_retention_idx
 -- Append-only lifecycle audit.
 CREATE TABLE IF NOT EXISTS workhorse.job_event (
   event_id bigint GENERATED ALWAYS AS IDENTITY,
-  job_id uuid NOT NULL,
+  job_id uuid NOT NULL CONSTRAINT job_event_job_fk
+    REFERENCES workhorse.job(id) ON DELETE CASCADE,
   attempt integer,
   event_type text NOT NULL,
   details jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -301,7 +302,8 @@ CREATE INDEX IF NOT EXISTS job_event_retention_idx
 -- One immutable row for every closed attempt.
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
   attempt_id bigint GENERATED ALWAYS AS IDENTITY,
-  job_id uuid NOT NULL,
+  job_id uuid NOT NULL CONSTRAINT attempt_history_job_fk
+    REFERENCES workhorse.job(id) ON DELETE CASCADE,
   attempt integer NOT NULL,
   fence_token bigint NOT NULL,
   worker_id text NOT NULL,
@@ -318,6 +320,31 @@ CREATE INDEX IF NOT EXISTS attempt_history_job_idx
   ON workhorse.attempt_history (job_id, attempt, occurred_at);
 CREATE INDEX IF NOT EXISTS attempt_history_retention_idx
   ON workhorse.attempt_history (occurred_at, attempt_id);
+
+-- Reinstalls of a schema created by an earlier v8 build must gain the same referential locking as a
+-- clean install. Besides rejecting unattributed history, these FKs serialize history insertion with
+-- terminal identity deletion so retention cannot leave an orphan behind under concurrency.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'workhorse.job_event'::regclass AND conname = 'job_event_job_fk'
+  ) THEN
+    ALTER TABLE workhorse.job_event
+      ADD CONSTRAINT job_event_job_fk FOREIGN KEY (job_id)
+      REFERENCES workhorse.job(id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'workhorse.attempt_history'::regclass
+       AND conname = 'attempt_history_job_fk'
+  ) THEN
+    ALTER TABLE workhorse.attempt_history
+      ADD CONSTRAINT attempt_history_job_fk FOREIGN KEY (job_id)
+      REFERENCES workhorse.job(id) ON DELETE CASCADE;
+  END IF;
+END;
+$$;
 
 -- Declarative schedules are synchronized from application code and evaluated by worker processes.
 -- Payloads, occurrence ownership, and queue semantics remain owned by the Workhorse protocol.
@@ -609,8 +636,8 @@ DECLARE
   v_count integer;
 BEGIN
   IF p_before IS NULL THEN RAISE EXCEPTION 'occurrence retention cutoff is required'; END IF;
-  IF p_limit NOT BETWEEN 1 AND 100000 THEN
-    RAISE EXCEPTION 'occurrence prune limit must be between 1 and 100000';
+  IF p_limit NOT BETWEEN 1 AND 1000000 THEN
+    RAISE EXCEPTION 'occurrence prune limit must be between 1 and 1000000';
   END IF;
 
   WITH victims AS MATERIALIZED (
@@ -1415,6 +1442,7 @@ AS $$
 DECLARE
   v_partition record;
   v_count integer := 0;
+  v_previous_lock_timeout text;
 BEGIN
   IF p_parent NOT IN ('job_event', 'attempt_history') THEN
     RAISE EXCEPTION 'history parent must be job_event or attempt_history';
@@ -1423,7 +1451,7 @@ BEGIN
   IF p_limit NOT BETWEEN 1 AND 52 THEN RAISE EXCEPTION 'partition limit must be between 1 and 52'; END IF;
 
   FOR v_partition IN
-    SELECT child.relname,
+    SELECT child_namespace.nspname AS schema_name, child.relname,
            ((regexp_match(
              pg_get_expr(child.relpartbound, child.oid),
              'TO \(''([^'']+)''\)'
@@ -1432,6 +1460,7 @@ BEGIN
       JOIN pg_class parent ON parent.oid = inheritance.inhparent
       JOIN pg_namespace namespace ON namespace.oid = parent.relnamespace
       JOIN pg_class child ON child.oid = inheritance.inhrelid
+      JOIN pg_namespace child_namespace ON child_namespace.oid = child.relnamespace
      WHERE namespace.nspname = 'workhorse'
        AND parent.relname = p_parent
        AND child.relname <> p_parent || '_default'
@@ -1446,12 +1475,26 @@ BEGIN
      ORDER BY upper_bound, child.relname
      LIMIT p_limit
   LOOP
-    PERFORM pg_advisory_xact_lock(hashtextextended(
+    IF NOT pg_try_advisory_xact_lock(hashtextextended(
       'workhorse:history-week:' || (v_partition.upper_bound - interval '1 week')::date,
       0
-    ));
-    EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', v_partition.relname);
-    v_count := v_count + 1;
+    )) THEN
+      CONTINUE;
+    END IF;
+    v_previous_lock_timeout := current_setting('lock_timeout');
+    PERFORM set_config('lock_timeout', '250ms', true);
+    BEGIN
+      EXECUTE format(
+        'DROP TABLE IF EXISTS %I.%I', v_partition.schema_name, v_partition.relname
+      );
+      v_count := v_count + 1;
+    EXCEPTION
+      WHEN lock_not_available THEN NULL;
+      WHEN OTHERS THEN
+        PERFORM set_config('lock_timeout', v_previous_lock_timeout, true);
+        RAISE;
+    END;
+    PERFORM set_config('lock_timeout', v_previous_lock_timeout, true);
   END LOOP;
   RETURN v_count;
 END;
@@ -1503,21 +1546,29 @@ BEGIN
   END IF;
   IF p_limit NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'terminal job limit must be between 1 and 100000'; END IF;
 
-  WITH candidates AS (
-    SELECT job.id
+  WITH candidate_window AS MATERIALIZED (
+    SELECT job.id, outcome.finished_at
       FROM workhorse.job job
       JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
      WHERE job.created_at < p_identity_before
        AND outcome.finished_at < p_outcome_before
        AND NOT EXISTS (SELECT 1 FROM workhorse.job_runtime runtime WHERE runtime.job_id = job.id)
-       AND NOT EXISTS (SELECT 1 FROM workhorse.job_event event WHERE event.job_id = job.id)
-       AND NOT EXISTS (SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.job_id = job.id)
-       AND NOT EXISTS (
-         SELECT 1 FROM workhorse.schedule_occurrence occurrence WHERE occurrence.job_id = job.id
-       )
      ORDER BY outcome.finished_at, job.id
      FOR UPDATE OF job SKIP LOCKED
-     LIMIT p_limit
+     LIMIT LEAST(p_limit * 4, 100000)
+  ), candidates AS (
+    SELECT candidate.id
+      FROM candidate_window candidate
+     WHERE NOT EXISTS (
+             SELECT 1 FROM workhorse.job_event event WHERE event.job_id = candidate.id
+           )
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.job_id = candidate.id
+           )
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.schedule_occurrence occurrence
+              WHERE occurrence.job_id = candidate.id
+           )
   )
   DELETE FROM workhorse.job job USING candidates WHERE job.id = candidates.id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
@@ -1701,34 +1752,35 @@ BEGIN
   v_event_exists := to_regclass(format('workhorse.%I', v_event_partition)) IS NOT NULL;
   v_attempt_exists := to_regclass(format('workhorse.%I', v_attempt_partition)) IS NOT NULL;
   IF v_event_exists AND v_attempt_exists THEN RETURN; END IF;
-  IF v_event_exists <> v_attempt_exists THEN
-    RAISE EXCEPTION 'history week % is only partially partitioned', v_start;
-  END IF;
 
   LOCK TABLE workhorse.job_event_default, workhorse.attempt_history_default IN ACCESS EXCLUSIVE MODE;
-  EXECUTE format(
-    'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM workhorse.job_event_default WHERE occurred_at >= %L AND occurred_at < %L',
-    v_event_staging, v_start, v_end);
-  EXECUTE format(
-    'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM workhorse.attempt_history_default WHERE occurred_at >= %L AND occurred_at < %L',
-    v_attempt_staging, v_start, v_end);
-  DELETE FROM workhorse.job_event_default WHERE occurred_at >= v_start AND occurred_at < v_end;
-  DELETE FROM workhorse.attempt_history_default WHERE occurred_at >= v_start AND occurred_at < v_end;
+  IF NOT v_event_exists THEN
+    EXECUTE format(
+      'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM workhorse.job_event_default WHERE occurred_at >= %L AND occurred_at < %L',
+      v_event_staging, v_start, v_end);
+    DELETE FROM workhorse.job_event_default WHERE occurred_at >= v_start AND occurred_at < v_end;
+    EXECUTE format(
+      'CREATE TABLE workhorse.%I PARTITION OF workhorse.job_event FOR VALUES FROM (%L) TO (%L)',
+      v_event_partition, v_start, v_end);
+    EXECUTE format(
+      'INSERT INTO workhorse.%I (event_id, job_id, attempt, event_type, details, occurred_at) OVERRIDING SYSTEM VALUE SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM %I',
+      v_event_partition, v_event_staging);
+    EXECUTE format('DROP TABLE %I', v_event_staging);
+  END IF;
 
-  EXECUTE format(
-    'CREATE TABLE IF NOT EXISTS workhorse.%I PARTITION OF workhorse.job_event FOR VALUES FROM (%L) TO (%L)',
-    v_event_partition, v_start, v_end);
-  EXECUTE format(
-    'CREATE TABLE IF NOT EXISTS workhorse.%I PARTITION OF workhorse.attempt_history FOR VALUES FROM (%L) TO (%L)',
-    v_attempt_partition, v_start, v_end);
-  EXECUTE format(
-    'INSERT INTO workhorse.%I (event_id, job_id, attempt, event_type, details, occurred_at) OVERRIDING SYSTEM VALUE SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM %I',
-    v_event_partition, v_event_staging);
-  EXECUTE format(
-    'INSERT INTO workhorse.%I (attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at) OVERRIDING SYSTEM VALUE SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at FROM %I',
-    v_attempt_partition, v_attempt_staging);
-  EXECUTE format('DROP TABLE %I', v_event_staging);
-  EXECUTE format('DROP TABLE %I', v_attempt_staging);
+  IF NOT v_attempt_exists THEN
+    EXECUTE format(
+      'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM workhorse.attempt_history_default WHERE occurred_at >= %L AND occurred_at < %L',
+      v_attempt_staging, v_start, v_end);
+    DELETE FROM workhorse.attempt_history_default WHERE occurred_at >= v_start AND occurred_at < v_end;
+    EXECUTE format(
+      'CREATE TABLE workhorse.%I PARTITION OF workhorse.attempt_history FOR VALUES FROM (%L) TO (%L)',
+      v_attempt_partition, v_start, v_end);
+    EXECUTE format(
+      'INSERT INTO workhorse.%I (attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at) OVERRIDING SYSTEM VALUE SELECT attempt_id, job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, finished_at, error, occurred_at FROM %I',
+      v_attempt_partition, v_attempt_staging);
+    EXECUTE format('DROP TABLE %I', v_attempt_staging);
+  END IF;
 END;
 $$;
 

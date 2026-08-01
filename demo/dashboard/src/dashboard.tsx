@@ -2677,16 +2677,18 @@ function SystemPage({
                     </Text>
                     <HelpButton
                       label="Rows outside weekly storage"
-                      help="Cumulative rows that landed in the catch-all area because no weekly storage covered their timestamp. This is a running total for the whole database, not a count for the selected window. Background cleanup clears expired rows when retention is enabled for that history category."
+                      help="Rows that landed in the catch-all area because no weekly storage covered their timestamp. Counts are exact through 10,000 rows and display a plus sign when the bounded health scan reports a lower bound. Background cleanup clears expired rows when retention is enabled for that history category."
                     />
                   </Group>
                   <Text c="dimmed" size="xs">
-                    Cumulative total, not windowed
+                    Database-wide, not windowed
                   </Text>
                 </Box>
                 <Badge color={defaultSpill > 0 ? "yellow" : "teal"} variant="light">
-                  {retention.defaultHistoryRows.jobEvents} events ·{" "}
-                  {retention.defaultHistoryRows.attemptHistory} attempts
+                  {retention.defaultHistoryRows.jobEvents}
+                  {retention.defaultHistoryRowsCapped.jobEvents ? "+" : ""} events ·{" "}
+                  {retention.defaultHistoryRows.attemptHistory}
+                  {retention.defaultHistoryRowsCapped.attemptHistory ? "+" : ""} attempts
                 </Badge>
               </Group>
             </Stack>
