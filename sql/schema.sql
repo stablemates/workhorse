@@ -40,6 +40,24 @@ AS $$
   SELECT sha256(convert_to(p_scope || chr(31) || p_key, 'UTF8'));
 $$;
 
+-- Safe, bounded cancellation diagnostics. requested_by is attribution only and does not assert that
+-- the caller was authorized to cancel the job.
+CREATE OR REPLACE FUNCTION workhorse.cancellation_envelope_v1(
+  p_requested_at timestamptz, p_requested_by text, p_reason text
+) RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT jsonb_build_object(
+    'name', 'CancellationRequested',
+    'message', 'job cancellation was requested',
+    'requested_at', p_requested_at,
+    'requested_by', p_requested_by,
+    'reason', p_reason
+  );
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.normalize_retry_policy_v1(p_policy jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -239,6 +257,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_wait (
   attempt integer NOT NULL CHECK (attempt >= 1),
   fence_token bigint NOT NULL CHECK (fence_token > 0),
   worker_id text NOT NULL CHECK (worker_id <> ''),
+  claimed_at timestamptz NOT NULL CHECK (isfinite(claimed_at)),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (job_id, wait_name),
   CHECK (
@@ -271,12 +290,23 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
   expires_at timestamptz,
   wait_name text,
   attempt_started_at timestamptz,
+  cancel_requested_at timestamptz,
+  cancel_requested_by text CHECK (
+    cancel_requested_by IS NULL OR (cancel_requested_by <> '' AND char_length(cancel_requested_by) <= 200)
+  ),
+  cancel_reason text CHECK (
+    cancel_reason IS NULL OR (cancel_reason <> '' AND char_length(cancel_reason) <= 2000)
+  ),
   error jsonb,
   previous_retry_delay_ms bigint CHECK (
     previous_retry_delay_ms BETWEEN 0 AND 31536000000
   ),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (wait_name IS NULL OR (wait_name <> '' AND char_length(wait_name) <= 200)),
+  CHECK (
+    (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
+    OR (state = 'active' AND cancel_requested_at IS NOT NULL)
+  ),
   CHECK (
     (state = 'scheduled' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NULL
       AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL
@@ -303,15 +333,19 @@ CREATE INDEX IF NOT EXISTS job_runtime_expired_active_idx
 -- Immutable terminal materialization. Moving here removes completed work from every dispatch index.
 CREATE TABLE IF NOT EXISTS workhorse.job_outcome (
   job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
-  state text NOT NULL CHECK (state IN ('succeeded', 'failed')),
+  state text NOT NULL CHECK (state IN ('succeeded', 'failed', 'canceled')),
   current_attempt integer NOT NULL CHECK (current_attempt >= 1),
-  fence_token bigint NOT NULL CHECK (fence_token > 0),
+  fence_token bigint NOT NULL CHECK (fence_token >= 0),
   run_at timestamptz NOT NULL,
   result jsonb,
   error jsonb,
   finished_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  CHECK ((state = 'succeeded' AND error IS NULL) OR state = 'failed')
+  CHECK (
+    (state = 'succeeded' AND fence_token > 0 AND error IS NULL)
+    OR (state = 'failed' AND fence_token > 0)
+    OR (state = 'canceled' AND error IS NOT NULL)
+  )
 );
 CREATE INDEX IF NOT EXISTS job_outcome_retention_idx
   ON workhorse.job_outcome (finished_at, job_id);
@@ -341,7 +375,9 @@ CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
   attempt integer NOT NULL,
   fence_token bigint NOT NULL,
   worker_id text NOT NULL,
-  outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed', 'retry', 'lease_expired')),
+  outcome text NOT NULL CHECK (
+    outcome IN ('succeeded', 'failed', 'retry', 'lease_expired', 'canceled')
+  ),
   started_at timestamptz NOT NULL,
   claimed_at timestamptz NOT NULL,
   finished_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -1139,21 +1175,243 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.heartbeat_v1(
+CREATE OR REPLACE FUNCTION workhorse.heartbeat_v2(
   p_job_id uuid, p_worker_id text, p_fence_token bigint, p_lease_ms integer DEFAULT 30000
-) RETURNS boolean
+) RETURNS text
 LANGUAGE plpgsql
 AS $$
-DECLARE v_updated integer;
+DECLARE v_runtime workhorse.job_runtime%ROWTYPE;
 BEGIN
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN RAISE EXCEPTION 'worker_id must not be empty'; END IF;
+  IF p_lease_ms NOT BETWEEN 100 AND 86400000 THEN
+    RAISE EXCEPTION 'lease_ms must be between 100 and 86400000';
+  END IF;
+  SELECT * INTO v_runtime
+    FROM workhorse.job_runtime r
+   WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
+     AND r.fence_token = p_fence_token
+   FOR UPDATE;
+  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp() THEN RETURN 'stale'; END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
   UPDATE workhorse.job_runtime r
      SET heartbeat_at = clock_timestamp(),
          expires_at = clock_timestamp() + make_interval(secs => p_lease_ms::double precision / 1000.0),
          updated_at = clock_timestamp()
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
-     AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp();
-  GET DIAGNOSTICS v_updated = ROW_COUNT;
-  RETURN v_updated = 1;
+     AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
+     AND r.cancel_requested_at IS NULL;
+  IF NOT FOUND THEN RETURN 'stale'; END IF;
+  RETURN 'accepted';
+END;
+$$;
+
+-- Compatibility heartbeat: cancellation means ownership must stop, so only accepted maps to true.
+CREATE OR REPLACE FUNCTION workhorse.heartbeat_v1(
+  p_job_id uuid, p_worker_id text, p_fence_token bigint, p_lease_ms integer DEFAULT 30000
+) RETURNS boolean
+LANGUAGE sql
+AS $$
+  SELECT workhorse.heartbeat_v2(p_job_id, p_worker_id, p_fence_token, p_lease_ms) = 'accepted';
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.cancel_v1(
+  p_job_id uuid, p_requested_by text DEFAULT NULL, p_reason text DEFAULT NULL
+) RETURNS TABLE (
+  status text, state text, current_attempt integer, requested_at timestamptz,
+  requested_by text, reason text, finished_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_outcome workhorse.job_outcome%ROWTYPE;
+  v_wait workhorse.job_wait%ROWTYPE;
+  v_now timestamptz := clock_timestamp();
+  v_fence_token bigint := 0;
+  v_worker_id text;
+  v_attempt integer;
+  v_envelope jsonb;
+BEGIN
+  IF p_job_id IS NULL THEN RAISE EXCEPTION 'job_id is required'; END IF;
+  IF p_requested_by IS NOT NULL
+     AND (p_requested_by = '' OR char_length(p_requested_by) > 200) THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NOT NULL AND (p_reason = '' OR char_length(p_reason) > 2000) THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+
+  SELECT * INTO v_runtime
+    FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id
+   FOR UPDATE;
+  IF FOUND THEN
+    IF v_runtime.state = 'active' THEN
+      IF v_runtime.cancel_requested_at IS NULL THEN
+        UPDATE workhorse.job_runtime runtime
+           SET cancel_requested_at = v_now,
+               cancel_requested_by = p_requested_by,
+               cancel_reason = p_reason,
+               updated_at = v_now
+         WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+           AND runtime.cancel_requested_at IS NULL
+        RETURNING * INTO v_runtime;
+        IF FOUND THEN
+          INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+            VALUES (
+              p_job_id,
+              v_runtime.current_attempt,
+              'cancel_requested',
+              jsonb_build_object(
+                'requested_at', v_now,
+                'requested_by', p_requested_by,
+                'reason', p_reason,
+                'fence_token', v_runtime.fence_token::text
+              )
+            );
+        END IF;
+      END IF;
+      RETURN QUERY VALUES (
+        'cancel_requested'::text,
+        'active'::text,
+        v_runtime.current_attempt,
+        v_runtime.cancel_requested_at,
+        v_runtime.cancel_requested_by,
+        v_runtime.cancel_reason,
+        NULL::timestamptz
+      );
+      RETURN;
+    END IF;
+
+    -- A suspended logical attempt retains its original worker/fence attribution in job_wait even
+    -- though scheduled runtime ownership has been released. Ordinary never-started jobs have none.
+    IF v_runtime.attempt_started_at IS NOT NULL THEN
+      SELECT * INTO v_wait
+        FROM workhorse.job_wait wait_row
+       WHERE wait_row.job_id = p_job_id AND wait_row.attempt = v_runtime.current_attempt
+       ORDER BY wait_row.created_at DESC, wait_row.wait_name DESC
+       LIMIT 1;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'started job % has no retained durable-wait attribution', p_job_id;
+      END IF;
+      v_fence_token := v_wait.fence_token;
+      v_worker_id := v_wait.worker_id;
+      v_attempt := v_wait.attempt;
+    END IF;
+    v_envelope := workhorse.cancellation_envelope_v1(v_now, p_requested_by, p_reason);
+    DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
+    INSERT INTO workhorse.job_outcome(
+      job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at
+    ) VALUES (
+      p_job_id, 'canceled', v_runtime.current_attempt, v_fence_token, v_runtime.run_at,
+      v_envelope, v_now, v_now
+    ) RETURNING * INTO v_outcome;
+    IF v_runtime.attempt_started_at IS NOT NULL THEN
+      INSERT INTO workhorse.attempt_history(
+        job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+      ) VALUES (
+        p_job_id, v_attempt, v_fence_token, v_worker_id, 'canceled',
+        v_runtime.attempt_started_at, v_wait.claimed_at, v_envelope
+      );
+    END IF;
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id,
+        CASE WHEN v_runtime.attempt_started_at IS NULL THEN NULL ELSE v_attempt END,
+        'canceled',
+        jsonb_build_object(
+          'requested_at', v_now,
+          'requested_by', p_requested_by,
+          'reason', p_reason,
+          'fence_token', v_fence_token::text,
+          'source', 'immediate'
+        )
+      );
+    RETURN QUERY VALUES (
+      'canceled'::text, 'canceled'::text, v_runtime.current_attempt,
+      v_now, p_requested_by, p_reason, v_outcome.finished_at
+    );
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_outcome FROM workhorse.job_outcome outcome WHERE outcome.job_id = p_job_id;
+  IF FOUND THEN
+    IF v_outcome.state = 'canceled' THEN
+      RETURN QUERY VALUES (
+        'canceled'::text,
+        v_outcome.state,
+        v_outcome.current_attempt,
+        NULLIF(v_outcome.error->>'requested_at', '')::timestamptz,
+        v_outcome.error->>'requested_by',
+        v_outcome.error->>'reason',
+        v_outcome.finished_at
+      );
+    ELSE
+      RETURN QUERY VALUES (
+        'already_terminal'::text, v_outcome.state, v_outcome.current_attempt,
+        NULL::timestamptz, NULL::text, NULL::text, v_outcome.finished_at
+      );
+    END IF;
+    RETURN;
+  END IF;
+
+  RETURN QUERY VALUES (
+    'not_found'::text, NULL::text, NULL::integer, NULL::timestamptz,
+    NULL::text, NULL::text, NULL::timestamptz
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.acknowledge_cancel_v1(
+  p_job_id uuid, p_worker_id text, p_fence_token bigint
+) RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_envelope jsonb;
+BEGIN
+  SELECT * INTO v_runtime
+    FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp()
+     OR v_runtime.cancel_requested_at IS NULL THEN
+    RETURN false;
+  END IF;
+  v_envelope := workhorse.cancellation_envelope_v1(
+    v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
+  );
+  DELETE FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+     AND runtime.expires_at > clock_timestamp() AND runtime.cancel_requested_at IS NOT NULL;
+  IF NOT FOUND THEN RETURN false; END IF;
+  INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, error)
+    VALUES (
+      p_job_id, 'canceled', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_envelope
+    );
+  INSERT INTO workhorse.attempt_history(
+    job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+  ) VALUES (
+    p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'canceled',
+    v_runtime.attempt_started_at, v_runtime.acquired_at, v_envelope
+  );
+  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    VALUES (
+      p_job_id,
+      v_runtime.current_attempt,
+      'canceled',
+      jsonb_build_object(
+        'requested_at', v_runtime.cancel_requested_at,
+        'requested_by', v_runtime.cancel_requested_by,
+        'reason', v_runtime.cancel_reason,
+        'fence_token', p_fence_token::text,
+        'source', 'acknowledged'
+      )
+    );
+  RETURN true;
 END;
 $$;
 
@@ -1198,7 +1456,8 @@ BEGIN
    FOR UPDATE;
   -- Recheck expiry after acquiring the row lock. A pre-lock predicate can become stale while this
   -- transaction waits behind another lifecycle operation that does not modify the runtime row.
-  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp() THEN
+  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp()
+     OR v_runtime.cancel_requested_at IS NOT NULL THEN
     RETURN QUERY VALUES (
       'stale'::text, NULL::jsonb, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
     );
@@ -1302,7 +1561,8 @@ BEGIN
      AND runtime.fence_token = p_fence_token
    FOR UPDATE;
   v_now := clock_timestamp();
-  IF NOT FOUND OR v_runtime.expires_at <= v_now THEN
+  IF NOT FOUND OR v_runtime.expires_at <= v_now
+     OR v_runtime.cancel_requested_at IS NOT NULL THEN
     RETURN QUERY VALUES (
       'stale'::text, NULL::text, NULL::text, NULL::bigint, NULL::timestamptz,
       NULL::timestamptz, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
@@ -1366,10 +1626,10 @@ BEGIN
 
   INSERT INTO workhorse.job_wait(
     job_id, wait_name, mode, duration_ms, requested_wake_at, wake_at,
-    attempt, fence_token, worker_id
+    attempt, fence_token, worker_id, claimed_at
   ) VALUES (
     p_job_id, p_wait_name, v_mode, p_duration_ms, p_wake_at, v_requested_target,
-    v_runtime.current_attempt, p_fence_token, p_worker_id
+    v_runtime.current_attempt, p_fence_token, p_worker_id, v_runtime.acquired_at
   )
   RETURNING * INTO v_wait;
 
@@ -1451,6 +1711,7 @@ BEGIN
   DELETE FROM workhorse.job_runtime r
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
+     AND r.cancel_requested_at IS NULL
   RETURNING * INTO v_runtime;
   IF NOT FOUND THEN RETURN false; END IF;
 
@@ -1485,9 +1746,10 @@ DECLARE
 BEGIN
   SELECT * INTO v_runtime FROM workhorse.job_runtime r
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
-     AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
+     AND r.fence_token = p_fence_token
    FOR UPDATE;
-  IF NOT FOUND THEN RETURN 'stale'; END IF;
+  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp() THEN RETURN 'stale'; END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
   SELECT * INTO STRICT v_job FROM workhorse.job j WHERE j.id = p_job_id;
 
   IF v_runtime.current_attempt < v_job.max_attempts THEN
@@ -1560,6 +1822,7 @@ DECLARE
   v_retry record;
   v_retry_delay_ms bigint;
   v_retry_source text;
+  v_envelope jsonb;
 BEGIN
   FOR v_runtime IN
     SELECT r.* FROM workhorse.job_runtime r
@@ -1568,6 +1831,43 @@ BEGIN
      LIMIT GREATEST(1, LEAST(p_limit, 10000))
   LOOP
     SELECT * INTO STRICT v_job FROM workhorse.job j WHERE j.id = v_runtime.job_id;
+    IF v_runtime.cancel_requested_at IS NOT NULL THEN
+      v_envelope := workhorse.cancellation_envelope_v1(
+        v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
+      );
+      DELETE FROM workhorse.job_runtime r
+       WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
+         AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp()
+         AND r.cancel_requested_at IS NOT NULL;
+      IF NOT FOUND THEN CONTINUE; END IF;
+      INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, error)
+        VALUES (
+          v_runtime.job_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
+          v_runtime.run_at, v_envelope
+        );
+      INSERT INTO workhorse.attempt_history(
+        job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+      ) VALUES (
+        v_runtime.job_id, v_runtime.current_attempt, v_runtime.fence_token,
+        v_runtime.worker_id, 'canceled', v_runtime.attempt_started_at,
+        v_runtime.acquired_at, v_envelope
+      );
+      INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+        VALUES (
+          v_runtime.job_id,
+          v_runtime.current_attempt,
+          'canceled',
+          jsonb_build_object(
+            'requested_at', v_runtime.cancel_requested_at,
+            'requested_by', v_runtime.cancel_requested_by,
+            'reason', v_runtime.cancel_reason,
+            'fence_token', v_runtime.fence_token::text,
+            'source', 'recovered'
+          )
+        );
+      v_count := v_count + 1;
+      CONTINUE;
+    END IF;
     IF v_runtime.current_attempt < v_job.max_attempts THEN
       SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
         v_runtime.job_id, v_runtime.current_attempt, v_job.retry_policy,
@@ -2085,7 +2385,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (10) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (11) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
   FROM generate_series(0, 4) AS weeks(week_offset);
 

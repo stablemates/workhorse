@@ -1,8 +1,6 @@
 # Workhorse demo
 
-This is the end-to-end product demo for Workhorse. It lets you create live jobs, watch workers process
-them, inspect retries and terminal failures, and observe recurring work, retention health, and queue
-health from the operator dashboard.
+This is the end-to-end product demo for Workhorse. It lets you create live jobs, request cooperative cancellation, watch workers process them, inspect retries and terminal failures, and observe recurring work, retention health, and queue health from the operator dashboard.
 
 The demo application uses Hono and Drizzle to exercise both integration packages in a realistic setup.
 An order and its durable job are committed in one Drizzle transaction, two Hono-managed workers process
@@ -12,11 +10,10 @@ Workhorse's durable execution model is what the demo is designed to show.
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
-The demo installs schema version 10, including the core `options.idempotency: { key, scope?, ttlMs? }`
-enqueue contract. It does not add a dedicated idempotency-key seed or dashboard form. Application code
-using `Queue` or the Drizzle transaction adapter can opt in to scoped deduplication, while the demo keeps
-raw keys out of persistence and its UI, and preserves the distinction between enqueue replay and at-least-once handler
-effects.
+The demo installs schema version 11, including scoped enqueue idempotency and cooperative cancellation.
+It does not add a dedicated idempotency-key seed or dashboard form. Application code using `Queue` or the
+Drizzle transaction adapter can opt in to scoped deduplication, while the demo keeps raw keys out of
+persistence and its UI and preserves the distinction between enqueue replay and at-least-once effects.
 
 Prerequisites are Node.js 22+, pnpm 10+, workspace dependencies installed with `pnpm install`, and
 PostgreSQL 15+ with the local `workhorse` role described in the root README. No PostgreSQL extensions are
@@ -153,10 +150,17 @@ intentionally represent a healthy retention state rather than manufacturing time
 failures.
 
 The reusable `createDemoApplication` boundary remains read-only by default. The one-command local demo
-injects a deliberately narrow writable operator that can enqueue test jobs and enable or disable its
-heartbeat schedule. Every action records actor, reason, request ID, timestamp, target, before/after
-state, and status in `public.workhorse_demo_audit`. Cancellation, redrive, and arbitrary schedule
+injects a deliberately narrow writable operator that can enqueue test jobs, request cancellation, and
+enable or disable its heartbeat schedule. Every action records actor, reason, request ID, timestamp,
+target, before/after state, and status in `public.workhorse_demo_audit`. Redrive and arbitrary schedule
 editing remain unavailable.
+
+Cancellation is shown as **Cancellation requested** while an active handler still owns the lease and as
+**Canceled** only after exact-fence acknowledgement or requested-lease expiry. Ready, future-scheduled,
+and durable-wait jobs cancel immediately. The handler receives `CancellationRequestedError` through its
+`AbortSignal`; this is cooperative and does not forcibly interrupt JavaScript. The operator attribution is
+not authorization, and the demo does not claim exactly-once external effects. Canceling a recurring job
+changes only that occurrence, not the schedule or its next fire.
 
 Startup synchronizes a namespaced one-minute heartbeat schedule through `Queue.syncSchedules`, and the
 workers evaluate due schedules in-process with advisory-lock coordination and SQL-level occurrence

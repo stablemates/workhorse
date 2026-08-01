@@ -50,6 +50,14 @@ export class InjectedCrashError extends Error {
   }
 }
 
+/** AbortSignal reason used when PostgreSQL reports a cancellation request for an owned job. */
+export class CancellationRequestedError extends Error {
+  constructor(readonly jobId: string) {
+    super(`Cancellation was requested for job ${jobId}`);
+    this.name = "CancellationRequestedError";
+  }
+}
+
 export interface WorkerOptions {
   /** Queue name used for claims. */
   queue?: string;
@@ -262,6 +270,7 @@ export class Worker {
     // as a killed process would, which allows deterministic expiry-recovery testing.
     const controller = new AbortController();
     let leaseLost = false;
+    let cancellationRequested = false;
     let durablySuspended = false;
     // Each job owns an independent self-scheduling heartbeat. The next delay starts only after the
     // previous query settles, so a slow database call cannot overlap another heartbeat for this job.
@@ -274,23 +283,35 @@ export class Worker {
         heartbeatTimer = undefined;
       }
     };
+    const markCancellationRequested = (): void => {
+      cancellationRequested = true;
+      stopHeartbeat();
+      if (!controller.signal.aborted) controller.abort(new CancellationRequestedError(job.id));
+    };
+    const refreshOwnership = async (): Promise<"accepted" | "cancel_requested" | "stale"> => {
+      const status = await this.queue.heartbeatStatus(job, this.workerId, this.leaseMs);
+      if (status === "cancel_requested") {
+        markCancellationRequested();
+      } else if (status === "stale") {
+        leaseLost = true;
+        stopHeartbeat();
+        if (!controller.signal.aborted) controller.abort(new Error("Job lease was lost"));
+      }
+      return status;
+    };
     const scheduleHeartbeat = (): void => {
       if (heartbeatStopped) return;
       heartbeatTimer = setTimeout(() => {
         heartbeatTimer = undefined;
         void Promise.resolve()
-          .then(() => this.queue.heartbeat(job, this.workerId, this.leaseMs))
+          .then(() => refreshOwnership())
           .then(
-            (accepted) => {
+            () => {
               if (heartbeatStopped) return;
-              if (!accepted) {
-                leaseLost = true;
-                stopHeartbeat();
-                controller.abort(new Error("Job lease was lost"));
-              }
             },
             (error: unknown) => {
               if (heartbeatStopped) return;
+              leaseLost = true;
               stopHeartbeat();
               controller.abort(error);
             },
@@ -307,11 +328,15 @@ export class Worker {
       await this.inject("afterClaim", job);
       const handler = this.handlers.get(job.type);
       if (!handler) {
-        await this.queue.fail(
+        const failed = await this.queue.fail(
           job,
           this.workerId,
           new Error(`No handler registered for ${job.type}`),
         );
+        if (failed === "cancel_requested") {
+          markCancellationRequested();
+          await this.queue.acknowledgeCancel(job, this.workerId);
+        }
         return;
       }
       await this.inject("beforeHandler", job);
@@ -406,11 +431,18 @@ export class Worker {
         sleepUntil,
       });
       await this.inject("afterHandler", job);
+      if (cancellationRequested) {
+        await this.queue.acknowledgeCancel(job, this.workerId);
+        return;
+      }
       if (leaseLost || controller.signal.aborted)
         throw controller.signal.reason ?? new Error("Job lease was lost");
       await this.inject("beforeComplete", job);
       const accepted = await this.queue.complete(job, this.workerId, result);
-      if (!accepted) throw new Error("Completion rejected because the lease is stale or expired");
+      if (!accepted) {
+        if (await this.queue.acknowledgeCancel(job, this.workerId)) return;
+        throw new Error("Completion rejected because the lease is stale or expired");
+      }
       await this.inject("afterComplete", job);
     } catch (error) {
       if (
@@ -423,11 +455,23 @@ export class Worker {
       // A crash failpoint models process disappearance, so converting it into fail_v1 would produce
       // the wrong durable state. Ordinary handler errors do close and retry the attempt.
       if (error instanceof InjectedCrashError) throw error;
+      if (
+        cancellationRequested ||
+        error instanceof CancellationRequestedError ||
+        controller.signal.reason instanceof CancellationRequestedError
+      ) {
+        await this.queue.acknowledgeCancel(job, this.workerId);
+        return;
+      }
       const delay =
         typeof this.options.retryDelayMs === "function"
           ? this.options.retryDelayMs(job.attempt, job)
           : this.options.retryDelayMs;
-      await this.queue.fail(job, this.workerId, error, delay);
+      const failed = await this.queue.fail(job, this.workerId, error, delay);
+      if (failed === "cancel_requested") {
+        markCancellationRequested();
+        await this.queue.acknowledgeCancel(job, this.workerId);
+      }
     } finally {
       stopHeartbeat();
     }

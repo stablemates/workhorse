@@ -7,6 +7,7 @@ import type {
   DemoDatabase,
   QueueController,
   ScheduleController,
+  TaskController,
   WorkerController,
 } from "./app.js";
 import {
@@ -32,6 +33,7 @@ export interface DashboardRpcContext {
   operator: DashboardOperator;
   scheduleController?: ScheduleController;
   queueController?: QueueController;
+  taskController?: TaskController;
   workerController?: WorkerController;
 }
 
@@ -52,6 +54,9 @@ const taskFilter = z.enum([
   "running",
   "completed",
   "discarded",
+  // Cancellation is its own terminal filter. It is never merged into "discarded", which means a
+  // task that exhausted its attempts.
+  "canceled",
 ]);
 const tasksInput = z.object({
   filter: taskFilter.default("all"),
@@ -102,6 +107,14 @@ const purgeQueueInput = z.object({
 const setWorkerPausedInput = z.object({
   workerId: z.string().trim().min(1),
   paused: z.boolean(),
+  audit: auditSchema,
+});
+/**
+ * One cancellation request. The audit reason is required and reused as the stored cancellation
+ * reason, so a task can never be canceled without a recorded operator justification.
+ */
+const cancelTaskInput = z.object({
+  id: z.uuid(),
   audit: auditSchema,
 });
 
@@ -218,6 +231,24 @@ export const dashboardRouter = {
         input.paused,
         auditWithOccurredAt(input.audit),
       );
+    }),
+    /**
+     * Cancel one task. The returned status is exactly what PostgreSQL reported, so the caller can
+     * distinguish an immediate cancellation from a cooperative request an active handler still has
+     * to observe, and from a terminal task that was left untouched.
+     */
+    cancelTask: procedure.input(cancelTaskInput).handler(async ({ context, input }) => {
+      if (context.operator.mode !== "local" || !context.taskController?.cancelTask) {
+        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+      }
+      const result = await context.taskController.cancelTask(
+        input.id,
+        auditWithOccurredAt(input.audit),
+      );
+      if (result.status === "not_found") {
+        throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+      }
+      return result;
     }),
   },
 };

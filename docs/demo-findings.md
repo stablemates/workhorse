@@ -23,8 +23,7 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 - the worker-owned scheduler synchronizes and fires a recurring definition with occurrence deduplication;
 - the typed oRPC snapshot exposes queues, jobs, checkpoint and wait provenance, logical and final-claim
   attempt timestamps, demo-owned progress plans, schedules, workers, failures, and database health;
-- schema version 10 installs the core scoped enqueue-idempotency contract used by application ingress,
-  although the demo does not add a dedicated idempotency-key form or seed;
+- schema version 11 installs the core scoped enqueue-idempotency and cooperative cancellation contracts used by application ingress and operator actions, although the demo still omits a dedicated idempotency-key form or seed;
 - the dashboard can be omitted without changing core queue behavior;
 - worker instances expose bounded local concurrency and `{ concurrency, activeSlots, paused, draining }`
   runtime state, while the demo intentionally keeps two default-concurrency workers rather than presenting
@@ -86,13 +85,18 @@ expiring worker registry. Any registry must avoid turning worker heartbeats into
 P0-03 supplies the local runtime contract. The remaining durable-registry decision belongs with **P0-02
 Production telemetry**.
 
-### A5. Operator mutations still need cancellation and redrive contracts
+### A5. Redrive still needs a supported mutation contract
 
-The dashboard's existing local pause, resume, purge, and worker controls are audited, and schema v10 now has a stable enqueue-idempotency contract. Cancellation and redrive still have no supported queue transition or authorization seam.
+Schema v11 now provides `Queue.cancel` and the demo operator surface can attribute a cancellation request
+with actor and reason. Ready, scheduled, and durable-wait work cancels immediately; active work displays a
+request until the exact worker/fence acknowledges it or expiry materializes it. The demo must not present
+`requestedBy` as authorization, forced interruption, or exactly-once settlement.
 
-**Needed:** add mutations only after their queue transitions exist, and require actor, reason, request ID,
-timestamp, target, and before/after state. This is covered by **P1-02 Cancellation**, **P1-04 Dead-letter
-views and redrive**, and the later operator tooling work.
+Redrive still has no supported queue transition or authorization seam.
+
+**Needed:** add redrive only after its queue transition exists, and require actor, reason, request ID,
+timestamp, target, and before/after state. Cancellation is covered by completed **P1-02 Cancellation**;
+redrive remains under **P1-04 Dead-letter views and redrive** and later operator tooling.
 
 ## Remaining packaging gaps
 
@@ -119,7 +123,7 @@ with an explicit mounting API. Keep the dashboard optional and avoid adding Reac
 
 ### D1. Schema upgrades are not documented because they do not exist
 
-`installSchema()` intentionally rejects non-v10 or mixed installations. The live demo exposed how quickly
+`installSchema()` intentionally rejects non-v11 or mixed installations. The live demo exposed how quickly
 that clean-install boundary becomes user-visible.
 
 **Needed:** ordered transactional migrations, independent schema and protocol versions, dry-run/status
@@ -174,9 +178,9 @@ job's event timeline, immutable attempts, payload/result redaction state, or red
 
 ## Priority conclusion
 
-The demo validates the current write path, persisted retry policies, enqueue idempotency, and lifecycle
-semantics. The highest-leverage next production work is now **P1-02 Cancellation**, followed by deadlines,
-dead-letter views/redrive, the query surface, and progress metadata. Full production telemetry remains
-last in the recommended sequence, while each preceding feature still owns focused diagnostics and
-benchmark evidence. Enqueue deduplication does not change the at-least-once handler and external-effect
-boundary.
+The demo validates the current write path, persisted retry policies, enqueue idempotency, cancellation, and
+lifecycle semantics. The highest-leverage next production work is now **P1-03 Deadlines and execution
+timeouts**, followed by dead-letter views/redrive, the query surface, and progress metadata. Full
+production telemetry remains last in the recommended sequence, while each preceding feature still owns
+focused diagnostics and benchmark evidence. Enqueue deduplication and cooperative cancellation do not
+change the at-least-once handler and external-effect boundary.

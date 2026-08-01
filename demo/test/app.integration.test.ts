@@ -2692,6 +2692,346 @@ describe("Workhorse demo", () => {
     ).toEqual({ count: 2 });
   });
 
+  it("cancels an unstarted task immediately, as a distinct terminal state with a recorded audit", async () => {
+    // No workers are started, so this task is provably still waiting to be claimed. Cancelling it
+    // must be immediate and final, because no handler ever observed it.
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const queue = new Queue(pool, "demo");
+    const jobId = await queue.enqueue("demo.success", { label: "cancel-ready" }, {});
+
+    const result = await client.dashboard.cancelTask({
+      id: jobId,
+      audit: { actor: "operator", reason: "Superseded by a newer request", requestId: "cancel-1" },
+    });
+    expect(result).toMatchObject({
+      status: "canceled",
+      jobId,
+      state: "canceled",
+      requestedBy: "operator",
+      reason: "Superseded by a newer request",
+    });
+    expect(result.finishedAt).toEqual(expect.any(String));
+
+    // Canceled is its own terminal state. It must never be reported as failed or discarded.
+    const detail = await client.dashboard.jobDetail({ id: jobId });
+    expect(detail.identity.state).toBe("canceled");
+    expect(detail.current.outcome).toMatchObject({ state: "canceled" });
+    expect(detail.current.runtime).toBeNull();
+
+    const audit = await pool.query<{
+      action: string;
+      target: string;
+      status: string;
+      reason: string;
+      before: { state: string | null };
+      after: { status: string; state: string | null };
+    }>(
+      `SELECT action, target, status, reason, before, after FROM public.workhorse_demo_audit
+          WHERE request_id = $1`,
+      ["cancel-1"],
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]).toMatchObject({
+      action: "cancelTask",
+      target: `job:${jobId}`,
+      status: "succeeded",
+      reason: "Superseded by a newer request",
+      before: { state: "ready" },
+      after: { status: "canceled", state: "canceled" },
+    });
+  });
+
+  it("cancels a future-scheduled task without waiting for its run time", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const queue = new Queue(pool, "demo");
+    const jobId = await queue.enqueue(
+      "demo.success",
+      { label: "cancel-scheduled" },
+      { runAt: new Date(Date.now() + 3_600_000) },
+    );
+    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+      current: { runtime: { state: "scheduled" } },
+    });
+
+    await expect(
+      client.dashboard.cancelTask({
+        id: jobId,
+        audit: { actor: "operator", reason: "No longer needed", requestId: "cancel-scheduled" },
+      }),
+    ).resolves.toMatchObject({ status: "canceled", state: "canceled" });
+    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+      identity: { state: "canceled" },
+    });
+  });
+
+  it("records a cooperative request for a running task and finalizes it once the handler stops", async () => {
+    // The handler is long enough that cancellation lands mid-flight, and the short heartbeat is
+    // what actually delivers the signal to the running worker.
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+      longRunningJobMs: 800,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      const enqueued = await client.dashboard.enqueueTest({
+        kind: "long-running",
+        audit: { actor: "operator", reason: "cooperative cancel", requestId: "cancel-active-seed" },
+      });
+      await waitFor(
+        () => client.dashboard.jobDetail({ id: enqueued.jobId }),
+        (detail) => detail.current.runtime?.state === "active",
+      );
+
+      const requested = await client.dashboard.cancelTask({
+        id: enqueued.jobId,
+        audit: { actor: "operator", reason: "Runaway task", requestId: "cancel-active" },
+      });
+      // While the handler still owns the lease, PostgreSQL can only record the request.
+      expect(requested).toMatchObject({
+        status: "cancel_requested",
+        state: "active",
+        requestedBy: "operator",
+        reason: "Runaway task",
+      });
+      expect(requested.requestedAt).toEqual(expect.any(String));
+      expect(requested.finishedAt).toBeNull();
+
+      // The request is visible on the live task before the outcome exists, so an operator is not
+      // left staring at an apparently untouched running task.
+      const pending = await client.dashboard.jobDetail({ id: enqueued.jobId });
+      expect(pending.current.runtime).toMatchObject({
+        state: "active",
+        cancellation: { requestedBy: "operator", reason: "Runaway task" },
+      });
+
+      // The handler owns when it stops, so the wait must outlast the whole handler duration.
+      const finished = await waitFor(
+        () => client.dashboard.jobDetail({ id: enqueued.jobId }),
+        (detail) => detail.identity.state === "canceled",
+        600,
+      );
+      expect(finished.current.outcome).toMatchObject({ state: "canceled" });
+      // A cooperative cancellation closes the attempt as canceled, never as a failure.
+      expect(finished.attempts.map((attempt) => attempt.outcome)).toEqual(["canceled"]);
+
+      const events = await pool.query<{ event_type: string; details: Record<string, unknown> }>(
+        `SELECT event_type, details FROM workhorse.job_event
+          WHERE job_id = $1 AND event_type IN ('cancel_requested', 'canceled')
+          ORDER BY occurred_at, event_id`,
+        [enqueued.jobId],
+      );
+      expect(events.rows.map((row) => row.event_type)).toEqual(["cancel_requested", "canceled"]);
+      expect(events.rows[0]?.details).toMatchObject({
+        requested_by: "operator",
+        reason: "Runaway task",
+      });
+      expect(events.rows[1]?.details).toMatchObject({ source: "acknowledged" });
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("leaves a task that already finished exactly as it was", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+    let jobId: string;
+
+    try {
+      const enqueued = await client.dashboard.enqueueTest({
+        kind: "success",
+        audit: { actor: "operator", reason: "terminal cancel", requestId: "cancel-terminal-seed" },
+      });
+      jobId = enqueued.jobId;
+      await waitFor(
+        () => client.dashboard.jobDetail({ id: jobId }),
+        (detail) => detail.identity.state === "succeeded",
+      );
+    } finally {
+      await workhorse.stop();
+    }
+
+    const before = await client.dashboard.jobDetail({ id: jobId! });
+    const result = await client.dashboard.cancelTask({
+      id: jobId!,
+      audit: { actor: "operator", reason: "Too late", requestId: "cancel-terminal" },
+    });
+    expect(result).toMatchObject({ status: "already_terminal", state: "succeeded" });
+    // A terminal outcome is immutable: the recorded success must survive the attempt untouched.
+    await expect(client.dashboard.jobDetail({ id: jobId! })).resolves.toMatchObject({
+      identity: { state: "succeeded" },
+      current: { outcome: { state: before.current.outcome?.state } },
+    });
+    await expect(
+      pool.query(`SELECT status FROM public.workhorse_demo_audit WHERE request_id = $1`, [
+        "cancel-terminal",
+      ]),
+    ).resolves.toMatchObject({ rows: [{ status: "succeeded" }] });
+  });
+
+  it("reports a missing task as not found rather than a silent success", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    await expect(
+      client.dashboard.cancelTask({
+        id: "00000000-0000-4000-8000-000000000000",
+        audit: { actor: "operator", reason: "Ghost task", requestId: "cancel-missing" },
+      }),
+    ).rejects.toThrow(/not found/i);
+    // The failed attempt is still audited, so an operator action never disappears.
+    await expect(
+      pool.query(`SELECT status, action FROM public.workhorse_demo_audit WHERE request_id = $1`, [
+        "cancel-missing",
+      ]),
+    ).resolves.toMatchObject({ rows: [{ status: "failed", action: "cancelTask" }] });
+  });
+
+  it("refuses cancellation from a read-only operator", async () => {
+    const { app } = createTestApplication();
+    const client = dashboardClient(app);
+    const jobId = await new Queue(pool, "demo").enqueue("demo.success", { label: "read-only" }, {});
+
+    await expect(
+      client.dashboard.cancelTask({
+        id: jobId,
+        audit: { actor: "viewer", reason: "Not permitted", requestId: "cancel-read-only" },
+      }),
+    ).rejects.toThrow(/read-only/i);
+    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+      identity: { state: "ready" },
+    });
+    await expect(
+      pool.query(`SELECT count(*)::integer AS count FROM public.workhorse_demo_audit`),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+  });
+
+  it("counts and filters canceled tasks separately from failed and discarded work", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const queue = new Queue(pool, "demo");
+    const canceledId = await queue.enqueue("demo.success", { label: "counted-cancel" }, {});
+    const readyId = await queue.enqueue("demo.success", { label: "left-alone" }, {});
+    await client.dashboard.cancelTask({
+      id: canceledId,
+      audit: { actor: "operator", reason: "Counted", requestId: "cancel-counted" },
+    });
+
+    const counts = await client.dashboard.taskCounts();
+    expect(counts.canceled).toBe(1);
+    // The demo's terminal-failure bucket is "discarded". Cancellation must not land in it, nor in
+    // the completed bucket, because a canceled task neither failed nor succeeded.
+    expect(counts.discarded).toBe(0);
+    expect(counts.completed).toBe(0);
+    expect(counts.queued).toBe(1);
+
+    const canceledPage = await client.dashboard.tasks({
+      filter: "canceled",
+      page: 1,
+      pageSize: 25,
+    });
+    expect(canceledPage.total).toBe(1);
+    expect(canceledPage.jobs.map((job) => job.id)).toEqual([canceledId]);
+    expect(canceledPage.jobs[0]).toMatchObject({ state: "canceled" });
+
+    const discardedPage = await client.dashboard.tasks({
+      filter: "discarded",
+      page: 1,
+      pageSize: 25,
+    });
+    expect(discardedPage.jobs.map((job) => job.id)).not.toContain(canceledId);
+    const queuedPage = await client.dashboard.tasks({ filter: "queued", page: 1, pageSize: 25 });
+    expect(queuedPage.jobs.map((job) => job.id)).toEqual([readyId]);
+  });
+
+  it("cancels one recurring occurrence without disabling its schedule", async () => {
+    const { app } = createTestApplication({
+      operator: createLocalOperator(database),
+      scheduleController: createLocalScheduleController(database),
+    });
+    const client = dashboardClient(app);
+    await syncDemoSchedules(pool);
+    const stored = await new Queue(pool, "demo").schedules([DEMO_SCHEDULE_NAMESPACE]);
+    const heartbeat = stored.find((schedule) => schedule.name === HEARTBEAT_SCHEDULE_NAME)!;
+    // Materialize one occurrence directly so the test does not depend on wall-clock cron timing.
+    const occurrenceJobId = (await new Queue(pool, "demo").fireSchedule(
+      DEMO_SCHEDULE_NAMESPACE,
+      HEARTBEAT_SCHEDULE_NAME,
+      heartbeat.revision,
+      new Date(),
+    ))!;
+    expect(occurrenceJobId).toEqual(expect.any(String));
+    await client.dashboard.cancelTask({
+      id: occurrenceJobId,
+      audit: { actor: "operator", reason: "Skip this run", requestId: "cancel-occurrence" },
+    });
+
+    await expect(client.dashboard.jobDetail({ id: occurrenceJobId })).resolves.toMatchObject({
+      identity: { state: "canceled" },
+    });
+    // Cancelling one materialized run says nothing about the schedule, which stays enabled and
+    // keeps its next occurrence.
+    const cron = await client.dashboard.cron();
+    for (const schedule of cron.schedules) expect(schedule.enabled).toBe(true);
+    expect(
+      (
+        await pool.query<{ enabled: boolean }>(
+          `SELECT enabled FROM workhorse.schedule_definition WHERE namespace = $1`,
+          [DEMO_SCHEDULE_NAMESPACE],
+        )
+      ).rows.every((row) => row.enabled),
+    ).toBe(true);
+  });
+
+  it("counts a canceled attempt as its own outcome rather than as an error", async () => {
+    // Only a task that actually started produces an attempt, so the system chart is exercised
+    // through a running task rather than one canceled before dispatch.
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+      longRunningJobMs: 800,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      const enqueued = await client.dashboard.enqueueTest({
+        kind: "long-running",
+        audit: { actor: "operator", reason: "metrics", requestId: "cancel-metrics-seed" },
+      });
+      await waitFor(
+        () => client.dashboard.jobDetail({ id: enqueued.jobId }),
+        (detail) => detail.current.runtime?.state === "active",
+      );
+      await client.dashboard.cancelTask({
+        id: enqueued.jobId,
+        audit: { actor: "operator", reason: "Metrics", requestId: "cancel-metrics" },
+      });
+      await waitFor(
+        () => client.dashboard.jobDetail({ id: enqueued.jobId }),
+        (detail) => detail.identity.state === "canceled",
+        600,
+      );
+
+      const system = await client.dashboard.system({ window: "1h" });
+      expect(system.outcomes.reduce((total, point) => total + point.canceled, 0)).toBe(1);
+      // An operator stopping a task is not a system error. It must not appear as a failed or
+      // lease-expired attempt, and it must not raise the error rate.
+      expect(system.outcomes.reduce((total, point) => total + point.failed, 0)).toBe(0);
+      expect(system.outcomes.reduce((total, point) => total + point.leaseExpired, 0)).toBe(0);
+      expect(system.kpis.errorRate.current).toBe(0);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
   it("seeds exactly one deterministic keyed representative task", async () => {
     const { app } = createTestApplication();
     const client = dashboardClient(app);

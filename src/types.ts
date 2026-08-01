@@ -92,6 +92,32 @@ export const MAX_IDEMPOTENCY_TTL_MS = 31_536_000_000;
 export const MAX_CHECKPOINT_VALUE_BYTES = 1_048_576;
 /** Maximum relative duration or first absolute target horizon for one durable wait (365 days). */
 export const MAX_WAIT_DURATION_MS = 31_536_000_000;
+/** Maximum characters accepted for cancellation-request attribution. Attribution is not authorization. */
+export const MAX_CANCELLATION_REQUESTED_BY_CHARACTERS = 200;
+/** Maximum characters accepted for a cancellation reason. */
+export const MAX_CANCELLATION_REASON_CHARACTERS = 2_000;
+
+/** Optional safe attribution attached to a cancellation request. PostgreSQL validates all bounds. */
+export interface CancellationRequest {
+  requestedBy?: string;
+  reason?: string;
+}
+
+export type CancelStatus = "canceled" | "cancel_requested" | "already_terminal" | "not_found";
+export type HeartbeatStatus = "accepted" | "cancel_requested" | "stale";
+
+/** Safe lifecycle metadata returned by {@link Queue.cancel}; payloads and worker ownership are omitted. */
+export interface CancelResult {
+  status: CancelStatus;
+  jobId: string;
+  state: JobState | null;
+  currentAttempt: number | null;
+  requestedAt: Date | null;
+  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
+  requestedBy: string | null;
+  reason: string | null;
+  finishedAt: Date | null;
+}
 
 export interface ClaimedJob<TPayload = Json> {
   /** Stable job identity across all attempts. */
@@ -140,7 +166,7 @@ export interface JobWait {
   createdAt: Date;
 }
 
-export type JobState = "scheduled" | "ready" | "active" | "succeeded" | "failed";
+export type JobState = "scheduled" | "ready" | "active" | "succeeded" | "failed" | "canceled";
 
 export interface JobSnapshot<TResult = Json> {
   id: string;
@@ -157,6 +183,10 @@ export interface JobSnapshot<TResult = Json> {
   runAt: Date;
   result: TResult | null;
   error: Json | null;
+  cancelRequestedAt: Date | null;
+  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
+  cancelRequestedBy: string | null;
+  cancelReason: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -60,6 +60,36 @@ describe("operational scenario contracts", () => {
     expect(retireHistoryWeekV1Sql).toContain("workhorse.retire_history_week_v1");
     expect(retireHistoryWeekV1Sql).toContain("$1::date");
   });
+
+  it("defines complete schema v11 cancellation lifecycle evidence without a performance claim", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "cancellation-lifecycle",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/ready and scheduled jobs cancel immediately/);
+    expect(contract!.invariants.join("\n")).toMatch(/waiting job cancels immediately/);
+    expect(contract!.invariants.join("\n")).toMatch(/heartbeat status and AbortSignal/);
+    expect(contract!.invariants.join("\n")).toMatch(/lease expiry instead of retrying/);
+    expect(contract!.invariants.join("\n")).toMatch(/wrong-fence acknowledgement/);
+    expect(contract!.invariants.join("\n")).toMatch(/no duplicate terminal outcome/);
+    expect(contract!.invariants.join("\n")).toMatch(/first-committer-wins/);
+    expect(contract!.invariants.join("\n")).toMatch(/next occurrence independent/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "readyCancelMs",
+        "scheduledCancelMs",
+        "waitingCancelMs",
+        "activeRequestMs",
+        "activeAcknowledgeMs",
+        "expiryMaterializationMs",
+        "stateQueryMs",
+        "eventQueryMs",
+        "recurringNextOccurrenceMs",
+      ]),
+    );
+    expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|throughput|latency target|sla/);
+  });
 });
 
 describe("resolveOperationalScenarioOptions", () => {
