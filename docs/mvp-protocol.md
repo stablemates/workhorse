@@ -1,21 +1,22 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 9 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema includes persisted retry policies, explicit durable checkpoints, named timer waits, and persisted automated retention.
+This is the compact schema version 10 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, named timer waits, and persisted automated retention.
 
 ## Storage model
 
-| Relation              | Role                                                             | Mutation model                                                          |
-| --------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `job`                 | Immutable identity, queue, type, payload, retry limit and policy | Insert once                                                             |
-| `job_runtime`         | Sole live row plus persisted previous jitter delay               | Insert at enqueue; CAS-update while live; delete at terminal transition |
-| `job_checkpoint`      | Immutable named handler restart boundaries                       | Insert once per job and checkpoint name under a fenced active lease     |
-| `job_wait`            | Immutable named timer restart boundaries                         | Insert once per job and wait name under a fenced active lease           |
-| `job_outcome`         | Terminal success or failure                                      | Insert once after runtime deletion                                      |
-| `job_event`           | Lifecycle audit                                                  | Append-only, weekly range partitions                                    |
-| `attempt_history`     | Closed attempt records                                           | Append-only, weekly range partitions                                    |
-| `schedule_definition` | Namespaced recurring-job desired state including retry policy    | Deploy upsert; omitted definitions are disabled                         |
-| `schedule_occurrence` | Deduplicated schedule fire mapped to a job                       | Insert once per schedule second; job ID populated atomically            |
-| `retention_policy`    | Authoritative cleanup windows and bounded work limits            | Singleton deploy synchronization                                        |
+| Relation              | Role                                                                | Mutation model                                                                        |
+| --------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `job`                 | Immutable identity, queue, type, payload, retry limit and policy    | Insert once                                                                           |
+| `enqueue_idempotency` | Scoped retained enqueue ownership and canonical request fingerprint | Reserve once per active `(scope, key)`; replace after expiry; delete on purge/cleanup |
+| `job_runtime`         | Sole live row plus persisted previous jitter delay                  | Insert at enqueue; CAS-update while live; delete at terminal transition               |
+| `job_checkpoint`      | Immutable named handler restart boundaries                          | Insert once per job and checkpoint name under a fenced active lease                   |
+| `job_wait`            | Immutable named timer restart boundaries                            | Insert once per job and wait name under a fenced active lease                         |
+| `job_outcome`         | Terminal success or failure                                         | Insert once after runtime deletion                                                    |
+| `job_event`           | Lifecycle audit                                                     | Append-only, weekly range partitions                                                  |
+| `attempt_history`     | Closed attempt records                                              | Append-only, weekly range partitions                                                  |
+| `schedule_definition` | Namespaced recurring-job desired state including retry policy       | Deploy upsert; omitted definitions are disabled                                       |
+| `schedule_occurrence` | Deduplicated schedule fire mapped to a job                          | Insert once per schedule second; job ID populated atomically                          |
+| `retention_policy`    | Authoritative cleanup windows and bounded work limits               | Singleton deploy synchronization                                                      |
 
 A committed job has exactly one live runtime or one terminal outcome, never both. Version 1 write tables and compatibility write views are absent.
 
@@ -29,7 +30,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 
 ## Atomic transitions
 
-1. `enqueue_many_v1` validates up to 1,000 JSONB requests against one timestamp and inserts `job`, `job_runtime`, and one `enqueued` event per job. `enqueue_v1` delegates to it.
+1. `enqueue_many_v1` validates up to 1,000 JSONB requests against one timestamp. Keyed requests first acquire deterministic sorted scoped-ownership locks, while acceptance side effects remain in caller ordinal order. New requests insert `job`, `job_runtime`, and one `enqueued` event; exact replays return the retained job ID before durable, FIFO, or notification side effects; mismatches abort the whole statement with structured safe conflict details. `enqueue_v1` delegates to it.
 2. `promote_v1` locks a bounded due set with `SKIP LOCKED`, updates scheduled runtime rows to ready, assigns sequences, and appends events.
 3. `claim_v1` locks one FIFO ready row and performs one runtime state update to active with worker, fence, heartbeat, expiry, and a preserved or newly initialized logical attempt start, then appends the claim event.
 4. `heartbeat_v1` CAS-updates only the matching unexpired active runtime.
@@ -41,14 +42,23 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 10. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
 11. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID.
 12. `sync_retention_policy_v1` stores explicit nullable minimum windows and work bounds, rejecting policies that could delete identity before retained outcome, event, attempt, or occurrence attribution.
-13. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. Every promoted row emits `promoted`; timer-backed promotion also carries and clears `wait_name` and appends `wait_elapsed`. `housekeep_v1` replenishes the history-partition horizon, retires event and attempt history independently, prunes occurrence keys, and removes safe terminal-job bundles under the separate `workhorse:housekeeping` lock. Every phase is isolated in an exception subtransaction. Both entry points return `(phase, rows_affected, duration_ms, skipped_lock, error)` telemetry.
+13. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. Every promoted row emits `promoted`; timer-backed promotion also carries and clears `wait_name` and appends `wait_elapsed`. `housekeep_v1` replenishes the history-partition horizon, retires event and attempt history independently, prunes occurrence keys, removes expired enqueue-idempotency bindings, and then removes safe terminal-job bundles under the separate `workhorse:housekeeping` lock. Every phase is isolated in an exception subtransaction. Both entry points return `(phase, rows_affected, duration_ms, skipped_lock, error)` telemetry.
 
 Every closed logical attempt has one immutable `attempt_history` row. `started_at` spans timer suspensions and `claimed_at` identifies the final activation that closed it. Every lifecycle boundary appends a `job_event`; timer control flow uses `wait_scheduled`, `wait_elapsed`, and `wait_replayed`. `retry_scheduled` and `lease_expired` details include `retry_policy`, `retry_delay_ms`, and `retry_delay_source`.
 
 ## Batch enqueue contract
 
-`Queue.enqueueMany(requests, transaction?)` accepts at most **1,000 requests**. Each request contains `queue`, `type`, `payload`, ISO-8601 `runAt`, `maxAttempts`, and optional `retryPolicy`.
+`Queue.enqueueMany(requests, transaction?)` accepts at most **1,000 requests**. Each request contains `queue`, `type`, `payload`, optional ISO-8601 `runAt`, `maxAttempts`, optional `retryPolicy`, tags, and optional `idempotency: { key, scope?, ttlMs? }`.
 
+- Scope defaults to `default`; TTL defaults to 86,400,000 ms (24 hours).
+- Key length is 1 through 512 UTF-8 bytes; scope length is 1 through 256 UTF-8 bytes; TTL is an integer from 1 through 31,536,000,000 ms (365 days).
+- The request fingerprint includes queue, type, payload, sorted tags, max attempts, normalized retry policy, TTL, and an explicitly supplied `runAt`.
+- A keyed omitted `runAt` stays omitted in the fingerprint, allowing later immediate retries to replay instead of conflicting on a new classification timestamp.
+- Exact replay returns the existing job ID with no duplicate job, event, FIFO-sequence, or notification work.
+- A retained mismatch raises a structured conflict containing safe preview/digest identity, the existing job ID, and request ordinal, and rolls back the whole batch.
+- Raw keys are never persisted. `enqueue_idempotency` stores scope plus the full SHA-256 key hash. The initial `enqueued` event, UI projections, and errors use a bounded preview plus 12-hex key digest; exact replay emits no event. Structured conflicts also include full stored/rejected request digests.
+- Expired bindings permit reuse. Purging queued or scheduled jobs releases bindings. Housekeeping deletes expired bindings before terminal identity pruning.
+- Requests without `idempotency` preserve the prior behavior and always create a new job.
 - Ready and scheduled jobs may be mixed.
 - Returned UUIDs match input order.
 - Ready FIFO sequence allocation follows input order.
@@ -98,7 +108,7 @@ A claim is owned only while `job_runtime.state = 'active'` and job ID, worker ID
 
 Worker failpoints at `afterClaim`, `beforeHandler`, `afterHandler`, `beforeComplete`, and `afterComplete` model process loss. Pre-completion crashes leave active runtime for recovery. An `afterComplete` crash leaves immutable succeeded outcome and closed attempt history.
 
-Delivery is at least once. External effects require application-level idempotency.
+Delivery is at least once. Enqueue idempotency deduplicates durable acceptance, not handler effects. External effects require provider idempotency, an outbox/inbox, or compensation.
 
 `HandlerContext.checkpoint(name, operation)` first returns an existing immutable value when present. Otherwise it runs the operation and saves its JSON result under the active fence. Concurrent calls for the same name within one handler are coalesced. A crash after an external effect but before PostgreSQL commits the checkpoint can still repeat that effect, so checkpoints do not replace provider idempotency, outbox/inbox, or compensation.
 

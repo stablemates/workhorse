@@ -1,6 +1,6 @@
 # Future feature roadmap
 
-This roadmap starts from the schema version 9 validation MVP described in
+This roadmap starts from the schema version 10 validation MVP described in
 [`docs/features.md`](docs/features.md). Items are ordered by product risk and dependency, not by
 feature visibility. A feature is complete only when its SQL contract, TypeScript API, integration
 tests, operational diagnostics, documentation, and benchmark impact are addressed.
@@ -18,15 +18,12 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P1-01 Enqueue idempotency keys**
-2. **P0-03 Configurable worker concurrency**
-3. **P0-04 Notification-assisted dispatch**
-4. **P1-02 Cancellation**
-5. **P1-03 Deadlines and execution timeouts**
-6. **P1-04 Dead-letter views and redrive**
-7. **P2-01 Query and listing API**
-8. **P1-09 Progress and job metadata**
-9. **P0-02 Production telemetry**
+1. **P1-02 Cancellation**
+2. **P1-03 Deadlines and execution timeouts**
+3. **P1-04 Dead-letter views and redrive**
+4. **P2-01 Query and listing API**
+5. **P1-09 Progress and job metadata**
+6. **P0-02 Production telemetry**
 
 The demo and initial integration packages are complete. Full OpenTelemetry support is deliberately
 sequenced after the next product and reliability features; each earlier feature must still ship the
@@ -156,15 +153,22 @@ not depend on the later full OpenTelemetry and metrics package.
 
 ## P1: job controls and reliability
 
-### [ ] P1-01 Enqueue idempotency keys
+### [x] P1-01 Enqueue idempotency keys
 
 **Depends on:** none
 
-- [ ] Support caller-scoped idempotency keys with an explicit retention window.
-- [ ] Return the existing job identity when the same key and equivalent request are repeated.
-- [ ] Reject key reuse with a materially different request.
-- [ ] Preserve atomic behavior for transactional and batch enqueue.
-- [ ] Document how enqueue deduplication differs from exactly-once handler effects.
+- [x] Support caller-scoped idempotency keys with a default 24-hour retention window and explicit
+      bounded TTL override.
+- [x] Return the existing job identity when the same key and equivalent request are repeated, without
+      duplicate job, event, FIFO, or notification side effects.
+- [x] Reject retained key reuse with a materially different request through structured redacted conflict
+      details.
+- [x] Preserve atomic behavior for transactional and batch enqueue, including duplicates within one
+      batch and whole-batch rollback on conflict.
+- [x] Release bindings on expiry and queued/scheduled purge, and clean expired bindings before terminal
+      identity pruning.
+- [x] Document how enqueue deduplication differs from exactly-once handler effects and cover the ingress
+      transitions with the `idempotent-ingress` operational benchmark scenario.
 
 ### [ ] P1-02 Cancellation
 

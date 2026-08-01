@@ -55,6 +55,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `crash-before-completion`   | durable state at all five worker crash boundaries                                                            |
 | `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection                                          |
 | `retry-paths`               | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion |
+| `idempotent-ingress`        | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants |
 | `retention-pruning`         | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity               |
 | `health-snapshot`           | health-query latency and internally consistent degraded-state counts                                         |
 
@@ -65,6 +66,13 @@ client-observed duration of each failure transition and their total. These timin
 transition and event append, not an isolated policy-function microbenchmark. Policy normalization and
 delay selection are expected to be negligible beside the existing row-lock, update, and history work,
 but no numerical overhead claim is supported until an actual benchmark artifact is recorded.
+
+`idempotent-ingress` records client-observed durations for initial keyed acceptance, exact replay,
+conflict rollback, duplicate-key batch acceptance, first expiring acceptance, and reuse after expiry. Its
+hard invariants verify stable replay identity; no duplicate job, binding, event, runtime, or FIFO state;
+whole-batch conflict rollback; duplicate result ordering alongside unchanged unkeyed behavior; and transfer
+of scoped ownership after expiry. These are full SQL transition timings. No latency or overhead number is
+claimed until a benchmark artifact containing this scenario is recorded.
 
 ## Safety and prerequisites
 
@@ -180,6 +188,7 @@ Lifecycle only or one scenario:
 ```bash
 pnpm benchmark -- --suite lifecycle --profile smoke --output lifecycle.json
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario lease-expiry-recovery
+pnpm benchmark -- --suite lifecycle --profile smoke --scenario idempotent-ingress
 ```
 
 ## Canonical JSON contract
@@ -230,7 +239,7 @@ Also record storage type, VM/container status, concurrent workloads, held transa
 
 ## Remaining evidence gaps
 
-V2 closes the original equivalent-semantics, confidence interval, concurrency, churn, telemetry, and lifecycle-scenario gaps. A commercial build decision still needs larger retained-history horizons, deliberately held old snapshots or replication horizons, production-shaped payloads, reference-system comparisons, multiple PostgreSQL versions, and repeated runs on production-class hardware.
+V2 closes the original equivalent-semantics, confidence interval, concurrency, churn, telemetry, and lifecycle-scenario gaps. Schema v10 also retires the prior missing idempotency-workload limitation by adding the invariant-gated `idempotent-ingress` operational scenario. A commercial build decision still needs a recorded artifact for that new scenario, larger retained-history horizons, deliberately held old snapshots or replication horizons, production-shaped payloads, reference-system comparisons, multiple PostgreSQL versions, and repeated runs on production-class hardware.
 
 ## Troubleshooting
 

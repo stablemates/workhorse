@@ -22,6 +22,24 @@ AS $$
      );
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.sha256_hex_v1(p_value text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT encode(sha256(convert_to(p_value, 'UTF8')), 'hex');
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.idempotency_key_hash_v1(p_scope text, p_key text)
+RETURNS bytea
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT sha256(convert_to(p_scope || chr(31) || p_key, 'UTF8'));
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.normalize_retry_policy_v1(p_policy jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -174,6 +192,22 @@ $$;
 -- GIN indexes array elements so overlap and containment tag filters avoid scanning every job row.
 CREATE INDEX IF NOT EXISTS job_tags_gin_idx ON workhorse.job USING gin (tags);
 CREATE INDEX IF NOT EXISTS job_created_retention_idx ON workhorse.job (created_at, id);
+
+-- PostgreSQL owns enqueue deduplication. The deferred reference lets enqueue reserve a scoped key
+-- through the unique index before creating any job, event, FIFO, or notification side effects.
+CREATE TABLE IF NOT EXISTS workhorse.enqueue_idempotency (
+  idempotency_scope text NOT NULL CHECK (
+    idempotency_scope <> '' AND octet_length(idempotency_scope) <= 256
+  ),
+  idempotency_key_hash bytea NOT NULL CHECK (octet_length(idempotency_key_hash) = 32),
+  request_fingerprint jsonb NOT NULL,
+  job_id uuid NOT NULL REFERENCES workhorse.job(id) DEFERRABLE INITIALLY DEFERRED,
+  expires_at timestamptz NOT NULL CHECK (isfinite(expires_at)),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (idempotency_scope, idempotency_key_hash)
+);
+CREATE INDEX IF NOT EXISTS enqueue_idempotency_expiry_idx
+  ON workhorse.enqueue_idempotency (expires_at, idempotency_scope, idempotency_key_hash);
 
 -- Immutable explicit restart boundaries. A name can be completed once for a stable job identity and
 -- remains available across retries and terminal materialization.
@@ -656,8 +690,9 @@ BEGIN
 END;
 $$;
 
--- Accept up to 1,000 jobs atomically. One timestamp classifies the whole batch, ordinality preserves
--- returned IDs and ready FIFO, and notifications are coalesced by ready queue.
+-- Accept up to 1,000 jobs atomically. Scoped idempotency keys are resolved in ordinal order through
+-- their unique index before any durable job side effects. Exact replays return the original identity;
+-- material mismatches abort the whole statement with SQLSTATE P1001.
 CREATE OR REPLACE FUNCTION workhorse.enqueue_many_v1(p_requests jsonb)
 RETURNS TABLE (ordinal integer, job_id uuid)
 LANGUAGE plpgsql
@@ -665,6 +700,36 @@ AS $$
 DECLARE
   v_count integer;
   v_now timestamptz := clock_timestamp();
+  v_request jsonb;
+  v_lock record;
+  v_ordinal integer;
+  v_queue_name text;
+  v_job_type text;
+  v_payload jsonb;
+  v_tags text[];
+  v_run_at timestamptz;
+  v_max_attempts integer;
+  v_retry_policy jsonb;
+  v_state text;
+  v_idempotency jsonb;
+  v_key text;
+  v_scope text;
+  v_key_hash bytea;
+  v_key_preview text;
+  v_key_digest text;
+  v_key_length integer;
+  v_ttl_ms numeric;
+  v_expires_at timestamptz;
+  v_fingerprint jsonb;
+  v_fingerprint_tags text[];
+  v_request_digest text;
+  v_conflicting_fields text[];
+  v_proposed_job_id uuid;
+  v_existing workhorse.enqueue_idempotency%ROWTYPE;
+  v_is_new boolean;
+  v_is_keyed boolean;
+  v_ready_queues text[] := '{}';
+  v_notify_queue text;
 BEGIN
   IF p_requests IS NULL OR jsonb_typeof(p_requests) <> 'array' THEN
     RAISE EXCEPTION 'requests must be a JSON array';
@@ -673,66 +738,229 @@ BEGIN
   IF v_count > 1000 THEN
     RAISE EXCEPTION 'enqueue batch exceeds maximum size of 1000';
   END IF;
-  IF EXISTS (
-    SELECT 1 FROM jsonb_array_elements(p_requests) request
-    WHERE COALESCE(request->>'queue', '') = ''
-       OR COALESCE(request->>'type', '') = ''
-       OR COALESCE((request->>'maxAttempts')::integer, 25) NOT BETWEEN 1 AND 100
-       OR request->>'runAt' IS NULL
-       OR jsonb_typeof(COALESCE(request->'tags', '[]'::jsonb)) <> 'array'
-       OR jsonb_array_length(COALESCE(request->'tags', '[]'::jsonb)) > 20
-       OR EXISTS (
-         SELECT 1
-           FROM jsonb_array_elements(COALESCE(request->'tags', '[]'::jsonb)) tag
-          WHERE jsonb_typeof(tag) <> 'string'
-             OR tag #>> '{}' = ''
-             OR char_length(tag #>> '{}') > 100
-       )
-  ) THEN
-    RAISE EXCEPTION 'each request requires non-empty queue/type/runAt, maxAttempts between 1 and 100, and at most 20 non-empty tags of at most 100 characters';
-  END IF;
-  PERFORM workhorse.normalize_retry_policy_v1(request->'retryPolicy')
-    FROM jsonb_array_elements(p_requests) request WHERE request ? 'retryPolicy';
 
-  RETURN QUERY
-  WITH parsed AS MATERIALIZED (
-    SELECT ordinality::integer AS ordinal,
-           gen_random_uuid() AS job_id,
-           request->>'queue' AS queue_name,
-           request->>'type' AS job_type,
-           COALESCE(request->'payload', 'null'::jsonb) AS payload,
-           ARRAY(SELECT jsonb_array_elements_text(COALESCE(request->'tags', '[]'::jsonb))) AS tags,
-           (request->>'runAt')::timestamptz AS run_at,
-           COALESCE((request->>'maxAttempts')::integer, 25) AS max_attempts,
-           workhorse.normalize_retry_policy_v1(request->'retryPolicy') AS retry_policy,
-           CASE WHEN (request->>'runAt')::timestamptz <= v_now THEN 'ready' ELSE 'scheduled' END AS state
+  -- Validate key identities before locking so malformed requests fail predictably, then acquire every
+  -- batch key in one deterministic order. This prevents reverse-order overlapping batches from
+  -- deadlocking while still serializing new and retained keys through the transaction boundary.
+  FOR v_request IN SELECT value FROM jsonb_array_elements(p_requests)
+  LOOP
+    v_idempotency := v_request->'idempotency';
+    IF v_idempotency IS NULL OR v_idempotency = 'null'::jsonb THEN CONTINUE; END IF;
+    IF jsonb_typeof(v_idempotency) <> 'object'
+       OR v_idempotency - ARRAY['key', 'scope', 'ttlMs'] <> '{}'::jsonb
+       OR NOT (v_idempotency ? 'key')
+       OR jsonb_typeof(v_idempotency->'key') <> 'string'
+       OR (v_idempotency ? 'scope' AND jsonb_typeof(v_idempotency->'scope') <> 'string')
+       OR (v_idempotency ? 'ttlMs' AND jsonb_typeof(v_idempotency->'ttlMs') <> 'number') THEN
+      RAISE EXCEPTION 'idempotency requires a string key and only optional string scope and numeric ttlMs';
+    END IF;
+    v_key := v_idempotency->>'key';
+    v_scope := COALESCE(v_idempotency->>'scope', 'default');
+    v_ttl_ms := COALESCE((v_idempotency->>'ttlMs')::numeric, 86400000);
+    IF v_key = '' OR octet_length(v_key) > 512 THEN
+      RAISE EXCEPTION 'idempotency key must contain between 1 and 512 UTF-8 bytes';
+    END IF;
+    IF v_scope = '' OR octet_length(v_scope) > 256 THEN
+      RAISE EXCEPTION 'idempotency scope must contain between 1 and 256 UTF-8 bytes';
+    END IF;
+    IF v_ttl_ms <> trunc(v_ttl_ms) OR v_ttl_ms NOT BETWEEN 1 AND 31536000000 THEN
+      RAISE EXCEPTION 'idempotency ttlMs must be an integer between 1 and 31536000000';
+    END IF;
+  END LOOP;
+  FOR v_lock IN
+    SELECT locks.scope, locks.key
+      FROM (
+        SELECT DISTINCT COALESCE(idempotency->>'scope', 'default') AS scope,
+               idempotency->>'key' AS key
+          FROM jsonb_array_elements(p_requests) AS input(request)
+          CROSS JOIN LATERAL (SELECT request->'idempotency' AS idempotency) parsed
+         WHERE idempotency IS NOT NULL AND idempotency <> 'null'::jsonb
+      ) locks
+     ORDER BY locks.scope COLLATE "C", locks.key COLLATE "C"
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_lock.scope || chr(31) || v_lock.key, 0));
+  END LOOP;
+
+  FOR v_request, v_ordinal IN
+    SELECT request, ordinality::integer
       FROM jsonb_array_elements(p_requests) WITH ORDINALITY input(request, ordinality)
-  ), inserted_jobs AS (
-    INSERT INTO workhorse.job(id, queue_name, job_type, payload, tags, max_attempts, retry_policy)
-      SELECT p.job_id, p.queue_name, p.job_type, p.payload, p.tags, p.max_attempts, p.retry_policy
-        FROM parsed p ORDER BY p.ordinal
-    RETURNING id
-  ), inserted_runtime AS (
-    INSERT INTO workhorse.job_runtime AS runtime(job_id, queue_name, state, current_attempt, run_at,
-      ready_at, sequence)
-      SELECT p.job_id, p.queue_name, p.state, 1, p.run_at,
-             CASE WHEN p.state = 'ready' THEN v_now END,
-             CASE WHEN p.state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END
-        FROM parsed p JOIN inserted_jobs j ON j.id = p.job_id ORDER BY p.ordinal
-    RETURNING runtime.job_id, runtime.queue_name, runtime.state
-  ), inserted_events AS (
-    INSERT INTO workhorse.job_event AS event(job_id, event_type, details)
-      SELECT p.job_id, 'enqueued', jsonb_build_object('state', p.state, 'run_at', p.run_at)
-        FROM parsed p JOIN inserted_runtime r ON r.job_id = p.job_id ORDER BY p.ordinal
-    RETURNING event.job_id
-  ), notifications AS MATERIALIZED (
-    SELECT pg_notify('workhorse_jobs', queue_name)
-      FROM (SELECT DISTINCT queue_name FROM inserted_runtime WHERE state = 'ready') ready_queues
-  )
-  SELECT p.ordinal, p.job_id FROM parsed p
-   WHERE (SELECT count(*) FROM inserted_events) >= 0
-     AND (SELECT count(*) FROM notifications) >= 0
-   ORDER BY p.ordinal;
+     ORDER BY ordinality
+  LOOP
+    v_queue_name := v_request->>'queue';
+    v_job_type := v_request->>'type';
+    v_payload := COALESCE(v_request->'payload', 'null'::jsonb);
+    IF COALESCE(v_queue_name, '') = '' OR COALESCE(v_job_type, '') = ''
+       OR jsonb_typeof(COALESCE(v_request->'tags', '[]'::jsonb)) <> 'array'
+       OR jsonb_array_length(COALESCE(v_request->'tags', '[]'::jsonb)) > 20
+       OR EXISTS (
+         SELECT 1 FROM jsonb_array_elements(COALESCE(v_request->'tags', '[]'::jsonb)) tag
+          WHERE jsonb_typeof(tag) <> 'string' OR tag #>> '{}' = ''
+             OR char_length(tag #>> '{}') > 100
+       ) THEN
+      RAISE EXCEPTION 'each request requires non-empty queue/type, maxAttempts between 1 and 100, and at most 20 non-empty tags of at most 100 characters';
+    END IF;
+    v_tags := ARRAY(
+      SELECT jsonb_array_elements_text(COALESCE(v_request->'tags', '[]'::jsonb))
+    );
+    v_max_attempts := COALESCE((v_request->>'maxAttempts')::integer, 25);
+    IF v_max_attempts NOT BETWEEN 1 AND 100 THEN
+      RAISE EXCEPTION 'each request requires non-empty queue/type, maxAttempts between 1 and 100, and at most 20 non-empty tags of at most 100 characters';
+    END IF;
+    v_retry_policy := workhorse.normalize_retry_policy_v1(v_request->'retryPolicy');
+    v_run_at := COALESCE((v_request->>'runAt')::timestamptz, v_now);
+    IF NOT isfinite(v_run_at) THEN RAISE EXCEPTION 'runAt must be finite'; END IF;
+    v_state := CASE WHEN v_run_at <= v_now THEN 'ready' ELSE 'scheduled' END;
+    v_idempotency := v_request->'idempotency';
+    v_is_new := true;
+    v_is_keyed := false;
+    v_key_hash := NULL;
+    v_key_preview := NULL;
+    v_key_digest := NULL;
+    v_key_length := NULL;
+    v_expires_at := NULL;
+    v_request_digest := NULL;
+
+    IF v_idempotency IS NOT NULL AND v_idempotency <> 'null'::jsonb THEN
+      IF jsonb_typeof(v_idempotency) <> 'object'
+         OR v_idempotency - ARRAY['key', 'scope', 'ttlMs'] <> '{}'::jsonb
+         OR NOT (v_idempotency ? 'key')
+         OR jsonb_typeof(v_idempotency->'key') <> 'string'
+         OR (v_idempotency ? 'scope' AND jsonb_typeof(v_idempotency->'scope') <> 'string')
+         OR (v_idempotency ? 'ttlMs' AND jsonb_typeof(v_idempotency->'ttlMs') <> 'number') THEN
+        RAISE EXCEPTION 'idempotency requires a string key and only optional string scope and numeric ttlMs';
+      END IF;
+      v_is_keyed := true;
+      v_key := v_idempotency->>'key';
+      v_scope := COALESCE(v_idempotency->>'scope', 'default');
+      v_ttl_ms := COALESCE((v_idempotency->>'ttlMs')::numeric, 86400000);
+      IF v_key = '' OR octet_length(v_key) > 512 THEN
+        RAISE EXCEPTION 'idempotency key must contain between 1 and 512 UTF-8 bytes';
+      END IF;
+      IF v_scope = '' OR octet_length(v_scope) > 256 THEN
+        RAISE EXCEPTION 'idempotency scope must contain between 1 and 256 UTF-8 bytes';
+      END IF;
+      IF v_ttl_ms <> trunc(v_ttl_ms) OR v_ttl_ms NOT BETWEEN 1 AND 31536000000 THEN
+        RAISE EXCEPTION 'idempotency ttlMs must be an integer between 1 and 31536000000';
+      END IF;
+      v_key_hash := workhorse.idempotency_key_hash_v1(v_scope, v_key);
+      v_key_digest := left(encode(v_key_hash, 'hex'), 12);
+      v_key_length := char_length(v_key);
+      v_key_preview := CASE
+        WHEN v_key_length <= 4 THEN repeat('•', v_key_length)
+        WHEN v_key_length <= 8 THEN left(v_key, 2) || '…' || right(v_key, 2)
+        ELSE left(v_key, 8) || '…' || right(v_key, 4)
+      END;
+      v_expires_at := v_now + v_ttl_ms * interval '1 millisecond';
+      v_fingerprint_tags := ARRAY(
+        SELECT unique_tags.tag
+          FROM (SELECT DISTINCT tag FROM unnest(v_tags) tag) unique_tags
+         ORDER BY unique_tags.tag COLLATE "C"
+      );
+      v_fingerprint := jsonb_build_object(
+        'queue', v_queue_name,
+        'type', v_job_type,
+        'payload', v_payload,
+        'tags', to_jsonb(v_fingerprint_tags),
+        'runAt', CASE
+          WHEN v_request->>'runAt' IS NULL THEN 'null'::jsonb ELSE to_jsonb(v_run_at)
+        END,
+        'maxAttempts', v_max_attempts,
+        'retryPolicy', v_retry_policy,
+        'ttlMs', v_ttl_ms
+      );
+      v_request_digest := workhorse.sha256_hex_v1(v_fingerprint::text);
+
+      LOOP
+        v_proposed_job_id := gen_random_uuid();
+        INSERT INTO workhorse.enqueue_idempotency AS existing(
+          idempotency_scope, idempotency_key_hash, request_fingerprint, job_id, expires_at
+        ) VALUES (
+          v_scope, v_key_hash, v_fingerprint, v_proposed_job_id, v_expires_at
+        )
+        ON CONFLICT (idempotency_scope, idempotency_key_hash) DO UPDATE
+          SET idempotency_key_hash = existing.idempotency_key_hash
+        RETURNING existing.* INTO v_existing;
+
+        IF v_existing.job_id = v_proposed_job_id THEN
+          job_id := v_proposed_job_id;
+          EXIT;
+        END IF;
+        IF v_existing.expires_at <= v_now THEN
+          DELETE FROM workhorse.enqueue_idempotency AS expired
+           WHERE expired.idempotency_scope = v_scope
+             AND expired.idempotency_key_hash = v_key_hash
+             AND expired.job_id = v_existing.job_id AND expired.expires_at <= v_now;
+          CONTINUE;
+        END IF;
+        IF v_existing.request_fingerprint <> v_fingerprint THEN
+          SELECT COALESCE(array_agg(field ORDER BY field COLLATE "C"), '{}')
+            INTO v_conflicting_fields
+            FROM jsonb_object_keys(v_fingerprint) field
+           WHERE v_existing.request_fingerprint->field IS DISTINCT FROM v_fingerprint->field;
+          RAISE EXCEPTION USING
+            ERRCODE = 'P1001',
+            MESSAGE = 'enqueue idempotency conflict with a retained request',
+            DETAIL = jsonb_build_object(
+              'scope', v_scope,
+              'keyPreview', v_key_preview,
+              'keyDigest', v_key_digest,
+              'keyLength', v_key_length,
+              'existingJobId', v_existing.job_id,
+              'ordinal', v_ordinal,
+              'conflictingFields', to_jsonb(v_conflicting_fields),
+              'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
+              'rejectedRequestDigest', v_request_digest
+            )::text;
+        END IF;
+        job_id := v_existing.job_id;
+        v_is_new := false;
+        EXIT;
+      END LOOP;
+    ELSE
+      job_id := gen_random_uuid();
+    END IF;
+
+    IF v_is_new THEN
+      INSERT INTO workhorse.job(
+        id, queue_name, job_type, payload, tags, max_attempts, retry_policy
+      ) VALUES (
+        job_id, v_queue_name, v_job_type, v_payload, v_tags, v_max_attempts, v_retry_policy
+      );
+      INSERT INTO workhorse.job_runtime(
+        job_id, queue_name, state, current_attempt, run_at, ready_at, sequence
+      ) VALUES (
+        job_id, v_queue_name, v_state, 1, v_run_at,
+        CASE WHEN v_state = 'ready' THEN v_now END,
+        CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END
+      );
+      INSERT INTO workhorse.job_event(job_id, event_type, details)
+        VALUES (
+          job_id,
+          'enqueued',
+          jsonb_build_object('state', v_state, 'run_at', v_run_at) ||
+          CASE WHEN v_is_keyed THEN jsonb_build_object(
+            'idempotency', jsonb_build_object(
+              'scope', v_scope,
+              'key_preview', v_key_preview,
+              'key_digest', v_key_digest,
+              'key_length', v_key_length,
+              'ttl_ms', v_ttl_ms,
+              'expires_at', v_expires_at,
+              'request_digest', v_request_digest
+            )
+          ) ELSE '{}'::jsonb END
+        );
+      IF v_state = 'ready' AND NOT v_queue_name = ANY(v_ready_queues) THEN
+        v_ready_queues := array_append(v_ready_queues, v_queue_name);
+      END IF;
+    END IF;
+    ordinal := v_ordinal;
+    RETURN NEXT;
+  END LOOP;
+
+  FOREACH v_notify_queue IN ARRAY v_ready_queues LOOP
+    PERFORM pg_notify('workhorse_jobs', v_notify_queue);
+  END LOOP;
 END;
 $$;
 
@@ -806,10 +1034,16 @@ BEGIN
       FROM workhorse.job_runtime r
      WHERE r.queue_name = p_queue_name AND r.state IN ('ready', 'scheduled')
      FOR UPDATE OF r
+  ), released_bindings AS (
+    DELETE FROM workhorse.enqueue_idempotency idempotency
+     USING purgeable p
+     WHERE idempotency.job_id = p.job_id
+     RETURNING idempotency.job_id
   ), deleted AS (
     DELETE FROM workhorse.job j
      USING purgeable p
      WHERE j.id = p.job_id
+       AND (SELECT count(*) FROM released_bindings) >= 0
      RETURNING j.id
   )
   SELECT count(*)::integer INTO v_count FROM deleted;
@@ -1569,8 +1803,41 @@ BEGIN
              SELECT 1 FROM workhorse.schedule_occurrence occurrence
               WHERE occurrence.job_id = candidate.id
            )
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.enqueue_idempotency idempotency
+              WHERE idempotency.job_id = candidate.id
+           )
   )
   DELETE FROM workhorse.job job USING candidates WHERE job.id = candidates.id;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.prune_enqueue_idempotency_v1(
+  p_before timestamptz, p_limit integer
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE v_count integer;
+BEGIN
+  IF p_before IS NULL OR NOT isfinite(p_before) THEN
+    RAISE EXCEPTION 'idempotency cutoff is required';
+  END IF;
+  IF p_limit NOT BETWEEN 1 AND 100000 THEN
+    RAISE EXCEPTION 'idempotency prune limit must be between 1 and 100000';
+  END IF;
+  WITH candidates AS MATERIALIZED (
+    SELECT idempotency_scope, idempotency_key_hash
+      FROM workhorse.enqueue_idempotency
+     WHERE expires_at <= p_before
+     ORDER BY expires_at, idempotency_scope, idempotency_key_hash
+     FOR UPDATE SKIP LOCKED
+     LIMIT p_limit
+  )
+  DELETE FROM workhorse.enqueue_idempotency idempotency USING candidates
+   WHERE idempotency.idempotency_scope = candidates.idempotency_scope
+     AND idempotency.idempotency_key_hash = candidates.idempotency_key_hash;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
@@ -1612,6 +1879,7 @@ BEGIN
       ('event_retention'::text, 0, 0, true, NULL::jsonb),
       ('attempt_retention'::text, 0, 0, true, NULL::jsonb),
       ('schedule_occurrences'::text, 0, 0, true, NULL::jsonb),
+      ('enqueue_idempotency'::text, 0, 0, true, NULL::jsonb),
       ('terminal_jobs'::text, 0, 0, true, NULL::jsonb);
     RETURN;
   END IF;
@@ -1711,6 +1979,22 @@ BEGIN
   );
   RETURN NEXT;
 
+  phase := 'enqueue_idempotency';
+  rows_affected := 0;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    rows_affected := workhorse.prune_enqueue_idempotency_v1(
+      clock_timestamp(), v_policy.terminal_job_prune_limit
+    );
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+
   phase := 'terminal_jobs';
   rows_affected := 0;
   error := NULL;
@@ -1801,7 +2085,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (9) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (10) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
   FROM generate_series(0, 4) AS weeks(week_offset);
 

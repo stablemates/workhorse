@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 9.
+The current clean-install protocol is schema version 10.
 
 ## Design objective
 
@@ -35,6 +35,7 @@ PostgreSQL is the durable authority. A worker owns a job only while the active `
 
 ```mermaid
 erDiagram
+  job ||--o{ enqueue_idempotency : "owns retained enqueue keys"
   job ||--o| job_runtime : "live lifecycle"
   job ||--o| job_outcome : "terminal lifecycle"
   job ||--o{ job_checkpoint : "records restart boundaries"
@@ -51,6 +52,14 @@ erDiagram
     jsonb payload
     int max_attempts
     jsonb retry_policy
+    timestamptz created_at
+  }
+  enqueue_idempotency {
+    text idempotency_scope PK
+    bytea idempotency_key_hash PK
+    jsonb request_fingerprint
+    uuid job_id FK
+    timestamptz expires_at
     timestamptz created_at
   }
   job_runtime {
@@ -120,6 +129,14 @@ For every accepted job, exactly one of `job_runtime` and `job_outcome` must exis
 ### `job`
 
 Insert-only identity, routing, payload, retry budget, normalized optional retry policy, and acceptance time. Dispatch reads payload only after a runtime row has been claimed. The policy is one of fixed `{delayMs}`, exponential `{initialDelayMs,multiplier,maxDelayMs}`, or decorrelated jitter `{baseDelayMs,maxDelayMs}`.
+
+### `enqueue_idempotency`
+
+PostgreSQL-owned scoped enqueue ownership, separate from stable job identity and dispatch. The primary key `(idempotency_scope, idempotency_key_hash)` serializes competing callers through one scoped unique owner. The hash is the full SHA-256 of the scope/key ownership input; raw keys are never persisted. Scope defaults to `default`; TTL defaults to 24 hours; keys are 1 through 512 UTF-8 bytes; scopes are 1 through 256 UTF-8 bytes; and TTL is an integer from 1 millisecond through 365 days.
+
+The stored canonical fingerprint covers queue, type, payload, sorted tags, `maxAttempts`, normalized `retryPolicy`, TTL, and explicitly supplied `runAt`. An omitted `runAt` stays omitted for keyed immediate ingress instead of capturing the classification timestamp. Exact replay returns the bound job ID before job, event, runtime, FIFO-sequence, or notification side effects. A mismatch raises a structured conflict and aborts the whole statement or caller transaction. Requests without `options.idempotency` bypass this relation and retain the prior always-create behavior.
+
+The ownership relation stores scope and full key hash, never the raw key. The initial `enqueued` event, UI projections, and errors expose only a bounded key preview plus 12-hex key digest; exact replay appends no event. Structured conflicts additionally carry full SHA-256 stored and rejected request digests. Expired ownership can be replaced by a new request. Housekeeping prunes expired bindings before terminal job identity, and purging ready or scheduled jobs releases their bindings with the job.
 
 ### `job_runtime`
 
@@ -241,6 +258,10 @@ Suspension aborts the handler's cooperative signal and exits through private wor
 
 `complete_v1` and exhausted failure consume only the matching unexpired active row. Runtime deletion, outcome insertion, attempt closure, and event append commit or roll back together.
 
+### Enqueue and replay
+
+`enqueue_many_v1` first validates and canonicalizes every request against one classification timestamp. Keyed requests acquire deterministic sorted scoped-ownership locks before ordinal processing, preventing overlapping batches from deadlocking. Exact equivalents return the retained job ID and skip all acceptance side effects; a mismatch aborts the whole batch. New keyed and unkeyed requests then insert identity, runtime, one `enqueued` event, FIFO placement when ready, and at most one commit-delivered notification per ready queue in caller order. This preserves same-batch duplicates, caller transaction rollback, and ordinary unkeyed behavior.
+
 ## Read models and health
 
 `Queue.getJob(id)` joins immutable `job` to both lifecycle relations and coalesces the one that exists, preserving the public `JobSnapshot` shape including `retryPolicy`. Health state counts union runtime and outcome. Ready, scheduled, active, expired-active, and oldest-ready metrics come directly from `job_runtime`.
@@ -249,7 +270,7 @@ Retention health includes the persisted policy, oldest retained timestamps, per-
 
 ## Delivery semantics
 
-Workhorse provides durable at-least-once execution. A process can die after an external effect but before completion commits, or after completion commits but before observing the response. Applications must use idempotency keys or transactional outbox/inbox patterns for non-idempotent effects.
+Workhorse provides durable at-least-once execution. Enqueue idempotency can make repeated acceptance attempts converge on one durable job identity, but it does not make handler execution or external effects exactly once. A process can die after an external effect but before completion commits, or after completion commits but before observing the response. Applications must use provider idempotency keys or transactional outbox/inbox patterns for non-idempotent effects.
 
 Schedule occurrence deduplication prevents duplicate enqueue for one occurrence second. The worker's in-process scheduler supplies the planned occurrence slot as the key, and a per-occurrence advisory lock plus the durable key make concurrent workers racing the same fire converge on one job. This does not change handler delivery semantics: a scheduled job can still execute more than once after a worker crash.
 
@@ -268,7 +289,7 @@ Because definitions live only in the target database, a deployment is one transa
 - The canonical schema is a clean-install artifact, not an online version 1 to version 2 migration.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.
-- Destructive job, outcome, event, and attempt retention is opt-in. Schedule occurrences default to 30 days and 10,000 rows per housekeeping pass.
+- Destructive job, outcome, event, and attempt retention is opt-in. Enqueue-idempotency bindings expire by their request TTL and are cleaned before terminal identity pruning. Schedule occurrences default to 30 days and 10,000 rows per housekeeping pass.
 - Default work bounds are 1,000 terminal jobs, four history partitions per category, 10,000 default-partition rows per category, and 10,000 schedule occurrences per housekeeping pass.
 - Schedules have one-second precision; cron expressions are evaluated in the worker's configured timezone, for which UTC is recommended.
 - Runtime updates centralize churn in one relation and require vacuum and HOT-update validation under sustained heartbeat load.

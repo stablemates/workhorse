@@ -1,6 +1,9 @@
 import { CronExpressionParser } from "cron-parser";
 import type {
   ClaimedJob,
+  EnqueueIdempotency,
+  EnqueueIdempotencyConflictDetails,
+  EnqueueIdempotencyConflictField,
   EnqueueOptions,
   EnqueueRequest,
   JobCheckpoint,
@@ -44,6 +47,7 @@ export type MaintenancePhase =
   | "event_retention"
   | "attempt_retention"
   | "schedule_occurrences"
+  | "enqueue_idempotency"
   | "terminal_jobs";
 
 export interface MaintenancePhaseResult {
@@ -53,7 +57,12 @@ export interface MaintenancePhaseResult {
   skippedLock: boolean;
   error: Json;
 }
-import { MAX_ENQUEUE_BATCH_SIZE, MAX_WAIT_DURATION_MS } from "./types.js";
+import {
+  DEFAULT_IDEMPOTENCY_SCOPE,
+  DEFAULT_IDEMPOTENCY_TTL_MS,
+  MAX_ENQUEUE_BATCH_SIZE,
+  MAX_WAIT_DURATION_MS,
+} from "./types.js";
 
 type ClaimRow = {
   job_id: string;
@@ -207,6 +216,156 @@ export class CheckpointLeaseLostError extends Error {
   }
 }
 
+/** The same scoped enqueue key is still retained for a materially different request. */
+export class EnqueueIdempotencyConflictError extends Error {
+  constructor(readonly details: EnqueueIdempotencyConflictDetails) {
+    super(
+      `Enqueue idempotency conflict in scope ${details.scope} for key ${details.keyPreview} (${details.keyDigest}); fields: ${details.conflictingFields.join(", ")}`,
+    );
+    this.name = "EnqueueIdempotencyConflictError";
+  }
+
+  get scope(): string {
+    return this.details.scope;
+  }
+  get keyPreview(): string {
+    return this.details.keyPreview;
+  }
+  get keyDigest(): string {
+    return this.details.keyDigest;
+  }
+  get keyLength(): number {
+    return this.details.keyLength;
+  }
+  get existingJobId(): string {
+    return this.details.existingJobId;
+  }
+  get ordinal(): number {
+    return this.details.ordinal;
+  }
+  get conflictingFields(): EnqueueIdempotencyConflictField[] {
+    return this.details.conflictingFields;
+  }
+  get storedRequestDigest(): string {
+    return this.details.storedRequestDigest;
+  }
+  get rejectedRequestDigest(): string {
+    return this.details.rejectedRequestDigest;
+  }
+}
+
+const enqueueConflictFields = new Set<EnqueueIdempotencyConflictField>([
+  "queue",
+  "type",
+  "payload",
+  "tags",
+  "runAt",
+  "maxAttempts",
+  "retryPolicy",
+  "ttlMs",
+]);
+const enqueueConflictDetailKeys = new Set([
+  "scope",
+  "keyPreview",
+  "keyDigest",
+  "keyLength",
+  "existingJobId",
+  "ordinal",
+  "conflictingFields",
+  "storedRequestDigest",
+  "rejectedRequestDigest",
+]);
+
+const sanitizedEnqueueConflictDetails: EnqueueIdempotencyConflictDetails = {
+  scope: "unknown",
+  keyPreview: "unknown",
+  keyDigest: "000000000000",
+  keyLength: 0,
+  existingJobId: "unknown",
+  ordinal: 0,
+  conflictingFields: [],
+  storedRequestDigest: "0".repeat(64),
+  rejectedRequestDigest: "0".repeat(64),
+};
+
+function validEnqueueConflictDetails(value: unknown): value is EnqueueIdempotencyConflictDetails {
+  if (typeof value !== "object" || value === null) return false;
+  const detail = value as Record<string, unknown>;
+  const keys = Object.keys(detail);
+  return (
+    keys.length === enqueueConflictDetailKeys.size &&
+    keys.every((key) => enqueueConflictDetailKeys.has(key)) &&
+    typeof detail.scope === "string" &&
+    detail.scope.length > 0 &&
+    [...detail.scope].length <= 256 &&
+    typeof detail.keyPreview === "string" &&
+    detail.keyPreview.length > 0 &&
+    [...detail.keyPreview].length <= 16 &&
+    typeof detail.keyDigest === "string" &&
+    /^[0-9a-f]{12}$/.test(detail.keyDigest) &&
+    typeof detail.keyLength === "number" &&
+    Number.isSafeInteger(detail.keyLength) &&
+    detail.keyLength >= 1 &&
+    detail.keyLength <= 512 &&
+    typeof detail.existingJobId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      detail.existingJobId,
+    ) &&
+    typeof detail.ordinal === "number" &&
+    Number.isSafeInteger(detail.ordinal) &&
+    detail.ordinal >= 1 &&
+    detail.ordinal <= MAX_ENQUEUE_BATCH_SIZE &&
+    Array.isArray(detail.conflictingFields) &&
+    detail.conflictingFields.length > 0 &&
+    detail.conflictingFields.every(
+      (field): field is EnqueueIdempotencyConflictField =>
+        typeof field === "string" &&
+        enqueueConflictFields.has(field as EnqueueIdempotencyConflictField),
+    ) &&
+    new Set(detail.conflictingFields).size === detail.conflictingFields.length &&
+    detail.conflictingFields.every(
+      (field, index, fields) => index === 0 || fields[index - 1]! < field,
+    ) &&
+    typeof detail.storedRequestDigest === "string" &&
+    /^[0-9a-f]{64}$/.test(detail.storedRequestDigest) &&
+    typeof detail.rejectedRequestDigest === "string" &&
+    /^[0-9a-f]{64}$/.test(detail.rejectedRequestDigest)
+  );
+}
+
+function enqueueConflictDetails(error: unknown): EnqueueIdempotencyConflictDetails {
+  const seen = new Set<object>();
+  let current = error;
+
+  for (let depth = 0; depth < 16; depth++) {
+    if (typeof current !== "object" || current === null || seen.has(current)) break;
+    seen.add(current);
+
+    try {
+      if ("detail" in current && typeof current.detail === "string") {
+        try {
+          const detail: unknown = JSON.parse(current.detail);
+          if (validEnqueueConflictDetails(detail)) return detail;
+        } catch {
+          // Continue through adapter wrappers in case PostgreSQL's DETAIL is on a cause.
+        }
+      }
+      current = "cause" in current ? current.cause : undefined;
+    } catch {
+      break;
+    }
+  }
+
+  return sanitizedEnqueueConflictDetails;
+}
+
+function enqueueConflict(error: unknown): EnqueueIdempotencyConflictError | null {
+  if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "P1001") {
+    return null;
+  }
+  return new EnqueueIdempotencyConflictError(enqueueConflictDetails(error));
+}
+
 export class CheckpointConflictError extends Error {
   constructor(jobId: string, checkpointName: string) {
     super(`Checkpoint ${checkpointName} for job ${jobId} already exists with a different value`);
@@ -279,20 +438,38 @@ export class Queue {
     }
 
     // Supplying an active PoolClient makes the whole batch participate in the caller's transaction.
-    const input = requests.map(({ type, payload, options = {}, tags }) => ({
-      queue: options.queue ?? this.defaultQueue,
-      type,
-      payload,
-      runAt: (options.runAt ?? new Date()).toISOString(),
-      maxAttempts: options.maxAttempts ?? 25,
-      retryPolicy: options.retryPolicy ?? null,
-      tags: tags ?? options.tags ?? [],
-    }));
-    const result = await transaction.query<{ job_id: string }>(
-      "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
-      [JSON.stringify(input)],
-    );
-    return result.rows.map((row) => row.job_id);
+    const input = requests.map(({ type, payload, options = {}, tags }) => {
+      const idempotency: EnqueueIdempotency | undefined = options.idempotency;
+      return {
+        queue: options.queue ?? this.defaultQueue,
+        type,
+        payload,
+        ...(options.runAt === undefined && idempotency !== undefined
+          ? {}
+          : { runAt: (options.runAt ?? new Date()).toISOString() }),
+        maxAttempts: options.maxAttempts ?? 25,
+        retryPolicy: options.retryPolicy ?? null,
+        tags: tags ?? options.tags ?? [],
+        ...(idempotency === undefined
+          ? {}
+          : {
+              idempotency: {
+                key: idempotency.key,
+                scope: idempotency.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+                ttlMs: idempotency.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
+              },
+            }),
+      };
+    });
+    try {
+      const result = await transaction.query<{ job_id: string }>(
+        "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+        [JSON.stringify(input)],
+      );
+      return result.rows.map((row) => row.job_id);
+    } catch (error) {
+      throw enqueueConflict(error) ?? error;
+    }
   }
 
   async promote(limit = 100): Promise<number> {

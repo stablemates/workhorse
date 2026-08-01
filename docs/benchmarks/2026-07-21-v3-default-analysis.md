@@ -177,6 +177,15 @@ All 90 assertions passed:
 
 These are correctness results. Their single-run timings are not latency distributions.
 
+### Schema v10 benchmark follow-through
+
+The recorded 2026-07-21 v3 artifacts predate enqueue idempotency and therefore remain unchanged historical
+evidence. Schema v10 retires the former missing-workload limitation in the harness by adding the
+`idempotent-ingress` operational scenario. It invariant-checks exact replay without duplicate durable or
+FIFO effects, whole-batch conflict rollback, equivalent same-batch duplicates alongside unkeyed requests,
+and reuse after expiry. It records full client-observed transition timings, but no measured latency or
+overhead number is claimed here because no new artifact is attached to this analysis.
+
 ## Methodological limits
 
 1. **Three fixed-run repetitions are insufficient for equivalence claims.** Use at least 10 paired repetitions, preferably more for millisecond-scale phases.
@@ -187,7 +196,6 @@ These are correctness results. Their single-run timings are not latency distribu
 6. **Small data sets emphasize fixed pages and cache warmth.** Repeat with 10k, 100k, and 1M retained completions.
 7. **Single process and local PostgreSQL.** This omits network latency, proxies, multiple worker processes, replicas, and noisy neighbors.
 8. **Tiny payloads and zero-cost handlers.** Add payload-size and handler-duration matrices.
-9. **No idempotency-key workload.** Batch ingress preserves current semantics, but production enqueue deduplication remains a separate protocol concern.
 
 ## Architecture recommendation
 
@@ -211,5 +219,5 @@ The next architectural decision should be made only after larger retained-histor
 - Claim/complete processing remains competitive.
 - Both designs behave nearly identically at an equal offered load of 100 jobs/s.
 - Hybrid still pays a write and storage premium.
-- Lifecycle correctness remains intact at 90/90 assertions.
+- Lifecycle correctness remains intact at 90/90 assertions in the recorded v3 artifact; schema v10 adds an unmeasured invariant-gated idempotent-ingress scenario.
 - The appropriate pivot is **API and SQL batching**, not a wholesale architecture redesign.

@@ -61,9 +61,12 @@ import {
 } from "react";
 import type { RetryPolicy } from "@workhorse/core";
 import {
+  describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
   formatRetryDelay,
+  idempotencyEvidenceLine,
+  readIdempotencyEvidence,
 } from "../../src/dashboard";
 import type {
   DashboardCronPage,
@@ -198,7 +201,14 @@ function activityChartKey(group: string): string {
 }
 
 type PageRoute = "/tasks" | "/cron" | "/queues" | "/system" | "/workers" | "/settings";
-type DemoJobKind = "success" | "retry" | "durable" | "timer" | "failure" | "long-running";
+type DemoJobKind =
+  | "success"
+  | "retry"
+  | "durable"
+  | "timer"
+  | "failure"
+  | "idempotent"
+  | "long-running";
 type DurableDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
@@ -648,6 +658,7 @@ function eventDetail(event: JobEvent, key: string): string | null {
 }
 
 const boundaryEventTypes = new Set([
+  "enqueued",
   "wait_scheduled",
   "wait_elapsed",
   "wait_replayed",
@@ -657,6 +668,7 @@ const boundaryEventTypes = new Set([
 ]);
 
 const boundaryEventLabels: Record<string, string> = {
+  enqueued: "Enqueued",
   wait_scheduled: "Wait scheduled",
   wait_elapsed: "Wait elapsed",
   wait_replayed: "Wait replayed",
@@ -666,6 +678,7 @@ const boundaryEventLabels: Record<string, string> = {
 };
 
 const boundaryEventColors: Record<string, string> = {
+  enqueued: "violet",
   wait_scheduled: "indigo",
   wait_elapsed: "cyan",
   wait_replayed: "grape",
@@ -673,6 +686,51 @@ const boundaryEventColors: Record<string, string> = {
   checkpoint_saved: "teal",
   retry_scheduled: "orange",
 };
+
+/**
+ * Accepted deduplication evidence for one task, if PostgreSQL recorded any.
+ *
+ * Everything shown here comes from the safe metadata on the single initial `enqueued` event. The
+ * raw key is not stored there and is therefore never available to render.
+ */
+function idempotencyEvidenceFor(job: DashboardJobDetail) {
+  for (const event of job.events) {
+    const evidence = readIdempotencyEvidence(event);
+    if (evidence !== null) return evidence;
+  }
+  return null;
+}
+
+/**
+ * Deduplication evidence for one task. Rendered only for a keyed task, so an unkeyed task keeps
+ * exactly the drawer it had before. Colour is decoration; the label and wording carry the meaning.
+ */
+function IdempotencySection({ job }: { job: DashboardJobDetail }) {
+  const evidence = idempotencyEvidenceFor(job);
+  if (evidence === null) return null;
+  const described = describeIdempotency(evidence);
+  return (
+    <Box>
+      <Group gap="xs" mb="xs" align="baseline">
+        <Text fw={600} size="sm">
+          Idempotency
+        </Text>
+        <Badge size="xs" variant="light" color="violet" tt="none" title={described.exact}>
+          {described.label}
+        </Badge>
+      </Group>
+      <Text c="dimmed" size="xs" title={described.exact}>
+        {described.summary}.
+      </Text>
+      <Text c="dimmed" size="xs" mt={4} title={described.exact}>
+        {idempotencyEvidenceLine(evidence)}
+      </Text>
+      <Text c="dimmed" size="xs" mt={4}>
+        The raw key is never recorded with the task, so it is never shown here.
+      </Text>
+    </Box>
+  );
+}
 
 /**
  * Retry evidence recorded with one `retry_scheduled` event. The stored policy, chosen delay, and
@@ -735,7 +793,13 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
  * ownership without closing the logical attempt.
  */
 function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
-  const events = job.events.filter((event) => boundaryEventTypes.has(event.type));
+  // Acceptance is a boundary worth showing only when it deduplicated something. An unkeyed task
+  // keeps exactly the timeline it had before this feature existed.
+  const events = job.events.filter(
+    (event) =>
+      boundaryEventTypes.has(event.type) &&
+      (event.type !== "enqueued" || readIdempotencyEvidence(event) !== null),
+  );
   if (events.length === 0) return null;
   const claimsPerAttempt = new Map<number | null, number>();
   const claimOrdinals = new Map<string, number>();
@@ -1551,6 +1615,12 @@ function TasksPage({
                     Retry once
                   </Menu.Item>
                   <Menu.Item
+                    leftSection={<CheckCircle size={16} />}
+                    onClick={() => void runDemoJob("idempotent")}
+                  >
+                    Idempotent · repeating opens the same task
+                  </Menu.Item>
+                  <Menu.Item
                     leftSection={<ListChecks size={16} />}
                     onClick={() => void runDemoJob("durable", "order-fulfillment")}
                   >
@@ -1666,6 +1736,17 @@ function TasksPage({
                           {taskDisplayName(job.type, job.queue)}
                         </Text>
                         <DurableProgressBadge job={job} />
+                        {job.keyed ? (
+                          <Badge
+                            size="xs"
+                            variant="light"
+                            color="violet"
+                            tt="none"
+                            title="This task was accepted with an idempotency key. Repeating the same request within its retained window returns this same task."
+                          >
+                            Keyed
+                          </Badge>
+                        ) : null}
                         {job.tags.map((tag) =>
                           tag === "durable-checkpoint" ? null : (
                             <Badge key={tag} size="xs" variant="light" color="gray" tt="none">
@@ -3663,6 +3744,7 @@ export function Dashboard() {
               </Text>
               <Code block>{JSON.stringify(selectedJob.payload, null, 2)}</Code>
             </Box>
+            <IdempotencySection job={selectedJob} />
             <JobCheckpoints job={selectedJob} />
             <DurableWaits job={selectedJob} />
             <Box>

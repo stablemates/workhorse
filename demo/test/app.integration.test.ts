@@ -12,6 +12,11 @@ import {
   createLocalQueueController,
   createLocalOperator,
   createLocalScheduleController,
+  DEMO_IDEMPOTENCY_TTL_MS,
+  DEMO_OPERATOR_IDEMPOTENCY_KEY,
+  DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
+  DEMO_SEED_IDEMPOTENCY_KEY,
+  DEMO_SEED_IDEMPOTENCY_SCOPE,
   DEMO_DURABLE_STEP_MS,
   DEMO_DURABLE_TIMER_WAIT_MS,
   DEMO_LONG_RUNNING_MS,
@@ -20,18 +25,28 @@ import {
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_POLL_MS,
   DEMO_WORKERS,
+  deterministicOrderId,
   DURABLE_TIMER_JOB_TYPE,
   DURABLE_TIMER_PREPARE_CHECKPOINT,
   DURABLE_TIMER_PUBLISH_CHECKPOINT,
   DURABLE_TIMER_WAIT_NAME,
   HEARTBEAT_SCHEDULE_NAME,
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENCY_SCOPE_HEADER,
   installDemoSchema,
+  MAX_DEMO_IDEMPOTENCY_KEY_BYTES,
   REPORT_SCHEDULE_NAME,
   seedDemoData,
   syncDemoSchedules,
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
 import type { DashboardRouter } from "../src/rpc.js";
+import {
+  describeIdempotency,
+  idempotencyEvidenceLine,
+  readDashboardSnapshot,
+  readIdempotencyEvidence,
+} from "../src/dashboard.js";
 
 const databaseUrl = localDatabaseUrl("test");
 assertLocalDatabasePurpose(databaseUrl, "test");
@@ -55,7 +70,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
     workhorse.job_wait, workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.queue_control, workhorse.job_outcome, workhorse.job_runtime,
+    workhorse.queue_control, workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
   await new Queue(pool).syncRetentionPolicy({
     jobIdentityRetentionDays: null,
@@ -76,6 +91,22 @@ afterAll(async () => {
   await pool.query("DROP TABLE IF EXISTS public.workhorse_demo_audit");
   await pool.end();
 });
+
+async function postOrder(
+  app: ReturnType<typeof createDemoApplication>["app"],
+  body: { customerEmail: string; description: string },
+  idempotency?: { key: string; scope?: string },
+) {
+  return app.request("/orders", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(idempotency ? { [IDEMPOTENCY_KEY_HEADER]: idempotency.key } : {}),
+      ...(idempotency?.scope ? { [IDEMPOTENCY_SCOPE_HEADER]: idempotency.scope } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+}
 
 function dashboardClient(
   app: ReturnType<typeof createDemoApplication>["app"],
@@ -130,6 +161,7 @@ describe("Workhorse demo", () => {
         expect.any(String),
         expect.any(String),
         expect.any(String),
+        expect.any(String),
       ],
       historicalJobCount: 362,
     });
@@ -144,8 +176,8 @@ describe("Workhorse demo", () => {
            FROM (
              SELECT xmin::text AS version FROM workhorse.job WHERE id = ANY($1::uuid[])
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
-             UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
-               WHERE name = 'default-dashboard-v6'
+            UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
+               WHERE name = 'default-dashboard-v7'
            ) representative_rows`,
         [seeded.jobIds],
       ),
@@ -154,7 +186,7 @@ describe("Workhorse demo", () => {
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 373 }],
+      rows: [{ count: 374 }],
     });
     expect(
       await pool.query(
@@ -277,9 +309,9 @@ describe("Workhorse demo", () => {
     });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 373,
+      all: 374,
       scheduled: 1,
-      queued: 10,
+      queued: 11,
       completed: 346,
       discarded: 16,
       retried: 22,
@@ -303,8 +335,8 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 373,
-      counts: { all: 373, scheduled: 1, queued: 10, completed: 346, discarded: 16 },
+      total: 374,
+      counts: { all: 374, scheduled: 1, queued: 11, completed: 346, discarded: 16 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -315,7 +347,7 @@ describe("Workhorse demo", () => {
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 373 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 374 });
     expect(secondPage.jobs).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
@@ -2035,5 +2067,405 @@ describe("Workhorse demo", () => {
     } finally {
       await workhorse.stop();
     }
+  });
+
+  it("returns the same order and task for a repeated keyed submission", async () => {
+    const { app } = createTestApplication();
+    const order = {
+      customerEmail: "repeat@example.com",
+      description: "Submit the same order twice",
+    };
+
+    const first = await postOrder(app, order, { key: "order-repeat-1" });
+    const second = await postOrder(app, order, { key: "order-repeat-1" });
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    const accepted = (await first.json()) as { orderId: string; jobId: string };
+    expect(await second.json()).toEqual(await Promise.resolve({ ...accepted, status: "queued" }));
+
+    // Exactly one application row and one accepted job identity exist for the retained key.
+    expect(
+      (await pool.query(`SELECT count(*)::integer AS count FROM public.workhorse_demo_order`))
+        .rows[0],
+    ).toEqual({ count: 1 });
+    expect(
+      (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.job`)).rows[0],
+    ).toEqual({ count: 1 });
+    expect(accepted.orderId).toBe(deterministicOrderId("workhorse-demo:orders", "order-repeat-1"));
+
+    // A replay records no additional job event, so FIFO order and history stay untouched.
+    expect(
+      (
+        await pool.query<{ event_type: string }>(
+          `SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY occurred_at, event_id`,
+          [accepted.jobId],
+        )
+      ).rows,
+    ).toEqual([{ event_type: "enqueued" }]);
+  });
+
+  it("keeps unkeyed submissions creating a new identity every time", async () => {
+    const { app } = createTestApplication();
+    const order = { customerEmail: "unkeyed@example.com", description: "No key supplied" };
+    const first = (await (await postOrder(app, order)).json()) as { orderId: string };
+    const second = (await (await postOrder(app, order)).json()) as { orderId: string };
+    expect(first.orderId).not.toBe(second.orderId);
+    expect(
+      (await pool.query(`SELECT count(*)::integer AS count FROM public.workhorse_demo_order`))
+        .rows[0],
+    ).toEqual({ count: 2 });
+  });
+
+  it("separates identical keys held in different scopes", async () => {
+    const { app } = createTestApplication();
+    const order = { customerEmail: "scoped@example.com", description: "Same key, two scopes" };
+    const first = (await (
+      await postOrder(app, order, { key: "shared", scope: "tenant-a" })
+    ).json()) as {
+      jobId: string;
+    };
+    const second = (await (
+      await postOrder(app, order, { key: "shared", scope: "tenant-b" })
+    ).json()) as { jobId: string };
+    expect(first.jobId).not.toBe(second.jobId);
+  });
+
+  it("rolls back the order insert when a changed request conflicts with a retained key", async () => {
+    const { app } = createTestApplication();
+    // Longer than the preview budget so the rejected response provably truncates the key.
+    const key = "order-conflict-key-long-enough-to-truncate";
+    const accepted = (await (
+      await postOrder(
+        app,
+        { customerEmail: "first@example.com", description: "Original order" },
+        { key },
+      )
+    ).json()) as { orderId: string; jobId: string };
+
+    const conflicted = await postOrder(
+      app,
+      { customerEmail: "second@example.com", description: "Different order under the same key" },
+      { key },
+    );
+    expect(conflicted.status).toBe(409);
+    const body = (await conflicted.json()) as Record<string, unknown>;
+    expect(body).toEqual({
+      error: expect.stringContaining("idempotency key"),
+      reason: "idempotency-conflict",
+      scope: "workhorse-demo:orders",
+      keyDigest: expect.stringMatching(/^[0-9a-f]{12}$/),
+      keyLength: key.length,
+      existingJobId: accepted.jobId,
+      // The demo puts a digest of the submitted order in the keyed payload, so a changed
+      // customer or description is reported as a real request difference.
+      conflictingFields: ["payload"],
+      storedRequestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      rejectedRequestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      retentionMs: DEMO_IDEMPOTENCY_TTL_MS,
+    });
+    expect(body.storedRequestDigest).not.toBe(body.rejectedRequestDigest);
+    // The rejected response identifies the key without ever reproducing it.
+    expect(JSON.stringify(body)).not.toContain(key);
+
+    // The whole statement rolled back: no second order row, and the original row is unchanged.
+    expect(
+      (
+        await pool.query<{ id: string; customer_email: string; description: string }>(
+          `SELECT id, customer_email, description FROM public.workhorse_demo_order`,
+        )
+      ).rows,
+    ).toEqual([
+      {
+        id: accepted.orderId,
+        customer_email: "first@example.com",
+        description: "Original order",
+      },
+    ]);
+    expect(
+      (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.job`)).rows[0],
+    ).toEqual({ count: 1 });
+  });
+
+  it("never publishes a raw idempotency key through RPC, events, or a conflict response", async () => {
+    const sentinel = "sentinel-raw-key-must-never-appear-7f3a91";
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const accepted = (await (
+      await postOrder(
+        app,
+        { customerEmail: "sentinel@example.com", description: "Leak regression" },
+        { key: sentinel },
+      )
+    ).json()) as { jobId: string };
+
+    const conflicted = await postOrder(
+      app,
+      { customerEmail: "sentinel@example.com", description: "Changed request" },
+      { key: sentinel },
+    );
+    expect(conflicted.status).toBe(409);
+
+    const surfaces = [
+      await conflicted.text(),
+      JSON.stringify(await client.dashboard.jobDetail({ id: accepted.jobId })),
+      JSON.stringify(await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25 })),
+      JSON.stringify(
+        (
+          await pool.query(`SELECT details FROM workhorse.job_event WHERE job_id = $1`, [
+            accepted.jobId,
+          ])
+        ).rows,
+      ),
+      await (await app.request(`/jobs/${accepted.jobId}`)).text(),
+    ];
+    for (const surface of surfaces) expect(surface).not.toContain(sentinel);
+  });
+
+  it("never reproduces a short idempotency key in a demo-rendered surface", async () => {
+    // Regression: core's own `key_preview` is a bounded prefix, so for a key shorter than the
+    // preview budget the "preview" is the entire key. Every surface this demo authors must
+    // therefore identify a key by digest and length only, never by preview.
+    const shortKey = "k1";
+    const { app } = createTestApplication();
+    const client = dashboardClient(app);
+    const accepted = (await (
+      await postOrder(
+        app,
+        { customerEmail: "short@example.com", description: "Short key" },
+        { key: shortKey },
+      )
+    ).json()) as { jobId: string };
+
+    const conflicted = await postOrder(
+      app,
+      { customerEmail: "short@example.com", description: "Changed under a short key" },
+      { key: shortKey },
+    );
+    expect(conflicted.status).toBe(409);
+    const conflictBody = await conflicted.text();
+    expect(conflictBody).not.toContain(`"${shortKey}"`);
+    expect(JSON.parse(conflictBody)).not.toHaveProperty("keyPreview");
+
+    // The evidence this demo derives, and the exact wording it renders from that evidence, are
+    // both free of the key even though the underlying core event still records a prefix preview.
+    const detail = await client.dashboard.jobDetail({ id: accepted.jobId });
+    const enqueued = detail.events.find((event) => event.type === "enqueued");
+    const evidence = readIdempotencyEvidence({
+      type: enqueued!.type,
+      details: enqueued!.details,
+    });
+    expect(evidence).not.toBeNull();
+    expect(evidence).not.toHaveProperty("keyPreview");
+    expect(JSON.stringify(evidence)).not.toContain(shortKey);
+    expect(describeIdempotency(evidence!).exact).not.toContain(shortKey);
+    expect(idempotencyEvidenceLine(evidence!)).not.toContain(shortKey);
+  });
+
+  it("exposes only safe deduplication metadata to the dashboard", async () => {
+    const { app } = createTestApplication();
+    const client = dashboardClient(app);
+    // Longer than the preview budget, so the recorded preview is provably a truncation rather
+    // than the whole key.
+    const key = "order-metadata-key-long-enough-to-truncate";
+    const keyed = (await (
+      await postOrder(
+        app,
+        { customerEmail: "metadata@example.com", description: "Show safe evidence" },
+        { key, scope: "tenant-metadata" },
+      )
+    ).json()) as { jobId: string };
+    const unkeyed = (await (
+      await postOrder(app, {
+        customerEmail: "plain@example.com",
+        description: "No deduplication surface",
+      })
+    ).json()) as { jobId: string };
+
+    const detail = await client.dashboard.jobDetail({ id: keyed.jobId });
+    const enqueued = detail.events.find((event) => event.type === "enqueued");
+    const evidence = readIdempotencyEvidence({
+      type: enqueued!.type,
+      details: enqueued!.details,
+    });
+    expect(evidence).toMatchObject({
+      scope: "tenant-metadata",
+      ttlMs: DEMO_IDEMPOTENCY_TTL_MS,
+      keyLength: key.length,
+    });
+    expect(evidence!.keyDigest).not.toContain(key);
+    expect(JSON.stringify(evidence)).not.toContain(key);
+    expect(Object.keys(evidence!)).toEqual([
+      "scope",
+      "keyDigest",
+      "keyLength",
+      "ttlMs",
+      "expiresAt",
+      "requestDigest",
+    ]);
+
+    const plainDetail = await client.dashboard.jobDetail({ id: unkeyed.jobId });
+    const plainEnqueued = plainDetail.events.find((event) => event.type === "enqueued");
+    expect(
+      readIdempotencyEvidence({ type: plainEnqueued!.type, details: plainEnqueued!.details }),
+    ).toBeNull();
+
+    const tasks = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 25 });
+    expect(tasks.jobs.find((job) => job.id === keyed.jobId)?.keyed).toBe(true);
+    expect(tasks.jobs.find((job) => job.id === unkeyed.jobId)?.keyed).toBe(false);
+  });
+
+  it("reports the same keyed state through the snapshot projection as the task list", async () => {
+    // Regression: the snapshot used to hardcode `keyed: false`, so a keyed task was silently
+    // mislabelled depending only on which projection observed it.
+    const { app } = createTestApplication();
+    const client = dashboardClient(app);
+    const keyed = (await (
+      await postOrder(
+        app,
+        { customerEmail: "snapshot@example.com", description: "Snapshot agreement" },
+        { key: "snapshot-agreement-key" },
+      )
+    ).json()) as { jobId: string };
+    const unkeyed = (await (
+      await postOrder(app, {
+        customerEmail: "snapshot-plain@example.com",
+        description: "Snapshot agreement, unkeyed",
+      })
+    ).json()) as { jobId: string };
+
+    const snapshot = await readDashboardSnapshot(
+      database,
+      new Queue(pool, "demo"),
+      ["demo-worker"],
+      createLocalOperator(database),
+    );
+    const tasks = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 50 });
+    for (const id of [keyed.jobId, unkeyed.jobId]) {
+      const fromSnapshot = snapshot.jobs.find((job) => job.id === id);
+      const fromTasks = tasks.jobs.find((job) => job.id === id);
+      expect(fromSnapshot).toBeDefined();
+      expect(fromTasks).toBeDefined();
+      expect(fromSnapshot!.keyed).toBe(fromTasks!.keyed);
+    }
+    expect(snapshot.jobs.find((job) => job.id === keyed.jobId)!.keyed).toBe(true);
+    expect(snapshot.jobs.find((job) => job.id === unkeyed.jobId)!.keyed).toBe(false);
+  });
+
+  it("rejects an unusable idempotency header before touching the database", async () => {
+    const { app } = createTestApplication();
+    const order = { customerEmail: "limits@example.com", description: "Header validation" };
+    const oversized = await postOrder(app, order, {
+      key: "k".repeat(MAX_DEMO_IDEMPOTENCY_KEY_BYTES + 1),
+    });
+    expect(oversized.status).toBe(400);
+    expect(await oversized.json()).toMatchObject({
+      error: expect.stringContaining(IDEMPOTENCY_KEY_HEADER),
+    });
+
+    const scopeWithoutKey = await app.request("/orders", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [IDEMPOTENCY_SCOPE_HEADER]: "tenant-a",
+      },
+      body: JSON.stringify(order),
+    });
+    expect(scopeWithoutKey.status).toBe(400);
+    expect(
+      (await pool.query(`SELECT count(*)::integer AS count FROM public.workhorse_demo_order`))
+        .rows[0],
+    ).toEqual({ count: 0 });
+  });
+
+  it("applies optional idempotency headers to every demo enqueue route", async () => {
+    const { app } = createTestApplication();
+    for (const [path, body] of [
+      ["/demo/retries", {}],
+      ["/demo/durable", { scenario: "order-fulfillment" }],
+      ["/demo/timers", {}],
+      ["/demo/failures", {}],
+    ] as const) {
+      const request = () =>
+        app.request(path, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            [IDEMPOTENCY_KEY_HEADER]: `route-key${path}`,
+          },
+          body: JSON.stringify(body),
+        });
+      const first = (await (await request()).json()) as { jobId: string };
+      const second = (await (await request()).json()) as { jobId: string };
+      expect(second.jobId).toBe(first.jobId);
+    }
+    expect(
+      (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.job`)).rows[0],
+    ).toEqual({ count: 4 });
+  });
+
+  it("opens the same task every time the operator repeats the idempotent scenario", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const first = await client.dashboard.enqueueTest({
+      kind: "idempotent",
+      audit: { actor: "operator", reason: "show deduplication", requestId: "audit-idempotent-1" },
+    });
+    const second = await client.dashboard.enqueueTest({
+      kind: "idempotent",
+      audit: { actor: "operator", reason: "show deduplication", requestId: "audit-idempotent-2" },
+    });
+    expect(second.jobId).toBe(first.jobId);
+    expect(
+      (await pool.query(`SELECT count(*)::integer AS count FROM workhorse.job`)).rows[0],
+    ).toEqual({ count: 1 });
+
+    const detail = await client.dashboard.jobDetail({ id: first.jobId });
+    const enqueued = detail.events.find((event) => event.type === "enqueued");
+    expect(
+      readIdempotencyEvidence({ type: enqueued!.type, details: enqueued!.details }),
+    ).toMatchObject({ scope: DEMO_OPERATOR_IDEMPOTENCY_SCOPE });
+    expect(JSON.stringify(detail)).not.toContain(DEMO_OPERATOR_IDEMPOTENCY_KEY);
+
+    // Both attempts are audited even though only one task identity exists.
+    expect(
+      (
+        await pool.query<{ count: number }>(
+          `SELECT count(*)::integer AS count FROM public.workhorse_demo_audit WHERE action = 'enqueueTest'`,
+        )
+      ).rows[0],
+    ).toEqual({ count: 2 });
+  });
+
+  it("seeds exactly one deterministic keyed representative task", async () => {
+    const { app } = createTestApplication();
+    const client = dashboardClient(app);
+    await seedDemoData(database);
+
+    // Keys are retained only as a hash, so the seed is located by its scope rather than its key.
+    const keyedRows = await pool.query<{ job_id: string }>(
+      `SELECT job_id::text FROM workhorse.enqueue_idempotency
+        WHERE idempotency_scope = $1`,
+      [DEMO_SEED_IDEMPOTENCY_SCOPE],
+    );
+    expect(keyedRows.rows).toHaveLength(1);
+    const seededJobId = keyedRows.rows[0]!.job_id;
+
+    const tasks = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 100 });
+    expect(tasks.jobs.filter((job) => job.keyed).map((job) => job.id)).toEqual([seededJobId]);
+    expect(tasks.jobs.find((job) => job.id === seededJobId)?.tags).toContain("idempotent");
+    expect(JSON.stringify(tasks)).not.toContain(DEMO_SEED_IDEMPOTENCY_KEY);
+
+    // Re-running the seed leaves the keyed task alone rather than accumulating duplicates.
+    await seedDemoData(database);
+    expect(
+      (
+        await pool.query(
+          `SELECT count(*)::integer AS count FROM workhorse.enqueue_idempotency
+            WHERE idempotency_scope = $1`,
+          [DEMO_SEED_IDEMPOTENCY_SCOPE],
+        )
+      ).rows[0],
+    ).toEqual({ count: 1 });
+    expect(app).toBeDefined();
   });
 });

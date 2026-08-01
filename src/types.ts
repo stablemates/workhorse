@@ -21,6 +21,40 @@ export type RetryPolicy =
     }
   | { type: "decorrelated-jitter"; baseDelayMs: number; maxDelayMs: number };
 
+/** PostgreSQL-owned enqueue deduplication identity and retention window. */
+export interface EnqueueIdempotency {
+  /** Caller-chosen key, unique within `scope` while its retention window remains active. */
+  key: string;
+  /** Caller namespace. Omitted values use {@link DEFAULT_IDEMPOTENCY_SCOPE}. */
+  scope?: string;
+  /** Deduplication retention window in milliseconds. Omitted values use the default 24 hours. */
+  ttlMs?: number;
+}
+
+/** Top-level accepted request fields whose normalized semantics can conflict on replay. */
+export type EnqueueIdempotencyConflictField =
+  | "queue"
+  | "type"
+  | "payload"
+  | "tags"
+  | "runAt"
+  | "maxAttempts"
+  | "retryPolicy"
+  | "ttlMs";
+
+/** Safe diagnostics for a materially different replay. The raw idempotency key is never exposed. */
+export interface EnqueueIdempotencyConflictDetails {
+  scope: string;
+  keyPreview: string;
+  keyDigest: string;
+  keyLength: number;
+  existingJobId: string;
+  ordinal: number;
+  conflictingFields: EnqueueIdempotencyConflictField[];
+  storedRequestDigest: string;
+  rejectedRequestDigest: string;
+}
+
 /** Options persisted as part of the accepted job definition or initial dispatch projection. */
 export interface EnqueueOptions {
   queue?: string;
@@ -28,6 +62,7 @@ export interface EnqueueOptions {
   maxAttempts?: number;
   retryPolicy?: RetryPolicy;
   tags?: string[];
+  idempotency?: EnqueueIdempotency;
 }
 
 /** One job accepted by {@link Queue.enqueueMany}, with the same semantics as `Queue.enqueue`. */
@@ -43,6 +78,16 @@ export interface EnqueueRequest<TPayload extends Json = Json> {
  * identity allocation, and notification work inside one PostgreSQL transaction.
  */
 export const MAX_ENQUEUE_BATCH_SIZE = 1_000;
+/** Default namespace for enqueue idempotency keys whose caller omits an explicit scope. */
+export const DEFAULT_IDEMPOTENCY_SCOPE = "default";
+/** Default enqueue idempotency retention window (24 hours). */
+export const DEFAULT_IDEMPOTENCY_TTL_MS = 86_400_000;
+/** Maximum UTF-8 size accepted for one enqueue idempotency key. */
+export const MAX_IDEMPOTENCY_KEY_BYTES = 512;
+/** Maximum UTF-8 size accepted for one enqueue idempotency scope. */
+export const MAX_IDEMPOTENCY_SCOPE_BYTES = 256;
+/** Maximum enqueue idempotency retention window (365 days). */
+export const MAX_IDEMPOTENCY_TTL_MS = 31_536_000_000;
 /** Maximum PostgreSQL canonical JSONB text size accepted for one durable checkpoint value. */
 export const MAX_CHECKPOINT_VALUE_BYTES = 1_048_576;
 /** Maximum relative duration or first absolute target horizon for one durable wait (365 days). */

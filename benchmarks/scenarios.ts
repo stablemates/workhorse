@@ -1,6 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { InjectedCrashError, Queue, Worker } from "../src/index.js";
+import {
+  EnqueueIdempotencyConflictError,
+  InjectedCrashError,
+  Queue,
+  Worker,
+} from "../src/index.js";
 import type { Failpoint, Queryable, QueueHealth } from "../src/index.js";
 
 export const operationalScenarioNames = [
@@ -9,6 +14,7 @@ export const operationalScenarioNames = [
   "crash-before-completion",
   "lease-expiry-recovery",
   "retry-paths",
+  "idempotent-ingress",
   "retention-pruning",
   "health-snapshot",
 ] as const;
@@ -168,6 +174,29 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     ],
   },
   {
+    name: "idempotent-ingress",
+    purpose:
+      "Exercise scoped enqueue replay, conflict rollback, batch duplicates, expiry reuse, and full transition timings.",
+    invariants: [
+      "an equivalent keyed replay returns the original job without duplicate durable or FIFO effects",
+      "a material conflict rolls back the whole batch and reports the retained job and request ordinal",
+      "equivalent duplicate keys inside one batch preserve result order while unkeyed ingress remains distinct",
+      "an expired scoped binding can be reused for a materially different request and a new job identity",
+    ],
+    metrics: [
+      "firstAcceptMs",
+      "exactReplayMs",
+      "conflictRollbackMs",
+      "batchDuplicatesMs",
+      "expiryFirstAcceptMs",
+      "expiryReuseMs",
+      "jobs",
+      "bindings",
+      "events",
+      "runtimes",
+    ],
+  },
+  {
     name: "retention-pruning",
     purpose: "Measure completed-week history retirement through the versioned partition protocol.",
     invariants: [
@@ -200,7 +229,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 ] as const;
 
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
-  workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
+  workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
 ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1;
 UPDATE workhorse.retention_policy
@@ -890,6 +919,227 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
   };
 }
 
+async function idempotentIngress(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const queue = new Queue(context.pool, context.queueName);
+  const assertions: ScenarioAssertion[] = [];
+  const state = async () =>
+    (
+      await context.pool.query<{
+        jobs: number;
+        bindings: number;
+        events: number;
+        runtimes: number;
+        sequence_last_value: string;
+        sequence_is_called: boolean;
+      }>(`SELECT
+        (SELECT count(*)::integer FROM workhorse.job) AS jobs,
+        (SELECT count(*)::integer FROM workhorse.enqueue_idempotency) AS bindings,
+        (SELECT count(*)::integer FROM workhorse.job_event) AS events,
+        (SELECT count(*)::integer FROM workhorse.job_runtime) AS runtimes,
+        (SELECT last_value::text FROM workhorse.ready_sequence_seq) AS sequence_last_value,
+        (SELECT is_called FROM workhorse.ready_sequence_seq) AS sequence_is_called`)
+    ).rows[0]!;
+
+  const firstOptions = {
+    queue: context.queueName,
+    maxAttempts: 3,
+    retryPolicy: { type: "fixed" as const, delayMs: 25 },
+    tags: ["ingress", "durable"],
+    idempotency: { key: "exact-replay", scope: "benchmark", ttlMs: 60_000 },
+  };
+  const [firstId, firstAcceptMs] = await measured(context.now, () =>
+    queue.enqueue("idempotent-ingress", { order: 1 }, firstOptions),
+  );
+  const afterFirst = await state();
+  const [replayedId, exactReplayMs] = await measured(context.now, () =>
+    queue.enqueue(
+      "idempotent-ingress",
+      { order: 1 },
+      { ...firstOptions, tags: ["durable", "ingress"] },
+    ),
+  );
+  const afterReplay = await state();
+  recordInvariant(assertions, "exact replay returns original job", replayedId, firstId);
+  recordInvariant(
+    assertions,
+    "exact replay adds no job, binding, event, runtime, or FIFO state",
+    afterReplay,
+    afterFirst,
+    jsonEquivalent,
+  );
+
+  const beforeConflict = await state();
+  const [conflict, conflictRollbackMs] = await measured(context.now, async () => {
+    try {
+      await queue.enqueueMany([
+        {
+          type: "idempotent-ingress",
+          payload: { rollback: true },
+          options: {
+            queue: context.queueName,
+            idempotency: { key: "rollback-candidate", scope: "benchmark", ttlMs: 60_000 },
+          },
+        },
+        {
+          type: "idempotent-ingress",
+          payload: { order: 2 },
+          options: firstOptions,
+        },
+      ]);
+      return null;
+    } catch (error) {
+      return error;
+    }
+  });
+  const afterConflict = await state();
+  recordInvariant(
+    assertions,
+    "material mismatch returns typed conflict",
+    conflict instanceof EnqueueIdempotencyConflictError,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "conflict identifies retained job",
+    conflict instanceof EnqueueIdempotencyConflictError ? conflict.existingJobId : null,
+    firstId,
+  );
+  recordInvariant(
+    assertions,
+    "conflict identifies request ordinal",
+    conflict instanceof EnqueueIdempotencyConflictError ? conflict.ordinal : null,
+    2,
+  );
+  recordInvariant(
+    assertions,
+    "conflict rolls back whole batch",
+    {
+      jobs: afterConflict.jobs,
+      bindings: afterConflict.bindings,
+      events: afterConflict.events,
+      runtimes: afterConflict.runtimes,
+    },
+    {
+      jobs: beforeConflict.jobs,
+      bindings: beforeConflict.bindings,
+      events: beforeConflict.events,
+      runtimes: beforeConflict.runtimes,
+    },
+    jsonEquivalent,
+  );
+
+  const [batchIds, batchDuplicatesMs] = await measured(context.now, () =>
+    queue.enqueueMany([
+      {
+        type: "batch-keyed",
+        payload: { stable: true },
+        tags: ["beta", "alpha"],
+        options: {
+          queue: context.queueName,
+          idempotency: { key: "batch-duplicate", scope: "benchmark", ttlMs: 60_000 },
+        },
+      },
+      {
+        type: "batch-keyed",
+        payload: { stable: true },
+        tags: ["alpha", "beta"],
+        options: {
+          queue: context.queueName,
+          idempotency: { key: "batch-duplicate", scope: "benchmark", ttlMs: 60_000 },
+        },
+      },
+      {
+        type: "batch-unkeyed",
+        payload: { stable: true },
+        options: { queue: context.queueName },
+      },
+    ]),
+  );
+  recordInvariant(
+    assertions,
+    "batch duplicate preserves repeated result",
+    batchIds[1],
+    batchIds[0],
+  );
+  recordInvariant(
+    assertions,
+    "unkeyed batch request remains distinct",
+    batchIds[2] === batchIds[0],
+    false,
+  );
+  recordInvariant(assertions, "batch returns two unique jobs", new Set(batchIds).size, 2);
+
+  const expiryOptions = {
+    queue: context.queueName,
+    idempotency: { key: "expiry-reuse", scope: "benchmark", ttlMs: 5 },
+  };
+  const [expiryFirstId, expiryFirstAcceptMs] = await measured(context.now, () =>
+    queue.enqueue("expiry-reuse", { version: 1 }, expiryOptions),
+  );
+  await context.sleep(15);
+  const [expiryReusedId, expiryReuseMs] = await measured(context.now, () =>
+    queue.enqueue("expiry-reuse", { version: 2 }, expiryOptions),
+  );
+  recordInvariant(
+    assertions,
+    "expired binding permits a new identity",
+    expiryReusedId === expiryFirstId,
+    false,
+  );
+  const originalExpiryJob = await context.pool.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM workhorse.job WHERE id = $1",
+    [expiryFirstId],
+  );
+  recordInvariant(
+    assertions,
+    "expired binding leaves original job intact",
+    originalExpiryJob.rows[0]?.count,
+    1,
+  );
+  const activeExpiryBinding = await context.pool.query<{ job_id: string }>(
+    "SELECT job_id FROM workhorse.enqueue_idempotency WHERE job_id = $1",
+    [expiryReusedId],
+  );
+  recordInvariant(
+    assertions,
+    "expiry reuse transfers scoped ownership",
+    activeExpiryBinding.rows[0]?.job_id,
+    expiryReusedId,
+  );
+
+  const finalState = await state();
+  recordInvariant(assertions, "scenario accepted expected jobs", finalState.jobs, 5);
+  recordInvariant(assertions, "scenario retained expected bindings", finalState.bindings, 3);
+  recordInvariant(assertions, "scenario appended one event per accepted job", finalState.events, 5);
+  recordInvariant(
+    assertions,
+    "scenario retained one runtime per accepted job",
+    finalState.runtimes,
+    5,
+  );
+
+  return {
+    name: "idempotent-ingress",
+    durationMs: 0,
+    metrics: {
+      firstAcceptMs,
+      exactReplayMs,
+      conflictRollbackMs,
+      batchDuplicatesMs,
+      expiryFirstAcceptMs,
+      expiryReuseMs,
+      jobs: finalState.jobs,
+      bindings: finalState.bindings,
+      events: finalState.events,
+      runtimes: finalState.runtimes,
+    },
+    assertions,
+  };
+}
+
 async function retentionPruning(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
@@ -1061,6 +1311,7 @@ export const operationalScenarioImplementations: Readonly<
   "crash-before-completion": crashBeforeCompletion,
   "lease-expiry-recovery": leaseExpiryRecovery,
   "retry-paths": retryPaths,
+  "idempotent-ingress": idempotentIngress,
   "retention-pruning": retentionPruning,
   "health-snapshot": healthSnapshot,
 };
