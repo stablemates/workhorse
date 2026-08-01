@@ -1392,6 +1392,12 @@ export function createDemoApplication(
     );
 
   if (options.dashboard !== false) {
+    for (const legacyRoute of ["/tasks", "/cron", "/queues", "/system", "/workers", "/settings"]) {
+      app.get(legacyRoute, (context) => {
+        const search = new URL(context.req.url).search;
+        return context.redirect(`/workhorse${legacyRoute}${search}`);
+      });
+    }
     mountWorkhorseDashboard(app, {
       path: "/workhorse",
       workhorse,

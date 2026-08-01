@@ -140,6 +140,13 @@ try {
   if (!dashboard.ok || !(await dashboard.text()).includes('<div id="root"></div>')) {
     throw new Error("Dashboard assets were not served from the clean checkout");
   }
+  const legacyDashboard = await fetch(`${baseUrl}/tasks?filter=running`, { redirect: "manual" });
+  if (
+    legacyDashboard.status !== 302 ||
+    legacyDashboard.headers.get("location") !== "/workhorse/tasks?filter=running"
+  ) {
+    throw new Error("Legacy dashboard URLs do not redirect into the Workhorse namespace");
+  }
 
   const orderResponse = await fetch(`${baseUrl}/orders`, {
     method: "POST",
