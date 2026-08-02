@@ -23,6 +23,8 @@ import {
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
   DEMO_SCHEDULE_NAMESPACE,
+  DEMO_TIMING_POLICY_TIMEOUT_MS,
+  DEMO_TIMING_TIMEOUT_MS,
   DEMO_WORKER_POLL_MS,
   DEMO_WORKERS,
   DEMO_WORKER_CONCURRENCY,
@@ -238,6 +240,9 @@ describe("Workhorse demo", () => {
         expect.any(String),
         expect.any(String),
         expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
       ],
       historicalJobCount: 362,
     });
@@ -254,7 +259,7 @@ describe("Workhorse demo", () => {
                WHERE id = ANY($1::uuid[]) AND job_type <> 'demo.long-running'
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
             UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
-               WHERE name = 'default-dashboard-v7'
+               WHERE name = 'default-dashboard-v8'
            ) representative_rows`,
         [seeded.jobIds],
       ),
@@ -263,7 +268,7 @@ describe("Workhorse demo", () => {
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 377 }],
+      rows: [{ count: 380 }],
     });
     expect(
       await pool.query(
@@ -295,6 +300,52 @@ describe("Workhorse demo", () => {
           payload: { source: "representative-seed" },
           max_attempts: 1,
           tags: ["demo-test", "durable-checkpoint", "durable-timer"],
+        },
+      ],
+    });
+    expect(
+      await pool.query(
+        `SELECT job.payload, job.max_attempts,
+                job.execution_timeout_ms::integer AS execution_timeout_ms,
+                job.deadline_at IS NOT NULL AS has_deadline,
+                COALESCE(runtime.state, outcome.state) AS state,
+                CASE WHEN runtime.run_at IS NULL THEN NULL
+                     ELSE job.deadline_at > runtime.run_at END AS deadline_after_run_at,
+                job.tags
+           FROM workhorse.job job
+           LEFT JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
+           LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
+          WHERE job.job_type = 'demo.timing-policy'
+          ORDER BY job.payload->>'source'`,
+      ),
+    ).toMatchObject({
+      rows: [
+        {
+          payload: { durationMs: 5_000, source: "execution-timeout-seed" },
+          max_attempts: 1,
+          execution_timeout_ms: DEMO_TIMING_TIMEOUT_MS,
+          has_deadline: false,
+          state: "ready",
+          deadline_after_run_at: null,
+          tags: ["demo-test", "execution-timeout", "intentionally-timed-out"],
+        },
+        {
+          payload: { durationMs: 0, source: "expired-deadline-seed" },
+          max_attempts: 1,
+          execution_timeout_ms: null,
+          has_deadline: true,
+          state: "failed",
+          deadline_after_run_at: null,
+          tags: ["demo-test", "deadline", "intentionally-expired"],
+        },
+        {
+          payload: { durationMs: 10, source: "timing-policy-seed" },
+          max_attempts: 1,
+          execution_timeout_ms: DEMO_TIMING_POLICY_TIMEOUT_MS,
+          has_deadline: true,
+          state: "scheduled",
+          deadline_after_run_at: true,
+          tags: ["demo-test", "deadline", "execution-timeout", "deployment-safe"],
         },
       ],
     });
@@ -404,11 +455,11 @@ describe("Workhorse demo", () => {
     });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 377,
-      scheduled: 4,
-      queued: 11,
+      all: 380,
+      scheduled: 5,
+      queued: 12,
       completed: 346,
-      discarded: 16,
+      discarded: 17,
       retried: 22,
     });
     // Seeds must never manufacture a retention problem: startup stays healthy and deterministic.
@@ -430,8 +481,8 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 377,
-      counts: { all: 377, scheduled: 4, queued: 11, completed: 346, discarded: 16 },
+      total: 380,
+      counts: { all: 380, scheduled: 5, queued: 12, completed: 346, discarded: 17 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -442,13 +493,13 @@ describe("Workhorse demo", () => {
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 377 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 380 });
     expect(secondPage.jobs).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
-      total: 4,
+      total: 5,
       jobs: expect.arrayContaining([
         expect.objectContaining({ state: "scheduled", payload: { source: "scheduled-seed" } }),
       ]),
@@ -559,10 +610,10 @@ describe("Workhorse demo", () => {
     ).resolves.toMatchObject({
       groups: [
         "demo.durable-pipeline",
-        "demo.durable-timer",
         "demo.long-running",
         "demo.recurring",
         "demo.report",
+        "demo.timing-policy",
         "email.digest",
         "email.send",
         "order.process",
@@ -576,6 +627,40 @@ describe("Workhorse demo", () => {
       groupBy: "status",
       groups: ["failed", "ready", "scheduled", "succeeded"],
     });
+  });
+
+  it("materializes the representative execution-timeout example", async () => {
+    const { workhorse } = createTestApplication({ maintenanceIntervalMs: 100 });
+    await seedDemoData(database);
+    const seeded = await pool.query<{ id: string }>(
+      `SELECT id::text FROM workhorse.job
+        WHERE job_type = 'demo.timing-policy'
+          AND payload->>'source' = 'execution-timeout-seed'`,
+    );
+    const jobId = seeded.rows[0]!.id;
+    workhorse.start();
+
+    try {
+      let job = await workhorse.context.queue.getJob(jobId);
+      for (let attempt = 0; attempt < 120 && job?.state !== "failed"; attempt += 1) {
+        await sleep(25);
+        job = await workhorse.context.queue.getJob(jobId);
+      }
+      expect(job).toMatchObject({
+        state: "failed",
+        currentAttempt: 1,
+        error: { name: "ExecutionTimeout" },
+      });
+      await expect(
+        pool.query(
+          `SELECT outcome FROM workhorse.attempt_history
+            WHERE job_id = $1 ORDER BY attempt`,
+          [jobId],
+        ),
+      ).resolves.toMatchObject({ rows: [{ outcome: "timeout" }] });
+    } finally {
+      await workhorse.stop();
+    }
   });
 
   it("keeps seeded durable failures pinned to their persistent boundary across retries", async () => {
