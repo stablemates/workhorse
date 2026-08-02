@@ -31,6 +31,7 @@ const RETRY_JOB_TYPE = "demo.retry";
 const RETRY_CHECKPOINT_NAME = "reserve-capacity";
 const FAILURE_JOB_TYPE = "demo.failure";
 const LONG_RUNNING_JOB_TYPE = "demo.long-running";
+const TIMING_JOB_TYPE = "demo.timing-policy";
 export const DURABLE_TIMER_JOB_TYPE = "demo.durable-timer";
 export const DURABLE_TIMER_PREPARE_CHECKPOINT = "prepare-publication";
 export const DURABLE_TIMER_WAIT_NAME = "publication-delay";
@@ -38,7 +39,7 @@ export const DURABLE_TIMER_PUBLISH_CHECKPOINT = "publish-after-wait";
 const RECURRING_JOB_TYPE = "demo.recurring";
 const REPORT_JOB_TYPE = "demo.report";
 const DEMO_QUEUE = "demo";
-const REPRESENTATIVE_SEED_NAME = "default-dashboard-v7";
+const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
 const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v1";
 const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 const HISTORICAL_JOB_COUNT = 362;
@@ -57,6 +58,9 @@ export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
 export const DEMO_MAINTENANCE_TASK_POLL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_LONG_RUNNING_SEED_DELAY_MS = 10_000;
+export const DEMO_TIMING_TIMEOUT_MS = 1_000;
+export const DEMO_TIMING_HANDLER_MS = 5_000;
+export const DEMO_TIMING_POLICY_TIMEOUT_MS = 90_000;
 export const DEMO_LONG_RUNNING_SEED_JOBS = [
   { label: "archive-validation" },
   { label: "partner-catalog-sync" },
@@ -1036,6 +1040,15 @@ export function createDemoApplication(
           dashboardRefresh.publish("worker");
           return { completed: true, durationMs };
         });
+        worker.handle<{ durationMs: number; source: string }>(
+          TIMING_JOB_TYPE,
+          async ({ durationMs, source }, { signal }) => {
+            dashboardRefresh.publish("worker");
+            await sleep(durationMs, undefined, { signal });
+            dashboardRefresh.publish("worker");
+            return { completed: true, durationMs, source };
+          },
+        );
       },
     })),
     onWorkerError(error) {
@@ -1183,14 +1196,16 @@ export async function seedDemoData(database: DemoDatabase) {
   // These jobs are inserted first but start after a short grace period, so startup work is never
   // starved. Their handler only awaits a Node timer, occupying slots without burning CPU or memory.
   const longRunningJobIds = await seedLongRunningDemoData(database);
-  const representativeJobIds = await database.transaction(async (transaction) => {
+  const representativeSeed = await database.transaction(async (transaction) => {
     const marker = await transaction.execute<{ name: string }>(sql`
       INSERT INTO public.workhorse_demo_seed (name)
       VALUES (${REPRESENTATIVE_SEED_NAME})
       ON CONFLICT (name) DO NOTHING
       RETURNING name
     `);
-    if (marker.rows.length === 0) return [];
+    if (marker.rows.length === 0) {
+      return { expiredDeadlineId: null, jobIds: [] as string[] };
+    }
 
     const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
     const seededJobIds: string[] = [];
@@ -1248,6 +1263,41 @@ export async function seedDemoData(database: DemoDatabase) {
         },
       ),
     );
+    const expiredDeadlineId = await workhorse.queue.enqueue(
+      TIMING_JOB_TYPE,
+      { durationMs: 0, source: "expired-deadline-seed" },
+      {
+        deadline: new Date(Date.now() - 1_000),
+        maxAttempts: 1,
+        tags: ["demo-test", "deadline", "intentionally-expired"],
+      },
+    );
+    seededJobIds.push(expiredDeadlineId);
+    seededJobIds.push(
+      await workhorse.queue.enqueue(
+        TIMING_JOB_TYPE,
+        { durationMs: DEMO_TIMING_HANDLER_MS, source: "execution-timeout-seed" },
+        {
+          executionTimeoutMs: DEMO_TIMING_TIMEOUT_MS,
+          maxAttempts: 1,
+          tags: ["demo-test", "execution-timeout", "intentionally-timed-out"],
+        },
+      ),
+    );
+    const timingPolicyRunAt = new Date(Date.now() + 24 * 60 * 60 * 1_000);
+    seededJobIds.push(
+      await workhorse.queue.enqueue(
+        TIMING_JOB_TYPE,
+        { durationMs: 10, source: "timing-policy-seed" },
+        {
+          runAt: timingPolicyRunAt,
+          deadline: new Date(timingPolicyRunAt.getTime() + 24 * 60 * 60 * 1_000),
+          executionTimeoutMs: DEMO_TIMING_POLICY_TIMEOUT_MS,
+          maxAttempts: 1,
+          tags: ["demo-test", "deadline", "execution-timeout", "deployment-safe"],
+        },
+      ),
+    );
     for (const scenario of Object.keys(durableDemoScenarios) as DurableDemoScenario[]) {
       seededJobIds.push(
         await workhorse.queue.enqueue(
@@ -1291,11 +1341,20 @@ export async function seedDemoData(database: DemoDatabase) {
         { runAt: new Date(Date.now() + 24 * 60 * 60 * 1_000), tags: ["reports", "weekly"] },
       ),
     );
-    return seededJobIds;
+    return { expiredDeadlineId, jobIds: seededJobIds };
   });
 
+  if (representativeSeed.expiredDeadlineId !== null) {
+    const workhorse = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
+    await workhorse.queue.recoverExpired();
+    const expiredDeadline = await workhorse.queue.getJob(representativeSeed.expiredDeadlineId);
+    if (expiredDeadline?.state !== "failed") {
+      throw new Error("Expected the representative expired deadline to be materialized");
+    }
+  }
+
   const historicalJobCount = await seedHistoricalDemoData(database);
-  const jobIds = [...longRunningJobIds, ...representativeJobIds];
+  const jobIds = [...longRunningJobIds, ...representativeSeed.jobIds];
   return {
     seeded: jobIds.length > 0 || historicalJobCount > 0,
     jobIds,

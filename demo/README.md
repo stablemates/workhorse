@@ -15,10 +15,10 @@ only demo-owned workers, controllers, projections, and seed data.
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
-The demo installs schema version 12, including daily retained history, split scheduled maintenance, scoped enqueue idempotency, and cooperative cancellation.
-It does not add a dedicated idempotency-key seed or dashboard form. Application code using `Queue` or the
-Drizzle transaction adapter can opt in to scoped deduplication, while the demo keeps raw keys out of
-persistence and its UI and preserves the distinction between enqueue replay and at-least-once effects.
+The demo installs schema version 13, including daily retained history, split scheduled maintenance,
+scoped enqueue idempotency, cooperative cancellation, absolute deadlines, and per-attempt execution
+timeouts. One deterministic keyed seed exposes deduplication evidence without persisting or displaying
+the raw key. The operator menu also retains an explicit idempotent enqueue path.
 
 Prerequisites are Node.js 22+, pnpm 10+, workspace dependencies installed with `pnpm install`, and
 PostgreSQL 15+ with the local `workhorse` role described in the root README. No PostgreSQL extensions are
@@ -41,8 +41,11 @@ allocates a free private Hono API port. Set `WORKHORSE_API_PORT` to a positive v
 internal port is required; `0` or an omitted value requests automatic allocation.
 Startup seeds one successful transactional order, one named durable timer, fixed, exponential, and
 decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
-durable pipelines, three intentionally persistent durable pipelines, one terminal failure, and one future
-scheduled job. The durable pipelines cover order fulfillment, customer onboarding, and report publication.
+durable pipelines, three intentionally persistent durable pipelines, one terminal failure, one future
+scheduled job, and three timing examples. The timing examples include a materialized expired deadline,
+an active handler that cooperatively reaches a one-second execution timeout, and a future scheduled task
+with a later absolute deadline plus a 90-second per-attempt budget. The durable pipelines cover order
+fulfillment, customer onboarding, and report publication.
 Recoverable examples crash after different checkpoints on attempt 1, then continue without repeating
 completed operations. Three representative persistent-failure seeds stop at their configured boundary on
 every attempt and never execute a later stage:
@@ -55,7 +58,8 @@ every attempt and never execute a later stage:
   decorrelated-jitter retry at about 10 minutes.
 
 Their immutable checkpoint artifacts and per-attempt failure evidence remain visible between retries in the
-existing task drawer. Use the dashboard's **enqueue test job** menu to create fresh success, retry,
+existing task drawer. Timing seeds expose deadline and timeout policy in the same drawer, while the
+System page shows current deadline pressure. Use the dashboard's **enqueue test job** menu to create fresh success, retry,
 durable pipeline, durable timer, failure, and 20-second long-running paths. The dedicated Steps column shows
 **N/M** for durable rows, and their task drawer uses a Mantine Stepper to show saved, running, and pending
 restart boundaries. Each new durable operation takes two seconds so progress remains visible. Set
