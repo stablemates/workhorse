@@ -209,6 +209,17 @@ export interface RetentionPolicy extends Required<RetentionPolicyDefinition> {
   updatedAt: Date;
 }
 
+export interface MaintenancePolicyDefinition {
+  timezone: string;
+  partitionPreparationIntervalMs?: number;
+  terminalCleanupIntervalMs?: number;
+  historyRetentionLocalHour?: number;
+}
+
+export interface MaintenancePolicy extends Required<MaintenancePolicyDefinition> {
+  updatedAt: Date;
+}
+
 export interface RetentionCategoryValues<T> {
   jobIdentity: T;
   terminalOutcome: T;

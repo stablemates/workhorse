@@ -274,8 +274,8 @@ const taskFilters: ReadonlyArray<{
   { value: "canceled", label: "Canceled", icon: Prohibit },
 ];
 const healthyStates = new Set(["succeeded", "ready", "active", "busy"]);
-const failureStates = new Set(["failed", "discarded"]);
-const warningStates = new Set(["scheduled", "retryable", "recent"]);
+const failureStates = new Set(["failed", "discarded", "incomplete"]);
+const warningStates = new Set(["scheduled", "retryable", "recent", "due"]);
 /**
  * Cancellation is neither success nor failure, so it gets its own neutral treatment. Colour is
  * decoration only; the badge text still says "Canceled" on its own.
@@ -423,7 +423,7 @@ function formatClock(value: string | null | undefined): string {
   }).format(new Date(value));
 }
 
-/** Calendar day without a time, so a week boundary reads plainly instead of as an ISO week code. */
+/** Calendar day without a time, so a daily boundary reads plainly. */
 function formatDay(value: string | null | undefined): string {
   if (!value) return "—";
   return getDateTimeFormatter({
@@ -2408,7 +2408,7 @@ function CronPage({
                   <Table.Th>Expression</Table.Th>
                   <Table.Th>Destination</Table.Th>
                   <Table.Th>Status</Table.Th>
-                  <Table.Th>Last fired</Table.Th>
+                  <Table.Th>Last run</Table.Th>
                   <Table.Th ta="right">Runs</Table.Th>
                 </Table.Tr>
               </Table.Thead>
@@ -2463,7 +2463,7 @@ function CronPage({
                             }
                           />
                         ) : (
-                          <StatusBadge state={schedule.active ? "active" : "disabled"} />
+                          <StatusBadge state={schedule.maintenance?.status ?? "scheduled"} />
                         )}
                       </Table.Td>
                       <Table.Td>
@@ -2471,7 +2471,7 @@ function CronPage({
                           {schedule.lastFiredAt ? formatRelative(schedule.lastFiredAt) : "never"}
                         </Text>
                       </Table.Td>
-                      <Table.Td ta="right">{schedule.occurrenceCount}</Table.Td>
+                      <Table.Td ta="right">{schedule.occurrenceCount ?? "—"}</Table.Td>
                     </Table.Tr>
                   );
                 })}
@@ -3083,7 +3083,7 @@ function SystemPage({
   const oldestRetained = retention.categories.find(
     (row) => row.category === retention.oldestRetainedCategory,
   );
-  // Only a lag check should tint the lag badge; spill and expired weeks have their own rows.
+  // Only a lag check should tint the lag badge; spill and expired days have their own rows.
   const retentionBehind = data.status.degradedChecks.some((check) =>
     check.startsWith("Retention behind"),
   );
@@ -3251,11 +3251,11 @@ function SystemPage({
               <Text fw={650}>Integrity</Text>
               <HelpButton
                 label="Integrity"
-                help="Checks whether scheduled work is being promoted now, whether history storage exists for the current and next four weeks, and whether old history is being deleted on schedule. Promotion and missing future storage are critical. Retention findings are degraded: they cost storage but do not stop work. All counts here are current totals and ignore the window selector."
+                help="Checks whether scheduled work is being promoted now, whether history storage exists for the current UTC day plus three future days, and whether old history is being deleted on schedule. Promotion and missing future storage are critical. Retention findings are degraded: they cost storage but do not stop work. All counts here are current totals and ignore the window selector."
               />
             </Group>
             <Text c="dimmed" size="xs" mb="lg">
-              Promotion, weekly history coverage, and history cleanup
+              Promotion, daily history coverage, and history cleanup
             </Text>
             <Group justify="space-between" mb="lg">
               <Box>
@@ -3280,7 +3280,7 @@ function SystemPage({
               </Table.Caption>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th scope="col">Week starting</Table.Th>
+                  <Table.Th scope="col">Day</Table.Th>
                   <Table.Th scope="col" ta="center">
                     Task events
                   </Table.Th>
@@ -3291,11 +3291,11 @@ function SystemPage({
               </Table.Thead>
               <Table.Tbody>
                 {data.integrity.partitions.map((partition) => (
-                  <Table.Tr key={partition.week}>
+                  <Table.Tr key={partition.day}>
                     <Table.Th scope="row" fw={400}>
                       <Text
                         size="xs"
-                        title={`${partition.week} · ${formatExact(partition.startsAt)}`}
+                        title={`${partition.day} · ${formatExact(partition.startsAt)}`}
                       >
                         {formatDay(partition.startsAt)}
                       </Text>
@@ -3375,11 +3375,11 @@ function SystemPage({
                 <Box>
                   <Group gap={4} wrap="nowrap">
                     <Text size="sm" fw={600}>
-                      Expired weeks awaiting cleanup
+                      Expired days awaiting cleanup
                     </Text>
                     <HelpButton
-                      label="Expired weeks awaiting cleanup"
-                      help="Whole weeks of history that are already past their keep-for window and are waiting for background cleanup to drop them. Cleanup removes a bounded number per pass, so this total shows the remaining backlog."
+                      label="Expired days awaiting cleanup"
+                      help="Whole UTC days of history that are already past their keep-for window and are waiting for background cleanup to drop them. Cleanup removes a bounded number per pass, so this total shows the remaining backlog."
                     />
                   </Group>
                   <Text c="dimmed" size="xs">
@@ -3389,7 +3389,7 @@ function SystemPage({
                 <Badge
                   color={eligiblePartitions > 0 ? "yellow" : "teal"}
                   variant="light"
-                  title={`${retention.eligibleHistoryPartitions.jobEvents} task-event weeks, ${retention.eligibleHistoryPartitions.attemptHistory} attempt-history weeks`}
+                  title={`${retention.eligibleHistoryPartitions.jobEvents} task-event days, ${retention.eligibleHistoryPartitions.attemptHistory} attempt-history days`}
                 >
                   {retention.eligibleHistoryPartitions.jobEvents} events ·{" "}
                   {retention.eligibleHistoryPartitions.attemptHistory} attempts
@@ -3399,11 +3399,11 @@ function SystemPage({
                 <Box>
                   <Group gap={4} wrap="nowrap">
                     <Text size="sm" fw={600}>
-                      Rows outside weekly storage
+                      Rows outside daily storage
                     </Text>
                     <HelpButton
-                      label="Rows outside weekly storage"
-                      help="Rows that landed in the catch-all area because no weekly storage covered their timestamp. Counts are exact through 10,000 rows and display a plus sign when the bounded health scan reports a lower bound. Background cleanup clears expired rows when retention is enabled for that history category."
+                      label="Rows outside daily storage"
+                      help="Rows that landed in the catch-all area because no daily storage covered their timestamp. Counts are exact through 10,000 rows and display a plus sign when the bounded health scan reports a lower bound. Background cleanup clears expired rows when retention is enabled for that history category."
                     />
                   </Group>
                   <Text c="dimmed" size="xs">

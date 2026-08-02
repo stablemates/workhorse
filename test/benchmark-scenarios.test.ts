@@ -1,7 +1,7 @@
 import type { QueryResult, QueryResultRow } from "pg";
 import { describe, expect, it } from "vitest";
 import {
-  createHistoryWeekV1Sql,
+  createHistoryDayV1Sql,
   mean,
   operationalScenarioContracts,
   operationalScenarioNames,
@@ -9,7 +9,7 @@ import {
   pollingClaimUpperBound,
   recordInvariant,
   resetWorkhorseStateSql,
-  retireHistoryWeekV1Sql,
+  retireHistoryDayV1Sql,
   resolveOperationalScenarioOptions,
   runOperationalScenarios,
 } from "../benchmarks/scenarios.js";
@@ -56,9 +56,9 @@ describe("operational scenario contracts", () => {
   it("uses explicit reset and versioned partition-retirement SQL contracts", () => {
     expect(resetWorkhorseStateSql).toContain("TRUNCATE workhorse.job_event");
     expect(resetWorkhorseStateSql).toContain("ALTER SEQUENCE workhorse.fence_token_seq");
-    expect(createHistoryWeekV1Sql).toContain("workhorse.create_history_week_v1");
-    expect(retireHistoryWeekV1Sql).toContain("workhorse.retire_history_week_v1");
-    expect(retireHistoryWeekV1Sql).toContain("$1::date");
+    expect(createHistoryDayV1Sql).toContain("workhorse.create_history_day_v1");
+    expect(retireHistoryDayV1Sql).toContain("workhorse.retire_history_day_v1");
+    expect(retireHistoryDayV1Sql).toContain("$1::date");
   });
 
   it("defines complete schema v11 cancellation lifecycle evidence without a performance claim", () => {

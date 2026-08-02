@@ -1,6 +1,6 @@
 # Future feature roadmap
 
-This roadmap starts from the schema version 11 validation MVP described in
+This roadmap starts from the schema version 12 validation MVP described in
 [`docs/features.md`](docs/features.md). Items are ordered by product risk and dependency, not by
 feature visibility. A feature is complete only when its SQL contract, TypeScript API, integration
 tests, operational diagnostics, documentation, and benchmark impact are addressed.
@@ -72,10 +72,15 @@ understandable, installable, and useful.
 
 **Depends on:** none
 
-- [x] Precreate weekly `job_event` and `attempt_history` partitions four weeks ahead through the housekeeping pass (`housekeep_v1`).
+- [x] Precreate UTC-daily `job_event` and `attempt_history` partitions for the current day plus three future days through `prepare_history_partitions_v1`.
 - [x] Add bounded retirement or archival of completed history partitions.
 - [x] Define independent retention for job identity, terminal outcomes, events, attempts, and
       schedule occurrences.
+- [x] Default every retained category to 14 days while keeping each window configurable in PostgreSQL.
+- [x] Split partition preparation, daily history retention, and terminal/idempotency cleanup into
+      independently locked tasks with persisted cadence state and one global IANA timezone.
+- [x] Gate terminal identity deletion on a persisted history-retention watermark so cleanup never
+      outruns retained attribution after removing reverse history foreign keys.
 - [x] Refuse unsafe retention that could remove live jobs or break lifecycle attribution.
 - [x] Report retention lag, default-partition usage, and the oldest retained boundary in health
       output.
@@ -405,6 +410,36 @@ HTTP.
       package.
 - [ ] Add packed-consumer tests proving independent installation, namespace mounting, authorization, and
       upgrades across supported API versions.
+
+### [ ] P2-10 Long-horizon statistics rollups
+
+**Depends on:** P0-01, P0-02, P2-01
+
+- [ ] Define hourly and daily aggregate tables for low-cardinality queue, job-type, state, latency,
+      retry, cancellation, and throughput dimensions.
+- [ ] Specify job-level versus attempt-level metric semantics and mergeable histogram buckets before
+      stabilizing the schema.
+- [ ] Recompute bounded time buckets idempotently so late terminal outcomes and retries converge
+      without double counting.
+- [ ] Persist a rollup watermark and prohibit raw-history retention from crossing it. A stalled
+      rollup must degrade health rather than silently create incomplete long-term statistics.
+- [ ] Stitch recent raw detail and older aggregates in dashboard queries without scanning retained
+      job history.
+- [ ] Define independent aggregate retention tiers and benchmark write amplification, query latency,
+      and storage on production-shaped payloads.
+
+### [ ] P2-11 Cold history export
+
+**Depends on:** P2-10, P2-04
+
+- [ ] Design an optional exporter for finalized raw history and/or rollup buckets after the rollup
+      watermark makes deletion safe.
+- [ ] Define immutable object naming, checksums, manifests, encryption, access control, retries, and
+      idempotent resume semantics without coupling core dispatch to object storage.
+- [ ] Make export completion an explicit retention interlock only when cold export is enabled.
+- [ ] Provide restore and offline-query guidance without promising transparent hot/cold dashboard
+      queries in the first version.
+- [ ] Keep storage providers in optional packages and preserve PostgreSQL-only operation by default.
 
 ## P3: orchestration
 

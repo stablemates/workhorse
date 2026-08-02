@@ -21,7 +21,7 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 - three representative durable seeds persistently fail at configured boundaries, preserve checkpoint-backed
   interim artifacts and per-attempt errors, schedule retries at about 5, 7, and 10 minutes, and never execute
   later planned stages;
-- schema v11 already persisted terminal outcomes/results and immutable checkpoint outputs as public data;
+- schema v12 persists terminal outcomes/results and immutable checkpoint outputs as public data;
   the existing task drawer now makes both the terminal result or failure evidence and checkpoint-backed
   interim artifacts inspectable alongside attempt history;
 - a named durable timer demo checkpoints preparation, suspends with no active lease, and later reclaims the
@@ -29,7 +29,7 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 - the worker-owned scheduler synchronizes and fires a recurring definition with occurrence deduplication;
 - the typed oRPC snapshot exposes queues, jobs, checkpoint and wait provenance, logical and final-claim
   attempt timestamps, demo-owned progress plans, schedules, workers, failures, and database health;
-- schema version 11 installs the core scoped enqueue-idempotency and cooperative cancellation contracts used by application ingress and operator actions, although the demo still omits a dedicated idempotency-key form or seed;
+- schema version 12 installs daily retained history, split scheduled maintenance, scoped enqueue-idempotency, and cooperative cancellation contracts, although the demo still omits a dedicated idempotency-key form or seed;
 - the dashboard can be omitted without changing core queue behavior;
 - worker instances expose bounded local concurrency and `{ concurrency, activeSlots, paused, draining }`
   runtime state, while the demo intentionally keeps two default-concurrency workers rather than presenting

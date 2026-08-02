@@ -54,7 +54,7 @@ export const DEMO_WORKER_CONCURRENCY: Readonly<Record<(typeof DEMO_WORKERS)[numb
   "demo-worker-2": 1,
 };
 export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
-export const DEMO_HOUSEKEEPING_INTERVAL_MS = 60_000;
+export const DEMO_MAINTENANCE_TASK_POLL_MS = 60_000;
 export const DEMO_LONG_RUNNING_MS = 20_000;
 export const DEMO_LONG_RUNNING_SEED_DELAY_MS = 10_000;
 export const DEMO_LONG_RUNNING_SEED_JOBS = [
@@ -130,7 +130,7 @@ export interface CreateDemoApplicationOptions {
   workerController?: WorkerController;
   workerPollMs?: number;
   maintenanceIntervalMs?: number;
-  housekeepingIntervalMs?: number;
+  maintenanceTaskPollMs?: number;
   longRunningJobMs?: number;
   durableStepMs?: number;
   durableTimerWaitMs?: number;
@@ -836,7 +836,7 @@ export function createDemoApplication(
   options: CreateDemoApplicationOptions = {},
 ) {
   const maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS;
-  const housekeepingIntervalMs = options.housekeepingIntervalMs ?? DEMO_HOUSEKEEPING_INTERVAL_MS;
+  const maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? DEMO_MAINTENANCE_TASK_POLL_MS;
   const durableStepMs = options.durableStepMs ?? DEMO_DURABLE_STEP_MS;
   const durableTimerWaitMs = options.durableTimerWaitMs ?? DEMO_DURABLE_TIMER_WAIT_MS;
   const dashboardRefresh = options.dashboardRefresh ?? new DashboardRefreshHub();
@@ -864,7 +864,7 @@ export function createDemoApplication(
         // Declared once at startup. The demo deliberately offers no runtime concurrency control.
         concurrency: DEMO_WORKER_CONCURRENCY[workerId],
         maintenanceIntervalMs,
-        housekeepingIntervalMs,
+        maintenanceTaskPollMs,
         // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
         // Returning undefined omits the worker override and lets SQL select the stored policy.
         retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
@@ -1058,7 +1058,7 @@ export function createDemoApplication(
       authorize: () => true,
       environment,
       configuredWorkers: DEMO_WORKERS,
-      maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs, housekeepingIntervalMs },
+      maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs },
       operator: options.operator ?? createReadOnlyOperator(),
       scheduleController: options.scheduleController,
       queueController: options.queueController,
@@ -1087,10 +1087,11 @@ function textArrayValue(values: readonly string[]) {
 
 async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
   return database.transaction(async (transaction) => {
-    // The seven-day window crosses into the previous ISO week. Use the core partition helper so
-    // backdated attempts do not accumulate in the default partition.
+    // Prepare every day in the seven-day seed window so backdated attempts do not accumulate in
+    // the default partition.
     await transaction.execute(sql`
-      SELECT workhorse.create_history_week_v1((current_date - interval '1 week')::date)
+      SELECT workhorse.create_history_day_v1((current_date - day_offset)::date)
+        FROM generate_series(1, 7) AS days(day_offset)
     `);
     const marker = await transaction.execute<{ name: string }>(sql`
       INSERT INTO public.workhorse_demo_seed (name)

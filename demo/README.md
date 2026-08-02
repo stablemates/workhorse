@@ -15,7 +15,7 @@ contributes only demo-owned workers, controllers, projections, and seed data.
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
-The demo installs schema version 11, including scoped enqueue idempotency and cooperative cancellation.
+The demo installs schema version 12, including daily retained history, split scheduled maintenance, scoped enqueue idempotency, and cooperative cancellation.
 It does not add a dedicated idempotency-key seed or dashboard form. Application code using `Queue` or the
 Drizzle transaction adapter can opt in to scoped deduplication, while the demo keeps raw keys out of
 persistence and its UI and preserves the distinction between enqueue replay and at-least-once effects.
@@ -88,8 +88,8 @@ not reload on every worker or PostgreSQL notification, so concurrent job volume 
 browser request storm. Task filtering and pagination happen in PostgreSQL, so the client never downloads
 the full task list. The mounted event endpoint remains available for a future explicitly coalesced design.
 
-The System Health integrity panel shows future weekly partition coverage, persisted retention lag,
-oldest retained data, fully expired weeks awaiting bounded cleanup, and cumulative rows in the default
+The System Health integrity panel shows future daily partition coverage, persisted retention lag,
+oldest retained data, fully expired days awaiting bounded cleanup, and cumulative rows in the default
 history partitions. Retention backlog is shown as degraded because it consumes storage without stopping
 dispatch; expired leases, stalled promotion, or missing future partitions remain critical. Demo seeds
 intentionally represent a healthy retention state rather than manufacturing time-dependent cleanup
@@ -110,9 +110,7 @@ changes only that occurrence, not the schedule or its next fire.
 
 Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, and a one-minute
 lightweight long-running schedule through `Queue.syncSchedules`. The workers evaluate due schedules
-in-process with advisory-lock coordination and SQL-level occurrence deduplication. The Cron view distinguishes the application heartbeat from the worker-owned maintenance
-loops: a fast tick that promotes due jobs and recovers expired leases, and a slower housekeeping pass
-that prunes old occurrence rows and replenishes history partitions. The heartbeat's
+in-process with advisory-lock coordination and SQL-level occurrence deduplication. The Cron view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, six-hour partition preparation, daily local-03:00 history retention, and five-minute terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone and task due state. The heartbeat's
 audited control updates the durable schedule definition, and Jobs and Workers show each resulting
 execution.
 

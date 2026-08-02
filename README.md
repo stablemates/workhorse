@@ -105,15 +105,15 @@ retains its prior behavior and always creates a new job.
 Raw keys are never persisted. `workhorse.enqueue_idempotency` stores the scope plus a full SHA-256 key
 hash; events, UI projections, and errors use a bounded preview plus a 12-hex key digest. The initial
 `enqueued` event records that safe metadata once, while exact replay emits no event. Expired bindings can
-be reused; housekeeping removes them
-before terminal identity pruning, and purging queued or scheduled jobs releases their bindings.
+be reused; terminal-storage maintenance removes them before terminal identity pruning, and purging queued
+or scheduled jobs releases their bindings.
 
 This deduplicates durable enqueue acceptance only. Handler delivery and external effects remain at least
 once and still require provider idempotency, an outbox/inbox, or compensation.
 
 ### Persisted retry policies
 
-Schema version 11 accepts an optional `retryPolicy` on enqueue requests and recurring schedule job
+Schema version 12 accepts an optional `retryPolicy` on enqueue requests and recurring schedule job
 definitions:
 
 ```ts
@@ -313,7 +313,9 @@ provides a Node server handle whose idempotent shutdown stops new claims, drains
 and requests, then closes explicitly provider-owned resources. See the package READMEs for complete
 configuration and ownership behavior.
 
-Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL, split across two cadences. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs and recovers expired leases, and also drives in-process schedule evaluation. A slower housekeeping pass (`workhorse.housekeep_v1`, once per minute by default) replenishes future history partitions; independently retires expired event and attempt partitions plus bounded fallback rows; prunes schedule occurrences; removes expired enqueue-idempotency bindings; and only then removes terminal jobs whose retained history no longer needs their identity. Slow cleanup therefore never delays dispatch. Transaction-scoped advisory locks inside `tick_v1`, `housekeep_v1`, and `workhorse.fire_schedule_v1` make concurrent passes from other workers cheap no-ops, so running many workers neither duplicates schedules nor multiplies maintenance load, and any surviving worker keeps schedules firing. Both entry points return per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and the `onMaintenance` callback.
+Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs, recovers expired leases, and drives schedule evaluation. Three slower SQL-owned tasks have independent advisory locks and persisted due state: `prepare_history_partitions_v1` maintains UTC-daily history partitions every six hours, `retain_history_v1` retires event, attempt, and schedule-occurrence history once per local date at or after 03:00 in the configured IANA timezone, and `prune_terminal_storage_v1` removes expired idempotency bindings and safe terminal bundles every five minutes. Workers poll task eligibility every minute by default, but PostgreSQL decides whether work is due globally, so additional workers produce cheap no-ops rather than multiplying cleanup. Every task returns per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and `onMaintenance`.
+
+Clean installation creates the current UTC day plus three future daily partitions. Retention defaults to 14 days for identity, outcomes, events, attempts, and occurrences, and each window remains configurable through `Queue.syncRetentionPolicy`. Terminal identity deletion is interlocked with a persisted history-retention watermark, so frequent terminal cleanup cannot outrun daily history retirement or late history insertion.
 
 Handler failures use SQL-owned, Sidekiq-inspired retry scheduling. For zero-based retry count `count` (the first failed attempt is `0`), the delay is `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds. The default 25-attempt budget spreads retries across roughly 20 days. Keeping the calculation in `fail_v1` gives every client the same durable protocol; `WorkerOptions.retryDelayMs` remains an explicit override, including `0` for an immediate retry or a callback `(attempt, job) => milliseconds | undefined`; returning `undefined` defers to PostgreSQL's persisted policy or compatibility default.
 

@@ -2192,16 +2192,38 @@ describe("Workhorse demo", () => {
           kind: "system",
           name: "tick",
           type: "workhorse.tick_v1",
-          maintenance: { intervalMs: 1_000, phases: ["promote", "recover"] },
+          maintenance: expect.objectContaining({
+            intervalMs: 1_000,
+            phases: ["promote", "recover"],
+          }),
         }),
         expect.objectContaining({
           kind: "system",
-          name: "housekeeping",
-          type: "workhorse.housekeep_v1",
-          maintenance: {
-            intervalMs: 60_000,
-            phases: ["history_partitions", "schedule_occurrences"],
-          },
+          name: "history-partitions",
+          type: "workhorse.prepare_history_partitions_v1",
+          maintenance: expect.objectContaining({
+            intervalMs: 21_600_000,
+            phases: ["history_partitions"],
+          }),
+        }),
+        expect.objectContaining({
+          kind: "system",
+          name: "history-retention",
+          cron: "daily at 03:00 UTC",
+          type: "workhorse.retain_history_v1",
+          maintenance: expect.objectContaining({
+            intervalMs: 86_400_000,
+            phases: ["event_retention", "attempt_retention", "schedule_occurrences"],
+          }),
+        }),
+        expect.objectContaining({
+          kind: "system",
+          name: "terminal-storage",
+          type: "workhorse.prune_terminal_storage_v1",
+          maintenance: expect.objectContaining({
+            intervalMs: 300_000,
+            phases: ["enqueue_idempotency", "terminal_jobs"],
+          }),
         }),
         expect.objectContaining({
           kind: "user",
@@ -2252,7 +2274,7 @@ describe("Workhorse demo", () => {
   });
 
   it("reports history spill as degraded rather than critical", async () => {
-    // A timestamp older than every weekly partition lands in the catch-all partition, which is
+    // A timestamp older than every daily partition lands in the catch-all partition, which is
     // exactly the condition operators need to see. No sleeping or seed data is involved.
     await pool.query(
       `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
@@ -2271,13 +2293,13 @@ describe("Workhorse demo", () => {
 
     expect(system.status.level).toBe("degraded");
     expect(system.status.criticalChecks).toEqual([]);
-    expect(system.status.degradedChecks).toEqual(["History rows outside weekly partitions (1)"]);
+    expect(system.status.degradedChecks).toEqual(["History rows outside daily partitions (1)"]);
     expect(system.status.checks).toEqual(system.status.degradedChecks);
     expect(system.integrity.retention.defaultHistoryRows).toEqual({
       jobEvents: 1,
       attemptHistory: 0,
     });
-    // The row predates every partition cutoff, so it is spill rather than an un-dropped week.
+    // The row predates every partition cutoff, so it is spill rather than an un-dropped day.
     expect(system.integrity.retention.eligibleHistoryPartitions).toEqual({
       jobEvents: 0,
       attemptHistory: 0,
@@ -2341,7 +2363,7 @@ describe("Workhorse demo", () => {
     expect(
       system.integrity.retention.categories.find((row) => row.category === "jobEvents"),
     ).toMatchObject({ retentionDays: null, lagMs: null });
-    // Retention never escalates past degraded, and nothing spilled outside weekly storage.
+    // Retention never escalates past degraded, and nothing spilled outside daily storage.
     expect(system.integrity.retention.defaultHistoryRows).toEqual({
       jobEvents: 0,
       attemptHistory: 0,

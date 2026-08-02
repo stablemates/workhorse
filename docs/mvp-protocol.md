@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 11 protocol reference. Public TypeScript `Queue`/`Worker` methods remain stable; the canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, named timer waits, cooperative cancellation, and persisted automated retention.
+This is the compact schema version 12 protocol reference. The canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, named timer waits, cooperative cancellation, and persisted automated retention.
 
 ## Storage model
 
@@ -12,11 +12,13 @@ This is the compact schema version 11 protocol reference. Public TypeScript `Que
 | `job_checkpoint`      | Immutable named handler restart boundaries                           | Insert once per job and checkpoint name under a fenced active lease                   |
 | `job_wait`            | Immutable named timer restart boundaries                             | Insert once per job and wait name under a fenced active lease                         |
 | `job_outcome`         | Terminal success, failure, or cancellation                           | Insert once after runtime deletion                                                    |
-| `job_event`           | Lifecycle audit                                                      | Append-only, weekly range partitions                                                  |
-| `attempt_history`     | Closed attempt records                                               | Append-only, weekly range partitions                                                  |
+| `job_event`           | Lifecycle audit                                                      | Append-only, UTC-daily range partitions                                               |
+| `attempt_history`     | Closed attempt records                                               | Append-only, UTC-daily range partitions                                               |
 | `schedule_definition` | Namespaced recurring-job desired state including retry policy        | Deploy upsert; omitted definitions are disabled                                       |
 | `schedule_occurrence` | Deduplicated schedule fire mapped to a job                           | Insert once per schedule second; job ID populated atomically                          |
 | `retention_policy`    | Authoritative cleanup windows and bounded work limits                | Singleton deploy synchronization                                                      |
+| `maintenance_policy`  | IANA timezone and database-global maintenance cadences               | Singleton deploy synchronization                                                      |
+| `maintenance_state`   | Per-task due state and retained-history safety watermark             | SQL-owned maintenance state                                                           |
 
 A committed job has exactly one live runtime or one terminal outcome, never both. Version 1 write tables and compatibility write views are absent.
 
@@ -44,7 +46,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 12. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
 13. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID. Canceling its job does not alter the definition or later occurrences.
 14. `sync_retention_policy_v1` stores explicit nullable minimum windows and work bounds, rejecting policies that could delete identity before retained outcome, event, attempt, or occurrence attribution.
-15. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. Every promoted row emits `promoted`; timer-backed promotion also carries and clears `wait_name` and appends `wait_elapsed`. `housekeep_v1` replenishes the history-partition horizon, retires event and attempt history independently, prunes occurrence keys, removes expired enqueue-idempotency bindings, and then removes safe terminal-job bundles under the separate `workhorse:housekeeping` lock. Every phase is isolated in an exception subtransaction. Both entry points return `(phase, rows_affected, duration_ms, skipped_lock, error)` telemetry.
+15. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. Every promoted row emits `promoted`; timer-backed promotion also carries and clears `wait_name` and appends `wait_elapsed`. `prepare_history_partitions_v1`, `retain_history_v1`, and `prune_terminal_storage_v1` own separate due state and advisory locks for partition coverage, daily history retirement, and terminal/idempotency cleanup. Every phase is isolated in an exception subtransaction, and every entry point returns `(phase, rows_affected, duration_ms, skipped_lock, error)` telemetry.
 
 Every closed logical attempt has one immutable `attempt_history` row. Never-started cancellation has none; active or previously started durable-wait cancellation closes one row with outcome `canceled`. `started_at` spans timer suspensions and `claimed_at` identifies the final activation that closed it. Every lifecycle boundary appends a `job_event`; cancellation uses one `cancel_requested` event only for active work and one `canceled` event at terminal materialization. Repeated requests add no duplicate terminal or event evidence.
 
@@ -141,8 +143,8 @@ Before scheduling concerns, the worker execution contract is:
 - Definitions contain cron text plus a typed Workhorse queue job; arbitrary SQL is not accepted.
 - Definition upsert is one target-database transaction; a per-namespace advisory lock serializes concurrent deployments.
 - Workers parse cron expressions in process and compute each enabled definition's due occurrences from its last durable occurrence.
-- Worker tick passes run at most once per `maintenanceIntervalMs` (default one second) and housekeeping passes at most once per `housekeepingIntervalMs` (default 60 seconds); transaction-scoped advisory locks inside `tick_v1`, `housekeep_v1`, and `fire_schedule_v1` make concurrent passes from other workers no-ops, so any number of workers run without duplicate fires and any surviving worker takes over.
-- Maintenance is bounded: 1,000-row promotion/recovery limits per tick; by default at most 1,000 terminal jobs, four history partitions per category, 10,000 fallback rows per category, and 10,000 occurrences per housekeeping pass. Both loops report per-phase telemetry through `worker.maintenanceTelemetry()` and `onMaintenance`.
+- Worker tick passes run at most once per `maintenanceIntervalMs` (default one second). Workers poll the three slow tasks at most once per `maintenanceTaskPollMs` (default 60 seconds), while PostgreSQL owns their database-global due state. Transaction-scoped advisory locks inside every maintenance task and `fire_schedule_v1` make concurrent passes no-ops, so any number of workers run without duplicate fires and any surviving worker takes over.
+- Maintenance is bounded: 1,000-row promotion/recovery limits per tick; by default at most 1,000 terminal jobs, four history partitions per category, 10,000 fallback rows per category, and 10,000 occurrences per task pass. Every loop reports per-phase telemetry through `worker.maintenanceTelemetry()` and `onMaintenance`.
 - `Worker` option `scheduleNamespaces` selects which namespaces a worker evaluates; `scheduleCatchupLimit` bounds missed occurrences fired after downtime.
 - Worker fires call `fire_schedule_v1(namespace, name, revision, occurrence)` with the planned occurrence second as the occurrence key; stale, disabled, or missing definitions are no-ops.
 - Callers using `Queue.fireSchedule(namespace, name, revision, occurrenceAt)` can supply a stable external occurrence timestamp.
@@ -152,11 +154,13 @@ Before scheduling concerns, the worker execution contract is:
 
 `attempt_history.started_at` records the beginning of the logical attempt even when it suspends through timers, while `claimed_at` records the final activation that produced retry, expiry, success, terminal failure, or cancellation. Timer suspension emits lifecycle events but does not close an attempt row. Never-started cancellation has no attempt row.
 
-The default partitions keep history inserts available if maintenance is late. `create_history_week_v1(week)` normalizes its argument to Monday, serializes creation for that boundary, repairs either missing half of a partial event/attempt pair, and moves matching fallback rows into each newly created partition. `retire_history_week_v1(week)` remains an explicit paired primitive. Clean installation precreates the current week and four future weeks, while each `housekeep_v1` pass repairs that horizon.
+The default partitions keep history inserts available if maintenance is late. `create_history_day_v1(day)` normalizes its argument to a UTC date, serializes creation for that boundary, repairs either missing half of a partial event/attempt pair, and moves matching fallback rows into each newly created partition. `retire_history_day_v1(day)` remains an explicit paired primitive. Clean installation precreates the current day and three future days, while `prepare_history_partitions_v1` repairs that horizon every six hours by default.
 
-`Queue.syncRetentionPolicy` persists independent minimum windows for identity, outcome, events, attempts, and occurrences. Null disables a category. Job, outcome, event, and attempt deletion is opt-in; occurrences retain the 30-day default. Event and attempt phases independently drop only fully expired completed weeks and bounded-delete expired default rows.
+`Queue.syncRetentionPolicy` persists independent minimum windows for identity, outcome, events, attempts, and occurrences. Every category defaults to 14 days; null disables a category. Event and attempt phases independently drop only fully expired completed days and bounded-delete expired default rows.
 
-Identity is the attribution anchor. Terminal cleanup requires an outcome, elapsed identity and outcome windows, no live runtime, and no remaining event, attempt, or occurrence reference. Only then does deleting `job` cascade its outcome, checkpoints, and waits. Retention windows are minimums: weekly granularity, bounded catch-up, and retained provenance can extend actual storage. Queue health reports the policy, cleanup lag, oldest retained boundaries, eligible history partitions, and cumulative default-partition rows.
+Identity is the attribution anchor. History inserts lock and verify their parent and update its retained-history boundary. Daily retention advances a global watermark only after event and attempt cleanup is complete through their cutoffs. Terminal cleanup requires an outcome, elapsed identity and outcome windows, no live runtime or retained occurrence, and a terminal boundary behind that watermark. Only then does deleting `job` cascade its outcome, checkpoints, and waits. Retention windows are minimums: daily granularity, bounded catch-up, and retained provenance can extend actual storage. Queue health reports policy, cleanup lag, oldest retained boundaries, eligible history partitions, and cumulative default-partition rows.
+
+`Queue.syncMaintenancePolicy` persists one IANA timezone and task cadences. Partition preparation defaults to six-hour intervals, terminal/idempotency cleanup to five-minute intervals, and history retention to once per local date at or after 03:00. Workers poll task eligibility every minute by default; PostgreSQL owns the global due check and separate advisory lock for each task.
 
 ## Validation limits
 
