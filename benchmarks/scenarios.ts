@@ -262,11 +262,13 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   {
     name: "worker-concurrency",
     purpose:
-      "Exercise bounded concurrent worker slots while recording throughput and database-pressure proxies without excluding claim work from timing.",
+      "Exercise bounded concurrent worker slots and equal-capacity worker topologies while recording throughput, start latency, and database-pressure proxies without excluding claim work from timing.",
     invariants: [
       "concurrency levels preserve the configured slot bound and expose accurate runtime state",
       "claims remain serial, never exceed free slots, and are all included in timed execution",
       "after backlog exhaustion, serial null-claim pressure is bounded by elapsed polling windows rather than configured concurrency",
+      "single, balanced, and distributed worker topologies preserve the same total handler-capacity bound",
+      "immediate and I/O-like topology profiles complete every job without leaving active or expired leases",
       "each active job retains an independent heartbeat and completes without an expired lease",
       "pause prevents claims and stop prevents new claims while draining active handlers",
     ],
@@ -277,6 +279,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "maximum handler, slot, query, and claim overlap by level",
       "claim attempts, null claims, polling-window bounds, and heartbeat calls by level",
       "maximum null claims per polling window across concurrency levels",
+      "equal-capacity topology throughput, start latency, overlap, and query pressure by handler profile",
       "first-null claim count",
       "shutdown claimed, succeeded, and remaining-ready counts",
     ],
@@ -479,7 +482,9 @@ class QueryPressureProbe implements Queryable {
         this.claimsWithoutFreeSlot += 1;
       }
     }
-    if (text.includes("workhorse.heartbeat_v1")) this.heartbeatCalls += 1;
+    if (text.includes("workhorse.heartbeat_v1") || text.includes("workhorse.heartbeat_v2")) {
+      this.heartbeatCalls += 1;
+    }
     try {
       return await this.target.query<R>(text, values);
     } finally {
@@ -2005,6 +2010,129 @@ async function workerConcurrency(
     pollingPressureChecks.every(Boolean),
     true,
   );
+
+  const topologyCapacity = Math.min(8, context.options.jobCount);
+  const topologyProfiles = [
+    { name: "immediate", delayMs: 0 },
+    { name: "io", delayMs: handlerDelayMs },
+  ] as const;
+  const topologyShapes = [
+    { name: "single", workerCount: 1, concurrency: topologyCapacity },
+    ...(topologyCapacity >= 4 && topologyCapacity % 2 === 0
+      ? [
+          {
+            name: "balanced",
+            workerCount: 2,
+            concurrency: topologyCapacity / 2,
+          },
+        ]
+      : []),
+    { name: "distributed", workerCount: topologyCapacity, concurrency: 1 },
+  ];
+  metrics.topologyCapacity = topologyCapacity;
+  metrics.topologyProfiles = topologyProfiles.map((profile) => profile.name).join(",");
+  metrics.topologyRuns = topologyProfiles.length * topologyShapes.length;
+
+  for (const profile of topologyProfiles) {
+    for (const shape of topologyShapes) {
+      await reset(context.pool);
+      const queue = new Queue(context.pool, context.queueName);
+      await queue.enqueueMany(
+        Array.from({ length: context.options.jobCount }, (_, index) => ({
+          type: "concurrency-topology",
+          payload: { index },
+        })),
+      );
+      const probe = new QueryPressureProbe(context.pool);
+      const workers: Worker[] = [];
+      const running: Promise<void>[] = [];
+      const startLatencies: number[] = [];
+      let activeHandlers = 0;
+      let maxHandlerOverlap = 0;
+      let completedHandlers = 0;
+      let processingStartedAt = 0;
+
+      for (let workerIndex = 0; workerIndex < shape.workerCount; workerIndex += 1) {
+        const worker = new Worker(new Queue(probe, context.queueName), {
+          concurrency: shape.concurrency,
+          workerId: `benchmark-topology-${profile.name}-${shape.name}-${workerIndex + 1}`,
+          leaseMs,
+          heartbeatMs,
+          pollMs,
+          maintenanceIntervalMs: 60_000,
+          maintenanceTaskPollMs: 60_000,
+        }).handle("concurrency-topology", async () => {
+          startLatencies.push(Math.max(0, context.now() - processingStartedAt));
+          activeHandlers += 1;
+          maxHandlerOverlap = Math.max(maxHandlerOverlap, activeHandlers);
+          if (profile.delayMs > 0) await context.sleep(profile.delayMs);
+          activeHandlers -= 1;
+          completedHandlers += 1;
+          if (completedHandlers === context.options.jobCount) {
+            for (const activeWorker of workers) activeWorker.stop();
+          }
+          return { ok: true };
+        });
+        workers.push(worker);
+      }
+
+      const before = probe.snapshot();
+      processingStartedAt = context.now();
+      for (const worker of workers) running.push(worker.run());
+      await Promise.all(running);
+      const durationMs = Math.max(0, context.now() - processingStartedAt);
+      const after = probe.snapshot();
+      const health = await queue.health();
+      const outcomes = await rowCount(context.pool, "job_outcome");
+      const prefix = `topology${profile.name}${shape.name}`;
+      const totalConfiguredSlots = shape.workerCount * shape.concurrency;
+
+      metrics[`${prefix}Workers`] = shape.workerCount;
+      metrics[`${prefix}ConcurrencyPerWorker`] = shape.concurrency;
+      metrics[`${prefix}TotalConfiguredSlots`] = totalConfiguredSlots;
+      metrics[`${prefix}DurationMs`] = durationMs;
+      metrics[`${prefix}JobsPerSecond`] =
+        durationMs === 0 ? null : (context.options.jobCount * 1_000) / durationMs;
+      metrics[`${prefix}StartLatencyP50Ms`] = percentile(startLatencies, 0.5);
+      metrics[`${prefix}StartLatencyP95Ms`] = percentile(startLatencies, 0.95);
+      metrics[`${prefix}StartLatencyMaxMs`] = percentile(startLatencies, 1);
+      metrics[`${prefix}MaxHandlerOverlap`] = maxHandlerOverlap;
+      metrics[`${prefix}QueryCalls`] = after.queries - before.queries;
+      metrics[`${prefix}ClaimCalls`] = after.claimCalls - before.claimCalls;
+      metrics[`${prefix}HeartbeatCalls`] = after.heartbeatCalls - before.heartbeatCalls;
+      metrics[`${prefix}MaxConcurrentQueries`] = after.maxConcurrentQueries;
+      metrics[`${prefix}MaxConcurrentClaims`] = after.maxConcurrentClaims;
+
+      recordInvariant(
+        assertions,
+        `${prefix} completes all handlers`,
+        completedHandlers,
+        context.options.jobCount,
+      );
+      recordInvariant(
+        assertions,
+        `${prefix} persists all outcomes`,
+        outcomes,
+        context.options.jobCount,
+      );
+      recordInvariant(assertions, `${prefix} leaves no ready work`, health.readyDepth, 0);
+      recordInvariant(assertions, `${prefix} leaves no active leases`, health.activeLeases, 0);
+      recordInvariant(assertions, `${prefix} leaves no expired leases`, health.expiredLeases, 0);
+      recordInvariant(
+        assertions,
+        `${prefix} respects total configured slots`,
+        maxHandlerOverlap,
+        totalConfiguredSlots,
+        (actual, expected) => Number(actual) >= 1 && Number(actual) <= Number(expected),
+      );
+      recordInvariant(
+        assertions,
+        `${prefix} records every handler start`,
+        startLatencies.length,
+        context.options.jobCount,
+      );
+    }
+  }
 
   await reset(context.pool);
   const firstNullQueue = new Queue(context.pool, context.queueName);
