@@ -218,15 +218,15 @@ not depend on the later full OpenTelemetry and metrics package.
 - [x] Cover immediate, cooperative, ignored-signal expiry, race, history, duplicate, stale-fence,
       query-timing, and recurring behavior in the `cancellation-lifecycle` operational scenario.
 
-### [ ] P1-03 Deadlines and execution timeouts
+### [x] P1-03 Deadlines and execution timeouts
 
 **Depends on:** P1-02
 
-- [ ] Support enqueue deadlines and per-attempt execution timeouts.
-- [ ] Prevent expired jobs from being newly claimed.
-- [ ] Fence late handler completion after timeout or deadline termination.
-- [ ] Distinguish timeout, deadline, cancellation, and lease-expiry outcomes.
-- [ ] Surface deadline pressure in health and telemetry.
+- [x] Support enqueue deadlines and per-attempt execution timeouts.
+- [x] Prevent expired jobs from being newly claimed.
+- [x] Fence late handler completion after timeout or deadline termination.
+- [x] Distinguish timeout, deadline, cancellation, and lease-expiry outcomes.
+- [x] Surface deadline pressure in health and telemetry.
 
 ### [ ] P1-04 Dead-letter views and redrive
 

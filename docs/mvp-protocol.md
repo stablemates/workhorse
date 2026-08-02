@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 12 protocol reference. The canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, named timer waits, cooperative cancellation, and persisted automated retention.
+This is the compact schema version 13 protocol reference. The canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, named timer waits, cooperative cancellation, absolute deadlines, per-attempt execution timeouts, and persisted automated retention.
 
 ## Storage model
 
@@ -34,7 +34,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 
 1. `enqueue_many_v1` validates up to 1,000 JSONB requests against one timestamp. Keyed requests first acquire deterministic sorted scoped-ownership locks, while acceptance side effects remain in caller ordinal order. New requests insert `job`, `job_runtime`, and one `enqueued` event; exact replays return the retained job ID before durable, FIFO, or notification side effects; mismatches abort the whole statement with structured safe conflict details. `enqueue_v1` delegates to it.
 2. `promote_v1` locks a bounded due set with `SKIP LOCKED`, updates scheduled runtime rows to ready, assigns sequences, and appends events.
-3. `claim_v1` locks one FIFO ready row and performs one runtime state update to active with worker, fence, heartbeat, expiry, and a preserved or newly initialized logical attempt start, then appends the claim event.
+3. `claim_v1` locks one FIFO ready row whose absolute deadline has not expired and performs one runtime state update to active with worker, fence, heartbeat, lease expiry, and the current attempt's execution-timeout budget, then appends the claim event.
 4. `heartbeat_v2` returns `accepted`, `cancel_requested`, or `stale` for the exact unexpired active generation and extends only accepted leases. Additive compatibility `heartbeat_v1` returns true only for accepted.
 5. `cancel_v1` locks the sole runtime. Ready, scheduled, and durable-wait continuations become canceled immediately. Active work records one request and returns `cancel_requested`; repeats retain the first request. Existing terminal success/failure returns `already_terminal`; existing cancellation returns `canceled`.
 6. `acknowledge_cancel_v1` accepts only the exact unexpired worker/fence carrying a request, then inserts the canceled outcome, truthful attempt history, and terminal event atomically.

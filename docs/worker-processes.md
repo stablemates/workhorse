@@ -87,6 +87,18 @@ Applications that already own process supervision can use the APIs directly:
 
 ## Process lifecycle contract
 
+Keep ordinary handlers at or below **110 seconds** for safer rolling deployments. If work can exceed
+that duration, split it into durable, idempotent stages with named checkpoints and lease-releasing
+waits. A longer shutdown timeout can provide more drain time, but it is not a substitute for durable
+boundaries because platforms may still terminate a process at the end of their grace period.
+
+For Kubernetes, set the Pod's `terminationGracePeriodSeconds` to at least 120 seconds when relying on
+the 110-second recommendation. Kubernetes defaults this field to 30 seconds and does not document a
+120-second maximum. The kubelet normally sends `SIGTERM` and force-kills remaining processes after the
+configured grace expires. A `preStop` hook consumes the same budget; an overrun receives only a
+one-off two-second extension. Force deletion, node failure, and some eviction or node-shutdown paths
+can still shorten or bypass the normal graceful path.
+
 ### Startup
 
 1. Validate the definition, timeout, and probe configuration.

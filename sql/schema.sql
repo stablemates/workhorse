@@ -138,6 +138,8 @@ BEGIN
       source := 'legacy-handler';
     ELSIF p_omitted_source = 'lease-recovery-immediate' THEN
       delay_ms := 0; source := 'lease-recovery-immediate';
+    ELSIF p_omitted_source = 'execution-timeout-immediate' THEN
+      delay_ms := 0; source := 'execution-timeout-immediate';
     ELSE
       RAISE EXCEPTION 'unsupported omitted retry source %', p_omitted_source;
     END IF;
@@ -193,6 +195,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
         AND retry_policy = workhorse.normalize_retry_policy_v1(retry_policy)
       )
     ),
+  deadline_at timestamptz CHECK (deadline_at IS NULL OR isfinite(deadline_at)),
+  execution_timeout_ms bigint CHECK (execution_timeout_ms BETWEEN 1 AND 31536000000),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 ALTER TABLE workhorse.job ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
@@ -288,6 +292,13 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
   acquired_at timestamptz,
   heartbeat_at timestamptz,
   expires_at timestamptz,
+  deadline_at timestamptz CHECK (deadline_at IS NULL OR isfinite(deadline_at)),
+  execution_used_ms bigint NOT NULL DEFAULT 0 CHECK (
+    execution_used_ms BETWEEN 0 AND 31536000000
+  ),
+  attempt_timeout_at timestamptz CHECK (
+    attempt_timeout_at IS NULL OR isfinite(attempt_timeout_at)
+  ),
   wait_name text,
   attempt_started_at timestamptz,
   cancel_requested_at timestamptz,
@@ -310,12 +321,14 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
   CHECK (
     (state = 'scheduled' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NULL
       AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL
+      AND attempt_timeout_at IS NULL
       AND fence_token = 0
       AND ((wait_name IS NULL AND attempt_started_at IS NULL)
         OR (wait_name IS NOT NULL AND attempt_started_at IS NOT NULL)))
     OR
     (state = 'ready' AND ready_at IS NOT NULL AND sequence IS NOT NULL AND worker_id IS NULL
       AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL
+      AND attempt_timeout_at IS NULL
       AND fence_token = 0 AND wait_name IS NULL)
     OR
     (state = 'active' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NOT NULL
@@ -329,6 +342,11 @@ CREATE INDEX IF NOT EXISTS job_runtime_scheduled_idx
   ON workhorse.job_runtime (run_at, job_id) WHERE state = 'scheduled';
 CREATE INDEX IF NOT EXISTS job_runtime_expired_active_idx
   ON workhorse.job_runtime (expires_at, job_id) WHERE state = 'active';
+CREATE INDEX IF NOT EXISTS job_runtime_deadline_idx
+  ON workhorse.job_runtime (deadline_at, job_id) WHERE deadline_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS job_runtime_timeout_idx
+  ON workhorse.job_runtime (attempt_timeout_at, job_id)
+  WHERE state = 'active' AND attempt_timeout_at IS NOT NULL;
 
 -- Immutable terminal materialization. Moving here removes completed work from every dispatch index.
 CREATE TABLE IF NOT EXISTS workhorse.job_outcome (
@@ -344,7 +362,12 @@ CREATE TABLE IF NOT EXISTS workhorse.job_outcome (
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (
     (state = 'succeeded' AND fence_token > 0 AND error IS NULL)
-    OR (state = 'failed' AND fence_token > 0)
+    OR (
+      state = 'failed' AND (
+        fence_token > 0
+        OR (fence_token = 0 AND error->>'name' = 'DeadlineExceeded')
+      )
+    )
     OR (state = 'canceled' AND error IS NOT NULL)
   )
 );
@@ -375,7 +398,10 @@ CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
   fence_token bigint NOT NULL,
   worker_id text NOT NULL,
   outcome text NOT NULL CHECK (
-    outcome IN ('succeeded', 'failed', 'retry', 'lease_expired', 'canceled')
+    outcome IN (
+      'succeeded', 'failed', 'retry', 'lease_expired', 'canceled',
+      'deadline_exceeded', 'timeout'
+    )
   ),
   started_at timestamptz NOT NULL,
   claimed_at timestamptz NOT NULL,
@@ -887,6 +913,8 @@ DECLARE
   v_run_at timestamptz;
   v_max_attempts integer;
   v_retry_policy jsonb;
+  v_deadline_at timestamptz;
+  v_execution_timeout_ms numeric;
   v_state text;
   v_idempotency jsonb;
   v_key text;
@@ -986,6 +1014,17 @@ BEGIN
     v_retry_policy := workhorse.normalize_retry_policy_v1(v_request->'retryPolicy');
     v_run_at := COALESCE((v_request->>'runAt')::timestamptz, v_now);
     IF NOT isfinite(v_run_at) THEN RAISE EXCEPTION 'runAt must be finite'; END IF;
+    v_deadline_at := (v_request->>'deadline')::timestamptz;
+    IF v_deadline_at IS NOT NULL AND NOT isfinite(v_deadline_at) THEN
+      RAISE EXCEPTION 'deadline must be a finite absolute timestamp';
+    END IF;
+    v_execution_timeout_ms := (v_request->>'executionTimeoutMs')::numeric;
+    IF v_execution_timeout_ms IS NOT NULL AND (
+      v_execution_timeout_ms <> trunc(v_execution_timeout_ms)
+      OR v_execution_timeout_ms NOT BETWEEN 1 AND 31536000000
+    ) THEN
+      RAISE EXCEPTION 'executionTimeoutMs must be an integer between 1 and 31536000000';
+    END IF;
     v_state := CASE WHEN v_run_at <= v_now THEN 'ready' ELSE 'scheduled' END;
     v_idempotency := v_request->'idempotency';
     v_is_new := true;
@@ -1041,6 +1080,8 @@ BEGIN
         'runAt', CASE
           WHEN v_request->>'runAt' IS NULL THEN 'null'::jsonb ELSE to_jsonb(v_run_at)
         END,
+        'deadline', to_jsonb(v_deadline_at),
+        'executionTimeoutMs', to_jsonb(v_execution_timeout_ms),
         'maxAttempts', v_max_attempts,
         'retryPolicy', v_retry_policy,
         'ttlMs', v_ttl_ms
@@ -1099,22 +1140,30 @@ BEGIN
 
     IF v_is_new THEN
       INSERT INTO workhorse.job(
-        id, queue_name, job_type, payload, tags, max_attempts, retry_policy
+        id, queue_name, job_type, payload, tags, max_attempts, retry_policy,
+        deadline_at, execution_timeout_ms
       ) VALUES (
-        job_id, v_queue_name, v_job_type, v_payload, v_tags, v_max_attempts, v_retry_policy
+        job_id, v_queue_name, v_job_type, v_payload, v_tags, v_max_attempts, v_retry_policy,
+        v_deadline_at, v_execution_timeout_ms::bigint
       );
       INSERT INTO workhorse.job_runtime(
-        job_id, queue_name, state, current_attempt, run_at, ready_at, sequence
+        job_id, queue_name, state, current_attempt, run_at, ready_at, sequence, deadline_at
       ) VALUES (
         job_id, v_queue_name, v_state, 1, v_run_at,
         CASE WHEN v_state = 'ready' THEN v_now END,
-        CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END
+        CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
+        v_deadline_at
       );
       INSERT INTO workhorse.job_event(job_id, event_type, details)
         VALUES (
           job_id,
           'enqueued',
-          jsonb_build_object('state', v_state, 'run_at', v_run_at) ||
+          jsonb_build_object(
+            'state', v_state,
+            'run_at', v_run_at,
+            'deadline_at', v_deadline_at,
+            'execution_timeout_ms', v_execution_timeout_ms
+          ) ||
           CASE WHEN v_is_keyed THEN jsonb_build_object(
             'idempotency', jsonb_build_object(
               'scope', v_scope,
@@ -1127,7 +1176,9 @@ BEGIN
             )
           ) ELSE '{}'::jsonb END
         );
-      IF v_state = 'ready' AND NOT v_queue_name = ANY(v_ready_queues) THEN
+      IF v_deadline_at IS NOT NULL AND v_deadline_at <= v_now THEN
+        PERFORM workhorse.terminalize_deadline_v1(job_id);
+      ELSIF v_state = 'ready' AND NOT v_queue_name = ANY(v_ready_queues) THEN
         v_ready_queues := array_append(v_ready_queues, v_queue_name);
       END IF;
     END IF;
@@ -1278,7 +1329,8 @@ CREATE OR REPLACE FUNCTION workhorse.claim_v1(
   p_lease_ms integer DEFAULT 30000
 ) RETURNS TABLE (
   job_id uuid, job_type text, payload jsonb, attempt integer, max_attempts integer,
-  retry_policy jsonb, fence_token bigint, lease_expires_at timestamptz
+  retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
+  attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
 )
 LANGUAGE plpgsql
 AS $$
@@ -1298,7 +1350,12 @@ BEGIN
 
   WITH candidate AS (
     SELECT r.job_id FROM workhorse.job_runtime r
+    JOIN workhorse.job j ON j.id = r.job_id
      WHERE r.state = 'ready' AND r.queue_name = p_queue_name
+       AND (r.deadline_at IS NULL OR r.deadline_at > v_now)
+       AND (
+         j.execution_timeout_ms IS NULL OR r.execution_used_ms < j.execution_timeout_ms
+       )
        AND NOT EXISTS (
          SELECT 1 FROM workhorse.queue_control control
           WHERE control.queue_name = p_queue_name AND control.paused
@@ -1310,8 +1367,15 @@ BEGIN
          acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
          ready_at = NULL, sequence = NULL, wait_name = NULL,
          attempt_started_at = COALESCE(r.attempt_started_at, v_now),
+         attempt_timeout_at = CASE
+           WHEN j.execution_timeout_ms IS NULL THEN NULL
+           ELSE v_now + make_interval(secs =>
+             (j.execution_timeout_ms - r.execution_used_ms)::double precision / 1000.0)
+         END,
          error = NULL, updated_at = v_now
-    FROM candidate c WHERE r.job_id = c.job_id AND r.state = 'ready'
+    FROM candidate c, workhorse.job j
+   WHERE r.job_id = c.job_id AND r.state = 'ready' AND j.id = r.job_id
+     AND (r.deadline_at IS NULL OR r.deadline_at > v_now)
   RETURNING r.* INTO v_runtime;
   IF NOT FOUND THEN RETURN; END IF;
 
@@ -1319,8 +1383,263 @@ BEGIN
     VALUES (v_runtime.job_id, v_runtime.current_attempt, 'claimed',
       jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
   RETURN QUERY
-    SELECT j.id, j.job_type, j.payload, v_runtime.current_attempt, j.max_attempts, j.retry_policy, v_fence, v_expires
+    SELECT j.id, j.job_type, j.payload, v_runtime.current_attempt, j.max_attempts,
+           j.retry_policy, j.deadline_at, j.execution_timeout_ms,
+           v_runtime.attempt_timeout_at, v_fence, v_expires
       FROM workhorse.job j WHERE j.id = v_runtime.job_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.deadline_envelope_v1(p_deadline_at timestamptz)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT jsonb_build_object(
+    'name', 'DeadlineExceeded',
+    'message', 'job deadline was exceeded',
+    'deadline_at', p_deadline_at
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.timeout_envelope_v1(
+  p_timeout_ms bigint, p_timeout_at timestamptz
+) RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT jsonb_build_object(
+    'name', 'ExecutionTimeout',
+    'message', 'attempt execution timeout was exceeded',
+    'execution_timeout_ms', p_timeout_ms,
+    'timeout_at', p_timeout_at
+  );
+$$;
+
+-- Absolute deadlines are terminal regardless of attempt budget. The runtime row is locked and moved
+-- once, so a handler completion, cancellation, or another reaper can win only by committing first.
+CREATE OR REPLACE FUNCTION workhorse.terminalize_deadline_v1(p_job_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_wait workhorse.job_wait%ROWTYPE;
+  v_error jsonb;
+  v_worker_id text;
+  v_fence_token bigint := 0;
+  v_claimed_at timestamptz;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id FOR UPDATE;
+  IF NOT FOUND OR v_runtime.deadline_at IS NULL
+     OR v_runtime.deadline_at > clock_timestamp() THEN RETURN false; END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN
+    v_error := workhorse.cancellation_envelope_v1(
+      v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
+    );
+    DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
+    INSERT INTO workhorse.job_outcome(
+      job_id, state, current_attempt, fence_token, run_at, error
+    ) VALUES (
+      p_job_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
+      v_runtime.run_at, v_error
+    );
+    INSERT INTO workhorse.attempt_history(
+      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+    ) VALUES (
+      p_job_id, v_runtime.current_attempt, v_runtime.fence_token, v_runtime.worker_id,
+      'canceled', v_runtime.attempt_started_at, v_runtime.acquired_at, v_error
+    );
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id, v_runtime.current_attempt, 'canceled',
+        jsonb_build_object(
+          'requested_at', v_runtime.cancel_requested_at,
+          'requested_by', v_runtime.cancel_requested_by,
+          'reason', v_runtime.cancel_reason,
+          'fence_token', v_runtime.fence_token::text,
+          'source', 'deadline_reaper'
+        )
+      );
+    RETURN true;
+  END IF;
+  v_error := workhorse.deadline_envelope_v1(v_runtime.deadline_at);
+  IF v_runtime.state = 'active' THEN
+    v_worker_id := v_runtime.worker_id;
+    v_fence_token := v_runtime.fence_token;
+    v_claimed_at := v_runtime.acquired_at;
+  ELSIF v_runtime.attempt_started_at IS NOT NULL THEN
+    SELECT * INTO STRICT v_wait FROM workhorse.job_wait wait_row
+     WHERE wait_row.job_id = p_job_id AND wait_row.attempt = v_runtime.current_attempt
+     ORDER BY wait_row.created_at DESC, wait_row.wait_name DESC LIMIT 1;
+    v_worker_id := v_wait.worker_id;
+    v_fence_token := v_wait.fence_token;
+    v_claimed_at := v_wait.claimed_at;
+  END IF;
+  DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
+  INSERT INTO workhorse.job_outcome(
+    job_id, state, current_attempt, fence_token, run_at, error
+  ) VALUES (
+    p_job_id, 'failed', v_runtime.current_attempt, v_fence_token, v_runtime.run_at, v_error
+  );
+  IF v_runtime.attempt_started_at IS NOT NULL THEN
+    INSERT INTO workhorse.attempt_history(
+      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+    ) VALUES (
+      p_job_id, v_runtime.current_attempt, v_fence_token, v_worker_id,
+      'deadline_exceeded', v_runtime.attempt_started_at, v_claimed_at, v_error
+    );
+  END IF;
+  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    VALUES (
+      p_job_id,
+      CASE WHEN v_runtime.attempt_started_at IS NULL THEN NULL ELSE v_runtime.current_attempt END,
+      'deadline_exceeded',
+      jsonb_build_object(
+        'deadline_at', v_runtime.deadline_at,
+        'fence_token', v_fence_token::text,
+        'started', v_runtime.attempt_started_at IS NOT NULL
+      )
+    );
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.timeout_owned_v1(
+  p_job_id uuid, p_worker_id text, p_fence_token bigint
+) RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_job workhorse.job%ROWTYPE;
+  v_error jsonb;
+  v_retry record;
+  v_state text;
+  v_run_at timestamptz;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  IF NOT FOUND OR v_runtime.attempt_timeout_at IS NULL
+     OR v_runtime.attempt_timeout_at > clock_timestamp() THEN RETURN false; END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN false; END IF;
+  SELECT * INTO STRICT v_job FROM workhorse.job job WHERE job.id = p_job_id;
+  IF v_job.deadline_at IS NOT NULL
+     AND v_job.deadline_at <= v_runtime.attempt_timeout_at
+     AND v_job.deadline_at <= clock_timestamp() THEN
+    RETURN workhorse.terminalize_deadline_v1(p_job_id);
+  END IF;
+  v_error := workhorse.timeout_envelope_v1(
+    v_job.execution_timeout_ms, v_runtime.attempt_timeout_at
+  );
+  IF v_runtime.current_attempt < v_job.max_attempts THEN
+    SELECT * INTO STRICT v_retry FROM workhorse.retry_delay_v1(
+      p_job_id, v_runtime.current_attempt, v_job.retry_policy,
+      v_runtime.previous_retry_delay_ms, NULL, 'execution-timeout-immediate'
+    );
+    v_run_at := clock_timestamp() +
+      make_interval(secs => v_retry.delay_ms::double precision / 1000.0);
+    v_state := CASE WHEN v_retry.delay_ms <= 0 THEN 'ready' ELSE 'scheduled' END;
+    UPDATE workhorse.job_runtime runtime SET
+      state = v_state,
+      current_attempt = runtime.current_attempt + 1,
+      fence_token = 0,
+      run_at = v_run_at,
+      ready_at = CASE WHEN v_state = 'ready' THEN clock_timestamp() END,
+      sequence = CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
+      worker_id = NULL,
+      acquired_at = NULL,
+      heartbeat_at = NULL,
+      expires_at = NULL,
+      wait_name = NULL,
+      attempt_started_at = NULL,
+      execution_used_ms = 0,
+      attempt_timeout_at = NULL,
+      previous_retry_delay_ms = v_retry.next_previous_retry_delay_ms,
+      error = v_error,
+      updated_at = clock_timestamp()
+     WHERE runtime.job_id = p_job_id;
+    IF v_state = 'ready' THEN PERFORM pg_notify('workhorse_jobs', v_job.queue_name); END IF;
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id, v_runtime.current_attempt, 'execution_timed_out',
+        jsonb_build_object(
+          'fence_token', p_fence_token::text,
+          'timeout_at', v_runtime.attempt_timeout_at,
+          'execution_timeout_ms', v_job.execution_timeout_ms,
+          'next_state', v_state,
+          'next_attempt', v_runtime.current_attempt + 1,
+          'retry_delay_ms', v_retry.delay_ms,
+          'retry_delay_source', v_retry.source
+        )
+      );
+  ELSE
+    DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
+    INSERT INTO workhorse.job_outcome(
+      job_id, state, current_attempt, fence_token, run_at, error
+    ) VALUES (
+      p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error
+    );
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id, v_runtime.current_attempt, 'execution_timed_out',
+        jsonb_build_object(
+          'fence_token', p_fence_token::text,
+          'timeout_at', v_runtime.attempt_timeout_at,
+          'execution_timeout_ms', v_job.execution_timeout_ms,
+          'next_state', 'failed'
+        )
+      );
+  END IF;
+  INSERT INTO workhorse.attempt_history(
+    job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+  ) VALUES (
+    p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'timeout',
+    v_runtime.attempt_started_at, v_runtime.acquired_at, v_error
+  );
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.expire_owned_v1(
+  p_job_id uuid, p_worker_id text, p_fence_token bigint
+) RETURNS text
+LANGUAGE plpgsql
+AS $$
+DECLARE v_runtime workhorse.job_runtime%ROWTYPE;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  IF NOT FOUND THEN RETURN 'stale'; END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
+  IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp()
+     AND (
+       v_runtime.attempt_timeout_at IS NULL
+       OR v_runtime.attempt_timeout_at > clock_timestamp()
+       OR v_runtime.deadline_at <= v_runtime.attempt_timeout_at
+     ) THEN
+    IF workhorse.terminalize_deadline_v1(p_job_id) THEN RETURN 'deadline_exceeded'; END IF;
+    RETURN 'stale';
+  END IF;
+  IF v_runtime.attempt_timeout_at IS NOT NULL
+     AND v_runtime.attempt_timeout_at <= clock_timestamp() THEN
+    IF workhorse.timeout_owned_v1(p_job_id, p_worker_id, p_fence_token) THEN
+      RETURN 'timeout_exceeded';
+    END IF;
+    RETURN 'stale';
+  END IF;
+  IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp() THEN
+    IF workhorse.terminalize_deadline_v1(p_job_id) THEN RETURN 'deadline_exceeded'; END IF;
+    RETURN 'stale';
+  END IF;
+  RETURN 'not_due';
 END;
 $$;
 
@@ -1340,14 +1659,24 @@ BEGIN
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token
    FOR UPDATE;
-  IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp() THEN RETURN 'stale'; END IF;
+  IF NOT FOUND THEN RETURN 'stale'; END IF;
   IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
+  IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp() THEN
+    RETURN workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
+  END IF;
+  IF v_runtime.attempt_timeout_at IS NOT NULL
+     AND v_runtime.attempt_timeout_at <= clock_timestamp() THEN
+    RETURN workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
+  END IF;
+  IF v_runtime.expires_at <= clock_timestamp() THEN RETURN 'stale'; END IF;
   UPDATE workhorse.job_runtime r
      SET heartbeat_at = clock_timestamp(),
          expires_at = clock_timestamp() + make_interval(secs => p_lease_ms::double precision / 1000.0),
          updated_at = clock_timestamp()
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
+     AND (r.deadline_at IS NULL OR r.deadline_at > clock_timestamp())
+     AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp())
      AND r.cancel_requested_at IS NULL;
   IF NOT FOUND THEN RETURN 'stale'; END IF;
   RETURN 'accepted';
@@ -1606,6 +1935,9 @@ BEGIN
   -- Recheck expiry after acquiring the row lock. A pre-lock predicate can become stale while this
   -- transaction waits behind another lifecycle operation that does not modify the runtime row.
   IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp()
+     OR (v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp())
+     OR (v_runtime.attempt_timeout_at IS NOT NULL
+       AND v_runtime.attempt_timeout_at <= clock_timestamp())
      OR v_runtime.cancel_requested_at IS NOT NULL THEN
     RETURN QUERY VALUES (
       'stale'::text, NULL::jsonb, NULL::integer, NULL::bigint, NULL::text, NULL::timestamptz
@@ -1711,6 +2043,8 @@ BEGIN
    FOR UPDATE;
   v_now := clock_timestamp();
   IF NOT FOUND OR v_runtime.expires_at <= v_now
+     OR (v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now)
+     OR (v_runtime.attempt_timeout_at IS NOT NULL AND v_runtime.attempt_timeout_at <= v_now)
      OR v_runtime.cancel_requested_at IS NOT NULL THEN
     RETURN QUERY VALUES (
       'stale'::text, NULL::text, NULL::text, NULL::bigint, NULL::timestamptz,
@@ -1809,12 +2143,21 @@ BEGIN
      SET state = 'scheduled', run_at = v_wait.wake_at, fence_token = 0,
          ready_at = NULL, sequence = NULL, worker_id = NULL, acquired_at = NULL,
          heartbeat_at = NULL, expires_at = NULL, wait_name = p_wait_name,
+         execution_used_ms = LEAST(
+           31536000000,
+           runtime.execution_used_ms + GREATEST(
+             0, floor(extract(epoch FROM v_now - runtime.acquired_at) * 1000)::bigint
+           )
+         ),
+         attempt_timeout_at = NULL,
          error = NULL, updated_at = clock_timestamp()
    WHERE runtime.job_id = p_job_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
      AND runtime.fence_token = p_fence_token
-     AND runtime.expires_at > clock_timestamp();
+     AND runtime.expires_at > clock_timestamp()
+     AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
+     AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > clock_timestamp());
   IF NOT FOUND THEN
     -- The lease can cross its deadline after the post-lock validation above while the immutable
     -- row is being inserted. Remove that transaction-local row and preserve the public stale
@@ -1860,6 +2203,8 @@ BEGIN
   DELETE FROM workhorse.job_runtime r
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
+     AND (r.deadline_at IS NULL OR r.deadline_at > clock_timestamp())
+     AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp())
      AND r.cancel_requested_at IS NULL
   RETURNING * INTO v_runtime;
   IF NOT FOUND THEN RETURN false; END IF;
@@ -1899,6 +2244,13 @@ BEGIN
    FOR UPDATE;
   IF NOT FOUND OR v_runtime.expires_at <= clock_timestamp() THEN RETURN 'stale'; END IF;
   IF v_runtime.cancel_requested_at IS NOT NULL THEN RETURN 'cancel_requested'; END IF;
+  IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= clock_timestamp() THEN
+    RETURN workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
+  END IF;
+  IF v_runtime.attempt_timeout_at IS NOT NULL
+     AND v_runtime.attempt_timeout_at <= clock_timestamp() THEN
+    RETURN workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
+  END IF;
   SELECT * INTO STRICT v_job FROM workhorse.job j WHERE j.id = p_job_id;
 
   IF v_runtime.current_attempt < v_job.max_attempts THEN
@@ -1916,11 +2268,14 @@ BEGIN
            ready_at = CASE WHEN v_state = 'ready' THEN clock_timestamp() END,
            sequence = CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
            worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
-           wait_name = NULL, attempt_started_at = NULL,
+           wait_name = NULL, attempt_started_at = NULL, execution_used_ms = 0,
+           attempt_timeout_at = NULL,
            previous_retry_delay_ms = v_retry.next_previous_retry_delay_ms,
            error = p_error, updated_at = clock_timestamp()
      WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
        AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
+       AND (r.deadline_at IS NULL OR r.deadline_at > clock_timestamp())
+       AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp())
     RETURNING * INTO v_runtime;
     IF NOT FOUND THEN RETURN 'stale'; END IF;
     IF v_state = 'ready' THEN PERFORM pg_notify('workhorse_jobs', v_job.queue_name); END IF;
@@ -1938,6 +2293,8 @@ BEGIN
     DELETE FROM workhorse.job_runtime r
      WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
        AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
+       AND (r.deadline_at IS NULL OR r.deadline_at > clock_timestamp())
+       AND (r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp())
     RETURNING * INTO v_runtime;
     IF NOT FOUND THEN RETURN 'stale'; END IF;
     v_state := 'failed';
@@ -1974,10 +2331,61 @@ DECLARE
   v_envelope jsonb;
 BEGIN
   FOR v_runtime IN
+    SELECT runtime.* FROM workhorse.job_runtime runtime
+     WHERE runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= clock_timestamp()
+       AND (
+         runtime.state <> 'active'
+         OR runtime.attempt_timeout_at IS NULL
+         OR runtime.attempt_timeout_at > clock_timestamp()
+         OR runtime.deadline_at <= runtime.attempt_timeout_at
+       )
+     ORDER BY runtime.deadline_at, runtime.job_id FOR UPDATE SKIP LOCKED
+     LIMIT GREATEST(1, LEAST(p_limit, 10000))
+  LOOP
+    IF workhorse.terminalize_deadline_v1(v_runtime.job_id) THEN
+      v_count := v_count + 1;
+    END IF;
+  END LOOP;
+
+  IF v_count < GREATEST(1, LEAST(p_limit, 10000)) THEN
+    FOR v_runtime IN
+      SELECT runtime.* FROM workhorse.job_runtime runtime
+       WHERE runtime.state = 'active' AND runtime.attempt_timeout_at IS NOT NULL
+         AND runtime.attempt_timeout_at <= clock_timestamp()
+         AND (
+           runtime.deadline_at IS NULL
+           OR runtime.deadline_at > clock_timestamp()
+           OR runtime.attempt_timeout_at < runtime.deadline_at
+         )
+       ORDER BY runtime.attempt_timeout_at, runtime.job_id FOR UPDATE SKIP LOCKED
+       LIMIT GREATEST(0, LEAST(p_limit, 10000) - v_count)
+    LOOP
+      IF workhorse.timeout_owned_v1(
+        v_runtime.job_id, v_runtime.worker_id, v_runtime.fence_token
+      ) THEN
+        v_count := v_count + 1;
+      END IF;
+    END LOOP;
+  END IF;
+
+  IF v_count >= GREATEST(1, LEAST(p_limit, 10000)) THEN
+    IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
+    RETURN v_count;
+  END IF;
+
+  FOR v_runtime IN
     SELECT r.* FROM workhorse.job_runtime r
      WHERE r.state = 'active' AND r.expires_at <= clock_timestamp()
+       AND (
+         r.cancel_requested_at IS NOT NULL
+         OR r.deadline_at IS NULL OR r.deadline_at > clock_timestamp()
+       )
+       AND (
+         r.cancel_requested_at IS NOT NULL
+         OR r.attempt_timeout_at IS NULL OR r.attempt_timeout_at > clock_timestamp()
+       )
      ORDER BY r.expires_at, r.job_id FOR UPDATE SKIP LOCKED
-     LIMIT GREATEST(1, LEAST(p_limit, 10000))
+     LIMIT GREATEST(0, LEAST(p_limit, 10000) - v_count)
   LOOP
     SELECT * INTO STRICT v_job FROM workhorse.job j WHERE j.id = v_runtime.job_id;
     IF v_runtime.cancel_requested_at IS NOT NULL THEN
@@ -2032,7 +2440,8 @@ BEGIN
              ready_at = CASE WHEN v_state = 'ready' THEN clock_timestamp() END,
              sequence = CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
              worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
-             wait_name = NULL, attempt_started_at = NULL,
+             wait_name = NULL, attempt_started_at = NULL, execution_used_ms = 0,
+             attempt_timeout_at = NULL,
              previous_retry_delay_ms = v_retry.next_previous_retry_delay_ms,
              error = v_error, updated_at = clock_timestamp()
        WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
@@ -2697,7 +3106,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (12) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (13) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

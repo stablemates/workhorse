@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 12.
+The current clean-install protocol is schema version 13.
 
 ## Design objective
 
@@ -286,7 +286,7 @@ not impose global rate limits, queue weights, or concurrency budgets across work
 
 ### Heartbeat
 
-`heartbeat_v2` locks the exact active worker/fence generation and returns `accepted`, `cancel_requested`, or `stale`. It extends the lease only for `accepted`. Additive `heartbeat_v1` compatibility returns `true` only for `accepted`, so existing callers still stop treating canceled or stale work as owned.
+`heartbeat_v2` locks the exact active worker/fence generation and returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`. It extends the lease only for `accepted`. Additive `heartbeat_v1` compatibility returns `true` only for `accepted`, so existing callers still stop treating canceled or stale work as owned.
 
 ### Cancellation
 
@@ -299,6 +299,31 @@ Cancellation is cooperative, not an out-of-band lease revocation. JavaScript can
 Cancellation versus completion or failure is first-committer-wins because all terminal paths own the same runtime lock and exclusivity invariant. After cancellation commits, stale completion, failure, checkpoint, wait, heartbeat, and acknowledgement calls cannot recreate runtime or overwrite outcome. After success or failure commits, cancellation reports that existing terminal state. Repeated terminal requests do not duplicate events, outcomes, or attempt history.
 
 A recurring schedule owns definitions and occurrence deduplication, not the lifecycle of every fired job. Canceling one occurrence does not disable the definition, change its revision, or prevent the next occurrence from enqueueing independently.
+
+### Deadlines and execution timeouts
+
+An optional enqueue deadline is an absolute wall-clock boundary on the stable job identity. It keeps
+advancing while work is ready, scheduled, waiting, retrying, or active. PostgreSQL prevents an expired
+job from entering a new claim and materializes one immutable failed outcome with deadline-specific
+evidence. A deadline never creates another attempt.
+
+An optional execution timeout is a budget for one logical attempt. Active execution consumes the
+budget, while a named durable wait releases the lease and pauses that accounting. If the timeout is
+reached, PostgreSQL closes the attempt with timeout-specific history and either schedules the next
+attempt through the persisted retry policy or materializes terminal failure when the retry budget is
+exhausted.
+
+Ordinary handlers should complete within 110 seconds so rolling deployments retain practical drain
+headroom. Longer operations should use durable execution boundaries: idempotent stages, named
+checkpoints, and lease-releasing waits. The recommendation is not a hard database limit because
+deployment grace periods vary, but applications should set execution timeouts deliberately rather
+than relying on an unbounded handler.
+
+The worker mirrors authoritative timestamps with local timers only for prompt cooperative delivery.
+The handler receives a distinct `AbortSignal` reason, but JavaScript and external effects are not
+forcibly preempted. SQL transition predicates and bounded maintenance remove the live generation and
+fence late completion, failure, heartbeat, checkpoint, or wait writes. Cancellation, completion,
+deadline, timeout, and lease-expiry races remain row-lock ordered and first-committer-wins.
 
 ### Retry and recovery
 

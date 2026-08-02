@@ -8,6 +8,7 @@ import type {
   EnqueueIdempotencyConflictField,
   EnqueueOptions,
   EnqueueRequest,
+  ExpireOwnedStatus,
   JobCheckpoint,
   JobSnapshot,
   JobWait,
@@ -76,6 +77,9 @@ type ClaimRow = {
   attempt: number;
   max_attempts: number;
   retry_policy: RetryPolicy | null;
+  deadline_at: Date | null;
+  execution_timeout_ms: string | null;
+  attempt_timeout_at: Date | null;
   fence_token: string;
   lease_expires_at: Date;
 };
@@ -293,6 +297,8 @@ const enqueueConflictFields = new Set<EnqueueIdempotencyConflictField>([
   "payload",
   "tags",
   "runAt",
+  "deadline",
+  "executionTimeoutMs",
   "maxAttempts",
   "retryPolicy",
   "ttlMs",
@@ -480,6 +486,8 @@ export class Queue {
         ...(options.runAt === undefined && idempotency !== undefined
           ? {}
           : { runAt: (options.runAt ?? new Date()).toISOString() }),
+        deadline: options.deadline?.toISOString() ?? null,
+        executionTimeoutMs: options.executionTimeoutMs ?? null,
         maxAttempts: options.maxAttempts ?? 25,
         retryPolicy: options.retryPolicy ?? null,
         tags: tags ?? options.tags ?? [],
@@ -731,6 +739,10 @@ export class Queue {
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
       retryPolicy: row.retry_policy,
+      deadlineAt: row.deadline_at,
+      executionTimeoutMs:
+        row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
+      attemptTimeoutAt: row.attempt_timeout_at,
       fenceToken: BigInt(row.fence_token),
       leaseExpiresAt: row.lease_expires_at,
     };
@@ -750,6 +762,14 @@ export class Queue {
     const result = await this.database.query<{ status: HeartbeatStatus }>(
       "SELECT workhorse.heartbeat_v2($1, $2, $3, $4) AS status",
       [job.id, workerId, job.fenceToken.toString(), leaseMs],
+    );
+    return result.rows[0]!.status;
+  }
+
+  async expireOwned(job: ClaimedJob<unknown>, workerId: string): Promise<ExpireOwnedStatus> {
+    const result = await this.database.query<{ status: ExpireOwnedStatus }>(
+      "SELECT workhorse.expire_owned_v1($1, $2, $3) AS status",
+      [job.id, workerId, job.fenceToken.toString()],
     );
     return result.rows[0]!.status;
   }
@@ -924,12 +944,27 @@ export class Queue {
     workerId: string,
     error: unknown,
     retryDelayMs?: number,
-  ): Promise<"ready" | "scheduled" | "failed" | "cancel_requested" | "stale"> {
+  ): Promise<
+    | "ready"
+    | "scheduled"
+    | "failed"
+    | "cancel_requested"
+    | "deadline_exceeded"
+    | "timeout_exceeded"
+    | "stale"
+  > {
     // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
     // creating the next projection. Undefined selects SQL-owned backoff; a number explicitly
     // overrides it, including zero for an immediate retry.
     const result = await this.database.query<{
-      state: "ready" | "scheduled" | "failed" | "cancel_requested" | "stale";
+      state:
+        | "ready"
+        | "scheduled"
+        | "failed"
+        | "cancel_requested"
+        | "deadline_exceeded"
+        | "timeout_exceeded"
+        | "stale";
     }>("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, $5) AS state", [
       job.id,
       workerId,
@@ -962,6 +997,8 @@ export class Queue {
       current_attempt: number;
       max_attempts: number;
       retry_policy: RetryPolicy | null;
+      deadline_at: Date | null;
+      execution_timeout_ms: string | null;
       version: string;
       run_at: Date;
       result: TResult | null;
@@ -973,6 +1010,7 @@ export class Queue {
       updated_at: Date;
     }>(
       `SELECT j.id, j.queue_name, j.job_type, j.payload, j.tags, j.retry_policy,
+              j.deadline_at, j.execution_timeout_ms::text,
               COALESCE(r.state, o.state) AS state,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
@@ -998,6 +1036,9 @@ export class Queue {
       currentAttempt: row.current_attempt,
       maxAttempts: row.max_attempts,
       retryPolicy: row.retry_policy,
+      deadlineAt: row.deadline_at,
+      executionTimeoutMs:
+        row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
       fenceToken: BigInt(row.version),
       runAt: row.run_at,
       result: row.result,
@@ -1045,6 +1086,12 @@ export class Queue {
           active: string;
           expired: string;
           oldest_ready_age_ms: number | null;
+          pending_deadlines: string;
+          overdue_deadlines: string;
+          deadlines_due_within_minute: string;
+          earliest_deadline_at: Date | null;
+          active_execution_timeouts: string;
+          overdue_execution_timeouts: string;
         }>(`
         SELECT count(*) FILTER (WHERE state = 'ready')::text AS ready,
                count(*) FILTER (WHERE state = 'scheduled')::text AS scheduled,
@@ -1059,7 +1106,22 @@ export class Queue {
                count(*) FILTER (WHERE state = 'active')::text AS active,
                count(*) FILTER (WHERE state = 'active' AND expires_at <= clock_timestamp())::text AS expired,
                extract(epoch FROM clock_timestamp() - min(ready_at) FILTER (WHERE state = 'ready')) * 1000
-                 AS oldest_ready_age_ms
+                 AS oldest_ready_age_ms,
+               count(*) FILTER (WHERE deadline_at IS NOT NULL)::text AS pending_deadlines,
+               count(*) FILTER (
+                 WHERE deadline_at IS NOT NULL AND deadline_at <= clock_timestamp()
+               )::text AS overdue_deadlines,
+               count(*) FILTER (
+                 WHERE deadline_at > clock_timestamp()
+                   AND deadline_at <= clock_timestamp() + interval '1 minute'
+               )::text AS deadlines_due_within_minute,
+               min(deadline_at) AS earliest_deadline_at,
+               count(*) FILTER (
+                 WHERE state = 'active' AND attempt_timeout_at IS NOT NULL
+               )::text AS active_execution_timeouts,
+               count(*) FILTER (
+                 WHERE state = 'active' AND attempt_timeout_at <= clock_timestamp()
+               )::text AS overdue_execution_timeouts
           FROM workhorse.job_runtime`),
         this.database.query<{
           relation: string;
@@ -1286,6 +1348,14 @@ export class Queue {
       expiredLeases: Number(depth.expired),
       oldestReadyAgeMs:
         depth.oldest_ready_age_ms === null ? null : Number(depth.oldest_ready_age_ms),
+      deadlinePressure: {
+        pending: Number(depth.pending_deadlines),
+        overdue: Number(depth.overdue_deadlines),
+        dueWithinMinute: Number(depth.deadlines_due_within_minute),
+        earliestAt: depth.earliest_deadline_at,
+      },
+      activeExecutionTimeouts: Number(depth.active_execution_timeouts),
+      overdueExecutionTimeouts: Number(depth.overdue_execution_timeouts),
       retentionPolicy: retentionPolicy(retentionRow),
       retentionLagMs: {
         jobIdentity:

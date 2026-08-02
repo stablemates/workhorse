@@ -386,6 +386,8 @@ export interface DashboardJobRow extends Record<string, unknown> {
   maxAttempts: number;
   /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */
   retryPolicy: RetryPolicy | null;
+  deadlineAt?: string | null;
+  executionTimeoutMs?: number | null;
   payload: unknown;
   tags: string[];
   /**
@@ -644,6 +646,14 @@ export interface DashboardSystemPage {
     queueWait: { p50Ms: number | null; p95Ms: number | null; p99Ms: number | null };
     retry: { backoff: number; dueSoon: number; buckets: DashboardSystemRetryBucket[] };
     lease: { active: number; expired: number; expiringSoon: number; recovered: number };
+    deadline?: {
+      pending: number;
+      overdue: number;
+      dueWithinMinute: number;
+      earliestAt: string | null;
+      activeTimeouts: number;
+      overdueTimeouts: number;
+    };
   };
   outcomes: DashboardSystemOutcomeBucket[];
   queues: DashboardSystemQueueRow[];
@@ -693,6 +703,8 @@ export interface DashboardJobDetail {
     /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */
     retryPolicy: RetryPolicy | null;
     maxAttempts: number;
+    deadlineAt?: string | null;
+    executionTimeoutMs?: number | null;
   };
   payload: unknown;
   durability: DashboardDurabilityPlan | null;
@@ -709,6 +721,7 @@ export interface DashboardJobDetail {
       expiresAt: string | null;
       waitName: string | null;
       attemptStartedAt: string | null;
+      attemptTimeoutAt?: string | null;
       /** Cooperative cancellation requested against this live runtime, if any. */
       cancellation: DashboardCancellationRequest | null;
       error: unknown;
