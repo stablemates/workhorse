@@ -1,0 +1,864 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 25,
+        "sampleIntervalMs": 500,
+        "targetJobs": 500,
+        "targetRatePerSecond": 100,
+        "workerConcurrency": 4
+      },
+      "enqueueBatchSize": 25,
+      "jobsPerRun": 100,
+      "leaseMs": 30000,
+      "repetitions": 3,
+      "seed": 1,
+      "workerConcurrency": [1, 4, 8]
+    },
+    "operational": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "retryDelayMs": 75,
+      "scenarios": ["worker-concurrency"],
+      "scheduleDelayMs": 75
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-02T19:06:48.781Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "queuePrefix": "operational",
+      "retryDelayMs": 75,
+      "scenarios": ["worker-concurrency"],
+      "scheduleDelayMs": 75
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "concurrency1 exposes readonly concurrency",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "concurrency1 runtime state concurrency",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "concurrency1 completes all handlers",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "concurrency1 persists all outcomes",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency1 leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency1 leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "concurrency1 handler overlap respects slots",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "concurrency1 runtime slots stay bounded",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "concurrency1 claims are serial",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency1 claims only use free slots",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 323,
+            "name": "concurrency1 polling claim pressure is duration bounded",
+            "passed": true
+          },
+          {
+            "actual": 3,
+            "expected": 3,
+            "name": "concurrency1 connection pressure tracks slots",
+            "passed": true
+          },
+          {
+            "actual": 50,
+            "expected": 24,
+            "name": "concurrency1 every job receives a heartbeat",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "concurrency1 has no claims outside timed window",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency1 drains active slots",
+            "passed": true
+          },
+          {
+            "actual": 4,
+            "expected": 4,
+            "name": "concurrency4 exposes readonly concurrency",
+            "passed": true
+          },
+          {
+            "actual": 4,
+            "expected": 4,
+            "name": "concurrency4 runtime state concurrency",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "concurrency4 completes all handlers",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "concurrency4 persists all outcomes",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency4 leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency4 leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 4,
+            "expected": 4,
+            "name": "concurrency4 handler overlap respects slots",
+            "passed": true
+          },
+          {
+            "actual": 4,
+            "expected": 4,
+            "name": "concurrency4 runtime slots stay bounded",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "concurrency4 claims are serial",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency4 claims only use free slots",
+            "passed": true
+          },
+          {
+            "actual": 25,
+            "expected": 102,
+            "name": "concurrency4 polling claim pressure is duration bounded",
+            "passed": true
+          },
+          {
+            "actual": 7,
+            "expected": 9,
+            "name": "concurrency4 connection pressure tracks slots",
+            "passed": true
+          },
+          {
+            "actual": 57,
+            "expected": 24,
+            "name": "concurrency4 every job receives a heartbeat",
+            "passed": true
+          },
+          {
+            "actual": 25,
+            "expected": 25,
+            "name": "concurrency4 has no claims outside timed window",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency4 drains active slots",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "concurrency8 exposes readonly concurrency",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "concurrency8 runtime state concurrency",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "concurrency8 completes all handlers",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "concurrency8 persists all outcomes",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency8 leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency8 leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "concurrency8 handler overlap respects slots",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "concurrency8 runtime slots stay bounded",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "concurrency8 claims are serial",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency8 claims only use free slots",
+            "passed": true
+          },
+          {
+            "actual": 25,
+            "expected": 65,
+            "name": "concurrency8 polling claim pressure is duration bounded",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 17,
+            "name": "concurrency8 connection pressure tracks slots",
+            "passed": true
+          },
+          {
+            "actual": 54,
+            "expected": 24,
+            "name": "concurrency8 every job receives a heartbeat",
+            "passed": true
+          },
+          {
+            "actual": 25,
+            "expected": 25,
+            "name": "concurrency8 has no claims outside timed window",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "concurrency8 drains active slots",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "null-claim pressure follows polling windows instead of concurrency",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyimmediatesingle completes all handlers",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyimmediatesingle persists all outcomes",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyimmediatesingle leaves no ready work",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyimmediatesingle leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyimmediatesingle leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 8,
+            "name": "topologyimmediatesingle respects total configured slots",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyimmediatesingle records every handler start",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyimmediatebalanced completes all handlers",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyimmediatebalanced persists all outcomes",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyimmediatebalanced leaves no ready work",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyimmediatebalanced leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyimmediatebalanced leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 8,
+            "name": "topologyimmediatebalanced respects total configured slots",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyimmediatebalanced records every handler start",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyimmediatedistributed completes all handlers",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyimmediatedistributed persists all outcomes",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyimmediatedistributed leaves no ready work",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyimmediatedistributed leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyimmediatedistributed leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 8,
+            "name": "topologyimmediatedistributed respects total configured slots",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyimmediatedistributed records every handler start",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyiosingle completes all handlers",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyiosingle persists all outcomes",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyiosingle leaves no ready work",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyiosingle leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyiosingle leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "topologyiosingle respects total configured slots",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyiosingle records every handler start",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyiobalanced completes all handlers",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyiobalanced persists all outcomes",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyiobalanced leaves no ready work",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyiobalanced leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyiobalanced leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "topologyiobalanced respects total configured slots",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyiobalanced records every handler start",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyiodistributed completes all handlers",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyiodistributed persists all outcomes",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyiodistributed leaves no ready work",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyiodistributed leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "topologyiodistributed leaves no expired leases",
+            "passed": true
+          },
+          {
+            "actual": 8,
+            "expected": 8,
+            "name": "topologyiodistributed respects total configured slots",
+            "passed": true
+          },
+          {
+            "actual": 24,
+            "expected": 24,
+            "name": "topologyiodistributed records every handler start",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "first-null run handles one job",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "first-null run stops after job plus null",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "first-null claims remain serial",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "pause reports paused state",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "pause keeps active slots empty",
+            "passed": true
+          },
+          {
+            "actual": false,
+            "expected": false,
+            "name": "pause runOnce reports no work",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "pause blocks claims",
+            "passed": true
+          },
+          {
+            "actual": false,
+            "expected": false,
+            "name": "resume clears paused state",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "stop enters draining state",
+            "passed": true
+          },
+          {
+            "actual": 4,
+            "expected": 4,
+            "name": "stop drains configured active slots",
+            "passed": true
+          },
+          {
+            "actual": 4,
+            "expected": 4,
+            "name": "stop prevents claims while draining",
+            "passed": true
+          },
+          {
+            "actual": 4,
+            "expected": 4,
+            "name": "stop completes active jobs",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "stop leaves unclaimed jobs ready",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "stop finishes with no active slots",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "stop leaves no active leases",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "stop leaves no expired leases",
+            "passed": true
+          }
+        ],
+        "durationMs": 5735.756449,
+        "metrics": {
+          "concurrency1ClaimCalls": 24,
+          "concurrency1ClaimCallUpperBound": 323,
+          "concurrency1DurationMs": 2968.6363410000004,
+          "concurrency1ElapsedPollingWindows": 297,
+          "concurrency1HeartbeatCalls": 50,
+          "concurrency1JobsPerSecond": 8.084520043271947,
+          "concurrency1MaxActiveSlots": 1,
+          "concurrency1MaxConcurrentClaims": 1,
+          "concurrency1MaxConcurrentQueries": 3,
+          "concurrency1MaxHandlerOverlap": 1,
+          "concurrency1NullClaimCalls": 0,
+          "concurrency1NullClaimsPerPollingWindow": 0,
+          "concurrency1QueryCalls": 214,
+          "concurrency4ClaimCalls": 25,
+          "concurrency4ClaimCallUpperBound": 102,
+          "concurrency4DurationMs": 753.9061459999998,
+          "concurrency4ElapsedPollingWindows": 76,
+          "concurrency4HeartbeatCalls": 57,
+          "concurrency4JobsPerSecond": 31.834201282662054,
+          "concurrency4MaxActiveSlots": 4,
+          "concurrency4MaxConcurrentClaims": 1,
+          "concurrency4MaxConcurrentQueries": 7,
+          "concurrency4MaxHandlerOverlap": 4,
+          "concurrency4NullClaimCalls": 1,
+          "concurrency4NullClaimsPerPollingWindow": 0.013157894736842105,
+          "concurrency4QueryCalls": 138,
+          "concurrency8ClaimCalls": 25,
+          "concurrency8ClaimCallUpperBound": 65,
+          "concurrency8DurationMs": 381.84748100000024,
+          "concurrency8ElapsedPollingWindows": 39,
+          "concurrency8HeartbeatCalls": 54,
+          "concurrency8JobsPerSecond": 62.85231982452173,
+          "concurrency8MaxActiveSlots": 8,
+          "concurrency8MaxConcurrentClaims": 1,
+          "concurrency8MaxConcurrentQueries": 8,
+          "concurrency8MaxHandlerOverlap": 8,
+          "concurrency8NullClaimCalls": 1,
+          "concurrency8NullClaimsPerPollingWindow": 0.02564102564102564,
+          "concurrency8QueryCalls": 119,
+          "concurrencyLevels": "1,4,8",
+          "firstNullClaimCalls": 2,
+          "handlerDelayMs": 120,
+          "heartbeatMs": 40,
+          "jobsPerLevel": 24,
+          "leaseMs": 600,
+          "maxNullClaimsPerPollingWindow": 0.02564102564102564,
+          "pausedClaimCalls": 0,
+          "pollingSchedulingSlack": 2,
+          "pollMs": 10,
+          "shutdownClaimsAfterDrain": 4,
+          "shutdownClaimsAtStop": 4,
+          "shutdownReady": 2,
+          "shutdownSucceeded": 4,
+          "topologyCapacity": 8,
+          "topologyimmediatebalancedClaimCalls": 25,
+          "topologyimmediatebalancedConcurrencyPerWorker": 4,
+          "topologyimmediatebalancedDurationMs": 14.758453000000372,
+          "topologyimmediatebalancedHeartbeatCalls": 0,
+          "topologyimmediatebalancedJobsPerSecond": 1626.1867012754924,
+          "topologyimmediatebalancedMaxConcurrentClaims": 2,
+          "topologyimmediatebalancedMaxConcurrentQueries": 7,
+          "topologyimmediatebalancedMaxHandlerOverlap": 1,
+          "topologyimmediatebalancedQueryCalls": 57,
+          "topologyimmediatebalancedStartLatencyMaxMs": 13.623806000000513,
+          "topologyimmediatebalancedStartLatencyP50Ms": 8.538479000000734,
+          "topologyimmediatebalancedStartLatencyP95Ms": 13.223717000000761,
+          "topologyimmediatebalancedTotalConfiguredSlots": 8,
+          "topologyimmediatebalancedWorkers": 2,
+          "topologyimmediatedistributedClaimCalls": 26,
+          "topologyimmediatedistributedConcurrencyPerWorker": 1,
+          "topologyimmediatedistributedDurationMs": 11.625293000000056,
+          "topologyimmediatedistributedHeartbeatCalls": 0,
+          "topologyimmediatedistributedJobsPerSecond": 2064.4640956576222,
+          "topologyimmediatedistributedMaxConcurrentClaims": 6,
+          "topologyimmediatedistributedMaxConcurrentQueries": 8,
+          "topologyimmediatedistributedMaxHandlerOverlap": 1,
+          "topologyimmediatedistributedQueryCalls": 82,
+          "topologyimmediatedistributedStartLatencyMaxMs": 10.474295999999413,
+          "topologyimmediatedistributedStartLatencyP50Ms": 7.380548999999519,
+          "topologyimmediatedistributedStartLatencyP95Ms": 10.361657999999807,
+          "topologyimmediatedistributedTotalConfiguredSlots": 8,
+          "topologyimmediatedistributedWorkers": 8,
+          "topologyimmediatesingleClaimCalls": 24,
+          "topologyimmediatesingleConcurrencyPerWorker": 8,
+          "topologyimmediatesingleDurationMs": 24.056163000000197,
+          "topologyimmediatesingleHeartbeatCalls": 0,
+          "topologyimmediatesingleJobsPerSecond": 997.6653383999686,
+          "topologyimmediatesingleMaxConcurrentClaims": 1,
+          "topologyimmediatesingleMaxConcurrentQueries": 4,
+          "topologyimmediatesingleMaxHandlerOverlap": 1,
+          "topologyimmediatesingleQueryCalls": 52,
+          "topologyimmediatesingleStartLatencyMaxMs": 22.91780899999958,
+          "topologyimmediatesingleStartLatencyP50Ms": 13.58447199999955,
+          "topologyimmediatesingleStartLatencyP95Ms": 22.049525000000358,
+          "topologyimmediatesingleTotalConfiguredSlots": 8,
+          "topologyimmediatesingleWorkers": 1,
+          "topologyiobalancedClaimCalls": 25,
+          "topologyiobalancedConcurrencyPerWorker": 4,
+          "topologyiobalancedDurationMs": 376.08247200000005,
+          "topologyiobalancedHeartbeatCalls": 51,
+          "topologyiobalancedJobsPerSecond": 63.81578985154085,
+          "topologyiobalancedMaxConcurrentClaims": 2,
+          "topologyiobalancedMaxConcurrentQueries": 8,
+          "topologyiobalancedMaxHandlerOverlap": 8,
+          "topologyiobalancedQueryCalls": 108,
+          "topologyiobalancedStartLatencyMaxMs": 254.79463400000077,
+          "topologyiobalancedStartLatencyP50Ms": 129.39411800000016,
+          "topologyiobalancedStartLatencyP95Ms": 254.34031400000003,
+          "topologyiobalancedTotalConfiguredSlots": 8,
+          "topologyiobalancedWorkers": 2,
+          "topologyiodistributedClaimCalls": 24,
+          "topologyiodistributedConcurrencyPerWorker": 1,
+          "topologyiodistributedDurationMs": 373.133331,
+          "topologyiodistributedHeartbeatCalls": 48,
+          "topologyiodistributedJobsPerSecond": 64.32017192267394,
+          "topologyiodistributedMaxConcurrentClaims": 8,
+          "topologyiodistributedMaxConcurrentQueries": 8,
+          "topologyiodistributedMaxHandlerOverlap": 8,
+          "topologyiodistributedQueryCalls": 128,
+          "topologyiodistributedStartLatencyMaxMs": 251.03649899999982,
+          "topologyiodistributedStartLatencyP50Ms": 127.56791200000043,
+          "topologyiodistributedStartLatencyP95Ms": 251.01294599999983,
+          "topologyiodistributedTotalConfiguredSlots": 8,
+          "topologyiodistributedWorkers": 8,
+          "topologyiosingleClaimCalls": 25,
+          "topologyiosingleConcurrencyPerWorker": 8,
+          "topologyiosingleDurationMs": 380.3095510000003,
+          "topologyiosingleHeartbeatCalls": 48,
+          "topologyiosingleJobsPerSecond": 63.10648769375761,
+          "topologyiosingleMaxConcurrentClaims": 1,
+          "topologyiosingleMaxConcurrentQueries": 7,
+          "topologyiosingleMaxHandlerOverlap": 8,
+          "topologyiosingleQueryCalls": 101,
+          "topologyiosingleStartLatencyMaxMs": 258.29817600000024,
+          "topologyiosingleStartLatencyP50Ms": 131.55247400000007,
+          "topologyiosingleStartLatencyP95Ms": 257.6023699999996,
+          "topologyiosingleTotalConfiguredSlots": 8,
+          "topologyiosingleWorkers": 1,
+          "topologyProfiles": "immediate,io",
+          "topologyRuns": 6
+        },
+        "name": "worker-concurrency"
+      }
+    ],
+    "totalDurationMs": 5735.771177
+  },
+  "profile": "default",
+  "provenance": {
+    "command": [
+      "/home/anton/.local/share/mise/installs/node/24.15.0/bin/node",
+      "/home/anton/personal/workhorse/src/cli/benchmark.ts",
+      "--",
+      "--suite",
+      "lifecycle",
+      "--profile",
+      "default",
+      "--scenario",
+      "worker-concurrency",
+      "--output",
+      "docs/benchmarks/results/2026-08-02-worker-concurrency-default.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187813376
+    },
+    "source": {
+      "commit": "24a9af073baafa0d193678c74d064026d899b5ae",
+      "dirty": true
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}

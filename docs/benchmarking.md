@@ -48,18 +48,18 @@ The suite also performs equal-load fixed-rate producer-consumer churn. Both desi
 
 The lifecycle suite runs deterministic operational scenarios with hard invariants:
 
-| Scenario                    | Evidence produced                                                                                                                       |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `scheduled-promotion-drift` | bounded promotion batches and due-time drift distribution                                                                               |
-| `heartbeat-fencing`         | accepted heartbeat cost and stale-fence rejection cost                                                                                  |
-| `cancellation-lifecycle`    | immediate/waiting cancellation, active signal/ack, expiry materialization, stale races, truthful history, recurrence, and query timings |
-| `crash-before-completion`   | durable state at all five worker crash boundaries                                                                                       |
-| `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection                                                                     |
-| `retry-paths`               | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion                            |
-| `idempotent-ingress`        | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants                            |
-| `retention-pruning`         | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                          |
-| `health-snapshot`           | health-query latency and internally consistent degraded-state counts                                                                    |
-| `worker-concurrency`        | 1/4/8-slot timing, overlap/slot bounds, polling-window claim pressure, heartbeats, first-null, pause, and drain invariants              |
+| Scenario                    | Evidence produced                                                                                                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scheduled-promotion-drift` | bounded promotion batches and due-time drift distribution                                                                                                                                        |
+| `heartbeat-fencing`         | accepted heartbeat cost and stale-fence rejection cost                                                                                                                                           |
+| `cancellation-lifecycle`    | immediate/waiting cancellation, active signal/ack, expiry materialization, stale races, truthful history, recurrence, and query timings                                                          |
+| `crash-before-completion`   | durable state at all five worker crash boundaries                                                                                                                                                |
+| `lease-expiry-recovery`     | recovery latency, new attempt/fence, and stale completion rejection                                                                                                                              |
+| `retry-paths`               | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion                                                                                     |
+| `idempotent-ingress`        | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants                                                                                     |
+| `retention-pruning`         | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                                                                                   |
+| `health-snapshot`           | health-query latency and internally consistent degraded-state counts                                                                                                                             |
+| `worker-concurrency`        | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants |
 
 Scenario invariant failures abort the suite. This prevents a fast but semantically incorrect run from being treated as evidence.
 
@@ -98,6 +98,13 @@ runs prove that one fill pass stops after its first null claim, pause issues no 
 later claims while active handlers drain. The query counters are client-side pressure proxies, not PostgreSQL
 connection-pool occupancy. No throughput, scaling, connection, or efficiency claim is supported until a live
 artifact containing this scenario is recorded.
+
+The same scenario compares equal total handler capacity using one multi-slot worker, a balanced two-worker
+topology, and one single-slot worker per capacity unit. Each topology runs an immediate handler profile and
+an I/O-like delayed profile. It records complete-run throughput, handler-start p50/p95/max, claim/query/
+heartbeat pressure, maximum concurrent claims, and maximum handler overlap. Every topology uses the real
+`Worker` runtime. These measurements cover process-local topology overhead, not operating-system process
+isolation or global queue concurrency.
 
 ## Safety and prerequisites
 

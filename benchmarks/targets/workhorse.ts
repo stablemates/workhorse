@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
-import { Queue, installSchema } from "../../src/index.js";
-import type { ClaimedJob, Json } from "../../src/types.js";
+import { Queue, Worker, installSchema } from "../../src/index.js";
+import type { Json } from "../../src/types.js";
 import { CompletionTarget, type TargetMetadata, type WorkItem } from "./types.js";
 
 export class WorkhorseTarget extends CompletionTarget {
@@ -14,23 +14,26 @@ export class WorkhorseTarget extends CompletionTarget {
       maxAttempts: 1,
       leaseMs: 30_000,
       databasePoolMax: 32,
-      polling: "public Queue claim loop",
+      polling: "native Worker loop with 1ms benchmark fallback polling",
+      workers: "one Worker instance using WorkerOptions.concurrency",
+      stop: "native graceful Worker.stop() drain",
     },
     capabilities: {
       bulkEnqueue: true,
-      nativeWorkerLoop: false,
-      claimLatencyComparable: true,
+      nativeWorkerLoop: true,
+      claimLatencyComparable: false,
       fencingComparable: true,
       successRetention: "retained",
     },
     notes: [
-      "Uses the public Queue/SQL protocol.",
+      "Uses the public Worker runtime so concurrency means local handler slots, matching the product API.",
+      "Worker.stop() prevents new claims and drains already active handlers before the run settles.",
       "Success rows and history are retained, unlike Graphile Worker.",
     ],
   };
   private readonly queue: Queue;
-  private stopping = false;
-  private workers: Promise<void>[] = [];
+  private worker: Worker | null = null;
+  private running: Promise<void> | null = null;
   constructor(private readonly pool: Pool) {
     super();
     this.queue = new Queue(pool, this.metadata.queue);
@@ -57,29 +60,29 @@ export class WorkhorseTarget extends CompletionTarget {
     );
   }
   async startConsumers(concurrency: number): Promise<void> {
-    this.stopping = false;
-    this.workers = Array.from({ length: concurrency }, (_, index) =>
-      this.work(`workhorse-${index + 1}`),
-    );
-  }
-  private async work(workerId: string): Promise<void> {
-    while (!this.stopping) {
-      const job = await this.queue.claim<{ id: string }>(workerId, { leaseMs: 30_000 });
-      if (!job) {
-        await new Promise((resolve) => setTimeout(resolve, 1));
-        continue;
-      }
-      const accepted = await this.queue.complete(job as ClaimedJob<unknown>, workerId, {
-        ok: true,
-      });
-      if (!accepted) throw new Error("Workhorse rejected completion");
-      this.recordCompletion(job.payload.id);
-    }
+    if (this.running) throw new Error("Workhorse consumers are already running");
+    this.worker = new Worker(this.queue, {
+      concurrency,
+      workerId: "competitor-baseline-workhorse",
+      leaseMs: 30_000,
+      pollMs: 1,
+    }).handle<{ id: string }>(this.metadata.queue, async ({ id }) => {
+      this.recordCompletion(id);
+      return { ok: true };
+    });
+    this.running = this.worker.run();
   }
   async stop(): Promise<void> {
-    this.stopping = true;
-    await Promise.all(this.workers);
-    this.workers = [];
+    const worker = this.worker;
+    const running = this.running;
+    if (!worker || !running) return;
+    worker.stop();
+    try {
+      await running;
+    } finally {
+      this.worker = null;
+      this.running = null;
+    }
   }
   async close(): Promise<void> {
     await this.stop();
