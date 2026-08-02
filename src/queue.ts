@@ -77,11 +77,11 @@ type ClaimRow = {
   attempt: number;
   max_attempts: number;
   retry_policy: RetryPolicy | null;
-  deadline_at: Date | null;
+  deadline_at: Date | string | null;
   execution_timeout_ms: string | null;
-  attempt_timeout_at: Date | null;
+  attempt_timeout_at: Date | string | null;
   fence_token: string;
-  lease_expires_at: Date;
+  lease_expires_at: Date | string;
 };
 
 type CancelRow = {
@@ -174,6 +174,18 @@ function maintenancePhaseResult(row: MaintenancePhaseRow): MaintenancePhaseResul
     skippedLock: row.skipped_lock,
     error: row.error,
   };
+}
+
+function claimedTimestamp(value: Date | string, field: string): Date {
+  const timestamp = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    throw new TypeError(`Claim returned an invalid ${field} timestamp`);
+  }
+  return timestamp;
+}
+
+function nullableClaimedTimestamp(value: Date | string | null, field: string): Date | null {
+  return value === null ? null : claimedTimestamp(value, field);
 }
 
 function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
@@ -739,12 +751,12 @@ export class Queue {
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
       retryPolicy: row.retry_policy,
-      deadlineAt: row.deadline_at,
+      deadlineAt: nullableClaimedTimestamp(row.deadline_at, "deadline_at"),
       executionTimeoutMs:
         row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
-      attemptTimeoutAt: row.attempt_timeout_at,
+      attemptTimeoutAt: nullableClaimedTimestamp(row.attempt_timeout_at, "attempt_timeout_at"),
       fenceToken: BigInt(row.fence_token),
-      leaseExpiresAt: row.lease_expires_at,
+      leaseExpiresAt: claimedTimestamp(row.lease_expires_at, "lease_expires_at"),
     };
   }
 
