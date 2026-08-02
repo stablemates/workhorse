@@ -1303,6 +1303,31 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
   );
 }
 
+/** Absolute lifetime and per-attempt execution limits persisted with the job definition. */
+function TimingPolicyLine({ job }: { job: DashboardJobDetail }) {
+  const deadlineAt = job.identity.deadlineAt ?? null;
+  const executionTimeoutMs = job.identity.executionTimeoutMs ?? null;
+  if (deadlineAt === null && executionTimeoutMs === null) return null;
+  const runtimeTimeoutAt = job.current.runtime?.attemptTimeoutAt ?? null;
+  const parts = [
+    deadlineAt === null ? null : `deadline ${formatExact(deadlineAt)}`,
+    executionTimeoutMs === null
+      ? null
+      : `${formatDuration(executionTimeoutMs)} active execution per attempt`,
+    runtimeTimeoutAt === null ? null : `current timeout target ${formatExact(runtimeTimeoutAt)}`,
+  ].filter((part): part is string => part !== null);
+  return (
+    <Group gap="xs" mt="xs" align="baseline">
+      <Text c="dimmed" size="xs" fw={600}>
+        Time limits
+      </Text>
+      <Text c="dimmed" size="xs" title={parts.join("; ")}>
+        {parts.join(" · ")}
+      </Text>
+    </Group>
+  );
+}
+
 /**
  * Compact ordered view of the recorded boundary events for this task. Repeated
  * claims inside one attempt are called out, because a durable wait releases
@@ -2985,6 +3010,34 @@ function SystemOperations({
               color={data.kpis.lease.expired > 0 ? "red" : "teal"}
               icon={<Pulse size={18} />}
             />
+            {(() => {
+              const deadline = data.kpis.deadline ?? {
+                pending: 0,
+                overdue: 0,
+                dueWithinMinute: 0,
+                earliestAt: null,
+                activeTimeouts: 0,
+                overdueTimeouts: 0,
+              };
+              return (
+                <HealthKpi
+                  divided
+                  title="Deadline pressure"
+                  value={deadline.overdue}
+                  detail={`${deadline.dueWithinMinute} due in 1m · ${deadline.overdueTimeouts} timed-out attempts awaiting reap`}
+                  help="A current snapshot of live jobs past their absolute deadline, jobs due within one minute, and active execution timeouts whose PostgreSQL target has elapsed."
+                  scope="now"
+                  color={
+                    deadline.overdue > 0 || deadline.overdueTimeouts > 0
+                      ? "red"
+                      : deadline.dueWithinMinute > 0
+                        ? "orange"
+                        : "teal"
+                  }
+                  icon={<Clock size={18} />}
+                />
+              );
+            })()}
           </Paper>
 
           <Paper withBorder p="md">
@@ -4403,6 +4456,7 @@ function DashboardContent({
               </Group>
               <Code fz="xs">{selectedJob.identity.id}</Code>
               <RetryPolicyLine job={selectedJob} />
+              <TimingPolicyLine job={selectedJob} />
             </Box>
             <Box>
               <JsonValue

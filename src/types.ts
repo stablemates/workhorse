@@ -38,6 +38,8 @@ export type EnqueueIdempotencyConflictField =
   | "payload"
   | "tags"
   | "runAt"
+  | "deadline"
+  | "executionTimeoutMs"
   | "maxAttempts"
   | "retryPolicy"
   | "ttlMs";
@@ -59,6 +61,10 @@ export interface EnqueueIdempotencyConflictDetails {
 export interface EnqueueOptions {
   queue?: string;
   runAt?: Date;
+  /** Absolute wall-clock deadline. Reaching it is terminal even when retry budget remains. */
+  deadline?: Date;
+  /** Maximum active execution time consumed by one logical attempt, excluding durable waits. */
+  executionTimeoutMs?: number;
   maxAttempts?: number;
   retryPolicy?: RetryPolicy;
   tags?: string[];
@@ -92,6 +98,8 @@ export const MAX_IDEMPOTENCY_TTL_MS = 31_536_000_000;
 export const MAX_CHECKPOINT_VALUE_BYTES = 1_048_576;
 /** Maximum relative duration or first absolute target horizon for one durable wait (365 days). */
 export const MAX_WAIT_DURATION_MS = 31_536_000_000;
+/** Maximum active execution budget for one attempt (365 days). */
+export const MAX_EXECUTION_TIMEOUT_MS = 31_536_000_000;
 /** Maximum characters accepted for cancellation-request attribution. Attribution is not authorization. */
 export const MAX_CANCELLATION_REQUESTED_BY_CHARACTERS = 200;
 /** Maximum characters accepted for a cancellation reason. */
@@ -104,7 +112,18 @@ export interface CancellationRequest {
 }
 
 export type CancelStatus = "canceled" | "cancel_requested" | "already_terminal" | "not_found";
-export type HeartbeatStatus = "accepted" | "cancel_requested" | "stale";
+export type HeartbeatStatus =
+  | "accepted"
+  | "cancel_requested"
+  | "deadline_exceeded"
+  | "timeout_exceeded"
+  | "stale";
+export type ExpireOwnedStatus =
+  | "not_due"
+  | "cancel_requested"
+  | "deadline_exceeded"
+  | "timeout_exceeded"
+  | "stale";
 
 /** Safe lifecycle metadata returned by {@link Queue.cancel}; payloads and worker ownership are omitted. */
 export interface CancelResult {
@@ -128,6 +147,12 @@ export interface ClaimedJob<TPayload = Json> {
   attempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;
+  /** Immutable absolute job deadline, or null when the job has no deadline. */
+  deadlineAt: Date | null;
+  /** Persisted active-execution budget for each logical attempt. */
+  executionTimeoutMs: number | null;
+  /** PostgreSQL-computed timeout target for this active handler activation. */
+  attemptTimeoutAt: Date | null;
   /** Ownership generation that must accompany heartbeat, completion, and failure. */
   fenceToken: bigint;
   /** Client-visible expiry snapshot. PostgreSQL remains authoritative. */
@@ -178,6 +203,8 @@ export interface JobSnapshot<TResult = Json> {
   currentAttempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;
+  deadlineAt: Date | null;
+  executionTimeoutMs: number | null;
   /** Current ownership generation, or zero before the first claim. */
   fenceToken: bigint;
   runAt: Date;
@@ -243,6 +270,17 @@ export interface QueueHealth {
   activeLeases: number;
   expiredLeases: number;
   oldestReadyAgeMs: number | null;
+  /** Pressure from absolute deadlines among live runtimes. */
+  deadlinePressure: {
+    pending: number;
+    overdue: number;
+    dueWithinMinute: number;
+    earliestAt: Date | null;
+  };
+  /** Active attempts with a persisted execution timeout target. */
+  activeExecutionTimeouts: number;
+  /** Active attempts whose execution timeout target has elapsed but is not yet reaped. */
+  overdueExecutionTimeouts: number;
   retentionPolicy: RetentionPolicy;
   /** Delay beyond each enabled policy cutoff. Null means disabled or no retained data. */
   retentionLagMs: RetentionCategoryValues<number | null>;

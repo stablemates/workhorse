@@ -1,6 +1,6 @@
 # Workhorse validation MVP
 
-Workhorse is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, cooperative cancellation, immutable history, and a live-only dispatch relation.
+Workhorse is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, cooperative cancellation, PostgreSQL-owned deadlines and execution timeouts, immutable history, and a live-only dispatch relation.
 
 The current implementation remains an evidence-first validation release rather than a production-support promise. Its purpose is to validate transactional enqueue, declarative worker-scheduled recurring jobs, fenced ownership, cooperative cancellation, immutable attempt history, durable checkpoint replay, lease-releasing timer waits, attribution-safe automated retention, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
 
@@ -40,6 +40,7 @@ The current implementation remains an evidence-first validation release rather t
 - a dedicated `workhorse worker` process runner with bounded graceful shutdown and optional probes;
 - immediate cancellation for queued, scheduled, and durable-wait work plus cooperative requests for
   active handlers;
+- absolute enqueue deadlines plus cooperative, fenced per-attempt execution timeouts;
 - separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
 - a separately packaged `@workhorse/dashboard` React operator dashboard with an injected,
   transport-neutral client boundary, package-owned styles/assets, and audited local controls;
@@ -56,7 +57,7 @@ not complete roadmap item **P1-09 Progress and job metadata**.
 
 Schema version 11 adds `Queue.cancel(jobId, { requestedBy?, reason? })`. Ready, future-scheduled,
 and durable-wait jobs become terminal `canceled` immediately. Active jobs retain their fenced lease
-and record one cancellation request. `heartbeat_v2` returns `accepted`, `cancel_requested`, or `stale`;
+and record one cancellation request. `heartbeat_v2` returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`;
 the worker converts `cancel_requested` into a `CancellationRequestedError` on the handler's
 `AbortSignal` and acknowledges only with the exact worker/fence generation. Boolean `heartbeat_v1`
 remains available and maps only `accepted` to `true`.
@@ -343,6 +344,11 @@ Benchmark suite v3 compares a purpose-built mutable-table protocol implementing 
 Follow the complete [benchmark runbook](docs/benchmarking.md) before running or interpreting anything beyond a smoke test.
 
 ## Correctness contract
+
+For safer rolling deployments, keep ordinary handlers at or below **110 seconds**. Work that can run
+longer should be modeled as durable execution: split it into idempotent stages with named checkpoints
+and use lease-releasing durable waits between stages. This is deployment guidance rather than a hard
+protocol limit; configure execution timeouts and process shutdown grace periods for the environment.
 
 - Accepted jobs are durable in PostgreSQL.
 - Handlers execute outside database transactions and are **at least once**.

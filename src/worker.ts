@@ -59,6 +59,25 @@ export class CancellationRequestedError extends Error {
   }
 }
 
+/** AbortSignal reason used when a job's immutable absolute deadline is reached. */
+export class DeadlineExceededError extends Error {
+  constructor(readonly jobId: string) {
+    super(`Deadline was exceeded for job ${jobId}`);
+    this.name = "DeadlineExceededError";
+  }
+}
+
+/** AbortSignal reason used when one logical attempt consumes its active execution budget. */
+export class ExecutionTimeoutError extends Error {
+  constructor(
+    readonly jobId: string,
+    readonly attempt: number,
+  ) {
+    super(`Execution timeout was exceeded for job ${jobId} attempt ${attempt}`);
+    this.name = "ExecutionTimeoutError";
+  }
+}
+
 export interface WorkerOptions {
   /** Queue name used for claims. */
   queue?: string;
@@ -272,10 +291,14 @@ export class Worker {
     const controller = new AbortController();
     let leaseLost = false;
     let cancellationRequested = false;
+    let deadlineExceeded = false;
+    let timeoutExceeded = false;
     let durablySuspended = false;
     // Each job owns an independent self-scheduling heartbeat. The next delay starts only after the
     // previous query settles, so a slow database call cannot overlap another heartbeat for this job.
     let heartbeatTimer: NodeJS.Timeout | undefined;
+    let expirationTimer: NodeJS.Timeout | undefined;
+    let expirationPromise: Promise<void> | undefined;
     let heartbeatStopped = false;
     const stopHeartbeat = (): void => {
       heartbeatStopped = true;
@@ -283,16 +306,29 @@ export class Worker {
         clearTimeout(heartbeatTimer);
         heartbeatTimer = undefined;
       }
+      if (expirationTimer) {
+        clearTimeout(expirationTimer);
+        expirationTimer = undefined;
+      }
     };
     const markCancellationRequested = (): void => {
       cancellationRequested = true;
       stopHeartbeat();
       if (!controller.signal.aborted) controller.abort(new CancellationRequestedError(job.id));
     };
-    const refreshOwnership = async (): Promise<"accepted" | "cancel_requested" | "stale"> => {
+    const refreshOwnership = async () => {
       const status = await this.queue.heartbeatStatus(job, this.workerId, this.leaseMs);
       if (status === "cancel_requested") {
         markCancellationRequested();
+      } else if (status === "deadline_exceeded") {
+        deadlineExceeded = true;
+        stopHeartbeat();
+        if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(job.id));
+      } else if (status === "timeout_exceeded") {
+        timeoutExceeded = true;
+        stopHeartbeat();
+        if (!controller.signal.aborted)
+          controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
       } else if (status === "stale") {
         leaseLost = true;
         stopHeartbeat();
@@ -300,6 +336,38 @@ export class Worker {
       }
       return status;
     };
+    const expirationAt = [job.deadlineAt, job.attemptTimeoutAt].reduce<Date | null>(
+      (earliest, candidate) =>
+        candidate !== null && (earliest === null || candidate < earliest) ? candidate : earliest,
+      null,
+    );
+    if (expirationAt) {
+      expirationTimer = setTimeout(
+        () => {
+          expirationTimer = undefined;
+          const isDeadline =
+            job.deadlineAt !== null &&
+            (job.attemptTimeoutAt === null || job.deadlineAt <= job.attemptTimeoutAt);
+          if (isDeadline) {
+            deadlineExceeded = true;
+            if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(job.id));
+          } else {
+            timeoutExceeded = true;
+            if (!controller.signal.aborted)
+              controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
+          }
+          stopHeartbeat();
+          expirationPromise = this.queue.expireOwned(job, this.workerId).then(async (status) => {
+            if (status === "cancel_requested") {
+              markCancellationRequested();
+              await this.queue.acknowledgeCancel(job, this.workerId);
+            }
+          });
+        },
+        Math.max(0, expirationAt.getTime() - Date.now()),
+      );
+      expirationTimer.unref();
+    }
     const scheduleHeartbeat = (): void => {
       if (heartbeatStopped) return;
       heartbeatTimer = setTimeout(() => {
@@ -462,6 +530,17 @@ export class Worker {
         controller.signal.reason instanceof CancellationRequestedError
       ) {
         await this.queue.acknowledgeCancel(job, this.workerId);
+        return;
+      }
+      if (
+        deadlineExceeded ||
+        timeoutExceeded ||
+        error instanceof DeadlineExceededError ||
+        error instanceof ExecutionTimeoutError ||
+        controller.signal.reason instanceof DeadlineExceededError ||
+        controller.signal.reason instanceof ExecutionTimeoutError
+      ) {
+        await expirationPromise;
         return;
       }
       const delay =

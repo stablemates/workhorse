@@ -3,7 +3,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { QueryResult, QueryResultRow } from "pg";
 import {
   CancellationRequestedError,
+  DeadlineExceededError,
   EnqueueIdempotencyConflictError,
+  ExecutionTimeoutError,
   InjectedCrashError,
   Queue,
   Worker,
@@ -14,6 +16,7 @@ export const operationalScenarioNames = [
   "scheduled-promotion-drift",
   "heartbeat-fencing",
   "cancellation-lifecycle",
+  "deadline-timeout-lifecycle",
   "crash-before-completion",
   "lease-expiry-recovery",
   "retry-paths",
@@ -159,6 +162,25 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "stateQueryMs",
       "eventQueryMs",
       "recurringNextOccurrenceMs",
+    ],
+  },
+  {
+    name: "deadline-timeout-lifecycle",
+    purpose:
+      "Exercise pre-claim deadline exclusion, active cooperative expiry, timeout retry, stale-write fencing, and health pressure.",
+    invariants: [
+      "a ready job past its absolute deadline is never newly claimed and becomes terminal without invented attempt history",
+      "an active deadline is delivered through AbortSignal and fences late completion",
+      "an execution timeout closes distinct attempt history and uses remaining retry budget",
+      "deadline and timeout pressure are visible in the canonical health snapshot",
+    ],
+    metrics: [
+      "readyDeadlineReapMs",
+      "activeDeadlineMs",
+      "timeoutRetryMs",
+      "pendingDeadlines",
+      "overdueDeadlines",
+      "activeExecutionTimeouts",
     ],
   },
   {
@@ -1013,6 +1035,196 @@ async function cancellationLifecycle(
   metrics.jobsExercised = 9;
 
   return { name: "cancellation-lifecycle", durationMs: 0, metrics, assertions };
+}
+
+async function deadlineTimeoutLifecycle(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const queue = new Queue(context.pool, context.queueName);
+  const assertions: ScenarioAssertion[] = [];
+  const metrics: Record<string, ScenarioMetric> = {};
+
+  const readyDeadlineId = await queue.enqueue(
+    "deadline-ready",
+    {},
+    { deadline: new Date(Date.now() + 60_000) },
+  );
+  await context.pool.query(
+    `UPDATE workhorse.job SET deadline_at = clock_timestamp() - interval '1 millisecond'
+      WHERE id = $1`,
+    [readyDeadlineId],
+  );
+  await context.pool.query(
+    `UPDATE workhorse.job_runtime SET deadline_at = clock_timestamp() - interval '1 millisecond'
+      WHERE job_id = $1`,
+    [readyDeadlineId],
+  );
+  recordInvariant(
+    assertions,
+    "expired ready job cannot be newly claimed",
+    await queue.claim("deadline-ready-worker"),
+    null,
+  );
+  const [readyReaped, readyDeadlineReapMs] = await measured(context.now, () =>
+    queue.recoverExpired(context.options.batchSize),
+  );
+  metrics.readyDeadlineReapMs = readyDeadlineReapMs;
+  recordInvariant(assertions, "expired ready deadline is reaped", readyReaped, 1);
+  recordInvariant(
+    assertions,
+    "never-started deadline becomes terminal failure",
+    (await queue.getJob(readyDeadlineId))?.state,
+    "failed",
+  );
+  recordInvariant(
+    assertions,
+    "never-started deadline invents no attempt history",
+    await rowCount(context.pool, "attempt_history", readyDeadlineId),
+    0,
+  );
+
+  let deadlineReason: unknown;
+  let deadlineClaim: ClaimedJob | undefined;
+  const deadlineWorkerId = "deadline-active-worker";
+  const deadlineWorker = new Worker(queue, {
+    queue: context.queueName,
+    workerId: deadlineWorkerId,
+    leaseMs: 500,
+    heartbeatMs: 20,
+    pollMs: 1,
+  }).handle("deadline-active", async (_payload, handlerContext) => {
+    deadlineClaim = handlerContext.job;
+    if (!handlerContext.signal.aborted) {
+      await new Promise<void>((resolve) =>
+        handlerContext.signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+    }
+    deadlineReason = handlerContext.signal.reason;
+    throw handlerContext.signal.reason;
+  });
+  const activeDeadlineId = await queue.enqueue(
+    "deadline-active",
+    {},
+    { deadline: new Date(Date.now() + 60), maxAttempts: 3 },
+  );
+  const activeDeadlineStarted = context.now();
+  await deadlineWorker.runOnce();
+  metrics.activeDeadlineMs = Math.max(0, context.now() - activeDeadlineStarted);
+  recordInvariant(
+    assertions,
+    "active deadline delivers distinct AbortSignal reason",
+    deadlineReason instanceof DeadlineExceededError,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "active deadline is terminal despite retry budget",
+    (await queue.getJob(activeDeadlineId))?.state,
+    "failed",
+  );
+  if (!deadlineClaim) throw new Error("deadline handler did not expose its claim");
+  recordInvariant(
+    assertions,
+    "late completion after deadline terminalization is fenced",
+    await queue.complete(deadlineClaim, deadlineWorkerId, { late: true }),
+    false,
+  );
+
+  let timeoutReason: unknown;
+  const timeoutWorker = new Worker(queue, {
+    queue: context.queueName,
+    workerId: "timeout-worker",
+    leaseMs: 500,
+    heartbeatMs: 20,
+    pollMs: 1,
+  }).handle("timeout-retry", async (_payload, handlerContext) => {
+    if (handlerContext.job.attempt === 2) return { attempt: 2 };
+    if (!handlerContext.signal.aborted) {
+      await new Promise<void>((resolve) =>
+        handlerContext.signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+    }
+    timeoutReason = handlerContext.signal.reason;
+    throw handlerContext.signal.reason;
+  });
+  const timeoutId = await queue.enqueue(
+    "timeout-retry",
+    {},
+    {
+      executionTimeoutMs: 60,
+      maxAttempts: 2,
+      retryPolicy: { type: "fixed", delayMs: 0 },
+    },
+  );
+  const timeoutStarted = context.now();
+  await timeoutWorker.runOnce();
+  metrics.timeoutRetryMs = Math.max(0, context.now() - timeoutStarted);
+  recordInvariant(
+    assertions,
+    "execution timeout delivers distinct AbortSignal reason",
+    timeoutReason instanceof ExecutionTimeoutError,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "execution timeout uses remaining retry budget",
+    (await queue.getJob(timeoutId))?.currentAttempt,
+    2,
+  );
+  await timeoutWorker.runOnce();
+  recordInvariant(
+    assertions,
+    "retry after timeout can succeed",
+    (await queue.getJob(timeoutId))?.state,
+    "succeeded",
+  );
+  const timeoutHistory = await context.pool.query<{ outcome: string }>(
+    `SELECT outcome FROM workhorse.attempt_history WHERE job_id = $1 ORDER BY attempt, attempt_id`,
+    [timeoutId],
+  );
+  recordInvariant(
+    assertions,
+    "timeout history remains distinct from lease expiry",
+    timeoutHistory.rows.map((row) => row.outcome),
+    ["timeout", "succeeded"],
+    jsonEquivalent,
+  );
+
+  await queue.enqueue(
+    "deadline-health",
+    {},
+    {
+      runAt: new Date(Date.now() + 120_000),
+      deadline: new Date(Date.now() + 30_000),
+    },
+  );
+  const healthTimeoutId = await queue.enqueue("timeout-health", {}, { executionTimeoutMs: 60_000 });
+  await queue.claim("timeout-health-worker", { leaseMs: 120_000 });
+  const health = await queue.health();
+  metrics.pendingDeadlines = health.deadlinePressure.pending;
+  metrics.overdueDeadlines = health.deadlinePressure.overdue;
+  metrics.activeExecutionTimeouts = health.activeExecutionTimeouts;
+  recordInvariant(
+    assertions,
+    "health reports pending deadline pressure",
+    health.deadlinePressure.pending >= 1,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "health reports active execution timeout",
+    health.activeExecutionTimeouts >= 1,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "health timeout seed remains active",
+    (await queue.getJob(healthTimeoutId))?.state,
+    "active",
+  );
+
+  return { name: "deadline-timeout-lifecycle", durationMs: 0, metrics, assertions };
 }
 
 async function crashBeforeCompletion(
@@ -2273,6 +2485,7 @@ export const operationalScenarioImplementations: Readonly<
   "scheduled-promotion-drift": scheduledPromotionDrift,
   "heartbeat-fencing": heartbeatFencing,
   "cancellation-lifecycle": cancellationLifecycle,
+  "deadline-timeout-lifecycle": deadlineTimeoutLifecycle,
   "crash-before-completion": crashBeforeCompletion,
   "lease-expiry-recovery": leaseExpiryRecovery,
   "retry-paths": retryPaths,

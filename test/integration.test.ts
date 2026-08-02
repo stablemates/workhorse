@@ -4,9 +4,11 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CancellationRequestedError,
+  DeadlineExceededError,
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
   EnqueueIdempotencyConflictError,
+  ExecutionTimeoutError,
   InjectedCrashError,
   installSchema,
   type MaintenancePhaseResult,
@@ -97,11 +99,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v12 with deterministic enqueue idempotency storage", async () => {
+  it("installs schema v13 with deterministic enqueue idempotency storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(12);
+    expect(version.rows[0]?.version).toBe(13);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -586,6 +588,391 @@ describe("live-runtime queue protocol", () => {
     expect(history.rows).toEqual([{ attempt: 1, outcome: "canceled" }]);
   });
 
+  it("validates, persists, and idempotently fingerprints deadlines and execution timeouts", async () => {
+    const deadline = new Date(Date.now() + 60_000);
+    const options = {
+      deadline,
+      executionTimeoutMs: 2_500,
+      idempotency: { key: "deadline-definition", scope: "p1-03" },
+    } as const;
+    const first = await queue.enqueue("deadline-definition", { value: 1 }, options);
+    expect(await queue.enqueue("deadline-definition", { value: 1 }, options)).toBe(first);
+    expect(await queue.getJob(first)).toMatchObject({
+      deadlineAt: deadline,
+      executionTimeoutMs: 2_500,
+    });
+    await expect(
+      queue.enqueue(
+        "deadline-definition",
+        { value: 1 },
+        {
+          ...options,
+          executionTimeoutMs: 2_501,
+        },
+      ),
+    ).rejects.toMatchObject({
+      conflictingFields: ["executionTimeoutMs"],
+    });
+    await expect(
+      queue.enqueue(
+        "deadline-definition",
+        { value: 1 },
+        { ...options, deadline: new Date(deadline.getTime() + 1) },
+      ),
+    ).rejects.toMatchObject({ conflictingFields: ["deadline"] });
+    await expect(
+      pool.query(
+        `SELECT * FROM workhorse.enqueue_many_v1(
+          '[{"queue":"default","type":"invalid-timeout","executionTimeoutMs":0}]'::jsonb
+        )`,
+      ),
+    ).rejects.toThrow(/executionTimeoutMs must be an integer/);
+    await expect(
+      pool.query(
+        `SELECT * FROM workhorse.enqueue_many_v1(
+          '[{"queue":"default","type":"invalid-deadline","deadline":"infinity"}]'::jsonb
+        )`,
+      ),
+    ).rejects.toThrow(/deadline must be a finite absolute timestamp/);
+
+    const expired = await queue.enqueue("already-expired", null, {
+      queue: "expired-deadline-only",
+      deadline: new Date(Date.now() - 1_000),
+      maxAttempts: 5,
+    });
+    expect(
+      await queue.claim("expired-deadline-worker", { queue: "expired-deadline-only" }),
+    ).toBeNull();
+    expect(await queue.getJob(expired)).toMatchObject({
+      state: "failed",
+      currentAttempt: 1,
+      fenceToken: 0n,
+      error: { name: "DeadlineExceeded" },
+    });
+    const evidence = await pool.query<{ event_type: string; outcome: string | null }>(
+      `SELECT event.event_type, history.outcome
+         FROM workhorse.job_event event
+         LEFT JOIN workhorse.attempt_history history ON history.job_id = event.job_id
+        WHERE event.job_id = $1 AND event.event_type = 'deadline_exceeded'`,
+      [expired],
+    );
+    expect(evidence.rows).toEqual([{ event_type: "deadline_exceeded", outcome: null }]);
+  });
+
+  it("cooperatively aborts active deadlines and durably fences handlers that ignore the signal", async () => {
+    const started = deferred();
+    const aborted = deferred<unknown>();
+    const release = deferred();
+    const id = await queue.enqueue("ignored-deadline", null, {
+      deadline: new Date(Date.now() + 150),
+      maxAttempts: 4,
+    });
+    const worker = new Worker(queue, {
+      workerId: "ignored-deadline-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 50,
+    }).handle("ignored-deadline", async (_payload, context) => {
+      started.resolve();
+      context.signal.addEventListener("abort", () => aborted.resolve(context.signal.reason), {
+        once: true,
+      });
+      await release.promise;
+      return { tooLate: true };
+    });
+
+    const execution = worker.runOnce();
+    await started.promise;
+    expect(await aborted.promise).toBeInstanceOf(DeadlineExceededError);
+    await sleep(25);
+    expect(await queue.getJob(id)).toMatchObject({
+      state: "failed",
+      currentAttempt: 1,
+      result: null,
+      error: { name: "DeadlineExceeded" },
+    });
+    release.resolve();
+    await execution;
+    const evidence = await pool.query<{ event_type: string; outcome: string }>(
+      `SELECT event.event_type, history.outcome
+         FROM workhorse.job_event event
+         JOIN workhorse.attempt_history history
+           ON history.job_id = event.job_id AND history.attempt = event.attempt
+        WHERE event.job_id = $1 AND event.event_type = 'deadline_exceeded'`,
+      [id],
+    );
+    expect(evidence.rows).toEqual([
+      { event_type: "deadline_exceeded", outcome: "deadline_exceeded" },
+    ]);
+  });
+
+  it("retries timed-out attempts with remaining budget and terminally distinguishes exhaustion", async () => {
+    const reasons: unknown[] = [];
+    const id = await queue.enqueue("attempt-timeout", null, {
+      executionTimeoutMs: 100,
+      maxAttempts: 2,
+    });
+    const worker = new Worker(queue, {
+      workerId: "attempt-timeout-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 50,
+    }).handle("attempt-timeout", async (_payload, context) => {
+      await new Promise<void>((_resolve, reject) => {
+        context.signal.addEventListener(
+          "abort",
+          () => {
+            reasons.push(context.signal.reason);
+            reject(context.signal.reason);
+          },
+          { once: true },
+        );
+      });
+      return null;
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    expect(await queue.getJob(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
+    expect(await worker.runOnce()).toBe(true);
+    expect(reasons).toHaveLength(2);
+    expect(reasons.every((reason) => reason instanceof ExecutionTimeoutError)).toBe(true);
+    expect(await queue.getJob(id)).toMatchObject({
+      state: "failed",
+      currentAttempt: 2,
+      error: { name: "ExecutionTimeout" },
+    });
+    const evidence = await pool.query<{ outcome: string; source: string }>(
+      `SELECT history.outcome, event.details->>'retry_delay_source' AS source
+         FROM workhorse.attempt_history history
+         JOIN workhorse.job_event event
+           ON event.job_id = history.job_id AND event.attempt = history.attempt
+          AND event.event_type = 'execution_timed_out'
+        WHERE history.job_id = $1 ORDER BY history.attempt`,
+      [id],
+    );
+    expect(evidence.rows).toEqual([
+      { outcome: "timeout", source: "execution-timeout-immediate" },
+      { outcome: "timeout", source: null },
+    ]);
+  });
+
+  it("materializes cancellation requested before an overdue deadline without stranding runtime", async () => {
+    const id = await queue.enqueue("cancel-before-deadline", null, {
+      deadline: new Date(Date.now() + 120),
+      maxAttempts: 3,
+    });
+    const claimed = await queue.claim("cancel-before-deadline-worker", { leaseMs: 5_000 });
+    expect(claimed?.id).toBe(id);
+    expect((await queue.cancel(id, { reason: "operator won" })).status).toBe("cancel_requested");
+    await sleep(140);
+    expect(await queue.recoverExpired()).toBe(1);
+    expect(await queue.getJob(id)).toMatchObject({
+      state: "canceled",
+      error: { name: "CancellationRequested", reason: "operator won" },
+    });
+    const evidence = await pool.query<{ outcome: string; source: string }>(
+      `SELECT history.outcome, event.details->>'source' AS source
+         FROM workhorse.attempt_history history
+         JOIN workhorse.job_event event ON event.job_id = history.job_id
+          AND event.attempt = history.attempt AND event.event_type = 'canceled'
+        WHERE history.job_id = $1`,
+      [id],
+    );
+    expect(evidence.rows).toEqual([{ outcome: "canceled", source: "deadline_reaper" }]);
+  });
+
+  it("classifies the earliest elapsed deadline or execution-timeout boundary", async () => {
+    const timeoutFirstId = await queue.enqueue("timeout-before-deadline", null, {
+      deadline: new Date(Date.now() + 60_000),
+      executionTimeoutMs: 5_000,
+      maxAttempts: 2,
+    });
+    const timeoutFirst = await queue.claim("timeout-before-deadline-worker", { leaseMs: 5_000 });
+    expect(timeoutFirst?.id).toBe(timeoutFirstId);
+    await pool.query(
+      `UPDATE workhorse.job SET deadline_at = clock_timestamp() - interval '1 second'
+        WHERE id = $1`,
+      [timeoutFirstId],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_runtime
+          SET deadline_at = clock_timestamp() - interval '1 second',
+              attempt_timeout_at = clock_timestamp() - interval '2 seconds'
+        WHERE job_id = $1`,
+      [timeoutFirstId],
+    );
+    expect(await queue.recoverExpired()).toBe(1);
+    expect(await queue.getJob(timeoutFirstId)).toMatchObject({
+      state: "ready",
+      currentAttempt: 2,
+      error: { name: "ExecutionTimeout" },
+    });
+    expect(await queue.recoverExpired()).toBe(1);
+    expect(await queue.getJob(timeoutFirstId)).toMatchObject({
+      state: "failed",
+      currentAttempt: 2,
+      error: { name: "DeadlineExceeded" },
+    });
+
+    const deadlineFirstId = await queue.enqueue("deadline-before-timeout", null, {
+      deadline: new Date(Date.now() + 60_000),
+      executionTimeoutMs: 5_000,
+      maxAttempts: 2,
+    });
+    const deadlineFirst = await queue.claim("deadline-before-timeout-worker", { leaseMs: 5_000 });
+    expect(deadlineFirst?.id).toBe(deadlineFirstId);
+    await pool.query(
+      `UPDATE workhorse.job SET deadline_at = clock_timestamp() - interval '2 seconds'
+        WHERE id = $1`,
+      [deadlineFirstId],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_runtime
+          SET deadline_at = clock_timestamp() - interval '2 seconds',
+              attempt_timeout_at = clock_timestamp() - interval '1 second'
+        WHERE job_id = $1`,
+      [deadlineFirstId],
+    );
+    expect(await queue.expireOwned(deadlineFirst!, "deadline-before-timeout-worker")).toBe(
+      "deadline_exceeded",
+    );
+    expect(await queue.getJob(deadlineFirstId)).toMatchObject({
+      state: "failed",
+      currentAttempt: 1,
+      error: { name: "DeadlineExceeded" },
+    });
+    const outcomes = await pool.query<{ job_id: string; outcome: string }>(
+      `SELECT job_id::text, outcome FROM workhorse.attempt_history
+        WHERE job_id = ANY($1::uuid[]) ORDER BY job_id, attempt`,
+      [[timeoutFirstId, deadlineFirstId]],
+    );
+    expect(outcomes.rows).toEqual(
+      expect.arrayContaining([
+        { job_id: timeoutFirstId, outcome: "timeout" },
+        { job_id: deadlineFirstId, outcome: "deadline_exceeded" },
+      ]),
+    );
+  });
+
+  it("returns cancellation after waiting behind a concurrent cancellation request", async () => {
+    const id = await queue.enqueue("expire-cancel-race", null, {
+      deadline: new Date(Date.now() + 60_000),
+    });
+    const claimed = await queue.claim("expire-cancel-race-worker", { leaseMs: 5_000 });
+    expect(claimed?.id).toBe(id);
+    await pool.query(
+      `UPDATE workhorse.job SET deadline_at = clock_timestamp() - interval '1 second'
+        WHERE id = $1`,
+      [id],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_runtime SET deadline_at = clock_timestamp() - interval '1 second'
+        WHERE job_id = $1`,
+      [id],
+    );
+
+    const cancelClient = await pool.connect();
+    try {
+      await cancelClient.query("BEGIN");
+      await cancelClient.query("SELECT status FROM workhorse.cancel_v1($1, NULL, $2)", [
+        id,
+        "cancel won row lock",
+      ]);
+      const expiring = queue.expireOwned(claimed!, "expire-cancel-race-worker");
+      await sleep(25);
+      await cancelClient.query("COMMIT");
+      expect(await expiring).toBe("cancel_requested");
+    } finally {
+      await cancelClient.query("ROLLBACK").catch(() => undefined);
+      cancelClient.release();
+    }
+    expect(await queue.acknowledgeCancel(claimed!, "expire-cancel-race-worker")).toBe(true);
+    expect(await queue.getJob(id)).toMatchObject({
+      state: "canceled",
+      error: { name: "CancellationRequested", reason: "cancel won row lock" },
+    });
+  });
+
+  it("excludes durable wait suspension from attempt execution budget while deadlines keep running", async () => {
+    let activations = 0;
+    const timeoutId = await queue.enqueue("wait-timeout-budget", null, {
+      executionTimeoutMs: 300,
+    });
+    const timeoutWorker = new Worker(queue, {
+      workerId: "wait-timeout-budget-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 50,
+    }).handle("wait-timeout-budget", async (_payload, context) => {
+      activations += 1;
+      if (activations === 1) await context.sleep("pause", 180);
+      return { activations };
+    });
+    expect(await timeoutWorker.runOnce()).toBe(true);
+    await sleep(200);
+    await queue.promote();
+    expect(await timeoutWorker.runOnce()).toBe(true);
+    expect(await queue.getJob(timeoutId)).toMatchObject({
+      state: "succeeded",
+      currentAttempt: 1,
+      result: { activations: 2 },
+    });
+
+    const deadlineId = await queue.enqueue("wait-deadline", null, {
+      deadline: new Date(Date.now() + 120),
+      executionTimeoutMs: 5_000,
+    });
+    const deadlineWorker = new Worker(queue, {
+      workerId: "wait-deadline-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 50,
+    }).handle("wait-deadline", async (_payload, context) => {
+      await context.sleep("long-pause", 1_000);
+      return null;
+    });
+    expect(await deadlineWorker.runOnce()).toBe(true);
+    await sleep(140);
+    expect(await queue.recoverExpired()).toBe(1);
+    expect(await queue.getJob(deadlineId)).toMatchObject({
+      state: "failed",
+      currentAttempt: 1,
+      error: { name: "DeadlineExceeded" },
+    });
+  });
+
+  it("reports deadline and active execution-timeout pressure without broad terminal indexes", async () => {
+    const deadline = new Date(Date.now() + 30_000);
+    const id = await queue.enqueue("deadline-health", null, {
+      deadline,
+      executionTimeoutMs: 5_000,
+    });
+    expect((await queue.claim("deadline-health-worker", { leaseMs: 10_000 }))?.id).toBe(id);
+    const health = await queue.health();
+    expect(health.deadlinePressure).toEqual({
+      pending: 1,
+      overdue: 0,
+      dueWithinMinute: 1,
+      earliestAt: deadline,
+    });
+    expect(health.activeExecutionTimeouts).toBe(1);
+    expect(health.overdueExecutionTimeouts).toBe(0);
+    const indexes = await pool.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes
+        WHERE schemaname = 'workhorse'
+          AND indexname IN ('job_runtime_deadline_idx', 'job_runtime_timeout_idx')
+        ORDER BY indexname`,
+    );
+    expect(indexes.rows).toEqual([
+      expect.objectContaining({
+        indexname: "job_runtime_deadline_idx",
+        indexdef: expect.stringContaining("WHERE (deadline_at IS NOT NULL)"),
+      }),
+      expect.objectContaining({
+        indexname: "job_runtime_timeout_idx",
+        indexdef: expect.stringContaining(
+          "WHERE ((state = 'active'::text) AND (attempt_timeout_at IS NOT NULL))",
+        ),
+      }),
+    ]);
+  });
+
   it("lock-orders cancellation against completion, failure, heartbeat, checkpoint, and wait", async () => {
     const transitions: Array<{
       name: string;
@@ -715,7 +1102,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(12);
+    expect(health.schemaVersion).toBe(13);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -1227,7 +1614,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v12 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v13 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -4375,7 +4762,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(12);
+    expect(health.schemaVersion).toBe(13);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);

@@ -525,6 +525,8 @@ export async function readDashboardTasks(
       attempt: number;
       max_attempts: number;
       retry_policy: RetryPolicy | null;
+      deadline_at: Date | string | null;
+      execution_timeout_ms: string | number | null;
       payload: unknown;
       tags: string[];
       run_at: Date | string | null;
@@ -547,7 +549,7 @@ export async function readDashboardTasks(
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               j.max_attempts, j.retry_policy, j.payload, j.tags,
+               j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.payload, j.tags,
                COALESCE(r.run_at, o.run_at) AS run_at,
                r.worker_id AS current_worker_id,
                COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id)
@@ -613,6 +615,9 @@ export async function readDashboardTasks(
         attempt: row.attempt,
         maxAttempts: row.max_attempts,
         retryPolicy: row.retry_policy,
+        deadlineAt: toIsoOrNull(row.deadline_at),
+        executionTimeoutMs:
+          row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
         payload: row.payload,
         tags: row.tags,
         keyed:
@@ -1384,6 +1389,8 @@ export async function readDashboardSystem(
   }));
   const criticalChecks = [
     runtime.expired > 0 ? "Expired leases" : null,
+    health.deadlinePressure.overdue > 0 ? "Deadlines overdue" : null,
+    health.overdueExecutionTimeouts > 0 ? "Execution timeouts overdue" : null,
     runtime.due_but_unpromoted > 0 ? "Promotion stalled" : null,
     partitions.some((partition) => !partition.eventExists || !partition.attemptExists)
       ? "History partitions missing"
@@ -1452,6 +1459,14 @@ export async function readDashboardSystem(
         expired: runtime.expired,
         expiringSoon: runtime.expiring_soon,
         recovered: summary.recovered,
+      },
+      deadline: {
+        pending: health.deadlinePressure.pending,
+        overdue: health.deadlinePressure.overdue,
+        dueWithinMinute: health.deadlinePressure.dueWithinMinute,
+        earliestAt: toIsoOrNull(health.deadlinePressure.earliestAt),
+        activeTimeouts: health.activeExecutionTimeouts,
+        overdueTimeouts: health.overdueExecutionTimeouts,
       },
     },
     outcomes: outcomeRows.rows.map((row) => ({
@@ -1866,6 +1881,8 @@ export async function readDashboardJobDetail(
       payload: unknown;
       max_attempts: number;
       retry_policy: RetryPolicy | null;
+      deadline_at: Date | string | null;
+      execution_timeout_ms: string | number | null;
       created_at: Date | string;
       runtime_state: string | null;
       runtime_attempt: number | null;
@@ -1878,6 +1895,7 @@ export async function readDashboardJobDetail(
       expires_at: Date | string | null;
       wait_name: string | null;
       attempt_started_at: Date | string | null;
+      attempt_timeout_at: Date | string | null;
       cancel_requested_at: Date | string | null;
       cancel_requested_by: string | null;
       cancel_reason: string | null;
@@ -1889,10 +1907,10 @@ export async function readDashboardJobDetail(
       outcome_error: unknown;
     }>(sql`
       SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.payload, j.max_attempts,
-             j.retry_policy, j.created_at,
+             j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.created_at,
              r.state AS runtime_state, r.current_attempt AS runtime_attempt, r.run_at, r.ready_at,
              r.worker_id, r.fence_token::text, r.acquired_at, r.heartbeat_at, r.expires_at,
-             r.wait_name, r.attempt_started_at,
+             r.wait_name, r.attempt_started_at, r.attempt_timeout_at,
              r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
              r.error AS runtime_error,
              o.state AS outcome_state, o.current_attempt AS outcome_attempt, o.finished_at,
@@ -1976,6 +1994,9 @@ export async function readDashboardJobDetail(
       createdAt: toIso(job.created_at),
       retryPolicy: job.retry_policy,
       maxAttempts: job.max_attempts,
+      deadlineAt: toIsoOrNull(job.deadline_at),
+      executionTimeoutMs:
+        job.execution_timeout_ms === null ? null : Number(job.execution_timeout_ms),
     },
     payload: job.payload,
     durability: projectDurability(job.type, job.payload),
@@ -1993,6 +2014,7 @@ export async function readDashboardJobDetail(
             expiresAt: toIsoOrNull(job.expires_at),
             waitName: job.wait_name,
             attemptStartedAt: toIsoOrNull(job.attempt_started_at),
+            attemptTimeoutAt: toIsoOrNull(job.attempt_timeout_at),
             cancellation: cancellationRequest(
               job.cancel_requested_at,
               job.cancel_requested_by,
