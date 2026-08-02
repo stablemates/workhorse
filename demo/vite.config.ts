@@ -8,19 +8,12 @@ const dashboardSource = resolve(workspaceRoot, "packages/dashboard/src");
 const reactGrabEntry = resolve(import.meta.dirname, "browser/react-grab.ts");
 const publicPort = Number(process.env.PORT ?? 3000);
 const apiPort = Number(process.env.WORKHORSE_API_PORT ?? publicPort + 1);
-const basePath = "/workhorse";
-const legacyDashboardPaths = new Set([
-  "/tasks",
-  "/cron",
-  "/queues",
-  "/system",
-  "/workers",
-  "/settings",
-]);
+const basePath = "";
+const legacyBasePath = "/workhorse";
 
 export default defineConfig({
   root: dashboardBrowserRoot,
-  base: `${basePath}/`,
+  base: "/",
   appType: "spa",
   clearScreen: false,
   plugins: [
@@ -33,10 +26,12 @@ export default defineConfig({
           const url = new URL(request.url ?? "/", "http://workhorse.local");
           const destination =
             url.pathname === "/"
-              ? `${basePath}/tasks`
-              : legacyDashboardPaths.has(url.pathname)
-                ? `${basePath}${url.pathname}${url.search}`
-                : null;
+              ? "/tasks"
+              : url.pathname === legacyBasePath
+                ? `/tasks${url.search}`
+                : url.pathname.startsWith(`${legacyBasePath}/`)
+                  ? `${url.pathname.slice(legacyBasePath.length)}${url.search}`
+                  : null;
           if (destination === null) return next();
           response.statusCode = 302;
           response.setHeader("location", destination);

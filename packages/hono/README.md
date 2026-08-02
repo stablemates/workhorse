@@ -36,10 +36,10 @@ const server = await serveWithWorkhorse({ fetch: app.fetch, workhorse, port: 300
 process.once("SIGTERM", () => void server.shutdown());
 ```
 
-The mount owns `/workhorse/*`, including the packaged React application, static assets, oRPC API,
-and SSE refresh stream. Authorization is required explicitly. The adapter checks that the installed
-schema is compatible and returns `503` when it is not, but it never installs or migrates database
-objects.
+The mount owns the configured path, including the packaged React application, static assets, oRPC API,
+and SSE refresh stream. Use `/workhorse` to embed it beside host routes or `/` when the dashboard owns the
+whole application. Authorization is required explicitly. The adapter checks that the installed schema is
+compatible and returns `503` when it is not, but it never installs or migrates database objects.
 
 Hosts may provide trusted, host-owned ES modules through `browserModules`. The mount inserts those module
 URLs before the dashboard entry script; the host remains responsible for serving, securing, and versioning

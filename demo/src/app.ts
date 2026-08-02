@@ -1045,15 +1045,14 @@ export function createDemoApplication(
   const app = new Hono().use("*", workhorse.middleware());
 
   if (options.dashboard !== false) {
-    app.get("/", (context) => context.redirect("/workhorse/tasks"));
-    for (const legacyRoute of ["/tasks", "/cron", "/queues", "/system", "/workers", "/settings"]) {
-      app.get(legacyRoute, (context) => {
-        const search = new URL(context.req.url).search;
-        return context.redirect(`/workhorse${legacyRoute}${search}`);
-      });
-    }
+    app.get("/workhorse", (context) => context.redirect("/tasks"));
+    app.get("/workhorse/*", (context) => {
+      const url = new URL(context.req.url);
+      const destination = url.pathname.slice("/workhorse".length) || "/tasks";
+      return context.redirect(`${destination}${url.search}`);
+    });
     mountWorkhorseDashboard(app, {
-      path: "/workhorse",
+      path: "/",
       workhorse,
       authorize: () => true,
       environment,
