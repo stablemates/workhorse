@@ -1,6 +1,6 @@
 # ADR 0004: Two-cadence maintenance split (tick and housekeeping)
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0011](0011-daily-retention-and-split-maintenance.md)
 - **Date:** 2026-07-29
 - **Amends:** [ADR 0003: Worker-owned in-process scheduling and maintenance](0003-worker-owned-scheduler.md)
 

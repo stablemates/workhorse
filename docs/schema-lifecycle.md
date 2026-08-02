@@ -14,6 +14,9 @@ objects.
 
 Application data is outside this lifecycle. In particular, all representative jobs, schedules,
 audit records, and other seed/reset behavior live in `demo/` and are not shipped as core migrations.
+The development command `pnpm demo` recreates the purpose-guarded demo database on every run so the
+current canonical schema is always exercised from scratch. `pnpm demo:production` preserves its
+database and represents the future deployable shape.
 
 ## Production baseline
 

@@ -24,7 +24,7 @@ export interface MountWorkhorseDashboardOptions<TTransaction> {
   path?: string;
   environment?: string;
   configuredWorkers?: readonly string[];
-  maintenanceLoops?: { tickIntervalMs: number; housekeepingIntervalMs: number };
+  maintenanceLoops?: { tickIntervalMs: number };
   operator?: DashboardOperator;
   scheduleController?: DashboardScheduleController;
   queueController?: DashboardQueueController;
@@ -113,7 +113,6 @@ export function mountWorkhorseDashboard<
         environment: options.environment ?? "unknown",
         maintenanceLoops: options.maintenanceLoops ?? {
           tickIntervalMs: 1_000,
-          housekeepingIntervalMs: 60_000,
         },
         operator: options.operator ?? { mode: "read-only" },
         scheduleController: options.scheduleController,

@@ -13,6 +13,8 @@ import type {
   JobWait,
   HeartbeatStatus,
   Json,
+  MaintenancePolicy,
+  MaintenancePolicyDefinition,
   Queryable,
   QueueHealth,
   RetryPolicy,
@@ -152,6 +154,14 @@ type RetentionPolicyRow = {
   updated_at: Date;
 };
 
+type MaintenancePolicyRow = {
+  timezone: string;
+  partition_preparation_interval_ms: number;
+  terminal_cleanup_interval_ms: number;
+  history_retention_local_hour: number;
+  updated_at: Date;
+};
+
 function maintenancePhaseResult(row: MaintenancePhaseRow): MaintenancePhaseResult {
   return {
     phase: row.phase,
@@ -173,6 +183,16 @@ function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
     historyPartitionsPerPass: row.history_partitions_per_pass,
     defaultPartitionRowsPerPass: row.default_partition_rows_per_pass,
     occurrenceRowsPerPass: row.occurrence_rows_per_pass,
+    updatedAt: row.updated_at,
+  };
+}
+
+function maintenancePolicy(row: MaintenancePolicyRow): MaintenancePolicy {
+  return {
+    timezone: row.timezone,
+    partitionPreparationIntervalMs: row.partition_preparation_interval_ms,
+    terminalCleanupIntervalMs: row.terminal_cleanup_interval_ms,
+    historyRetentionLocalHour: row.history_retention_local_hour,
     updatedAt: row.updated_at,
   };
 }
@@ -520,12 +540,32 @@ export class Queue {
     return result.rows.map(maintenancePhaseResult);
   }
 
-  async housekeep(
-    options: { occurrenceRetentionDays?: number; occurrencePruneLimit?: number } = {},
+  async prepareHistoryPartitions(
+    options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
     const result = await this.database.query<MaintenancePhaseRow>(
-      "SELECT * FROM workhorse.housekeep_v1($1, $2)",
-      [options.occurrenceRetentionDays ?? null, options.occurrencePruneLimit ?? null],
+      "SELECT * FROM workhorse.prepare_history_partitions_v1($1, $2)",
+      [options.force ?? false, options.now ?? new Date()],
+    );
+    return result.rows.map(maintenancePhaseResult);
+  }
+
+  async retainHistory(
+    options: { force?: boolean; now?: Date } = {},
+  ): Promise<MaintenancePhaseResult[]> {
+    const result = await this.database.query<MaintenancePhaseRow>(
+      "SELECT * FROM workhorse.retain_history_v1($1, $2)",
+      [options.force ?? false, options.now ?? new Date()],
+    );
+    return result.rows.map(maintenancePhaseResult);
+  }
+
+  async pruneTerminalStorage(
+    options: { force?: boolean; now?: Date } = {},
+  ): Promise<MaintenancePhaseResult[]> {
+    const result = await this.database.query<MaintenancePhaseRow>(
+      "SELECT * FROM workhorse.prune_terminal_storage_v1($1, $2)",
+      [options.force ?? false, options.now ?? new Date()],
     );
     return result.rows.map(maintenancePhaseResult);
   }
@@ -555,6 +595,26 @@ export class Queue {
       "SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy",
     );
     return retentionPolicy(result.rows[0]!);
+  }
+
+  async syncMaintenancePolicy(definition: MaintenancePolicyDefinition): Promise<MaintenancePolicy> {
+    const result = await this.database.query<MaintenancePolicyRow>(
+      `SELECT (policy).* FROM workhorse.sync_maintenance_policy_v1($1, $2, $3, $4) policy`,
+      [
+        definition.timezone,
+        definition.partitionPreparationIntervalMs ?? null,
+        definition.terminalCleanupIntervalMs ?? null,
+        definition.historyRetentionLocalHour ?? null,
+      ],
+    );
+    return maintenancePolicy(result.rows[0]!);
+  }
+
+  async getMaintenancePolicy(): Promise<MaintenancePolicy> {
+    const result = await this.database.query<MaintenancePolicyRow>(
+      "SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy",
+    );
+    return maintenancePolicy(result.rows[0]!);
   }
 
   async syncSchedules(
@@ -1119,14 +1179,18 @@ export class Queue {
                 AND policy.job_event_retention_days IS NOT NULL
                 AND upper_bound <= clock_timestamp()
                   - make_interval(days => policy.job_event_retention_days)
-                AND upper_bound <= date_trunc('week', clock_timestamp())
+                AND upper_bound <= (
+                  date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                )
             )::text AS eligible_event_partitions,
             count(*) FILTER (
               WHERE parent_name = 'attempt_history'
                 AND policy.attempt_history_retention_days IS NOT NULL
                 AND upper_bound <= clock_timestamp()
                   - make_interval(days => policy.attempt_history_retention_days)
-                AND upper_bound <= date_trunc('week', clock_timestamp())
+                AND upper_bound <= (
+                  date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                )
             )::text AS eligible_attempt_partitions
           FROM partitions CROSS JOIN policy
         ), default_rows AS (
@@ -1160,8 +1224,12 @@ export class Queue {
                     ELSE GREATEST(
                       0,
                       COALESCE(extract(epoch FROM
-                        date_trunc('week', clock_timestamp()
-                          - make_interval(days => policy.job_event_retention_days))
+                        date_trunc(
+                          'day',
+                          (clock_timestamp() - make_interval(
+                            days => policy.job_event_retention_days
+                          )) AT TIME ZONE 'UTC'
+                        ) AT TIME ZONE 'UTC'
                         - boundaries.oldest_partitioned_job_event_at) * 1000, 0),
                       COALESCE(extract(epoch FROM
                         clock_timestamp() - make_interval(days => policy.job_event_retention_days)
@@ -1172,8 +1240,12 @@ export class Queue {
                     ELSE GREATEST(
                       0,
                       COALESCE(extract(epoch FROM
-                        date_trunc('week', clock_timestamp()
-                          - make_interval(days => policy.attempt_history_retention_days))
+                        date_trunc(
+                          'day',
+                          (clock_timestamp() - make_interval(
+                            days => policy.attempt_history_retention_days
+                          )) AT TIME ZONE 'UTC'
+                        ) AT TIME ZONE 'UTC'
                         - boundaries.oldest_partitioned_attempt_history_at) * 1000, 0),
                       COALESCE(extract(epoch FROM
                         clock_timestamp()

@@ -74,11 +74,11 @@ Raw idempotency keys are never persisted. The initial `enqueued` event, UI proje
 
 Any conflict rolls back the complete batch, including earlier new keys in that statement. A surrounding caller transaction also remains authoritative for commit or rollback.
 
-### Expiry, housekeeping, and purge release ownership
+### Expiry, terminal cleanup, and purge release ownership
 
 A binding whose `expires_at` has passed no longer owns its scoped key. A later request may atomically remove the expired binding, establish new ownership, and create a new job identity, even when its request differs from the expired request. Reuse does not delete or mutate the original job.
 
-`housekeep_v1` cleans expired enqueue-idempotency bindings before terminal identity pruning in the same pass. This order prevents an expired binding from unnecessarily retaining an otherwise eligible terminal identity while preserving active bindings as deletion guards.
+`prune_terminal_storage_v1` cleans expired enqueue-idempotency bindings before terminal identity pruning in the same pass. This order prevents an expired binding from unnecessarily retaining an otherwise eligible terminal identity while preserving active bindings as deletion guards.
 
 `purge_queue_v1` releases bindings for queued or scheduled jobs deleted by purge. Active and terminal jobs remain outside purge as before.
 
@@ -122,6 +122,6 @@ Handlers must continue to use provider idempotency keys, transactional outbox/in
 
 ## Validation
 
-Integration coverage exercises schema version 10 hash-only storage and constraints, UTF-8 byte and TTL bounds, default scope and TTL, concurrent exact replay, one safe initial enqueue event and no duplicate job/event/runtime/FIFO/notification effects, sorted-tag and normalized-policy equivalence, explicit and omitted `runAt`, structured redacted conflicts with key and request digests, retention-window mismatch, same-batch duplicates, whole-batch rollback, caller-transaction rollback, unkeyed compatibility, expiry reuse, purge release, and housekeeping-before-terminal-pruning order.
+Integration coverage exercises hash-only storage and constraints, UTF-8 byte and TTL bounds, default scope and TTL, concurrent exact replay, one safe initial enqueue event and no duplicate job/event/runtime/FIFO/notification effects, sorted-tag and normalized-policy equivalence, explicit and omitted `runAt`, structured redacted conflicts with key and request digests, retention-window mismatch, same-batch duplicates, whole-batch rollback, caller-transaction rollback, unkeyed compatibility, expiry reuse, purge release, and idempotency-cleanup-before-terminal-pruning order.
 
 The `idempotent-ingress` operational benchmark scenario adds hard invariants for exact replay, conflict rollback, batch duplicates, expiry reuse, and resulting durable state. It records full client-observed transition timings. No numerical latency or overhead claim is accepted until a benchmark artifact containing the scenario is recorded.

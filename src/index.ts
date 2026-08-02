@@ -49,6 +49,8 @@ export type {
   JobWait,
   HeartbeatStatus,
   Json,
+  MaintenancePolicy,
+  MaintenancePolicyDefinition,
   Queryable,
   QueueHealth,
   RetryPolicy,

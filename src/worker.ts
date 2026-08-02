@@ -39,7 +39,7 @@ export type Handler<TPayload = Json, TResult extends Json = Json> = (
 ) => Promise<TResult> | TResult;
 
 export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
-  loop: "tick" | "housekeeping";
+  loop: "tick" | "history_partitions" | "history_retention" | "terminal_storage";
   observedAt: string;
 }
 
@@ -73,8 +73,8 @@ export interface WorkerOptions {
   pollMs?: number;
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
   maintenanceIntervalMs?: number;
-  /** Minimum delay between partition replenishment and occurrence-pruning passes. */
-  housekeepingIntervalMs?: number;
+  /** Minimum delay between checks for database-scheduled background maintenance tasks. */
+  maintenanceTaskPollMs?: number;
   /** Receives one telemetry event for every SQL-owned maintenance phase. */
   onMaintenance?: (telemetry: WorkerMaintenanceTelemetry) => void;
   /** Namespaces whose enabled recurring schedules this worker should evaluate and fire. */
@@ -109,12 +109,12 @@ export class Worker {
   private readonly heartbeatMs: number;
   private readonly pollMs: number;
   private readonly maintenanceIntervalMs: number;
-  private readonly housekeepingIntervalMs: number;
+  private readonly maintenanceTaskPollMs: number;
   private readonly scheduleNamespaces: readonly string[];
   private readonly scheduleCatchupLimit: number;
   public readonly concurrency: number;
   private lastTickAt = Number.NEGATIVE_INFINITY;
-  private lastHousekeepingAt = Number.NEGATIVE_INFINITY;
+  private lastMaintenanceTaskPollAt = Number.NEGATIVE_INFINITY;
   private lastClaimAt = Number.NEGATIVE_INFINITY;
   private previousPassWorked = false;
   private readonly latestMaintenance = new Map<string, WorkerMaintenanceTelemetry>();
@@ -138,7 +138,7 @@ export class Worker {
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
     this.pollMs = options.pollMs ?? 250;
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1_000;
-    this.housekeepingIntervalMs = options.housekeepingIntervalMs ?? 60_000;
+    this.maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? 60_000;
     this.scheduleNamespaces = [...new Set(options.scheduleNamespaces ?? [])];
     this.scheduleCatchupLimit = options.scheduleCatchupLimit ?? 100;
     if (!Number.isSafeInteger(this.concurrency) || this.concurrency < 1 || this.concurrency > 100)
@@ -146,8 +146,8 @@ export class Worker {
     if (this.heartbeatMs >= this.leaseMs) throw new Error("heartbeatMs must be less than leaseMs");
     if (this.maintenanceIntervalMs < 100)
       throw new Error("maintenanceIntervalMs must be at least 100");
-    if (this.housekeepingIntervalMs < 100)
-      throw new Error("housekeepingIntervalMs must be at least 100");
+    if (this.maintenanceTaskPollMs < 100)
+      throw new Error("maintenanceTaskPollMs must be at least 100");
     if (this.scheduleCatchupLimit < 1 || this.scheduleCatchupLimit > 10_000)
       throw new Error("scheduleCatchupLimit must be between 1 and 10000");
   }
@@ -505,10 +505,14 @@ export class Worker {
       }
     }
 
-    if (nowMs - this.lastHousekeepingAt >= this.housekeepingIntervalMs) {
-      for (const result of await this.queue.housekeep())
-        this.recordMaintenance("housekeeping", result);
-      this.lastHousekeepingAt = nowMs;
+    if (nowMs - this.lastMaintenanceTaskPollAt >= this.maintenanceTaskPollMs) {
+      for (const result of await this.queue.prepareHistoryPartitions())
+        this.recordMaintenance("history_partitions", result);
+      for (const result of await this.queue.retainHistory())
+        this.recordMaintenance("history_retention", result);
+      for (const result of await this.queue.pruneTerminalStorage())
+        this.recordMaintenance("terminal_storage", result);
+      this.lastMaintenanceTaskPollAt = nowMs;
     }
   }
 
@@ -558,7 +562,7 @@ export class Worker {
   }
 
   private async maintenanceLoop(shouldStop: () => boolean, signal?: AbortSignal): Promise<void> {
-    const intervalMs = Math.min(this.maintenanceIntervalMs, this.housekeepingIntervalMs);
+    const intervalMs = Math.min(this.maintenanceIntervalMs, this.maintenanceTaskPollMs);
     while (!shouldStop()) {
       await this.waitForWake(intervalMs, signal);
       if (shouldStop()) break;

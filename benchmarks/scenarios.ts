@@ -300,8 +300,8 @@ UPDATE workhorse.retention_policy
        updated_at = clock_timestamp()
  WHERE singleton`;
 
-export const createHistoryWeekV1Sql = "SELECT workhorse.create_history_week_v1($1::date)";
-export const retireHistoryWeekV1Sql = "SELECT workhorse.retire_history_week_v1($1::date)";
+export const createHistoryDayV1Sql = "SELECT workhorse.create_history_day_v1($1::date)";
+export const retireHistoryDayV1Sql = "SELECT workhorse.retire_history_day_v1($1::date)";
 
 const defaults: ResolvedOperationalScenarioOptions = {
   jobCount: 12,
@@ -1665,12 +1665,12 @@ async function retentionPruning(
     const job = await queue.claim(`retention-worker-${index}`);
     await queue.complete(job!, `retention-worker-${index}`, { ok: true });
   }
-  const retiredWeek = new Date();
-  retiredWeek.setUTCHours(12, 0, 0, 0);
-  retiredWeek.setUTCDate(retiredWeek.getUTCDate() - ((retiredWeek.getUTCDay() + 6) % 7) - 14);
-  const retiredWeekDate = retiredWeek.toISOString().slice(0, 10);
-  const historicalTimestamp = new Date(`${retiredWeekDate}T12:00:00.000Z`);
-  await context.pool.query(createHistoryWeekV1Sql, [retiredWeekDate]);
+  const retiredDay = new Date();
+  retiredDay.setUTCHours(12, 0, 0, 0);
+  retiredDay.setUTCDate(retiredDay.getUTCDate() - 14);
+  const retiredDayDate = retiredDay.toISOString().slice(0, 10);
+  const historicalTimestamp = new Date(`${retiredDayDate}T12:00:00.000Z`);
+  await context.pool.query(createHistoryDayV1Sql, [retiredDayDate]);
   await context.pool.query(
     `UPDATE workhorse.job_event e SET occurred_at = $1
       FROM workhorse.job j WHERE j.id = e.job_id AND j.queue_name = $2`,
@@ -1694,7 +1694,7 @@ async function retentionPruning(
     defaultPartitionRowsPerPass: context.options.pruneLimit,
     occurrenceRowsPerPass: context.options.pruneLimit,
   });
-  const housekeeping = await queue.housekeep();
+  const historyRetention = await queue.retainHistory({ force: true });
   const historyAfter =
     (await rowCount(context.pool, "job_event")) + (await rowCount(context.pool, "attempt_history"));
   const pruned = historyBefore - historyAfter;
@@ -1711,14 +1711,14 @@ async function retentionPruning(
   recordInvariant(assertions, "current job identity is retained", retainedJobs, seededJobs);
   recordInvariant(
     assertions,
-    "event retention ran through housekeeping",
-    housekeeping.find((phase) => phase.phase === "event_retention")?.rowsAffected ?? 0,
+    "event retention task ran",
+    historyRetention.find((phase) => phase.phase === "event_retention")?.rowsAffected ?? 0,
     1,
   );
   recordInvariant(
     assertions,
-    "attempt retention ran through housekeeping",
-    housekeeping.find((phase) => phase.phase === "attempt_retention")?.rowsAffected ?? 0,
+    "attempt retention task ran",
+    historyRetention.find((phase) => phase.phase === "attempt_retention")?.rowsAffected ?? 0,
     1,
   );
   recordInvariant(
@@ -1744,9 +1744,9 @@ async function retentionPruning(
       historyAfter,
       retainedJobs,
       eventRetentionUnits:
-        housekeeping.find((phase) => phase.phase === "event_retention")?.rowsAffected ?? 0,
+        historyRetention.find((phase) => phase.phase === "event_retention")?.rowsAffected ?? 0,
       attemptRetentionUnits:
-        housekeeping.find((phase) => phase.phase === "attempt_retention")?.rowsAffected ?? 0,
+        historyRetention.find((phase) => phase.phase === "attempt_retention")?.rowsAffected ?? 0,
     },
     assertions,
   };
@@ -1857,7 +1857,7 @@ async function workerConcurrency(
       heartbeatMs,
       pollMs,
       maintenanceIntervalMs: 100,
-      housekeepingIntervalMs: 100,
+      maintenanceTaskPollMs: 100,
     });
     let activeHandlers = 0;
     let maxHandlerOverlap = 0;
@@ -2017,7 +2017,7 @@ async function workerConcurrency(
     heartbeatMs,
     pollMs: 1,
     maintenanceIntervalMs: 100,
-    housekeepingIntervalMs: 100,
+    maintenanceTaskPollMs: 100,
   });
   let firstNullHandled = 0;
   firstNullWorker.handle("first-null", () => {
@@ -2052,7 +2052,7 @@ async function workerConcurrency(
     heartbeatMs,
     pollMs: 1,
     maintenanceIntervalMs: 100,
-    housekeepingIntervalMs: 100,
+    maintenanceTaskPollMs: 100,
   });
   pauseWorker.handle("pause-guard", () => ({ ok: true }));
   pauseWorker.pause();
@@ -2086,7 +2086,7 @@ async function workerConcurrency(
     heartbeatMs,
     pollMs: 1,
     maintenanceIntervalMs: 100,
-    housekeepingIntervalMs: 100,
+    maintenanceTaskPollMs: 100,
   });
   let shutdownActive = 0;
   let releaseShutdown!: () => void;

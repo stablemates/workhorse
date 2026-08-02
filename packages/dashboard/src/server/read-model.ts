@@ -689,7 +689,12 @@ export async function readDashboardTaskFacets(
 /** Display-only schedule descriptions; the core schema deliberately has no description column. */
 const scheduleDescriptions: Record<string, string> = {
   "workhorse:tick": "Promotes due jobs to ready and recovers expired leases.",
-  "workhorse:housekeeping": "Prunes old schedule occurrences and replenishes history partitions.",
+  "workhorse:history-partitions":
+    "Maintains the current UTC day plus three future history partitions.",
+  "workhorse:history-retention":
+    "Retires expired history and schedule occurrences after the daily local boundary.",
+  "workhorse:terminal-storage":
+    "Prunes expired idempotency bindings and safely removable terminal jobs.",
 };
 
 function scheduleDescription(namespace: string, name: string): string | null {
@@ -697,10 +702,39 @@ function scheduleDescription(namespace: string, name: string): string | null {
 }
 
 function systemMaintenanceSchedules(
-  now: Date,
   cadences: MaintenanceLoopCadences,
+  policy: {
+    timezone: string;
+    partitionPreparationIntervalMs: number;
+    terminalCleanupIntervalMs: number;
+    historyRetentionLocalHour: number;
+    updatedAt: string;
+  },
+  state: Map<
+    string,
+    {
+      lastStartedAt: string | null;
+      lastCompletedAt: string | null;
+      due: boolean;
+      incomplete: boolean;
+    }
+  >,
 ): DashboardScheduleRow[] {
-  const updatedAt = now.toISOString();
+  const updatedAt = policy.updatedAt;
+  const maintenance = (
+    taskName: string,
+    intervalMs: number,
+    phases: string[],
+  ): NonNullable<DashboardScheduleRow["maintenance"]> => {
+    const task = state.get(taskName);
+    return {
+      intervalMs,
+      phases,
+      status: task?.incomplete ? "incomplete" : task?.due ? "due" : "scheduled",
+      lastStartedAt: task?.lastStartedAt ?? null,
+      lastCompletedAt: task?.lastCompletedAt ?? null,
+    };
+  };
   return [
     {
       kind: "system",
@@ -715,34 +749,79 @@ function systemMaintenanceSchedules(
       active: true,
       revision: "1",
       updatedAt,
-      occurrenceCount: 0,
+      occurrenceCount: null,
       lastFiredAt: null,
       lastRun: null,
       maintenance: {
         intervalMs: cadences.tickIntervalMs,
         phases: ["promote", "recover"],
+        status: "scheduled",
+        lastStartedAt: null,
+        lastCompletedAt: null,
       },
     },
     {
       kind: "system",
-      identity: { kind: "system", namespace: "workhorse", name: "housekeeping" },
+      identity: { kind: "system", namespace: "workhorse", name: "history-partitions" },
       namespace: "workhorse",
-      name: "housekeeping",
-      description: scheduleDescription("workhorse", "housekeeping"),
-      cron: `every ${cadences.housekeepingIntervalMs}ms`,
+      name: "history-partitions",
+      description: scheduleDescription("workhorse", "history-partitions"),
+      cron: `every ${policy.partitionPreparationIntervalMs}ms`,
       queue: null,
-      type: "workhorse.housekeep_v1",
+      type: "workhorse.prepare_history_partitions_v1",
       enabled: true,
       active: true,
       revision: "1",
       updatedAt,
-      occurrenceCount: 0,
-      lastFiredAt: null,
+      occurrenceCount: null,
+      lastFiredAt: state.get("history_partitions")?.lastCompletedAt ?? null,
       lastRun: null,
-      maintenance: {
-        intervalMs: cadences.housekeepingIntervalMs,
-        phases: ["history_partitions", "schedule_occurrences"],
-      },
+      maintenance: maintenance("history_partitions", policy.partitionPreparationIntervalMs, [
+        "history_partitions",
+      ]),
+    },
+    {
+      kind: "system",
+      identity: { kind: "system", namespace: "workhorse", name: "history-retention" },
+      namespace: "workhorse",
+      name: "history-retention",
+      description: scheduleDescription("workhorse", "history-retention"),
+      cron: `daily at ${String(policy.historyRetentionLocalHour).padStart(2, "0")}:00 ${policy.timezone}`,
+      queue: null,
+      type: "workhorse.retain_history_v1",
+      enabled: true,
+      active: true,
+      revision: "1",
+      updatedAt,
+      occurrenceCount: null,
+      lastFiredAt: state.get("history_retention")?.lastCompletedAt ?? null,
+      lastRun: null,
+      maintenance: maintenance("history_retention", 86_400_000, [
+        "event_retention",
+        "attempt_retention",
+        "schedule_occurrences",
+      ]),
+    },
+    {
+      kind: "system",
+      identity: { kind: "system", namespace: "workhorse", name: "terminal-storage" },
+      namespace: "workhorse",
+      name: "terminal-storage",
+      description: scheduleDescription("workhorse", "terminal-storage"),
+      cron: `every ${policy.terminalCleanupIntervalMs}ms`,
+      queue: null,
+      type: "workhorse.prune_terminal_storage_v1",
+      enabled: true,
+      active: true,
+      revision: "1",
+      updatedAt,
+      occurrenceCount: null,
+      lastFiredAt: state.get("terminal_storage")?.lastCompletedAt ?? null,
+      lastRun: null,
+      maintenance: maintenance("terminal_storage", policy.terminalCleanupIntervalMs, [
+        "enqueue_idempotency",
+        "terminal_jobs",
+      ]),
     },
   ];
 }
@@ -752,18 +831,19 @@ export async function readDashboardCron(
   maintenanceLoops: MaintenanceLoopCadences,
 ): Promise<DashboardCronPage> {
   const now = new Date();
-  const scheduleRows = await database.execute<{
-    namespace: string;
-    name: string;
-    cron: string;
-    queue: string;
-    type: string;
-    enabled: boolean;
-    revision: string;
-    updated_at: Date | string;
-    occurrence_count: number;
-    last_fired_at: Date | string | null;
-  }>(sql`
+  const [scheduleRows, policyRows, stateRows] = await Promise.all([
+    database.execute<{
+      namespace: string;
+      name: string;
+      cron: string;
+      queue: string;
+      type: string;
+      enabled: boolean;
+      revision: string;
+      updated_at: Date | string;
+      occurrence_count: number;
+      last_fired_at: Date | string | null;
+    }>(sql`
       SELECT d.namespace, d.schedule_name AS name, d.cron_expression AS cron,
              d.queue_name AS queue, d.job_type AS type, d.enabled,
              d.revision::text AS revision, d.updated_at,
@@ -775,12 +855,79 @@ export async function readDashboardCron(
        GROUP BY d.namespace, d.schedule_name
        ORDER BY d.namespace, d.schedule_name
        LIMIT 50
-    `);
+    `),
+    database.execute<{
+      timezone: string;
+      partition_preparation_interval_ms: number;
+      terminal_cleanup_interval_ms: number;
+      history_retention_local_hour: number;
+      updated_at: Date | string;
+    }>(sql`
+      SELECT timezone, partition_preparation_interval_ms, terminal_cleanup_interval_ms,
+             history_retention_local_hour, updated_at
+        FROM workhorse.maintenance_policy WHERE singleton
+    `),
+    database.execute<{
+      task_name: string;
+      last_started_at: Date | string | null;
+      last_completed_at: Date | string | null;
+      due: boolean;
+      incomplete: boolean;
+    }>(sql`
+      SELECT state.task_name, state.last_started_at, state.last_completed_at,
+             CASE state.task_name
+               WHEN 'history_partitions' THEN state.last_completed_at IS NULL
+                 OR state.last_completed_at <= clock_timestamp()
+                   - make_interval(secs => policy.partition_preparation_interval_ms / 1000.0)
+               WHEN 'terminal_storage' THEN state.last_completed_at IS NULL
+                 OR state.last_completed_at <= clock_timestamp()
+                   - make_interval(secs => policy.terminal_cleanup_interval_ms / 1000.0)
+               WHEN 'history_retention' THEN
+                 (clock_timestamp() AT TIME ZONE policy.timezone)::time
+                   >= make_time(policy.history_retention_local_hour, 0, 0)
+                 AND (
+                   state.last_completed_local_date IS NULL
+                   OR state.last_completed_local_date
+                     < (clock_timestamp() AT TIME ZONE policy.timezone)::date
+                 )
+               ELSE false
+             END AS due,
+             state.last_started_at IS NOT NULL
+               AND (state.last_completed_at IS NULL OR state.last_started_at > state.last_completed_at)
+               AS incomplete
+        FROM workhorse.maintenance_state state
+        CROSS JOIN workhorse.maintenance_policy policy
+       WHERE policy.singleton
+       ORDER BY state.task_name
+    `),
+  ]);
+  const policy = policyRows.rows[0]!;
+  const state = new Map(
+    stateRows.rows.map((row) => [
+      row.task_name,
+      {
+        lastStartedAt: toIsoOrNull(row.last_started_at),
+        lastCompletedAt: toIsoOrNull(row.last_completed_at),
+        due: row.due,
+        incomplete: row.incomplete,
+      },
+    ]),
+  );
 
   return {
     capturedAt: now.toISOString(),
     schedules: [
-      ...systemMaintenanceSchedules(now, maintenanceLoops),
+      ...systemMaintenanceSchedules(
+        maintenanceLoops,
+        {
+          timezone: policy.timezone,
+          partitionPreparationIntervalMs: Number(policy.partition_preparation_interval_ms),
+          terminalCleanupIntervalMs: Number(policy.terminal_cleanup_interval_ms),
+          historyRetentionLocalHour: Number(policy.history_retention_local_hour),
+          updatedAt: toIso(policy.updated_at),
+        },
+        state,
+      ),
       ...scheduleRows.rows.map((row) => {
         return {
           kind: "user" as const,
@@ -871,10 +1018,10 @@ const dashboardRetentionCategories: ReadonlyArray<{
   },
 ];
 
-// Row cleanup runs every minute, while partition cleanup can legitimately wait for a whole weekly
-// boundary and is bounded per pass. Grace avoids turning normal maintenance cadence into an alert.
+// Row cleanup runs every five minutes, while daily partition cleanup is bounded per pass. Grace
+// avoids turning normal maintenance cadence and a partial boundary day into an alert.
 const rowRetentionLagGraceMs = 6 * 60 * 60 * 1_000;
-const partitionRetentionLagGraceMs = 8 * 24 * 60 * 60 * 1_000;
+const partitionRetentionLagGraceMs = 2 * 24 * 60 * 60 * 1_000;
 const eligiblePartitionGrace = 2;
 
 /**
@@ -952,11 +1099,11 @@ function retentionDegradedChecks(retention: DashboardSystemRetention): string[] 
     retention.eligibleHistoryPartitions.jobEvents +
     retention.eligibleHistoryPartitions.attemptHistory;
   if (eligible > eligiblePartitionGrace) {
-    checks.push(`Expired history weeks awaiting cleanup (${eligible})`);
+    checks.push(`Expired history days awaiting cleanup (${eligible})`);
   }
   const spill =
     retention.defaultHistoryRows.jobEvents + retention.defaultHistoryRows.attemptHistory;
-  if (spill > 0) checks.push(`History rows outside weekly partitions (${spill})`);
+  if (spill > 0) checks.push(`History rows outside daily partitions (${spill})`);
   return checks;
 }
 
@@ -1194,19 +1341,22 @@ export async function readDashboardSystem(
        LIMIT 8
     `),
     database.execute<{
-      week: string;
+      day: string;
       starts_at: Date | string;
       event_exists: boolean;
       attempt_exists: boolean;
     }>(sql`
-      SELECT to_char(week_start, 'IYYY"w"IW') AS week, week_start AS starts_at,
-             to_regclass(format('workhorse.%I', 'job_event_' || to_char(week_start, 'IYYY"w"IW')))
+      SELECT to_char(day_start, 'YYYYMMDD') AS day, day_start AS starts_at,
+             to_regclass(format('workhorse.%I', 'job_event_' || to_char(day_start, 'YYYYMMDD')))
                IS NOT NULL AS event_exists,
-             to_regclass(format('workhorse.%I', 'attempt_history_' || to_char(week_start, 'IYYY"w"IW')))
+             to_regclass(format('workhorse.%I', 'attempt_history_' || to_char(day_start, 'YYYYMMDD')))
                IS NOT NULL AS attempt_exists
-        FROM generate_series(date_trunc('week', current_date),
-          date_trunc('week', current_date) + interval '4 weeks', interval '1 week') week_start
-       ORDER BY week_start
+        FROM generate_series(
+          date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC'),
+          date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') + interval '3 days',
+          interval '1 day'
+        ) day_start
+       ORDER BY day_start
     `),
     // Retention facts come from the canonical queue read model rather than duplicated SQL here.
     queue.health(),
@@ -1227,7 +1377,7 @@ export async function readDashboardSystem(
     count: retryByLabel.get(label) ?? 0,
   }));
   const partitions = partitionRows.rows.map((row) => ({
-    week: row.week,
+    day: row.day,
     startsAt: toIso(row.starts_at),
     eventExists: row.event_exists,
     attemptExists: row.attempt_exists,

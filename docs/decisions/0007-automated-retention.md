@@ -1,6 +1,6 @@
 # ADR 0007: Persisted, attribution-safe automated retention
 
-- **Status:** Accepted
+- **Status:** Superseded in partitioning, defaults, and deletion interlocks by [ADR 0011](0011-daily-retention-and-split-maintenance.md)
 - **Date:** 2026-08-01
 - **Amends:** [ADR 0004: Two-cadence maintenance split](0004-two-cadence-maintenance.md)
 

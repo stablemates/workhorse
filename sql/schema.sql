@@ -340,6 +340,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_outcome (
   result jsonb,
   error jsonb,
   finished_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  history_through_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (
     (state = 'succeeded' AND fence_token > 0 AND error IS NULL)
@@ -353,8 +354,7 @@ CREATE INDEX IF NOT EXISTS job_outcome_retention_idx
 -- Append-only lifecycle audit.
 CREATE TABLE IF NOT EXISTS workhorse.job_event (
   event_id bigint GENERATED ALWAYS AS IDENTITY,
-  job_id uuid NOT NULL CONSTRAINT job_event_job_fk
-    REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  job_id uuid NOT NULL,
   attempt integer,
   event_type text NOT NULL,
   details jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -370,8 +370,7 @@ CREATE INDEX IF NOT EXISTS job_event_retention_idx
 -- One immutable row for every closed attempt.
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
   attempt_id bigint GENERATED ALWAYS AS IDENTITY,
-  job_id uuid NOT NULL CONSTRAINT attempt_history_job_fk
-    REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  job_id uuid NOT NULL,
   attempt integer NOT NULL,
   fence_token bigint NOT NULL,
   worker_id text NOT NULL,
@@ -391,30 +390,92 @@ CREATE INDEX IF NOT EXISTS attempt_history_job_idx
 CREATE INDEX IF NOT EXISTS attempt_history_retention_idx
   ON workhorse.attempt_history (occurred_at, attempt_id);
 
--- Reinstalls of a schema created by an earlier v8 build must gain the same referential locking as a
--- clean install. Besides rejecting unattributed history, these FKs serialize history insertion with
--- terminal identity deletion so retention cannot leave an orphan behind under concurrency.
-DO $$
+-- One database-owned schedule coordinates low-frequency maintenance across every worker process.
+-- The IANA timezone controls the local 03:00 history-retention boundary; interval tasks remain
+-- elapsed-time based so daylight-saving transitions cannot duplicate or suppress them.
+CREATE TABLE IF NOT EXISTS workhorse.maintenance_policy (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  timezone text NOT NULL,
+  partition_preparation_interval_ms integer NOT NULL CHECK (
+    partition_preparation_interval_ms BETWEEN 60000 AND 604800000
+  ),
+  terminal_cleanup_interval_ms integer NOT NULL CHECK (
+    terminal_cleanup_interval_ms BETWEEN 1000 AND 86400000
+  ),
+  history_retention_local_hour integer NOT NULL CHECK (
+    history_retention_local_hour BETWEEN 0 AND 23
+  ),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+INSERT INTO workhorse.maintenance_policy(
+  singleton, timezone, partition_preparation_interval_ms,
+  terminal_cleanup_interval_ms, history_retention_local_hour
+) VALUES (true, 'UTC', 21600000, 300000, 3)
+ON CONFLICT (singleton) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
+  task_name text PRIMARY KEY CHECK (
+    task_name IN ('history_partitions', 'history_retention', 'terminal_storage')
+  ),
+  last_started_at timestamptz,
+  last_completed_at timestamptz,
+  last_completed_local_date date,
+  history_retained_before timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CHECK (
+    (task_name = 'history_retention')
+    OR (last_completed_local_date IS NULL AND history_retained_before IS NULL)
+  )
+);
+INSERT INTO workhorse.maintenance_state(
+  task_name, history_retained_before
+) VALUES
+  ('history_partitions', NULL),
+  ('history_retention', date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC')
+    AT TIME ZONE 'UTC' - interval '14 days'),
+  ('terminal_storage', NULL)
+ON CONFLICT (task_name) DO NOTHING;
+
+-- History deliberately has no reverse foreign key to job. Parent deletion would otherwise probe
+-- every retained history partition. This insert-side lock preserves the important half of the
+-- relationship: history must be attributed to an existing job, and insertion serializes with
+-- terminal identity deletion without making deletion inspect every child partition.
+CREATE OR REPLACE FUNCTION workhorse.lock_history_job_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-     WHERE conrelid = 'workhorse.job_event'::regclass AND conname = 'job_event_job_fk'
-  ) THEN
-    ALTER TABLE workhorse.job_event
-      ADD CONSTRAINT job_event_job_fk FOREIGN KEY (job_id)
-      REFERENCES workhorse.job(id) ON DELETE CASCADE;
+  PERFORM 1 FROM workhorse.job WHERE id = NEW.job_id FOR KEY SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'foreign_key_violation',
+      MESSAGE = format('history references missing workhorse job %s', NEW.job_id),
+      CONSTRAINT = TG_TABLE_NAME || '_job_exists';
   END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-     WHERE conrelid = 'workhorse.attempt_history'::regclass
-       AND conname = 'attempt_history_job_fk'
-  ) THEN
-    ALTER TABLE workhorse.attempt_history
-      ADD CONSTRAINT attempt_history_job_fk FOREIGN KEY (job_id)
-      REFERENCES workhorse.job(id) ON DELETE CASCADE;
-  END IF;
+  UPDATE workhorse.job_outcome outcome
+     SET history_through_at = GREATEST(outcome.history_through_at, NEW.occurred_at)
+   WHERE outcome.job_id = NEW.job_id
+     AND outcome.history_through_at < NEW.occurred_at;
+  UPDATE workhorse.maintenance_state state
+     SET history_retained_before = LEAST(
+           state.history_retained_before,
+           date_trunc('day', NEW.occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+         ),
+         updated_at = clock_timestamp()
+   WHERE state.task_name = 'history_retention'
+     AND state.history_retained_before IS NOT NULL
+     AND NEW.occurred_at < state.history_retained_before;
+  RETURN NEW;
 END;
 $$;
+DROP TRIGGER IF EXISTS job_event_job_exists ON workhorse.job_event;
+CREATE TRIGGER job_event_job_exists
+  BEFORE INSERT OR UPDATE OF job_id ON workhorse.job_event
+  FOR EACH ROW EXECUTE FUNCTION workhorse.lock_history_job_v1();
+DROP TRIGGER IF EXISTS attempt_history_job_exists ON workhorse.attempt_history;
+CREATE TRIGGER attempt_history_job_exists
+  BEFORE INSERT OR UPDATE OF job_id ON workhorse.attempt_history
+  FOR EACH ROW EXECUTE FUNCTION workhorse.lock_history_job_v1();
 
 -- Declarative schedules are synchronized from application code and evaluated by worker processes.
 -- Payloads, occurrence ownership, and queue semantics remain owned by the Workhorse protocol.
@@ -513,7 +574,7 @@ INSERT INTO workhorse.retention_policy(
   job_event_retention_days, attempt_history_retention_days,
   schedule_occurrence_retention_days, terminal_job_prune_limit,
   history_partitions_per_pass, default_partition_rows_per_pass, occurrence_rows_per_pass
-) VALUES (true, NULL, NULL, NULL, NULL, 30, 1000, 4, 10000, 10000)
+) VALUES (true, 14, 14, 14, 14, 14, 1000, 4, 10000, 10000)
 ON CONFLICT (singleton) DO NOTHING;
 
 CREATE OR REPLACE FUNCTION workhorse.sync_retention_policy_v1(
@@ -530,7 +591,12 @@ CREATE OR REPLACE FUNCTION workhorse.sync_retention_policy_v1(
 LANGUAGE plpgsql
 AS $$
 DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+DECLARE v_previous workhorse.retention_policy%ROWTYPE;
 BEGIN
+  SELECT * INTO STRICT v_previous
+    FROM workhorse.retention_policy
+   WHERE singleton
+   FOR UPDATE;
   UPDATE workhorse.retention_policy policy SET
     job_identity_retention_days = p_job_identity_retention_days,
     terminal_outcome_retention_days = p_terminal_outcome_retention_days,
@@ -552,6 +618,32 @@ BEGIN
     updated_at = clock_timestamp()
   WHERE singleton
   RETURNING * INTO v_policy;
+  IF (
+       v_previous.job_event_retention_days IS DISTINCT FROM v_policy.job_event_retention_days
+       OR v_previous.attempt_history_retention_days IS DISTINCT FROM
+            v_policy.attempt_history_retention_days
+       OR v_previous.schedule_occurrence_retention_days IS DISTINCT FROM
+            v_policy.schedule_occurrence_retention_days
+     ) THEN
+    UPDATE workhorse.maintenance_state state
+       SET history_retained_before = CASE
+             WHEN v_policy.job_event_retention_days IS NOT NULL
+              AND v_policy.attempt_history_retention_days IS NOT NULL THEN
+               LEAST(
+                 state.history_retained_before,
+                 LEAST(
+                   date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                     - make_interval(days => v_policy.job_event_retention_days),
+                   date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                     - make_interval(days => v_policy.attempt_history_retention_days)
+                 )
+               )
+             ELSE state.history_retained_before
+           END,
+           last_completed_local_date = NULL,
+           updated_at = clock_timestamp()
+     WHERE state.task_name = 'history_retention';
+  END IF;
   RETURN v_policy;
 END;
 $$;
@@ -562,6 +654,55 @@ LANGUAGE sql
 STABLE
 AS $$
   SELECT policy FROM workhorse.retention_policy policy WHERE singleton;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.sync_maintenance_policy_v1(
+  p_timezone text,
+  p_partition_preparation_interval_ms integer DEFAULT NULL,
+  p_terminal_cleanup_interval_ms integer DEFAULT NULL,
+  p_history_retention_local_hour integer DEFAULT NULL
+) RETURNS workhorse.maintenance_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_policy workhorse.maintenance_policy%ROWTYPE;
+DECLARE v_previous workhorse.maintenance_policy%ROWTYPE;
+BEGIN
+  IF p_timezone IS NULL OR NOT EXISTS (
+    SELECT 1 FROM pg_timezone_names timezone WHERE timezone.name = p_timezone
+  ) THEN
+    RAISE EXCEPTION 'maintenance timezone must be a valid IANA timezone name';
+  END IF;
+  SELECT * INTO STRICT v_previous FROM workhorse.maintenance_policy WHERE singleton FOR UPDATE;
+  UPDATE workhorse.maintenance_policy policy SET
+    timezone = p_timezone,
+    partition_preparation_interval_ms = COALESCE(
+      p_partition_preparation_interval_ms, policy.partition_preparation_interval_ms
+    ),
+    terminal_cleanup_interval_ms = COALESCE(
+      p_terminal_cleanup_interval_ms, policy.terminal_cleanup_interval_ms
+    ),
+    history_retention_local_hour = COALESCE(
+      p_history_retention_local_hour, policy.history_retention_local_hour
+    ),
+    updated_at = clock_timestamp()
+  WHERE singleton
+  RETURNING * INTO v_policy;
+  IF v_previous.timezone IS DISTINCT FROM v_policy.timezone
+     OR v_previous.history_retention_local_hour IS DISTINCT FROM v_policy.history_retention_local_hour THEN
+    UPDATE workhorse.maintenance_state
+       SET last_completed_local_date = NULL, updated_at = clock_timestamp()
+     WHERE task_name = 'history_retention';
+  END IF;
+  RETURN v_policy;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.get_maintenance_policy_v1()
+RETURNS workhorse.maintenance_policy
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT policy FROM workhorse.maintenance_policy policy WHERE singleton;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.sync_schedule_definitions_v1(
@@ -1065,24 +1206,32 @@ BEGIN
   INSERT INTO workhorse.queue_control(queue_name, paused)
     VALUES (p_queue_name, false)
   ON CONFLICT (queue_name) DO NOTHING;
-  WITH purgeable AS (
-    SELECT r.job_id
-      FROM workhorse.job_runtime r
-     WHERE r.queue_name = p_queue_name AND r.state IN ('ready', 'scheduled')
-     FOR UPDATE OF r
-  ), released_bindings AS (
-    DELETE FROM workhorse.enqueue_idempotency idempotency
-     USING purgeable p
-     WHERE idempotency.job_id = p.job_id
-     RETURNING idempotency.job_id
-  ), deleted AS (
-    DELETE FROM workhorse.job j
-     USING purgeable p
-     WHERE j.id = p.job_id
-       AND (SELECT count(*) FROM released_bindings) >= 0
-     RETURNING j.id
-  )
-  SELECT count(*)::integer INTO v_count FROM deleted;
+  -- Lock both runtime and parent identities before taking a fresh statement snapshot for history
+  -- deletion. The history insert trigger takes KEY SHARE on job, so it either commits before these
+  -- deletes become visible or fails after the parent disappears; it cannot commit an orphan.
+  PERFORM 1
+    FROM workhorse.job_runtime runtime
+    JOIN workhorse.job job ON job.id = runtime.job_id
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+   FOR UPDATE OF runtime, job;
+
+  DELETE FROM workhorse.enqueue_idempotency idempotency
+   USING workhorse.job_runtime runtime
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+     AND idempotency.job_id = runtime.job_id;
+  DELETE FROM workhorse.job_event event
+   USING workhorse.job_runtime runtime
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+     AND event.job_id = runtime.job_id;
+  DELETE FROM workhorse.attempt_history attempt
+   USING workhorse.job_runtime runtime
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+     AND attempt.job_id = runtime.job_id;
+  DELETE FROM workhorse.job job
+   USING workhorse.job_runtime runtime
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+     AND job.id = runtime.job_id;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
 $$;
@@ -2005,12 +2154,14 @@ BEGIN
        AND ((regexp_match(
              pg_get_expr(child.relpartbound, child.oid),
              'TO \(''([^'']+)''\)'
-           ))[1])::timestamptz <= date_trunc('week', clock_timestamp())
+           ))[1])::timestamptz <= (
+             date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+           )
      ORDER BY upper_bound, child.relname
      LIMIT p_limit
   LOOP
     IF NOT pg_try_advisory_xact_lock(hashtextextended(
-      'workhorse:history-week:' || (v_partition.upper_bound - interval '1 week')::date,
+      'workhorse:history-day:' || ((v_partition.upper_bound AT TIME ZONE 'UTC')::date - 1),
       0
     )) THEN
       CONTINUE;
@@ -2068,15 +2219,17 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.prune_terminal_jobs_v1(
-  p_identity_before timestamptz, p_outcome_before timestamptz, p_limit integer
+  p_identity_before timestamptz, p_outcome_before timestamptz,
+  p_history_before timestamptz, p_limit integer
 ) RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE v_count integer;
 BEGIN
-  IF p_identity_before IS NULL OR p_outcome_before IS NULL
-     OR NOT isfinite(p_identity_before) OR NOT isfinite(p_outcome_before) THEN
-    RAISE EXCEPTION 'identity and outcome cutoffs are required';
+  IF p_identity_before IS NULL OR p_outcome_before IS NULL OR p_history_before IS NULL
+     OR NOT isfinite(p_identity_before) OR NOT isfinite(p_outcome_before)
+     OR NOT isfinite(p_history_before) THEN
+    RAISE EXCEPTION 'identity, outcome, and history cutoffs are required';
   END IF;
   IF p_limit NOT BETWEEN 1 AND 100000 THEN RAISE EXCEPTION 'terminal job limit must be between 1 and 100000'; END IF;
 
@@ -2086,6 +2239,7 @@ BEGIN
       JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
      WHERE job.created_at < p_identity_before
        AND outcome.finished_at < p_outcome_before
+       AND outcome.history_through_at < p_history_before
        AND NOT EXISTS (SELECT 1 FROM workhorse.job_runtime runtime WHERE runtime.job_id = job.id)
      ORDER BY outcome.finished_at, job.id
      FOR UPDATE OF job SKIP LOCKED
@@ -2094,12 +2248,6 @@ BEGIN
     SELECT candidate.id
       FROM candidate_window candidate
      WHERE NOT EXISTS (
-             SELECT 1 FROM workhorse.job_event event WHERE event.job_id = candidate.id
-           )
-       AND NOT EXISTS (
-             SELECT 1 FROM workhorse.attempt_history attempt WHERE attempt.job_id = candidate.id
-           )
-       AND NOT EXISTS (
              SELECT 1 FROM workhorse.schedule_occurrence occurrence
               WHERE occurrence.job_id = candidate.id
            )
@@ -2107,6 +2255,8 @@ BEGIN
              SELECT 1 FROM workhorse.enqueue_idempotency idempotency
               WHERE idempotency.job_id = candidate.id
            )
+     ORDER BY candidate.finished_at, candidate.id
+     LIMIT p_limit
   )
   DELETE FROM workhorse.job job USING candidates WHERE job.id = candidates.id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
@@ -2143,46 +2293,83 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.housekeep_v1(
-  p_occurrence_retention_days integer DEFAULT NULL,
-  p_occurrence_prune_limit integer DEFAULT NULL
+DROP FUNCTION IF EXISTS workhorse.housekeep_v1(integer, integer);
+
+CREATE OR REPLACE FUNCTION workhorse.history_retention_complete_v1(
+  p_parent text, p_before timestamptz
+) RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE v_partitions_remain boolean;
+DECLARE v_default_rows_remain boolean;
+BEGIN
+  IF p_parent NOT IN ('job_event', 'attempt_history') THEN
+    RAISE EXCEPTION 'history parent must be job_event or attempt_history';
+  END IF;
+  IF p_before IS NULL OR NOT isfinite(p_before) THEN
+    RAISE EXCEPTION 'retention cutoff is required';
+  END IF;
+  SELECT EXISTS (
+    SELECT 1
+      FROM pg_inherits inheritance
+      JOIN pg_class parent ON parent.oid = inheritance.inhparent
+      JOIN pg_namespace namespace ON namespace.oid = parent.relnamespace
+      JOIN pg_class child ON child.oid = inheritance.inhrelid
+     WHERE namespace.nspname = 'workhorse'
+       AND parent.relname = p_parent
+       AND child.relname <> p_parent || '_default'
+       AND ((regexp_match(
+             pg_get_expr(child.relpartbound, child.oid),
+             'TO \(''([^'']+)''\)'
+           ))[1])::timestamptz <= p_before
+  ) INTO v_partitions_remain;
+  IF p_parent = 'job_event' THEN
+    SELECT EXISTS (
+      SELECT 1 FROM workhorse.job_event_default WHERE occurred_at < p_before LIMIT 1
+    ) INTO v_default_rows_remain;
+  ELSE
+    SELECT EXISTS (
+      SELECT 1 FROM workhorse.attempt_history_default WHERE occurred_at < p_before LIMIT 1
+    ) INTO v_default_rows_remain;
+  END IF;
+  RETURN NOT v_partitions_remain AND NOT v_default_rows_remain;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.prepare_history_partitions_v1(
+  p_force boolean DEFAULT false,
+  p_now timestamptz DEFAULT clock_timestamp()
 ) RETURNS TABLE (
   phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
 )
 LANGUAGE plpgsql
 AS $$
-DECLARE
-  v_started_at timestamptz;
-  v_week_offset integer;
-  v_suffix text;
-  v_policy workhorse.retention_policy%ROWTYPE;
-  v_occurrence_days integer;
-  v_occurrence_limit integer;
+DECLARE v_started_at timestamptz;
+DECLARE v_day_offset integer;
+DECLARE v_suffix text;
+DECLARE v_today date := (p_now AT TIME ZONE 'UTC')::date;
+DECLARE v_policy workhorse.maintenance_policy%ROWTYPE;
+DECLARE v_state workhorse.maintenance_state%ROWTYPE;
 BEGIN
-  IF p_occurrence_retention_days IS NOT NULL
-     AND p_occurrence_retention_days NOT BETWEEN 1 AND 36500 THEN
-    RAISE EXCEPTION 'occurrence retention days must be between 1 and 36500';
-  END IF;
-  IF p_occurrence_prune_limit IS NOT NULL
-     AND p_occurrence_prune_limit NOT BETWEEN 1 AND 1000000 THEN
-    RAISE EXCEPTION 'occurrence prune limit must be between 1 and 1000000';
-  END IF;
-  SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
-  v_occurrence_days := COALESCE(
-    p_occurrence_retention_days, v_policy.schedule_occurrence_retention_days
-  );
-  v_occurrence_limit := COALESCE(p_occurrence_prune_limit, v_policy.occurrence_rows_per_pass);
-
-  IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:housekeeping', 0)) THEN
-    RETURN QUERY VALUES
-      ('history_partitions'::text, 0, 0, true, NULL::jsonb),
-      ('event_retention'::text, 0, 0, true, NULL::jsonb),
-      ('attempt_retention'::text, 0, 0, true, NULL::jsonb),
-      ('schedule_occurrences'::text, 0, 0, true, NULL::jsonb),
-      ('enqueue_idempotency'::text, 0, 0, true, NULL::jsonb),
-      ('terminal_jobs'::text, 0, 0, true, NULL::jsonb);
+  IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
+  IF NOT pg_try_advisory_xact_lock(
+    hashtextextended('workhorse:maintenance:history-partitions', 0)
+  ) THEN
+    RETURN QUERY VALUES ('history_partitions'::text, 0, 0, true, NULL::jsonb);
     RETURN;
   END IF;
+  SELECT * INTO STRICT v_policy FROM workhorse.maintenance_policy WHERE singleton;
+  SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
+   WHERE task_name = 'history_partitions' FOR UPDATE;
+  IF NOT p_force AND v_state.last_completed_at IS NOT NULL
+     AND v_state.last_completed_at > p_now - make_interval(
+       secs => v_policy.partition_preparation_interval_ms / 1000.0
+     ) THEN
+    RETURN;
+  END IF;
+  UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
+   WHERE task_name = 'history_partitions';
 
   phase := 'history_partitions';
   rows_affected := 0;
@@ -2190,15 +2377,11 @@ BEGIN
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
-    FOR v_week_offset IN 0..4 LOOP
-      v_suffix := to_char(
-        date_trunc('week', current_date + make_interval(weeks => v_week_offset)), 'IYYY"w"IW'
-      );
+    FOR v_day_offset IN 0..3 LOOP
+      v_suffix := to_char(v_today + v_day_offset, 'YYYYMMDD');
       IF to_regclass(format('workhorse.%I', 'job_event_' || v_suffix)) IS NULL
          OR to_regclass(format('workhorse.%I', 'attempt_history_' || v_suffix)) IS NULL THEN
-        PERFORM workhorse.create_history_week_v1(
-          (current_date + make_interval(weeks => v_week_offset))::date
-        );
+        PERFORM workhorse.create_history_day_v1(v_today + v_day_offset);
         rows_affected := rows_affected + 1;
       END IF;
     END LOOP;
@@ -2209,27 +2392,82 @@ BEGIN
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  IF error IS NULL THEN
+    UPDATE workhorse.maintenance_state
+       SET last_completed_at = p_now, updated_at = clock_timestamp()
+     WHERE task_name = 'history_partitions';
+  END IF;
   RETURN NEXT;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.retain_history_v1(
+  p_force boolean DEFAULT false,
+  p_now timestamptz DEFAULT clock_timestamp()
+) RETURNS TABLE (
+  phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE v_started_at timestamptz;
+DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+DECLARE v_maintenance workhorse.maintenance_policy%ROWTYPE;
+DECLARE v_state workhorse.maintenance_state%ROWTYPE;
+DECLARE v_local_now timestamp;
+DECLARE v_event_before timestamptz;
+DECLARE v_attempt_before timestamptz;
+DECLARE v_occurrence_before timestamptz;
+DECLARE v_safe_before timestamptz;
+DECLARE v_success boolean := true;
+DECLARE v_complete boolean := false;
+BEGIN
+  IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
+  IF NOT pg_try_advisory_xact_lock(
+    hashtextextended('workhorse:maintenance:history-retention', 0)
+  ) THEN
+    RETURN QUERY VALUES
+      ('event_retention'::text, 0, 0, true, NULL::jsonb),
+      ('attempt_retention'::text, 0, 0, true, NULL::jsonb),
+      ('schedule_occurrences'::text, 0, 0, true, NULL::jsonb);
+    RETURN;
+  END IF;
+  SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
+  SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
+  SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
+   WHERE task_name = 'history_retention' FOR UPDATE;
+  v_local_now := p_now AT TIME ZONE v_maintenance.timezone;
+  IF NOT p_force AND (
+    v_local_now::time < make_time(v_maintenance.history_retention_local_hour, 0, 0)
+    OR v_state.last_completed_local_date >= v_local_now::date
+  ) THEN
+    RETURN;
+  END IF;
+  UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
+   WHERE task_name = 'history_retention';
+  v_event_before := date_trunc('day', p_now AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+    - make_interval(days => COALESCE(v_policy.job_event_retention_days, 0));
+  v_attempt_before := date_trunc('day', p_now AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+    - make_interval(days => COALESCE(v_policy.attempt_history_retention_days, 0));
+  v_occurrence_before := p_now
+    - make_interval(days => COALESCE(v_policy.schedule_occurrence_retention_days, 0));
 
   phase := 'event_retention';
   rows_affected := 0;
+  skipped_lock := false;
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
     IF v_policy.job_event_retention_days IS NOT NULL THEN
       rows_affected := workhorse.retire_history_partitions_v1(
-        'job_event',
-        clock_timestamp() - make_interval(days => v_policy.job_event_retention_days),
-        v_policy.history_partitions_per_pass
+        'job_event', v_event_before, v_policy.history_partitions_per_pass
       );
       rows_affected := rows_affected + workhorse.prune_default_history_v1(
-        'job_event',
-        clock_timestamp() - make_interval(days => v_policy.job_event_retention_days),
-        v_policy.default_partition_rows_per_pass
+        'job_event', v_event_before, v_policy.default_partition_rows_per_pass
       );
     END IF;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+    v_success := false;
   END;
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
@@ -2243,18 +2481,15 @@ BEGIN
   BEGIN
     IF v_policy.attempt_history_retention_days IS NOT NULL THEN
       rows_affected := workhorse.retire_history_partitions_v1(
-        'attempt_history',
-        clock_timestamp() - make_interval(days => v_policy.attempt_history_retention_days),
-        v_policy.history_partitions_per_pass
+        'attempt_history', v_attempt_before, v_policy.history_partitions_per_pass
       );
       rows_affected := rows_affected + workhorse.prune_default_history_v1(
-        'attempt_history',
-        clock_timestamp() - make_interval(days => v_policy.attempt_history_retention_days),
-        v_policy.default_partition_rows_per_pass
+        'attempt_history', v_attempt_before, v_policy.default_partition_rows_per_pass
       );
     END IF;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+    v_success := false;
   END;
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
@@ -2266,29 +2501,99 @@ BEGIN
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
-    IF v_occurrence_days IS NOT NULL THEN
+    IF v_policy.schedule_occurrence_retention_days IS NOT NULL THEN
       rows_affected := workhorse.prune_schedule_occurrences_v1(
-        clock_timestamp() - make_interval(days => v_occurrence_days), v_occurrence_limit
+        v_occurrence_before,
+        v_policy.occurrence_rows_per_pass
       );
     END IF;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+    v_success := false;
   END;
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
   RETURN NEXT;
 
+  IF v_success THEN
+    v_complete := (
+      v_policy.job_event_retention_days IS NULL
+      OR workhorse.history_retention_complete_v1('job_event', v_event_before)
+    ) AND (
+      v_policy.attempt_history_retention_days IS NULL
+      OR workhorse.history_retention_complete_v1('attempt_history', v_attempt_before)
+    ) AND (
+      v_policy.schedule_occurrence_retention_days IS NULL
+      OR NOT EXISTS (
+        SELECT 1 FROM workhorse.schedule_occurrence
+         WHERE occurrence_at < v_occurrence_before
+      )
+    );
+    IF v_complete THEN
+      v_safe_before := LEAST(v_event_before, v_attempt_before);
+      UPDATE workhorse.maintenance_state
+         SET last_completed_at = p_now,
+             last_completed_local_date = v_local_now::date,
+             history_retained_before = GREATEST(history_retained_before, v_safe_before),
+             updated_at = clock_timestamp()
+       WHERE task_name = 'history_retention';
+    END IF;
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.prune_terminal_storage_v1(
+  p_force boolean DEFAULT false,
+  p_now timestamptz DEFAULT clock_timestamp()
+) RETURNS TABLE (
+  phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE v_started_at timestamptz;
+DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+DECLARE v_maintenance workhorse.maintenance_policy%ROWTYPE;
+DECLARE v_state workhorse.maintenance_state%ROWTYPE;
+DECLARE v_history_before timestamptz;
+DECLARE v_success boolean := true;
+BEGIN
+  IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
+  IF NOT pg_try_advisory_xact_lock(
+    hashtextextended('workhorse:maintenance:terminal-storage', 0)
+  ) THEN
+    RETURN QUERY VALUES
+      ('enqueue_idempotency'::text, 0, 0, true, NULL::jsonb),
+      ('terminal_jobs'::text, 0, 0, true, NULL::jsonb);
+    RETURN;
+  END IF;
+  SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
+  SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
+  SELECT * INTO STRICT v_state FROM workhorse.maintenance_state
+   WHERE task_name = 'terminal_storage' FOR UPDATE;
+  IF NOT p_force AND v_state.last_completed_at IS NOT NULL
+     AND v_state.last_completed_at > p_now - make_interval(
+       secs => v_maintenance.terminal_cleanup_interval_ms / 1000.0
+     ) THEN
+    RETURN;
+  END IF;
+  SELECT history_retained_before INTO v_history_before
+    FROM workhorse.maintenance_state WHERE task_name = 'history_retention';
+  UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
+   WHERE task_name = 'terminal_storage';
+
   phase := 'enqueue_idempotency';
   rows_affected := 0;
+  skipped_lock := false;
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
     rows_affected := workhorse.prune_enqueue_idempotency_v1(
-      clock_timestamp(), v_policy.terminal_job_prune_limit
+      p_now, v_policy.terminal_job_prune_limit
     );
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+    v_success := false;
   END;
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
@@ -2300,31 +2605,38 @@ BEGIN
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
-    IF v_policy.job_identity_retention_days IS NOT NULL THEN
+    IF v_policy.job_identity_retention_days IS NOT NULL AND v_history_before IS NOT NULL THEN
       rows_affected := workhorse.prune_terminal_jobs_v1(
-        clock_timestamp() - make_interval(days => v_policy.job_identity_retention_days),
-        clock_timestamp() - make_interval(days => v_policy.terminal_outcome_retention_days),
+        p_now - make_interval(days => v_policy.job_identity_retention_days),
+        p_now - make_interval(days => v_policy.terminal_outcome_retention_days),
+        v_history_before,
         v_policy.terminal_job_prune_limit
       );
     END IF;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+    v_success := false;
   END;
   duration_ms := GREATEST(
     0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
   );
+  IF v_success THEN
+    UPDATE workhorse.maintenance_state
+       SET last_completed_at = p_now, updated_at = clock_timestamp()
+     WHERE task_name = 'terminal_storage';
+  END IF;
   RETURN NEXT;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.create_history_week_v1(p_week date)
+CREATE OR REPLACE FUNCTION workhorse.create_history_day_v1(p_day date)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_start date := date_trunc('week', p_week)::date;
-  v_end date := (date_trunc('week', p_week) + interval '1 week')::date;
-  v_suffix text := to_char(v_start, 'IYYY"w"IW');
+  v_start timestamptz := p_day::timestamp AT TIME ZONE 'UTC';
+  v_end timestamptz := (p_day + 1)::timestamp AT TIME ZONE 'UTC';
+  v_suffix text := to_char(p_day, 'YYYYMMDD');
   v_event_partition text := 'job_event_' || v_suffix;
   v_attempt_partition text := 'attempt_history_' || v_suffix;
   v_event_staging text := 'workhorse_job_event_' || v_suffix;
@@ -2332,7 +2644,7 @@ DECLARE
   v_event_exists boolean;
   v_attempt_exists boolean;
 BEGIN
-  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:history-week:' || v_start, 0));
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:history-day:' || p_day, 0));
   v_event_exists := to_regclass(format('workhorse.%I', v_event_partition)) IS NOT NULL;
   v_attempt_exists := to_regclass(format('workhorse.%I', v_attempt_partition)) IS NOT NULL;
   IF v_event_exists AND v_attempt_exists THEN RETURN; END IF;
@@ -2368,25 +2680,27 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.retire_history_week_v1(p_week date)
+CREATE OR REPLACE FUNCTION workhorse.retire_history_day_v1(p_day date)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_start date := date_trunc('week', p_week)::date;
-  v_suffix text := to_char(v_start, 'IYYY"w"IW');
+  v_start date := p_day;
+  v_suffix text := to_char(v_start, 'YYYYMMDD');
 BEGIN
-  IF v_start >= date_trunc('week', current_date)::date THEN
-    RAISE EXCEPTION 'only completed history weeks can be retired';
+  IF v_start >= (clock_timestamp() AT TIME ZONE 'UTC')::date THEN
+    RAISE EXCEPTION 'only completed history days can be retired';
   END IF;
-  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:history-week:' || v_start, 0));
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:history-day:' || v_start, 0));
   EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', 'job_event_' || v_suffix);
   EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', 'attempt_history_' || v_suffix);
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (11) ON CONFLICT DO NOTHING;
-SELECT workhorse.create_history_week_v1((current_date + make_interval(weeks => week_offset))::date)
-  FROM generate_series(0, 4) AS weeks(week_offset);
+  INSERT INTO workhorse.schema_version(version) VALUES (12) ON CONFLICT DO NOTHING;
+SELECT workhorse.create_history_day_v1(
+         ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
+       )
+  FROM generate_series(0, 3) AS days(day_offset);
 
 COMMIT;

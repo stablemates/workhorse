@@ -51,11 +51,11 @@ function deferred<T = void>(): {
   return { promise, resolve, reject };
 }
 const defaultRetentionPolicy: RetentionPolicyDefinition = {
-  jobIdentityRetentionDays: null,
-  terminalOutcomeRetentionDays: null,
-  jobEventRetentionDays: null,
-  attemptHistoryRetentionDays: null,
-  scheduleOccurrenceRetentionDays: 30,
+  jobIdentityRetentionDays: 14,
+  terminalOutcomeRetentionDays: 14,
+  jobEventRetentionDays: 14,
+  attemptHistoryRetentionDays: 14,
+  scheduleOccurrenceRetentionDays: 14,
   terminalJobPruneLimit: 1_000,
   historyPartitionsPerPass: 4,
   defaultPartitionRowsPerPass: 10_000,
@@ -75,6 +75,21 @@ beforeEach(async () => {
     workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
   await queue.syncRetentionPolicy(defaultRetentionPolicy);
+  await queue.syncMaintenancePolicy({
+    timezone: "UTC",
+    partitionPreparationIntervalMs: 21_600_000,
+    terminalCleanupIntervalMs: 300_000,
+    historyRetentionLocalHour: 3,
+  });
+  await pool.query(`UPDATE workhorse.maintenance_state SET
+    last_started_at = NULL,
+    last_completed_at = NULL,
+    last_completed_local_date = NULL,
+    history_retained_before = CASE WHEN task_name = 'history_retention'
+      THEN date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+        - interval '14 days'
+      ELSE NULL END,
+    updated_at = clock_timestamp()`);
 });
 
 afterAll(async () => {
@@ -82,24 +97,42 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v11 with deterministic enqueue idempotency storage", async () => {
+  it("installs schema v12 with deterministic enqueue idempotency storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(11);
+    expect(version.rows[0]?.version).toBe(12);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
       tick: string | null;
       housekeep: string | null;
+      partitions: string | null;
+      retention: string | null;
+      terminal: string | null;
     }>(`SELECT
       to_regprocedure('workhorse.maintain_v1(integer,integer,integer,integer)')::text AS maintain,
       to_regprocedure('workhorse.tick_v1(integer,integer)')::text AS tick,
-      to_regprocedure('workhorse.housekeep_v1(integer,integer)')::text AS housekeep`);
+      to_regprocedure('workhorse.housekeep_v1(integer,integer)')::text AS housekeep,
+      to_regprocedure('workhorse.prepare_history_partitions_v1(boolean,timestamp with time zone)')::text AS partitions,
+      to_regprocedure('workhorse.retain_history_v1(boolean,timestamp with time zone)')::text AS retention,
+      to_regprocedure('workhorse.prune_terminal_storage_v1(boolean,timestamp with time zone)')::text AS terminal`);
     expect(maintenanceFunctions.rows[0]).toEqual({
       maintain: null,
       tick: "tick_v1(integer,integer)",
-      housekeep: "housekeep_v1(integer,integer)",
+      housekeep: null,
+      partitions: "prepare_history_partitions_v1(boolean,timestamp with time zone)",
+      retention: "retain_history_v1(boolean,timestamp with time zone)",
+      terminal: "prune_terminal_storage_v1(boolean,timestamp with time zone)",
+    });
+
+    const maintenancePolicy = await queue.getMaintenancePolicy();
+    expect(maintenancePolicy).toMatchObject({
+      timezone: "UTC",
+      partitionPreparationIntervalMs: 21_600_000,
+      terminalCleanupIntervalMs: 300_000,
+      historyRetentionLocalHour: 3,
+      updatedAt: expect.any(Date),
     });
 
     const historyPartitions = await pool.query<{ parent: string; partitions: number }>(`
@@ -112,9 +145,24 @@ describe("live-runtime queue protocol", () => {
        GROUP BY parent.relname
        ORDER BY parent.relname`);
     expect(historyPartitions.rows).toEqual([
-      { parent: "attempt_history", partitions: 6 },
-      { parent: "job_event", partitions: 6 },
+      { parent: "attempt_history", partitions: 5 },
+      { parent: "job_event", partitions: 5 },
     ]);
+
+    const historyIntegrity = await pool.query<{ foreign_keys: number; triggers: string[] }>(`
+      SELECT
+        (SELECT count(*)::integer FROM pg_constraint
+          WHERE conrelid IN ('workhorse.job_event'::regclass, 'workhorse.attempt_history'::regclass)
+            AND contype = 'f') AS foreign_keys,
+        (SELECT json_agg(trigger_name ORDER BY trigger_name) FROM (
+          SELECT tgname AS trigger_name FROM pg_trigger
+           WHERE tgrelid IN ('workhorse.job_event'::regclass, 'workhorse.attempt_history'::regclass)
+             AND NOT tgisinternal
+        ) triggers) AS triggers`);
+    expect(historyIntegrity.rows[0]).toEqual({
+      foreign_keys: 0,
+      triggers: ["attempt_history_job_exists", "job_event_job_exists"],
+    });
 
     const relations = await pool.query<{ relname: string }>(
       `
@@ -396,7 +444,7 @@ describe("live-runtime queue protocol", () => {
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      housekeepingIntervalMs: 100,
+      maintenanceTaskPollMs: 100,
     }).handle("cooperative-cancel", async (_payload, context) => {
       started.resolve();
       await new Promise<void>((_resolve, reject) => {
@@ -428,7 +476,7 @@ describe("live-runtime queue protocol", () => {
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      housekeepingIntervalMs: 100,
+      maintenanceTaskPollMs: 100,
     }).handle("ignore-cancel", async (_payload, context) => {
       expect(worker.concurrency).toBe(1);
       started.resolve();
@@ -485,14 +533,14 @@ describe("live-runtime queue protocol", () => {
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      housekeepingIntervalMs: 100,
+      maintenanceTaskPollMs: 100,
     }).handle("concurrent-worker-cancel", handler);
     const secondWorker = new Worker(queue, {
       workerId: "concurrent-cancel-b",
       leaseMs: 5_000,
       heartbeatMs: 100,
       maintenanceIntervalMs: 100,
-      housekeepingIntervalMs: 100,
+      maintenanceTaskPollMs: 100,
     }).handle("concurrent-worker-cancel", handler);
 
     expect(firstWorker.concurrency).toBe(1);
@@ -667,7 +715,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(11);
+    expect(health.schemaVersion).toBe(12);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -880,7 +928,7 @@ describe("live-runtime queue protocol", () => {
     ).toBe(1);
   });
 
-  it("returns per-phase tick and housekeeping telemetry", async () => {
+  it("returns per-phase tick and background maintenance telemetry", async () => {
     const scheduledId = await queue.enqueue(
       "scheduled-maintenance",
       {},
@@ -916,52 +964,55 @@ describe("live-runtime queue protocol", () => {
     ]);
     expect((await queue.getJob(scheduledId))?.state).toBe("ready");
 
-    expect(await queue.housekeep({ occurrenceRetentionDays: 30, occurrencePruneLimit: 1 })).toEqual(
-      [
-        {
-          phase: "history_partitions",
-          rowsAffected: 0,
-          durationMs: expect.any(Number),
-          skippedLock: false,
-          error: null,
-        },
-        {
-          phase: "event_retention",
-          rowsAffected: 0,
-          durationMs: expect.any(Number),
-          skippedLock: false,
-          error: null,
-        },
-        {
-          phase: "attempt_retention",
-          rowsAffected: 0,
-          durationMs: expect.any(Number),
-          skippedLock: false,
-          error: null,
-        },
-        {
-          phase: "schedule_occurrences",
-          rowsAffected: 1,
-          durationMs: expect.any(Number),
-          skippedLock: false,
-          error: null,
-        },
-        {
-          phase: "enqueue_idempotency",
-          rowsAffected: 0,
-          durationMs: expect.any(Number),
-          skippedLock: false,
-          error: null,
-        },
-        {
-          phase: "terminal_jobs",
-          rowsAffected: 0,
-          durationMs: expect.any(Number),
-          skippedLock: false,
-          error: null,
-        },
-      ],
-    );
+    await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, occurrenceRowsPerPass: 1 });
+    expect([
+      ...(await queue.prepareHistoryPartitions({ force: true })),
+      ...(await queue.retainHistory({ force: true })),
+      ...(await queue.pruneTerminalStorage({ force: true })),
+    ]).toEqual([
+      {
+        phase: "history_partitions",
+        rowsAffected: 0,
+        durationMs: expect.any(Number),
+        skippedLock: false,
+        error: null,
+      },
+      {
+        phase: "event_retention",
+        rowsAffected: 0,
+        durationMs: expect.any(Number),
+        skippedLock: false,
+        error: null,
+      },
+      {
+        phase: "attempt_retention",
+        rowsAffected: 0,
+        durationMs: expect.any(Number),
+        skippedLock: false,
+        error: null,
+      },
+      {
+        phase: "schedule_occurrences",
+        rowsAffected: 1,
+        durationMs: expect.any(Number),
+        skippedLock: false,
+        error: null,
+      },
+      {
+        phase: "enqueue_idempotency",
+        rowsAffected: 0,
+        durationMs: expect.any(Number),
+        skippedLock: false,
+        error: null,
+      },
+      {
+        phase: "terminal_jobs",
+        rowsAffected: 0,
+        durationMs: expect.any(Number),
+        skippedLock: false,
+        error: null,
+      },
+    ]);
     expect(
       (
         await pool.query(
@@ -981,8 +1032,10 @@ describe("live-runtime queue protocol", () => {
       ]);
       await blocker.query("SELECT pg_advisory_unlock(hashtextextended('workhorse:tick', 0))");
 
-      await blocker.query("SELECT pg_advisory_lock(hashtextextended('workhorse:housekeeping', 0))");
-      expect(await queue.housekeep()).toEqual([
+      await blocker.query(
+        "SELECT pg_advisory_lock(hashtextextended('workhorse:maintenance:history-partitions', 0))",
+      );
+      expect(await queue.prepareHistoryPartitions({ force: true })).toEqual([
         {
           phase: "history_partitions",
           rowsAffected: 0,
@@ -990,6 +1043,12 @@ describe("live-runtime queue protocol", () => {
           skippedLock: true,
           error: null,
         },
+      ]);
+      await blocker.query("SELECT pg_advisory_unlock_all()");
+      await blocker.query(
+        "SELECT pg_advisory_lock(hashtextextended('workhorse:maintenance:history-retention', 0))",
+      );
+      expect(await queue.retainHistory({ force: true })).toEqual([
         {
           phase: "event_retention",
           rowsAffected: 0,
@@ -1011,6 +1070,12 @@ describe("live-runtime queue protocol", () => {
           skippedLock: true,
           error: null,
         },
+      ]);
+      await blocker.query("SELECT pg_advisory_unlock_all()");
+      await blocker.query(
+        "SELECT pg_advisory_lock(hashtextextended('workhorse:maintenance:terminal-storage', 0))",
+      );
+      expect(await queue.pruneTerminalStorage({ force: true })).toEqual([
         {
           phase: "enqueue_idempotency",
           rowsAffected: 0,
@@ -1032,6 +1097,83 @@ describe("live-runtime queue protocol", () => {
     }
   });
 
+  it("persists one IANA maintenance timezone and runs daily retention once after local 03:00", async () => {
+    expect(
+      await queue.syncMaintenancePolicy({
+        timezone: "America/New_York",
+        partitionPreparationIntervalMs: 3_600_000,
+        terminalCleanupIntervalMs: 60_000,
+        historyRetentionLocalHour: 3,
+      }),
+    ).toMatchObject({
+      timezone: "America/New_York",
+      partitionPreparationIntervalMs: 3_600_000,
+      terminalCleanupIntervalMs: 60_000,
+      historyRetentionLocalHour: 3,
+    });
+    await expect(queue.syncMaintenancePolicy({ timezone: "Mars/Olympus_Mons" })).rejects.toThrow(
+      /valid IANA timezone/,
+    );
+
+    const beforeSpringForwardBoundary = new Date("2026-03-08T06:59:00.000Z");
+    const atSpringForwardBoundary = new Date("2026-03-08T07:00:00.000Z");
+    expect(await queue.retainHistory({ now: beforeSpringForwardBoundary })).toEqual([]);
+    expect(await queue.retainHistory({ now: atSpringForwardBoundary })).toHaveLength(3);
+    expect(await queue.retainHistory({ now: new Date("2026-03-08T08:00:00.000Z") })).toEqual([]);
+    await queue.syncMaintenancePolicy({ timezone: "America/New_York" });
+    expect(await queue.retainHistory({ now: new Date("2026-03-08T09:00:00.000Z") })).toEqual([]);
+    await queue.syncMaintenancePolicy({
+      timezone: "America/New_York",
+      partitionPreparationIntervalMs: 7_200_000,
+    });
+    expect(await queue.retainHistory({ now: new Date("2026-03-08T10:00:00.000Z") })).toEqual([]);
+    expect(
+      (
+        await pool.query(
+          "SELECT last_completed_local_date FROM workhorse.maintenance_state WHERE task_name = 'history_retention'",
+        )
+      ).rows,
+    ).toEqual([{ last_completed_local_date: new Date("2026-03-08T05:00:00.000Z") }]);
+  });
+
+  it("continues bounded occurrence retention on the same local date until the backlog clears", async () => {
+    await pool.query(
+      `INSERT INTO workhorse.schedule_definition(
+         namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts
+       ) VALUES ('retention-backlog', 'daily', '0 0 * * *', 'default', 'backlog', '{}'::jsonb, 1)`,
+    );
+    await pool.query(
+      `INSERT INTO workhorse.schedule_occurrence(namespace, schedule_name, occurrence_at)
+       VALUES ('retention-backlog', 'daily', '2020-01-01T00:00:00Z'),
+              ('retention-backlog', 'daily', '2020-01-02T00:00:00Z')`,
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      occurrenceRowsPerPass: 1,
+    });
+    await queue.syncMaintenancePolicy({ timezone: "UTC", historyRetentionLocalHour: 3 });
+
+    const first = await queue.retainHistory({ now: new Date("2026-08-02T03:00:00.000Z") });
+    const second = await queue.retainHistory({ now: new Date("2026-08-02T03:01:00.000Z") });
+    const third = await queue.retainHistory({ now: new Date("2026-08-02T03:02:00.000Z") });
+    expect(first[2]).toMatchObject({ phase: "schedule_occurrences", rowsAffected: 1 });
+    expect(second[2]).toMatchObject({ phase: "schedule_occurrences", rowsAffected: 1 });
+    expect(third).toEqual([]);
+  });
+
+  it("globally rate-limits interval maintenance tasks while allowing explicit forced runs", async () => {
+    const now = new Date("2026-08-02T12:00:00.000Z");
+    expect(await queue.prepareHistoryPartitions({ now })).toHaveLength(1);
+    expect(await queue.prepareHistoryPartitions({ now: new Date(now.getTime() + 1_000) })).toEqual(
+      [],
+    );
+    expect(await queue.prepareHistoryPartitions({ force: true, now })).toHaveLength(1);
+
+    expect(await queue.pruneTerminalStorage({ now })).toHaveLength(2);
+    expect(await queue.pruneTerminalStorage({ now: new Date(now.getTime() + 1_000) })).toEqual([]);
+    expect(await queue.pruneTerminalStorage({ force: true, now })).toHaveLength(2);
+  });
+
   it("isolates housekeeping phases when partition replenishment fails", async () => {
     await pool.query(
       `INSERT INTO workhorse.schedule_definition(
@@ -1044,14 +1186,14 @@ describe("live-runtime queue protocol", () => {
     );
     await pool.query(`
       DO $$
-      DECLARE suffix text := to_char(date_trunc('week', current_date + interval '4 weeks'), 'IYYY"w"IW');
+      DECLARE suffix text := to_char(current_date + 3, 'YYYYMMDD');
       BEGIN
         EXECUTE format('DROP TABLE workhorse.%I', 'job_event_' || suffix);
         EXECUTE format('DROP TABLE workhorse.%I', 'attempt_history_' || suffix);
       END
       $$`);
     await pool.query(`
-      CREATE OR REPLACE FUNCTION workhorse.create_history_week_v1(p_week date)
+      CREATE OR REPLACE FUNCTION workhorse.create_history_day_v1(p_day date)
       RETURNS void LANGUAGE plpgsql AS $$
       BEGIN
         RAISE EXCEPTION 'forced partition replenishment failure';
@@ -1059,17 +1201,15 @@ describe("live-runtime queue protocol", () => {
       $$`);
 
     try {
-      const results = await queue.housekeep({
-        occurrenceRetentionDays: 30,
-        occurrencePruneLimit: 10,
-      });
-      expect(results[0]).toMatchObject({
+      const partitionResults = await queue.prepareHistoryPartitions({ force: true });
+      expect(partitionResults[0]).toMatchObject({
         phase: "history_partitions",
         rowsAffected: 0,
         skippedLock: false,
         error: { message: "forced partition replenishment failure" },
       });
-      expect(results[3]).toMatchObject({
+      const retentionResults = await queue.retainHistory({ force: true });
+      expect(retentionResults[2]).toMatchObject({
         phase: "schedule_occurrences",
         rowsAffected: 1,
         skippedLock: false,
@@ -1087,7 +1227,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v11 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v12 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -1699,6 +1839,12 @@ describe("live-runtime queue protocol", () => {
         runAt: new Date(Date.now() + 60_000),
       },
     );
+    await pool.query(
+      `INSERT INTO workhorse.attempt_history(
+         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at
+       ) VALUES ($1, 1, 1, 'purge-history-worker', 'succeeded', clock_timestamp(), clock_timestamp())`,
+      [scheduledId],
+    );
     const otherId = await queue.enqueue("other", {}, { queue: "other" });
 
     await queue.pauseQueue(queueName);
@@ -1718,6 +1864,16 @@ describe("live-runtime queue protocol", () => {
     expect(await queue.getJob(readyId)).toMatchObject({ state: "active" });
     expect(await queue.getJob(scheduledId)).toBeNull();
     expect(await queue.getJob(otherId)).toMatchObject({ state: "ready" });
+    expect(
+      (
+        await pool.query(
+          `SELECT
+             (SELECT count(*)::integer FROM workhorse.job_event WHERE job_id = $1) AS events,
+             (SELECT count(*)::integer FROM workhorse.attempt_history WHERE job_id = $1) AS attempts`,
+          [scheduledId],
+        )
+      ).rows[0],
+    ).toEqual({ events: 0, attempts: 0 });
     expect(await queue.purgeQueue(queueName)).toBe(0);
   });
 
@@ -1786,6 +1942,40 @@ describe("live-runtime queue protocol", () => {
         },
       ),
     ).rejects.toBeInstanceOf(EnqueueIdempotencyConflictError);
+  });
+
+  it("serializes queue purge with a concurrent history insert", async () => {
+    const queueName = "purge-history-race";
+    const id = await queue.enqueue("purge-history-race", {}, { queue: queueName });
+    const inserter = await pool.connect();
+    try {
+      await inserter.query("BEGIN");
+      await inserter.query(
+        `INSERT INTO workhorse.job_event(job_id, event_type) VALUES ($1, 'concurrent-purge')`,
+        [id],
+      );
+      let settled = false;
+      const purge = queue.purgeQueue(queueName).finally(() => {
+        settled = true;
+      });
+      await sleep(25);
+      expect(settled).toBe(false);
+      await inserter.query("COMMIT");
+
+      expect(await purge).toBe(1);
+      expect(await queue.getJob(id)).toBeNull();
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::integer AS count FROM workhorse.job_event WHERE job_id = $1",
+            [id],
+          )
+        ).rows[0]?.count,
+      ).toBe(0);
+    } finally {
+      await inserter.query("ROLLBACK").catch(() => undefined);
+      inserter.release();
+    }
   });
 
   it("treats an empty enqueue batch as a query-free no-op", async () => {
@@ -2543,7 +2733,7 @@ describe("live-runtime queue protocol", () => {
       heartbeatMs: 50,
       leaseMs: 500,
       maintenanceIntervalMs: 100,
-      housekeepingIntervalMs: 1_000,
+      maintenanceTaskPollMs: 1_000,
       pollMs: 1_000,
     }).handle("maintenance-during-handler", async () => {
       await release.promise;
@@ -2563,19 +2753,20 @@ describe("live-runtime queue protocol", () => {
     }
   });
 
-  it("runs tick and housekeeping on independent worker cadences with phase telemetry", async () => {
+  it("runs tick and scheduled maintenance tasks on independent cadences with phase telemetry", async () => {
     const jobId = await queue.enqueue(
       "scheduled-worker",
       { ok: true },
       { runAt: new Date(Date.now() + 80) },
     );
     await sleep(100);
+    await queue.syncMaintenancePolicy({ timezone: "UTC", historyRetentionLocalHour: 0 });
 
     const telemetry: ReturnType<Worker["maintenanceTelemetry"]> = [];
     const worker = new Worker(queue, {
       workerId: "worker-maintenance",
       maintenanceIntervalMs: 100,
-      housekeepingIntervalMs: 1_000,
+      maintenanceTaskPollMs: 1_000,
       onMaintenance: (event) => telemetry.push(event),
     }).handle("scheduled-worker", () => ({ ok: true }));
     expect(await worker.runOnce()).toBe(true);
@@ -2583,12 +2774,12 @@ describe("live-runtime queue protocol", () => {
     expect(telemetry.map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
       "tick:promote",
       "tick:recover",
-      "housekeeping:history_partitions",
-      "housekeeping:event_retention",
-      "housekeeping:attempt_retention",
-      "housekeeping:schedule_occurrences",
-      "housekeeping:enqueue_idempotency",
-      "housekeeping:terminal_jobs",
+      "history_partitions:history_partitions",
+      "history_retention:event_retention",
+      "history_retention:attempt_retention",
+      "history_retention:schedule_occurrences",
+      "terminal_storage:enqueue_idempotency",
+      "terminal_storage:terminal_jobs",
     ]);
     expect(worker.maintenanceTelemetry()).toEqual(telemetry);
 
@@ -2605,7 +2796,7 @@ describe("live-runtime queue protocol", () => {
       { phase: "promote", rowsAffected: 0, durationMs: 0, skippedLock: false, error: null },
       { phase: "recover", rowsAffected: 0, durationMs: 0, skippedLock: false, error: null },
     ];
-    const housekeepingResults: MaintenancePhaseResult[] = [
+    const partitionResults: MaintenancePhaseResult[] = [
       {
         phase: "history_partitions",
         rowsAffected: 0,
@@ -2613,6 +2804,8 @@ describe("live-runtime queue protocol", () => {
         skippedLock: false,
         error: null,
       },
+    ];
+    const retentionResults: MaintenancePhaseResult[] = [
       {
         phase: "event_retention",
         rowsAffected: 0,
@@ -2634,6 +2827,8 @@ describe("live-runtime queue protocol", () => {
         skippedLock: false,
         error: null,
       },
+    ];
+    const terminalResults: MaintenancePhaseResult[] = [
       {
         phase: "enqueue_idempotency",
         rowsAffected: 0,
@@ -2651,7 +2846,13 @@ describe("live-runtime queue protocol", () => {
     ];
     const now = vi.spyOn(Date, "now").mockReturnValue(0);
     const tick = vi.spyOn(queue, "tick").mockResolvedValue(tickResults);
-    const housekeep = vi.spyOn(queue, "housekeep").mockResolvedValue(housekeepingResults);
+    const prepareHistoryPartitions = vi
+      .spyOn(queue, "prepareHistoryPartitions")
+      .mockResolvedValue(partitionResults);
+    const retainHistory = vi.spyOn(queue, "retainHistory").mockResolvedValue(retentionResults);
+    const pruneTerminalStorage = vi
+      .spyOn(queue, "pruneTerminalStorage")
+      .mockResolvedValue(terminalResults);
     const claim = vi.spyOn(queue, "claim").mockResolvedValue(null);
 
     try {
@@ -2659,7 +2860,7 @@ describe("live-runtime queue protocol", () => {
         workerId: "idle-cadence",
         pollMs: 15_000,
         maintenanceIntervalMs: 1_000,
-        housekeepingIntervalMs: 60_000,
+        maintenanceTaskPollMs: 60_000,
       });
 
       await worker.runOnce();
@@ -2679,7 +2880,9 @@ describe("live-runtime queue protocol", () => {
     } finally {
       now.mockRestore();
       tick.mockRestore();
-      housekeep.mockRestore();
+      prepareHistoryPartitions.mockRestore();
+      retainHistory.mockRestore();
+      pruneTerminalStorage.mockRestore();
       claim.mockRestore();
     }
   });
@@ -2695,7 +2898,11 @@ describe("live-runtime queue protocol", () => {
     }));
     const now = vi.spyOn(Date, "now").mockReturnValue(0);
     const tick = vi.spyOn(queue, "tick").mockResolvedValueOnce(skippedTick);
-    const housekeep = vi.spyOn(queue, "housekeep").mockResolvedValue([]);
+    const prepareHistoryPartitions = vi
+      .spyOn(queue, "prepareHistoryPartitions")
+      .mockResolvedValue([]);
+    const retainHistory = vi.spyOn(queue, "retainHistory").mockResolvedValue([]);
+    const pruneTerminalStorage = vi.spyOn(queue, "pruneTerminalStorage").mockResolvedValue([]);
     const schedules = vi.spyOn(queue, "schedules").mockResolvedValue([]);
     const claim = vi.spyOn(queue, "claim").mockResolvedValue(null);
 
@@ -2718,7 +2925,9 @@ describe("live-runtime queue protocol", () => {
     } finally {
       now.mockRestore();
       tick.mockRestore();
-      housekeep.mockRestore();
+      prepareHistoryPartitions.mockRestore();
+      retainHistory.mockRestore();
+      pruneTerminalStorage.mockRestore();
       schedules.mockRestore();
       claim.mockRestore();
     }
@@ -4166,7 +4375,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(11);
+    expect(health.schemaVersion).toBe(12);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -4243,27 +4452,60 @@ describe("live-runtime queue protocol", () => {
     ).resolves.toMatchObject({ rows: [{ prune_schedule_occurrences_v1: 0 }] });
   });
 
+  it("preserves daily completion on identical retention policy sync and invalidates changed windows", async () => {
+    await pool.query(`
+      UPDATE workhorse.maintenance_state
+         SET last_completed_local_date = '2026-08-02'
+       WHERE task_name = 'history_retention'`);
+
+    await queue.syncRetentionPolicy(defaultRetentionPolicy);
+    expect(
+      (
+        await pool.query<{ completed: string | null }>(`
+          SELECT last_completed_local_date::text AS completed
+            FROM workhorse.maintenance_state
+           WHERE task_name = 'history_retention'`)
+      ).rows[0]?.completed,
+    ).toBe("2026-08-02");
+
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      scheduleOccurrenceRetentionDays: 13,
+    });
+    expect(
+      (
+        await pool.query<{ completed: string | null }>(`
+          SELECT last_completed_local_date::text AS completed
+            FROM workhorse.maintenance_state
+           WHERE task_name = 'history_retention'`)
+      ).rows[0]?.completed,
+    ).toBeNull();
+  });
+
   it("retires event and attempt partitions independently and bounds partition/default work", async () => {
-    const firstWeek = "2018-01-01";
-    const secondWeek = "2018-01-08";
-    for (const week of [firstWeek, secondWeek]) {
-      await pool.query("SELECT workhorse.retire_history_week_v1($1)", [week]);
-      await pool.query("SELECT workhorse.create_history_week_v1($1)", [week]);
+    const firstDay = "2018-01-01";
+    const secondDay = "2018-01-02";
+    for (const day of [firstDay, secondDay]) {
+      await pool.query("SELECT workhorse.retire_history_day_v1($1)", [day]);
+      await pool.query("SELECT workhorse.create_history_day_v1($1)", [day]);
     }
     await queue.syncRetentionPolicy({
       ...defaultRetentionPolicy,
+      jobIdentityRetentionDays: 36_500,
+      terminalOutcomeRetentionDays: 36_500,
       jobEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 36_500,
+      scheduleOccurrenceRetentionDays: 36_500,
       historyPartitionsPerPass: 1,
     });
 
-    const firstPass = await queue.housekeep();
-    expect(firstPass[0]).toMatchObject({ phase: "history_partitions" });
-    expect(firstPass[1]).toMatchObject({
+    const firstPass = await queue.retainHistory({ force: true });
+    expect(firstPass[0]).toMatchObject({
       phase: "event_retention",
       rowsAffected: 1,
       error: null,
     });
-    expect(firstPass[2]).toMatchObject({
+    expect(firstPass[1]).toMatchObject({
       phase: "attempt_retention",
       rowsAffected: 0,
       error: null,
@@ -4271,17 +4513,17 @@ describe("live-runtime queue protocol", () => {
     expect(
       (
         await pool.query(
-          `SELECT to_regclass('workhorse.job_event_2018w01') AS first_event,
-                  to_regclass('workhorse.job_event_2018w02') AS second_event,
-                  to_regclass('workhorse.attempt_history_2018w01') AS first_attempt,
-                  to_regclass('workhorse.attempt_history_2018w02') AS second_attempt`,
+          `SELECT to_regclass('workhorse.job_event_20180101') AS first_event,
+                  to_regclass('workhorse.job_event_20180102') AS second_event,
+                  to_regclass('workhorse.attempt_history_20180101') AS first_attempt,
+                  to_regclass('workhorse.attempt_history_20180102') AS second_attempt`,
         )
       ).rows[0],
     ).toEqual({
       first_event: null,
-      second_event: "job_event_2018w02",
-      first_attempt: "attempt_history_2018w01",
-      second_attempt: "attempt_history_2018w02",
+      second_event: "job_event_20180102",
+      first_attempt: "attempt_history_20180101",
+      second_attempt: "attempt_history_20180102",
     });
 
     await pool.query(`
@@ -4313,9 +4555,9 @@ describe("live-runtime queue protocol", () => {
       historyPartitionsPerPass: 1,
       defaultPartitionRowsPerPass: 2,
     });
-    const boundedPass = await queue.housekeep();
-    expect(boundedPass[1]).toMatchObject({ phase: "event_retention", rowsAffected: 3 });
-    expect(boundedPass[2]).toMatchObject({ phase: "attempt_retention", rowsAffected: 3 });
+    const boundedPass = await queue.retainHistory({ force: true });
+    expect(boundedPass[0]).toMatchObject({ phase: "event_retention", rowsAffected: 3 });
+    expect(boundedPass[1]).toMatchObject({ phase: "attempt_retention", rowsAffected: 3 });
     expect(
       (
         await pool.query(`SELECT
@@ -4337,8 +4579,24 @@ describe("live-runtime queue protocol", () => {
         [id],
       );
       await pool.query(
+        `UPDATE workhorse.job_event
+            SET occurred_at = clock_timestamp() - interval '40 days' WHERE job_id = $1`,
+        [id],
+      );
+      await pool.query(
+        `UPDATE workhorse.attempt_history
+            SET started_at = clock_timestamp() - interval '40 days',
+                claimed_at = clock_timestamp() - interval '40 days',
+                finished_at = clock_timestamp() - interval '40 days',
+                occurred_at = clock_timestamp() - interval '40 days'
+          WHERE job_id = $1`,
+        [id],
+      );
+      await pool.query(
         `UPDATE workhorse.job_outcome
-            SET finished_at = clock_timestamp() - interval '40 days' WHERE job_id = $1`,
+            SET finished_at = clock_timestamp() - interval '40 days',
+                history_through_at = clock_timestamp() - interval '40 days'
+          WHERE job_id = $1`,
         [id],
       );
       return id;
@@ -4368,6 +4626,16 @@ describe("live-runtime queue protocol", () => {
       [deletable, secondDeletable, eventGuard, occurrenceGuard, recentOutcome],
     ]);
     await pool.query(
+      `INSERT INTO workhorse.job_event(job_id, event_type) VALUES ($1, 'late-retained')`,
+      [eventGuard],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.attempt_history(
+         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at
+       ) VALUES ($1, 2, 2, 'late-retention-worker', 'succeeded', clock_timestamp(), clock_timestamp())`,
+      [attemptGuard],
+    );
+    await pool.query(
       `UPDATE workhorse.job_outcome SET finished_at = clock_timestamp() WHERE job_id = $1`,
       [recentOutcome],
     );
@@ -4396,8 +4664,9 @@ describe("live-runtime queue protocol", () => {
       scheduleOccurrenceRetentionDays: 30,
       terminalJobPruneLimit: 1,
     });
+    expect(await queue.retainHistory({ force: true })).toHaveLength(3);
 
-    expect((await queue.housekeep())[5]).toMatchObject({
+    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
       phase: "terminal_jobs",
       rowsAffected: 1,
       error: null,
@@ -4412,7 +4681,7 @@ describe("live-runtime queue protocol", () => {
       ).rows[0]?.count,
     ).toBe(0);
     expect(await queue.getJob(secondDeletable)).not.toBeNull();
-    expect((await queue.housekeep())[5]).toMatchObject({
+    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
       phase: "terminal_jobs",
       rowsAffected: 1,
       error: null,
@@ -4443,7 +4712,9 @@ describe("live-runtime queue protocol", () => {
       );
       await pool.query(
         `UPDATE workhorse.job_outcome
-            SET finished_at = clock_timestamp() - interval '40 days' WHERE job_id = $1`,
+            SET finished_at = clock_timestamp() - interval '40 days',
+                history_through_at = clock_timestamp() - interval '40 days'
+          WHERE job_id = $1`,
         [id],
       );
       return id;
@@ -4462,13 +4733,13 @@ describe("live-runtime queue protocol", () => {
       terminalJobPruneLimit: 10,
     });
 
-    const phases = await queue.housekeep();
-    expect(phases[4]).toMatchObject({
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases[0]).toMatchObject({
       phase: "enqueue_idempotency",
       rowsAffected: 1,
       error: null,
     });
-    expect(phases[5]).toMatchObject({ phase: "terminal_jobs", rowsAffected: 1, error: null });
+    expect(phases[1]).toMatchObject({ phase: "terminal_jobs", rowsAffected: 1, error: null });
     expect(await queue.getJob(expired)).toBeNull();
     expect(await queue.getJob(retained)).not.toBeNull();
     expect(
@@ -4490,7 +4761,9 @@ describe("live-runtime queue protocol", () => {
     );
     await pool.query(
       `UPDATE workhorse.job_outcome
-          SET finished_at = clock_timestamp() - interval '40 days' WHERE job_id = $1`,
+          SET finished_at = clock_timestamp() - interval '40 days',
+              history_through_at = clock_timestamp() - interval '40 days'
+        WHERE job_id = $1`,
       [id],
     );
 
@@ -4502,7 +4775,8 @@ describe("live-runtime queue protocol", () => {
         deleting.query(
           `SELECT workhorse.prune_terminal_jobs_v1(
              clock_timestamp() - interval '30 days',
-             clock_timestamp() - interval '30 days', 1
+             clock_timestamp() - interval '30 days',
+             date_trunc('day', clock_timestamp() - interval '30 days'), 1
            ) AS pruned`,
         ),
       ).resolves.toMatchObject({ rows: [{ pruned: 1 }] });
@@ -4531,9 +4805,9 @@ describe("live-runtime queue protocol", () => {
   });
 
   it("reports retention boundaries, lag, eligible partitions, and exact default counts", async () => {
-    const oldWeek = "2016-01-04";
-    await pool.query("SELECT workhorse.retire_history_week_v1($1)", [oldWeek]);
-    await pool.query("SELECT workhorse.create_history_week_v1($1)", [oldWeek]);
+    const oldDay = "2016-01-04";
+    await pool.query("SELECT workhorse.retire_history_day_v1($1)", [oldDay]);
+    await pool.query("SELECT workhorse.create_history_day_v1($1)", [oldDay]);
     await pool.query(`
       WITH identities AS (
         INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts, created_at)
@@ -4552,6 +4826,7 @@ describe("live-runtime queue protocol", () => {
                '2015-01-01' FROM identity`);
     await queue.syncRetentionPolicy({
       ...defaultRetentionPolicy,
+      jobIdentityRetentionDays: 30,
       jobEventRetentionDays: 30,
       attemptHistoryRetentionDays: 30,
     });
@@ -4568,6 +4843,24 @@ describe("live-runtime queue protocol", () => {
     expect(health.eligibleHistoryPartitions).toMatchObject({ jobEvents: 1, attemptHistory: 1 });
     expect(health.defaultHistoryRows).toEqual({ jobEvents: 1, attemptHistory: 1 });
     expect(health.defaultHistoryRowsCapped).toEqual({ jobEvents: false, attemptHistory: false });
+
+    const zonedClient = await pool.connect();
+    try {
+      await zonedClient.query("SET TIME ZONE 'Pacific/Kiritimati'");
+      const zonedHealth = await new Queue(zonedClient).health();
+      expect(zonedHealth.eligibleHistoryPartitions).toEqual(health.eligibleHistoryPartitions);
+      expect(zonedHealth.retentionLagMs.jobEvents).toBeCloseTo(
+        health.retentionLagMs.jobEvents!,
+        -3,
+      );
+      expect(zonedHealth.retentionLagMs.attemptHistory).toBeCloseTo(
+        health.retentionLagMs.attemptHistory!,
+        -3,
+      );
+    } finally {
+      await zonedClient.query("RESET TIME ZONE");
+      zonedClient.release();
+    }
   });
 
   it("caps fallback-row health scans and marks the reported lower bound", async () => {
@@ -4588,24 +4881,25 @@ describe("live-runtime queue protocol", () => {
     expect(health.defaultHistoryRowsCapped.attemptHistory).toBe(false);
   });
 
-  it("computes identity lag from terminal jobs and ignores a partial history boundary week", async () => {
+  it("computes identity lag from terminal jobs and ignores a partial history boundary day", async () => {
     await queue.enqueue("live-boundary", {});
-    const boundary = await pool.query<{ week_start: string }>(
-      `SELECT date_trunc('week', clock_timestamp() - interval '30 days')::date::text
-         AS week_start`,
+    const boundary = await pool.query<{ day_start: string }>(
+      `SELECT date_trunc('day', clock_timestamp() - interval '30 days')::date::text
+         AS day_start`,
     );
-    await pool.query("SELECT workhorse.create_history_week_v1($1)", [boundary.rows[0]!.week_start]);
+    await pool.query("SELECT workhorse.create_history_day_v1($1)", [boundary.rows[0]!.day_start]);
     const partialBoundaryJob = await queue.enqueue("partial-boundary", {});
     await pool.query(
       `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
        VALUES (
          $1, 'partial-boundary',
-         date_trunc('week', clock_timestamp() - interval '30 days') + interval '1 day'
+         date_trunc('day', clock_timestamp() - interval '30 days') + interval '12 hours'
        )`,
       [partialBoundaryJob],
     );
     await queue.syncRetentionPolicy({
       ...defaultRetentionPolicy,
+      jobIdentityRetentionDays: 30,
       jobEventRetentionDays: 30,
     });
 
@@ -4654,8 +4948,8 @@ describe("live-runtime queue protocol", () => {
     expect(eligible.retentionLagMs.terminalOutcome).toBeGreaterThan(0);
   });
 
-  it("creates and retires completed weekly history partitions", async () => {
-    const oldWeek = "2020-01-06";
+  it("creates and retires completed daily history partitions", async () => {
+    const oldDay = "2020-01-08";
     const historicalTimestamp = "2020-01-08T12:00:00.000Z";
     const historicalJobId = "00000000-0000-4000-8000-000000000001";
     await pool.query(
@@ -4688,13 +4982,13 @@ describe("live-runtime queue protocol", () => {
       { relation: "job_event_default" },
     ]);
 
-    await pool.query("SELECT workhorse.create_history_week_v1($1)", [oldWeek]);
+    await pool.query("SELECT workhorse.create_history_day_v1($1)", [oldDay]);
     expect(
-      (await pool.query("SELECT to_regclass('workhorse.job_event_2020w02') AS relation")).rows[0]
+      (await pool.query("SELECT to_regclass('workhorse.job_event_20200108') AS relation")).rows[0]
         .relation,
     ).not.toBeNull();
     expect(
-      (await pool.query("SELECT to_regclass('workhorse.attempt_history_2020w02') AS relation"))
+      (await pool.query("SELECT to_regclass('workhorse.attempt_history_20200108') AS relation"))
         .rows[0].relation,
     ).not.toBeNull();
     const migratedRelations = await pool.query<{ relation: string }>(
@@ -4706,42 +5000,37 @@ describe("live-runtime queue protocol", () => {
       [historicalJobId],
     );
     expect(migratedRelations.rows).toEqual([
-      { relation: "attempt_history_2020w02" },
-      { relation: "job_event_2020w02" },
+      { relation: "attempt_history_20200108" },
+      { relation: "job_event_20200108" },
     ]);
-    await pool.query("SELECT workhorse.retire_history_week_v1($1)", [oldWeek]);
+    await pool.query("SELECT workhorse.retire_history_day_v1($1)", [oldDay]);
     expect(
-      (await pool.query("SELECT to_regclass('workhorse.job_event_2020w02') AS relation")).rows[0]
+      (await pool.query("SELECT to_regclass('workhorse.job_event_20200108') AS relation")).rows[0]
         .relation,
     ).toBeNull();
     await expect(
-      pool.query("SELECT workhorse.retire_history_week_v1(current_date)"),
-    ).rejects.toThrow(/only completed history weeks can be retired/);
+      pool.query("SELECT workhorse.retire_history_day_v1(current_date)"),
+    ).rejects.toThrow(/only completed history days can be retired/);
   });
 
-  it("replenishes the four-week history partition horizon during housekeeping", async () => {
+  it("replenishes the three-day history partition horizon during partition preparation", async () => {
     await pool.query(`
       DO $$
-      DECLARE week_offset integer;
+      DECLARE day_offset integer;
       DECLARE suffix text;
       BEGIN
-        FOR week_offset IN 2..3 LOOP
+        FOR day_offset IN 2..3 LOOP
           suffix := to_char(
-            date_trunc('week', current_date + make_interval(weeks => week_offset)),
-            'IYYY"w"IW'
+            (clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset,
+            'YYYYMMDD'
           );
           EXECUTE format('DROP TABLE workhorse.%I', 'job_event_' || suffix);
           EXECUTE format('DROP TABLE workhorse.%I', 'attempt_history_' || suffix);
         END LOOP;
       END
       $$`);
-    expect(await queue.housekeep()).toMatchObject([
+    expect(await queue.prepareHistoryPartitions({ force: true })).toMatchObject([
       { phase: "history_partitions", rowsAffected: 2, skippedLock: false, error: null },
-      { phase: "event_retention", skippedLock: false, error: null },
-      { phase: "attempt_retention", skippedLock: false, error: null },
-      { phase: "schedule_occurrences", skippedLock: false, error: null },
-      { phase: "enqueue_idempotency", skippedLock: false, error: null },
-      { phase: "terminal_jobs", skippedLock: false, error: null },
     ]);
     const horizon = await pool.query<{ missing: number }>(`
       SELECT count(*) FILTER (
@@ -4750,31 +5039,65 @@ describe("live-runtime queue protocol", () => {
              )::integer AS missing
         FROM (
           SELECT to_char(
-                   date_trunc('week', current_date + make_interval(weeks => week_offset)),
-                   'IYYY"w"IW'
+                   (clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset,
+                   'YYYYMMDD'
                  ) AS suffix
-            FROM generate_series(0, 4) AS weeks(week_offset)
+            FROM generate_series(0, 3) AS days(day_offset)
         ) expected`);
     expect(horizon.rows[0]?.missing).toBe(0);
   });
 
-  it("repairs a partially missing weekly history partition", async () => {
-    const week = "2021-02-01";
-    await pool.query("SELECT workhorse.retire_history_week_v1($1)", [week]);
-    await pool.query("SELECT workhorse.create_history_week_v1($1)", [week]);
-    await pool.query("DROP TABLE workhorse.attempt_history_2021w05");
+  it("repairs a partially missing daily history partition", async () => {
+    const day = "2021-02-01";
+    await pool.query("SELECT workhorse.retire_history_day_v1($1)", [day]);
+    await pool.query("SELECT workhorse.create_history_day_v1($1)", [day]);
+    await pool.query("DROP TABLE workhorse.attempt_history_20210201");
 
     await expect(
-      pool.query("SELECT workhorse.create_history_week_v1($1)", [week]),
+      pool.query("SELECT workhorse.create_history_day_v1($1)", [day]),
     ).resolves.toBeDefined();
     expect(
       (
         await pool.query(
-          `SELECT to_regclass('workhorse.job_event_2021w05') IS NOT NULL AS event_exists,
-                  to_regclass('workhorse.attempt_history_2021w05') IS NOT NULL AS attempt_exists`,
+          `SELECT to_regclass('workhorse.job_event_20210201') IS NOT NULL AS event_exists,
+                  to_regclass('workhorse.attempt_history_20210201') IS NOT NULL AS attempt_exists`,
         )
       ).rows[0],
     ).toEqual({ event_exists: true, attempt_exists: true });
+  });
+
+  it("uses one UTC advisory lock key for daily retirement in every session timezone", async () => {
+    const day = "2014-03-03";
+    await pool.query("SELECT workhorse.create_history_day_v1($1)", [day]);
+    const blocker = await pool.connect();
+    const zonedClient = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended('workhorse:history-day:2014-03-03', 0))`,
+      );
+      await zonedClient.query("BEGIN");
+      await zonedClient.query("SET LOCAL TIME ZONE 'America/Los_Angeles'");
+      await expect(
+        zonedClient.query(
+          "SELECT workhorse.retire_history_partitions_v1('job_event', $1, 1) AS retired",
+          ["2014-03-04"],
+        ),
+      ).resolves.toMatchObject({ rows: [{ retired: 0 }] });
+      await zonedClient.query("ROLLBACK");
+      await blocker.query("COMMIT");
+
+      await expect(
+        pool.query("SELECT workhorse.retire_history_partitions_v1('job_event', $1, 1) AS retired", [
+          "2014-03-04",
+        ]),
+      ).resolves.toMatchObject({ rows: [{ retired: 1 }] });
+    } finally {
+      await zonedClient.query("ROLLBACK").catch(() => undefined);
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      zonedClient.release();
+      blocker.release();
+    }
   });
 
   it("retires the discovered qualified partition without waiting indefinitely for DDL locks", async () => {

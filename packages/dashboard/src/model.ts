@@ -428,7 +428,8 @@ export interface DashboardScheduleRow {
   active: boolean;
   revision: string;
   updatedAt: string;
-  occurrenceCount: number;
+  /** Completed user-schedule occurrences; unavailable for internal maintenance loops. */
+  occurrenceCount: number | null;
   lastFiredAt: string | null;
   lastRun?: {
     status: string;
@@ -439,12 +440,14 @@ export interface DashboardScheduleRow {
   maintenance?: {
     intervalMs: number;
     phases: string[];
+    status: "scheduled" | "due" | "incomplete";
+    lastStartedAt: string | null;
+    lastCompletedAt: string | null;
   } | null;
 }
 
 export interface MaintenanceLoopCadences {
   tickIntervalMs: number;
-  housekeepingIntervalMs: number;
 }
 
 export interface DashboardWorkerRow {
@@ -597,7 +600,7 @@ export interface DashboardRetentionCategoryRow {
   /** How far past the policy cutoff the oldest retained row still is. */
   lagMs: number | null;
   oldestRetainedAt: string | null;
-  /** Partitioned categories are pruned a whole week at a time, so lag alone is expected. */
+  /** Partitioned categories are pruned a whole UTC day at a time, so bounded lag is expected. */
   prunedByPartition: boolean;
 }
 
@@ -610,7 +613,7 @@ export interface DashboardSystemRetention {
   /** Oldest retained timestamp across every category that still holds data. */
   oldestRetainedAt: string | null;
   oldestRetainedCategory: DashboardRetentionCategory | null;
-  /** Weekly history partitions already past their cutoff but not yet dropped. */
+  /** Daily history partitions already past their cutoff but not yet dropped. */
   eligibleHistoryPartitions: { jobEvents: number; attemptHistory: number };
   /** Cumulative rows that landed in the catch-all partitions; never window-scoped. */
   defaultHistoryRows: { jobEvents: number; attemptHistory: number };
@@ -652,7 +655,7 @@ export interface DashboardSystemPage {
   integrity: {
     dueButUnpromoted: number;
     partitions: Array<{
-      week: string;
+      day: string;
       startsAt: string;
       eventExists: boolean;
       attemptExists: boolean;
