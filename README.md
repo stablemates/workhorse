@@ -11,6 +11,7 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/features.md`](docs/features.md): authoritative Supported, Partial, and Not Supported feature matrix.
 - [`docs/mvp-protocol.md`](docs/mvp-protocol.md): concise table and SQL transition reference.
 - [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
+- [`docs/worker-processes.md`](docs/worker-processes.md): dedicated production worker CLI, signal and drain semantics, probes, deployment examples, concurrency findings, and topology guidance.
 - [`docs/demo-findings.md`](docs/demo-findings.md): API, packaging, documentation, and developer-experience gaps found by the end-to-end demo.
 - [`demo/README.md`](demo/README.md): interactive Workhorse demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
 - [`docs/decisions/0009-enqueue-idempotency-keys.md`](docs/decisions/0009-enqueue-idempotency-keys.md): scoped enqueue-key ownership, request equivalence, safe diagnostics, expiry, and cleanup.
@@ -36,6 +37,7 @@ The current implementation remains an evidence-first validation release rather t
 - worker-owned in-process cron scheduling with advisory-lock coordination and SQL occurrence deduplication;
 - centralized promotion and lease recovery off the worker claim hot path;
 - a TypeScript `pg` client and worker runtime with configurable per-instance concurrency;
+- a dedicated `workhorse worker` process runner with bounded graceful shutdown and optional probes;
 - immediate cancellation for queued, scheduled, and durable-wait work plus cooperative requests for
   active handlers;
 - separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;

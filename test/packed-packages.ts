@@ -152,6 +152,7 @@ try {
   await writeFile(
     path.join(consumer, "type-smoke.ts"),
     `import { createDrizzleAdapter } from "@workhorse/drizzle";
+import { defineWorkerProcess } from "@workhorse/core";
 import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
 import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";
 import type { DashboardTaskCounts } from "@workhorse/dashboard/model";
@@ -162,6 +163,11 @@ import { Pool } from "pg";
 const pool = new Pool();
 const db = drizzle({ client: pool });
 const adapter = createDrizzleAdapter(db);
+const workerProcess = defineWorkerProcess({
+  adapter: () => adapter,
+  workers: [{ configure: (worker) => void worker.handle("typed", async () => ({ ok: true })) }],
+  probes: { port: 9090 },
+});
 const integration = new HonoWorkhorse(adapter);
 const app = new Hono();
 mountWorkhorseDashboard(app, { workhorse: integration, authorize: () => true });
@@ -172,6 +178,7 @@ const dashboardProps: DashboardProps = { client: dashboardClient, eventsUrl: nul
 const dashboardCountsPromise: Promise<DashboardTaskCounts> = dashboardClient.taskCounts();
 void dashboardProps;
 void dashboardCountsPromise;
+void workerProcess;
 `,
   );
   await writeFile(
@@ -181,6 +188,14 @@ void dashboardCountsPromise;
 
   await run("pnpm", ["install", "--ignore-scripts", "--frozen-lockfile=false"], consumer);
   await run("pnpm", ["exec", "tsc", "-p", "tsconfig.json"], consumer);
+  const cliHelp = await run(
+    "node",
+    ["node_modules/@workhorse/core/dist/src/cli/workhorse.js", "--help"],
+    consumer,
+  );
+  if (!cliHelp.includes("workhorse worker --config")) {
+    throw new Error("The packed Workhorse CLI did not expose worker command help");
+  }
   await run("node", ["integration.mjs"], consumer);
   process.stdout.write("Packed core, Drizzle, Hono, and dashboard consumer tests passed.\n");
 } finally {

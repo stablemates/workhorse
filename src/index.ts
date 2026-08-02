@@ -33,6 +33,17 @@ export type {
   WorkerOptions,
   WorkerRuntimeState,
 } from "./worker.js";
+export { defineWorkerProcess, runWorkerProcess, startWorkerProcess } from "./worker-process.js";
+export type {
+  RunWorkerProcessOptions,
+  StartedWorkerProcess,
+  WorkerProcessDefinition,
+  WorkerProcessLogger,
+  WorkerProcessProbeOptions,
+  WorkerProcessSignal,
+  WorkerProcessSignalSource,
+  WorkerProcessWorkerDefinition,
+} from "./worker-process.js";
 export type {
   ClaimedJob,
   CancellationRequest,
