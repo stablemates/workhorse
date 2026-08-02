@@ -119,6 +119,21 @@ not depend on the later full OpenTelemetry and metrics package.
       lease safety, first-null behavior, pause, and graceful shutdown. A recorded live artifact is still
       required before making performance or scale claims.
 
+### [x] P0-03A Dedicated production worker process
+
+**Depends on:** P0-03
+
+- [x] Add framework-neutral worker process definitions and startup orchestration.
+- [x] Add a `workhorse worker --config` CLI for compiled application configuration modules.
+- [x] Handle the first `SIGINT`/`SIGTERM` by stopping claims and draining active handlers while
+      heartbeats continue.
+- [x] Add a bounded deadline, immediate second-signal exit, process-fatal worker-loop failures, and
+      idempotent adapter cleanup.
+- [x] Add optional status-only liveness/readiness probes that report draining without exposing
+      application ingress.
+- [x] Document dedicated workers as the production default, Hono co-hosting as an explicit small-app
+      option, and one multi-slot coordinator per queue or policy group as the benchmark-backed topology.
+
 ### [ ] P0-04 Notification-assisted dispatch
 
 **Depends on:** P0-03

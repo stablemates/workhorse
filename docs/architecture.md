@@ -21,6 +21,8 @@ No compatibility write views are installed for the version 1 projection tables.
 flowchart LR
   App[Application transaction] -->|enqueue_many_v1 / enqueue_v1| PG[(PostgreSQL)]
   Deploy[Deployment] -->|schedule sync| PG
+  Supervisor[Process supervisor] -->|SIGINT / SIGTERM| WorkerProcess[Dedicated worker process]
+  WorkerProcess --> Worker[TypeScript Worker]
   Worker[TypeScript Worker] -->|claim / heartbeat_v2 / acknowledge_cancel_v1| PG
   Operator[Authorized application or operator layer] -->|cancel_v1 with attribution| PG
   Worker -->|fire_schedule_v1 / tick_v1 / split maintenance tasks| PG
@@ -31,6 +33,12 @@ flowchart LR
 ```
 
 PostgreSQL is the durable authority. A worker owns a job only while the active `job_runtime` row matches its worker ID and fence token and has not expired.
+
+Production deployment uses a dedicated worker process by default. The process owns its adapter,
+Workers, optional probe-only listener, termination signals, bounded drain, and final resource close.
+Framework co-hosting remains available but is not the default scaling boundary. See
+[`worker-processes.md`](worker-processes.md) and
+[ADR 0012](decisions/0012-dedicated-worker-processes.md).
 
 ## Data model
 
@@ -327,6 +335,27 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 3. A per-namespace advisory lock serializes concurrent deployments of the same namespace.
 
 Because definitions live only in the target database, a deployment is one transaction: there is no second metadata database to converge. Every material definition change increments a revision, and worker fires pass the revision they loaded. A stale in-process schedule therefore becomes a no-op instead of running a new payload at an old cadence. Definition row locking also makes a disable deployment wait for a fire that already began before returning.
+
+## Worker process lifecycle
+
+`defineWorkerProcess()` declares a process-owned adapter and one or more worker configurations.
+`startWorkerProcess()` provides framework-neutral orchestration without global signals.
+`runWorkerProcess()` and `workhorse worker --config` add the standalone Node lifecycle.
+
+The first `SIGINT` or `SIGTERM` marks readiness false and calls `stop()` on every Worker. Later claim
+requests stop, active handlers and their per-job heartbeats continue, and adapter resources close only
+after every run loop settles. A claim transaction already in flight may commit after shutdown begins;
+that committed lease is drained rather than abandoned. Process termination does not synthesize durable
+job cancellation or abort a handler.
+
+A configurable deadline, 25 seconds by default, prevents an uncooperative handler from blocking
+termination forever. A second signal exits with its conventional signal code; a missed deadline exits
+with code 1. Hard termination leaves active leases for ordinary fenced expiry recovery. Any unexpected
+worker-loop failure stops sibling workers, applies the same bounded drain, and fails the process so an
+external supervisor can restart it.
+
+The optional probe-only listener reports liveness while running or draining and readiness only while
+accepting claims. It does not expose application HTTP ingress, queue data, or mutations.
 
 ## Operational limits
 

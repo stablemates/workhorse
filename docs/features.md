@@ -21,6 +21,7 @@ This is the authoritative implementation snapshot for schema version 12. “Supp
 | Bounded attribution-safe automated retention             |                                               |                                                  |
 | Configurable bounded worker concurrency                  |                                               |                                                  |
 | Immediate and cooperative fenced cancellation            |                                               |                                                  |
+| Dedicated worker process CLI and graceful signal drain   |                                               |                                                  |
 
 ## Core job and dispatch
 

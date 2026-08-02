@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { randomUUID } from "node:crypto";
 import { CronExpressionParser } from "cron-parser";
 import { Queue } from "./queue.js";
 import type { MaintenancePhaseResult } from "./queue.js";
@@ -131,7 +132,7 @@ export class Worker {
     private readonly queue: Queue,
     private readonly options: WorkerOptions = {},
   ) {
-    this.workerId = options.workerId ?? `worker-${process.pid}`;
+    this.workerId = options.workerId ?? `worker-${process.pid}-${randomUUID()}`;
     this.queueName = options.queue ?? queue.defaultQueue;
     this.concurrency = options.concurrency ?? 1;
     this.leaseMs = options.leaseMs ?? 30_000;
