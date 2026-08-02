@@ -80,6 +80,23 @@ describe("Drizzle provider integration", () => {
     );
   });
 
+  it("normalizes claimed deadline and timeout timestamps to Date values", async () => {
+    const deadline = new Date(Date.now() + 60_000);
+    await adapter.queue.enqueue(
+      "timed",
+      { source: "drizzle" },
+      { deadline, executionTimeoutMs: 5_000 },
+    );
+
+    const claimed = await adapter.queue.claim("drizzle-worker");
+
+    expect(claimed).toMatchObject({ type: "timed", executionTimeoutMs: 5_000 });
+    expect(claimed?.deadlineAt).toBeInstanceOf(Date);
+    expect(claimed?.attemptTimeoutAt).toBeInstanceOf(Date);
+    expect(claimed?.leaseExpiresAt).toBeInstanceOf(Date);
+    expect(claimed?.deadlineAt?.getTime()).toBe(deadline.getTime());
+  });
+
   it("preserves PostgreSQL error codes through provider translation", async () => {
     const failure = await drizzleQueryable(db)
       .query("SELECT * FROM workhorse.relation_that_does_not_exist")
