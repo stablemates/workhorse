@@ -41,9 +41,11 @@ provider coverage.
 - [x] Ship a separate Drizzle ORM provider package with caller-owned transaction support.
 - [x] Ship a separate Hono integration package with configuration, startup, and graceful shutdown
       behavior.
+- [x] Ship a complete Hono dashboard mount that owns its packaged UI, assets, private oRPC transport,
+      authorization boundary, and either a caller-owned namespace or the application root.
 - [x] Keep Drizzle and Hono dependencies out of the core package.
 - [x] Add packed-package integration tests for transaction ownership, pooling, error translation,
-      worker lifecycle, and shutdown.
+      worker lifecycle, shutdown, dashboard package contents, and Hono mount type compatibility.
 
 ### [x] P0-00B Demo application and complete dashboard built with Drizzle and Hono
 
@@ -53,10 +55,12 @@ provider coverage.
 its intended integration experience, and its complete initial operator dashboard are
 understandable, installable, and useful.
 
-- [x] Build one end-to-end Workhorse application in `demo/`, using the Drizzle and Hono integrations
-      integration packages.
+- [x] Build one end-to-end Workhorse application in `demo/`, using the Drizzle and Hono integration
+      packages.
 - [x] Build a complete dashboard with queue, job, schedule, worker, failure, and health views.
-- [x] Use shadcn/ui as the component foundation for the dashboard.
+- [x] Extract the dashboard into `@workhorse/dashboard` and make the demo consume the packaged Hono mount
+      rather than owning a separate dashboard implementation.
+- [x] Use Mantine as the component foundation for the dashboard.
 - [x] Use oRPC for the dashboard's typed API boundary.
 - [x] Stream or efficiently refresh active state without polling every row.
 - [x] Include full audit context for every mutating operator action supported by the product.
@@ -396,14 +400,15 @@ and the compatibility policy is stable enough to define a real upgrade boundary.
 
 **Design before implementation.** The demo must not become the accidental public API contract. Define a
 reusable, versioned Workhorse API package and its authorization boundary before exposing job operations over
-HTTP.
+HTTP. This is separate from the existing dashboard mount and its private oRPC transport.
 
 - [ ] Define the supported read and mutation surface independently from the dashboard's private oRPC
       transport.
 - [ ] Decide package boundaries for the transport-neutral API contract, typed client, and framework-specific
       mounts such as Hono.
-- [ ] Support mounting below a caller-owned namespace such as `/workhorse` without taking over the host
-      application's unrelated routes or middleware.
+- [ ] Support mounting the future public API either at the application root or below a caller-owned
+      namespace such as `/workhorse`, without taking over unrelated host routes or middleware in the
+      namespaced case.
 - [ ] Define authentication, RBAC, audit context, error mapping, pagination, redaction, and compatibility
       semantics before stabilizing endpoints.
 - [ ] Keep schema installation, migrations, seed data, and application-specific job creation outside the API

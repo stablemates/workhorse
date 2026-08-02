@@ -193,20 +193,23 @@ drop its databases without removing the checkout.
 ## Run the demo
 
 After `pnpm install`, the demo needs only PostgreSQL 15+ and the local `workhorse` role described above.
-One command safely recreates the purpose-guarded `workhorse_demo` database, builds every workspace
-package, installs the application schema, starts the Hono worker, and serves the dashboard:
+One command safely recreates the purpose-guarded `workhorse_demo` database, installs the application
+schema, builds the development runtime artifacts, starts the Hono worker, and serves
+`@workhorse/dashboard` from source through Vite:
 
 ```bash
 pnpm demo
 ```
 
-Open `http://localhost:3000/`; it redirects to the operator dashboard. The default startup seeds successful,
-retried, and failed jobs so the operational views are populated. Three durable seeds persistently fail at
+Open `http://workhorse.localhost:43155/tasks` for the operator dashboard. The standalone demo mounts the
+packaged dashboard at `/`; host applications may instead mount the same dashboard below a namespace such
+as `/workhorse` through `@workhorse/hono`. The default startup seeds successful, retried, and failed jobs so
+the operational views are populated. Three durable seeds persistently fail at
 configured stage boundaries, never execute later stages, and retry at about 5, 7, and 10 minutes. Their
 checkpoint-backed interim artifacts, attempt failures, and eventual terminal result or failure evidence are
 inspectable in the existing task drawer. Set `SEED_DEMO_DATA=false` for an empty console. The recurring
 heartbeat demonstration runs on the worker's built-in scheduler with no extra infrastructure. See the
-demo README for curl requests and connection overrides.
+demo README for development, production-mode, fixture, and connection overrides.
 
 ## Minimal usage
 
