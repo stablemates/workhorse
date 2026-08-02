@@ -5,8 +5,8 @@ styles, browser bundle, oRPC client, and provider-neutral server read model. It 
 the demo application.
 
 For supported frameworks, prefer their complete mount adapter. For example,
-`mountWorkhorseDashboard` from `@workhorse/hono` serves the package below `/workhorse` without the
-host building its own dashboard or transport adapter.
+`mountWorkhorseDashboard` from `@workhorse/hono` serves the package at a configurable path such as
+`/workhorse` or `/` without the host building its own dashboard or transport adapter.
 
 The React surface remains available for custom integrations:
 

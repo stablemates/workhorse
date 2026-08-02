@@ -105,8 +105,8 @@ try {
     if (demo.exitCode !== null) throw new Error(`Demo exited before readiness\n${demoOutput}`);
     try {
       const [page, api] = await Promise.all([
-        fetch(`${baseUrl}/workhorse/tasks`),
-        fetch(`${baseUrl}/workhorse/rpc/dashboard/meta`, {
+        fetch(`${baseUrl}/tasks`),
+        fetch(`${baseUrl}/rpc/dashboard/meta`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: "{}",
@@ -123,7 +123,7 @@ try {
   }
   if (!ready) throw new Error(`Timed out waiting for demo readiness\n${demoOutput}`);
 
-  const dashboard = await fetch(`${baseUrl}/workhorse/tasks`);
+  const dashboard = await fetch(`${baseUrl}/tasks`);
   const dashboardHtml = await dashboard.text();
   if (!dashboard.ok || !dashboardHtml.includes('<div id="root"></div>')) {
     throw new Error("Dashboard assets were not served from the clean checkout");
@@ -131,17 +131,16 @@ try {
   if (demoOutput.includes("building client environment for production")) {
     throw new Error("The development demo unexpectedly built a production dashboard bundle");
   }
-  for (const token of [
-    "/workhorse/@vite/client",
-    "/workhorse/@react-refresh",
-    "/workhorse/src/browser.tsx",
-    "react-grab.ts",
-  ]) {
+  for (const token of ["/@vite/client", "/@react-refresh", "/src/browser.tsx", "react-grab.ts"]) {
     if (!dashboardHtml.includes(token)) {
       throw new Error(`Development dashboard HTML omitted ${token}`);
     }
   }
-  if (dashboardHtml.includes("/workhorse/workhorse/") || dashboardHtml.includes("/assets/index-")) {
+  if (
+    dashboardHtml.includes('src="/workhorse/') ||
+    dashboardHtml.includes('href="/workhorse/') ||
+    dashboardHtml.includes("/assets/index-")
+  ) {
     throw new Error("Development dashboard HTML used an invalid or production asset path");
   }
   const reactGrabPath = dashboardHtml.match(/src="([^"]*react-grab\.ts)"/)?.[1];
@@ -150,7 +149,7 @@ try {
   if (!reactGrabEntry?.ok || !reactGrabSource.includes("react-grab")) {
     throw new Error("Demo-owned React Grab source module was not transformed by Vite");
   }
-  const dashboardSource = await fetch(`${baseUrl}/workhorse/src/browser.tsx`);
+  const dashboardSource = await fetch(`${baseUrl}/src/browser.tsx`);
   const dashboardSourceText = await dashboardSource.text();
   if (
     !dashboardSource.ok ||
@@ -159,21 +158,23 @@ try {
   ) {
     throw new Error("Dashboard source was not served with React development transforms");
   }
-  const legacyDashboard = await fetch(`${baseUrl}/tasks?filter=running`, { redirect: "manual" });
+  const legacyDashboard = await fetch(`${baseUrl}/workhorse/tasks?filter=running`, {
+    redirect: "manual",
+  });
   if (
     legacyDashboard.status !== 302 ||
-    legacyDashboard.headers.get("location") !== "/workhorse/tasks?filter=running"
+    legacyDashboard.headers.get("location") !== "/tasks?filter=running"
   ) {
-    throw new Error("Legacy dashboard URLs do not redirect into the Workhorse namespace");
+    throw new Error("Legacy namespaced dashboard URLs do not redirect to the root mount");
   }
 
-  const tasksResponse = await fetch(`${baseUrl}/workhorse/rpc/dashboard/tasks`, {
+  const tasksResponse = await fetch(`${baseUrl}/rpc/dashboard/tasks`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ json: { filter: "all", page: 1, pageSize: 100 } }),
   });
   const tasksText = await tasksResponse.text();
-  const cronResponse = await fetch(`${baseUrl}/workhorse/rpc/dashboard/cron`, {
+  const cronResponse = await fetch(`${baseUrl}/rpc/dashboard/cron`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}",

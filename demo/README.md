@@ -8,9 +8,9 @@ the queue, and worker-owned in-process scheduling drives recurring work. Those f
 Workhorse's durable execution model is what the demo is designed to show.
 
 The demo imports the complete admin application from the publishable packages. `@workhorse/hono`
-mounts `@workhorse/dashboard` below `/workhorse`, including its oRPC API and event endpoint. Development
-serves dashboard source through Vite, while production serves the packaged browser assets. The demo
-contributes only demo-owned workers, controllers, projections, and seed data.
+mounts `@workhorse/dashboard` at `/`, including its oRPC API and event endpoint. Development serves
+dashboard source through Vite, while production serves the packaged browser assets. The demo contributes
+only demo-owned workers, controllers, projections, and seed data.
 
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
@@ -34,8 +34,8 @@ The command recreates only the purpose-guarded `workhorse_demo` database, compil
 packages, then starts a watched Hono API and a Vite development frontend at
 `http://workhorse.localhost:43155/`. Vite serves `@workhorse/dashboard` directly from source with React
 development metadata, HMR, source maps, and the demo-owned React Grab module. It does not run a production
-dashboard bundle first. The Hono API remains mounted below `/workhorse`; the demo intentionally exposes no
-ad hoc public job API. Set
+dashboard bundle first. The Hono API is mounted at `/`; the demo intentionally exposes no ad hoc public job
+API. The previous `/workhorse/*` URLs redirect to the equivalent root routes. Set
 `WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay. Each development run
 allocates a free private Hono API port. Set `WORKHORSE_API_PORT` to a positive value only when a fixed
 internal port is required; `0` or an omitted value requests automatic allocation.
@@ -62,11 +62,10 @@ restart boundaries. Each new durable operation takes two seconds so progress rem
 `SEED_DEMO_DATA=false` to start empty instead. The versioned seed marker makes direct application restarts
 idempotent.
 
-Open `http://workhorse.localhost:43155/workhorse/tasks` for the Mantine operator dashboard. Its
-full-width application shell keeps the header and responsive sidebar in place while browser URLs switch
-between `/workhorse/tasks`, `/workhorse/cron`, `/workhorse/system`, and `/workhorse/workers`. Task
-filters are nested under Current Tasks and persist as the `filter` query parameter, with pagination
-persisted as `page`.
+Open `http://workhorse.localhost:43155/tasks` for the Mantine operator dashboard. Its full-width
+application shell keeps the header and responsive sidebar in place while browser URLs switch between
+`/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
+the `filter` query parameter, with pagination persisted as `page`.
 
 The demo starts `demo-worker-1` and `demo-worker-2`. Worker status is explicit: `busy` owns an active
 lease, `recent` completed an attempt during the bounded five-minute observation window, and `idle` is a

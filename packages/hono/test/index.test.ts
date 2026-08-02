@@ -34,6 +34,22 @@ describe("HonoWorkhorse", () => {
     expect(runtimeAdapter.database.query).not.toHaveBeenCalled();
   });
 
+  it("supports a protected dashboard mounted at the host root", async () => {
+    const runtimeAdapter = adapter();
+    const integration = new HonoWorkhorse(runtimeAdapter);
+    const app = new Hono();
+    mountWorkhorseDashboard(app, {
+      path: "/",
+      workhorse: integration,
+      authorize: () => false,
+    });
+
+    expect((await app.request("/")).status).toBe(403);
+    expect((await app.request("/tasks")).status).toBe(403);
+    expect((await app.request("/rpc/dashboard/tasks", { method: "POST" })).status).toBe(403);
+    expect(runtimeAdapter.database.query).not.toHaveBeenCalled();
+  });
+
   it("provides the adapter queue and transaction bridge through typed middleware", async () => {
     const runtimeAdapter = adapter();
     const integration = new HonoWorkhorse(runtimeAdapter);

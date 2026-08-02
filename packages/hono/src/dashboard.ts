@@ -20,7 +20,7 @@ import type { HonoWorkhorse } from "./index.js";
 
 export interface MountWorkhorseDashboardOptions<TTransaction> {
   workhorse: HonoWorkhorse<TTransaction>;
-  /** URL namespace. Defaults to `/workhorse`. */
+  /** URL mount path. Defaults to `/workhorse`; use `/` to own the host root. */
   path?: string;
   environment?: string;
   configuredWorkers?: readonly string[];
@@ -77,7 +77,7 @@ export function mountWorkhorseDashboard<
   options: MountWorkhorseDashboardOptions<TTransaction>,
 ): DashboardRefreshHub {
   const path = mountPath(options.path ?? "/workhorse");
-  if (!path) throw new Error("Workhorse dashboard must be mounted below a non-root namespace");
+  const root = path || "/";
   const assets = dashboardAssetsDirectory();
   const refresh = options.refresh ?? new DashboardRefreshHub();
   const rpc = new RPCHandler(dashboardRouter);
@@ -100,8 +100,12 @@ export function mountWorkhorseDashboard<
     }
     await next();
   };
-  app.use(path, protect);
-  app.use(`${path}/*`, protect);
+  if (path) {
+    app.use(path, protect);
+    app.use(`${path}/*`, protect);
+  } else {
+    app.use("*", protect);
+  }
 
   app.all(`${path}/rpc/*`, async (context) => {
     const { response } = await rpc.handle(context.req.raw, {
@@ -192,7 +196,7 @@ export function mountWorkhorseDashboard<
       { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } },
     );
   };
-  app.get(path, (context) => context.redirect(`${path}/tasks`));
+  app.get(root, (context) => context.redirect(`${path}/tasks`));
   app.get(`${path}/*`, serveApplication);
 
   return refresh;
