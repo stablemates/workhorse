@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 14 protocol reference. The canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, named timer waits, cooperative cancellation, absolute deadlines, per-attempt execution timeouts, failure-only dead-letter queries, audited redrive lineage, and persisted automated retention.
+This is the compact schema version 15 protocol reference. The canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, named timer waits, cooperative cancellation, absolute deadlines, per-attempt execution timeouts, failure-only dead-letter queries, audited redrive lineage, a dedicated operator job projection, bounded payload controls, merged lifecycle timelines, and persisted automated retention.
 
 ## Storage model
 
@@ -12,6 +12,7 @@ This is the compact schema version 14 protocol reference. The canonical clean-in
 | `job_checkpoint`      | Immutable named handler restart boundaries                           | Insert once per job and checkpoint name under a fenced active lease                   |
 | `job_wait`            | Immutable named timer restart boundaries                             | Insert once per job and wait name under a fenced active lease                         |
 | `job_outcome`         | Terminal success, failure, or cancellation                           | Insert once after runtime deletion                                                    |
+| `job_query`           | Bounded operator lifecycle projection                                | Trigger-synchronized on meaningful lifecycle changes; heartbeat-independent           |
 | `job_redrive`         | Audited source-to-target redrive lineage and request replay evidence | Insert once per accepted source/request identity                                      |
 | `job_event`           | Lifecycle audit                                                      | Append-only, UTC-daily range partitions                                               |
 | `attempt_history`     | Closed attempt records                                               | Append-only, UTC-daily range partitions                                               |
@@ -29,6 +30,8 @@ A committed job has exactly one live runtime or one terminal outcome, never both
 - Scheduled promotion uses `job_runtime_scheduled_idx (run_at, job_id) WHERE state = 'scheduled'`.
 - Expiry recovery uses `job_runtime_expired_active_idx (expires_at, job_id) WHERE state = 'active'`.
 - Dead-letter listing uses a cold partial `job_outcome` index ordered by `(finished_at, job_id)` where state is `failed`; it is never consulted by claim.
+- Cross-state listing uses dedicated `job_query` indexes ordered by immutable `(created_at, job_id)`, optionally prefixed by queue, type, or state. These indexes are never consulted by claim, promotion, recovery, deadlines, or timeouts.
+- Lifecycle timelines use job/time indexes on the partitioned event and attempt relations.
 
 FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input order. Promotion and retries allocate a new sequence when work becomes ready.
 
@@ -47,16 +50,18 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 11. `complete_v1` deletes only the matching unexpired active runtime with no cancellation request and inserts succeeded outcome, closed attempt history, and event atomically.
 12. `list_dead_letters_v1` validates failure-only filters and returns a bounded descending cursor page from immutable outcomes with redrive counts.
 13. `redrive_v1` locks one source, requires a failed outcome plus audit metadata, resolves source/request idempotency, and creates a new ready identity with copied immutable definition except for a cleared absolute deadline. It appends source and target events and one lineage edge without modifying the source outcome's semantic terminal columns; the existing retention watermark may advance with append-only history. `redrive_many_v1` selects at most 1,000 oldest matching sources after an optional keyset cursor; dry-run returns `eligible` rows without writes.
-14. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
-15. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID. Canceling its job does not alter the definition or later occurrences.
-16. `sync_retention_policy_v1` stores explicit nullable minimum windows and work bounds, rejecting policies that could delete identity before retained outcome, event, attempt, occurrence, or redrive-lineage attribution.
-17. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. Every promoted row emits `promoted`; timer-backed promotion also carries and clears `wait_name` and appends `wait_elapsed`. `prepare_history_partitions_v1`, `retain_history_v1`, and `prune_terminal_storage_v1` own separate due state and advisory locks for partition coverage, daily history retirement, and terminal/idempotency cleanup. Every phase is isolated in an exception subtransaction, and every entry point returns `(phase, rows_affected, duration_ms, skipped_lock, error)` telemetry. Terminal identity pruning skips a redrive source while any retained descendant edge still protects it.
+14. `list_jobs_v1` validates exact queue/type/state/creation-time filters, a bounded payload projection, and a filter-bound immutable cursor. It selects at most 1,000 candidates from `job_query` before joining `job` for optional top-level-redacted payload output.
+15. `list_job_timeline_v1` merges retained `job_event` and `attempt_history` rows into one latest-first bounded cursor stream. Unknown identities and identities whose history was fully retired both return an empty stream; use point lookup when that distinction matters.
+16. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
+17. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID. Canceling its job does not alter the definition or later occurrences.
+18. `sync_retention_policy_v1` stores explicit nullable minimum windows and work bounds, rejecting policies that could delete identity before retained outcome, event, attempt, occurrence, or redrive-lineage attribution.
+19. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. Every promoted row emits `promoted`; timer-backed promotion also carries and clears `wait_name` and appends `wait_elapsed`. `prepare_history_partitions_v1`, `retain_history_v1`, and `prune_terminal_storage_v1` own separate due state and advisory locks for partition coverage, daily history retirement, and terminal/idempotency cleanup. Every phase is isolated in an exception subtransaction, and every entry point returns `(phase, rows_affected, duration_ms, skipped_lock, error)` telemetry. Terminal identity pruning skips a redrive source while any retained descendant edge still protects it.
 
 Every closed logical attempt has one immutable `attempt_history` row. Never-started cancellation has none; active or previously started durable-wait cancellation closes one row with outcome `canceled`. `started_at` spans timer suspensions and `claimed_at` identifies the final activation that closed it. Every lifecycle boundary appends a `job_event`; cancellation uses one `cancel_requested` event only for active work and one `canceled` event at terminal materialization. Repeated requests add no duplicate terminal or event evidence.
 
 ## Dead-letter and redrive contract
 
-`Queue.listDeadLetters(query?)` accepts queue, type, required tags, error name, `finishedAfter`, and `finishedBefore` filters. Pages contain at most 1,000 rows and use immutable `(finishedAt, jobId)` cursor order. General live and historical listing remains deferred to P2-01.
+`Queue.listDeadLetters(query?)` accepts queue, type, required tags, error name, `finishedAfter`, and `finishedBefore` filters. Pages contain at most 1,000 rows and use immutable `(finishedAt, jobId)` cursor order. General live and terminal listing is provided by the schema-v15 `Queue.listJobs` contract above.
 
 `Queue.redrive(sourceJobId, { requestedBy, reason, requestId })` accepts only a retained failed source. Actor is 1 through 200 characters, reason is 1 through 2,000 characters, and request ID is 1 through 512 UTF-8 bytes. The request ID is hashed; audit rows and conflict details expose only its safe preview, digest, and length.
 

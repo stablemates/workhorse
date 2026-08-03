@@ -43,6 +43,8 @@ The current implementation remains an evidence-first validation release rather t
 - absolute enqueue deadlines plus cooperative, fenced per-attempt execution timeouts;
 - cursor-based dead-letter queries plus idempotent single and bounded bulk redrive with dry-run and
   retained lineage;
+- cursor-based cross-state job listing on a dedicated operator projection, with payload omission,
+  top-level redaction, byte bounds, and merged lifecycle timelines;
 - separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
 - a separately packaged `@workhorse/dashboard` React operator dashboard with an injected,
   transport-neutral client boundary, package-owned styles/assets, and audited local controls;
@@ -111,6 +113,39 @@ sources without writes. Redrive is
 another at-least-once execution and can repeat external effects, so handlers still need provider
 idempotency or compensation. `Queue.getRedriveLineage()` returns bounded retained edges and reports
 whether traversal was truncated.
+
+### Job listing and lifecycle timelines
+
+Schema version 15 adds `Queue.listJobs()` over a dedicated `job_query` projection. Operator reads use
+separate global, queue, type, and state creation-time indexes instead of broadening ready, scheduled,
+active, deadline, timeout, or recovery indexes. Pages are ordered by immutable `(createdAt, jobId)` and
+return a cursor bound to the filter and payload projection that produced it.
+
+```ts
+const page = await queue.listJobs({
+  queue: "billing",
+  states: ["active", "failed"],
+  createdAfter: new Date("2026-08-01T00:00:00Z"),
+  payload: {
+    include: true,
+    maxBytes: 16_384,
+    redactKeys: ["cardNumber", "accessToken"],
+  },
+});
+
+const timeline = await queue.getJobTimeline(page.items[0]!.id, { limit: 100 });
+```
+
+Payload is omitted by default. PostgreSQL applies at most 50 unique top-level redaction keys before
+checking the caller's 1-byte through 1-MiB response ceiling. Each row reports `omitted`, `included`, or
+`too_large`; an omitted or oversized payload is returned as `null`. Candidate identities are selected
+before payload rows are joined, so only the bounded page touches payload storage.
+
+`Queue.getJobTimeline()` merges retained lifecycle events and closed attempts into one latest-first,
+cursor-based stream. Pages are capped at 1,000. Listing is intentionally weakly consistent across calls:
+new jobs can appear before an existing cursor, and concurrent state changes can change membership in a
+filtered later page. Timeline retention is independent, so an existing job may have partial or empty
+history. Use `Queue.getJob()` separately when identity existence matters.
 
 ### Enqueue idempotency keys
 

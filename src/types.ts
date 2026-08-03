@@ -108,6 +108,14 @@ export const MAX_CANCELLATION_REASON_CHARACTERS = 2_000;
 export const MAX_REDRIVE_BATCH_SIZE = 1_000;
 /** Maximum UTF-8 size accepted for a redrive request identity. */
 export const MAX_REDRIVE_REQUEST_ID_BYTES = 512;
+/** Maximum jobs or timeline entries returned by one keyset-paginated query. */
+export const MAX_JOB_QUERY_PAGE_SIZE = 1_000;
+/** Default maximum encoded payload size included by an explicit list projection. */
+export const DEFAULT_JOB_QUERY_PAYLOAD_BYTES = 16_384;
+/** Maximum encoded payload size accepted by a list projection. */
+export const MAX_JOB_QUERY_PAYLOAD_BYTES = 1_048_576;
+/** Maximum unique top-level payload keys redacted by one list projection. */
+export const MAX_JOB_QUERY_REDACT_KEYS = 50;
 
 /** Optional safe attribution attached to a cancellation request. PostgreSQL validates all bounds. */
 export interface CancellationRequest {
@@ -185,6 +193,123 @@ export interface DeadLetter {
 export interface DeadLetterPage {
   items: DeadLetter[];
   nextCursor: DeadLetterCursor | null;
+}
+
+/** Stable job identity and lifecycle filters applied by PostgreSQL. */
+export interface JobListFilter {
+  queue?: string;
+  type?: string;
+  states?: JobState[];
+  createdAfter?: Date;
+  createdBefore?: Date;
+}
+
+/** Bounded payload projection for job listings. Redaction applies only to top-level object keys. */
+export interface JobPayloadProjection {
+  include?: boolean;
+  maxBytes?: number;
+  redactKeys?: string[];
+}
+
+/** Signed descending cursor over immutable creation time and job identity. */
+export interface JobListCursor {
+  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
+  createdAt: string;
+  jobId: string;
+  signature: string;
+}
+
+export interface JobListQuery extends JobListFilter {
+  limit?: number;
+  cursor?: JobListCursor;
+  payload?: JobPayloadProjection;
+}
+
+export type JobPayloadStatus = "omitted" | "included" | "too_large";
+
+/** One job projection ordered newest-first without exposing outcome or worker ownership details. */
+export interface JobListItem {
+  id: string;
+  queue: string;
+  type: string;
+  tags: string[];
+  state: JobState;
+  currentAttempt: number;
+  maxAttempts: number;
+  retryPolicy: RetryPolicy | null;
+  deadlineAt: Date | null;
+  executionTimeoutMs: number | null;
+  runAt: Date;
+  cancelRequestedAt: Date | null;
+  /** Caller-provided attribution only. This does not claim that the caller was authorized. */
+  cancelRequestedBy: string | null;
+  cancelReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  payload: Json | null;
+  payloadStatus: JobPayloadStatus;
+  payloadBytes: number | null;
+}
+
+export interface JobListPage {
+  items: JobListItem[];
+  nextCursor: JobListCursor | null;
+}
+
+/** Stable descending cursor over a job's merged event and closed-attempt timeline. */
+export interface JobTimelineCursor {
+  jobId: string;
+  /** Exact PostgreSQL timestamp text. Treat as opaque continuation state. */
+  occurredAt: string;
+  kind: "event" | "attempt";
+  /** Exact PostgreSQL bigint text. Treat as opaque continuation state. */
+  recordId: string;
+}
+
+export interface JobTimelineQuery {
+  limit?: number;
+  cursor?: JobTimelineCursor;
+}
+
+interface JobTimelineEntryBase {
+  recordId: string;
+  attempt: number | null;
+  occurredAt: Date;
+}
+
+export interface JobTimelineEvent extends JobTimelineEntryBase {
+  kind: "event";
+  eventType: string;
+  details: Json;
+}
+
+export type JobAttemptOutcome =
+  | "succeeded"
+  | "failed"
+  | "retry"
+  | "lease_expired"
+  | "canceled"
+  | "deadline_exceeded"
+  | "timeout";
+
+export interface JobTimelineAttempt extends JobTimelineEntryBase {
+  kind: "attempt";
+  attempt: number;
+  fenceToken: bigint;
+  workerId: string;
+  outcome: JobAttemptOutcome;
+  startedAt: Date;
+  claimedAt: Date;
+  finishedAt: Date;
+  error: Json | null;
+}
+
+export type JobTimelineEntry = JobTimelineEvent | JobTimelineAttempt;
+
+export interface JobTimelinePage {
+  /** Merged events and attempts ordered latest-first. */
+  items: JobTimelineEntry[];
+  nextCursor: JobTimelineCursor | null;
 }
 
 /** Required audit and idempotency identity for a redrive request. */

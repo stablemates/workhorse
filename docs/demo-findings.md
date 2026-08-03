@@ -181,19 +181,19 @@ listener setup still rely on process exit to release resources.
 **Needed:** a small acquisition/cleanup helper or integration lifecycle that disposes partially acquired
 resources in reverse order. Ownership must remain explicit so caller-owned pools are never closed.
 
-### X3. Broader job detail inspection is incomplete
+### X3. The core query API is complete; dashboard adoption remains
 
-The existing task drawer now exposes selected-job terminal results or failure evidence, immutable attempts,
-and checkpoint-backed interim artifacts. It still does not expose a complete event timeline,
-payload/result redaction state, or redrive lineage.
+Schema v15 now exposes cursor-based cross-state job listing, explicit payload omission/redaction/size
+status, and a merged retained event/attempt timeline through the public Queue API. The existing task drawer
+still uses its package-owned direct SQL read model and does not yet expose the complete core timeline,
+payload projection state, or redrive lineage.
 
-**Needed:** implement this on the future P2-01 query API rather than adding more direct SQL to the demo.
+**Needed:** migrate the dashboard read model onto the stable P2-01 contracts where its search and aggregate
+requirements fit, without weakening its authorization boundary or exposing payload by default.
 
 ## Priority conclusion
 
 The demo validates the current write path, persisted retry policies, enqueue idempotency, cancellation, and
-lifecycle semantics. The highest-leverage next production work is now **P1-03 Deadlines and execution
-timeouts**, followed by dead-letter views/redrive, the query surface, and progress metadata. Full
-production telemetry remains last in the recommended sequence, while each preceding feature still owns
-focused diagnostics and benchmark evidence. Enqueue deduplication and cooperative cancellation do not
-change the at-least-once handler and external-effect boundary.
+lifecycle semantics. The next recommended product work is **P1-09 Progress and job metadata**, followed by
+production telemetry. The P2-01 core query surface is complete, while dashboard adoption and the later CLI
+remain separate operator-experience work.
