@@ -1,8 +1,14 @@
 import { CronExpressionParser } from "cron-parser";
 import type {
+  BulkRedrivePage,
+  BulkRedriveOptions,
   CancellationRequest,
   CancelResult,
   ClaimedJob,
+  DeadLetter,
+  DeadLetterFilter,
+  DeadLetterPage,
+  DeadLetterQuery,
   EnqueueIdempotency,
   EnqueueIdempotencyConflictDetails,
   EnqueueIdempotencyConflictField,
@@ -18,6 +24,12 @@ import type {
   MaintenancePolicyDefinition,
   Queryable,
   QueueHealth,
+  RedriveIdempotencyConflictDetails,
+  RedriveIdempotencyConflictField,
+  RedriveLineage,
+  RedriveLineageRecord,
+  RedriveRequest,
+  RedriveResult,
   RetryPolicy,
   RetentionPolicy,
   RetentionPolicyDefinition,
@@ -67,6 +79,7 @@ import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
   MAX_ENQUEUE_BATCH_SIZE,
+  MAX_REDRIVE_BATCH_SIZE,
   MAX_WAIT_DURATION_MS,
 } from "./types.js";
 
@@ -92,6 +105,51 @@ type CancelRow = {
   requested_by: string | null;
   reason: string | null;
   finished_at: Date | null;
+};
+
+type DeadLetterRow = {
+  job_id: string;
+  queue_name: string;
+  job_type: string;
+  payload: Json;
+  tags: string[];
+  current_attempt: number;
+  max_attempts: number;
+  retry_policy: RetryPolicy | null;
+  deadline_at: Date | string | null;
+  execution_timeout_ms: string | null;
+  error: Json;
+  finished_at: Date | string;
+  redrive_count: string;
+  has_more: boolean;
+  cursor_finished_at: string;
+};
+
+type RedriveRow = {
+  status: RedriveResult["status"];
+  source_job_id: string;
+  target_job_id: string | null;
+  source_state: RedriveResult["sourceState"];
+  target_state: RedriveResult["targetState"];
+  requested_at: Date | string | null;
+};
+
+type BulkRedriveRow = RedriveRow & {
+  source_finished_at_cursor: string;
+  has_more: boolean;
+};
+
+type RedriveLineageRow = {
+  source_job_id: string;
+  target_job_id: string;
+  requested_by: string;
+  reason: string;
+  request_id_preview: string;
+  request_id_digest: string;
+  request_id_length: number;
+  source_state: "failed";
+  target_initial_state: "ready";
+  requested_at: Date | string;
 };
 
 type CheckpointRow = {
@@ -186,6 +244,66 @@ function claimedTimestamp(value: Date | string, field: string): Date {
 
 function nullableClaimedTimestamp(value: Date | string | null, field: string): Date | null {
   return value === null ? null : claimedTimestamp(value, field);
+}
+
+function deadLetterFilter(filter: DeadLetterFilter): Record<string, Json> {
+  return {
+    ...(filter.queue === undefined ? {} : { queue: filter.queue }),
+    ...(filter.type === undefined ? {} : { type: filter.type }),
+    ...(filter.tags === undefined ? {} : { tags: filter.tags }),
+    ...(filter.errorName === undefined ? {} : { errorName: filter.errorName }),
+    ...(filter.finishedAfter === undefined
+      ? {}
+      : { finishedAfter: filter.finishedAfter.toISOString() }),
+    ...(filter.finishedBefore === undefined
+      ? {}
+      : { finishedBefore: filter.finishedBefore.toISOString() }),
+  };
+}
+
+function deadLetter(row: DeadLetterRow): DeadLetter {
+  return {
+    jobId: row.job_id,
+    queue: row.queue_name,
+    type: row.job_type,
+    payload: row.payload,
+    tags: row.tags,
+    currentAttempt: row.current_attempt,
+    maxAttempts: row.max_attempts,
+    retryPolicy: row.retry_policy,
+    deadlineAt: nullableClaimedTimestamp(row.deadline_at, "deadline_at"),
+    executionTimeoutMs: row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
+    error: row.error,
+    finishedAt: claimedTimestamp(row.finished_at, "finished_at"),
+    redriveCount: Number(row.redrive_count),
+  };
+}
+
+function redriveResult(row: RedriveRow): RedriveResult {
+  return {
+    status: row.status,
+    sourceJobId: row.source_job_id,
+    targetJobId: row.target_job_id,
+    sourceState: row.source_state,
+    targetState: row.target_state,
+    requestedAt:
+      row.requested_at === null ? null : claimedTimestamp(row.requested_at, "requested_at"),
+  };
+}
+
+function redriveLineageRecord(row: RedriveLineageRow): RedriveLineageRecord {
+  return {
+    sourceJobId: row.source_job_id,
+    targetJobId: row.target_job_id,
+    requestedBy: row.requested_by,
+    reason: row.reason,
+    requestIdPreview: row.request_id_preview,
+    requestIdDigest: row.request_id_digest,
+    requestIdLength: row.request_id_length,
+    sourceState: row.source_state,
+    targetInitialState: row.target_initial_state,
+    requestedAt: claimedTimestamp(row.requested_at, "requested_at"),
+  };
 }
 
 function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
@@ -415,6 +533,106 @@ function enqueueConflict(error: unknown): EnqueueIdempotencyConflictError | null
     return null;
   }
   return new EnqueueIdempotencyConflictError(enqueueConflictDetails(error));
+}
+
+const redriveConflictFields = new Set<RedriveIdempotencyConflictField>(["reason", "requestedBy"]);
+const redriveConflictDetailKeys = new Set([
+  "sourceJobId",
+  "existingTargetJobId",
+  "requestIdPreview",
+  "requestIdDigest",
+  "requestIdLength",
+  "conflictingFields",
+  "storedRequestDigest",
+  "rejectedRequestDigest",
+]);
+const sanitizedRedriveConflictDetails: RedriveIdempotencyConflictDetails = {
+  sourceJobId: "unknown",
+  existingTargetJobId: "unknown",
+  requestIdPreview: "unknown",
+  requestIdDigest: "000000000000",
+  requestIdLength: 0,
+  conflictingFields: [],
+  storedRequestDigest: "0".repeat(64),
+  rejectedRequestDigest: "0".repeat(64),
+};
+
+function validRedriveConflictDetails(value: unknown): value is RedriveIdempotencyConflictDetails {
+  if (typeof value !== "object" || value === null) return false;
+  const detail = value as Record<string, unknown>;
+  const keys = Object.keys(detail);
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return (
+    keys.length === redriveConflictDetailKeys.size &&
+    keys.every((key) => redriveConflictDetailKeys.has(key)) &&
+    typeof detail.sourceJobId === "string" &&
+    uuid.test(detail.sourceJobId) &&
+    typeof detail.existingTargetJobId === "string" &&
+    uuid.test(detail.existingTargetJobId) &&
+    typeof detail.requestIdPreview === "string" &&
+    detail.requestIdPreview.length > 0 &&
+    [...detail.requestIdPreview].length <= 16 &&
+    typeof detail.requestIdDigest === "string" &&
+    /^[0-9a-f]{12}$/.test(detail.requestIdDigest) &&
+    typeof detail.requestIdLength === "number" &&
+    Number.isSafeInteger(detail.requestIdLength) &&
+    detail.requestIdLength >= 1 &&
+    detail.requestIdLength <= 512 &&
+    Array.isArray(detail.conflictingFields) &&
+    detail.conflictingFields.length > 0 &&
+    detail.conflictingFields.every(
+      (field): field is RedriveIdempotencyConflictField =>
+        typeof field === "string" &&
+        redriveConflictFields.has(field as RedriveIdempotencyConflictField),
+    ) &&
+    new Set(detail.conflictingFields).size === detail.conflictingFields.length &&
+    detail.conflictingFields.every(
+      (field, index, fields) => index === 0 || fields[index - 1]! < field,
+    ) &&
+    typeof detail.storedRequestDigest === "string" &&
+    /^[0-9a-f]{64}$/.test(detail.storedRequestDigest) &&
+    typeof detail.rejectedRequestDigest === "string" &&
+    /^[0-9a-f]{64}$/.test(detail.rejectedRequestDigest)
+  );
+}
+
+function redriveConflictDetails(error: unknown): RedriveIdempotencyConflictDetails {
+  const seen = new Set<object>();
+  let current = error;
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (typeof current !== "object" || current === null || seen.has(current)) break;
+    seen.add(current);
+    try {
+      if ("detail" in current && typeof current.detail === "string") {
+        try {
+          const detail: unknown = JSON.parse(current.detail);
+          if (validRedriveConflictDetails(detail)) return detail;
+        } catch {
+          // Continue through adapter wrappers in case PostgreSQL's DETAIL is on a cause.
+        }
+      }
+      current = "cause" in current ? current.cause : undefined;
+    } catch {
+      break;
+    }
+  }
+  return sanitizedRedriveConflictDetails;
+}
+
+function redriveConflict(error: unknown): RedriveIdempotencyConflictError | null {
+  if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "P1002") {
+    return null;
+  }
+  return new RedriveIdempotencyConflictError(redriveConflictDetails(error));
+}
+
+export class RedriveIdempotencyConflictError extends Error {
+  constructor(readonly details: RedriveIdempotencyConflictDetails) {
+    super(
+      `Redrive request conflict for source ${details.sourceJobId} and request ${details.requestIdPreview} (${details.requestIdDigest}); fields: ${details.conflictingFields.join(", ")}`,
+    );
+    this.name = "RedriveIdempotencyConflictError";
+  }
 }
 
 export class CheckpointConflictError extends Error {
@@ -729,6 +947,118 @@ export class Queue {
       requestedBy: row.requested_by,
       reason: row.reason,
       finishedAt: row.finished_at,
+    };
+  }
+
+  async listDeadLetters(query: DeadLetterQuery = {}): Promise<DeadLetterPage> {
+    const limit = query.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_REDRIVE_BATCH_SIZE) {
+      throw new RangeError(
+        `listDeadLetters limit must be an integer between 1 and ${MAX_REDRIVE_BATCH_SIZE}`,
+      );
+    }
+    const result = await this.database.query<DeadLetterRow>(
+      "SELECT * FROM workhorse.list_dead_letters_v1($1::jsonb, $2, $3, $4)",
+      [
+        JSON.stringify(deadLetterFilter(query)),
+        limit,
+        query.cursor?.finishedAt ?? null,
+        query.cursor?.jobId ?? null,
+      ],
+    );
+    const items = result.rows.map(deadLetter);
+    const last = items.at(-1);
+    return {
+      items,
+      nextCursor:
+        result.rows.at(-1)?.has_more === true && last !== undefined
+          ? { finishedAt: result.rows.at(-1)!.cursor_finished_at, jobId: last.jobId }
+          : null,
+    };
+  }
+
+  async redrive(sourceJobId: string, request: RedriveRequest): Promise<RedriveResult> {
+    try {
+      const result = await this.database.query<RedriveRow>(
+        "SELECT * FROM workhorse.redrive_v1($1, $2, $3, $4)",
+        [sourceJobId, request.requestedBy, request.reason, request.requestId],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("redrive_v1 returned no result");
+      return redriveResult(row);
+    } catch (error) {
+      throw redriveConflict(error) ?? error;
+    }
+  }
+
+  async redriveMany(
+    filter: DeadLetterFilter,
+    request: RedriveRequest,
+    options: BulkRedriveOptions = {},
+  ): Promise<BulkRedrivePage> {
+    const limit = options.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_REDRIVE_BATCH_SIZE) {
+      throw new RangeError(
+        `redriveMany limit must be an integer between 1 and ${MAX_REDRIVE_BATCH_SIZE}`,
+      );
+    }
+    try {
+      const result = await this.database.query<BulkRedriveRow>(
+        "SELECT status, source_job_id, target_job_id, source_state, target_state, requested_at, source_finished_at_cursor, has_more FROM workhorse.redrive_many_v1($1::jsonb, $2, $3, $4, $5, $6, $7, $8) ORDER BY ordinal",
+        [
+          JSON.stringify(deadLetterFilter(filter)),
+          limit,
+          options.dryRun ?? false,
+          request.requestedBy,
+          request.reason,
+          request.requestId,
+          options.cursor?.finishedAt ?? null,
+          options.cursor?.jobId ?? null,
+        ],
+      );
+      const last = result.rows.at(-1);
+      return {
+        results: result.rows.map(redriveResult),
+        nextCursor:
+          last?.has_more === true
+            ? {
+                finishedAt: last.source_finished_at_cursor,
+                jobId: last.source_job_id,
+              }
+            : null,
+      };
+    } catch (error) {
+      throw redriveConflict(error) ?? error;
+    }
+  }
+
+  async getRedriveLineage(jobId: string, limit = MAX_REDRIVE_BATCH_SIZE): Promise<RedriveLineage> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_REDRIVE_BATCH_SIZE) {
+      throw new RangeError(
+        `getRedriveLineage limit must be an integer between 1 and ${MAX_REDRIVE_BATCH_SIZE}`,
+      );
+    }
+    const result = await this.database.query<RedriveLineageRow>(
+      `WITH RECURSIVE connected_edges AS (
+         SELECT edge.* FROM workhorse.job_redrive edge
+          WHERE edge.source_job_id = $1 OR edge.target_job_id = $1
+         UNION
+         SELECT edge.*
+           FROM connected_edges connected
+           JOIN workhorse.job_redrive edge
+             ON edge.source_job_id IN (connected.source_job_id, connected.target_job_id)
+             OR edge.target_job_id IN (connected.source_job_id, connected.target_job_id)
+       )
+       SELECT bounded.source_job_id, bounded.target_job_id, bounded.requested_by, bounded.reason,
+              bounded.request_id_preview, bounded.request_id_digest, bounded.request_id_length,
+              bounded.source_state, bounded.target_initial_state, bounded.requested_at
+         FROM (SELECT * FROM connected_edges LIMIT $2) bounded
+        ORDER BY bounded.requested_at, bounded.source_job_id, bounded.target_job_id`,
+      [jobId, limit + 1],
+    );
+    return {
+      records: result.rows.slice(0, limit).map(redriveLineageRecord),
+      truncated: result.rows.length > limit,
     };
   }
 

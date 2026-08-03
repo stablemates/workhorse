@@ -55,6 +55,7 @@ describe("operational scenario contracts", () => {
 
   it("uses explicit reset and versioned partition-retirement SQL contracts", () => {
     expect(resetWorkhorseStateSql).toContain("TRUNCATE workhorse.job_event");
+    expect(resetWorkhorseStateSql).toContain("workhorse.job_redrive");
     expect(resetWorkhorseStateSql).toContain("ALTER SEQUENCE workhorse.fence_token_seq");
     expect(createHistoryDayV1Sql).toContain("workhorse.create_history_day_v1");
     expect(retireHistoryDayV1Sql).toContain("workhorse.retire_history_day_v1");
@@ -86,6 +87,31 @@ describe("operational scenario contracts", () => {
         "stateQueryMs",
         "eventQueryMs",
         "recurringNextOccurrenceMs",
+      ]),
+    );
+    expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|throughput|latency target|sla/);
+  });
+
+  it("defines complete dead-letter redrive evidence without a performance claim", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "dead-letter-redrive-lifecycle",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/cold outcome relation/);
+    expect(contract!.invariants.join("\n")).toMatch(/dry-run/);
+    expect(contract!.invariants.join("\n")).toMatch(/source outcome remains unchanged/);
+    expect(contract!.invariants.join("\n")).toMatch(/exact repeated request/);
+    expect(contract!.invariants.join("\n")).toMatch(/audited lineage/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "deadLetters",
+        "listMs",
+        "dryRunMs",
+        "singleRedriveMs",
+        "replayMs",
+        "bulkRedriveMs",
+        "lineageEdges",
       ]),
     );
     expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|throughput|latency target|sla/);

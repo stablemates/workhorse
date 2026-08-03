@@ -15,7 +15,7 @@ only demo-owned workers, controllers, projections, and seed data.
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
-The demo installs schema version 13, including daily retained history, split scheduled maintenance,
+The demo installs schema version 14, including daily retained history, split scheduled maintenance,
 scoped enqueue idempotency, cooperative cancellation, absolute deadlines, and per-attempt execution
 timeouts. One deterministic keyed seed exposes deduplication evidence without persisting or displaying
 the raw key. The operator menu also retains an explicit idempotent enqueue path.

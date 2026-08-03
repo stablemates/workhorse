@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { installSchema } from "@workhorse/core";
+import { installSchema, RedriveIdempotencyConflictError } from "@workhorse/core";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../../src/local-database.js";
 import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "../src/index.js";
 
@@ -95,6 +95,60 @@ describe("Drizzle provider integration", () => {
     expect(claimed?.attemptTimeoutAt).toBeInstanceOf(Date);
     expect(claimed?.leaseExpiresAt).toBeInstanceOf(Date);
     expect(claimed?.deadlineAt?.getTime()).toBe(deadline.getTime());
+  });
+
+  it("maps dead-letter redrive and conflicts through the Drizzle adapter", async () => {
+    const sourceJobId = await adapter.queue.enqueue(
+      "drizzle-redrive",
+      { source: "drizzle" },
+      { maxAttempts: 1, executionTimeoutMs: 5_000 },
+    );
+    const claimed = await adapter.queue.claim("drizzle-redrive-worker");
+    expect(claimed?.id).toBe(sourceJobId);
+    expect(
+      await adapter.queue.fail(claimed!, "drizzle-redrive-worker", new Error("retry me")),
+    ).toBe("failed");
+
+    const deadLetters = await adapter.queue.listDeadLetters({ type: "drizzle-redrive" });
+    expect(deadLetters.items).toMatchObject([
+      {
+        jobId: sourceJobId,
+        executionTimeoutMs: 5_000,
+        finishedAt: expect.any(Date),
+        redriveCount: 0,
+      },
+    ]);
+
+    const request = {
+      requestedBy: "drizzle-operator",
+      reason: "provider integration",
+      requestId: "drizzle-redrive-request",
+    };
+    const created = await adapter.queue.redrive(sourceJobId, request);
+    expect(created).toMatchObject({
+      status: "redriven",
+      sourceJobId,
+      targetJobId: expect.any(String),
+      requestedAt: expect.any(Date),
+    });
+    await expect(adapter.queue.redrive(sourceJobId, request)).resolves.toMatchObject({
+      status: "replayed",
+      targetJobId: created.targetJobId,
+      requestedAt: created.requestedAt,
+    });
+    await expect(
+      adapter.queue.redrive(sourceJobId, { ...request, reason: "different request" }),
+    ).rejects.toBeInstanceOf(RedriveIdempotencyConflictError);
+    expect(await adapter.queue.getRedriveLineage(sourceJobId)).toMatchObject({
+      records: [
+        {
+          sourceJobId,
+          targetJobId: created.targetJobId,
+          requestedAt: expect.any(Date),
+        },
+      ],
+      truncated: false,
+    });
   });
 
   it("preserves PostgreSQL error codes through provider translation", async () => {

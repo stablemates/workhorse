@@ -48,19 +48,20 @@ The suite also performs equal-load fixed-rate producer-consumer churn. Both desi
 
 The lifecycle suite runs deterministic operational scenarios with hard invariants:
 
-| Scenario                     | Evidence produced                                                                                                                                                                                |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scheduled-promotion-drift`  | bounded promotion batches and due-time drift distribution                                                                                                                                        |
-| `heartbeat-fencing`          | accepted heartbeat cost and stale-fence rejection cost                                                                                                                                           |
-| `cancellation-lifecycle`     | immediate/waiting cancellation, active signal/ack, expiry materialization, stale races, truthful history, recurrence, and query timings                                                          |
-| `deadline-timeout-lifecycle` | pre-claim deadline exclusion, active abort delivery, timeout retry, stale-write fencing, distinct history, and health pressure                                                                   |
-| `crash-before-completion`    | durable state at all five worker crash boundaries                                                                                                                                                |
-| `lease-expiry-recovery`      | recovery latency, new attempt/fence, and stale completion rejection                                                                                                                              |
-| `retry-paths`                | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion                                                                                     |
-| `idempotent-ingress`         | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants                                                                                     |
-| `retention-pruning`          | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                                                                                   |
-| `health-snapshot`            | health-query latency and internally consistent degraded-state counts                                                                                                                             |
-| `worker-concurrency`         | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants |
+| Scenario                        | Evidence produced                                                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scheduled-promotion-drift`     | bounded promotion batches and due-time drift distribution                                                                                                                                        |
+| `heartbeat-fencing`             | accepted heartbeat cost and stale-fence rejection cost                                                                                                                                           |
+| `cancellation-lifecycle`        | immediate/waiting cancellation, active signal/ack, expiry materialization, stale races, truthful history, recurrence, and query timings                                                          |
+| `deadline-timeout-lifecycle`    | pre-claim deadline exclusion, active abort delivery, timeout retry, stale-write fencing, distinct history, and health pressure                                                                   |
+| `dead-letter-redrive-lifecycle` | cold failure cursor paging, side-effect-free preview, audited redrive, exact replay, immutable sources, and retained lineage                                                                     |
+| `crash-before-completion`       | durable state at all five worker crash boundaries                                                                                                                                                |
+| `lease-expiry-recovery`         | recovery latency, new attempt/fence, and stale completion rejection                                                                                                                              |
+| `retry-paths`                   | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion                                                                                     |
+| `idempotent-ingress`            | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants                                                                                     |
+| `retention-pruning`             | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                                                                                   |
+| `health-snapshot`               | health-query latency and internally consistent degraded-state counts                                                                                                                             |
+| `worker-concurrency`            | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants |
 
 Scenario invariant failures abort the suite. This prevents a fast but semantically incorrect run from being treated as evidence.
 
@@ -95,6 +96,13 @@ terminalization. Cancellation precedence and cross-transition races remain cover
 PostgreSQL integration suite. The small timings are operational diagnostics only. No latency,
 timeout-precision, or deployment-drain claim is supported until a live artifact is recorded and
 interpreted with its platform grace periods.
+
+`dead-letter-redrive-lifecycle` records client-observed failure-list, dry-run, single-redrive,
+exact-replay, and bounded bulk-redrive durations. Its hard invariants prove that preview writes
+nothing, fresh targets are ready with cleared absolute deadlines, source outcomes remain terminal,
+replay creates no duplicate target, and every new identity has an audited retained lineage edge.
+These small full-transition observations are diagnostics only, not a redrive throughput or latency
+claim. No performance claim is supported until a live artifact is recorded and interpreted.
 
 `worker-concurrency` seeds work before measurement, then times the complete worker run so no claim query is
 excluded from the throughput window. It records 1/4/8-slot durations and derived jobs/second, maximum

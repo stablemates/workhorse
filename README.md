@@ -1,6 +1,6 @@
 # Workhorse validation MVP
 
-Workhorse is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, cooperative cancellation, PostgreSQL-owned deadlines and execution timeouts, immutable history, and a live-only dispatch relation.
+Workhorse is a PostgreSQL-native durable execution protocol with deploy-synchronized recurring jobs, fenced ownership, cooperative cancellation, PostgreSQL-owned deadlines and execution timeouts, immutable dead letters with audited redrive, immutable history, and a live-only dispatch relation.
 
 The current implementation remains an evidence-first validation release rather than a production-support promise. Its purpose is to validate transactional enqueue, declarative worker-scheduled recurring jobs, fenced ownership, cooperative cancellation, immutable attempt history, durable checkpoint replay, lease-releasing timer waits, attribution-safe automated retention, failure recovery, PostgreSQL diagnostics, and long-run churn behavior.
 
@@ -41,6 +41,8 @@ The current implementation remains an evidence-first validation release rather t
 - immediate cancellation for queued, scheduled, and durable-wait work plus cooperative requests for
   active handlers;
 - absolute enqueue deadlines plus cooperative, fenced per-attempt execution timeouts;
+- cursor-based dead-letter queries plus idempotent single and bounded bulk redrive with dry-run and
+  retained lineage;
 - separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
 - a separately packaged `@workhorse/dashboard` React operator dashboard with an injected,
   transport-neutral client boundary, package-owned styles/assets, and audited local controls;
@@ -74,6 +76,41 @@ attempt has exactly one `canceled` attempt row. Repeated requests return the exi
 without duplicate terminal rows or events. `requestedBy` is audit attribution, not authorization, so
 applications and operator layers must enforce their own permission checks. Canceling a job created by a
 recurring schedule affects only that occurrence and does not disable the schedule or later occurrences.
+
+### Dead letters and redrive
+
+Schema version 14 keeps terminal failures in the cold `job_outcome` relation and exposes them through
+`Queue.listDeadLetters()`. Stable `(finishedAt, jobId)` cursors support bounded pages filtered by queue,
+type, required tags, error name, and completion window. The partial failure index is separate from every
+ready, scheduled, active, and expiry dispatch index.
+
+`Queue.redrive()` creates a new ready job linked to the failed source. It copies queue, type, payload,
+tags, retry policy, attempt budget, and per-attempt execution timeout, while clearing the old absolute
+deadline and never copying checkpoints, waits, attempts, result, or cancellation state. The source
+outcome's semantic terminal evidence remains immutable; only its existing retention watermark may
+advance when the append-only redrive event is recorded.
+
+```ts
+const page = await queue.listDeadLetters({ queue: "billing", errorName: "CardDeclined" });
+const source = page.items[0];
+if (source) {
+  await queue.redrive(source.jobId, {
+    requestedBy: "operator@example.com",
+    reason: "provider incident resolved",
+    requestId: "incident-2026-08-03:billing-redrive",
+  });
+}
+```
+
+Every redrive requires actor, reason, and request identity. The raw request ID is never persisted.
+An exact source/request replay returns the original target; a materially different replay raises
+`RedriveIdempotencyConflictError`. `Queue.redriveMany()` returns `{ results, nextCursor }` for at most
+1,000 oldest matching failures. Pass `nextCursor` back as `options.cursor` to advance a large backlog;
+repeating the same cursor and request replays that exact page. `{ dryRun: true }` returns eligible
+sources without writes. Redrive is
+another at-least-once execution and can repeat external effects, so handlers still need provider
+idempotency or compensation. `Queue.getRedriveLineage()` returns bounded retained edges and reports
+whether traversal was truncated.
 
 ### Enqueue idempotency keys
 

@@ -373,6 +373,32 @@ CREATE TABLE IF NOT EXISTS workhorse.job_outcome (
 );
 CREATE INDEX IF NOT EXISTS job_outcome_retention_idx
   ON workhorse.job_outcome (finished_at, job_id);
+-- Failed outcomes are operationally cold and never participate in dispatch. This partial index
+-- supports dead-letter keyset scans without adding failed work to any runtime dispatch index.
+CREATE INDEX IF NOT EXISTS job_outcome_failed_finished_idx
+  ON workhorse.job_outcome (finished_at DESC, job_id DESC) WHERE state = 'failed';
+
+-- Durable redrive lineage is both the idempotency record and the audit record. A source identity
+-- cannot be removed while any descendant target still exists. Deleting a target removes its
+-- incoming lineage edge, allowing retention to prune the source in a later pass.
+CREATE TABLE IF NOT EXISTS workhorse.job_redrive (
+  source_job_id uuid NOT NULL REFERENCES workhorse.job(id),
+  target_job_id uuid NOT NULL UNIQUE REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  request_id_hash bytea NOT NULL CHECK (octet_length(request_id_hash) = 32),
+  request_id_preview text NOT NULL,
+  request_id_digest text NOT NULL CHECK (char_length(request_id_digest) = 12),
+  request_id_length integer NOT NULL CHECK (request_id_length BETWEEN 1 AND 512),
+  requested_by text NOT NULL CHECK (requested_by <> '' AND char_length(requested_by) <= 200),
+  reason text NOT NULL CHECK (reason <> '' AND char_length(reason) <= 2000),
+  request_fingerprint jsonb NOT NULL,
+  source_state text NOT NULL DEFAULT 'failed' CHECK (source_state = 'failed'),
+  target_initial_state text NOT NULL DEFAULT 'ready' CHECK (target_initial_state = 'ready'),
+  requested_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (source_job_id, request_id_hash),
+  CHECK (source_job_id <> target_job_id)
+);
+CREATE INDEX IF NOT EXISTS job_redrive_source_time_idx
+  ON workhorse.job_redrive (source_job_id, requested_at, target_job_id);
 
 -- Append-only lifecycle audit.
 CREATE TABLE IF NOT EXISTS workhorse.job_event (
@@ -1210,6 +1236,404 @@ AS $$
     'runAt', p_run_at, 'maxAttempts', p_max_attempts, 'tags', to_jsonb(COALESCE(p_tags, '{}')),
     'retryPolicy', p_retry_policy
   ))) ORDER BY ordinal LIMIT 1;
+$$;
+
+DROP FUNCTION IF EXISTS workhorse.list_dead_letters_v1(jsonb, integer, timestamptz, uuid);
+CREATE OR REPLACE FUNCTION workhorse.list_dead_letters_v1(
+  p_filter jsonb DEFAULT '{}'::jsonb,
+  p_limit integer DEFAULT 100,
+  p_cursor_finished_at timestamptz DEFAULT NULL,
+  p_cursor_job_id uuid DEFAULT NULL
+) RETURNS TABLE (
+  job_id uuid, queue_name text, job_type text, payload jsonb, tags text[],
+  current_attempt integer, max_attempts integer, retry_policy jsonb,
+  deadline_at timestamptz, execution_timeout_ms bigint, error jsonb,
+  finished_at timestamptz, redrive_count integer, has_more boolean,
+  cursor_finished_at text
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  v_filter jsonb := COALESCE(p_filter, '{}'::jsonb);
+  v_tags text[];
+  v_finished_after timestamptz;
+  v_finished_before timestamptz;
+BEGIN
+  IF jsonb_typeof(v_filter) <> 'object'
+     OR v_filter - ARRAY['queue', 'type', 'tags', 'errorName', 'finishedAfter', 'finishedBefore']
+        <> '{}'::jsonb THEN
+    RAISE EXCEPTION 'dead-letter filter must be an object containing only queue, type, tags, errorName, finishedAfter, and finishedBefore';
+  END IF;
+  IF p_limit NOT BETWEEN 1 AND 1000 THEN
+    RAISE EXCEPTION 'dead-letter limit must be between 1 and 1000';
+  END IF;
+  IF (p_cursor_finished_at IS NULL) <> (p_cursor_job_id IS NULL) THEN
+    RAISE EXCEPTION 'dead-letter cursor requires both finished_at and job_id';
+  END IF;
+  IF p_cursor_finished_at IS NOT NULL AND NOT isfinite(p_cursor_finished_at) THEN
+    RAISE EXCEPTION 'dead-letter cursor finished_at must be finite';
+  END IF;
+  IF v_filter ? 'queue' AND (
+       jsonb_typeof(v_filter->'queue') <> 'string' OR v_filter->>'queue' = ''
+     ) THEN RAISE EXCEPTION 'dead-letter queue filter must be a non-empty string'; END IF;
+  IF v_filter ? 'type' AND (
+       jsonb_typeof(v_filter->'type') <> 'string' OR v_filter->>'type' = ''
+     ) THEN RAISE EXCEPTION 'dead-letter type filter must be a non-empty string'; END IF;
+  IF v_filter ? 'errorName' AND (
+       jsonb_typeof(v_filter->'errorName') <> 'string' OR v_filter->>'errorName' = ''
+     ) THEN RAISE EXCEPTION 'dead-letter errorName filter must be a non-empty string'; END IF;
+  IF v_filter ? 'tags' THEN
+    IF jsonb_typeof(v_filter->'tags') <> 'array' THEN
+      RAISE EXCEPTION 'dead-letter tags filter must be an array';
+    END IF;
+    SELECT COALESCE(array_agg(value), '{}') INTO v_tags
+      FROM jsonb_array_elements_text(v_filter->'tags') tag(value);
+    IF NOT workhorse.valid_tags(v_tags) THEN
+      RAISE EXCEPTION 'dead-letter tags filter must contain at most 20 non-empty tags of at most 100 characters';
+    END IF;
+  END IF;
+  IF v_filter ? 'finishedAfter' THEN
+    IF jsonb_typeof(v_filter->'finishedAfter') <> 'string' THEN
+      RAISE EXCEPTION 'dead-letter finishedAfter filter must be a timestamp string';
+    END IF;
+    v_finished_after := (v_filter->>'finishedAfter')::timestamptz;
+    IF NOT isfinite(v_finished_after) THEN RAISE EXCEPTION 'dead-letter finishedAfter must be finite'; END IF;
+  END IF;
+  IF v_filter ? 'finishedBefore' THEN
+    IF jsonb_typeof(v_filter->'finishedBefore') <> 'string' THEN
+      RAISE EXCEPTION 'dead-letter finishedBefore filter must be a timestamp string';
+    END IF;
+    v_finished_before := (v_filter->>'finishedBefore')::timestamptz;
+    IF NOT isfinite(v_finished_before) THEN RAISE EXCEPTION 'dead-letter finishedBefore must be finite'; END IF;
+  END IF;
+  IF v_finished_after IS NOT NULL AND v_finished_before IS NOT NULL
+     AND v_finished_after >= v_finished_before THEN
+    RAISE EXCEPTION 'dead-letter finishedAfter must be earlier than finishedBefore';
+  END IF;
+
+  RETURN QUERY
+  WITH candidates AS MATERIALIZED (
+    SELECT job.id, job.queue_name, job.job_type, job.payload, job.tags,
+           outcome.current_attempt, job.max_attempts, job.retry_policy,
+           job.deadline_at, job.execution_timeout_ms, outcome.error,
+           outcome.finished_at,
+           (SELECT count(*)::integer FROM workhorse.job_redrive redrive
+             WHERE redrive.source_job_id = job.id) AS redrive_count
+      FROM workhorse.job_outcome outcome
+      JOIN workhorse.job job ON job.id = outcome.job_id
+     WHERE outcome.state = 'failed'
+       AND (NOT (v_filter ? 'queue') OR job.queue_name = v_filter->>'queue')
+       AND (NOT (v_filter ? 'type') OR job.job_type = v_filter->>'type')
+       AND (v_tags IS NULL OR job.tags @> v_tags)
+       AND (NOT (v_filter ? 'errorName') OR outcome.error->>'name' = v_filter->>'errorName')
+       AND (v_finished_after IS NULL OR outcome.finished_at >= v_finished_after)
+       AND (v_finished_before IS NULL OR outcome.finished_at < v_finished_before)
+       AND (p_cursor_finished_at IS NULL OR
+            (outcome.finished_at, outcome.job_id) < (p_cursor_finished_at, p_cursor_job_id))
+     ORDER BY outcome.finished_at DESC, outcome.job_id DESC
+     LIMIT p_limit + 1
+  )
+  SELECT candidate.id, candidate.queue_name, candidate.job_type, candidate.payload, candidate.tags,
+         candidate.current_attempt, candidate.max_attempts, candidate.retry_policy,
+         candidate.deadline_at, candidate.execution_timeout_ms, candidate.error,
+         candidate.finished_at, candidate.redrive_count,
+         (SELECT count(*) FROM candidates) > p_limit,
+         to_char(candidate.finished_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+    FROM candidates candidate
+   ORDER BY candidate.finished_at DESC, candidate.id DESC
+   LIMIT p_limit;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.redrive_v1(
+  p_source_job_id uuid,
+  p_requested_by text,
+  p_reason text,
+  p_request_id text
+) RETURNS TABLE (
+  status text, source_job_id uuid, target_job_id uuid, source_state text,
+  target_state text, requested_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_job workhorse.job%ROWTYPE;
+  v_outcome workhorse.job_outcome%ROWTYPE;
+  v_existing workhorse.job_redrive%ROWTYPE;
+  v_fingerprint jsonb;
+  v_conflicting_fields text[];
+  v_request_id_hash bytea;
+  v_request_id_preview text;
+  v_request_id_digest text;
+  v_request_id_length integer;
+  v_now timestamptz := clock_timestamp();
+BEGIN
+  IF p_source_job_id IS NULL THEN RAISE EXCEPTION 'source_job_id is required'; END IF;
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+
+  v_fingerprint := jsonb_build_object('requestedBy', p_requested_by, 'reason', p_reason);
+  v_request_id_hash := sha256(convert_to(p_request_id, 'UTF8'));
+  v_request_id_digest := left(encode(v_request_id_hash, 'hex'), 12);
+  v_request_id_length := char_length(p_request_id);
+  v_request_id_preview := CASE
+    WHEN v_request_id_length <= 4 THEN repeat('•', v_request_id_length)
+    WHEN v_request_id_length <= 8 THEN left(p_request_id, 2) || '…' || right(p_request_id, 2)
+    ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
+  END;
+  PERFORM pg_advisory_xact_lock(hashtextextended(
+    'workhorse:redrive:' || p_source_job_id::text || ':' || p_request_id, 0
+  ));
+
+  SELECT * INTO v_existing FROM workhorse.job_redrive redrive
+   WHERE redrive.source_job_id = p_source_job_id
+     AND redrive.request_id_hash = v_request_id_hash;
+  IF FOUND THEN
+    IF v_existing.request_fingerprint <> v_fingerprint THEN
+      SELECT COALESCE(array_agg(field ORDER BY field COLLATE "C"), '{}')
+        INTO v_conflicting_fields
+        FROM jsonb_object_keys(v_fingerprint) field
+       WHERE v_existing.request_fingerprint->field IS DISTINCT FROM v_fingerprint->field;
+      RAISE EXCEPTION USING
+        ERRCODE = 'P1002',
+        MESSAGE = 'redrive request conflict with a retained request',
+        DETAIL = jsonb_build_object(
+          'sourceJobId', p_source_job_id,
+          'existingTargetJobId', v_existing.target_job_id,
+          'requestIdPreview', v_request_id_preview,
+          'requestIdDigest', v_request_id_digest,
+          'requestIdLength', v_request_id_length,
+          'conflictingFields', to_jsonb(v_conflicting_fields),
+          'storedRequestDigest', workhorse.sha256_hex_v1(v_existing.request_fingerprint::text),
+          'rejectedRequestDigest', workhorse.sha256_hex_v1(v_fingerprint::text)
+        )::text;
+    END IF;
+    RETURN QUERY
+    SELECT 'replayed'::text, p_source_job_id, v_existing.target_job_id,
+           'failed'::text,
+           COALESCE(runtime.state, outcome.state), v_existing.requested_at
+      FROM (VALUES (1)) singleton(value)
+      LEFT JOIN workhorse.job_runtime runtime ON runtime.job_id = v_existing.target_job_id
+      LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = v_existing.target_job_id;
+    RETURN;
+  END IF;
+
+  SELECT job.* INTO v_job FROM workhorse.job job
+   WHERE job.id = p_source_job_id FOR KEY SHARE;
+  IF NOT FOUND THEN
+    RETURN QUERY VALUES ('not_found'::text, p_source_job_id, NULL::uuid, NULL::text, NULL::text, NULL::timestamptz);
+    RETURN;
+  END IF;
+  SELECT outcome.* INTO v_outcome FROM workhorse.job_outcome outcome
+   WHERE outcome.job_id = p_source_job_id FOR SHARE;
+  IF NOT FOUND OR v_outcome.state <> 'failed' THEN
+    RETURN QUERY VALUES (
+      'not_failed'::text, p_source_job_id, NULL::uuid,
+      COALESCE(v_outcome.state, (SELECT runtime.state FROM workhorse.job_runtime runtime
+                                 WHERE runtime.job_id = p_source_job_id)),
+      NULL::text, NULL::timestamptz
+    );
+    RETURN;
+  END IF;
+
+  target_job_id := gen_random_uuid();
+  INSERT INTO workhorse.job(
+    id, queue_name, job_type, payload, tags, max_attempts, retry_policy,
+    deadline_at, execution_timeout_ms
+  ) VALUES (
+    target_job_id, v_job.queue_name, v_job.job_type, v_job.payload, v_job.tags,
+    v_job.max_attempts, v_job.retry_policy, NULL, v_job.execution_timeout_ms
+  );
+  INSERT INTO workhorse.job_runtime(
+    job_id, queue_name, state, current_attempt, run_at, ready_at, sequence, deadline_at
+  ) VALUES (
+    target_job_id, v_job.queue_name, 'ready', 1, v_now, v_now,
+    nextval('workhorse.ready_sequence_seq'), NULL
+  );
+  INSERT INTO workhorse.job_redrive(
+    source_job_id, target_job_id, request_id_hash, request_id_preview,
+    request_id_digest, request_id_length, requested_by, reason,
+    request_fingerprint, source_state, target_initial_state, requested_at
+  ) VALUES (
+    p_source_job_id, target_job_id, v_request_id_hash, v_request_id_preview,
+    v_request_id_digest, v_request_id_length, p_requested_by, p_reason,
+    v_fingerprint, 'failed', 'ready', v_now
+  );
+  -- The history trigger may advance history_through_at for retention safety. Semantic terminal
+  -- evidence remains immutable and the lifecycle event keeps its truthful request-time chronology.
+  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    VALUES (p_source_job_id, v_outcome.current_attempt, 'redriven', jsonb_build_object(
+      'target_job_id', target_job_id,
+      'request_id_preview', v_request_id_preview,
+      'request_id_digest', v_request_id_digest,
+      'request_id_length', v_request_id_length,
+      'requested_by', p_requested_by, 'reason', p_reason, 'requested_at', v_now
+    ));
+  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    VALUES (target_job_id, 1, 'redrive_created', jsonb_build_object(
+      'source_job_id', p_source_job_id,
+      'request_id_preview', v_request_id_preview,
+      'request_id_digest', v_request_id_digest,
+      'request_id_length', v_request_id_length,
+      'requested_by', p_requested_by, 'reason', p_reason, 'requested_at', v_now,
+      'state', 'ready'
+    ));
+  PERFORM pg_notify('workhorse_jobs', v_job.queue_name);
+  RETURN QUERY VALUES (
+    'redriven'::text, p_source_job_id, target_job_id, 'failed'::text, 'ready'::text, v_now
+  );
+END;
+$$;
+
+DROP FUNCTION IF EXISTS workhorse.redrive_many_v1(jsonb, integer, boolean, text, text, text);
+DROP FUNCTION IF EXISTS workhorse.redrive_many_v1(
+  jsonb, integer, boolean, text, text, text, timestamptz, uuid
+);
+CREATE OR REPLACE FUNCTION workhorse.redrive_many_v1(
+  p_filter jsonb,
+  p_limit integer,
+  p_dry_run boolean,
+  p_requested_by text,
+  p_reason text,
+  p_request_id text,
+  p_cursor_finished_at timestamptz DEFAULT NULL,
+  p_cursor_job_id uuid DEFAULT NULL
+) RETURNS TABLE (
+  ordinal integer, status text, source_job_id uuid, target_job_id uuid,
+  source_state text, target_state text, requested_at timestamptz,
+  source_finished_at_cursor text, has_more boolean
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_filter jsonb := COALESCE(p_filter, '{}'::jsonb);
+  v_tags text[];
+  v_finished_after timestamptz;
+  v_finished_before timestamptz;
+  v_candidate record;
+BEGIN
+  IF p_limit NOT BETWEEN 1 AND 1000 THEN
+    RAISE EXCEPTION 'bulk redrive limit must be between 1 and 1000';
+  END IF;
+  IF (p_cursor_finished_at IS NULL) <> (p_cursor_job_id IS NULL) THEN
+    RAISE EXCEPTION 'bulk redrive cursor requires both finished_at and job_id';
+  END IF;
+  IF p_cursor_finished_at IS NOT NULL AND NOT isfinite(p_cursor_finished_at) THEN
+    RAISE EXCEPTION 'bulk redrive cursor finished_at must be finite';
+  END IF;
+  IF p_dry_run IS NULL THEN RAISE EXCEPTION 'bulk redrive dry_run is required'; END IF;
+  -- Validate attribution even for an empty selection and dry runs.
+  IF p_requested_by IS NULL OR p_requested_by = '' OR char_length(p_requested_by) > 200 THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NULL OR p_reason = '' OR char_length(p_reason) > 2000 THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' OR octet_length(p_request_id) > 512 THEN
+    RAISE EXCEPTION 'request_id must contain between 1 and 512 UTF-8 bytes';
+  END IF;
+  IF jsonb_typeof(v_filter) <> 'object'
+     OR v_filter - ARRAY['queue', 'type', 'tags', 'errorName', 'finishedAfter', 'finishedBefore']
+        <> '{}'::jsonb THEN
+    RAISE EXCEPTION 'bulk redrive filter must be an object containing only queue, type, tags, errorName, finishedAfter, and finishedBefore';
+  END IF;
+  IF v_filter ? 'queue' AND (
+       jsonb_typeof(v_filter->'queue') <> 'string' OR v_filter->>'queue' = ''
+     ) THEN RAISE EXCEPTION 'bulk redrive queue filter must be a non-empty string'; END IF;
+  IF v_filter ? 'type' AND (
+       jsonb_typeof(v_filter->'type') <> 'string' OR v_filter->>'type' = ''
+     ) THEN RAISE EXCEPTION 'bulk redrive type filter must be a non-empty string'; END IF;
+  IF v_filter ? 'errorName' AND (
+       jsonb_typeof(v_filter->'errorName') <> 'string' OR v_filter->>'errorName' = ''
+     ) THEN RAISE EXCEPTION 'bulk redrive errorName filter must be a non-empty string'; END IF;
+  IF v_filter ? 'tags' THEN
+    IF jsonb_typeof(v_filter->'tags') <> 'array' THEN
+      RAISE EXCEPTION 'bulk redrive tags filter must be an array';
+    END IF;
+    SELECT COALESCE(array_agg(value), '{}') INTO v_tags
+      FROM jsonb_array_elements_text(v_filter->'tags') tag(value);
+    IF NOT workhorse.valid_tags(v_tags) THEN
+      RAISE EXCEPTION 'bulk redrive tags filter must contain at most 20 non-empty tags of at most 100 characters';
+    END IF;
+  END IF;
+  IF v_filter ? 'finishedAfter' THEN
+    IF jsonb_typeof(v_filter->'finishedAfter') <> 'string' THEN
+      RAISE EXCEPTION 'bulk redrive finishedAfter filter must be a timestamp string';
+    END IF;
+    v_finished_after := (v_filter->>'finishedAfter')::timestamptz;
+    IF NOT isfinite(v_finished_after) THEN RAISE EXCEPTION 'bulk redrive finishedAfter must be finite'; END IF;
+  END IF;
+  IF v_filter ? 'finishedBefore' THEN
+    IF jsonb_typeof(v_filter->'finishedBefore') <> 'string' THEN
+      RAISE EXCEPTION 'bulk redrive finishedBefore filter must be a timestamp string';
+    END IF;
+    v_finished_before := (v_filter->>'finishedBefore')::timestamptz;
+    IF NOT isfinite(v_finished_before) THEN RAISE EXCEPTION 'bulk redrive finishedBefore must be finite'; END IF;
+  END IF;
+  IF v_finished_after IS NOT NULL AND v_finished_before IS NOT NULL
+     AND v_finished_after >= v_finished_before THEN
+    RAISE EXCEPTION 'bulk redrive finishedAfter must be earlier than finishedBefore';
+  END IF;
+
+  ordinal := 0;
+  FOR v_candidate IN
+    WITH candidates AS MATERIALIZED (
+      SELECT outcome.job_id, outcome.finished_at
+        FROM workhorse.job_outcome outcome
+        JOIN workhorse.job job ON job.id = outcome.job_id
+       WHERE outcome.state = 'failed'
+         AND (NOT (v_filter ? 'queue') OR job.queue_name = v_filter->>'queue')
+         AND (NOT (v_filter ? 'type') OR job.job_type = v_filter->>'type')
+         AND (v_tags IS NULL OR job.tags @> v_tags)
+         AND (NOT (v_filter ? 'errorName') OR outcome.error->>'name' = v_filter->>'errorName')
+         AND (v_finished_after IS NULL OR outcome.finished_at >= v_finished_after)
+         AND (v_finished_before IS NULL OR outcome.finished_at < v_finished_before)
+         AND (p_cursor_finished_at IS NULL OR
+              (outcome.finished_at, outcome.job_id) > (p_cursor_finished_at, p_cursor_job_id))
+       ORDER BY outcome.finished_at, outcome.job_id
+       LIMIT p_limit + 1
+    )
+    SELECT candidate.job_id, candidate.finished_at,
+           (SELECT count(*) FROM candidates) > p_limit AS has_more
+      FROM candidates candidate
+     ORDER BY candidate.finished_at, candidate.job_id
+     LIMIT p_limit
+  LOOP
+    ordinal := ordinal + 1;
+    IF p_dry_run THEN
+      status := 'eligible';
+      source_job_id := v_candidate.job_id;
+      target_job_id := NULL;
+      source_state := 'failed';
+      target_state := NULL;
+      requested_at := NULL;
+      source_finished_at_cursor := to_char(
+        v_candidate.finished_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+      );
+      has_more := v_candidate.has_more;
+      RETURN NEXT;
+    ELSE
+      RETURN QUERY
+      SELECT ordinal, result.status, result.source_job_id, result.target_job_id,
+             result.source_state, result.target_state, result.requested_at,
+             to_char(
+               v_candidate.finished_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+             ),
+             v_candidate.has_more
+        FROM workhorse.redrive_v1(
+          v_candidate.job_id, p_requested_by, p_reason, p_request_id
+        ) result;
+    END IF;
+  END LOOP;
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.pause_queue_v1(p_queue_name text)
@@ -2664,6 +3088,10 @@ BEGIN
              SELECT 1 FROM workhorse.enqueue_idempotency idempotency
               WHERE idempotency.job_id = candidate.id
            )
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.job_redrive redrive
+              WHERE redrive.source_job_id = candidate.id
+           )
      ORDER BY candidate.finished_at, candidate.id
      LIMIT p_limit
   )
@@ -3106,7 +3534,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (13) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (14) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

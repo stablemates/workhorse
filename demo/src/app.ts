@@ -1099,11 +1099,13 @@ function textArrayValue(values: readonly string[]) {
 
 async function seedHistoricalDemoData(database: DemoDatabase): Promise<number> {
   return database.transaction(async (transaction) => {
-    // Prepare every day in the seven-day seed window so backdated attempts do not accumulate in
-    // the default partition.
+    // Prepare every UTC day touched by the seven-day seed window so session-local current_date
+    // cannot leave the previous UTC day in the default partition near midnight.
     await transaction.execute(sql`
-      SELECT workhorse.create_history_day_v1((current_date - day_offset)::date)
-        FROM generate_series(1, 7) AS days(day_offset)
+      SELECT workhorse.create_history_day_v1(
+               ((clock_timestamp() AT TIME ZONE 'UTC')::date - day_offset)::date
+             )
+        FROM generate_series(0, 7) AS days(day_offset)
     `);
     const marker = await transaction.execute<{ name: string }>(sql`
       INSERT INTO public.workhorse_demo_seed (name)

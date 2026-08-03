@@ -228,15 +228,15 @@ not depend on the later full OpenTelemetry and metrics package.
 - [x] Distinguish timeout, deadline, cancellation, and lease-expiry outcomes.
 - [x] Surface deadline pressure in health and telemetry.
 
-### [ ] P1-04 Dead-letter views and redrive
+### [x] P1-04 Dead-letter views and redrive
 
 **Depends on:** P1-01, P1-02
 
-- [ ] Add query APIs for terminal failures without copying them into dispatch indexes.
-- [ ] Add audited redrive that creates a new job linked to the failed source job.
-- [ ] Support bounded bulk redrive with filters and dry-run output.
-- [ ] Preserve the original immutable outcome and complete redrive lineage.
-- [ ] Define idempotency behavior for repeated redrive requests.
+- [x] Add query APIs for terminal failures without copying them into dispatch indexes.
+- [x] Add audited redrive that creates a new job linked to the failed source job.
+- [x] Support bounded bulk redrive with filters and dry-run output.
+- [x] Preserve the original immutable outcome and complete redrive lineage.
+- [x] Define idempotency behavior for repeated redrive requests.
 
 ### [ ] P1-05 Priority queues
 

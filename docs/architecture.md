@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 13.
+The current clean-install protocol is schema version 14.
 
 ## Design objective
 
@@ -11,6 +11,7 @@ Dispatch cost should scale with live work, not lifetime completed work. Schema v
 - immutable accepted identity and payload in `job`
 - exactly one mutable `job_runtime` row only while a job is scheduled, ready, or active
 - exactly one immutable `job_outcome` row after success or terminal failure
+- immutable audited `job_redrive` edges between failed sources and fresh target identities
 - append-only, time-partitioned `job_event` and `attempt_history`
 
 No compatibility write views are installed for the version 1 projection tables.
@@ -25,6 +26,7 @@ flowchart LR
   WorkerProcess --> Worker[TypeScript Worker]
   Worker[TypeScript Worker] -->|claim / heartbeat_v2 / acknowledge_cancel_v1| PG
   Operator[Authorized application or operator layer] -->|cancel_v1 with attribution| PG
+  Operator -->|list_dead_letters_v1 / redrive_v1 / redrive_many_v1| PG
   Worker -->|fire_schedule_v1 / tick_v1 / split maintenance tasks| PG
   PG -->|payload + attempt + fence| Worker
   Worker -->|handler outside SQL transaction| Effects[External effects]
@@ -47,6 +49,8 @@ erDiagram
   job ||--o{ enqueue_idempotency : "owns retained enqueue keys"
   job ||--o| job_runtime : "live lifecycle"
   job ||--o| job_outcome : "terminal lifecycle"
+  job ||--o{ job_redrive : "failed source"
+  job ||--o| job_redrive : "redrive target"
   job ||--o{ job_checkpoint : "records restart boundaries"
   job ||--o{ job_wait : "records timer boundaries"
   job ||--o{ job_event : "emits"
@@ -96,6 +100,15 @@ erDiagram
     jsonb result
     jsonb error
     timestamptz finished_at
+  }
+  job_redrive {
+    uuid source_job_id PK
+    bytea request_id_hash PK
+    uuid target_job_id UK
+    text requested_by
+    text reason
+    jsonb request_fingerprint
+    timestamptz requested_at
   }
   job_checkpoint {
     uuid job_id PK
@@ -176,7 +189,17 @@ The table uses fillfactor 70 because heartbeat and lifecycle updates are intenti
 
 ### `job_outcome`
 
-Insert-only terminal state. Completion, terminal failure, or cancellation deletes runtime and inserts the outcome in one transaction. Succeeded rows contain `result`; failed rows contain `error`; canceled rows contain the bounded cancellation envelope. Never-started cancellation uses fence zero and has no attempt row, while started cancellation retains ownership provenance. Terminal jobs no longer occupy dispatch indexes. Automated retention never deletes an outcome alone: it removes the stable terminal job only after both identity and outcome minimum windows have elapsed and no retained history still attributes to that identity.
+Semantically immutable terminal state. Completion, terminal failure, or cancellation deletes runtime and inserts the outcome in one transaction. Succeeded rows contain `result`; failed rows contain `error`; canceled rows contain the bounded cancellation envelope. Those semantic columns never change. The retention-only `history_through_at` watermark may advance when later append-only history is attributed to the terminal identity. Never-started cancellation uses fence zero and has no attempt row, while started cancellation retains ownership provenance. Terminal jobs no longer occupy dispatch indexes. Automated retention never deletes an outcome alone: it removes the stable terminal job only after both identity and outcome minimum windows have elapsed and no retained history still attributes to that identity.
+
+Failed outcomes additionally have one cold partial index ordered by immutable completion time and identity. `list_dead_letters_v1` uses it for bounded cursor pages and joins immutable `job` definition only after selecting terminal candidates. This index is not a dispatch path and claim never reads it.
+
+### `job_redrive`
+
+Insert-only source-to-target lineage and operator audit. The source/request hash primary key serializes exact replay, while unique target identity gives every new execution one parent. Raw request IDs are never stored. The row retains safe request preview/digest/length, actor, reason, canonical request fingerprint, source and initial target states, and request time.
+
+`redrive_v1` accepts only a retained failed source. It creates a fresh ready job with copied queue, type, payload, tags, attempt budget, retry policy, and execution timeout, but clears the old absolute deadline and never copies checkpoint, wait, attempt, result, or cancellation state. Source and target events plus the lineage row commit atomically; the original outcome's semantic terminal columns are never updated, while its retention watermark follows the normal history-attribution rule. Exact replay returns the existing target, while a changed actor or reason under the same source/request identity conflicts. `redrive_many_v1` applies the same transition to an oldest-first bounded candidate page, accepts a keyset cursor for deterministic backlog progression, and performs no writes in dry-run mode.
+
+The source foreign key protects lineage: terminal identity pruning skips any source with a retained descendant edge. Target deletion cascades its inbound edge, allowing ancestors to become eligible later under the normal retention windows. `Queue.getRedriveLineage` traverses the retained connected graph with an explicit bound and truncation flag.
 
 ### `job_checkpoint`
 

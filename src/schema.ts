@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { Queryable } from "./types.js";
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 13;
+export const WORKHORSE_SCHEMA_VERSION = 14;
 
 export async function readSchemaVersion(database: Queryable): Promise<number | null> {
   const result = await database.query<{ version: number }>(

@@ -17,6 +17,7 @@ export const operationalScenarioNames = [
   "heartbeat-fencing",
   "cancellation-lifecycle",
   "deadline-timeout-lifecycle",
+  "dead-letter-redrive-lifecycle",
   "crash-before-completion",
   "lease-expiry-recovery",
   "retry-paths",
@@ -184,6 +185,29 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     ],
   },
   {
+    name: "dead-letter-redrive-lifecycle",
+    purpose:
+      "Exercise bounded failure listing, non-mutating preview, audited redrive, exact replay, and immutable source outcomes.",
+    invariants: [
+      "terminal failures page through the cold outcome relation without entering live dispatch",
+      "bulk dry-run returns eligible sources without creating jobs, events, or lineage",
+      "redrive creates fresh ready identities while every source outcome remains unchanged",
+      "an exact repeated request returns the original target without duplicate lineage",
+      "bounded bulk redrive records complete audited lineage for every created target",
+    ],
+    metrics: [
+      "deadLetters",
+      "listMs",
+      "dryRunMs",
+      "singleRedriveMs",
+      "replayMs",
+      "bulkRedriveMs",
+      "previewed",
+      "redriven",
+      "lineageEdges",
+    ],
+  },
+  {
     name: "crash-before-completion",
     purpose: "Model deterministic process disappearance at every worker crash boundary.",
     invariants: [
@@ -309,6 +333,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 ] as const;
 
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
+  workhorse.job_redrive,
   workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
 ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1;
@@ -1225,6 +1250,211 @@ async function deadlineTimeoutLifecycle(
   );
 
   return { name: "deadline-timeout-lifecycle", durationMs: 0, metrics, assertions };
+}
+
+async function deadLetterRedriveLifecycle(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const queue = new Queue(context.pool, context.queueName);
+  const assertions: ScenarioAssertion[] = [];
+  const metrics: Record<string, ScenarioMetric> = {};
+  const sourceIds: string[] = [];
+
+  for (let index = 0; index < 3; index += 1) {
+    const sourceId = await queue.enqueue(
+      "redrive-source",
+      { index },
+      {
+        deadline: new Date(Date.now() + 60_000),
+        executionTimeoutMs: 5_000,
+        maxAttempts: 1,
+        tags: ["redrive", "operational"],
+      },
+    );
+    const workerId = `redrive-source-worker-${index}`;
+    const claimed = await queue.claim(workerId);
+    if (!claimed) throw new Error("redrive scenario could not claim its source job");
+    await queue.fail(claimed, workerId, new Error(`terminal source ${index}`));
+    sourceIds.push(sourceId);
+  }
+
+  const [firstPage, listMs] = await measured(context.now, () =>
+    queue.listDeadLetters({
+      queue: context.queueName,
+      type: "redrive-source",
+      tags: ["redrive"],
+      errorName: "Error",
+      limit: 2,
+    }),
+  );
+  const secondPage = await queue.listDeadLetters({
+    queue: context.queueName,
+    type: "redrive-source",
+    limit: 2,
+    ...(firstPage.nextCursor === null ? {} : { cursor: firstPage.nextCursor }),
+  });
+  const listedIds = [...firstPage.items, ...secondPage.items].map((item) => item.jobId);
+  metrics.deadLetters = listedIds.length;
+  metrics.listMs = listMs;
+  recordInvariant(assertions, "failure cursor lists every source once", new Set(listedIds).size, 3);
+  recordInvariant(
+    assertions,
+    "failure listing remains terminal-only",
+    firstPage.items[0]?.error !== null,
+    true,
+  );
+
+  const beforeDryRun = {
+    jobs: await rowCount(context.pool, "job"),
+    events: await rowCount(context.pool, "job_event"),
+    lineage: await rowCount(context.pool, "job_redrive"),
+  };
+  const [previewPage, dryRunMs] = await measured(context.now, () =>
+    queue.redriveMany(
+      { queue: context.queueName, type: "redrive-source", tags: ["redrive"] },
+      {
+        requestedBy: "operational-scenario",
+        reason: "preview failed operational sources",
+        requestId: "dead-letter-preview",
+      },
+      { limit: 2, dryRun: true },
+    ),
+  );
+  const preview = previewPage.results;
+  const afterDryRun = {
+    jobs: await rowCount(context.pool, "job"),
+    events: await rowCount(context.pool, "job_event"),
+    lineage: await rowCount(context.pool, "job_redrive"),
+  };
+  metrics.dryRunMs = dryRunMs;
+  metrics.previewed = preview.length;
+  recordInvariant(
+    assertions,
+    "dry-run reports only eligible rows",
+    preview.map((result) => result.status),
+    ["eligible", "eligible"],
+    jsonEquivalent,
+  );
+  recordInvariant(
+    assertions,
+    "dry-run has no durable side effects",
+    afterDryRun,
+    beforeDryRun,
+    jsonEquivalent,
+  );
+
+  const sourceJobId = firstPage.items[0]!.jobId;
+  const request = {
+    requestedBy: "operational-scenario",
+    reason: "retry one inspected terminal failure",
+    requestId: "dead-letter-single",
+  };
+  const [single, singleRedriveMs] = await measured(context.now, () =>
+    queue.redrive(sourceJobId, request),
+  );
+  const [replay, replayMs] = await measured(context.now, () => queue.redrive(sourceJobId, request));
+  metrics.singleRedriveMs = singleRedriveMs;
+  metrics.replayMs = replayMs;
+  recordInvariant(
+    assertions,
+    "single redrive creates a fresh ready target",
+    single.status,
+    "redriven",
+  );
+  recordInvariant(
+    assertions,
+    "exact replay returns the original target",
+    replay.targetJobId,
+    single.targetJobId,
+  );
+  recordInvariant(assertions, "exact replay is classified distinctly", replay.status, "replayed");
+
+  const [bulkPage, bulkRedriveMs] = await measured(context.now, () =>
+    queue.redriveMany(
+      { queue: context.queueName, type: "redrive-source", errorName: "Error" },
+      {
+        requestedBy: "operational-scenario",
+        reason: "retry a bounded terminal batch",
+        requestId: "dead-letter-bulk",
+      },
+      { limit: 2 },
+    ),
+  );
+  const bulk = bulkPage.results;
+  const bulkContinuation =
+    bulkPage.nextCursor === null
+      ? { results: [], nextCursor: null }
+      : await queue.redriveMany(
+          { queue: context.queueName, type: "redrive-source", errorName: "Error" },
+          {
+            requestedBy: "operational-scenario",
+            reason: "retry a bounded terminal batch",
+            requestId: "dead-letter-bulk",
+          },
+          { limit: 2, cursor: bulkPage.nextCursor },
+        );
+  metrics.bulkRedriveMs = bulkRedriveMs;
+  metrics.redriven =
+    1 +
+    [...bulk, ...bulkContinuation.results].filter((result) => result.status === "redriven").length;
+  recordInvariant(assertions, "bulk redrive stays bounded", bulk.length, 2);
+  recordInvariant(
+    assertions,
+    "bulk redrive creates ready targets",
+    bulk.every((result) => result.status === "redriven" && result.targetState === "ready"),
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "bulk cursor advances through the remaining backlog",
+    bulkContinuation.results.length,
+    1,
+  );
+  recordInvariant(
+    assertions,
+    "bulk cursor ends only after the backlog page is complete",
+    bulkContinuation.nextCursor,
+    null,
+  );
+
+  const sourceOutcome = await context.pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM workhorse.job_outcome
+      WHERE job_id = ANY($1::uuid[]) AND state = 'failed'`,
+    [sourceIds],
+  );
+  recordInvariant(
+    assertions,
+    "redrive leaves every source outcome immutable",
+    Number(sourceOutcome.rows[0]?.count ?? 0),
+    3,
+  );
+  const targets = await context.pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM workhorse.job_redrive edge
+       JOIN workhorse.job target ON target.id = edge.target_job_id
+       JOIN workhorse.job_runtime runtime ON runtime.job_id = target.id
+      WHERE runtime.state = 'ready' AND target.deadline_at IS NULL
+        AND target.execution_timeout_ms = 5000`,
+  );
+  recordInvariant(
+    assertions,
+    "fresh targets are ready, retain timeout, and clear absolute deadline",
+    Number(targets.rows[0]?.count ?? 0),
+    4,
+  );
+  const lineage = await queue.getRedriveLineage(sourceJobId);
+  metrics.lineageEdges = await rowCount(context.pool, "job_redrive");
+  recordInvariant(
+    assertions,
+    "lineage query retains the inspected source",
+    lineage.records.length >= 1,
+    true,
+  );
+  recordInvariant(assertions, "small lineage is complete", lineage.truncated, false);
+  recordInvariant(assertions, "one edge exists for each created target", metrics.lineageEdges, 4);
+
+  return { name: "dead-letter-redrive-lifecycle", durationMs: 0, metrics, assertions };
 }
 
 async function crashBeforeCompletion(
@@ -2486,6 +2716,7 @@ export const operationalScenarioImplementations: Readonly<
   "heartbeat-fencing": heartbeatFencing,
   "cancellation-lifecycle": cancellationLifecycle,
   "deadline-timeout-lifecycle": deadlineTimeoutLifecycle,
+  "dead-letter-redrive-lifecycle": deadLetterRedriveLifecycle,
   "crash-before-completion": crashBeforeCompletion,
   "lease-expiry-recovery": leaseExpiryRecovery,
   "retry-paths": retryPaths,
