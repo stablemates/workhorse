@@ -1,0 +1,111 @@
+---
+title: Idempotency
+description: Scoped enqueue idempotency keys, request equivalence, conflicts, and what deduplication does not cover.
+---
+
+Enqueue idempotency deduplicates **durable acceptance**. Two identical requests with the same key
+produce one job instead of two.
+
+## Basic usage
+
+```ts
+await queue.enqueue(
+  "invoice.capture",
+  { invoiceId: "inv-1" },
+  {
+    queue: "billing",
+    idempotency: {
+      key: "capture:inv-1",
+      scope: "tenant-42", // defaults to "default"
+      ttlMs: 86_400_000, // defaults to 24 hours
+    },
+  },
+);
+```
+
+An exact equivalent replay returns the **original job ID** without creating another job, event, FIFO
+placement, or notification. `enqueueMany` accepts `options.idempotency` on each request.
+
+## Bounds and defaults
+
+| Field   | Default     | Bound                          |
+| ------- | ----------- | ------------------------------ |
+| `key`   | required    | 1 to 512 UTF-8 bytes           |
+| `scope` | `"default"` | 1 to 256 UTF-8 bytes           |
+| `ttlMs` | 24 hours    | integer, 1 ms through 365 days |
+
+Keys are unique within their scope while retained. Expired bindings can be reused.
+
+## Request equivalence
+
+A replay is "exact" when all of the following match:
+
+- queue
+- type
+- payload
+- sorted tags
+- `maxAttempts`
+- normalized `retryPolicy`
+- TTL
+- an explicitly supplied `runAt`
+
+For keyed immediate ingress, an **omitted** `runAt` stays omitted in the fingerprint rather than being
+replaced by the current time. That is what lets a later retry of the same request replay instead of
+conflicting.
+
+A materially different replay raises `EnqueueIdempotencyConflictError` and rolls back the **entire**
+enqueue statement or batch.
+
+```ts
+import { EnqueueIdempotencyConflictError } from "@workhorse/core";
+
+try {
+  await queue.enqueue(
+    "invoice.capture",
+    { invoiceId: "inv-2" },
+    { idempotency: { key: "capture:inv-1" } },
+  );
+} catch (error) {
+  if (error instanceof EnqueueIdempotencyConflictError) {
+    // error.details identifies the mismatching fields with safe diagnostics only
+    console.error(error.details);
+  }
+  throw error;
+}
+```
+
+## Safe diagnostics
+
+<Callout type="warn">
+  Raw keys are **never persisted**. `workhorse.enqueue_idempotency` stores the scope plus a full
+  SHA-256 key hash. Events, UI projections, and errors expose only a bounded preview plus a 12-hex
+  key digest.
+</Callout>
+
+The initial `enqueued` event records that safe metadata once. An exact replay emits no event at all.
+
+## Expiry and cleanup
+
+- Expired bindings permit key reuse.
+- Terminal-storage maintenance removes expired bindings **before** terminal identity pruning.
+- Purging queued or scheduled jobs releases their bindings.
+
+## Unkeyed enqueue
+
+Omitting `idempotency` preserves the prior behavior: every accepted request creates a new job identity.
+
+## What this does not cover
+
+<Callout type="warn">
+  This deduplicates durable enqueue acceptance only. Handler delivery and external effects remain
+  **at least once** and still require provider idempotency keys, an outbox/inbox, or compensation.
+</Callout>
+
+Design rule of thumb: an enqueue idempotency key protects your queue from duplicate work items; a
+provider idempotency key protects your customer from duplicate charges. You usually need both.
+
+## Related
+
+- [Durable execution](/docs/durable-execution) for checkpointing completed external effects.
+- [Dead letters and redrive](/docs/dead-letters), which has its own separate request idempotency.
+- [ADR 0009: enqueue idempotency keys](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0009-enqueue-idempotency-keys.md).

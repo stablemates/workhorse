@@ -1,0 +1,140 @@
+---
+title: Cancellation, deadlines, and timeouts
+description: Cooperative cancellation with fenced acknowledgement, absolute deadlines, and per-attempt execution timeouts.
+---
+
+Three mechanisms stop work early. All three are **cooperative**: JavaScript is never forcibly
+preempted.
+
+## Cancellation
+
+```ts
+const result = await queue.cancel(jobId, {
+  requestedBy: "operator@example.com",
+  reason: "customer withdrew the order",
+});
+```
+
+`CancelResult`:
+
+```ts
+{
+  status: "canceled" | "cancel_requested" | "already_terminal" | "not_found";
+  jobId: string;
+  state: JobState | null;
+  currentAttempt: number | null;
+  requestedAt: Date | null;
+  requestedBy: string | null;
+  reason: string | null;
+  finishedAt: Date | null;
+}
+```
+
+### Behavior by state
+
+| Job state                                 | Result                                                  |
+| ----------------------------------------- | ------------------------------------------------------- |
+| `ready`, future `scheduled`, durable wait | Terminal `canceled` immediately                         |
+| `active`                                  | One durable request recorded; status `cancel_requested` |
+| Already `succeeded` / `failed`            | `already_terminal`, nothing changes                     |
+| Already `canceled`                        | `canceled`, the retained evidence                       |
+| Unknown identity                          | `not_found`                                             |
+
+Active jobs keep their fenced lease. The request is delivered through heartbeat status and the
+handler's `AbortSignal`.
+
+### Handling cancellation in a handler
+
+```ts
+worker.handle("export.build", async (payload, context) => {
+  for (const chunk of chunks) {
+    if (context.signal.aborted) {
+      // Stop starting new effects and settle promptly.
+      throw context.signal.reason;
+    }
+    await processChunk(chunk, { signal: context.signal });
+  }
+  return { done: true };
+});
+```
+
+`context.signal.reason` is a `CancellationRequestedError`, `DeadlineExceededError`, or
+`ExecutionTimeoutError`. All three are exported from `@workhorse/core`.
+
+### Acknowledgement and fencing
+
+`heartbeat_v2` returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or
+`stale`. The worker converts `cancel_requested` into an abort and acknowledges **only** with the exact
+worker/fence generation. Boolean `heartbeat_v1` remains available and maps only `accepted` to `true`.
+
+If a handler ignores the signal until its lease expires, bounded recovery materializes the requested
+cancellation instead of creating another attempt.
+
+### Immutability and races
+
+- A canceled outcome is immutable. Stale completion, failure, checkpoint, wait, heartbeat, or
+  acknowledgement writes cannot replace it.
+- Cancellation racing with completion or failure uses first-committer-wins ordering.
+- Repeated requests return the existing request or outcome without duplicate terminal rows or events.
+
+### Attempt history
+
+A never-started job has **no** attempt-history row: cancellation does not invent history. A canceled
+active or previously started durable-wait attempt has exactly one `canceled` attempt row.
+
+### Attribution is not authorization
+
+<Callout type="warn">
+  `requestedBy` (max 200 characters) and `reason` (max 2,000 characters) are audit attribution only.
+  Workhorse does not check permissions. Your application or operator layer must enforce them.
+</Callout>
+
+### Recurring jobs
+
+Canceling a job created by a schedule affects only that occurrence. The definition remains enabled and
+later occurrences fire independently.
+
+## Absolute deadlines
+
+`EnqueueOptions.deadline` is an immutable wall-clock boundary. Reaching it is terminal even when retry
+budget remains.
+
+```ts
+await queue.enqueue("quote.price", { quoteId }, { deadline: new Date(Date.now() + 900_000) });
+```
+
+- Expired work cannot enter a new claim.
+- Active expiry is signaled cooperatively (`deadline_exceeded`, then `DeadlineExceededError`).
+- Deadline termination never retries.
+- Redrive clears the old deadline on the new target rather than copying an already-expired boundary.
+
+## Per-attempt execution timeouts
+
+`EnqueueOptions.executionTimeoutMs` bounds the active execution of one logical attempt. Durable waits
+**pause** the budget rather than consuming it.
+
+```ts
+await queue.enqueue("report.build", { month }, { executionTimeoutMs: 90_000, maxAttempts: 3 });
+```
+
+- Maximum 365 days (`MAX_EXECUTION_TIMEOUT_MS`).
+- Timeout evidence is distinct from ordinary failure.
+- Remaining retry budget schedules a later attempt.
+
+`ClaimedJob.attemptTimeoutAt` exposes the current attempt's computed target.
+
+## Late-write fencing
+
+Completion, failure, heartbeat, checkpoint, and wait writes cannot overwrite a committed deadline or
+execution-timeout transition. Whatever committed first is the truth.
+
+## Process shutdown is different
+
+A `SIGTERM` to a worker process does **not** abort handler `AbortSignal`s. Process shutdown asks active
+work to finish while preserving its lease. Handler cancellation stays a durable, job-level operation.
+See [Deployment and operations](/docs/operations).
+
+## Further reading
+
+[ADR 0010: cooperative job cancellation](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0010-cooperative-job-cancellation.md)
+records the delivery model, race ownership, and non-goals.

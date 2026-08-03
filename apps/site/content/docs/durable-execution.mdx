@@ -1,0 +1,148 @@
+---
+title: Durable checkpoints and waits
+description: Named checkpoints that survive retries and lease-releasing durable timers that suspend a handler without consuming an attempt.
+---
+
+Workhorse handlers always **restart from their entry point**. There is no persisted JavaScript stack.
+Durable execution primitives make selected boundaries durable inside that model.
+
+## Checkpoints
+
+`context.checkpoint(name, operation)` returns the persisted value when the name already exists.
+Otherwise it runs the operation and immutably persists its JSON result under the current fenced lease.
+
+```ts
+worker.handle("order.fulfill", async (payload: { orderId: string }, context) => {
+  const charge = await context.checkpoint("charge", async () => {
+    // Use a stable provider idempotency key: the crash window between the external effect
+    // and the checkpoint commit is still at least once.
+    return await payments.charge(payload.orderId, { idempotencyKey: `charge:${payload.orderId}` });
+  });
+
+  const shipment = await context.checkpoint("ship", async () => {
+    return await logistics.createShipment(payload.orderId, charge.id);
+  });
+
+  return { chargeId: charge.id, shipmentId: shipment.id };
+});
+```
+
+After a retry or restart, `charge` replays from storage and `ship` runs for the first time.
+
+### Rules and limits
+
+| Rule                        | Detail                                                                   |
+| --------------------------- | ------------------------------------------------------------------------ |
+| Names                       | 1 to 200 characters, immutable per job                                   |
+| Values                      | PostgreSQL-canonical JSONB, at most 1 MiB (`MAX_CHECKPOINT_VALUE_BYTES`) |
+| Ownership                   | Only the exact active, unexpired worker/fence generation may save        |
+| Same name, same value       | Returns the stored checkpoint                                            |
+| Same name, different value  | Throws `CheckpointConflictError`                                         |
+| Stale ownership             | Throws `CheckpointLeaseLostError`                                        |
+| Overlapping same-name calls | Coalesced within one activation                                          |
+
+<Callout type="warn">
+  A checkpoint is **evidence**, not a progress bar. It records that a boundary completed. It is not
+  a mutable progress field, and there is still a crash window between an external effect and the
+  checkpoint commit. Keep external calls idempotent.
+</Callout>
+
+### Reading checkpoints
+
+```ts
+// Inside a handler
+const previous = await context.getCheckpoint<{ id: string }>("charge");
+
+// Outside a handler
+const one = await queue.getCheckpoint(jobId, "charge");
+const all = await queue.listCheckpoints(jobId);
+// each: { jobId, name, value, attempt, fenceToken, workerId, createdAt }
+```
+
+## Durable waits
+
+`context.sleep(name, durationMs)` and `context.sleepUntil(name, wakeAt)` commit a named PostgreSQL
+timer, **release the lease and worker slot**, and restart the handler in the same logical attempt after
+promotion.
+
+```ts
+worker.handle("email.drip", async (payload: { to: string }, context) => {
+  const first = await context.checkpoint("welcome", () => mailer.send(payload.to, "welcome"));
+
+  await context.sleep("wait-3-days", 3 * 24 * 60 * 60_000);
+
+  const followUp = await context.checkpoint("follow-up", () => mailer.send(payload.to, "tips"));
+  return { first, followUp };
+});
+```
+
+Key properties:
+
+- The wait **does not consume a retry attempt**.
+- The worker slot is freed while waiting, so a three-day wait costs no process resources.
+- On resume, the handler restarts from its entry point; completed checkpoints replay instead of
+  re-running.
+- `attempt_history.started_at` spans all suspensions in that logical attempt.
+
+### Relative versus absolute
+
+```ts
+await context.sleep("cooldown", 60_000); // first duration is stored
+await context.sleepUntil("billing-day", new Date("2026-09-01")); // immutable absolute target
+```
+
+Relative replay is first-write-wins: the first stored duration and PostgreSQL-computed wake target win.
+Changing the mode or absolute target for an existing name raises `WaitConflictError`.
+
+### Rules and limits
+
+| Rule          | Detail                                                  |
+| ------------- | ------------------------------------------------------- |
+| Names         | 1 to 200 characters, immutable per job                  |
+| Waits per job | At most 1,000, else `WaitLimitExceededError`            |
+| First target  | Within a 365-day horizon (`MAX_WAIT_DURATION_MS`)       |
+| Ownership     | Exact active generation only, else `WaitLeaseLostError` |
+
+<Callout type="warn">
+  Durable waits are **not exact-time alarms**. The stored target is a not-before boundary. Promotion
+  cadence, queue pause, worker availability, and database downtime can delay the next claim. The
+  default one-second maintenance cadence makes sub-second waits inefficient. Use `sleepUntil` when
+  you need an immutable absolute target.
+</Callout>
+
+### Inspecting waits
+
+```ts
+const wait = await context.getWait("wait-3-days");
+const stored = await queue.getWait(jobId, "wait-3-days");
+const all = await queue.listWaits(jobId);
+```
+
+## Designing a durable pipeline
+
+1. Split long work into idempotent stages.
+2. Wrap each completed external or expensive effect in a named checkpoint.
+3. Put lease-releasing waits between stages that need real time to pass.
+4. Assume all code **before** a wait can execute again.
+5. Keep each active stage at or below roughly 110 seconds for safe rolling deploys.
+
+```ts
+worker.handle("report.publish", async (payload: { month: string }, context) => {
+  const extracted = await context.checkpoint("extract", () => warehouse.extract(payload.month));
+  await context.sleep("settle", 15 * 60_000);
+  const rendered = await context.checkpoint("render", () => renderer.render(extracted));
+  const published = await context.checkpoint("publish", () => cdn.publish(rendered));
+  return published;
+});
+```
+
+## Health visibility
+
+`queue.health()` reports `sleepingJobs`, `overdueWaits`, and `nextWakeAt` so you can tell suspended
+work apart from stuck work.
+
+## Not supported
+
+There is no signal delivery, operator early wake, dependency graph, child-job join, deterministic
+workflow runtime, or persisted continuation stack. Waits are time-based only. See
+[Limitations](/docs/limitations).

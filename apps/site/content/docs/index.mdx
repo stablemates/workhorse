@@ -1,0 +1,78 @@
+---
+title: Introduction
+description: Workhorse is a PostgreSQL-native durable job queue and durable execution protocol for TypeScript and Node.js.
+---
+
+Workhorse is a PostgreSQL-native durable job queue and durable execution protocol. Correctness-sensitive
+lifecycle transitions live in versioned SQL functions; the TypeScript `Queue` and `Worker` classes are
+thin protocol clients over them.
+
+There is no broker, no Redis, and no PostgreSQL extension. If your application already uses PostgreSQL,
+you already have everything Workhorse needs.
+
+## What you get
+
+- **Transactional enqueue.** Accept a job in the same transaction as your application writes, so a
+  committed row and its follow-up work cannot disagree.
+- **Fenced ownership.** Every claim allocates a monotonically increasing fence token. A stale worker
+  cannot complete, fail, checkpoint, or heartbeat a newer attempt.
+- **Durable execution boundaries.** Named checkpoints survive retries and restarts; lease-releasing
+  timer waits suspend a handler for minutes or months without consuming an attempt.
+- **PostgreSQL-owned policy.** Retry backoff, deadlines, per-attempt execution timeouts, retention,
+  and idempotency equivalence are decided and enforced in SQL, so every client behaves identically.
+- **Immutable evidence.** Append-only lifecycle events and one closed attempt-history row per logical
+  attempt, plus immutable terminal outcomes and audited dead-letter redrive lineage.
+- **Operator surface.** Cursor-based job listing with bounded payload projection, merged lifecycle
+  timelines, dead letters, queue health, and an embeddable React dashboard.
+
+## Platform support
+
+| Requirement     | Supported                                                  |
+| --------------- | ---------------------------------------------------------- |
+| Language        | TypeScript-first. JavaScript ESM is fully supported.       |
+| Module format   | ESM only (`"type": "module"`). There is no CommonJS build. |
+| Runtime         | Node.js **>= 22**                                          |
+| Database        | PostgreSQL **15+**, no extensions required                 |
+| Package manager | Any. The repository itself uses pnpm.                      |
+
+Type definitions ship with every package. JavaScript users get the same runtime behavior; only the
+compile-time types are TypeScript-specific.
+
+## Release status
+
+Workhorse 0.1 is an **evidence-first validation release**, not a production-support promise. It exists
+to validate transactional enqueue, deploy-synchronized recurring jobs, fenced ownership, cooperative
+cancellation, immutable attempt history, durable checkpoint replay, lease-releasing timer waits,
+attribution-safe automated retention, failure recovery, PostgreSQL diagnostics, and long-run churn
+behavior.
+
+Practical consequences of that status:
+
+- The canonical schema is **clean-install only** at protocol version 15. Online migration between
+  schema versions is not provided.
+- Benchmarks in this repository are reproducible measurements, not marketing claims. Small runs are
+  smoke tests only.
+- Features are documented as Supported, Partial, or Not Supported in the authoritative
+  [feature matrix](https://github.com/stablemates/workhorse/blob/main/docs/features.md).
+
+Read [Limitations](/docs/limitations) before adopting Workhorse for critical work.
+
+## Packages
+
+| Package                | Purpose                                                               |
+| ---------------------- | --------------------------------------------------------------------- |
+| `@workhorse/core`      | `Queue`, `Worker`, schema installation, worker-process runtime, CLI   |
+| `@workhorse/drizzle`   | Drizzle ORM adapter for node-postgres databases and transactions      |
+| `@workhorse/hono`      | Hono middleware, worker lifecycle, graceful shutdown, dashboard mount |
+| `@workhorse/dashboard` | Embeddable React operator dashboard                                   |
+
+## Where to go next
+
+- [Installation](/docs/installation) sets up the schema and the database connection.
+- [Quickstart](/docs/quickstart) enqueues and processes a first job.
+- [Core concepts](/docs/concepts) explains the execution model you are signing up for.
+
+Deep design material stays in the repository rather than being duplicated here:
+[architecture](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md),
+[protocol reference](https://github.com/stablemates/workhorse/blob/main/docs/mvp-protocol.md), and the
+[decision records](https://github.com/stablemates/workhorse/tree/main/docs/decisions).

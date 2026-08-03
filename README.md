@@ -6,6 +6,7 @@ The current implementation remains an evidence-first validation release rather t
 
 ## Documentation
 
+- [`workhorse.run`](https://workhorse.run): public TypeScript SDK guides, API reference, integrations, examples, and live-demo entry point.
 - [`TODO.md`](TODO.md): prioritized, dependency-aware roadmap for future feature development.
 - [`docs/architecture.md`](docs/architecture.md): system boundaries, module ownership, data model, field-by-field database and API dictionaries, lifecycle, transactions, fencing, crash semantics, health model, and invariants.
 - [`docs/features.md`](docs/features.md): authoritative Supported, Partial, and Not Supported feature matrix.
@@ -16,6 +17,15 @@ The current implementation remains an evidence-first validation release rather t
 - [`demo/README.md`](demo/README.md): interactive Workhorse demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
 - [`docs/decisions/0009-enqueue-idempotency-keys.md`](docs/decisions/0009-enqueue-idempotency-keys.md): scoped enqueue-key ownership, request equivalence, safe diagnostics, expiry, and cleanup.
 - [`docs/decisions/0010-cooperative-job-cancellation.md`](docs/decisions/0010-cooperative-job-cancellation.md): cooperative delivery, exact-fence acknowledgement, race ownership, truthful history, recurring behavior, and non-goals.
+
+Run the Fumadocs site locally without PostgreSQL:
+
+```bash
+pnpm install
+pnpm docs:dev
+```
+
+The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you also want the live operator demo; set `NEXT_PUBLIC_WORKHORSE_DEMO_URL` for a custom demo origin.
 
 ## Included scope
 
