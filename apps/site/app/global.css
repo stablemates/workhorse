@@ -1,0 +1,166 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+/*
+ * Workhorse visual system
+ * -----------------------
+ * A developer-infrastructure identity built around three ideas:
+ *   1. PostgreSQL-native: slate/ink surfaces, hairline rules, table-like density.
+ *   2. Precise: a single signal-orange accent used only for state and emphasis.
+ *   3. Evidence-first: monospace metadata, no decorative gradients.
+ */
+
+@theme {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+
+  /* Signal orange. Reserved for accents, state, and focus. */
+  --color-signal-50: oklch(0.97 0.02 62);
+  --color-signal-100: oklch(0.94 0.045 62);
+  --color-signal-200: oklch(0.89 0.08 62);
+  --color-signal-300: oklch(0.83 0.115 60);
+  --color-signal-400: oklch(0.77 0.15 55);
+  --color-signal-500: oklch(0.7 0.175 50);
+  --color-signal-600: oklch(0.62 0.17 45);
+  --color-signal-700: oklch(0.52 0.145 42);
+  --color-signal-800: oklch(0.42 0.11 40);
+  --color-signal-900: oklch(0.33 0.08 40);
+
+  /* Safety green, used only for "supported"/healthy state. */
+  --color-safety-400: oklch(0.79 0.16 148);
+  --color-safety-500: oklch(0.7 0.16 150);
+  --color-safety-600: oklch(0.58 0.14 152);
+
+  --color-ink-50: oklch(0.985 0.002 250);
+  --color-ink-100: oklch(0.965 0.003 250);
+  --color-ink-200: oklch(0.922 0.004 250);
+  --color-ink-300: oklch(0.86 0.005 250);
+  --color-ink-400: oklch(0.68 0.008 250);
+  --color-ink-500: oklch(0.55 0.01 250);
+  --color-ink-600: oklch(0.44 0.012 250);
+  --color-ink-700: oklch(0.34 0.014 250);
+  --color-ink-800: oklch(0.24 0.016 250);
+  --color-ink-900: oklch(0.17 0.018 253);
+  --color-ink-950: oklch(0.13 0.018 255);
+}
+
+:root {
+  --wh-accent: var(--color-signal-600);
+  --wh-rule: color-mix(in oklab, var(--color-ink-900) 12%, transparent);
+  --wh-grid: color-mix(in oklab, var(--color-ink-900) 6%, transparent);
+  --wh-surface: var(--color-ink-50);
+  --wh-panel: #fff;
+
+  --color-fd-primary: var(--color-signal-600);
+  --color-fd-ring: var(--color-signal-500);
+  --color-fd-muted-foreground: hsl(0 0% 38%);
+}
+
+.dark {
+  --wh-accent: var(--color-signal-400);
+  --wh-rule: color-mix(in oklab, var(--color-ink-50) 14%, transparent);
+  --wh-grid: color-mix(in oklab, var(--color-ink-50) 7%, transparent);
+  --wh-surface: var(--color-ink-950);
+  --wh-panel: color-mix(in oklab, var(--color-ink-900) 88%, black);
+
+  --color-fd-primary: var(--color-signal-400);
+  --color-fd-ring: var(--color-signal-400);
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-feature-settings: "cv11", "ss01";
+  font-variant-numeric: tabular-nums;
+}
+
+:where(a, button, [role="button"]):focus-visible {
+  outline: 2px solid var(--color-fd-ring);
+  outline-offset: 2px;
+}
+
+/* ---------- Structural primitives ---------- */
+
+/* A hairline blueprint grid. Deliberately faint: structure, not decoration. */
+.wh-grid-field {
+  background-image:
+    linear-gradient(to right, var(--wh-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--wh-grid) 1px, transparent 1px);
+  background-size: 64px 64px;
+  background-position: center top;
+  mask-image: linear-gradient(to bottom, black, transparent 78%);
+}
+
+/* Full-bleed hairline that reads like a schema separator. */
+.wh-rule {
+  border-color: var(--wh-rule);
+}
+
+.wh-panel {
+  background-color: var(--wh-panel);
+  border: 1px solid var(--wh-rule);
+}
+
+.wh-mono-label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-fd-muted-foreground);
+}
+
+.wh-accent-text {
+  color: var(--wh-accent);
+}
+
+/* Ticking status dot used for live/supported indicators. */
+.wh-status-dot {
+  block-size: 0.5rem;
+  inline-size: 0.5rem;
+  border-radius: 9999px;
+  background-color: var(--color-safety-500);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-safety-500) 20%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wh-status-dot {
+    animation: wh-pulse 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes wh-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-safety-500) 20%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in oklab, var(--color-safety-500) 6%, transparent);
+  }
+}
+
+/* Terminal / SQL-ish code frame used on the landing page. */
+.wh-frame {
+  border: 1px solid var(--wh-rule);
+  background-color: var(--wh-panel);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.wh-frame-bar {
+  border-bottom: 1px solid var(--wh-rule);
+  background-color: color-mix(in oklab, var(--wh-panel) 92%, var(--color-ink-500));
+}
+
+.wh-link-underline {
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in oklab, var(--wh-accent) 45%, transparent);
+  text-underline-offset: 3px;
+}
+
+.wh-link-underline:hover {
+  text-decoration-color: var(--wh-accent);
+}

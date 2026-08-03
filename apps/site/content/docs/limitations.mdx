@@ -1,0 +1,111 @@
+---
+title: Limitations
+description: What Workhorse 0.1 deliberately does not do, and what that means for adoption.
+---
+
+Workhorse 0.1 is an **evidence-first validation release**, not a production-support promise. This page
+is the honest boundary of the current implementation. The authoritative, field-by-field matrix lives in
+[`docs/features.md`](https://github.com/stablemates/workhorse/blob/main/docs/features.md).
+
+## Delivery and effects
+
+<Callout type="warn">
+  Handler execution is **at least once**. Enqueue idempotency deduplicates durable acceptance only.
+  PostgreSQL cannot make HTTP calls, emails, or payments exactly once. Use stable external
+  idempotency keys, an outbox/inbox, or compensation.
+</Callout>
+
+Redrive is another at-least-once execution and can repeat external effects.
+
+## Not supported
+
+| Capability                                    | Status                                                    |
+| --------------------------------------------- | --------------------------------------------------------- |
+| Job priorities                                | Ordering is FIFO only                                     |
+| Mutable progress fields                       | Checkpoints are immutable evidence, not progress updates  |
+| Workflows, DAGs, dependencies, child jobs     | No workflow graph or dependency runtime                   |
+| Signals and operator early wake               | Durable waits are time-based only                         |
+| Forced handler interruption                   | Cancellation, deadlines, and timeouts are all cooperative |
+| Cross-queue concurrency policies, rate limits | Not implemented                                           |
+| Arbitrary scheduled SQL                       | Schedules contain typed Workhorse jobs only               |
+| Online schema migration                       | Clean-install only                                        |
+| Compatibility write views                     | Deliberately absent to avoid dual-write semantics         |
+| Built-in RBAC, auth, multi-tenancy            | Host applications must authorize                          |
+| OpenTelemetry, metrics endpoint               | Instrument externally                                     |
+| Additional ORM and framework adapters         | Only Drizzle and Hono today                               |
+| Exactly-once external effects                 | Impossible from the database alone                        |
+
+## Partial support
+
+| Capability             | Caveat                                                                |
+| ---------------------- | --------------------------------------------------------------------- |
+| `NOTIFY` wake hints    | Polling remains authoritative; notifications are only an optimization |
+| Queue health           | Independent read-only queries; PostgreSQL statistics can lag          |
+| Comparative benchmarks | Success-path baseline; not a claim of full semantic equivalence       |
+| Operator dashboard     | No built-in RBAC or multi-tenancy                                     |
+| Schema                 | Clean install only; no migration path between protocol versions       |
+
+## Timing is best-effort, not real-time
+
+- Delayed jobs and durable waits store a **not-before** boundary. Promotion cadence, queue pause,
+  worker availability, and database downtime can delay the next claim.
+- The default one-second maintenance cadence makes sub-second durable waits inefficient.
+- Recurring schedules fire through worker evaluation, deduplicated per occurrence second. They are not
+  a hard real-time scheduler.
+
+## Cooperative stop, not preemption
+
+Cancellation, deadlines, and execution timeouts all deliver a signal. A handler that ignores its
+`AbortSignal` runs until its lease expires, at which point bounded recovery materializes the requested
+outcome. JavaScript is never forcibly preempted.
+
+A process `SIGTERM` does not abort handler signals either; it drains within a bounded deadline and then
+hard-exits. Active leases remain durable state that another worker recovers.
+
+## Handler duration
+
+Keep ordinary handlers at or below **110 seconds** for safer rolling deployments. Longer work should be
+split into idempotent stages with checkpoints and lease-releasing waits. This is guidance, not an
+enforced protocol limit.
+
+## Bounds you will actually hit
+
+| Limit                        | Value                           |
+| ---------------------------- | ------------------------------- |
+| Enqueue batch                | 1,000 requests                  |
+| Tags per job                 | 20, each at most 100 characters |
+| Checkpoint value             | 1 MiB canonical JSONB           |
+| Checkpoint and wait names    | 1 to 200 characters             |
+| Waits per job                | 1,000                           |
+| Wait horizon                 | 365 days                        |
+| Listing page                 | 1,000 rows                      |
+| Payload projection           | 1 byte to 1 MiB, 50 redact keys |
+| Dead-letter and redrive page | 1,000 rows                      |
+| Worker concurrency           | 1 to 100 per instance           |
+
+## Benchmark claims
+
+Benchmarks in this repository are reproducible measurements of specific configurations. Small runs are
+smoke tests only and are not evidence of product superiority. Publication-grade evidence requires
+larger retained-history horizons, production-shaped payloads, stable hardware, reference systems, and
+preserved raw results. See the
+[benchmark runbook](https://github.com/stablemates/workhorse/blob/main/docs/benchmarking.md).
+
+## Planned, not implemented
+
+- Long-horizon statistics rollups with bounded dimensions and idempotent late-data recomputation
+- Cold history export after rollup safety is established
+- Notification-assisted dispatch and bounded batch claiming
+- OpenTelemetry spans and process metrics
+- Dynamic configuration reload and handler registry version negotiation
+
+The prioritized roadmap lives in
+[`TODO.md`](https://github.com/stablemates/workhorse/blob/main/TODO.md).
+
+## Should you adopt it?
+
+Workhorse is a reasonable fit when you already run PostgreSQL, want transactional enqueue and durable
+execution boundaries, and can accept at-least-once handlers with a clean-install schema.
+
+It is not a fit when you need priorities, workflow orchestration, forced interruption, cross-process
+rate limits, or a supported online migration story today.

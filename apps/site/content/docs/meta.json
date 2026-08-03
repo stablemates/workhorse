@@ -1,0 +1,32 @@
+{
+  "title": "Documentation",
+  "root": true,
+  "pages": [
+    "---Getting started---",
+    "index",
+    "installation",
+    "quickstart",
+    "concepts",
+    "---Producing work---",
+    "enqueue",
+    "idempotency",
+    "schedules",
+    "---Executing work---",
+    "workers",
+    "retries",
+    "durable-execution",
+    "cancellation",
+    "---Operating---",
+    "queries",
+    "dead-letters",
+    "operations",
+    "---Integrations---",
+    "drizzle",
+    "hono",
+    "dashboard",
+    "---Reference---",
+    "examples",
+    "api",
+    "limitations"
+  ]
+}

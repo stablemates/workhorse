@@ -1,6 +1,8 @@
 docs/research
 node_modules/
 dist/
+.next/
+.source/
 .env
 .env.*
 !.env.example

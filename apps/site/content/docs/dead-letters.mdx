@@ -1,0 +1,139 @@
+---
+title: Dead letters and redrive
+description: Query immutable terminal failures and redrive them with audited, idempotent, bounded operations.
+---
+
+Terminal failures stay in the cold `job_outcome` relation. The partial failure index is separate from
+every ready, scheduled, active, and expiry dispatch index, so inspecting dead letters never competes
+with claiming work.
+
+## Listing dead letters
+
+```ts
+const page = await queue.listDeadLetters({
+  queue: "billing",
+  type: "invoice.capture",
+  tags: ["tenant:42"], // every supplied tag must be present
+  errorName: "CardDeclined",
+  finishedAfter: new Date("2026-08-01T00:00:00Z"),
+  finishedBefore: new Date("2026-08-03T00:00:00Z"),
+  limit: 100,
+});
+
+for (const item of page.items) {
+  console.log(item.jobId, item.error, item.finishedAt, item.redriveCount);
+}
+```
+
+- Stable descending `(finishedAt, jobId)` cursors; pass `page.nextCursor` as `cursor` to advance.
+- Default limit 100, maximum 1,000 (`MAX_REDRIVE_BATCH_SIZE`).
+- Each `DeadLetter` includes queue, type, payload, tags, attempts, retry policy, deadline, execution
+  timeout, error envelope, `finishedAt`, and `redriveCount`.
+
+## Redriving one failure
+
+```ts
+const source = page.items[0];
+if (source) {
+  const result = await queue.redrive(source.jobId, {
+    requestedBy: "operator@example.com",
+    reason: "provider incident resolved",
+    requestId: "incident-2026-08-03:billing-redrive",
+  });
+  // { status, sourceJobId, targetJobId, sourceState, targetState, requestedAt }
+}
+```
+
+Every redrive requires **actor, reason, and request identity**. All three are mandatory:
+
+| Field         | Bound                 |
+| ------------- | --------------------- |
+| `requestedBy` | 1 to 200 characters   |
+| `reason`      | 1 to 2,000 characters |
+| `requestId`   | 1 to 512 UTF-8 bytes  |
+
+### What the target inherits
+
+Copied: queue, type, payload, tags, retry policy, attempt budget, per-attempt execution timeout.
+
+Not copied: the old absolute deadline (cleared), checkpoints, waits, attempts, result, and cancellation
+state. The target starts `ready` at attempt one.
+
+The source outcome's semantic terminal evidence remains immutable. Only its existing retention
+watermark may advance when the append-only redrive event is recorded.
+
+### Request idempotency
+
+- An exact source/request replay returns the original target with status `replayed`.
+- A materially different replay raises `RedriveIdempotencyConflictError` (SQLSTATE `P1002`) without
+  side effects.
+- The raw request ID is **never persisted**. Audit rows and conflict details expose only a safe
+  preview, digest, and length.
+
+```ts
+import { RedriveIdempotencyConflictError } from "@workhorse/core";
+
+try {
+  await queue.redrive(jobId, request);
+} catch (error) {
+  if (error instanceof RedriveIdempotencyConflictError) console.error(error.details);
+  throw error;
+}
+```
+
+## Bulk redrive
+
+```ts
+let cursor;
+do {
+  const bulk = await queue.redriveMany(
+    { queue: "billing", errorName: "ProviderTimeout" },
+    {
+      requestedBy: "operator@example.com",
+      reason: "provider incident 2026-08-03 resolved",
+      requestId: "incident-2026-08-03:bulk",
+    },
+    { limit: 500, cursor },
+  );
+
+  cursor = bulk.nextCursor ?? undefined;
+} while (cursor);
+```
+
+- Processes the **oldest** matching failures in one PostgreSQL statement.
+- Default limit 100, maximum 1,000 per page.
+- `nextCursor` advances deterministically across equal timestamps. Repeating the same cursor and
+  request replays that exact page instead of duplicating targets.
+- Each source derives independent idempotency from the shared request ID.
+
+### Dry run
+
+```ts
+const preview = await queue.redriveMany(filter, request, { dryRun: true });
+// results have status "eligible"; no job, event, notification, or lineage writes occur
+```
+
+`RedriveStatus` is `redriven`, `replayed`, `eligible`, `not_found`, or `not_failed`.
+
+## Lineage
+
+```ts
+const lineage = await queue.getRedriveLineage(jobId, 1_000);
+// { records: [...], truncated: boolean }
+```
+
+Returns bounded retained edges and reports whether traversal was truncated. A retained descendant
+protects its source identity from terminal pruning; once the target is pruned, ancestors become
+eligible under the normal terminal identity policy.
+
+## Operational cautions
+
+<Callout type="warn">
+  Redrive is another **at-least-once execution**. It can repeat external effects. Handlers still
+  need provider idempotency keys or compensation before you redrive payments, emails, or webhooks in
+  bulk.
+</Callout>
+
+- Start with `dryRun` on a narrow filter, then widen.
+- Use one request ID per incident so replays are safe if your tooling crashes mid-backlog.
+- `requestedBy` is attribution, not authorization. Enforce permissions in your operator layer.

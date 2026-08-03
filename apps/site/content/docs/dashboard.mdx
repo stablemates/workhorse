@@ -1,0 +1,114 @@
+---
+title: Dashboard
+description: The embeddable React operator dashboard, its mount adapter, authorization boundary, and custom integration surface.
+---
+
+`@workhorse/dashboard` is an embeddable React operator dashboard. The package owns the UI, data
+contracts, theme, styles, browser bundle, oRPC client, and a provider-neutral server read model. It has
+no dependency on the demo application.
+
+## What it shows
+
+- Current tasks with filters, pagination, and a task drawer
+- Durable checkpoint progress (a Steps column and a stepper of saved, running, and pending boundaries)
+- Terminal results and per-attempt failure evidence
+- Recurring schedules and their occurrences
+- Queues and workers, including audited pause and resume controls
+- System health: deadline pressure, retention lag, and PostgreSQL diagnostics
+
+## Recommended: mount it with the framework adapter
+
+For Hono, `mountWorkhorseDashboard` serves the whole application without you building a transport
+adapter:
+
+```ts
+import { mountWorkhorseDashboard } from "@workhorse/hono";
+
+mountWorkhorseDashboard(app, {
+  workhorse,
+  path: "/workhorse", // "/" to own the host root
+  environment: "production",
+  authorize: (request) => isAdmin(request),
+});
+```
+
+Selected options:
+
+| Option                                                                                    | Purpose                                                                   |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `path`                                                                                    | Mount namespace. Defaults to `/workhorse`.                                |
+| `authorize`                                                                               | **Required.** Authorizes every dashboard, RPC, asset, and stream request. |
+| `environment`                                                                             | Label shown in the UI                                                     |
+| `configuredWorkers`                                                                       | Worker identities the host knows about                                    |
+| `auditActor`                                                                              | Actor recorded for mutations initiated from the dashboard                 |
+| `browserModules`                                                                          | Trusted host-owned ES modules loaded before the dashboard entry           |
+| `operator`, `queueController`, `taskController`, `workerController`, `scheduleController` | Host-owned control surfaces                                               |
+| `projectDurability`                                                                       | Host projection of durable-step progress                                  |
+
+## Authorization
+
+<Callout type="warn">
+  The dashboard has **no built-in authentication, RBAC, or multi-tenancy**. Host applications must
+  authorize every request. `requestedBy` and `auditActor` are attribution, not authorization.
+</Callout>
+
+Expose it only to trusted operators, behind your existing session or SSO check.
+
+## Schema safety
+
+The mount verifies that the installed schema is compatible and returns `503` when it is not. It
+deliberately never installs or migrates database objects.
+
+## Custom integrations
+
+The React surface remains available for hosts that are not on Hono:
+
+```tsx
+import { Dashboard, WorkhorseThemeProvider } from "@workhorse/dashboard";
+import { createDashboardClient } from "@workhorse/dashboard/client";
+import "@workhorse/dashboard/styles.css";
+
+const client = createDashboardClient("/workhorse/rpc");
+
+root.render(
+  <WorkhorseThemeProvider>
+    <Dashboard client={client} basePath="/workhorse" auditActor="ops@example.com" />
+  </WorkhorseThemeProvider>,
+);
+```
+
+`DashboardProps` accepts `client`, `basePath`, `auditActor`, and `demoTools`. The `demoTools` job
+seeding menu is not part of the required client contract; opt in only when a host intentionally
+supplies demo fixtures. All sample and seed data stay owned by the demo project, never the package.
+
+Server-side building blocks are exported from `@workhorse/dashboard/server`, including
+`dashboardRouter`, `readDashboardSnapshot`, `dashboardDatabase`, `dashboardAssetsDirectory`, and
+`DashboardRefreshHub`.
+
+## Requirements
+
+| Peer                 | Range        |
+| -------------------- | ------------ |
+| `@workhorse/core`    | `>=0.1.0 <1` |
+| `react`, `react-dom` | `>=19 <20`   |
+| Node.js              | `>=22`       |
+
+## Refresh behavior
+
+The browser refreshes only the active page through its dedicated reader on a bounded polling cadence.
+The default is 30 seconds, with 5-second, 15-second, 1-minute, 5-minute, and manual-only options.
+
+## Try it locally
+
+The repository ships an end-to-end demo that mounts the packaged dashboard and seeds successful,
+retried, failed, durable, deadline, and timeout jobs:
+
+```bash
+pnpm install
+pnpm db:reset:all
+pnpm demo
+```
+
+See the
+[demo README](https://github.com/stablemates/workhorse/blob/main/demo/README.md) for fixtures,
+production-mode, and connection overrides.

@@ -1,0 +1,103 @@
+---
+title: Installation
+description: Install the Workhorse packages, provision PostgreSQL, and install the versioned schema.
+---
+
+## Requirements
+
+- Node.js **>= 22**
+- PostgreSQL **15 or newer**, with no extensions required
+- An ESM project (`"type": "module"` in `package.json`)
+
+## Install the packages
+
+```bash
+npm install @workhorse/core pg
+```
+
+```bash
+pnpm add @workhorse/core pg
+```
+
+`pg` (node-postgres) is a peer of normal usage: you own the `Pool` and its lifetime.
+
+Optional integrations:
+
+```bash
+pnpm add @workhorse/drizzle drizzle-orm      # Drizzle transactions
+pnpm add @workhorse/hono hono @hono/node-server  # Hono lifecycle + dashboard mount
+pnpm add @workhorse/dashboard react react-dom    # Embeddable operator UI
+```
+
+## Provide a database
+
+Workhorse creates a `workhorse` schema inside a database you own. Nothing outside that schema is
+touched.
+
+```bash
+createdb workhorse_app
+export DATABASE_URL="postgres://workhorse:workhorse@localhost:5432/workhorse_app"
+```
+
+The database role needs permission to create a schema, tables, indexes, partitions, and functions in
+the target database.
+
+## Install the schema
+
+`installSchema` applies the canonical clean-install schema for protocol version 15.
+
+```ts
+import { Pool } from "pg";
+import { installSchema, WORKHORSE_SCHEMA_VERSION } from "@workhorse/core";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+await installSchema(pool);
+console.log(`Workhorse schema version ${WORKHORSE_SCHEMA_VERSION} installed`);
+```
+
+Installation is an explicit deployment step. Runtimes never install or migrate the schema implicitly.
+`installSchema` refuses to treat an existing mixed or non-current Workhorse schema as a clean
+installation, so it will not silently corrupt an older database.
+
+<Callout type="warn">
+  The schema is **clean-install only**. There is no supported online migration path between protocol
+  versions. Treat a version change as a deliberate, separately engineered operation.
+</Callout>
+
+## Verify compatibility at startup
+
+Long-lived processes should assert compatibility instead of installing:
+
+```ts
+import { assertSchemaCompatible, readSchemaVersion } from "@workhorse/core";
+
+const installed = await readSchemaVersion(pool); // number | null
+await assertSchemaCompatible(pool); // throws when the runtime and database disagree
+```
+
+`readSchemaVersion` returns `null` when the schema is absent. `assertSchemaCompatible` throws when the
+installed version differs from the runtime's `WORKHORSE_SCHEMA_VERSION`.
+
+## JavaScript usage
+
+Every package is published as ESM with bundled type declarations. Plain JavaScript works without any
+build step:
+
+```js
+// worker.mjs
+import { Pool } from "pg";
+import { Queue, Worker } from "@workhorse/core";
+
+const queue = new Queue(new Pool({ connectionString: process.env.DATABASE_URL }));
+const worker = new Worker(queue, { workerId: "worker-1" });
+worker.handle("email.send", async (payload) => ({ delivered: payload.to }));
+await worker.run();
+```
+
+CommonJS `require()` is not supported.
+
+## Next steps
+
+Continue with the [Quickstart](/docs/quickstart), then read
+[Core concepts](/docs/concepts) before designing handlers.

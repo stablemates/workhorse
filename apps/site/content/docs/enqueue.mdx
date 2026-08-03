@@ -1,0 +1,172 @@
+---
+title: Enqueue and transactions
+description: Immediate, delayed, batched, and transactional enqueue with deadlines, timeouts, tags, and queues.
+---
+
+## `Queue.enqueue`
+
+```ts
+const jobId: string = await queue.enqueue(type, payload, options?, transaction?);
+```
+
+| Parameter     | Type             | Notes                                                                        |
+| ------------- | ---------------- | ---------------------------------------------------------------------------- |
+| `type`        | `string`         | Handler name. Immutable on the job.                                          |
+| `payload`     | JSON value       | Immutable. Runtime validation and size policy are yours.                     |
+| `options`     | `EnqueueOptions` | See below.                                                                   |
+| `transaction` | `Queryable`      | Defaults to the queue's database. Pass a `PoolClient` to join a transaction. |
+
+### `EnqueueOptions`
+
+```ts
+interface EnqueueOptions {
+  queue?: string; // defaults to the Queue's defaultQueue ("default")
+  runAt?: Date; // future date creates a scheduled job
+  deadline?: Date; // absolute wall-clock terminal boundary
+  executionTimeoutMs?: number; // active execution budget per logical attempt
+  maxAttempts?: number; // defaults to 25
+  retryPolicy?: RetryPolicy; // see Retries
+  tags?: string[]; // up to 20 tags, each at most 100 characters
+  idempotency?: EnqueueIdempotency; // see Idempotency
+}
+```
+
+## Immediate and delayed work
+
+```ts
+// Due now
+await queue.enqueue("email.send", { to: "person@example.com" });
+
+// Due later: the job enters the scheduled runtime and is promoted when due
+await queue.enqueue(
+  "invoice.remind",
+  { invoiceId: "inv-1" },
+  { queue: "billing", runAt: new Date(Date.now() + 3_600_000) },
+);
+```
+
+Scheduled work is promoted by `tick_v1` on a bounded pass, so `runAt` is a **not-before** boundary
+rather than an exact alarm.
+
+## Transactional enqueue
+
+Pass the active client as the fourth argument. The job's durable acceptance then commits or rolls back
+with your application writes.
+
+```ts
+const client = await pool.connect();
+try {
+  await client.query("BEGIN");
+  await client.query("INSERT INTO account (id, email) VALUES ($1, $2)", [id, email]);
+  await queue.enqueue("account.created", { accountId: id }, {}, client);
+  await client.query("COMMIT");
+} catch (error) {
+  await client.query("ROLLBACK");
+  throw error;
+} finally {
+  client.release();
+}
+```
+
+Using an ORM? [`@workhorse/drizzle`](/docs/drizzle) adapts Drizzle databases and caller-owned
+transactions with the same semantics.
+
+<Callout>
+  Transactional enqueue removes the "did my job get created?" class of bugs. It does not make
+  handler side effects transactional: handlers run outside SQL transactions and are at least once.
+</Callout>
+
+## Batch enqueue
+
+```ts
+const ids = await queue.enqueueMany(
+  [
+    { type: "email.send", payload: { to: "a@example.com" } },
+    { type: "email.send", payload: { to: "b@example.com" }, options: { queue: "bulk" } },
+    { type: "report.build", payload: { month: "2026-07" }, tags: ["reports"] },
+  ],
+  client, // optional transaction
+);
+```
+
+- At most **1,000** requests per call (`MAX_ENQUEUE_BATCH_SIZE`). Larger batches throw `RangeError`.
+- All requests share one classification timestamp and commit or roll back together.
+- Returned IDs are in input order, and ready jobs receive FIFO sequences in input order.
+- `enqueue` is implemented as a single-request `enqueueMany`.
+
+## Queues
+
+Queue names are plain strings supplied per job and per worker claim. There are no priorities: ordering
+within a queue is FIFO by a globally monotonic sequence.
+
+```ts
+const queue = new Queue(pool, "billing"); // change the default for this client
+await queue.enqueue("charge", payload); // -> "billing"
+await queue.enqueue("charge", payload, { queue: "vip" }); // -> "vip"
+```
+
+Queue-level controls:
+
+```ts
+await queue.pauseQueue("billing"); // suppress claims without touching jobs
+await queue.resumeQueue("billing");
+const removed = await queue.purgeQueue("billing"); // remove scheduled + ready work atomically
+```
+
+Purging releases any enqueue idempotency bindings held by the removed jobs.
+
+## Tags
+
+Tags are optional labels used for filtering in dead-letter queries and operator listings.
+
+```ts
+await queue.enqueue("charge", payload, { tags: ["tenant:42", "priority-customer"] });
+```
+
+Up to 20 non-empty tags of at most 100 characters each. A GIN index supports overlap and containment
+filters.
+
+## Deadlines
+
+`deadline` is an absolute wall-clock boundary. Reaching it is terminal **even when retry budget
+remains**.
+
+```ts
+await queue.enqueue("price.quote", { quoteId }, { deadline: new Date(Date.now() + 15 * 60_000) });
+```
+
+- An expired job cannot enter a new claim.
+- An active attempt is signaled cooperatively: `heartbeat_v2` returns `deadline_exceeded` and the
+  handler's `AbortSignal` aborts with `DeadlineExceededError`.
+- Deadline termination never retries.
+- Redrive deliberately clears the old absolute deadline on the new target.
+
+## Per-attempt execution timeouts
+
+`executionTimeoutMs` bounds the **active execution** of one logical attempt. Durable waits pause the
+budget rather than consuming it.
+
+```ts
+await queue.enqueue("report.build", { month }, { executionTimeoutMs: 90_000 });
+```
+
+- Maximum 365 days (`MAX_EXECUTION_TIMEOUT_MS`).
+- Timeout evidence is distinct from ordinary failure; `heartbeat_v2` returns `timeout_exceeded` and the
+  signal aborts with `ExecutionTimeoutError`.
+- Remaining retry budget schedules a later attempt.
+
+Both deadlines and timeouts are cooperative. JavaScript is not forcibly preempted; observe the signal.
+
+## Attempt budget
+
+`maxAttempts` defaults to **25**. Combined with the default SQL-owned backoff, that spreads retries
+across roughly 20 days. Override it only when a job genuinely needs a different budget.
+
+## Errors
+
+| Error                             | Cause                                                         |
+| --------------------------------- | ------------------------------------------------------------- |
+| `RangeError`                      | Batch larger than 1,000 requests                              |
+| `EnqueueIdempotencyConflictError` | A retained key was reused with a materially different request |
+
+See [Idempotency](/docs/idempotency) for conflict details and equivalence rules.

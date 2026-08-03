@@ -1,0 +1,119 @@
+---
+title: Recurring schedules
+description: Deploy-synchronized, namespaced recurring jobs evaluated by workers with revision fencing and SQL deduplication.
+---
+
+Workhorse recurring jobs are **declarative and deploy-synchronized**. You describe the desired state of
+a namespace during deployment; Workhorse reconciles the database to match it.
+
+Definitions contain typed Workhorse jobs, never arbitrary SQL.
+
+## Synchronize during deployment
+
+```ts
+await queue.syncSchedules("billing-production", [
+  {
+    name: "daily-invoices",
+    schedule: "0 6 * * *",
+    job: {
+      type: "generate-invoices",
+      queue: "billing",
+      payload: { scope: "daily" },
+      maxAttempts: 5,
+      retryPolicy: {
+        type: "exponential",
+        initialDelayMs: 30_000,
+        multiplier: 2,
+        maxDelayMs: 900_000,
+      },
+    },
+  },
+  {
+    name: "weekly-digest",
+    schedule: "0 9 * * 1",
+    enabled: true,
+    job: { type: "digest.send", payload: {} },
+  },
+]);
+```
+
+<Callout type="warn">
+  Synchronization is **authoritative for its namespace**. Any name that exists in the database but
+  is omitted from the call is disabled atomically. Run this on every deployment with the complete
+  list.
+</Callout>
+
+Cron expressions are validated in process before any write, so an invalid expression throws rather than
+half-applying a namespace. Pass `{ prune: false }` as the third argument when you deliberately want to
+add definitions without disabling omitted names; the default is `true`.
+
+### Types
+
+```ts
+interface ScheduleDefinition {
+  name: string; // stable deployment identity
+  schedule: string; // cron expression, parsed in process
+  enabled?: boolean;
+  job: ScheduleJobDefinition;
+}
+
+interface ScheduleJobDefinition {
+  type: string;
+  payload: Json;
+  queue?: string;
+  maxAttempts?: number;
+  retryPolicy?: RetryPolicy;
+}
+```
+
+## Let workers fire them
+
+A worker only evaluates namespaces it was configured with:
+
+```ts
+const worker = new Worker(queue, {
+  workerId: "worker-1",
+  scheduleNamespaces: ["billing-production"],
+  scheduleCatchupLimit: 100, // max missed occurrences fired per schedule per pass
+});
+```
+
+No extra infrastructure, cron container, or `pg_cron` extension is required. Workers parse cron
+expressions in process and call revision-fenced `workhorse.fire_schedule_v1` with the planned
+occurrence second.
+
+## Revision fencing
+
+Changing a definition increments its revision. A worker still running old code holds a stale revision,
+and its fire command becomes a no-op instead of executing a newly committed payload at the old cadence.
+
+## Occurrence deduplication
+
+A durable `(namespace, schedule, second)` key deduplicates in SQL. Many workers can evaluate the same
+schedule simultaneously; only one job is created per occurrence second. Duplicate fires return the
+existing job ID.
+
+## Inspecting schedules
+
+```ts
+const stored = await queue.schedules(["billing-production"]);
+// [{ namespace, name, schedule, revision, lastOccurrenceAt }]
+```
+
+`StoredSchedule.revision` is a `bigint`.
+
+You can also fire an occurrence explicitly through `queue.fireSchedule(...)`, which is primarily useful
+for tests and operator tooling.
+
+## Cancellation of an occurrence
+
+Canceling a job that a schedule created affects **only that occurrence**. The definition stays enabled
+and later occurrences fire independently. See [Cancellation](/docs/cancellation).
+
+## Operational notes
+
+- Fired jobs copy the definition's retry policy to every job identity.
+- Occurrence rows are retained under their own retention window
+  (`scheduleOccurrenceRetentionDays`, default 14 days).
+- Schedules should be authored in application code and synchronized at deploy time, not edited only in
+  a database console; workers execute what the database holds, but the deployment owns intent.
