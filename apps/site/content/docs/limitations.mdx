@@ -37,13 +37,12 @@ Redrive is another at-least-once execution and can repeat external effects.
 
 ## Partial support
 
-| Capability             | Caveat                                                                |
-| ---------------------- | --------------------------------------------------------------------- |
-| `NOTIFY` wake hints    | Polling remains authoritative; notifications are only an optimization |
-| Queue health           | Independent read-only queries; PostgreSQL statistics can lag          |
-| Comparative benchmarks | Success-path baseline; not a claim of full semantic equivalence       |
-| Operator dashboard     | No built-in RBAC or multi-tenancy                                     |
-| Schema                 | Clean install only; no migration path between protocol versions       |
+| Capability          | Caveat                                                                |
+| ------------------- | --------------------------------------------------------------------- |
+| `NOTIFY` wake hints | Polling remains authoritative; notifications are only an optimization |
+| Queue health        | Independent read-only queries; PostgreSQL statistics can lag          |
+| Operator dashboard  | No built-in RBAC or multi-tenancy                                     |
+| Schema              | Clean install only; no migration path between protocol versions       |
 
 ## Timing is best-effort, not real-time
 
@@ -82,14 +81,6 @@ enforced protocol limit.
 | Payload projection           | 1 byte to 1 MiB, 50 redact keys |
 | Dead-letter and redrive page | 1,000 rows                      |
 | Worker concurrency           | 1 to 100 per instance           |
-
-## Benchmark claims
-
-Benchmarks in this repository are reproducible measurements of specific configurations. Small runs are
-smoke tests only and are not evidence of product superiority. Publication-grade evidence requires
-larger retained-history horizons, production-shaped payloads, stable hardware, reference systems, and
-preserved raw results. See the
-[benchmark runbook](https://github.com/stablemates/workhorse/blob/main/docs/benchmarking.md).
 
 ## Planned, not implemented
 

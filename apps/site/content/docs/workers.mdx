@@ -97,20 +97,6 @@ worker.concurrency; // readonly number
 worker.runtimeState(); // { concurrency, activeSlots, paused, draining }
 ```
 
-### Measured behavior
-
-From the 2026-08-02 lifecycle benchmark with roughly 120 ms handlers:
-
-| Concurrency |   Throughput | Maximum overlap |
-| ----------: | -----------: | --------------: |
-|           1 |  8.08 jobs/s |               1 |
-|           4 | 31.83 jobs/s |               4 |
-|           8 | 62.85 jobs/s |               8 |
-
-At equal total capacity, `1×8`, `2×4`, and `8×1` all reached about 63 to 64 jobs/s for I/O-like
-handlers. One eight-slot worker bounded claim pressure to a single query while preserving the same
-handler overlap.
-
 **Recommendation:** use one multi-slot `Worker` per distinct queue or policy group per process, and
 scale process replicas for availability and aggregate capacity. Do not create one `Worker` per
 concurrency slot.
