@@ -18,6 +18,7 @@ export const operationalScenarioNames = [
   "cancellation-lifecycle",
   "deadline-timeout-lifecycle",
   "dead-letter-redrive-lifecycle",
+  "query-listing-lifecycle",
   "crash-before-completion",
   "lease-expiry-recovery",
   "retry-paths",
@@ -208,6 +209,28 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     ],
   },
   {
+    name: "query-listing-lifecycle",
+    purpose:
+      "Exercise operator-only cross-state pagination, bounded payload projection, and merged retained lifecycle history.",
+    invariants: [
+      "cross-state pages use an immutable cursor and list every seeded identity once",
+      "payloads are omitted by default and top-level redaction precedes byte classification",
+      "queue, type, state, and creation-time filters share the same bounded projection",
+      "heartbeats do not churn the operator projection while lifecycle transitions do",
+      "events and closed attempts form one deterministic retained timeline",
+      "operator indexes remain separate from every claim-critical index",
+    ],
+    metrics: [
+      "listedJobs",
+      "listMs",
+      "payloadProjectionMs",
+      "timelineMs",
+      "timelineEntries",
+      "projectionRows",
+      "operatorIndexBytes",
+    ],
+  },
+  {
     name: "crash-before-completion",
     purpose: "Model deterministic process disappearance at every worker crash boundary.",
     invariants: [
@@ -333,7 +356,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 ] as const;
 
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
-  workhorse.job_redrive,
+  workhorse.job_redrive, workhorse.job_query,
   workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
 ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1;
@@ -1455,6 +1478,152 @@ async function deadLetterRedriveLifecycle(
   recordInvariant(assertions, "one edge exists for each created target", metrics.lineageEdges, 4);
 
   return { name: "dead-letter-redrive-lifecycle", durationMs: 0, metrics, assertions };
+}
+
+async function queryListingLifecycle(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const queue = new Queue(context.pool, context.queueName);
+  const assertions: ScenarioAssertion[] = [];
+  const metrics: Record<string, ScenarioMetric> = {};
+  const ids = await queue.enqueueMany([
+    {
+      type: "query-listing-a",
+      payload: { public: "alpha", secret: "redact-alpha" },
+      options: { queue: context.queueName, tags: ["query", "alpha"] },
+    },
+    {
+      type: "query-listing-b",
+      payload: { public: "beta", secret: "redact-beta" },
+      options: { queue: context.queueName, tags: ["query", "beta"] },
+    },
+    {
+      type: "query-listing-a",
+      payload: { public: "gamma", secret: "redact-gamma" },
+      options: { queue: context.queueName, tags: ["query", "gamma"] },
+    },
+    {
+      type: "query-listing-b",
+      payload: { public: "delta", secret: "redact-delta" },
+      options: { queue: context.queueName, tags: ["query", "delta"] },
+    },
+  ]);
+  const completed = await queue.claim("query-listing-complete", { queue: context.queueName });
+  if (!completed) throw new Error("query listing scenario could not claim its completed job");
+  await queue.complete(completed, "query-listing-complete", { ok: true });
+  const active = await queue.claim("query-listing-active", { queue: context.queueName });
+  if (!active) throw new Error("query listing scenario could not claim its active job");
+
+  const projectionBeforeHeartbeat = await context.pool.query<{ updated_at: Date }>(
+    "SELECT updated_at FROM workhorse.job_query WHERE job_id = $1",
+    [active.id],
+  );
+  await queue.heartbeat(active, "query-listing-active", 30_000);
+  const projectionAfterHeartbeat = await context.pool.query<{ updated_at: Date }>(
+    "SELECT updated_at FROM workhorse.job_query WHERE job_id = $1",
+    [active.id],
+  );
+  recordInvariant(
+    assertions,
+    "heartbeat leaves operator projection timestamp unchanged",
+    projectionAfterHeartbeat.rows[0]?.updated_at.getTime(),
+    projectionBeforeHeartbeat.rows[0]?.updated_at.getTime(),
+  );
+
+  const [firstPage, listMs] = await measured(context.now, () =>
+    queue.listJobs({ queue: context.queueName, limit: 2 }),
+  );
+  const secondPage =
+    firstPage.nextCursor === null
+      ? { items: [], nextCursor: null }
+      : await queue.listJobs({
+          queue: context.queueName,
+          limit: 2,
+          cursor: firstPage.nextCursor,
+        });
+  const listed = [...firstPage.items, ...secondPage.items];
+  metrics.listMs = listMs;
+  metrics.listedJobs = listed.length;
+  recordInvariant(assertions, "cross-state cursor lists every job once", listed.length, ids.length);
+  recordInvariant(
+    assertions,
+    "cross-state cursor contains no duplicates",
+    new Set(listed.map((job) => job.id)).size,
+    ids.length,
+  );
+  recordInvariant(
+    assertions,
+    "default listing omits every payload",
+    listed.every((job) => job.payload === null && job.payloadStatus === "omitted"),
+    true,
+  );
+  recordInvariant(assertions, "final page has no continuation cursor", secondPage.nextCursor, null);
+
+  const createdTimes = listed.map((job) => job.createdAt.getTime());
+  const [projected, payloadProjectionMs] = await measured(context.now, () =>
+    queue.listJobs({
+      queue: context.queueName,
+      type: "query-listing-a",
+      states: ["ready", "succeeded"],
+      createdAfter: new Date(Math.min(...createdTimes) - 1),
+      createdBefore: new Date(Math.max(...createdTimes) + 1),
+      payload: { include: true, maxBytes: 1_024, redactKeys: ["secret"] },
+    }),
+  );
+  metrics.payloadProjectionMs = payloadProjectionMs;
+  recordInvariant(assertions, "combined filters select two jobs", projected.items.length, 2);
+  recordInvariant(
+    assertions,
+    "redaction occurs before bounded payload return",
+    projected.items.every(
+      (job) =>
+        job.payloadStatus === "included" &&
+        job.payload !== null &&
+        typeof job.payload === "object" &&
+        !Array.isArray(job.payload) &&
+        !("secret" in job.payload),
+    ),
+    true,
+  );
+
+  const [timeline, timelineMs] = await measured(context.now, () =>
+    queue.getJobTimeline(completed.id, { limit: 100 }),
+  );
+  metrics.timelineMs = timelineMs;
+  metrics.timelineEntries = timeline.items.length;
+  recordInvariant(
+    assertions,
+    "timeline contains lifecycle events and the closed attempt",
+    new Set(timeline.items.map((entry) => entry.kind)),
+    new Set(["event", "attempt"]),
+    (actual, expected) =>
+      actual instanceof Set &&
+      expected instanceof Set &&
+      [...expected].every((value) => actual.has(value)),
+  );
+  recordInvariant(assertions, "small retained timeline is complete", timeline.nextCursor, null);
+
+  metrics.projectionRows = await rowCount(context.pool, "job_query");
+  recordInvariant(
+    assertions,
+    "projection has one row per identity",
+    metrics.projectionRows,
+    ids.length,
+  );
+  const indexStorage = await context.pool.query<{ bytes: string }>(`
+    SELECT COALESCE(sum(pg_relation_size(indexrelid)), 0)::text AS bytes
+      FROM pg_index
+     WHERE indrelid = 'workhorse.job_query'::regclass`);
+  metrics.operatorIndexBytes = Number(indexStorage.rows[0]?.bytes ?? 0);
+  recordInvariant(
+    assertions,
+    "operator indexes have independently measurable storage",
+    Number(metrics.operatorIndexBytes) > 0,
+    true,
+  );
+
+  return { name: "query-listing-lifecycle", durationMs: 0, metrics, assertions };
 }
 
 async function crashBeforeCompletion(
@@ -2717,6 +2886,7 @@ export const operationalScenarioImplementations: Readonly<
   "cancellation-lifecycle": cancellationLifecycle,
   "deadline-timeout-lifecycle": deadlineTimeoutLifecycle,
   "dead-letter-redrive-lifecycle": deadLetterRedriveLifecycle,
+  "query-listing-lifecycle": queryListingLifecycle,
   "crash-before-completion": crashBeforeCompletion,
   "lease-expiry-recovery": leaseExpiryRecovery,
   "retry-paths": retryPaths,

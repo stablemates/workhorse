@@ -151,6 +151,105 @@ describe("Drizzle provider integration", () => {
     });
   });
 
+  it("maps job listings and timelines with bounded payload projections", async () => {
+    const deadline = new Date(Date.now() + 60_000);
+    const jobId = await adapter.queue.enqueue(
+      "drizzle-query",
+      { visible: "included", secret: "redacted" },
+      {
+        queue: "drizzle-query-queue",
+        tags: ["provider", "query"],
+        maxAttempts: 1,
+        deadline,
+        executionTimeoutMs: 5_000,
+      },
+    );
+    const claimed = await adapter.queue.claim("drizzle-query-worker", {
+      queue: "drizzle-query-queue",
+    });
+    expect(claimed?.id).toBe(jobId);
+    expect(await adapter.queue.fail(claimed!, "drizzle-query-worker", new Error("timeline"))).toBe(
+      "failed",
+    );
+
+    const omitted = await adapter.queue.listJobs({ type: "drizzle-query" });
+    expect(omitted.items).toMatchObject([
+      {
+        id: jobId,
+        queue: "drizzle-query-queue",
+        tags: ["provider", "query"],
+        state: "failed",
+        deadlineAt: expect.any(Date),
+        executionTimeoutMs: 5_000,
+        runAt: expect.any(Date),
+        createdAt: expect.any(Date),
+        updatedAt: expect.any(Date),
+        payload: null,
+        payloadStatus: "omitted",
+        payloadBytes: null,
+      },
+    ]);
+    expect(omitted.items[0]!.deadlineAt?.getTime()).toBe(deadline.getTime());
+
+    const included = await adapter.queue.listJobs({
+      type: "drizzle-query",
+      payload: { include: true, maxBytes: 1_024, redactKeys: ["secret"] },
+    });
+    expect(included.items[0]).toMatchObject({
+      id: jobId,
+      payload: { visible: "included" },
+      payloadStatus: "included",
+      payloadBytes: expect.any(Number),
+    });
+
+    const tooLarge = await adapter.queue.listJobs({
+      type: "drizzle-query",
+      payload: { include: true, maxBytes: 1 },
+    });
+    expect(tooLarge.items[0]).toMatchObject({
+      id: jobId,
+      payload: null,
+      payloadStatus: "too_large",
+      payloadBytes: expect.any(Number),
+    });
+
+    const firstTimelinePage = await adapter.queue.getJobTimeline(jobId, { limit: 1 });
+    expect(firstTimelinePage.items).toHaveLength(1);
+    expect(firstTimelinePage.nextCursor).toMatchObject({
+      jobId,
+      occurredAt: expect.any(String),
+      kind: expect.stringMatching(/^(event|attempt)$/),
+      recordId: expect.any(String),
+    });
+    const secondTimelinePage = await adapter.queue.getJobTimeline(jobId, {
+      limit: 100,
+      cursor: firstTimelinePage.nextCursor!,
+    });
+    const timeline = [...firstTimelinePage.items, ...secondTimelinePage.items];
+    expect(timeline.some((entry) => entry.kind === "event")).toBe(true);
+    const attempt = timeline.find((entry) => entry.kind === "attempt");
+    expect(attempt).toMatchObject({
+      kind: "attempt",
+      attempt: 1,
+      fenceToken: expect.any(BigInt),
+      workerId: "drizzle-query-worker",
+      outcome: "failed",
+      startedAt: expect.any(Date),
+      claimedAt: expect.any(Date),
+      finishedAt: expect.any(Date),
+      occurredAt: expect.any(Date),
+      error: { name: "Error", message: "timeline" },
+    });
+    expect(
+      timeline.every((entry, index) => {
+        const previous = timeline[index - 1];
+        return (
+          previous === undefined || previous.occurredAt.getTime() >= entry.occurredAt.getTime()
+        );
+      }),
+    ).toBe(true);
+  });
+
   it("preserves PostgreSQL error codes through provider translation", async () => {
     const failure = await drizzleQueryable(db)
       .query("SELECT * FROM workhorse.relation_that_does_not_exist")

@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 14.
+The current clean-install protocol is schema version 15.
 
 ## Design objective
 
@@ -49,6 +49,7 @@ erDiagram
   job ||--o{ enqueue_idempotency : "owns retained enqueue keys"
   job ||--o| job_runtime : "live lifecycle"
   job ||--o| job_outcome : "terminal lifecycle"
+  job ||--|| job_query : "operator projection"
   job ||--o{ job_redrive : "failed source"
   job ||--o| job_redrive : "redrive target"
   job ||--o{ job_checkpoint : "records restart boundaries"
@@ -100,6 +101,16 @@ erDiagram
     jsonb result
     jsonb error
     timestamptz finished_at
+  }
+  job_query {
+    uuid job_id PK
+    text queue_name
+    text job_type
+    text state
+    int current_attempt
+    timestamptz run_at
+    timestamptz created_at
+    timestamptz updated_at
   }
   job_redrive {
     uuid source_job_id PK
@@ -193,6 +204,14 @@ Semantically immutable terminal state. Completion, terminal failure, or cancella
 
 Failed outcomes additionally have one cold partial index ordered by immutable completion time and identity. `list_dead_letters_v1` uses it for bounded cursor pages and joins immutable `job` definition only after selecting terminal candidates. This index is not a dispatch path and claim never reads it.
 
+### `job_query`
+
+A bounded operator projection maintained in the same transaction as runtime and outcome lifecycle changes. It stores routing, state, current attempt, run time, cancellation-request metadata, immutable creation time, and the last meaningful lifecycle update. It deliberately excludes payload, result, error, checkpoints, waits, worker ownership, heartbeat, and lease expiry.
+
+`list_jobs_v1` selects a page from dedicated global, queue, type, or state creation-time indexes before joining immutable `job` rows for optional payload projection. Heartbeats do not update the projection, and no query index is added to `job_runtime`. Pages use immutable `(created_at, job_id)` keys and a filter/projection-bound signature. Cross-page state membership is weakly consistent until snapshot pagination is implemented.
+
+Payload is omitted by default. When requested, PostgreSQL applies bounded top-level redaction before checking the response byte ceiling and returns explicit omission status. These controls bound disclosure and returned size for selected rows, not accepted payload size or requested detoasting work.
+
 ### `job_redrive`
 
 Insert-only source-to-target lineage and operator audit. The source/request hash primary key serializes exact replay, while unique target identity gives every new execution one parent. Raw request IDs are never stored. The row retains safe request preview/digest/length, actor, reason, canonical request fingerprint, source and initial target states, and request time.
@@ -224,6 +243,8 @@ Identity is the attribution anchor. Finite terminal-job retention requires both 
 ### History
 
 `job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed logical attempt, including retry, lease expiry, success, terminal failure, and cancellation after an attempt actually started. Its `started_at` preserves the logical attempt start across timer suspensions, while `claimed_at` identifies the final activation that closed it. Timer suspension itself emits events but does not close attempt history. Both history relations use UTC-daily range partitions with default fallbacks. Clean installation creates the current day plus three future days, and `prepare_history_partitions_v1` continuously replenishes and repairs that horizon.
+
+`list_job_timeline_v1` merges retained rows from both history relations into one latest-first cursor stream ordered by event/attempt time, kind rank, and immutable record identity. Event details and attempt errors are operator evidence rather than job payload and are not changed by payload redaction. Since retention is independent, an existing identity can legitimately return partial or empty history.
 
 Event and attempt retention are independent phases inside `retain_history_v1`. Each drops only fully expired completed daily partitions, retires at most the configured number per pass, skips busy day locks, caps DDL lock waits at 250 ms, and bounded-deletes expired rows from its own default partition. Explicit day creation and paired retirement functions remain available for controlled operator work. Default partitions preserve insert availability when partition maintenance is late, while health reports exact counts through 10,000 rows and explicit capped lower bounds beyond that so fallback spill cannot remain invisible or make health unbounded.
 

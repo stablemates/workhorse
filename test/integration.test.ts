@@ -136,11 +136,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v14 with deterministic enqueue idempotency storage", async () => {
+  it("installs schema v15 with deterministic enqueue idempotency storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(14);
+    expect(version.rows[0]?.version).toBe(15);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -1854,7 +1854,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(14);
+    expect(health.schemaVersion).toBe(15);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2366,7 +2366,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v14 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v15 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -5514,7 +5514,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(14);
+    expect(health.schemaVersion).toBe(15);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -6278,5 +6278,465 @@ describe("live-runtime queue protocol", () => {
         .rows[0]?.relation,
     ).toBeNull();
     await pool.query("DROP SCHEMA retention_external");
+  });
+
+  it("installs and reconverges the v15 operator projection, indexes, functions, and lifecycle triggers", async () => {
+    const objects = await pool.query<{
+      projection: string | null;
+      list_jobs: string | null;
+      timeline: string | null;
+      projection_has_payload: boolean;
+    }>(`SELECT
+      to_regclass('workhorse.job_query')::text AS projection,
+      to_regprocedure('workhorse.list_jobs_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)')::text AS list_jobs,
+      to_regprocedure('workhorse.list_job_timeline_v1(uuid,integer,timestamp with time zone,text,bigint)')::text AS timeline,
+      EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'workhorse' AND table_name = 'job_query' AND column_name = 'payload'
+      ) AS projection_has_payload`);
+    expect(objects.rows[0]).toEqual({
+      projection: "job_query",
+      list_jobs: "list_jobs_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)",
+      timeline: "list_job_timeline_v1(uuid,integer,timestamp with time zone,text,bigint)",
+      projection_has_payload: false,
+    });
+
+    const indexes = await pool.query<{ indexname: string }>(`
+      SELECT indexname FROM pg_indexes
+       WHERE schemaname = 'workhorse'
+         AND indexname IN (
+           'job_query_created_idx', 'job_query_queue_created_idx',
+           'job_query_type_created_idx', 'job_query_state_created_idx',
+           'attempt_history_job_time_idx'
+         ) ORDER BY indexname`);
+    expect(indexes.rows.map((row) => row.indexname)).toEqual([
+      "attempt_history_job_time_idx",
+      "job_query_created_idx",
+      "job_query_queue_created_idx",
+      "job_query_state_created_idx",
+      "job_query_type_created_idx",
+    ]);
+
+    const triggers = await pool.query<{ tgname: string }>(`
+      SELECT tgname FROM pg_trigger
+       WHERE tgrelid IN ('workhorse.job_runtime'::regclass, 'workhorse.job_outcome'::regclass)
+         AND NOT tgisinternal AND tgname LIKE '%query_projection%'
+       ORDER BY tgname`);
+    expect(triggers.rows.map((row) => row.tgname)).toEqual([
+      "job_outcome_query_projection_insert",
+      "job_runtime_query_projection_insert",
+      "job_runtime_query_projection_update",
+    ]);
+
+    const id = await queue.enqueue("projection-converge", { ignored: true });
+    await pool.query("UPDATE workhorse.job_query SET state = 'scheduled' WHERE job_id = $1", [id]);
+    await installSchema(pool);
+    expect(
+      (await pool.query("SELECT state FROM workhorse.job_query WHERE job_id = $1", [id])).rows[0],
+    ).toEqual({ state: "ready" });
+  });
+
+  it("projects meaningful live and terminal transitions without heartbeat churn", async () => {
+    const id = await queue.enqueue("projection-transitions", { value: 1 }, { maxAttempts: 1 });
+    expect(
+      (
+        await pool.query(
+          "SELECT state, current_attempt FROM workhorse.job_query WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0],
+    ).toEqual({ state: "ready", current_attempt: 1 });
+
+    const claimed = await queue.claim("projection-worker");
+    expect(claimed?.id).toBe(id);
+    const active = await pool.query<{ state: string; updated_at: Date }>(
+      "SELECT state, updated_at FROM workhorse.job_query WHERE job_id = $1",
+      [id],
+    );
+    expect(active.rows[0]?.state).toBe("active");
+    await sleep(5);
+    expect(await queue.heartbeat(claimed!, "projection-worker", 30_000)).toBe(true);
+    const afterHeartbeat = await pool.query<{ updated_at: Date }>(
+      "SELECT updated_at FROM workhorse.job_query WHERE job_id = $1",
+      [id],
+    );
+    expect(afterHeartbeat.rows[0]?.updated_at.getTime()).toBe(active.rows[0]?.updated_at.getTime());
+
+    const requested = await queue.cancel(id, { requestedBy: "operator", reason: "maintenance" });
+    expect(requested.status).toBe("cancel_requested");
+    expect(
+      (
+        await pool.query(
+          `SELECT state, cancel_requested_by, cancel_reason,
+                  cancel_requested_at IS NOT NULL AS requested
+             FROM workhorse.job_query WHERE job_id = $1`,
+          [id],
+        )
+      ).rows[0],
+    ).toEqual({
+      state: "active",
+      cancel_requested_by: "operator",
+      cancel_reason: "maintenance",
+      requested: true,
+    });
+    expect(
+      (
+        await pool.query("SELECT workhorse.acknowledge_cancel_v1($1, $2, $3) AS accepted", [
+          id,
+          "projection-worker",
+          claimed!.fenceToken.toString(),
+        ])
+      ).rows[0]?.accepted,
+    ).toBe(true);
+    expect(
+      (
+        await pool.query(
+          "SELECT state, cancel_requested_by, cancel_reason FROM workhorse.job_query WHERE job_id = $1",
+          [id],
+        )
+      ).rows[0],
+    ).toEqual({ state: "canceled", cancel_requested_by: "operator", cancel_reason: "maintenance" });
+  });
+
+  it("lists mixed live and terminal jobs with every filter and immutable same-time cursors", async () => {
+    const createdAt = "2025-01-02T03:04:05.123456Z";
+    const ids = [
+      "00000000-0000-0000-0000-000000000001",
+      "00000000-0000-0000-0000-000000000002",
+      "00000000-0000-0000-0000-000000000003",
+    ];
+    await pool.query(
+      `INSERT INTO workhorse.job(id, queue_name, job_type, payload, tags, max_attempts, created_at)
+       VALUES ($1, 'query-a', 'email', '{"n":1}', ARRAY['one'], 3, $4),
+              ($2, 'query-a', 'email', '{"n":2}', ARRAY['two'], 3, $4),
+              ($3, 'query-b', 'report', '{"n":3}', ARRAY['three'], 3, $4)`,
+      [...ids, createdAt],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.job_runtime(
+         job_id, queue_name, state, current_attempt, run_at, ready_at, sequence, updated_at
+       ) VALUES ($1, 'query-a', 'ready', 1, $2, $2, nextval('workhorse.ready_sequence_seq'), $2)`,
+      [ids[0], createdAt],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.job_outcome(
+         job_id, state, current_attempt, fence_token, run_at, result, finished_at, updated_at
+       ) VALUES
+         ($1, 'succeeded', 1, 1, $3, '{}', $3, $3),
+         ($2, 'succeeded', 2, 1, $3, '{}', $3, $3)`,
+      [ids[1], ids[2], createdAt],
+    );
+
+    const filtered = await queue.listJobs({
+      queue: "query-a",
+      type: "email",
+      states: ["ready", "succeeded"],
+      createdAfter: new Date("2025-01-02T03:04:05.123Z"),
+      createdBefore: new Date("2025-01-02T03:04:05.124Z"),
+      limit: 2,
+    });
+    expect(filtered.items.map((item) => item.id)).toEqual([ids[1], ids[0]]);
+    expect(filtered.nextCursor).toBeNull();
+
+    const first = await queue.listJobs({ limit: 2 });
+    expect(first.items.map((item) => item.id)).toEqual([ids[2], ids[1]]);
+    expect(first.nextCursor).not.toBeNull();
+    await pool.query(
+      `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
+       VALUES ('00000000-0000-0000-0000-000000000004', 'query-new', 'new', '{}', 1, $1)`,
+      [createdAt],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.job_runtime(
+         job_id, queue_name, state, run_at, ready_at, sequence, updated_at
+       ) VALUES (
+         '00000000-0000-0000-0000-000000000004', 'query-new', 'ready', $1, $1,
+         nextval('workhorse.ready_sequence_seq'), $1
+       )`,
+      [createdAt],
+    );
+    const second = await queue.listJobs({ limit: 2, cursor: first.nextCursor! });
+    expect(second.items.map((item) => item.id)).toEqual([ids[0]]);
+    expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.items, ...second.items].map((item) => item.id)).size).toBe(3);
+    // This is the documented weak consistency boundary: a concurrent row before the cursor is not
+    // duplicated into the later page, and no snapshot claim is made for it.
+    expect(second.items.some((item) => item.id.endsWith("0004"))).toBe(false);
+  });
+
+  it("binds list cursors to normalized filters and payload projections", async () => {
+    for (const [id, type] of [
+      ["10000000-0000-0000-0000-000000000001", "bound-a"],
+      ["10000000-0000-0000-0000-000000000002", "bound-a"],
+    ] as const) {
+      await pool.query(
+        `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
+         VALUES ($1, 'bound', $2, '{"secret":"x"}', 1, '2025-02-01T00:00:00Z')`,
+        [id, type],
+      );
+      await pool.query(
+        `INSERT INTO workhorse.job_runtime(
+           job_id, queue_name, state, run_at, ready_at, sequence, updated_at
+         ) VALUES ($1, 'bound', 'ready', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z',
+           nextval('workhorse.ready_sequence_seq'), '2025-02-01T00:00:00Z')`,
+        [id],
+      );
+    }
+    const first = await queue.listJobs({ type: "bound-a", limit: 1 });
+    expect(first.nextCursor?.signature).toMatch(/^[0-9a-f]{16}$/);
+    await expect(
+      queue.listJobs({ type: "bound-b", limit: 1, cursor: first.nextCursor! }),
+    ).rejects.toThrow(/cursor does not match/);
+    await expect(
+      queue.listJobs({
+        type: "bound-a",
+        limit: 1,
+        cursor: first.nextCursor!,
+        payload: { include: true },
+      }),
+    ).rejects.toThrow(/cursor does not match/);
+    await expect(
+      pool.query("SELECT * FROM workhorse.list_jobs_v1('{}', 1, now(), NULL, NULL, '{}')"),
+    ).rejects.toThrow(/provided together/);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL TIME ZONE 'UTC'");
+      const timezoneFirst = await client.query<{
+        job_id: string;
+        cursor_created_at: string;
+        cursor_signature: string;
+      }>(
+        `SELECT job_id, cursor_created_at::text AS cursor_created_at, cursor_signature
+           FROM workhorse.list_jobs_v1($1, 1, NULL, NULL, NULL, '{}')`,
+        [JSON.stringify({ type: "bound-a", createdAfter: "2025-01-01T00:00:00Z" })],
+      );
+      await client.query("SET LOCAL TIME ZONE 'Pacific/Honolulu'");
+      const timezoneSecond = await client.query(
+        `SELECT job_id
+           FROM workhorse.list_jobs_v1($1, 1, $2, $3, $4, '{}')`,
+        [
+          JSON.stringify({ type: "bound-a", createdAfter: "2025-01-01T00:00:00Z" }),
+          timezoneFirst.rows[0]!.cursor_created_at,
+          timezoneFirst.rows[0]!.job_id,
+          timezoneFirst.rows[0]!.cursor_signature,
+        ],
+      );
+      expect(timezoneSecond.rowCount).toBe(1);
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
+
+  it("omits payloads by default and redacts before enforcing byte bounds", async () => {
+    const objectId = await queue.enqueue("payload-object", {
+      visible: "ok",
+      secret: "x".repeat(10_000),
+      nested: { secret: "retained" },
+    });
+    const omitted = await queue.listJobs({ type: "payload-object" });
+    expect(omitted.items[0]).toMatchObject({
+      id: objectId,
+      payload: null,
+      payloadStatus: "omitted",
+      payloadBytes: null,
+    });
+    const expectedBytes = Number(
+      (
+        await pool.query<{ bytes: number }>(
+          `SELECT octet_length(($1::jsonb - ARRAY['secret'])::text)::integer AS bytes`,
+          [
+            JSON.stringify({
+              visible: "ok",
+              secret: "x".repeat(10_000),
+              nested: { secret: "retained" },
+            }),
+          ],
+        )
+      ).rows[0]?.bytes,
+    );
+    const included = await queue.listJobs({
+      type: "payload-object",
+      payload: { include: true, maxBytes: expectedBytes, redactKeys: ["secret"] },
+    });
+    expect(included.items[0]).toMatchObject({
+      payload: { visible: "ok", nested: { secret: "retained" } },
+      payloadStatus: "included",
+      payloadBytes: expectedBytes,
+    });
+    const tooLarge = await queue.listJobs({
+      type: "payload-object",
+      payload: { include: true, maxBytes: expectedBytes - 1, redactKeys: ["secret"] },
+    });
+    expect(tooLarge.items[0]).toMatchObject({
+      payload: null,
+      payloadStatus: "too_large",
+      payloadBytes: expectedBytes,
+    });
+
+    await queue.enqueue("payload-scalar", "secret");
+    await queue.enqueue("payload-array", ["secret", { secret: "retained" }]);
+    expect(
+      (
+        await queue.listJobs({
+          states: ["ready"],
+          payload: { include: true, maxBytes: 1_024, redactKeys: ["secret"] },
+        })
+      ).items
+        .filter((item) => item.type.startsWith("payload-"))
+        .map((item) => item.payload),
+    ).toEqual([
+      ["secret", { secret: "retained" }],
+      "secret",
+      { visible: "ok", nested: { secret: "retained" } },
+    ]);
+
+    for (const [projection, message] of [
+      [{ include: true, maxBytes: 0 }, /between 1 and 1048576/],
+      [{ include: true, maxBytes: 1048577 }, /between 1 and 1048576/],
+      [{ include: true, redactKeys: ["x", "x"] }, /unique/],
+      [{ include: true, redactKeys: [""] }, /1 to 200/],
+      [{ include: true, unknown: true }, /permits only/],
+    ] as const) {
+      await expect(
+        pool.query("SELECT * FROM workhorse.list_jobs_v1('{}', 1, NULL, NULL, NULL, $1)", [
+          JSON.stringify(projection),
+        ]),
+      ).rejects.toThrow(message);
+    }
+    await expect(queue.listJobs({ unknown: true } as never)).rejects.toThrow(
+      /query contains unknown field: unknown/,
+    );
+    await expect(
+      queue.listJobs({ payload: { include: true, unknown: true } } as never),
+    ).rejects.toThrow(/payload contains unknown field: unknown/);
+  });
+
+  it("uses only dedicated operator indexes for global, queue, type, and state creation scans", async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL enable_seqscan = off");
+      const queries = [
+        [
+          "job_query_created_idx",
+          "SELECT * FROM workhorse.job_query ORDER BY created_at DESC, job_id DESC LIMIT 10",
+        ],
+        [
+          "job_query_queue_created_idx",
+          "SELECT * FROM workhorse.job_query WHERE queue_name = 'q' ORDER BY created_at DESC, job_id DESC LIMIT 10",
+        ],
+        [
+          "job_query_type_created_idx",
+          "SELECT * FROM workhorse.job_query WHERE job_type = 't' ORDER BY created_at DESC, job_id DESC LIMIT 10",
+        ],
+        [
+          "job_query_state_created_idx",
+          "SELECT * FROM workhorse.job_query WHERE state = 'ready' ORDER BY created_at DESC, job_id DESC LIMIT 10",
+        ],
+      ] as const;
+      for (const [indexName, sql] of queries) {
+        const plan = (
+          await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF) ${sql}`)
+        ).rows
+          .map((row) => row["QUERY PLAN"])
+          .join("\n");
+        expect(plan).toContain(indexName);
+        expect(plan).not.toMatch(
+          /job_runtime_(ready|scheduled|expired_active|deadline|timeout)_idx/,
+        );
+      }
+      const combinedPlan = (
+        await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
+          SELECT * FROM workhorse.job_query
+           WHERE queue_name = 'query-a'
+             AND job_type = 'email'
+             AND state = ANY (ARRAY['ready', 'succeeded'])
+           ORDER BY created_at DESC, job_id DESC LIMIT 10`)
+      ).rows
+        .map((row) => row["QUERY PLAN"])
+        .join("\n");
+      expect(combinedPlan).toMatch(/job_query_(queue|type|state)_created_idx/);
+      expect(combinedPlan).not.toMatch(
+        /job_runtime_(ready|scheduled|expired_active|deadline|timeout)_idx/,
+      );
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
+
+  it("merges retained events and attempts with stable equal-time cursors and exact final pages", async () => {
+    const jobId = "20000000-0000-0000-0000-000000000001";
+    const sameTime = "2025-03-04T05:06:07.123456Z";
+    await pool.query(
+      `INSERT INTO workhorse.job(id, queue_name, job_type, payload, max_attempts, created_at)
+       VALUES ($1, 'timeline', 'timeline', '{}', 2, '2025-03-01T00:00:00Z')`,
+      [jobId],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.job_event(job_id, attempt, event_type, details, occurred_at)
+       VALUES ($1, 1, 'older-event', '{"position":"old"}', '2025-03-04T05:06:06Z'),
+              ($1, 1, 'same-event', '{"position":"event"}', $2),
+              ($1, 2, 'newer-event', '{"position":"new"}', '2025-03-04T05:06:08Z')`,
+      [jobId, sameTime],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.attempt_history(
+         job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at,
+         finished_at, error, occurred_at
+       ) VALUES (
+         $1, 1, 7, 'timeline-worker', 'retry', '2025-03-04T05:00:00Z',
+         '2025-03-04T05:00:01Z', $2, '{"name":"Retry"}', $2
+       )`,
+      [jobId, sameTime],
+    );
+
+    const first = await queue.getJobTimeline(jobId, { limit: 2 });
+    expect(
+      first.items.map((item) => [item.kind, item.kind === "event" ? item.eventType : item.outcome]),
+    ).toEqual([
+      ["event", "newer-event"],
+      ["event", "same-event"],
+    ]);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await queue.getJobTimeline(jobId, { limit: 2, cursor: first.nextCursor! });
+    expect(second.items.map((item) => item.kind)).toEqual(["attempt", "event"]);
+    expect(second.items[0]).toMatchObject({
+      kind: "attempt",
+      attempt: 1,
+      fenceToken: 7n,
+      workerId: "timeline-worker",
+      outcome: "retry",
+      error: { name: "Retry" },
+    });
+    expect(second.nextCursor).toBeNull();
+    expect(
+      new Set([...first.items, ...second.items].map((item) => `${item.kind}:${item.recordId}`))
+        .size,
+    ).toBe(4);
+
+    await expect(
+      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, 'unknown', 1)", [
+        jobId,
+        sameTime,
+      ]),
+    ).rejects.toThrow(/event or attempt/);
+    await expect(
+      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, NULL, 1)", [
+        jobId,
+        sameTime,
+      ]),
+    ).rejects.toThrow(/provided together/);
+
+    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = $1", [jobId]);
+    expect((await queue.getJobTimeline(jobId)).items.map((item) => item.kind)).toEqual(["attempt"]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = $1", [jobId]);
+    expect((await queue.getJobTimeline(jobId)).items).toEqual([]);
+    expect((await queue.getJobTimeline("20000000-0000-0000-0000-000000000099")).items).toEqual([]);
   });
 });

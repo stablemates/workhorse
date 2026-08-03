@@ -116,6 +116,31 @@ describe("operational scenario contracts", () => {
     );
     expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|throughput|latency target|sla/);
   });
+
+  it("defines complete query listing evidence without a performance claim", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "query-listing-lifecycle",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/immutable cursor/);
+    expect(contract!.invariants.join("\n")).toMatch(/omitted by default/);
+    expect(contract!.invariants.join("\n")).toMatch(/heartbeats do not churn/);
+    expect(contract!.invariants.join("\n")).toMatch(/events and closed attempts/);
+    expect(contract!.invariants.join("\n")).toMatch(/separate from every claim-critical index/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "listedJobs",
+        "listMs",
+        "payloadProjectionMs",
+        "timelineMs",
+        "timelineEntries",
+        "projectionRows",
+        "operatorIndexBytes",
+      ]),
+    );
+    expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|throughput|latency target|sla/);
+  });
 });
 
 describe("resolveOperationalScenarioOptions", () => {

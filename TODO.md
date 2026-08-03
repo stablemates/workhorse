@@ -322,14 +322,14 @@ later integration rather than a prerequisite.
 
 ## P2: operator and ecosystem experience
 
-### [ ] P2-01 Query and listing API
+### [x] P2-01 Query and listing API
 
 **Depends on:** P0-01, P1-04
 
-- [ ] Add cursor-based listing by queue, type, lifecycle state, and time range.
-- [ ] Keep operational reads away from claim-critical indexes.
-- [ ] Support lifecycle timeline retrieval from events and attempt history.
-- [ ] Define bounded payload inclusion and redaction controls.
+- [x] Add cursor-based listing by queue, type, lifecycle state, and time range.
+- [x] Keep operational reads away from claim-critical indexes.
+- [x] Support lifecycle timeline retrieval from events and attempt history.
+- [x] Define bounded payload inclusion and redaction controls.
 
 ### [ ] P2-02 Administrative CLI and TUI
 

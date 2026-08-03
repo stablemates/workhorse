@@ -15,8 +15,16 @@ import type {
   EnqueueOptions,
   EnqueueRequest,
   ExpireOwnedStatus,
+  JobListFilter,
+  JobListItem,
+  JobListPage,
+  JobListQuery,
   JobCheckpoint,
   JobSnapshot,
+  JobState,
+  JobTimelineEntry,
+  JobTimelinePage,
+  JobTimelineQuery,
   JobWait,
   HeartbeatStatus,
   Json,
@@ -78,7 +86,11 @@ export interface MaintenancePhaseResult {
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
+  DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
+  MAX_JOB_QUERY_PAGE_SIZE,
+  MAX_JOB_QUERY_PAYLOAD_BYTES,
+  MAX_JOB_QUERY_REDACT_KEYS,
   MAX_REDRIVE_BATCH_SIZE,
   MAX_WAIT_DURATION_MS,
 } from "./types.js";
@@ -123,6 +135,49 @@ type DeadLetterRow = {
   redrive_count: string;
   has_more: boolean;
   cursor_finished_at: string;
+};
+
+type JobListRow = {
+  job_id: string;
+  queue_name: string;
+  job_type: string;
+  tags: string[];
+  state: JobState;
+  current_attempt: number;
+  max_attempts: number;
+  retry_policy: RetryPolicy | null;
+  deadline_at: Date | string | null;
+  execution_timeout_ms: string | null;
+  run_at: Date | string;
+  cancel_requested_at: Date | string | null;
+  cancel_requested_by: string | null;
+  cancel_reason: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+  payload: Json | null;
+  payload_status: JobListItem["payloadStatus"];
+  payload_bytes: number | string | null;
+  has_more: boolean;
+  cursor_created_at: string;
+  cursor_signature: string;
+};
+
+type JobTimelineRow = {
+  kind: JobTimelineEntry["kind"];
+  record_id: string;
+  attempt: number | null;
+  event_type: string | null;
+  details: Json | null;
+  fence_token: string | null;
+  worker_id: string | null;
+  outcome: Extract<JobTimelineEntry, { kind: "attempt" }>["outcome"] | null;
+  started_at: Date | string | null;
+  claimed_at: Date | string | null;
+  finished_at: Date | string | null;
+  error: Json | null;
+  occurred_at: Date | string;
+  has_more: boolean;
+  cursor_occurred_at: string;
 };
 
 type RedriveRow = {
@@ -276,6 +331,96 @@ function deadLetter(row: DeadLetterRow): DeadLetter {
     error: row.error,
     finishedAt: claimedTimestamp(row.finished_at, "finished_at"),
     redriveCount: Number(row.redrive_count),
+  };
+}
+
+const JOB_STATES = new Set<JobState>([
+  "scheduled",
+  "ready",
+  "active",
+  "succeeded",
+  "failed",
+  "canceled",
+]);
+
+function validateFiniteDate(value: Date | undefined, field: string): void {
+  if (value !== undefined && (!(value instanceof Date) || !Number.isFinite(value.getTime()))) {
+    throw new TypeError(`${field} must be a finite Date`);
+  }
+}
+
+function jobListFilter(filter: JobListFilter): Record<string, Json> {
+  return {
+    ...(filter.queue === undefined ? {} : { queue: filter.queue }),
+    ...(filter.type === undefined ? {} : { type: filter.type }),
+    ...(filter.states === undefined ? {} : { states: filter.states }),
+    ...(filter.createdAfter === undefined
+      ? {}
+      : { createdAfter: filter.createdAfter.toISOString() }),
+    ...(filter.createdBefore === undefined
+      ? {}
+      : { createdBefore: filter.createdBefore.toISOString() }),
+  };
+}
+
+function jobListItem(row: JobListRow): JobListItem {
+  return {
+    id: row.job_id,
+    queue: row.queue_name,
+    type: row.job_type,
+    tags: row.tags,
+    state: row.state,
+    currentAttempt: row.current_attempt,
+    maxAttempts: row.max_attempts,
+    retryPolicy: row.retry_policy,
+    deadlineAt: nullableClaimedTimestamp(row.deadline_at, "deadline_at"),
+    executionTimeoutMs: row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
+    runAt: claimedTimestamp(row.run_at, "run_at"),
+    cancelRequestedAt: nullableClaimedTimestamp(row.cancel_requested_at, "cancel_requested_at"),
+    cancelRequestedBy: row.cancel_requested_by,
+    cancelReason: row.cancel_reason,
+    createdAt: claimedTimestamp(row.created_at, "created_at"),
+    updatedAt: claimedTimestamp(row.updated_at, "updated_at"),
+    payload: row.payload,
+    payloadStatus: row.payload_status,
+    payloadBytes: row.payload_bytes === null ? null : Number(row.payload_bytes),
+  };
+}
+
+function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
+  const base = {
+    recordId: row.record_id,
+    attempt: row.attempt,
+    occurredAt: claimedTimestamp(row.occurred_at, "occurred_at"),
+  };
+  if (row.kind === "event") {
+    if (row.event_type === null || row.details === null) {
+      throw new Error("list_job_timeline_v1 returned an incomplete event row");
+    }
+    return { ...base, kind: "event", eventType: row.event_type, details: row.details };
+  }
+  if (
+    row.attempt === null ||
+    row.fence_token === null ||
+    row.worker_id === null ||
+    row.outcome === null ||
+    row.started_at === null ||
+    row.claimed_at === null ||
+    row.finished_at === null
+  ) {
+    throw new Error("list_job_timeline_v1 returned an incomplete attempt row");
+  }
+  return {
+    ...base,
+    kind: "attempt",
+    attempt: row.attempt,
+    fenceToken: BigInt(row.fence_token),
+    workerId: row.worker_id,
+    outcome: row.outcome,
+    startedAt: claimedTimestamp(row.started_at, "started_at"),
+    claimedAt: claimedTimestamp(row.claimed_at, "claimed_at"),
+    finishedAt: claimedTimestamp(row.finished_at, "finished_at"),
+    error: row.error,
   };
 }
 
@@ -947,6 +1092,221 @@ export class Queue {
       requestedBy: row.requested_by,
       reason: row.reason,
       finishedAt: row.finished_at,
+    };
+  }
+
+  async listJobs(query: JobListQuery = {}): Promise<JobListPage> {
+    if (typeof query !== "object" || query === null || Array.isArray(query)) {
+      throw new TypeError("listJobs query must be an object");
+    }
+    const allowedQueryFields = new Set([
+      "queue",
+      "type",
+      "states",
+      "createdAfter",
+      "createdBefore",
+      "limit",
+      "cursor",
+      "payload",
+    ]);
+    for (const field of Object.keys(query)) {
+      if (!allowedQueryFields.has(field)) {
+        throw new TypeError(`listJobs query contains unknown field: ${field}`);
+      }
+    }
+
+    const limit = query.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_JOB_QUERY_PAGE_SIZE) {
+      throw new RangeError(
+        `listJobs limit must be an integer between 1 and ${MAX_JOB_QUERY_PAGE_SIZE}`,
+      );
+    }
+
+    validateFiniteDate(query.createdAfter, "listJobs createdAfter");
+    validateFiniteDate(query.createdBefore, "listJobs createdBefore");
+    if (
+      query.createdAfter !== undefined &&
+      query.createdBefore !== undefined &&
+      query.createdAfter.getTime() >= query.createdBefore.getTime()
+    ) {
+      throw new RangeError("listJobs createdAfter must be earlier than createdBefore");
+    }
+
+    if (query.states !== undefined) {
+      if (!Array.isArray(query.states) || query.states.length === 0) {
+        throw new RangeError("listJobs states must be a non-empty array when supplied");
+      }
+      const uniqueStates = new Set<JobState>();
+      for (const state of query.states) {
+        if (!JOB_STATES.has(state))
+          throw new TypeError(`listJobs state is invalid: ${String(state)}`);
+        if (uniqueStates.has(state))
+          throw new RangeError(`listJobs states must be unique: ${state}`);
+        uniqueStates.add(state);
+      }
+    }
+
+    const cursor = query.cursor;
+    if (cursor !== undefined) {
+      if (typeof cursor !== "object" || cursor === null) {
+        throw new TypeError("listJobs cursor must be an object");
+      }
+      for (const field of Object.keys(cursor)) {
+        if (!new Set(["createdAt", "jobId", "signature"]).has(field)) {
+          throw new TypeError(`listJobs cursor contains unknown field: ${field}`);
+        }
+      }
+      for (const [field, value] of [
+        ["createdAt", cursor.createdAt],
+        ["jobId", cursor.jobId],
+        ["signature", cursor.signature],
+      ] as const) {
+        if (typeof value !== "string" || value.length === 0) {
+          throw new TypeError(`listJobs cursor ${field} must be a non-empty string`);
+        }
+      }
+    }
+
+    if (
+      query.payload !== undefined &&
+      (typeof query.payload !== "object" || query.payload === null || Array.isArray(query.payload))
+    ) {
+      throw new TypeError("listJobs payload must be an object");
+    }
+    const projection = query.payload ?? {};
+    for (const field of Object.keys(projection)) {
+      if (!new Set(["include", "maxBytes", "redactKeys"]).has(field)) {
+        throw new TypeError(`listJobs payload contains unknown field: ${field}`);
+      }
+    }
+    if (projection.include !== undefined && typeof projection.include !== "boolean") {
+      throw new TypeError("listJobs payload include must be a boolean");
+    }
+    if (
+      projection.maxBytes !== undefined &&
+      (!Number.isSafeInteger(projection.maxBytes) ||
+        projection.maxBytes < 1 ||
+        projection.maxBytes > MAX_JOB_QUERY_PAYLOAD_BYTES)
+    ) {
+      throw new RangeError(
+        `listJobs payload maxBytes must be an integer between 1 and ${MAX_JOB_QUERY_PAYLOAD_BYTES}`,
+      );
+    }
+    const redactKeys = projection.redactKeys ?? [];
+    if (!Array.isArray(redactKeys)) {
+      throw new TypeError("listJobs payload redactKeys must be an array");
+    }
+    if (redactKeys.length > MAX_JOB_QUERY_REDACT_KEYS) {
+      throw new RangeError(
+        `listJobs payload redactKeys must contain at most ${MAX_JOB_QUERY_REDACT_KEYS} keys`,
+      );
+    }
+    const uniqueRedactKeys = new Set<string>();
+    for (const key of redactKeys) {
+      if (typeof key !== "string") {
+        throw new TypeError("listJobs payload redactKeys must contain only strings");
+      }
+      const length = [...key].length;
+      if (length < 1 || length > 200) {
+        throw new RangeError("listJobs payload redactKeys must contain 1 to 200 characters");
+      }
+      if (uniqueRedactKeys.has(key)) {
+        throw new RangeError(`listJobs payload redactKeys must be unique: ${key}`);
+      }
+      uniqueRedactKeys.add(key);
+    }
+
+    const payloadProjection = {
+      include: projection.include ?? false,
+      maxBytes: projection.maxBytes ?? DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
+      redactKeys,
+    };
+    const result = await this.database.query<JobListRow>(
+      `SELECT job_id, queue_name, job_type, tags, state, current_attempt, max_attempts,
+              retry_policy, deadline_at, execution_timeout_ms::text AS execution_timeout_ms,
+              run_at, cancel_requested_at, cancel_requested_by, cancel_reason, created_at,
+              updated_at, payload, payload_status, payload_bytes, has_more,
+              cursor_created_at::text AS cursor_created_at, cursor_signature
+         FROM workhorse.list_jobs_v1(
+           $1::jsonb, $2::integer, $3::timestamptz, $4::uuid, $5::text, $6::jsonb
+         )`,
+      [
+        JSON.stringify(jobListFilter(query)),
+        limit,
+        cursor?.createdAt ?? null,
+        cursor?.jobId ?? null,
+        cursor?.signature ?? null,
+        JSON.stringify(payloadProjection),
+      ],
+    );
+    const items = result.rows.map(jobListItem);
+    const last = result.rows.at(-1);
+    return {
+      items,
+      nextCursor:
+        last?.has_more === true
+          ? {
+              createdAt: last.cursor_created_at,
+              jobId: last.job_id,
+              signature: last.cursor_signature,
+            }
+          : null,
+    };
+  }
+
+  async getJobTimeline(jobId: string, query: JobTimelineQuery = {}): Promise<JobTimelinePage> {
+    const limit = query.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_JOB_QUERY_PAGE_SIZE) {
+      throw new RangeError(
+        `getJobTimeline limit must be an integer between 1 and ${MAX_JOB_QUERY_PAGE_SIZE}`,
+      );
+    }
+
+    const cursor = query.cursor;
+    if (cursor !== undefined) {
+      if (typeof cursor !== "object" || cursor === null) {
+        throw new TypeError("getJobTimeline cursor must be an object");
+      }
+      for (const [field, value] of [
+        ["jobId", cursor.jobId],
+        ["occurredAt", cursor.occurredAt],
+        ["recordId", cursor.recordId],
+      ] as const) {
+        if (typeof value !== "string" || value.length === 0) {
+          throw new TypeError(`getJobTimeline cursor ${field} must be a non-empty string`);
+        }
+      }
+      if (cursor.kind !== "event" && cursor.kind !== "attempt") {
+        throw new TypeError("getJobTimeline cursor kind must be event or attempt");
+      }
+      if (cursor.jobId !== jobId) {
+        throw new RangeError("getJobTimeline cursor jobId must match the requested jobId");
+      }
+    }
+
+    const result = await this.database.query<JobTimelineRow>(
+      `SELECT kind, record_id::text AS record_id, attempt, event_type, details,
+              fence_token::text AS fence_token, worker_id, outcome, started_at, claimed_at,
+              finished_at, error, occurred_at, has_more,
+              cursor_occurred_at::text AS cursor_occurred_at
+         FROM workhorse.list_job_timeline_v1(
+           $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::bigint
+         )`,
+      [jobId, limit, cursor?.occurredAt ?? null, cursor?.kind ?? null, cursor?.recordId ?? null],
+    );
+    const items = result.rows.map(jobTimelineEntry);
+    const last = result.rows.at(-1);
+    return {
+      items,
+      nextCursor:
+        last?.has_more === true
+          ? {
+              jobId,
+              occurredAt: last.cursor_occurred_at,
+              kind: last.kind,
+              recordId: last.record_id,
+            }
+          : null,
     };
   }
 

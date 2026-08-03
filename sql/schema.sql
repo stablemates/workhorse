@@ -378,6 +378,153 @@ CREATE INDEX IF NOT EXISTS job_outcome_retention_idx
 CREATE INDEX IF NOT EXISTS job_outcome_failed_finished_idx
   ON workhorse.job_outcome (finished_at DESC, job_id DESC) WHERE state = 'failed';
 
+-- Bounded operator metadata projection. Payloads and heartbeat-owned fields deliberately remain in
+-- their authoritative relations so operator reads cannot become claim paths or churn on heartbeats.
+CREATE TABLE IF NOT EXISTS workhorse.job_query (
+  job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  queue_name text NOT NULL CHECK (queue_name <> ''),
+  job_type text NOT NULL CHECK (job_type <> ''),
+  state text NOT NULL CHECK (
+    state IN ('scheduled', 'ready', 'active', 'succeeded', 'failed', 'canceled')
+  ),
+  current_attempt integer NOT NULL CHECK (current_attempt BETWEEN 1 AND 100),
+  run_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  cancel_requested_at timestamptz,
+  cancel_requested_by text,
+  cancel_reason text,
+  CHECK (
+    (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
+    OR (state IN ('active', 'canceled') AND cancel_requested_at IS NOT NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS job_query_created_idx
+  ON workhorse.job_query (created_at DESC, job_id DESC);
+CREATE INDEX IF NOT EXISTS job_query_queue_created_idx
+  ON workhorse.job_query (queue_name, created_at DESC, job_id DESC);
+CREATE INDEX IF NOT EXISTS job_query_type_created_idx
+  ON workhorse.job_query (job_type, created_at DESC, job_id DESC);
+CREATE INDEX IF NOT EXISTS job_query_state_created_idx
+  ON workhorse.job_query (state, created_at DESC, job_id DESC);
+
+CREATE OR REPLACE FUNCTION workhorse.project_job_runtime_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO workhorse.job_query(
+    job_id, queue_name, job_type, state, current_attempt, run_at, created_at, updated_at,
+    cancel_requested_at, cancel_requested_by, cancel_reason
+  )
+  SELECT
+    NEW.job_id, NEW.queue_name, job.job_type, NEW.state, NEW.current_attempt, NEW.run_at,
+    job.created_at, NEW.updated_at, NEW.cancel_requested_at, NEW.cancel_requested_by,
+    NEW.cancel_reason
+  FROM workhorse.job job
+  WHERE job.id = NEW.job_id
+  ON CONFLICT (job_id) DO UPDATE SET
+    queue_name = EXCLUDED.queue_name,
+    job_type = EXCLUDED.job_type,
+    state = EXCLUDED.state,
+    current_attempt = EXCLUDED.current_attempt,
+    run_at = EXCLUDED.run_at,
+    created_at = EXCLUDED.created_at,
+    updated_at = EXCLUDED.updated_at,
+    cancel_requested_at = EXCLUDED.cancel_requested_at,
+    cancel_requested_by = EXCLUDED.cancel_requested_by,
+    cancel_reason = EXCLUDED.cancel_reason;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS job_runtime_query_projection_insert ON workhorse.job_runtime;
+CREATE TRIGGER job_runtime_query_projection_insert
+  AFTER INSERT ON workhorse.job_runtime
+  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_runtime_v1();
+DROP TRIGGER IF EXISTS job_runtime_query_projection_update ON workhorse.job_runtime;
+CREATE TRIGGER job_runtime_query_projection_update
+  AFTER UPDATE OF queue_name, state, current_attempt, run_at,
+    cancel_requested_at, cancel_requested_by, cancel_reason
+  ON workhorse.job_runtime
+  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_runtime_v1();
+
+CREATE OR REPLACE FUNCTION workhorse.project_job_outcome_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO workhorse.job_query(
+    job_id, queue_name, job_type, state, current_attempt, run_at, created_at, updated_at,
+    cancel_requested_at, cancel_requested_by, cancel_reason
+  )
+  SELECT
+    NEW.job_id, job.queue_name, job.job_type, NEW.state, NEW.current_attempt, NEW.run_at,
+    job.created_at, NEW.updated_at,
+    CASE WHEN NEW.state = 'canceled' THEN NULLIF(NEW.error->>'requested_at', '')::timestamptz END,
+    CASE WHEN NEW.state = 'canceled' THEN NEW.error->>'requested_by' END,
+    CASE WHEN NEW.state = 'canceled' THEN NEW.error->>'reason' END
+  FROM workhorse.job job
+  WHERE job.id = NEW.job_id
+  ON CONFLICT (job_id) DO UPDATE SET
+    queue_name = EXCLUDED.queue_name,
+    job_type = EXCLUDED.job_type,
+    state = EXCLUDED.state,
+    current_attempt = EXCLUDED.current_attempt,
+    run_at = EXCLUDED.run_at,
+    created_at = EXCLUDED.created_at,
+    updated_at = EXCLUDED.updated_at,
+    cancel_requested_at = EXCLUDED.cancel_requested_at,
+    cancel_requested_by = EXCLUDED.cancel_requested_by,
+    cancel_reason = EXCLUDED.cancel_reason;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS job_outcome_query_projection_insert ON workhorse.job_outcome;
+CREATE TRIGGER job_outcome_query_projection_insert
+  AFTER INSERT ON workhorse.job_outcome
+  FOR EACH ROW EXECUTE FUNCTION workhorse.project_job_outcome_v1();
+
+-- Repeated v15 installation converges the projection from authoritative state without touching
+-- payloads. Removing impossible orphan rows also repairs interrupted/manual pre-release installs.
+INSERT INTO workhorse.job_query(
+  job_id, queue_name, job_type, state, current_attempt, run_at, created_at, updated_at,
+  cancel_requested_at, cancel_requested_by, cancel_reason
+)
+SELECT
+  runtime.job_id, runtime.queue_name, job.job_type, runtime.state, runtime.current_attempt,
+  runtime.run_at, job.created_at, runtime.updated_at, runtime.cancel_requested_at,
+  runtime.cancel_requested_by, runtime.cancel_reason
+FROM workhorse.job_runtime runtime
+JOIN workhorse.job job ON job.id = runtime.job_id
+UNION ALL
+SELECT
+  outcome.job_id, job.queue_name, job.job_type, outcome.state, outcome.current_attempt,
+  outcome.run_at, job.created_at, outcome.updated_at,
+  CASE WHEN outcome.state = 'canceled'
+    THEN NULLIF(outcome.error->>'requested_at', '')::timestamptz END,
+  CASE WHEN outcome.state = 'canceled' THEN outcome.error->>'requested_by' END,
+  CASE WHEN outcome.state = 'canceled' THEN outcome.error->>'reason' END
+FROM workhorse.job_outcome outcome
+JOIN workhorse.job job ON job.id = outcome.job_id
+ON CONFLICT (job_id) DO UPDATE SET
+  queue_name = EXCLUDED.queue_name,
+  job_type = EXCLUDED.job_type,
+  state = EXCLUDED.state,
+  current_attempt = EXCLUDED.current_attempt,
+  run_at = EXCLUDED.run_at,
+  created_at = EXCLUDED.created_at,
+  updated_at = EXCLUDED.updated_at,
+  cancel_requested_at = EXCLUDED.cancel_requested_at,
+  cancel_requested_by = EXCLUDED.cancel_requested_by,
+  cancel_reason = EXCLUDED.cancel_reason;
+DELETE FROM workhorse.job_query query_row
+WHERE NOT EXISTS (
+  SELECT 1 FROM workhorse.job_runtime runtime WHERE runtime.job_id = query_row.job_id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM workhorse.job_outcome outcome WHERE outcome.job_id = query_row.job_id
+);
+
 -- Durable redrive lineage is both the idempotency record and the audit record. A source identity
 -- cannot be removed while any descendant target still exists. Deleting a target removes its
 -- incoming lineage edge, allowing retention to prune the source in a later pass.
@@ -439,6 +586,8 @@ CREATE TABLE IF NOT EXISTS workhorse.attempt_history_default
   PARTITION OF workhorse.attempt_history DEFAULT;
 CREATE INDEX IF NOT EXISTS attempt_history_job_idx
   ON workhorse.attempt_history (job_id, attempt, occurred_at);
+CREATE INDEX IF NOT EXISTS attempt_history_job_time_idx
+  ON workhorse.attempt_history (job_id, occurred_at, attempt_id);
 CREATE INDEX IF NOT EXISTS attempt_history_retention_idx
   ON workhorse.attempt_history (occurred_at, attempt_id);
 
@@ -3534,7 +3683,388 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (14) ON CONFLICT DO NOTHING;
+CREATE OR REPLACE FUNCTION workhorse.list_jobs_v1(
+  p_filter jsonb,
+  p_limit integer,
+  p_cursor_created_at timestamptz,
+  p_cursor_job_id uuid,
+  p_cursor_signature text,
+  p_payload_projection jsonb
+) RETURNS TABLE (
+  job_id uuid,
+  queue_name text,
+  job_type text,
+  tags text[],
+  state text,
+  current_attempt integer,
+  max_attempts integer,
+  retry_policy jsonb,
+  deadline_at timestamptz,
+  execution_timeout_ms bigint,
+  run_at timestamptz,
+  cancel_requested_at timestamptz,
+  cancel_requested_by text,
+  cancel_reason text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  payload jsonb,
+  payload_status text,
+  payload_bytes integer,
+  has_more boolean,
+  cursor_created_at timestamptz,
+  cursor_signature text
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  v_filter jsonb := COALESCE(p_filter, '{}'::jsonb);
+  v_projection jsonb := COALESCE(p_payload_projection, '{}'::jsonb);
+  v_normalized_filter jsonb;
+  v_normalized_projection jsonb;
+  v_queue text;
+  v_type text;
+  v_states text[];
+  v_created_after timestamptz;
+  v_created_before timestamptz;
+  v_include boolean := false;
+  v_max_bytes integer := 16384;
+  v_redact_keys text[] := '{}';
+  v_signature text;
+  v_has_duplicates boolean;
+BEGIN
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000 THEN
+    RAISE EXCEPTION 'limit must be between 1 and 1000';
+  END IF;
+  IF jsonb_typeof(v_filter) <> 'object' THEN RAISE EXCEPTION 'filter must be an object'; END IF;
+  IF EXISTS (
+    SELECT 1 FROM jsonb_object_keys(v_filter) key
+    WHERE key <> ALL (ARRAY['queue', 'type', 'states', 'createdAfter', 'createdBefore'])
+  ) THEN
+    RAISE EXCEPTION 'filter permits only queue, type, states, createdAfter, and createdBefore';
+  END IF;
+  IF v_filter ? 'queue' THEN
+    IF jsonb_typeof(v_filter->'queue') <> 'string' OR v_filter->>'queue' = '' THEN
+      RAISE EXCEPTION 'filter.queue must be a non-empty string';
+    END IF;
+    v_queue := v_filter->>'queue';
+  END IF;
+  IF v_filter ? 'type' THEN
+    IF jsonb_typeof(v_filter->'type') <> 'string' OR v_filter->>'type' = '' THEN
+      RAISE EXCEPTION 'filter.type must be a non-empty string';
+    END IF;
+    v_type := v_filter->>'type';
+  END IF;
+  IF v_filter ? 'states' THEN
+    IF jsonb_typeof(v_filter->'states') <> 'array'
+       OR jsonb_array_length(v_filter->'states') = 0 THEN
+      RAISE EXCEPTION 'filter.states must be a non-empty array';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v_filter->'states') state_value
+      WHERE jsonb_typeof(state_value) <> 'string'
+         OR state_value #>> '{}' NOT IN (
+           'scheduled', 'ready', 'active', 'succeeded', 'failed', 'canceled'
+         )
+    ) THEN
+      RAISE EXCEPTION 'filter.states contains an invalid lifecycle state';
+    END IF;
+    SELECT array_agg(state_value ORDER BY state_value), count(*) <> count(DISTINCT state_value)
+      INTO STRICT v_states, v_has_duplicates
+      FROM jsonb_array_elements_text(v_filter->'states') state_value;
+    IF v_has_duplicates THEN RAISE EXCEPTION 'filter.states must contain unique values'; END IF;
+  END IF;
+  IF v_filter ? 'createdAfter' THEN
+    IF jsonb_typeof(v_filter->'createdAfter') <> 'string' THEN
+      RAISE EXCEPTION 'filter.createdAfter must be a timestamp string';
+    END IF;
+    v_created_after := (v_filter->>'createdAfter')::timestamptz;
+    IF NOT isfinite(v_created_after) THEN RAISE EXCEPTION 'filter.createdAfter must be finite'; END IF;
+  END IF;
+  IF v_filter ? 'createdBefore' THEN
+    IF jsonb_typeof(v_filter->'createdBefore') <> 'string' THEN
+      RAISE EXCEPTION 'filter.createdBefore must be a timestamp string';
+    END IF;
+    v_created_before := (v_filter->>'createdBefore')::timestamptz;
+    IF NOT isfinite(v_created_before) THEN RAISE EXCEPTION 'filter.createdBefore must be finite'; END IF;
+  END IF;
+  IF v_created_after IS NOT NULL AND v_created_before IS NOT NULL
+     AND v_created_after >= v_created_before THEN
+    RAISE EXCEPTION 'filter.createdAfter must be earlier than createdBefore';
+  END IF;
+
+  IF jsonb_typeof(v_projection) <> 'object' THEN
+    RAISE EXCEPTION 'payloadProjection must be an object';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM jsonb_object_keys(v_projection) key
+    WHERE key <> ALL (ARRAY['include', 'maxBytes', 'redactKeys'])
+  ) THEN
+    RAISE EXCEPTION 'payloadProjection permits only include, maxBytes, and redactKeys';
+  END IF;
+  IF v_projection ? 'include' THEN
+    IF jsonb_typeof(v_projection->'include') <> 'boolean' THEN
+      RAISE EXCEPTION 'payloadProjection.include must be boolean';
+    END IF;
+    v_include := (v_projection->>'include')::boolean;
+  END IF;
+  IF v_projection ? 'maxBytes' THEN
+    IF jsonb_typeof(v_projection->'maxBytes') <> 'number'
+       OR (v_projection->>'maxBytes')::numeric <> trunc((v_projection->>'maxBytes')::numeric)
+       OR (v_projection->>'maxBytes')::numeric NOT BETWEEN 1 AND 1048576 THEN
+      RAISE EXCEPTION 'payloadProjection.maxBytes must be an integer between 1 and 1048576';
+    END IF;
+    v_max_bytes := (v_projection->>'maxBytes')::integer;
+  END IF;
+  IF v_projection ? 'redactKeys' THEN
+    IF jsonb_typeof(v_projection->'redactKeys') <> 'array'
+       OR jsonb_array_length(v_projection->'redactKeys') > 50 THEN
+      RAISE EXCEPTION 'payloadProjection.redactKeys must contain at most 50 values';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v_projection->'redactKeys') key_value
+      WHERE jsonb_typeof(key_value) <> 'string'
+         OR char_length(key_value #>> '{}') NOT BETWEEN 1 AND 200
+    ) THEN
+      RAISE EXCEPTION 'payloadProjection.redactKeys values must contain 1 to 200 characters';
+    END IF;
+    SELECT COALESCE(array_agg(key_value ORDER BY key_value), '{}'),
+           count(*) <> count(DISTINCT key_value)
+      INTO STRICT v_redact_keys, v_has_duplicates
+      FROM jsonb_array_elements_text(v_projection->'redactKeys') key_value;
+    IF v_has_duplicates THEN
+      RAISE EXCEPTION 'payloadProjection.redactKeys must contain unique values';
+    END IF;
+  END IF;
+
+  v_normalized_filter := jsonb_strip_nulls(jsonb_build_object(
+    'queue', v_queue,
+    'type', v_type,
+    'states', CASE WHEN v_states IS NULL THEN NULL ELSE to_jsonb(v_states) END,
+    'createdAfter', CASE WHEN v_created_after IS NULL THEN NULL
+      ELSE to_char(v_created_after AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') END,
+    'createdBefore', CASE WHEN v_created_before IS NULL THEN NULL
+      ELSE to_char(v_created_before AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') END
+  ));
+  v_normalized_projection := jsonb_build_object(
+    'include', v_include,
+    'maxBytes', v_max_bytes,
+    'redactKeys', to_jsonb(v_redact_keys)
+  );
+  v_signature := left(workhorse.sha256_hex_v1(jsonb_build_object(
+    'filter', v_normalized_filter,
+    'payloadProjection', v_normalized_projection
+  )::text), 16);
+
+  IF (p_cursor_created_at IS NULL) <> (p_cursor_job_id IS NULL)
+     OR (p_cursor_created_at IS NULL) <> (p_cursor_signature IS NULL) THEN
+    RAISE EXCEPTION 'cursor timestamp, job id, and signature must be provided together';
+  END IF;
+  IF p_cursor_created_at IS NOT NULL THEN
+    IF NOT isfinite(p_cursor_created_at) THEN RAISE EXCEPTION 'cursor timestamp must be finite'; END IF;
+    IF p_cursor_signature !~ '^[0-9a-f]{16}$' THEN
+      RAISE EXCEPTION 'cursor signature must be 16 lowercase hexadecimal characters';
+    END IF;
+    IF p_cursor_signature <> v_signature THEN
+      RAISE EXCEPTION 'cursor does not match the requested filter and payload projection';
+    END IF;
+  END IF;
+
+  RETURN QUERY
+  WITH candidates AS MATERIALIZED (
+    SELECT query_row.*
+    FROM workhorse.job_query query_row
+    WHERE (v_queue IS NULL OR query_row.queue_name = v_queue)
+      AND (v_type IS NULL OR query_row.job_type = v_type)
+      AND (v_states IS NULL OR query_row.state = ANY(v_states))
+      AND (v_created_after IS NULL OR query_row.created_at >= v_created_after)
+      AND (v_created_before IS NULL OR query_row.created_at < v_created_before)
+      AND (p_cursor_created_at IS NULL
+        OR (query_row.created_at, query_row.job_id) < (p_cursor_created_at, p_cursor_job_id))
+    ORDER BY query_row.created_at DESC, query_row.job_id DESC
+    LIMIT p_limit + 1
+  ), page AS MATERIALIZED (
+    SELECT candidate.*
+    FROM candidates candidate
+    ORDER BY candidate.created_at DESC, candidate.job_id DESC
+    LIMIT p_limit
+  ), page_meta AS (
+    SELECT count(*) > p_limit AS has_more FROM candidates
+  )
+  SELECT
+    page.job_id,
+    page.queue_name,
+    page.job_type,
+    job.tags,
+    page.state,
+    page.current_attempt,
+    job.max_attempts,
+    job.retry_policy,
+    job.deadline_at,
+    job.execution_timeout_ms,
+    page.run_at,
+    page.cancel_requested_at,
+    page.cancel_requested_by,
+    page.cancel_reason,
+    page.created_at,
+    page.updated_at,
+    CASE WHEN v_include AND payload_value.payload_bytes <= v_max_bytes
+      THEN payload_value.payload END,
+    CASE
+      WHEN NOT v_include THEN 'omitted'
+      WHEN payload_value.payload_bytes <= v_max_bytes THEN 'included'
+      ELSE 'too_large'
+    END,
+    CASE WHEN v_include THEN payload_value.payload_bytes END,
+    page_meta.has_more,
+    page.created_at,
+    v_signature
+  FROM page
+  JOIN workhorse.job job ON job.id = page.job_id
+  CROSS JOIN page_meta
+  LEFT JOIN LATERAL (
+    SELECT redacted.payload, octet_length(redacted.payload::text)::integer AS payload_bytes
+    FROM (
+      SELECT CASE WHEN jsonb_typeof(job.payload) = 'object'
+        THEN job.payload - v_redact_keys
+        ELSE job.payload
+      END AS payload
+    ) redacted
+    WHERE v_include
+  ) payload_value ON true
+  ORDER BY page.created_at DESC, page.job_id DESC;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.list_job_timeline_v1(
+  p_job_id uuid,
+  p_limit integer,
+  p_cursor_occurred_at timestamptz,
+  p_cursor_kind text,
+  p_cursor_record_id bigint
+) RETURNS TABLE (
+  kind text,
+  record_id bigint,
+  job_id uuid,
+  occurred_at timestamptz,
+  attempt integer,
+  event_type text,
+  details jsonb,
+  fence_token bigint,
+  worker_id text,
+  outcome text,
+  started_at timestamptz,
+  claimed_at timestamptz,
+  finished_at timestamptz,
+  error jsonb,
+  has_more boolean,
+  cursor_occurred_at timestamptz
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  v_cursor_rank integer;
+BEGIN
+  IF p_job_id IS NULL THEN RAISE EXCEPTION 'job_id is required'; END IF;
+  IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 1000 THEN
+    RAISE EXCEPTION 'limit must be between 1 and 1000';
+  END IF;
+  IF (p_cursor_occurred_at IS NULL) <> (p_cursor_kind IS NULL)
+     OR (p_cursor_occurred_at IS NULL) <> (p_cursor_record_id IS NULL) THEN
+    RAISE EXCEPTION 'timeline cursor timestamp, kind, and record id must be provided together';
+  END IF;
+  IF p_cursor_occurred_at IS NOT NULL THEN
+    IF NOT isfinite(p_cursor_occurred_at) THEN
+      RAISE EXCEPTION 'timeline cursor timestamp must be finite';
+    END IF;
+    IF p_cursor_kind NOT IN ('event', 'attempt') THEN
+      RAISE EXCEPTION 'timeline cursor kind must be event or attempt';
+    END IF;
+    IF p_cursor_record_id <= 0 THEN
+      RAISE EXCEPTION 'timeline cursor record id must be positive';
+    END IF;
+    v_cursor_rank := CASE p_cursor_kind WHEN 'event' THEN 1 ELSE 0 END;
+  END IF;
+
+  RETURN QUERY
+  WITH merged AS MATERIALIZED (
+    SELECT
+      'event'::text AS kind,
+      event.event_id AS record_id,
+      event.job_id,
+      event.occurred_at,
+      event.attempt,
+      event.event_type,
+      event.details,
+      NULL::bigint AS fence_token,
+      NULL::text AS worker_id,
+      NULL::text AS outcome,
+      NULL::timestamptz AS started_at,
+      NULL::timestamptz AS claimed_at,
+      NULL::timestamptz AS finished_at,
+      NULL::jsonb AS error,
+      1 AS kind_rank
+    FROM workhorse.job_event event
+    WHERE event.job_id = p_job_id
+      AND (p_cursor_occurred_at IS NULL
+        OR (event.occurred_at, 1, event.event_id)
+          < (p_cursor_occurred_at, v_cursor_rank, p_cursor_record_id))
+    UNION ALL
+    SELECT
+      'attempt'::text,
+      history.attempt_id,
+      history.job_id,
+      history.occurred_at,
+      history.attempt,
+      NULL::text,
+      NULL::jsonb,
+      history.fence_token,
+      history.worker_id,
+      history.outcome,
+      history.started_at,
+      history.claimed_at,
+      history.finished_at,
+      history.error,
+      0 AS kind_rank
+    FROM workhorse.attempt_history history
+    WHERE history.job_id = p_job_id
+      AND (p_cursor_occurred_at IS NULL
+        OR (history.occurred_at, 0, history.attempt_id)
+          < (p_cursor_occurred_at, v_cursor_rank, p_cursor_record_id))
+    ORDER BY occurred_at DESC, kind_rank DESC, record_id DESC
+    LIMIT p_limit + 1
+  ), page AS MATERIALIZED (
+    SELECT merged.* FROM merged
+    ORDER BY merged.occurred_at DESC, merged.kind_rank DESC, merged.record_id DESC
+    LIMIT p_limit
+  ), page_meta AS (
+    SELECT count(*) > p_limit AS has_more FROM merged
+  )
+  SELECT
+    page.kind,
+    page.record_id,
+    page.job_id,
+    page.occurred_at,
+    page.attempt,
+    page.event_type,
+    page.details,
+    page.fence_token,
+    page.worker_id,
+    page.outcome,
+    page.started_at,
+    page.claimed_at,
+    page.finished_at,
+    page.error,
+    page_meta.has_more,
+    page.occurred_at
+  FROM page
+  CROSS JOIN page_meta
+  ORDER BY page.occurred_at DESC, page.kind_rank DESC, page.record_id DESC;
+END;
+$$;
+
+  INSERT INTO workhorse.schema_version(version) VALUES (15) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

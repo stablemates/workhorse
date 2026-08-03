@@ -55,6 +55,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `cancellation-lifecycle`        | immediate/waiting cancellation, active signal/ack, expiry materialization, stale races, truthful history, recurrence, and query timings                                                          |
 | `deadline-timeout-lifecycle`    | pre-claim deadline exclusion, active abort delivery, timeout retry, stale-write fencing, distinct history, and health pressure                                                                   |
 | `dead-letter-redrive-lifecycle` | cold failure cursor paging, side-effect-free preview, audited redrive, exact replay, immutable sources, and retained lineage                                                                     |
+| `query-listing-lifecycle`       | dedicated operator projection, immutable cursor continuation, default payload omission, redaction before byte bounds, heartbeat independence, merged timeline, and operator-index storage        |
 | `crash-before-completion`       | durable state at all five worker crash boundaries                                                                                                                                                |
 | `lease-expiry-recovery`         | recovery latency, new attempt/fence, and stale completion rejection                                                                                                                              |
 | `retry-paths`                   | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion                                                                                     |
@@ -64,6 +65,12 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `worker-concurrency`            | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants |
 
 Scenario invariant failures abort the suite. This prevents a fast but semantically incorrect run from being treated as evidence.
+
+`query-listing-lifecycle` records client-observed page, payload projection, and timeline durations plus
+projection row count and the dedicated operator indexes' measured bytes. These are diagnostic observations,
+not latency targets or publication-grade scale claims. The scenario proves operator pages do not require
+claim-critical indexes, payload is omitted unless explicitly requested, redaction precedes the response byte
+ceiling, heartbeats do not churn the projection, and retained events and attempts share one cursor stream.
 
 `retry-paths` records the selected fixed, exponential, and decorrelated-jitter delays plus the
 client-observed duration of each failure transition and their total. These timings include the full SQL
