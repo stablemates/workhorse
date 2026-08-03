@@ -45,8 +45,8 @@ import { dashboardDatabase, readDashboardSnapshot } from "@workhorse/dashboard/s
 import { durableDemoScenarios } from "../src/durable-demo.js";
 import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/model";
 
-const databaseUrl = localDatabaseUrl("test");
-assertLocalDatabasePurpose(databaseUrl, "test");
+const databaseUrl = localDatabaseUrl("demo");
+assertLocalDatabasePurpose(databaseUrl, "demo");
 const pool = new Pool({ connectionString: databaseUrl, max: 4 });
 const database = createDemoDatabase(pool);
 
@@ -60,6 +60,7 @@ function createTestApplication(options: CreateDemoApplicationOptions = {}) {
 }
 
 beforeAll(async () => {
+  await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
   await installSchema(pool);
   await installDemoSchema(database);
 });

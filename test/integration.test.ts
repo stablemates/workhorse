@@ -11,6 +11,7 @@ import {
   ExecutionTimeoutError,
   InjectedCrashError,
   installSchema,
+  type Json,
   type MaintenancePhaseResult,
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
@@ -18,6 +19,7 @@ import {
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
   Queue,
+  RedriveIdempotencyConflictError,
   type Queryable,
   type RetentionPolicyDefinition,
   Worker,
@@ -64,6 +66,41 @@ const defaultRetentionPolicy: RetentionPolicyDefinition = {
   occurrenceRowsPerPass: 10_000,
 };
 
+async function createFailedJob({
+  type,
+  queueName = "default",
+  payload = {},
+  tags = [],
+  errorName = "Error",
+  deadline,
+  executionTimeoutMs,
+  retryPolicy,
+}: {
+  type: string;
+  queueName?: string;
+  payload?: Json;
+  tags?: string[];
+  errorName?: string;
+  deadline?: Date;
+  executionTimeoutMs?: number;
+  retryPolicy?: { type: "fixed"; delayMs: number };
+}): Promise<string> {
+  const id = await queue.enqueue(type, payload, {
+    queue: queueName,
+    tags,
+    maxAttempts: 1,
+    deadline,
+    executionTimeoutMs,
+    retryPolicy,
+  });
+  const job = await queue.claim(`fixture-${type}`, { queue: queueName });
+  expect(job?.id).toBe(id);
+  const error = new Error(`${type} failed`);
+  error.name = errorName;
+  expect(await queue.fail(job!, `fixture-${type}`, error)).toBe("failed");
+  return id;
+}
+
 beforeAll(async () => {
   await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
   await installSchema(pool);
@@ -73,7 +110,7 @@ beforeEach(async () => {
   await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
     workhorse.schedule_occurrence, workhorse.schedule_definition,
     workhorse.queue_control, workhorse.job_wait, workhorse.job_checkpoint,
-    workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
+    workhorse.enqueue_idempotency, workhorse.job_redrive, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
   await queue.syncRetentionPolicy(defaultRetentionPolicy);
@@ -99,11 +136,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v13 with deterministic enqueue idempotency storage", async () => {
+  it("installs schema v14 with deterministic enqueue idempotency storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(13);
+    expect(version.rows[0]?.version).toBe(14);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -216,6 +253,721 @@ describe("live-runtime queue protocol", () => {
        ORDER BY column_name`);
     expect(idempotencyColumns.rows.map((row) => row.column_name)).toContain("idempotency_key_hash");
     expect(idempotencyColumns.rows.map((row) => row.column_name)).not.toContain("idempotency_key");
+  });
+
+  it("lists only failed outcomes with filters, a stable cursor, and a partial cold index", async () => {
+    const smtp = await createFailedJob({
+      type: "email",
+      queueName: "mail",
+      payload: { recipient: "a@example.test" },
+      tags: ["urgent", "tenant-a"],
+      errorName: "SmtpError",
+    });
+    const timeout = await createFailedJob({
+      type: "email",
+      queueName: "mail",
+      tags: ["urgent", "tenant-b"],
+      errorName: "TimeoutError",
+    });
+    const other = await createFailedJob({
+      type: "report",
+      queueName: "analytics",
+      tags: ["urgent"],
+      errorName: "SmtpError",
+    });
+    const succeeded = await queue.enqueue("email", {}, { queue: "mail", tags: ["urgent"] });
+    const succeededClaim = await queue.claim("successful-list-fixture", { queue: "mail" });
+    expect(succeededClaim?.id).toBe(succeeded);
+    expect(await queue.complete(succeededClaim!, "successful-list-fixture", { ok: true })).toBe(
+      true,
+    );
+
+    const base = new Date(Date.now() - 60_000);
+    await pool.query(
+      `UPDATE workhorse.job_outcome SET finished_at = CASE job_id
+         WHEN $1 THEN $4::timestamptz - interval '3 hours'
+         WHEN $2 THEN $4::timestamptz - interval '2 hours'
+         WHEN $3 THEN $4::timestamptz - interval '1 hour'
+         ELSE $4::timestamptz END
+       WHERE job_id = ANY($5::uuid[])`,
+      [smtp, timeout, other, base, [smtp, timeout, other, succeeded]],
+    );
+
+    const first = await pool.query<{
+      job_id: string;
+      queue_name: string;
+      job_type: string;
+      tags: string[];
+      error: { name: string };
+      finished_at: Date;
+      redrive_count: number;
+    }>(`SELECT * FROM workhorse.list_dead_letters_v1($1, 1, NULL, NULL)`, [
+      JSON.stringify({
+        queue: "mail",
+        type: "email",
+        tags: ["urgent"],
+        finishedAfter: new Date(base.getTime() - 4 * 3_600_000).toISOString(),
+        finishedBefore: base.toISOString(),
+      }),
+    ]);
+    expect(first.rows).toMatchObject([
+      {
+        job_id: timeout,
+        queue_name: "mail",
+        job_type: "email",
+        tags: ["urgent", "tenant-b"],
+        error: { name: "TimeoutError" },
+        redrive_count: 0,
+      },
+    ]);
+    const second = await pool.query<{ job_id: string }>(
+      `SELECT job_id FROM workhorse.list_dead_letters_v1($1, 10, $2, $3)`,
+      [JSON.stringify({ queue: "mail", tags: ["urgent"] }), first.rows[0]!.finished_at, timeout],
+    );
+    expect(second.rows).toEqual([{ job_id: smtp }]);
+    const errorFiltered = await pool.query<{ job_id: string }>(
+      "SELECT job_id FROM workhorse.list_dead_letters_v1($1, 10, NULL, NULL)",
+      [JSON.stringify({ errorName: "SmtpError" })],
+    );
+    expect(new Set(errorFiltered.rows.map((row) => row.job_id))).toEqual(new Set([other, smtp]));
+    expect(errorFiltered.rows.some((row) => row.job_id === succeeded)).toBe(false);
+
+    const index = await pool.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes
+        WHERE schemaname = 'workhorse' AND indexname = 'job_outcome_failed_finished_idx'`,
+    );
+    expect(index.rows[0]!.indexdef).toMatch(
+      /finished_at DESC, job_id DESC.*WHERE \(state = 'failed'/,
+    );
+    const dispatchIndexes = await pool.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+        WHERE schemaname = 'workhorse' AND tablename = 'job_runtime'
+          AND indexdef ILIKE '%failed%'`,
+    );
+    expect(dispatchIndexes.rows).toEqual([]);
+  });
+
+  it("redrives once with immutable source evidence, exact copy semantics, audit, replay, and safe conflict", async () => {
+    const rawRequestId = "operator-secret-request-123456";
+    const deadline = new Date(Date.now() + 86_400_000);
+    const source = await createFailedJob({
+      type: "rebuild-search",
+      queueName: "operations",
+      payload: { tenant: 42, full: true },
+      tags: ["tenant-42", "manual"],
+      deadline,
+      executionTimeoutMs: 12_345,
+      retryPolicy: { type: "fixed", delayMs: 250 },
+      errorName: "SearchUnavailable",
+    });
+    await pool.query(
+      `INSERT INTO workhorse.job_checkpoint(
+         job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id
+       ) VALUES ($1, 'source-only', '{"done":true}', 1, 1, 'fixture')`,
+      [source],
+    );
+    await pool.query(
+      `INSERT INTO workhorse.job_wait(
+         job_id, wait_name, mode, duration_ms, wake_at, attempt, fence_token, worker_id, claimed_at
+       ) VALUES ($1, 'source-wait', 'relative', 1000, clock_timestamp() + interval '1 second',
+                 1, 1, 'fixture', clock_timestamp())`,
+      [source],
+    );
+    const sourceBefore = await pool.query<{ outcome: Record<string, unknown> }>(
+      "SELECT to_jsonb(outcome) - 'history_through_at' AS outcome FROM workhorse.job_outcome outcome WHERE job_id = $1",
+      [source],
+    );
+
+    const created = await pool.query<{
+      status: string;
+      source_job_id: string;
+      target_job_id: string;
+      source_state: string;
+      target_state: string;
+      requested_at: Date;
+    }>("SELECT * FROM workhorse.redrive_v1($1, $2, $3, $4)", [
+      source,
+      "on-call@example.test",
+      "upstream recovered",
+      rawRequestId,
+    ]);
+    expect(created.rows[0]).toMatchObject({
+      status: "redriven",
+      source_job_id: source,
+      source_state: "failed",
+      target_state: "ready",
+    });
+    const target = created.rows[0]!.target_job_id;
+    expect(target).not.toBe(source);
+
+    const copied = await pool.query(
+      `SELECT job.queue_name, job.job_type, job.payload, job.tags, job.max_attempts,
+              job.retry_policy, job.deadline_at, job.execution_timeout_ms,
+              runtime.state, runtime.current_attempt, runtime.deadline_at AS runtime_deadline_at
+         FROM workhorse.job job JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
+        WHERE job.id = $1`,
+      [target],
+    );
+    expect(copied.rows[0]).toMatchObject({
+      queue_name: "operations",
+      job_type: "rebuild-search",
+      payload: { tenant: 42, full: true },
+      tags: ["tenant-42", "manual"],
+      max_attempts: 1,
+      retry_policy: { type: "fixed", delayMs: 250 },
+      deadline_at: null,
+      execution_timeout_ms: "12345",
+      state: "ready",
+      current_attempt: 1,
+      runtime_deadline_at: null,
+    });
+    expect(
+      (
+        await pool.query(
+          `SELECT count(*)::integer AS count FROM (
+             SELECT 1 FROM workhorse.job_checkpoint WHERE job_id = $1
+             UNION ALL SELECT 1 FROM workhorse.job_wait WHERE job_id = $1
+           ) durability`,
+          [target],
+        )
+      ).rows[0]!.count,
+    ).toBe(0);
+    expect(
+      (
+        await pool.query(
+          "SELECT to_jsonb(outcome) - 'history_through_at' AS outcome FROM workhorse.job_outcome outcome WHERE job_id = $1",
+          [source],
+        )
+      ).rows[0],
+    ).toEqual(sourceBefore.rows[0]);
+    expect(
+      (
+        await pool.query(
+          "SELECT count(*)::integer AS count FROM workhorse.job_outcome WHERE job_id = $1",
+          [target],
+        )
+      ).rows[0]!.count,
+    ).toBe(0);
+
+    const audit = await pool.query<{
+      requested_by: string;
+      reason: string;
+      request_id_preview: string;
+      request_id_digest: string;
+      request_id_length: number;
+      source_state: string;
+      target_initial_state: string;
+      row_text: string;
+    }>(
+      `SELECT requested_by, reason, request_id_preview, request_id_digest, request_id_length,
+              source_state, target_initial_state, to_jsonb(redrive)::text AS row_text
+         FROM workhorse.job_redrive redrive WHERE source_job_id = $1`,
+      [source],
+    );
+    expect(audit.rows[0]).toMatchObject({
+      requested_by: "on-call@example.test",
+      reason: "upstream recovered",
+      request_id_preview: "operator…3456",
+      request_id_digest: expect.stringMatching(/^[0-9a-f]{12}$/),
+      request_id_length: rawRequestId.length,
+      source_state: "failed",
+      target_initial_state: "ready",
+    });
+    expect(audit.rows[0]!.row_text).not.toContain(rawRequestId);
+    const events = await pool.query<{
+      job_id: string;
+      event_type: string;
+      details: unknown;
+      occurred_at: Date;
+    }>(
+      `SELECT job_id, event_type, details, occurred_at FROM workhorse.job_event
+        WHERE job_id = ANY($1::uuid[]) AND event_type IN ('redriven', 'redrive_created')
+        ORDER BY event_type`,
+      [[source, target]],
+    );
+    expect(events.rows).toMatchObject([
+      { job_id: target, event_type: "redrive_created" },
+      { job_id: source, event_type: "redriven" },
+    ]);
+    expect(events.rows.every((event) => event.occurred_at >= created.rows[0]!.requested_at)).toBe(
+      true,
+    );
+    expect(JSON.stringify(events.rows)).not.toContain(rawRequestId);
+
+    const replay = await pool.query("SELECT * FROM workhorse.redrive_v1($1, $2, $3, $4)", [
+      source,
+      "on-call@example.test",
+      "upstream recovered",
+      rawRequestId,
+    ]);
+    expect(replay.rows[0]).toMatchObject({ status: "replayed", target_job_id: target });
+    expect(replay.rows[0]!.requested_at).toEqual(created.rows[0]!.requested_at);
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job_redrive")).rows[0]!
+        .count,
+    ).toBe(1);
+
+    let conflict: unknown;
+    try {
+      await pool.query("SELECT * FROM workhorse.redrive_v1($1, $2, $3, $4)", [
+        source,
+        "on-call@example.test",
+        "different reason",
+        rawRequestId,
+      ]);
+    } catch (error) {
+      conflict = error;
+    }
+    expect(conflict).toMatchObject({ code: "P1002" });
+    const detail = JSON.parse(String((conflict as { detail: string }).detail));
+    expect(detail).toMatchObject({
+      sourceJobId: source,
+      existingTargetJobId: target,
+      requestIdPreview: "operator…3456",
+      requestIdLength: rawRequestId.length,
+      conflictingFields: ["reason"],
+    });
+    expect(JSON.stringify(detail)).not.toContain(rawRequestId);
+
+    const live = await queue.enqueue("not-failed", {});
+    const notFailed = await pool.query(
+      "SELECT * FROM workhorse.redrive_v1($1, 'operator', 'reason', 'live')",
+      [live],
+    );
+    expect(notFailed.rows[0]).toMatchObject({
+      status: "not_failed",
+      source_job_id: live,
+      source_state: "ready",
+      target_job_id: null,
+      requested_at: null,
+    });
+    const missing = await pool.query(
+      "SELECT * FROM workhorse.redrive_v1(gen_random_uuid(), 'operator', 'reason', 'missing')",
+    );
+    expect(missing.rows[0]).toMatchObject({
+      status: "not_found",
+      target_job_id: null,
+      requested_at: null,
+    });
+    await expect(
+      pool.query("SELECT * FROM workhorse.redrive_v1($1, '', 'reason', 'bounded')", [source]),
+    ).rejects.toThrow(/requested_by/);
+    await expect(
+      pool.query("SELECT * FROM workhorse.redrive_v1($1, 'operator', 'reason', $2)", [
+        source,
+        "é".repeat(257),
+      ]),
+    ).rejects.toThrow(/512 UTF-8 bytes/);
+  });
+
+  it("serializes concurrent exact redrive requests to one target", async () => {
+    const source = await createFailedJob({ type: "concurrent-redrive" });
+    const params = [source, "operator", "retry concurrently", "concurrent-request"];
+    const [first, second] = await Promise.all([
+      pool.query("SELECT * FROM workhorse.redrive_v1($1, $2, $3, $4)", params),
+      pool.query("SELECT * FROM workhorse.redrive_v1($1, $2, $3, $4)", params),
+    ]);
+    expect(new Set([first.rows[0]!.status, second.rows[0]!.status])).toEqual(
+      new Set(["redriven", "replayed"]),
+    );
+    expect(first.rows[0]!.target_job_id).toBe(second.rows[0]!.target_job_id);
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job_redrive")).rows[0]!
+        .count,
+    ).toBe(1);
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]!.count,
+    ).toBe(2);
+  });
+
+  it("maps dead-letter, redrive, lineage, conflict, and bulk results through the public Queue API", async () => {
+    const older = await createFailedJob({
+      type: "public-redrive",
+      queueName: "public-redrive",
+      tags: ["public"],
+      errorName: "PublicFailure",
+    });
+    const newer = await createFailedJob({
+      type: "public-redrive",
+      queueName: "public-redrive",
+      tags: ["public"],
+      errorName: "PublicFailure",
+    });
+    const now = new Date(Date.now() - 10_000);
+    await pool.query(
+      `UPDATE workhorse.job_outcome SET finished_at = CASE job_id
+         WHEN $1 THEN $3::timestamptz - interval '2 hours'
+         WHEN $2 THEN $3::timestamptz - interval '1 hour' END
+       WHERE job_id = ANY($4::uuid[])`,
+      [older, newer, now, [older, newer]],
+    );
+
+    const firstPage = await queue.listDeadLetters({
+      queue: "public-redrive",
+      tags: ["public"],
+      errorName: "PublicFailure",
+      limit: 1,
+    });
+    expect(firstPage.items).toMatchObject([
+      {
+        jobId: newer,
+        queue: "public-redrive",
+        type: "public-redrive",
+        error: { name: "PublicFailure" },
+        redriveCount: 0,
+        finishedAt: expect.any(Date),
+      },
+    ]);
+    expect(firstPage.nextCursor).toEqual({
+      finishedAt: expect.any(String),
+      jobId: newer,
+    });
+    const secondPage = await queue.listDeadLetters({
+      queue: "public-redrive",
+      limit: 1,
+      cursor: firstPage.nextCursor!,
+    });
+    expect(secondPage.items.map((item) => item.jobId)).toEqual([older]);
+    expect(secondPage.nextCursor).toBeNull();
+
+    const request = {
+      requestedBy: "public-operator",
+      reason: "validate public mapping",
+      requestId: "public-redrive-request",
+    };
+    const created = await queue.redrive(older, request);
+    expect(created).toMatchObject({
+      status: "redriven",
+      sourceJobId: older,
+      targetJobId: expect.any(String),
+      sourceState: "failed",
+      targetState: "ready",
+      requestedAt: expect.any(Date),
+    });
+    const lineage = await queue.getRedriveLineage(older);
+    expect(lineage).toMatchObject({
+      records: [
+        {
+          sourceJobId: older,
+          targetJobId: created.targetJobId,
+          requestedBy: request.requestedBy,
+          reason: request.reason,
+          requestIdPreview: "public-r…uest",
+          requestIdDigest: expect.stringMatching(/^[0-9a-f]{12}$/),
+          requestIdLength: request.requestId.length,
+          sourceState: "failed",
+          targetInitialState: "ready",
+          requestedAt: expect.any(Date),
+        },
+      ],
+      truncated: false,
+    });
+    let conflict: unknown;
+    try {
+      await queue.redrive(older, { ...request, reason: "materially different" });
+    } catch (error) {
+      conflict = error;
+    }
+    expect(conflict).toBeInstanceOf(RedriveIdempotencyConflictError);
+    expect(conflict).toMatchObject({
+      details: {
+        sourceJobId: older,
+        existingTargetJobId: created.targetJobId,
+        conflictingFields: ["reason"],
+      },
+    });
+
+    const preview = await queue.redriveMany(
+      { queue: "public-redrive", type: "public-redrive", tags: ["public"] },
+      {
+        requestedBy: "public-operator",
+        reason: "bulk public mapping",
+        requestId: "public-bulk-request",
+      },
+      { limit: 2, dryRun: true },
+    );
+    expect(preview).toMatchObject({
+      results: [
+        {
+          status: "eligible",
+          sourceJobId: older,
+          targetJobId: null,
+          sourceState: "failed",
+          targetState: null,
+          requestedAt: null,
+        },
+        {
+          status: "eligible",
+          sourceJobId: newer,
+          targetJobId: null,
+          sourceState: "failed",
+          targetState: null,
+          requestedAt: null,
+        },
+      ],
+      nextCursor: null,
+    });
+  });
+
+  it("bulk redrive shares filters, bounds oldest-first work, keeps dry-run pure, and replays", async () => {
+    const oldest = await createFailedJob({
+      type: "bulk-import",
+      queueName: "bulk",
+      tags: ["tenant-a", "retryable"],
+      errorName: "BulkError",
+    });
+    const middle = await createFailedJob({
+      type: "bulk-import",
+      queueName: "bulk",
+      tags: ["tenant-a", "retryable"],
+      errorName: "BulkError",
+    });
+    const newest = await createFailedJob({
+      type: "bulk-import",
+      queueName: "bulk",
+      tags: ["tenant-a", "retryable"],
+      errorName: "BulkError",
+    });
+    await createFailedJob({
+      type: "bulk-import",
+      queueName: "other",
+      tags: ["tenant-a", "retryable"],
+      errorName: "BulkError",
+    });
+    const base = new Date(Date.now() - 60_000);
+    await pool.query(
+      `UPDATE workhorse.job_outcome SET finished_at = CASE job_id
+         WHEN $1 THEN $4::timestamptz - interval '3 hours'
+         WHEN $2 THEN $4::timestamptz - interval '2 hours'
+         WHEN $3 THEN $4::timestamptz - interval '1 hour' END
+       WHERE job_id = ANY($5::uuid[])`,
+      [oldest, middle, newest, base, [oldest, middle, newest]],
+    );
+    const filter = JSON.stringify({
+      queue: "bulk",
+      type: "bulk-import",
+      tags: ["tenant-a", "retryable"],
+      errorName: "BulkError",
+      finishedAfter: new Date(base.getTime() - 4 * 3_600_000).toISOString(),
+      finishedBefore: base.toISOString(),
+    });
+    const before = await pool.query<{ jobs: number; redrives: number; events: number }>(
+      `SELECT (SELECT count(*)::integer FROM workhorse.job) AS jobs,
+              (SELECT count(*)::integer FROM workhorse.job_redrive) AS redrives,
+              (SELECT count(*)::integer FROM workhorse.job_event) AS events`,
+    );
+    const listener = await pool.connect();
+    const notifications: string[] = [];
+    listener.on("notification", (notification) => notifications.push(notification.payload ?? ""));
+    await listener.query("LISTEN workhorse_jobs");
+    const preview = await (async () => {
+      try {
+        const result = await pool.query(
+          "SELECT * FROM workhorse.redrive_many_v1($1, 2, true, 'operator', 'bulk recovery', 'bulk-request') ORDER BY ordinal",
+          [filter],
+        );
+        await sleep(25);
+        expect(notifications).toEqual([]);
+        return result;
+      } finally {
+        await listener.query("UNLISTEN workhorse_jobs");
+        listener.release();
+      }
+    })();
+    expect(preview.rows).toMatchObject([
+      {
+        ordinal: 1,
+        status: "eligible",
+        source_job_id: oldest,
+        target_job_id: null,
+        requested_at: null,
+      },
+      {
+        ordinal: 2,
+        status: "eligible",
+        source_job_id: middle,
+        target_job_id: null,
+        requested_at: null,
+      },
+    ]);
+    const afterPreview = await pool.query<{ jobs: number; redrives: number; events: number }>(
+      `SELECT (SELECT count(*)::integer FROM workhorse.job) AS jobs,
+              (SELECT count(*)::integer FROM workhorse.job_redrive) AS redrives,
+              (SELECT count(*)::integer FROM workhorse.job_event) AS events`,
+    );
+    expect(afterPreview.rows).toEqual(before.rows);
+
+    const created = await pool.query(
+      "SELECT * FROM workhorse.redrive_many_v1($1, 2, false, 'operator', 'bulk recovery', 'bulk-request') ORDER BY ordinal",
+      [filter],
+    );
+    expect(created.rows).toMatchObject([
+      { ordinal: 1, status: "redriven", source_job_id: oldest, target_state: "ready" },
+      { ordinal: 2, status: "redriven", source_job_id: middle, target_state: "ready" },
+    ]);
+    expect(created.rows.some((row) => row.source_job_id === newest)).toBe(false);
+    const replay = await pool.query(
+      "SELECT * FROM workhorse.redrive_many_v1($1, 2, false, 'operator', 'bulk recovery', 'bulk-request') ORDER BY ordinal",
+      [filter],
+    );
+    expect(replay.rows.map((row) => row.status)).toEqual(["replayed", "replayed"]);
+    expect(replay.rows.map((row) => row.target_job_id)).toEqual(
+      created.rows.map((row) => row.target_job_id),
+    );
+    await expect(
+      pool.query(
+        "SELECT * FROM workhorse.redrive_many_v1('{}', 1001, true, 'operator', 'reason', 'request')",
+      ),
+    ).rejects.toThrow(/between 1 and 1000/);
+  });
+
+  it("advances bounded bulk redrive across cursor pages including equal finish times", async () => {
+    const sourceIds: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      sourceIds.push(
+        await createFailedJob({ type: `bulk-cursor-${index}`, queueName: "bulk-cursor" }),
+      );
+    }
+    const [oldest, ...ties] = sourceIds;
+    const boundary = new Date(Date.now() - 60_000);
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = CASE WHEN job_id = $1
+            THEN $2::timestamptz - interval '1 hour' ELSE $2::timestamptz END
+        WHERE job_id = ANY($3::uuid[])`,
+      [oldest, boundary, sourceIds],
+    );
+    const orderedTies = ties[0]! < ties[1]! ? ties : [ties[1]!, ties[0]!];
+    const request = {
+      requestedBy: "bulk-cursor-operator",
+      reason: "drain a bounded backlog",
+      requestId: "bulk-cursor-request",
+    };
+
+    const first = await queue.redriveMany({ queue: "bulk-cursor" }, request, { limit: 2 });
+    expect(first.results.map((result) => result.sourceJobId)).toEqual([oldest, orderedTies[0]]);
+    expect(first.nextCursor).toEqual({ finishedAt: expect.any(String), jobId: orderedTies[0] });
+
+    const replay = await queue.redriveMany({ queue: "bulk-cursor" }, request, { limit: 2 });
+    expect(replay.results.map((result) => result.status)).toEqual(["replayed", "replayed"]);
+    expect(replay.nextCursor).toEqual(first.nextCursor);
+
+    const second = await queue.redriveMany({ queue: "bulk-cursor" }, request, {
+      limit: 2,
+      cursor: first.nextCursor!,
+    });
+    expect(second.results).toMatchObject([
+      { status: "redriven", sourceJobId: orderedTies[1], targetJobId: expect.any(String) },
+    ]);
+    expect(second.nextCursor).toBeNull();
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job_redrive")).rows[0]!
+        .count,
+    ).toBe(3);
+  });
+
+  it("bounds retained lineage traversal and reports truncation", async () => {
+    const source = await createFailedJob({
+      type: "bounded-lineage-source",
+      queueName: "bounded-lineage",
+    });
+    const first = await queue.redrive(source, {
+      requestedBy: "lineage-operator",
+      reason: "first generation",
+      requestId: "lineage-first",
+    });
+    const firstTarget = await queue.claim("bounded-lineage-worker", { queue: "bounded-lineage" });
+    expect(firstTarget?.id).toBe(first.targetJobId);
+    expect(
+      await queue.fail(firstTarget!, "bounded-lineage-worker", new Error("first target failed")),
+    ).toBe("failed");
+    const second = await queue.redrive(first.targetJobId!, {
+      requestedBy: "lineage-operator",
+      reason: "second generation",
+      requestId: "lineage-second",
+    });
+
+    expect(await queue.getRedriveLineage(source, 1)).toMatchObject({
+      records: [{ sourceJobId: source, targetJobId: first.targetJobId }],
+      truncated: true,
+    });
+    expect(await queue.getRedriveLineage(second.targetJobId!)).toMatchObject({
+      records: [
+        { sourceJobId: source, targetJobId: first.targetJobId },
+        { sourceJobId: first.targetJobId, targetJobId: second.targetJobId },
+      ],
+      truncated: false,
+    });
+  });
+
+  it("protects redrive sources until descendant targets are pruned", async () => {
+    const source = await createFailedJob({
+      type: "retained-redrive",
+      queueName: "retention-redrive",
+    });
+    const redrive = await pool.query<{ target_job_id: string }>(
+      "SELECT target_job_id FROM workhorse.redrive_v1($1, 'operator', 'retention proof', 'retention-request')",
+      [source],
+    );
+    const target = redrive.rows[0]!.target_job_id;
+    const targetClaim = await queue.claim("retention-redrive-target", {
+      queue: "retention-redrive",
+    });
+    expect(targetClaim?.id).toBe(target);
+    expect(
+      await queue.fail(targetClaim!, "retention-redrive-target", new Error("target failed")),
+    ).toBe("failed");
+    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = ANY($1::uuid[])", [
+      [source, target],
+    ]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = ANY($1::uuid[])", [
+      [source, target],
+    ]);
+    await pool.query(
+      `UPDATE workhorse.job SET created_at = clock_timestamp() - interval '40 days'
+        WHERE id = ANY($1::uuid[])`,
+      [[source, target]],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = clock_timestamp() - interval '40 days',
+              history_through_at = clock_timestamp() - interval '40 days'
+        WHERE job_id = ANY($1::uuid[])`,
+      [[source, target]],
+    );
+
+    await expect(
+      pool.query("DELETE FROM workhorse.job WHERE id = $1", [source]),
+    ).rejects.toMatchObject({
+      code: "23503",
+    });
+    const first = await pool.query<{ pruned: number }>(
+      `SELECT workhorse.prune_terminal_jobs_v1(
+         clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
+         date_trunc('day', clock_timestamp() - interval '30 days'), 10
+       ) AS pruned`,
+    );
+    expect(first.rows[0]!.pruned).toBe(1);
+    expect(
+      (await pool.query("SELECT id FROM workhorse.job WHERE id = $1", [source])).rows,
+    ).toHaveLength(1);
+    expect(
+      (await pool.query("SELECT id FROM workhorse.job WHERE id = $1", [target])).rows,
+    ).toHaveLength(0);
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job_redrive")).rows[0]!
+        .count,
+    ).toBe(0);
+    const second = await pool.query<{ pruned: number }>(
+      `SELECT workhorse.prune_terminal_jobs_v1(
+         clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days',
+         date_trunc('day', clock_timestamp() - interval '30 days'), 10
+       ) AS pruned`,
+    );
+    expect(second.rows[0]!.pruned).toBe(1);
+    expect(
+      (await pool.query("SELECT id FROM workhorse.job WHERE id = $1", [source])).rows,
+    ).toHaveLength(0);
   });
 
   it("validates cancellation metadata and idempotently cancels never-started jobs", async () => {
@@ -1102,7 +1854,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(13);
+    expect(health.schemaVersion).toBe(14);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -1614,7 +2366,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v13 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v14 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -4762,7 +5514,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(13);
+    expect(health.schemaVersion).toBe(14);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -5271,8 +6023,7 @@ describe("live-runtime queue protocol", () => {
   it("computes identity lag from terminal jobs and ignores a partial history boundary day", async () => {
     await queue.enqueue("live-boundary", {});
     const boundary = await pool.query<{ day_start: string }>(
-      `SELECT date_trunc('day', clock_timestamp() - interval '30 days')::date::text
-         AS day_start`,
+      `SELECT ((clock_timestamp() AT TIME ZONE 'UTC')::date - 30)::text AS day_start`,
     );
     await pool.query("SELECT workhorse.create_history_day_v1($1)", [boundary.rows[0]!.day_start]);
     const partialBoundaryJob = await queue.enqueue("partial-boundary", {});
@@ -5280,7 +6031,10 @@ describe("live-runtime queue protocol", () => {
       `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
        VALUES (
          $1, 'partial-boundary',
-         date_trunc('day', clock_timestamp() - interval '30 days') + interval '12 hours'
+         (
+           ((clock_timestamp() AT TIME ZONE 'UTC')::date - 30)::timestamp
+           + interval '12 hours'
+         ) AT TIME ZONE 'UTC'
        )`,
       [partialBoundaryJob],
     );
@@ -5396,7 +6150,9 @@ describe("live-runtime queue protocol", () => {
         .relation,
     ).toBeNull();
     await expect(
-      pool.query("SELECT workhorse.retire_history_day_v1(current_date)"),
+      pool.query(
+        "SELECT workhorse.retire_history_day_v1((clock_timestamp() AT TIME ZONE 'UTC')::date)",
+      ),
     ).rejects.toThrow(/only completed history days can be retired/);
   });
 

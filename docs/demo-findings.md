@@ -95,18 +95,20 @@ expiring worker registry. Any registry must avoid turning worker heartbeats into
 P0-03 supplies the local runtime contract. The remaining durable-registry decision belongs with **P0-02
 Production telemetry**.
 
-### A5. Redrive still needs a supported mutation contract
+### A5. Redrive now has a supported core mutation contract
 
 Schema v11 now provides `Queue.cancel` and the demo operator surface can attribute a cancellation request
 with actor and reason. Ready, scheduled, and durable-wait work cancels immediately; active work displays a
 request until the exact worker/fence acknowledges it or expiry materializes it. The demo must not present
 `requestedBy` as authorization, forced interruption, or exactly-once settlement.
 
-Redrive still has no supported queue transition or authorization seam.
+Schema v14 adds failure-only cursor queries, audited single and bounded bulk redrive, non-mutating
+dry-run, exact request replay, conflict diagnostics, immutable source outcomes, and retained lineage.
+Every mutation requires actor, reason, and request ID and records target plus before/after state.
 
-**Needed:** add redrive only after its queue transition exists, and require actor, reason, request ID,
-timestamp, target, and before/after state. Cancellation is covered by completed **P1-02 Cancellation**;
-redrive remains under **P1-04 Dead-letter views and redrive** and later operator tooling.
+The core transition is complete under **P1-04 Dead-letter views and redrive**. A dashboard mutation
+still requires an application authorization policy and is intentionally deferred to later operator
+tooling rather than treating attribution as RBAC.
 
 ## Remaining packaging gaps
 

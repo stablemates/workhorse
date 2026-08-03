@@ -104,6 +104,10 @@ export const MAX_EXECUTION_TIMEOUT_MS = 31_536_000_000;
 export const MAX_CANCELLATION_REQUESTED_BY_CHARACTERS = 200;
 /** Maximum characters accepted for a cancellation reason. */
 export const MAX_CANCELLATION_REASON_CHARACTERS = 2_000;
+/** Maximum failed jobs inspected or redriven by one bounded operation. */
+export const MAX_REDRIVE_BATCH_SIZE = 1_000;
+/** Maximum UTF-8 size accepted for a redrive request identity. */
+export const MAX_REDRIVE_REQUEST_ID_BYTES = 512;
 
 /** Optional safe attribution attached to a cancellation request. PostgreSQL validates all bounds. */
 export interface CancellationRequest {
@@ -136,6 +140,115 @@ export interface CancelResult {
   requestedBy: string | null;
   reason: string | null;
   finishedAt: Date | null;
+}
+
+/** Failure-only filters shared by dead-letter listing and bounded bulk redrive. */
+export interface DeadLetterFilter {
+  queue?: string;
+  type?: string;
+  /** Every supplied tag must be present. */
+  tags?: string[];
+  errorName?: string;
+  finishedAfter?: Date;
+  finishedBefore?: Date;
+}
+
+/** Stable descending cursor over immutable terminal failure time and job identity. */
+export interface DeadLetterCursor {
+  /** Exact PostgreSQL UTC timestamp text. Treat as opaque continuation state. */
+  finishedAt: string;
+  jobId: string;
+}
+
+export interface DeadLetterQuery extends DeadLetterFilter {
+  limit?: number;
+  cursor?: DeadLetterCursor;
+}
+
+/** One immutable terminal failure projected without re-entering dispatch indexes. */
+export interface DeadLetter {
+  jobId: string;
+  queue: string;
+  type: string;
+  payload: Json;
+  tags: string[];
+  currentAttempt: number;
+  maxAttempts: number;
+  retryPolicy: RetryPolicy | null;
+  deadlineAt: Date | null;
+  executionTimeoutMs: number | null;
+  error: Json;
+  finishedAt: Date;
+  redriveCount: number;
+}
+
+export interface DeadLetterPage {
+  items: DeadLetter[];
+  nextCursor: DeadLetterCursor | null;
+}
+
+/** Required audit and idempotency identity for a redrive request. */
+export interface RedriveRequest {
+  requestedBy: string;
+  reason: string;
+  requestId: string;
+}
+
+export type RedriveStatus = "redriven" | "replayed" | "eligible" | "not_found" | "not_failed";
+
+/** PostgreSQL-owned before/after result for one source job. */
+export interface RedriveResult {
+  status: RedriveStatus;
+  sourceJobId: string;
+  targetJobId: string | null;
+  sourceState: JobState | null;
+  targetState: JobState | null;
+  requestedAt: Date | null;
+}
+
+export interface BulkRedriveOptions {
+  limit?: number;
+  dryRun?: boolean;
+  /** Oldest-first continuation cursor returned by the previous bulk page. */
+  cursor?: DeadLetterCursor;
+}
+
+export interface BulkRedrivePage {
+  results: RedriveResult[];
+  nextCursor: DeadLetterCursor | null;
+}
+
+export type RedriveIdempotencyConflictField = "requestedBy" | "reason";
+
+/** Safe diagnostics for a materially different replay. The raw request ID is never exposed. */
+export interface RedriveIdempotencyConflictDetails {
+  sourceJobId: string;
+  existingTargetJobId: string;
+  requestIdPreview: string;
+  requestIdDigest: string;
+  requestIdLength: number;
+  conflictingFields: RedriveIdempotencyConflictField[];
+  storedRequestDigest: string;
+  rejectedRequestDigest: string;
+}
+
+/** One immutable audited edge in a redrive lineage graph. */
+export interface RedriveLineageRecord {
+  sourceJobId: string;
+  targetJobId: string;
+  requestedBy: string;
+  reason: string;
+  requestIdPreview: string;
+  requestIdDigest: string;
+  requestIdLength: number;
+  sourceState: "failed";
+  targetInitialState: "ready";
+  requestedAt: Date;
+}
+
+export interface RedriveLineage {
+  records: RedriveLineageRecord[];
+  truncated: boolean;
 }
 
 export interface ClaimedJob<TPayload = Json> {
