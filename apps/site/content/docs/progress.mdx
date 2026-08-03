@@ -1,0 +1,43 @@
+---
+title: Progress
+description: Report bounded latest-value progress from an active fenced handler.
+---
+
+Progress is a mutable operational projection for long-running handlers. It is deliberately separate from
+the immutable job payload, checkpoint outputs, and terminal result.
+
+```ts
+worker.handle("import", async (payload, context) => {
+  await context.setProgress({ phase: "reading", completed: 0, total: payload.rows.length });
+
+  // Changed values from one ownership generation are accepted at most once every 100 ms.
+  await processRows(payload.rows);
+  await context.setProgress({
+    phase: "complete",
+    completed: payload.rows.length,
+    total: payload.rows.length,
+  });
+
+  return { imported: payload.rows.length };
+});
+```
+
+`context.getProgress()` returns the latest value observed by that handler activation. Low-level runtimes
+can use `Queue.updateProgress(job, workerId, value)` and `Queue.getProgress(jobId)` directly.
+
+## Contract
+
+- Only the exact active, unexpired worker and fence may update progress.
+- Values are JSON and at most 64 KiB in PostgreSQL canonical JSONB text.
+- A changed value from the same fence is accepted at most once every 100 ms. A faster changed write throws
+  `ProgressRateLimitError` with `retryAfterMs`.
+- Repeating the identical value is a no-op and does not consume a revision or append telemetry.
+- Every accepted change increments a per-job revision and records attempt, fence, worker, and timestamps.
+- The latest value survives retry and terminal materialization until the job identity is pruned.
+- Accepted changes append `progress_updated` lifecycle events containing revision and byte size, not the
+  progress value itself.
+
+<Callout type="warn">
+  Progress is observability, not a durable restart boundary. Use checkpoints for immutable completed
+  work that must be reused after retry.
+</Callout>

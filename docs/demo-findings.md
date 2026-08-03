@@ -36,9 +36,8 @@ The demo now proves these paths against PostgreSQL rather than mocks:
   an unrecorded performance comparison;
 - `pnpm demo` recreates only a purpose-guarded demo database, builds the workspace, and serves the app.
 
-Checkpoint outputs are immutable durable evidence, not mutable progress updates. Their visibility does not
-complete **P1-09 Progress and job metadata**, which still requires fenced, bounded mutable updates with
-defined frequency and size limits.
+Checkpoint outputs remain immutable durable evidence. Schema version 16 adds a separate fenced, bounded
+latest-progress projection with defined frequency and size limits and exposes it in the task drawer.
 
 ## Gaps fixed while building the demo
 
@@ -183,7 +182,7 @@ resources in reverse order. Ownership must remain explicit so caller-owned pools
 
 ### X3. The core query API is complete; dashboard adoption remains
 
-Schema v15 now exposes cursor-based cross-state job listing, explicit payload omission/redaction/size
+Schema v16 exposes cursor-based cross-state job listing, explicit payload omission/redaction/size
 status, and a merged retained event/attempt timeline through the public Queue API. The existing task drawer
 still uses its package-owned direct SQL read model and does not yet expose the complete core timeline,
 payload projection state, or redrive lineage.
@@ -193,7 +192,7 @@ requirements fit, without weakening its authorization boundary or exposing paylo
 
 ## Priority conclusion
 
-The demo validates the current write path, persisted retry policies, enqueue idempotency, cancellation, and
-lifecycle semantics. The next recommended product work is **P1-09 Progress and job metadata**, followed by
-production telemetry. The P2-01 core query surface is complete, while dashboard adoption and the later CLI
-remain separate operator-experience work.
+The demo validates the current write path, persisted retry policies, enqueue idempotency, cancellation,
+progress, and lifecycle semantics. The next recommended product work is production telemetry. The P2-01
+core query surface is complete, while broader dashboard adoption and the later CLI remain separate
+operator-experience work.

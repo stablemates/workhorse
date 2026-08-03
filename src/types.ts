@@ -96,6 +96,10 @@ export const MAX_IDEMPOTENCY_SCOPE_BYTES = 256;
 export const MAX_IDEMPOTENCY_TTL_MS = 31_536_000_000;
 /** Maximum PostgreSQL canonical JSONB text size accepted for one durable checkpoint value. */
 export const MAX_CHECKPOINT_VALUE_BYTES = 1_048_576;
+/** Maximum PostgreSQL canonical JSONB text size accepted for latest mutable job progress. */
+export const MAX_PROGRESS_VALUE_BYTES = 65_536;
+/** Minimum interval between changed progress writes from one ownership generation. */
+export const MIN_PROGRESS_UPDATE_INTERVAL_MS = 100;
 /** Maximum relative duration or first absolute target horizon for one durable wait (365 days). */
 export const MAX_WAIT_DURATION_MS = 31_536_000_000;
 /** Maximum active execution budget for one attempt (365 days). */
@@ -410,6 +414,21 @@ export interface JobCheckpoint<TValue extends Json = Json> {
   createdAt: Date;
 }
 
+/** Latest mutable progress projection for a stable job identity. */
+export interface JobProgress<TValue extends Json = Json> {
+  jobId: string;
+  value: TValue;
+  /** Monotonic accepted-change revision for this job. */
+  revision: bigint;
+  /** Attempt that wrote the latest value. */
+  attempt: number;
+  /** Ownership generation that authorized the latest value. */
+  fenceToken: bigint;
+  workerId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 /** One immutable named durable timer boundary. */
 export interface JobWait {
   jobId: string;
@@ -452,6 +471,8 @@ export interface JobSnapshot<TResult = Json> {
   /** Caller-provided attribution only. This does not claim that the caller was authorized. */
   cancelRequestedBy: string | null;
   cancelReason: string | null;
+  /** Latest bounded mutable progress, retained across retries and terminal materialization. */
+  progress: JobProgress | null;
   createdAt: Date;
   updatedAt: Date;
 }

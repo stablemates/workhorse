@@ -249,6 +249,22 @@ CREATE TABLE IF NOT EXISTS workhorse.job_checkpoint (
   PRIMARY KEY (job_id, checkpoint_name)
 );
 
+-- One bounded mutable progress projection per stable identity. Progress is separate from immutable
+-- payloads, checkpoints, and outcomes and retains provenance for its latest accepted change.
+CREATE TABLE IF NOT EXISTS workhorse.job_progress (
+  job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  progress_value jsonb NOT NULL
+    CONSTRAINT job_progress_value_size CHECK (
+      octet_length(progress_value::text) <= 65536
+    ),
+  revision bigint NOT NULL CHECK (revision >= 1),
+  attempt integer NOT NULL CHECK (attempt >= 1),
+  fence_token bigint NOT NULL CHECK (fence_token > 0),
+  worker_id text NOT NULL CHECK (worker_id <> ''),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
 -- Immutable named durable timer boundaries. Relative waits preserve the first PostgreSQL-computed
 -- target, while absolute waits preserve the caller's exact target for deterministic replay.
 CREATE TABLE IF NOT EXISTS workhorse.job_wait (
@@ -2563,6 +2579,132 @@ BEGIN
 END;
 $$;
 
+-- Replace the latest progress only while the caller owns the exact active, unexpired generation.
+-- Changed writes from one generation are limited to ten per second. Identical writes are no-ops.
+CREATE OR REPLACE FUNCTION workhorse.update_progress_v1(
+  p_job_id uuid,
+  p_worker_id text,
+  p_fence_token bigint,
+  p_progress_value jsonb
+) RETURNS TABLE (
+  status text,
+  progress_value jsonb,
+  revision bigint,
+  attempt integer,
+  fence_token bigint,
+  worker_id text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  retry_after_ms bigint
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_progress workhorse.job_progress%ROWTYPE;
+  v_now timestamptz;
+  v_elapsed_ms numeric;
+BEGIN
+  IF p_progress_value IS NULL THEN
+    RAISE EXCEPTION 'progress_value must be JSON, including JSON null when appropriate';
+  END IF;
+  IF octet_length(p_progress_value::text) > 65536 THEN
+    RAISE EXCEPTION 'progress_value must be at most 65536 bytes';
+  END IF;
+
+  SELECT * INTO v_runtime
+    FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id
+     AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id
+     AND runtime.fence_token = p_fence_token
+   FOR UPDATE;
+  -- Sample time only after ownership serialization. A timestamp captured before a blocked lock wait
+  -- could accept an expired lease or calculate an invalid update interval.
+  v_now := clock_timestamp();
+  IF NOT FOUND OR v_runtime.expires_at <= v_now
+     OR (v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now)
+     OR (v_runtime.attempt_timeout_at IS NOT NULL AND v_runtime.attempt_timeout_at <= v_now)
+     OR v_runtime.cancel_requested_at IS NOT NULL THEN
+    RETURN QUERY VALUES (
+      'stale'::text, NULL::jsonb, NULL::bigint, NULL::integer, NULL::bigint,
+      NULL::text, NULL::timestamptz, NULL::timestamptz, NULL::bigint
+    );
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_progress
+    FROM workhorse.job_progress progress
+   WHERE progress.job_id = p_job_id
+   FOR UPDATE;
+  -- A non-protocol writer could hold the progress row while this transaction owns runtime. Resample
+  -- before any mutation so a lease, deadline, or execution timeout cannot expire during that wait.
+  v_now := clock_timestamp();
+  IF v_runtime.expires_at <= v_now
+     OR (v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now)
+     OR (v_runtime.attempt_timeout_at IS NOT NULL AND v_runtime.attempt_timeout_at <= v_now) THEN
+    RETURN QUERY VALUES (
+      'stale'::text, NULL::jsonb, NULL::bigint, NULL::integer, NULL::bigint,
+      NULL::text, NULL::timestamptz, NULL::timestamptz, NULL::bigint
+    );
+    RETURN;
+  END IF;
+  IF FOUND AND v_progress.progress_value IS NOT DISTINCT FROM p_progress_value THEN
+    RETURN QUERY VALUES (
+      'unchanged'::text, v_progress.progress_value, v_progress.revision, v_progress.attempt,
+      v_progress.fence_token, v_progress.worker_id, v_progress.created_at,
+      v_progress.updated_at, NULL::bigint
+    );
+    RETURN;
+  END IF;
+
+  IF FOUND AND v_progress.fence_token = p_fence_token THEN
+    v_elapsed_ms := extract(epoch FROM (v_now - v_progress.updated_at)) * 1000;
+    IF v_elapsed_ms < 100 THEN
+      RETURN QUERY VALUES (
+        'rate_limited'::text, v_progress.progress_value, v_progress.revision,
+        v_progress.attempt, v_progress.fence_token, v_progress.worker_id,
+        v_progress.created_at, v_progress.updated_at, ceil(100 - v_elapsed_ms)::bigint
+      );
+      RETURN;
+    END IF;
+  END IF;
+
+  INSERT INTO workhorse.job_progress(
+    job_id, progress_value, revision, attempt, fence_token, worker_id, created_at, updated_at
+  ) VALUES (
+    p_job_id, p_progress_value, 1, v_runtime.current_attempt, p_fence_token, p_worker_id,
+    v_now, v_now
+  )
+  ON CONFLICT (job_id) DO UPDATE SET
+    progress_value = EXCLUDED.progress_value,
+    revision = workhorse.job_progress.revision + 1,
+    attempt = EXCLUDED.attempt,
+    fence_token = EXCLUDED.fence_token,
+    worker_id = EXCLUDED.worker_id,
+    updated_at = EXCLUDED.updated_at
+  RETURNING * INTO v_progress;
+
+  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    VALUES (
+      p_job_id,
+      v_runtime.current_attempt,
+      'progress_updated',
+      jsonb_build_object(
+        'revision', v_progress.revision::text,
+        'bytes', octet_length(v_progress.progress_value::text),
+        'fence_token', p_fence_token::text
+      )
+    );
+
+  RETURN QUERY VALUES (
+    'updated'::text, v_progress.progress_value, v_progress.revision, v_progress.attempt,
+    v_progress.fence_token, v_progress.worker_id, v_progress.created_at,
+    v_progress.updated_at, NULL::bigint
+  );
+END;
+$$;
+
 -- Atomically record or replay one named durable timer boundary while the caller owns the exact
 -- active, unexpired runtime generation. Wait rows are immutable after their first committed write.
 CREATE OR REPLACE FUNCTION workhorse.schedule_wait_v1(
@@ -4064,7 +4206,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (15) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (16) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

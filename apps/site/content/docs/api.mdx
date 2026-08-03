@@ -13,7 +13,7 @@ type declarations.
 | `installSchema`            | `(database: Queryable) => Promise<void>`           |
 | `readSchemaVersion`        | `(database: Queryable) => Promise<number \| null>` |
 | `assertSchemaCompatible`   | `(database: Queryable) => Promise<void>`           |
-| `WORKHORSE_SCHEMA_VERSION` | `number` (currently `15`)                          |
+| `WORKHORSE_SCHEMA_VERSION` | `number` (currently `16`)                          |
 
 ## `Queue`
 
@@ -62,6 +62,8 @@ Normally driven by `Worker`; exposed for custom runtimes and tests.
 | `scheduleWait`    | `(job, workerId, name, request: ScheduleWaitRequest) => Promise<ScheduleWaitResult>` |
 | `getWait`         | `(jobId, name) => Promise<JobWait \| null>`                                          |
 | `listWaits`       | `(jobId) => Promise<JobWait[]>`                                                      |
+| `updateProgress`  | `(job, workerId, value) => Promise<JobProgress>`                                     |
+| `getProgress`     | `(jobId) => Promise<JobProgress \| null>`                                            |
 
 ### Reads
 
@@ -139,6 +141,8 @@ new Worker(queue: Queue, options?: WorkerOptions)
 | `RedriveIdempotencyConflictError` | A redrive request ID was reused with different attribution     |
 | `CheckpointConflictError`         | A checkpoint name was reused with a materially different value |
 | `CheckpointLeaseLostError`        | A checkpoint save came from a stale generation                 |
+| `ProgressLeaseLostError`          | A progress update came from a stale generation                 |
+| `ProgressRateLimitError`          | A changed progress update arrived before the 100 ms interval   |
 | `WaitConflictError`               | A wait name was reused with a different mode or target         |
 | `WaitLeaseLostError`              | A wait was scheduled from a stale generation                   |
 | `WaitLimitExceededError`          | A job exceeded 1,000 named waits                               |

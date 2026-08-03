@@ -903,6 +903,40 @@ function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
   );
 }
 
+function JobProgress({ job }: { job: DashboardJobDetail }) {
+  const progress = job.progress;
+  return (
+    <Box component="section" aria-labelledby="job-progress-heading">
+      <Group justify="space-between" mb="xs">
+        <Text id="job-progress-heading" component="h3" fw={600} size="sm" my={0}>
+          Latest progress
+        </Text>
+        <Badge variant="light" color={progress ? "blue" : "gray"}>
+          {progress ? `Revision ${progress.revision}` : "Not reported"}
+        </Badge>
+      </Group>
+      {progress ? (
+        <Paper withBorder p="sm">
+          <Text c="dimmed" size="xs" mb="sm" title={formatExact(progress.updatedAt)}>
+            Attempt {progress.attempt} · {progress.workerId} · fence {progress.fenceToken} · updated{" "}
+            {formatRelative(progress.updatedAt)}
+          </Text>
+          <JsonValue
+            label="Mutable progress"
+            value={progress.value}
+            emptyLabel="The worker reported JSON null as its latest progress."
+            copyLabel="the latest task progress"
+          />
+        </Paper>
+      ) : (
+        <Text c="dimmed" size="sm">
+          This task has not reported mutable progress.
+        </Text>
+      )}
+    </Box>
+  );
+}
+
 type DurableWait = DashboardJobDetail["waits"][number];
 type JobEvent = DashboardJobDetail["events"][number];
 type WaitPhase = "sleeping" | "waking" | "resumed";
@@ -947,6 +981,7 @@ const boundaryEventTypes = new Set([
   "wait_replayed",
   "claimed",
   "checkpoint_saved",
+  "progress_updated",
   "retry_scheduled",
   "cancel_requested",
   "succeeded",
@@ -961,6 +996,7 @@ const boundaryEventLabels: Record<string, string> = {
   wait_replayed: "Wait replayed",
   claimed: "Claimed",
   checkpoint_saved: "Checkpoint saved",
+  progress_updated: "Progress updated",
   retry_scheduled: "Retry scheduled",
   cancel_requested: "Cancellation requested",
   succeeded: "Succeeded",
@@ -975,6 +1011,7 @@ const boundaryEventColors: Record<string, string> = {
   wait_replayed: "grape",
   claimed: "blue",
   checkpoint_saved: "teal",
+  progress_updated: "blue",
   retry_scheduled: "orange",
   succeeded: "green",
   failed: "red",
@@ -4479,6 +4516,7 @@ function DashboardContent({
               error={cancelError}
               cancelTask={cancelTask}
             />
+            <JobProgress job={selectedJob} />
             <JobCheckpoints job={selectedJob} />
             <DurableWaits job={selectedJob} />
             <Box>

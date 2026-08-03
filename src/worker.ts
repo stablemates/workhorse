@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { CronExpressionParser } from "cron-parser";
 import { Queue } from "./queue.js";
 import type { MaintenancePhaseResult } from "./queue.js";
-import type { ClaimedJob, JobCheckpoint, JobWait, Json } from "./types.js";
+import type { ClaimedJob, JobCheckpoint, JobProgress, JobWait, Json } from "./types.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
 
@@ -20,6 +20,10 @@ export interface HandlerContext<TPayload = Json> {
   getCheckpoint<TValue extends Json = Json>(name: string): Promise<JobCheckpoint<TValue> | null>;
   /** Read an immutable named durable wait from the current handler activation's snapshot. */
   getWait(name: string): Promise<JobWait | null>;
+  /** Read the latest mutable progress observed by this handler activation. */
+  getProgress<TValue extends Json = Json>(): Promise<JobProgress<TValue> | null>;
+  /** Replace the latest mutable progress under the current fenced lease. */
+  setProgress<TValue extends Json>(value: TValue): Promise<JobProgress<TValue>>;
   /**
    * Return the persisted value when this name already exists. Otherwise run the operation and
    * immutably persist its JSON result under the current fenced lease.
@@ -434,6 +438,21 @@ export class Worker {
       ) => ((await loadCheckpoints()).get(name) as JobCheckpoint<TValue> | undefined) ?? null;
       const getWait: HandlerContext["getWait"] = async (name: string) =>
         (await loadWaits()).get(name) ?? null;
+      let progressLoad: Promise<JobProgress | null> | undefined;
+      const getProgress: HandlerContext["getProgress"] = async <TValue extends Json>() => {
+        progressLoad ??= this.queue.getProgress(job.id);
+        return (await progressLoad) as JobProgress<TValue> | null;
+      };
+      const setProgress: HandlerContext["setProgress"] = async <TValue extends Json>(
+        value: TValue,
+      ) => {
+        if (controller.signal.aborted) {
+          throw controller.signal.reason ?? new Error("Job lease was lost");
+        }
+        const updated = await this.queue.updateProgress(job, this.workerId, value);
+        progressLoad = Promise.resolve(updated);
+        return updated;
+      };
       const inFlightCheckpoints = new Map<string, Promise<Json>>();
       const checkpoint: HandlerContext["checkpoint"] = async <TValue extends Json>(
         name: string,
@@ -495,6 +514,8 @@ export class Worker {
         signal: controller.signal,
         getCheckpoint,
         getWait,
+        getProgress,
+        setProgress,
         checkpoint,
         sleep: durableSleep,
         sleepUntil,

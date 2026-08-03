@@ -1720,6 +1720,11 @@ describe("Workhorse demo", () => {
       }
       expect(detail).toMatchObject({
         identity: { id: enqueued.jobId, type: "demo.long-running", state: "succeeded" },
+        progress: {
+          value: { phase: "complete", completed: 250, total: 250 },
+          revision: "2",
+          attempt: 1,
+        },
         current: { outcome: { result: { completed: true, durationMs: 250 } } },
       });
     } finally {

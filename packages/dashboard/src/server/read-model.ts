@@ -1905,6 +1905,13 @@ export async function readDashboardJobDetail(
       finished_at: Date | string | null;
       result: unknown;
       outcome_error: unknown;
+      progress_value: unknown;
+      progress_revision: string | null;
+      progress_attempt: number | null;
+      progress_fence_token: string | null;
+      progress_worker_id: string | null;
+      progress_created_at: Date | string | null;
+      progress_updated_at: Date | string | null;
     }>(sql`
       SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.payload, j.max_attempts,
              j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.created_at,
@@ -1914,10 +1921,15 @@ export async function readDashboardJobDetail(
              r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
              r.error AS runtime_error,
              o.state AS outcome_state, o.current_attempt AS outcome_attempt, o.finished_at,
-             o.result, o.error AS outcome_error
+             o.result, o.error AS outcome_error,
+             p.progress_value, p.revision::text AS progress_revision,
+             p.attempt AS progress_attempt, p.fence_token::text AS progress_fence_token,
+             p.worker_id AS progress_worker_id, p.created_at AS progress_created_at,
+             p.updated_at AS progress_updated_at
         FROM workhorse.job j
         LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
         LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+        LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
        WHERE j.id = ${id}
     `),
     database.execute<{
@@ -1999,6 +2011,18 @@ export async function readDashboardJobDetail(
         job.execution_timeout_ms === null ? null : Number(job.execution_timeout_ms),
     },
     payload: job.payload,
+    progress:
+      job.progress_revision === null
+        ? null
+        : {
+            value: job.progress_value,
+            revision: job.progress_revision,
+            attempt: job.progress_attempt!,
+            fenceToken: job.progress_fence_token!,
+            workerId: job.progress_worker_id!,
+            createdAt: toIso(job.progress_created_at!),
+            updatedAt: toIso(job.progress_updated_at!),
+          },
     durability: projectDurability(job.type, job.payload),
     current: {
       runtime: job.runtime_state

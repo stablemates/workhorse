@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 15 protocol reference. The canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, named timer waits, cooperative cancellation, absolute deadlines, per-attempt execution timeouts, failure-only dead-letter queries, audited redrive lineage, a dedicated operator job projection, bounded payload controls, merged lifecycle timelines, and persisted automated retention.
+This is the compact schema version 16 protocol reference. The canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, fenced bounded latest-value progress, named timer waits, cooperative cancellation, absolute deadlines, per-attempt execution timeouts, failure-only dead-letter queries, audited redrive lineage, a dedicated operator job projection, bounded payload controls, merged lifecycle timelines, and persisted automated retention.
 
 ## Storage model
 
@@ -10,6 +10,7 @@ This is the compact schema version 15 protocol reference. The canonical clean-in
 | `enqueue_idempotency` | Scoped retained enqueue ownership and canonical request fingerprint  | Reserve once per active `(scope, key)`; replace after expiry; delete on purge/cleanup |
 | `job_runtime`         | Sole live row, retry state, and optional active cancellation request | Insert at enqueue; CAS-update while live; delete at terminal transition               |
 | `job_checkpoint`      | Immutable named handler restart boundaries                           | Insert once per job and checkpoint name under a fenced active lease                   |
+| `job_progress`        | Latest bounded mutable operational progress                          | Fenced replace, at most once per 100 ms for changed values from one generation        |
 | `job_wait`            | Immutable named timer restart boundaries                             | Insert once per job and wait name under a fenced active lease                         |
 | `job_outcome`         | Terminal success, failure, or cancellation                           | Insert once after runtime deletion                                                    |
 | `job_query`           | Bounded operator lifecycle projection                                | Trigger-synchronized on meaningful lifecycle changes; heartbeat-independent           |
@@ -44,6 +45,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 5. `cancel_v1` locks the sole runtime. Ready, scheduled, and durable-wait continuations become canceled immediately. Active work records one request and returns `cancel_requested`; repeats retain the first request. Existing terminal success/failure returns `already_terminal`; existing cancellation returns `canceled`.
 6. `acknowledge_cancel_v1` accepts only the exact unexpired worker/fence carrying a request, then inserts the canceled outcome, truthful attempt history, and terminal event atomically.
 7. `save_checkpoint_v1` locks the matching unexpired active generation and inserts one immutable named JSON result plus a `checkpoint_saved` event. Repeated equal values return the stored checkpoint; different values conflict; cancellation-requested or stale owners are rejected.
+   7b. `update_progress_v1` locks and revalidates the matching active generation, replaces one 64-KiB latest-value projection, increments its revision, and appends value-free `progress_updated` telemetry. Identical values are no-ops; changed values from one fence are limited to one every 100 milliseconds.
 8. `schedule_wait_v1` locks and revalidates the matching active generation, inserts at most one named relative or absolute timer definition, and either returns an elapsed boundary or changes runtime to wait-marked scheduled state without incrementing the attempt. Relative replay is first-write-wins; absolute target or mode changes conflict; cancellation-requested or stale owners are rejected; each job is limited to 1,000 names.
 9. `fail_v1` locks the matching active generation. A cancellation request returns `cancel_requested`. Otherwise retry asks PostgreSQL to select the persisted policy delay, CAS-updates the same runtime, increments attempt, persists any next jitter state, clears wait continuation metadata, and requeues ready or scheduled. Exhaustion deletes runtime and inserts failed outcome.
 10. `recover_expired_v1` locks expired active runtimes in bounded batches. Requested rows materialize canceled without retry; other rows perform policy selection and attempt increment/requeue or terminal failure with observed fence and expiry guards.
@@ -61,7 +63,7 @@ Every closed logical attempt has one immutable `attempt_history` row. Never-star
 
 ## Dead-letter and redrive contract
 
-`Queue.listDeadLetters(query?)` accepts queue, type, required tags, error name, `finishedAfter`, and `finishedBefore` filters. Pages contain at most 1,000 rows and use immutable `(finishedAt, jobId)` cursor order. General live and terminal listing is provided by the schema-v15 `Queue.listJobs` contract above.
+`Queue.listDeadLetters(query?)` accepts queue, type, required tags, error name, `finishedAfter`, and `finishedBefore` filters. Pages contain at most 1,000 rows and use immutable `(finishedAt, jobId)` cursor order. General live and terminal listing is provided by the schema-v16 `Queue.listJobs` contract above.
 
 `Queue.redrive(sourceJobId, { requestedBy, reason, requestId })` accepts only a retained failed source. Actor is 1 through 200 characters, reason is 1 through 2,000 characters, and request ID is 1 through 512 UTF-8 bytes. The request ID is hashed; audit rows and conflict details expose only its safe preview, digest, and length.
 
