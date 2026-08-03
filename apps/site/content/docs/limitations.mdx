@@ -22,7 +22,6 @@ Redrive is another at-least-once execution and can repeat external effects.
 | Capability                                    | Status                                                    |
 | --------------------------------------------- | --------------------------------------------------------- |
 | Job priorities                                | Ordering is FIFO only                                     |
-| Mutable progress fields                       | Checkpoints are immutable evidence, not progress updates  |
 | Workflows, DAGs, dependencies, child jobs     | No workflow graph or dependency runtime                   |
 | Signals and operator early wake               | Durable waits are time-based only                         |
 | Forced handler interruption                   | Cancellation, deadlines, and timeouts are all cooperative |
@@ -74,6 +73,8 @@ enforced protocol limit.
 | Enqueue batch                | 1,000 requests                  |
 | Tags per job                 | 20, each at most 100 characters |
 | Checkpoint value             | 1 MiB canonical JSONB           |
+| Progress value               | 64 KiB canonical JSONB          |
+| Changed progress frequency   | 10 per second per active fence  |
 | Checkpoint and wait names    | 1 to 200 characters             |
 | Waits per job                | 1,000                           |
 | Wait horizon                 | 365 days                        |

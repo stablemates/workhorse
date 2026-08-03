@@ -7,6 +7,8 @@ import {
   EnqueueIdempotencyConflictError,
   ExecutionTimeoutError,
   InjectedCrashError,
+  ProgressLeaseLostError,
+  ProgressRateLimitError,
   Queue,
   Worker,
 } from "../src/index.js";
@@ -19,6 +21,7 @@ export const operationalScenarioNames = [
   "deadline-timeout-lifecycle",
   "dead-letter-redrive-lifecycle",
   "query-listing-lifecycle",
+  "progress-lifecycle",
   "crash-before-completion",
   "lease-expiry-recovery",
   "retry-paths",
@@ -228,6 +231,27 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "timelineEntries",
       "projectionRows",
       "operatorIndexBytes",
+    ],
+  },
+  {
+    name: "progress-lifecycle",
+    purpose:
+      "Exercise fenced mutable progress, bounded write frequency, latest-value lookup, lifecycle telemetry, and terminal retention.",
+    invariants: [
+      "the exact active ownership generation can replace the latest bounded progress value",
+      "identical writes are no-ops and changed writes from one generation are frequency limited",
+      "wrong ownership generations cannot mutate progress",
+      "lookup returns only the latest revision with its attempt, fence, worker, and timestamps",
+      "accepted changes append bounded telemetry and the latest value survives terminal materialization",
+    ],
+    metrics: [
+      "firstUpdateMs",
+      "unchangedUpdateMs",
+      "rateLimitedUpdateMs",
+      "secondUpdateMs",
+      "lookupMs",
+      "latestRevision",
+      "progressEvents",
     ],
   },
   {
@@ -2432,6 +2456,101 @@ async function healthSnapshot(
   };
 }
 
+async function progressLifecycle(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const queue = new Queue(context.pool, context.queueName);
+  const assertions: ScenarioAssertion[] = [];
+  const id = await queue.enqueue("progress-lifecycle", { source: "benchmark" });
+  const job = await queue.claim("benchmark-progress", { leaseMs: 5_000 });
+  if (!job) throw new Error("progress lifecycle failed to claim its seeded job");
+
+  const [first, firstUpdateMs] = await measured(context.now, () =>
+    queue.updateProgress(job, "benchmark-progress", { completed: 1, total: 2 }),
+  );
+  const [unchanged, unchangedUpdateMs] = await measured(context.now, () =>
+    queue.updateProgress(job, "benchmark-progress", { completed: 1, total: 2 }),
+  );
+
+  const rateStarted = context.now();
+  let rateLimited = false;
+  try {
+    await queue.updateProgress(job, "benchmark-progress", { completed: 2, total: 2 });
+  } catch (error) {
+    rateLimited = error instanceof ProgressRateLimitError;
+    if (!rateLimited) throw error;
+  }
+  const rateLimitedUpdateMs = Math.max(0, context.now() - rateStarted);
+
+  let staleRejected = false;
+  try {
+    await queue.updateProgress({ ...job, fenceToken: job.fenceToken + 1n }, "benchmark-progress", {
+      invalid: true,
+    });
+  } catch (error) {
+    staleRejected = error instanceof ProgressLeaseLostError;
+    if (!staleRejected) throw error;
+  }
+
+  await context.sleep(110);
+  const [second, secondUpdateMs] = await measured(context.now, () =>
+    queue.updateProgress(job, "benchmark-progress", { completed: 2, total: 2 }),
+  );
+  const [snapshot, lookupMs] = await measured(context.now, () => queue.getJob(id));
+  const completed = await queue.complete(job, "benchmark-progress", { ok: true });
+  const terminal = await queue.getJob(id);
+  const eventResult = await context.pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM workhorse.job_event
+      WHERE job_id = $1 AND event_type = 'progress_updated'`,
+    [id],
+  );
+  const progressEvents = Number(eventResult.rows[0]!.count);
+
+  recordInvariant(assertions, "first progress revision is one", first.revision, 1n);
+  recordInvariant(
+    assertions,
+    "identical progress is a no-op",
+    unchanged.revision === first.revision &&
+      unchanged.updatedAt.getTime() === first.updatedAt.getTime(),
+    true,
+  );
+  recordInvariant(assertions, "changed progress is frequency limited", rateLimited, true);
+  recordInvariant(assertions, "wrong progress fence is rejected", staleRejected, true);
+  recordInvariant(assertions, "second accepted progress increments revision", second.revision, 2n);
+  recordInvariant(
+    assertions,
+    "lookup exposes latest progress",
+    snapshot?.progress?.revision === second.revision &&
+      jsonEquivalent(snapshot?.progress?.value, second.value),
+    true,
+  );
+  recordInvariant(assertions, "progress job completes", completed, true);
+  recordInvariant(
+    assertions,
+    "terminal lookup retains latest progress",
+    terminal?.progress?.revision === second.revision &&
+      jsonEquivalent(terminal?.progress?.value, second.value),
+    true,
+  );
+  recordInvariant(assertions, "accepted changes append one event each", progressEvents, 2);
+
+  return {
+    name: "progress-lifecycle",
+    durationMs: 0,
+    metrics: {
+      firstUpdateMs,
+      unchangedUpdateMs,
+      rateLimitedUpdateMs,
+      secondUpdateMs,
+      lookupMs,
+      latestRevision: second.revision.toString(),
+      progressEvents,
+    },
+    assertions,
+  };
+}
+
 async function workerConcurrency(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
@@ -2887,6 +3006,7 @@ export const operationalScenarioImplementations: Readonly<
   "deadline-timeout-lifecycle": deadlineTimeoutLifecycle,
   "dead-letter-redrive-lifecycle": deadLetterRedriveLifecycle,
   "query-listing-lifecycle": queryListingLifecycle,
+  "progress-lifecycle": progressLifecycle,
   "crash-before-completion": crashBeforeCompletion,
   "lease-expiry-recovery": leaseExpiryRecovery,
   "retry-paths": retryPaths,

@@ -707,6 +707,15 @@ export interface DashboardJobDetail {
     executionTimeoutMs?: number | null;
   };
   payload: unknown;
+  progress: {
+    value: unknown;
+    revision: string;
+    attempt: number;
+    fenceToken: string;
+    workerId: string;
+    createdAt: string;
+    updatedAt: string;
+  } | null;
   durability: DashboardDurabilityPlan | null;
   current: {
     runtime: {

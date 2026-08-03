@@ -56,6 +56,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `deadline-timeout-lifecycle`    | pre-claim deadline exclusion, active abort delivery, timeout retry, stale-write fencing, distinct history, and health pressure                                                                   |
 | `dead-letter-redrive-lifecycle` | cold failure cursor paging, side-effect-free preview, audited redrive, exact replay, immutable sources, and retained lineage                                                                     |
 | `query-listing-lifecycle`       | dedicated operator projection, immutable cursor continuation, default payload omission, redaction before byte bounds, heartbeat independence, merged timeline, and operator-index storage        |
+| `progress-lifecycle`            | fenced latest-value updates, identical-value no-op, frequency limit, stale-fence rejection, lookup provenance, terminal retention, and bounded event evidence                                    |
 | `crash-before-completion`       | durable state at all five worker crash boundaries                                                                                                                                                |
 | `lease-expiry-recovery`         | recovery latency, new attempt/fence, and stale completion rejection                                                                                                                              |
 | `retry-paths`                   | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion                                                                                     |
@@ -71,6 +72,11 @@ projection row count and the dedicated operator indexes' measured bytes. These a
 not latency targets or publication-grade scale claims. The scenario proves operator pages do not require
 claim-critical indexes, payload is omitted unless explicitly requested, redaction precedes the response byte
 ceiling, heartbeats do not churn the projection, and retained events and attempts share one cursor stream.
+
+`progress-lifecycle` records full client-observed durations for the first accepted update, identical-value
+no-op, frequency-limit rejection, second accepted revision, and latest-value lookup. Its invariants prove
+stale-fence rejection, terminal retention, and one value-free lifecycle event per accepted change. These
+small-run observations are diagnostics, not an update-latency or throughput claim.
 
 `retry-paths` records the selected fixed, exponential, and decorrelated-jitter delays plus the
 client-observed duration of each failure transition and their total. These timings include the full SQL

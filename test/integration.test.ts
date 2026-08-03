@@ -14,6 +14,7 @@ import {
   type Json,
   type MaintenancePhaseResult,
   MAX_CHECKPOINT_VALUE_BYTES,
+  MAX_PROGRESS_VALUE_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
   MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_IDEMPOTENCY_SCOPE_BYTES,
@@ -136,11 +137,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v15 with deterministic enqueue idempotency storage", async () => {
+  it("installs schema v16 with fenced mutable progress storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(15);
+    expect(version.rows[0]?.version).toBe(16);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -1854,7 +1855,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(15);
+    expect(health.schemaVersion).toBe(16);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2366,7 +2367,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v15 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v16 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -4318,6 +4319,133 @@ describe("live-runtime queue protocol", () => {
     }
   });
 
+  it("updates bounded mutable progress with fenced provenance and lookup visibility", async () => {
+    const id = await queue.enqueue("progress", { batch: "import-1" });
+    const job = await queue.claim("progress-worker");
+
+    const first = await queue.updateProgress(job!, "progress-worker", {
+      completed: 2,
+      total: 10,
+      phase: "reading",
+    });
+    expect(first).toMatchObject({
+      jobId: id,
+      value: { completed: 2, total: 10, phase: "reading" },
+      revision: 1n,
+      attempt: 1,
+      fenceToken: job!.fenceToken,
+      workerId: "progress-worker",
+    });
+    await expect(queue.getProgress(id)).resolves.toEqual(first);
+    await expect(queue.getJob(id)).resolves.toMatchObject({ progress: first });
+
+    const unchanged = await queue.updateProgress(job!, "progress-worker", {
+      completed: 2,
+      total: 10,
+      phase: "reading",
+    });
+    expect(unchanged).toEqual(first);
+    await expect(
+      queue.updateProgress(job!, "progress-worker", { completed: 3, total: 10 }),
+    ).rejects.toMatchObject({
+      name: "ProgressRateLimitError",
+      jobId: id,
+      retryAfterMs: expect.any(Number),
+    });
+
+    await sleep(110);
+    const second = await queue.updateProgress(job!, "progress-worker", {
+      completed: 3,
+      total: 10,
+      phase: "writing",
+    });
+    expect(second).toMatchObject({ revision: 2n, attempt: 1, workerId: "progress-worker" });
+    expect(second.createdAt).toEqual(first.createdAt);
+    expect(second.updatedAt.getTime()).toBeGreaterThan(first.updatedAt.getTime());
+
+    expect(await queue.complete(job!, "progress-worker", { imported: 10 })).toBe(true);
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "succeeded", progress: second });
+    const events = await pool.query<{ event_type: string; details: Record<string, unknown> }>(
+      `SELECT event_type, details FROM workhorse.job_event
+        WHERE job_id = $1 AND event_type = 'progress_updated' ORDER BY event_id`,
+      [id],
+    );
+    expect(events.rows).toEqual([
+      { event_type: "progress_updated", details: expect.objectContaining({ revision: "1" }) },
+      { event_type: "progress_updated", details: expect.objectContaining({ revision: "2" }) },
+    ]);
+  });
+
+  it("bounds progress values and rejects stale ownership generations", async () => {
+    await queue.enqueue("progress-bounds", {}, { maxAttempts: 2 });
+    const stale = await queue.claim("progress-worker-a", { leaseMs: 100 });
+
+    await expect(
+      queue.updateProgress(stale!, "progress-worker-a", {
+        data: "x".repeat(MAX_PROGRESS_VALUE_BYTES + 1),
+      }),
+    ).rejects.toThrow(/at most 65536 bytes/);
+    await sleep(130);
+    expect(await queue.recoverExpired()).toBe(1);
+    const current = await queue.claim("progress-worker-b");
+
+    await expect(
+      queue.updateProgress(stale!, "progress-worker-a", { stale: true }),
+    ).rejects.toMatchObject({ name: "ProgressLeaseLostError" });
+    const accepted = await queue.updateProgress(current!, "progress-worker-b", { recovered: true });
+    expect(accepted).toMatchObject({ revision: 1n, attempt: 2, workerId: "progress-worker-b" });
+  });
+
+  it("rechecks progress lease expiry after waiting for the runtime lock", async () => {
+    const id = await queue.enqueue("progress-lock-expiry", {});
+    const job = await queue.claim("progress-lock-worker", { leaseMs: 100 });
+    const blocker = await pool.connect();
+
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE", [id]);
+      const updating = queue
+        .updateProgress(job!, "progress-lock-worker", { shouldNotPersist: true })
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      await sleep(130);
+      await blocker.query("COMMIT");
+
+      await expect(updating).resolves.toMatchObject({ name: "ProgressLeaseLostError" });
+      await expect(queue.getProgress(id)).resolves.toBeNull();
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
+  it("exposes progress helpers to handlers", async () => {
+    const id = await queue.enqueue("progress-context", {});
+    const observed: unknown[] = [];
+    const worker = new Worker(queue, { workerId: "progress-context-worker" }).handle(
+      "progress-context",
+      async (_payload, context) => {
+        observed.push(await context.getProgress());
+        const updated = await context.setProgress({ percent: 50, label: "halfway" });
+        observed.push(await context.getProgress());
+        return { revision: updated.revision.toString() };
+      },
+    );
+
+    expect(await worker.runOnce()).toBe(true);
+    expect(observed).toEqual([
+      null,
+      expect.objectContaining({ jobId: id, value: { percent: 50, label: "halfway" } }),
+    ]);
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "succeeded",
+      result: { revision: "1" },
+      progress: { value: { percent: 50, label: "halfway" } },
+    });
+  });
+
   it("schedules the first named wait with immutable ownership provenance", async () => {
     const id = await queue.enqueue("wait-first", {});
     const job = await queue.claim("wait-worker", { leaseMs: 10_000 });
@@ -5514,7 +5642,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(15);
+    expect(health.schemaVersion).toBe(16);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -6280,7 +6408,7 @@ describe("live-runtime queue protocol", () => {
     await pool.query("DROP SCHEMA retention_external");
   });
 
-  it("installs and reconverges the v15 operator projection, indexes, functions, and lifecycle triggers", async () => {
+  it("installs and reconverges the v16 operator projection, indexes, functions, and lifecycle triggers", async () => {
     const objects = await pool.query<{
       projection: string | null;
       list_jobs: string | null;

@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 15.
+The current clean-install protocol is schema version 16.
 
 ## Design objective
 
@@ -11,6 +11,7 @@ Dispatch cost should scale with live work, not lifetime completed work. Schema v
 - immutable accepted identity and payload in `job`
 - exactly one mutable `job_runtime` row only while a job is scheduled, ready, or active
 - exactly one immutable `job_outcome` row after success or terminal failure
+- at most one bounded mutable `job_progress` projection, separate from payload and outcome
 - immutable audited `job_redrive` edges between failed sources and fresh target identities
 - append-only, time-partitioned `job_event` and `attempt_history`
 
@@ -53,6 +54,7 @@ erDiagram
   job ||--o{ job_redrive : "failed source"
   job ||--o| job_redrive : "redrive target"
   job ||--o{ job_checkpoint : "records restart boundaries"
+  job ||--o| job_progress : "reports latest progress"
   job ||--o{ job_wait : "records timer boundaries"
   job ||--o{ job_event : "emits"
   job ||--o{ attempt_history : "closes attempts"
@@ -129,6 +131,16 @@ erDiagram
     bigint fence_token
     text worker_id
     timestamptz created_at
+  }
+  job_progress {
+    uuid job_id PK
+    jsonb progress_value
+    bigint revision
+    int attempt
+    bigint fence_token
+    text worker_id
+    timestamptz created_at
+    timestamptz updated_at
   }
   job_wait {
     uuid job_id PK
@@ -227,6 +239,18 @@ Insert-only named JSON results at explicit handler restart boundaries. The prima
 `HandlerContext.checkpoint(name, operation)` reads an existing value before running user code and coalesces overlapping calls for the same name inside one handler. It does not make external effects exactly once: a process can disappear after an external system commits but before the checkpoint transaction commits.
 
 Values are limited to 1 MiB of PostgreSQL's canonical JSONB text representation, giving every language client one authoritative definition. Checkpoints intentionally have no independent retirement path because deleting a completed name while retaining a retryable job could repeat that step. They cascade only when the stable parent job identity is deleted, so future job-retention policy must account for checkpoint storage.
+
+### `job_progress`
+
+One latest-value mutable projection for operational progress, kept separate from immutable payload,
+checkpoint, and outcome fields. `update_progress_v1` serializes on the active runtime row and accepts only
+the exact unexpired worker/fence generation. Accepted changes increment a monotonic revision and replace
+attempt, fence, worker, and update-time provenance. Identical values are no-ops.
+
+Values are limited to 64 KiB of canonical JSONB text. One fence may commit a changed value at most every
+100 milliseconds; a new ownership generation may report immediately. Each accepted change emits a bounded
+`progress_updated` event with revision and byte size but not the value. The latest projection survives retry
+and terminal materialization and cascades only with the stable parent identity.
 
 ### `job_wait`
 

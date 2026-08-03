@@ -20,6 +20,7 @@ import type {
   JobListPage,
   JobListQuery,
   JobCheckpoint,
+  JobProgress,
   JobSnapshot,
   JobState,
   JobTimelineEntry,
@@ -219,6 +220,22 @@ type CheckpointRow = {
 
 type SaveCheckpointRow = Omit<CheckpointRow, "job_id" | "checkpoint_name"> & {
   status: "saved" | "existing" | "conflict" | "stale";
+};
+
+type ProgressRow = {
+  job_id: string;
+  progress_value: Json;
+  revision: string;
+  attempt: number;
+  fence_token: string;
+  worker_id: string;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type UpdateProgressRow = Omit<ProgressRow, "job_id"> & {
+  status: "updated" | "unchanged" | "rate_limited" | "stale";
+  retry_after_ms: string | null;
 };
 
 type WaitRow = {
@@ -496,6 +513,19 @@ function checkpointRecord<TValue extends Json>(row: CheckpointRow): JobCheckpoin
   };
 }
 
+function progressRecord<TValue extends Json>(row: ProgressRow): JobProgress<TValue> {
+  return {
+    jobId: row.job_id,
+    value: row.progress_value as TValue,
+    revision: BigInt(row.revision),
+    attempt: row.attempt,
+    fenceToken: BigInt(row.fence_token),
+    workerId: row.worker_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function waitRecord(row: WaitRow): JobWait {
   return {
     jobId: row.job_id,
@@ -525,6 +555,23 @@ export class CheckpointLeaseLostError extends Error {
       `Cannot save checkpoint ${checkpointName} for job ${jobId} because the lease is stale or expired`,
     );
     this.name = "CheckpointLeaseLostError";
+  }
+}
+
+export class ProgressLeaseLostError extends Error {
+  constructor(jobId: string) {
+    super(`Cannot update progress for job ${jobId} because the lease is stale or expired`);
+    this.name = "ProgressLeaseLostError";
+  }
+}
+
+export class ProgressRateLimitError extends Error {
+  constructor(
+    readonly jobId: string,
+    readonly retryAfterMs: number,
+  ) {
+    super(`Cannot update progress for job ${jobId} yet; retry after ${retryAfterMs} milliseconds`);
+    this.name = "ProgressRateLimitError";
   }
 }
 
@@ -1541,6 +1588,46 @@ export class Queue {
     });
   }
 
+  async getProgress<TValue extends Json = Json>(
+    jobId: string,
+  ): Promise<JobProgress<TValue> | null> {
+    const result = await this.database.query<ProgressRow>(
+      `SELECT job_id, progress_value, revision::text, attempt, fence_token::text,
+              worker_id, created_at, updated_at
+         FROM workhorse.job_progress
+        WHERE job_id = $1`,
+      [jobId],
+    );
+    const row = result.rows[0];
+    return row ? progressRecord<TValue>(row) : null;
+  }
+
+  async updateProgress<TValue extends Json>(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    value: TValue,
+  ): Promise<JobProgress<TValue>> {
+    const encodedValue = JSON.stringify(value);
+    if (encodedValue === undefined) {
+      throw new TypeError("Progress value must be JSON serializable");
+    }
+    const result = await this.database.query<UpdateProgressRow>(
+      `SELECT status, progress_value, revision::text, attempt, fence_token::text,
+              worker_id, created_at, updated_at, retry_after_ms::text
+         FROM workhorse.update_progress_v1($1, $2, $3, $4::jsonb)`,
+      [job.id, workerId, job.fenceToken.toString(), encodedValue],
+    );
+    const row = result.rows[0]!;
+    if (row.status === "stale") throw new ProgressLeaseLostError(job.id);
+    if (row.status === "rate_limited") {
+      throw new ProgressRateLimitError(job.id, Number(row.retry_after_ms));
+    }
+    if (row.status !== "updated" && row.status !== "unchanged") {
+      throw new Error(`Unexpected progress status: ${String(row.status)}`);
+    }
+    return progressRecord<TValue>({ ...row, job_id: job.id });
+  }
+
   async getWait(jobId: string, name: string): Promise<JobWait | null> {
     validateWaitName(name);
     const result = await this.database.query<WaitRow>(
@@ -1708,6 +1795,13 @@ export class Queue {
       cancel_requested_at: Date | null;
       cancel_requested_by: string | null;
       cancel_reason: string | null;
+      progress_value: Json | null;
+      progress_revision: string | null;
+      progress_attempt: number | null;
+      progress_fence_token: string | null;
+      progress_worker_id: string | null;
+      progress_created_at: Date | null;
+      progress_updated_at: Date | null;
       created_at: Date;
       updated_at: Date;
     }>(
@@ -1718,11 +1812,16 @@ export class Queue {
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
               COALESCE(r.run_at, o.run_at) AS run_at, o.result,
               COALESCE(r.error, o.error) AS error, r.cancel_requested_at,
-              r.cancel_requested_by, r.cancel_reason, j.created_at,
+              r.cancel_requested_by, r.cancel_reason,
+              p.progress_value, p.revision::text AS progress_revision,
+              p.attempt AS progress_attempt, p.fence_token::text AS progress_fence_token,
+              p.worker_id AS progress_worker_id, p.created_at AS progress_created_at,
+              p.updated_at AS progress_updated_at, j.created_at,
               COALESCE(r.updated_at, o.updated_at) AS updated_at
          FROM workhorse.job j
          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
          LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+         LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
         WHERE j.id = $1`,
       [id],
     );
@@ -1748,6 +1847,19 @@ export class Queue {
       cancelRequestedAt: row.cancel_requested_at,
       cancelRequestedBy: row.cancel_requested_by,
       cancelReason: row.cancel_reason,
+      progress:
+        row.progress_revision === null
+          ? null
+          : progressRecord({
+              job_id: row.id,
+              progress_value: row.progress_value,
+              revision: row.progress_revision,
+              attempt: row.progress_attempt!,
+              fence_token: row.progress_fence_token!,
+              worker_id: row.progress_worker_id!,
+              created_at: row.progress_created_at!,
+              updated_at: row.progress_updated_at!,
+            }),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

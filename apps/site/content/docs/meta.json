@@ -15,6 +15,7 @@
     "workers",
     "retries",
     "durable-execution",
+    "progress",
     "cancellation",
     "---Operating---",
     "queries",

@@ -7,6 +7,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Hono } from "hono";
 import {
+  MIN_PROGRESS_UPDATE_INTERVAL_MS,
   Queue,
   type CancelStatus,
   type Json,
@@ -1033,10 +1034,19 @@ export function createDemoApplication(
         worker.handle(FAILURE_JOB_TYPE, () => {
           throw new Error("Intentional terminal demo failure");
         });
-        worker.handle(LONG_RUNNING_JOB_TYPE, async () => {
+        worker.handle(LONG_RUNNING_JOB_TYPE, async (_payload, context) => {
           dashboardRefresh.publish("worker");
           const durationMs = options.longRunningJobMs ?? DEMO_LONG_RUNNING_MS;
+          if (durationMs >= MIN_PROGRESS_UPDATE_INTERVAL_MS * 2) {
+            await context.setProgress({ phase: "running", completed: 0, total: durationMs });
+            dashboardRefresh.publish("worker");
+          }
           await sleep(durationMs);
+          await context.setProgress({
+            phase: "complete",
+            completed: durationMs,
+            total: durationMs,
+          });
           dashboardRefresh.publish("worker");
           return { completed: true, durationMs };
         });

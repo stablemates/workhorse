@@ -38,6 +38,8 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
   with jobs and recurring schedule definitions;
 - append-only, time-partitioned lifecycle events and finalized attempts;
 - immutable named handler checkpoints that survive retry and are fenced against stale workers;
+- fenced latest-value progress updates with 64 KiB values, ten changed writes per second per
+  ownership generation, revision provenance, lookup, timeline telemetry, and dashboard inspection;
 - persisted terminal outcomes/results and checkpoint-backed interim artifacts inspectable in the existing
   demo task drawer;
 - named durable timer waits that release the worker lease and restart in the same logical attempt;
@@ -64,8 +66,8 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
 
 Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
 
-Checkpoint outputs are immutable evidence, not mutable progress updates. Their task-drawer visibility does
-not complete roadmap item **P1-09 Progress and job metadata**.
+Checkpoint outputs remain immutable restart evidence. Mutable progress is stored separately and never
+changes the accepted payload, checkpoint outputs, or terminal result.
 
 ### Cooperative cancellation
 

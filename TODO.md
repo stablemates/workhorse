@@ -277,7 +277,7 @@ not depend on the later full OpenTelemetry and metrics package.
 - [ ] Version contracts without making historical payloads unreadable.
 - [ ] Redact configured sensitive fields from logs, traces, and operator views.
 
-### [ ] P1-09 Progress and job metadata
+### [x] P1-09 Progress and job metadata
 
 **Depends on:** P1-02
 
@@ -286,10 +286,10 @@ but they are not mutable progress. P1-09 remains open for a distinct fenced, bou
 Progress remains observable through the query and dashboard contracts; full trace and metric export is a
 later integration rather than a prerequisite.
 
-- [ ] Add fenced, bounded progress updates for active jobs.
-- [ ] Keep mutable progress out of immutable payload and outcome fields.
-- [ ] Define update frequency and size limits to control write amplification.
-- [ ] Expose latest progress through lookup APIs and telemetry.
+- [x] Add fenced, bounded progress updates for active jobs.
+- [x] Keep mutable progress out of immutable payload and outcome fields.
+- [x] Define update frequency and size limits to control write amplification.
+- [x] Expose latest progress through lookup APIs and telemetry.
 
 ### [x] P1-10 Explicit durable checkpoints
 
