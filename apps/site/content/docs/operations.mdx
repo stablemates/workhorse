@@ -1,6 +1,6 @@
 ---
 title: Deployment and operations
-description: Process topology, graceful shutdown, probes, retention and maintenance policy, health checks, and benchmarking.
+description: Process topology, graceful shutdown, probes, retention and maintenance policy, and health checks.
 ---
 
 ## Topology
@@ -197,29 +197,6 @@ Instrument `onMaintenance` telemetry and your own handler wrappers.
   pool; handler concurrency does not require one connection per handler, but it does add pressure.
 - Keep leases long enough for normal heartbeat jitter and short enough to meet recovery objectives.
 - Use at least two replicas when worker availability matters.
-
-## Benchmarking
-
-The repository ships a reproducible benchmark suite comparing a conventional mutable-table protocol
-with the live-runtime design, plus a standalone success-path competitor baseline.
-
-```bash
-pnpm db:reset:bench
-pnpm benchmark -- --profile smoke --suite all --output benchmark-smoke.json
-pnpm benchmark:competitors -- --profile smoke --output competitor-smoke.json
-```
-
-<Callout type="warn">
-  Small runs are smoke tests only. They are not evidence of product superiority. Publication-grade
-  evidence requires larger retained-history horizons, production-shaped payloads, stable hardware,
-  reference systems, and preserved raw results.
-</Callout>
-
-Follow the
-[benchmark runbook](https://github.com/stablemates/workhorse/blob/main/docs/benchmarking.md) before
-running or interpreting anything beyond a smoke test. Worker topology findings and detailed process
-lifecycle semantics live in
-[`docs/worker-processes.md`](https://github.com/stablemates/workhorse/blob/main/docs/worker-processes.md).
 
 ## Schema changes
 
