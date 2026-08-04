@@ -1,6 +1,6 @@
 import type { CancelStatus, JobState } from "@workhorse/core";
 import type { DashboardDemoJobKind, DashboardDemoScenario } from "../client.js";
-import type { DashboardDurabilityPlan } from "../model.js";
+import type { DashboardDurabilityPlan, DashboardRunNowStatus } from "../model.js";
 
 export interface DashboardAuditContext {
   actor: string;
@@ -54,7 +54,15 @@ export interface DashboardCancelTaskResult {
   finishedAt: string | null;
 }
 
+export interface DashboardRunNowResult {
+  status: DashboardRunNowStatus;
+  id: string;
+  state: string | null;
+  runAt: string | null;
+}
+
 export interface DashboardTaskController {
+  runTaskNow?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardRunNowResult>;
   cancelTask?: (
     jobId: string,
     audit: DashboardCancellationAuditContext,
