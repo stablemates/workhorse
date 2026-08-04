@@ -29,6 +29,7 @@ import {
   ThemeIcon,
   Title,
   Tooltip,
+  VisuallyHidden,
 } from "@mantine/core";
 import { BarChart } from "@mantine/charts";
 import { useDisclosure } from "@mantine/hooks";
@@ -39,6 +40,8 @@ import {
   CheckCircle,
   Clock,
   Copy,
+  DotsThreeVertical,
+  FunnelSimple,
   GearSix,
   Info,
   ListDashes,
@@ -53,6 +56,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   createContext,
+  Fragment,
   lazy,
   Suspense,
   useCallback,
@@ -74,6 +78,7 @@ import {
   idempotencyEvidenceLine,
   isTerminalTaskState,
   readIdempotencyEvidence,
+  taskRowActionGroups,
 } from "./model.js";
 import { describeDurableBoundary, readTaskResultEvidence, type TaskResultState } from "./model.js";
 import type {
@@ -91,6 +96,7 @@ import type {
   DashboardTaskFilter,
   DashboardTasksPage,
   DashboardWorkersPage,
+  TaskRowActionId,
 } from "./model.js";
 import type { DashboardClient, DashboardDemoTools } from "./client.js";
 import { WorkhorseBrand } from "./brand.js";
@@ -510,6 +516,20 @@ function hasStoredValue(value: unknown): boolean {
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2) ?? "";
+}
+
+const clipboardUnavailable =
+  "Copying is not available in this browser. Open the task to select the text instead.";
+
+/** Resolves to null on success, or to the sentence to show the operator when copying failed. */
+async function copyToClipboard(text: string): Promise<string | null> {
+  if (!navigator.clipboard) return clipboardUnavailable;
+  try {
+    await navigator.clipboard.writeText(text);
+    return null;
+  } catch {
+    return clipboardUnavailable;
+  }
 }
 
 /**
@@ -2127,6 +2147,77 @@ function TaskListingFilters({
   );
 }
 
+function taskRowActionIcon(id: TaskRowActionId): ReactNode {
+  if (id === "inspect") return <Info size={16} />;
+  if (id === "copy-id" || id === "copy-args") return <Copy size={16} />;
+  if (id === "cancel") return <Prohibit size={16} />;
+  return <FunnelSimple size={16} />;
+}
+
+/**
+ * The per-row action menu for one task.
+ *
+ * Which actions apply is decided by `taskRowActionGroups` from the row's own state, so the list and
+ * the drawer can never disagree about whether a task is cancelable. An action that does not apply
+ * stays in the menu, disabled, with the reason written underneath it: an operator finds out why a
+ * finished task cannot be canceled in the place they went to cancel it, rather than from a menu
+ * that quietly changes shape from row to row.
+ *
+ * Cancellation is never applied from here. It opens the task drawer with the confirmation armed,
+ * because cancellation is irreversible and its reason belongs in the audit trail.
+ */
+function TaskRowActions({
+  job,
+  onAction,
+}: {
+  job: DashboardJobRow;
+  onAction: (id: TaskRowActionId, job: DashboardJobRow) => void;
+}) {
+  const groups = taskRowActionGroups(job);
+  return (
+    <Menu position="bottom-end" withinPortal shadow="md" width={280}>
+      <Menu.Target>
+        <ActionIcon
+          size="sm"
+          variant="subtle"
+          color="gray"
+          aria-label={`Actions for task ${job.id}`}
+          // The row itself opens the drawer on click, which is not what opening this menu means.
+          onClick={(event) => event.stopPropagation()}
+        >
+          <DotsThreeVertical size={16} weight="bold" />
+        </ActionIcon>
+      </Menu.Target>
+      <Menu.Dropdown onClick={(event) => event.stopPropagation()}>
+        {groups.map((group, index) => (
+          <Fragment key={group.label}>
+            {index > 0 ? <Menu.Divider /> : null}
+            <Menu.Label>{group.label}</Menu.Label>
+            {group.actions.map((action) => (
+              <Menu.Item
+                key={action.id}
+                leftSection={taskRowActionIcon(action.id)}
+                color={action.destructive && action.unavailable === null ? "red" : undefined}
+                disabled={action.unavailable !== null}
+                onClick={() => onAction(action.id, job)}
+              >
+                <Text size="sm" lh={1.3}>
+                  {action.label}
+                </Text>
+                {action.unavailable === null ? null : (
+                  <Text size="xs" c="dimmed" lh={1.3} mt={2} style={{ whiteSpace: "normal" }}>
+                    {action.unavailable}
+                  </Text>
+                )}
+              </Menu.Item>
+            ))}
+          </Fragment>
+        ))}
+      </Menu.Dropdown>
+    </Menu>
+  );
+}
+
 function TasksPage({
   data,
   navigate,
@@ -2144,12 +2235,14 @@ function TasksPage({
   runDemoJob: ((kind: DemoJobKind, scenario?: DurableDemoScenario) => Promise<void>) | null;
   runningDemoJob: DemoJobKind | null;
   actionError: string | null;
-  inspectJob: (id: string) => void;
+  inspectJob: (id: string, options?: { confirmCancel?: boolean }) => void;
 }) {
   const [fullArgs, setFullArgs] = useState(
     () => localStorage.getItem("workhorse-full-args") === "true",
   );
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
+  // What the last row action did. Announced rather than left to a colour or a vanished menu.
+  const [rowFeedback, setRowFeedback] = useState<string | null>(null);
   const searchInput = searchDraft ?? taskLocation.search ?? "";
   const taskFacets = useTaskFacets(data);
   const locationState: TaskLocationState = taskLocation;
@@ -2170,6 +2263,37 @@ function TasksPage({
     }, 300);
     return () => clearTimeout(timer);
   }, [searchDraft, taskLocation.search, updateLocation]);
+  useEffect(() => {
+    if (rowFeedback === null) return;
+    const timer = setTimeout(() => setRowFeedback(null), 4_000);
+    return () => clearTimeout(timer);
+  }, [rowFeedback]);
+  /**
+   * Apply one row action.
+   *
+   * Only the two clipboard actions finish here. Filtering goes through the same location update the
+   * filter controls use, so the URL stays the single description of what this list is showing, and
+   * cancellation opens the drawer instead of acting, because an irreversible action is confirmed
+   * with a reason before it is applied.
+   */
+  const runRowAction = useCallback(
+    (id: TaskRowActionId, job: DashboardJobRow) => {
+      if (id === "inspect") return inspectJob(job.id);
+      if (id === "cancel") return inspectJob(job.id, { confirmCancel: true });
+      if (id === "filter-type") return updateLocation({ jobType: job.type });
+      if (id === "filter-queue") return updateLocation({ queue: job.queue });
+      if (id === "filter-worker") {
+        const worker = job.workerId ?? job.lastWorkerId;
+        if (worker !== null) updateLocation({ worker });
+        return;
+      }
+      const copying = id === "copy-id" ? "Task id" : "Args";
+      void copyToClipboard(id === "copy-id" ? job.id : formatJson(job.payload)).then((failure) =>
+        setRowFeedback(failure ?? `${copying} copied to the clipboard.`),
+      );
+    },
+    [inspectJob, updateLocation],
+  );
   const toggleFullArgs = (checked: boolean) => {
     setFullArgs(checked);
     localStorage.setItem("workhorse-full-args", String(checked));
@@ -2309,6 +2433,18 @@ function TasksPage({
             </Text>
           </>
         ) : null}
+        {/* One live region for row actions, so a screen reader hears a copy that a menu item
+            performed and then closed itself. */}
+        <Box role="status" aria-live="polite">
+          {rowFeedback === null ? null : (
+            <>
+              <Divider />
+              <Text c="dimmed" size="sm" px="md" py="xs">
+                {rowFeedback}
+              </Text>
+            </>
+          )}
+        </Box>
         <Divider />
         <ScrollArea>
           <Table
@@ -2316,7 +2452,7 @@ function TasksPage({
             highlightOnHover
             verticalSpacing={6}
             horizontalSpacing="sm"
-            miw={fullArgs ? 1020 : 900}
+            miw={fullArgs ? 1064 : 944}
           >
             <Table.Thead>
               <Table.Tr>
@@ -2329,12 +2465,15 @@ function TasksPage({
                 <Table.Th ta="right">Attempt</Table.Th>
                 <Table.Th ta="right">Duration</Table.Th>
                 <Table.Th ta="right">Updated</Table.Th>
+                <Table.Th w={44}>
+                  <VisuallyHidden>Actions</VisuallyHidden>
+                </Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {data.jobs.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={9}>
+                  <Table.Td colSpan={10}>
                     <Center mih={120}>
                       <Text c="dimmed" size="sm">
                         No tasks match this filter.
@@ -2420,6 +2559,9 @@ function TasksPage({
                       <Text size="sm" title={formatExact(job.updatedAt)} c="dimmed">
                         {formatRelative(job.updatedAt)}
                       </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <TaskRowActions job={job} onAction={runRowAction} />
                     </Table.Td>
                   </Table.Tr>
                 ))
@@ -4032,13 +4174,20 @@ function useDashboardController(
     [auditActor, client, loadPage],
   );
 
+  /**
+   * Open one task's drawer.
+   *
+   * `confirmCancel` arms the drawer's cancellation confirmation, which is how the tasks list offers
+   * cancel: the row opens the confirmation rather than canceling, so the irreversibility is still
+   * stated and the optional reason still reaches the audit trail.
+   */
   const inspectJob = useCallback(
-    async (id: string) => {
+    async (id: string, options: { confirmCancel?: boolean } = {}) => {
       setSelectedJobId(id);
       setSelectedJob(null);
       setJobDetailError(null);
       // Opening a different task must never inherit the previous task's confirmation or result.
-      setConfirmingCancel(false);
+      setConfirmingCancel(options.confirmCancel === true);
       setCancelReason("");
       setCancelError(null);
       setCancelFeedback(null);
@@ -4161,7 +4310,7 @@ function useDashboardController(
         runDemoJob={demoTools ? runDemoJob : null}
         runningDemoJob={runningDemoJob}
         actionError={actionError}
-        inspectJob={(id) => void inspectJob(id)}
+        inspectJob={(id, options) => void inspectJob(id, options)}
       />
     );
   } else if (loadState.data?.route === "/cron") {
