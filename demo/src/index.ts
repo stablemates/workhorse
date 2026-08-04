@@ -62,8 +62,8 @@ if (process.env.SEED_DEMO_DATA !== "false") {
   const seed = await seedDemoData(database);
   console.log(
     seed.seeded
-      ? `Seeded ${seed.jobIds.length} representative and ${seed.historicalJobCount} historical demo jobs`
-      : "Representative and historical demo data already exist",
+      ? `Seeded ${seed.jobIds.length} live showcase and ${seed.historicalJobCount} historical demo jobs`
+      : "Live showcase and historical demo data already exist",
   );
 }
 const running = await serveWithWorkhorse({
