@@ -9,10 +9,13 @@ export type {
 } from "./client.js";
 export {
   parseTaskLocation,
+  taskDetailNavigation,
+  taskListingKey,
   taskLocationHref,
   taskPageSizes,
   type TaskActivityGroup,
   type TaskActivityPeriod,
+  type TaskDetailNavigation,
   type TaskLocationState,
   type TaskPageSize,
 } from "./task-location.js";

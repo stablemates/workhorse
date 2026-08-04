@@ -16,6 +16,14 @@ export interface TaskLocationState {
   pageSize: TaskPageSize;
   period: TaskActivityPeriod;
   group: TaskActivityGroup;
+  /**
+   * The task whose detail drawer is open, so an opened drawer is part of the shareable URL.
+   *
+   * It is deliberately separate from the listing parameters: the drawer is a view onto one task,
+   * not a narrowing of the list, so copying the URL restores both the same list and the same
+   * open task, and closing the drawer leaves every filter and the page number untouched.
+   */
+  taskId: string | null;
 }
 
 const filters = new Set<DashboardTaskFilter>([
@@ -31,6 +39,23 @@ const filters = new Set<DashboardTaskFilter>([
 
 function optionalValue(parameters: URLSearchParams, key: string): string | null {
   return parameters.get(key)?.trim() || null;
+}
+
+/**
+ * How a change of the open task should enter browser history.
+ *
+ * Opening the drawer from a closed list is the one step an operator expects Back to undo, so it
+ * pushes. Clicking from one task to the next is a swap inside the panel that is already open, and
+ * closing is a dismissal, so both replace: otherwise Back would walk the operator through every
+ * task they glanced at, and Forward would re-open a panel they deliberately dismissed.
+ */
+export type TaskDetailNavigation = "push" | "replace";
+
+export function taskDetailNavigation(
+  previousTaskId: string | null,
+  nextTaskId: string | null,
+): TaskDetailNavigation {
+  return previousTaskId === null && nextTaskId !== null ? "push" : "replace";
 }
 
 export function parseTaskLocation(
@@ -53,6 +78,7 @@ export function parseTaskLocation(
       (tag, index, values) => tag.length > 0 && tag.length <= 100 && values.indexOf(tag) === index,
     )
     .slice(0, 20);
+  const requestedTaskId = optionalValue(parameters, "task");
 
   return {
     filter: requestedFilter && filters.has(requestedFilter) ? requestedFilter : "all",
@@ -61,6 +87,9 @@ export function parseTaskLocation(
     jobType: optionalValue(parameters, "type"),
     tags,
     search: optionalValue(parameters, "q"),
+    // A hand-edited or truncated id is answered by the drawer's own load error, but an
+    // unbounded value would be carried into every link this dashboard builds.
+    taskId: requestedTaskId && requestedTaskId.length <= 200 ? requestedTaskId : null,
     page: Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1,
     pageSize: taskPageSizes.includes(requestedPageSize as TaskPageSize)
       ? (requestedPageSize as TaskPageSize)
@@ -86,6 +115,28 @@ export function taskLocationHref(state: TaskLocationState): string {
   if (state.pageSize !== 50) parameters.set("per", String(state.pageSize));
   if (state.period !== "1h") parameters.set("period", state.period);
   if (state.group !== "queue") parameters.set("group", state.group);
+  if (state.taskId) parameters.set("task", state.taskId);
   const query = parameters.toString();
   return query ? `/tasks?${query}` : "/tasks";
+}
+
+/**
+ * Everything the task listing request depends on, as one comparable string.
+ *
+ * Opening, switching, and closing the drawer all rewrite the URL, and the list behind the panel
+ * must not refetch or flash a loader for any of them. Deriving the fetch from this key rather
+ * than from the location object states exactly which parameters are a different list, and leaves
+ * the drawer id, the chart period, and the chart grouping out of it.
+ */
+export function taskListingKey(state: TaskLocationState): string {
+  return JSON.stringify([
+    state.filter,
+    state.queue,
+    state.worker,
+    state.jobType,
+    state.tags,
+    state.search,
+    state.page,
+    state.pageSize,
+  ]);
 }

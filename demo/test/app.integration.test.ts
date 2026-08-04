@@ -43,6 +43,12 @@ import type { CreateDemoApplicationOptions } from "../src/app.js";
 import type { DashboardRouter } from "@workhorse/dashboard/server";
 import { dashboardDatabase, readDashboardSnapshot } from "@workhorse/dashboard/server";
 import { durableDemoScenarios } from "../src/durable-demo.js";
+import {
+  DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT,
+  DEMO_FEATURE_SHOWCASE_FAMILIES,
+  DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+  DEMO_FEATURE_SHOWCASE_SOURCE,
+} from "../src/feature-showcase.js";
 import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/model";
 
 const databaseUrl = localDatabaseUrl("demo");
@@ -215,6 +221,12 @@ describe("Workhorse demo", () => {
           job_type: "demo.recurring",
           enabled: true,
         },
+        ...DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => ({
+          schedule_name: family.scheduleName,
+          cron_expression: family.schedule,
+          job_type: DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+          enabled: true,
+        })).toSorted((left, right) => left.schedule_name.localeCompare(right.schedule_name)),
       ],
     });
   });
@@ -223,30 +235,8 @@ describe("Workhorse demo", () => {
     const { app } = createTestApplication();
 
     const seeded = await seedDemoData(database);
-    expect(seeded).toMatchObject({
-      seeded: true,
-      jobIds: [
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-      ],
-      historicalJobCount: 362,
-    });
+    expect(seeded).toMatchObject({ seeded: true, historicalJobCount: 362 });
+    expect(seeded.jobIds).toHaveLength(44);
     expect(await seedDemoData(database)).toEqual({
       seeded: false,
       jobIds: [],
@@ -264,13 +254,49 @@ describe("Workhorse demo", () => {
            ) representative_rows`,
         [seeded.jobIds],
       ),
-    ).toMatchObject({ rows: [{ versions: [expect.any(String)] }] });
+    ).toMatchObject({ rows: [{ versions: [expect.any(String), expect.any(String)] }] });
     expect(
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 380 }],
+      rows: [{ count: 406 }],
     });
+    expect(
+      await pool.query(
+        `SELECT payload->>'family' AS family,
+                count(DISTINCT payload->>'scenario')::integer AS scenarios
+           FROM workhorse.job
+          WHERE job_type = $1 AND payload->>'source' = $2
+          GROUP BY payload->>'family'
+          ORDER BY payload->>'family'`,
+        [DEMO_FEATURE_SHOWCASE_JOB_TYPE, DEMO_FEATURE_SHOWCASE_SOURCE],
+      ),
+    ).toMatchObject({
+      rows: [...DEMO_FEATURE_SHOWCASE_FAMILIES]
+        .toSorted((left, right) => left.key.localeCompare(right.key))
+        .map((family) => ({ family: family.key, scenarios: 3 })),
+    });
+    expect(DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT).toBe(24);
+    expect(
+      await pool.query(
+        `SELECT count(*)::integer AS count
+           FROM workhorse.job job
+           JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
+          WHERE job.job_type = $1
+            AND job.payload->>'family' = 'cancellation'
+            AND outcome.state = 'canceled'`,
+        [DEMO_FEATURE_SHOWCASE_JOB_TYPE],
+      ),
+    ).toMatchObject({ rows: [{ count: 2 }] });
+    expect(
+      await pool.query(
+        `SELECT count(*)::integer AS count,
+                count(DISTINCT source_job_id)::integer AS sources,
+                count(DISTINCT target_job_id)::integer AS targets
+           FROM workhorse.job_redrive
+          WHERE requested_by = 'demo-seed'`,
+      ),
+    ).toMatchObject({ rows: [{ count: 2, sources: 2, targets: 2 }] });
     expect(
       await pool.query(
         `SELECT job.payload, job.max_attempts, job.tags, runtime.state,
@@ -456,11 +482,11 @@ describe("Workhorse demo", () => {
     });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 380,
-      scheduled: 5,
-      queued: 12,
-      completed: 346,
-      discarded: 17,
+      all: 406,
+      scheduled: 6,
+      queued: 29,
+      completed: 348,
+      discarded: 21,
       retried: 22,
     });
     // Seeds must never manufacture a retention problem: startup stays healthy and deterministic.
@@ -482,25 +508,38 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 380,
-      counts: { all: 380, scheduled: 5, queued: 12, completed: 346, discarded: 17 },
+      total: 406,
+      counts: { all: 406, scheduled: 6, queued: 29, completed: 348, discarded: 21 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
     await expect(client.dashboard.taskFacets()).resolves.toMatchObject({
-      queues: ["demo", "emails", "orders"],
-      workers: ["demo-worker-1", "demo-worker-2"],
+      queues: [
+        "demo",
+        "emails",
+        "orders",
+        "showcase-dead-letter",
+        "showcase-redrive-replay",
+        "showcase-redrive-success",
+      ],
+      workers: [
+        "demo-worker-1",
+        "demo-worker-2",
+        "showcase-seed-dead-letter",
+        "showcase-seed-redrive-replay",
+        "showcase-seed-redrive-success",
+      ],
       jobTypes: expect.arrayContaining(["demo.report", "order.process"]),
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 380 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 406 });
     expect(secondPage.jobs).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
-      total: 5,
+      total: 6,
       jobs: expect.arrayContaining([
         expect.objectContaining({ state: "scheduled", payload: { source: "scheduled-seed" } }),
       ]),
@@ -590,7 +629,14 @@ describe("Workhorse demo", () => {
       period: "7d",
       groupBy: "queue",
     });
-    expect(queueActivity.groups).toEqual(["demo", "emails", "orders"]);
+    expect(queueActivity.groups).toEqual([
+      "demo",
+      "emails",
+      "orders",
+      "showcase-dead-letter",
+      "showcase-redrive-replay",
+      "showcase-redrive-success",
+    ]);
     expect(
       queueActivity.buckets.filter((bucket) => Object.keys(bucket.counts).length > 0).length,
     ).toBeGreaterThan(6);
@@ -605,16 +651,25 @@ describe("Workhorse demo", () => {
     expect(filteredActivity.groups.every((group) => group.startsWith("email."))).toBe(true);
     await expect(
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "worker" }),
-    ).resolves.toMatchObject({ groups: ["demo-worker-1", "demo-worker-2", "unassigned"] });
+    ).resolves.toMatchObject({
+      groups: [
+        "demo-worker-1",
+        "demo-worker-2",
+        "showcase-seed-dead-letter",
+        "showcase-seed-redrive-replay",
+        "showcase-seed-redrive-success",
+        "unassigned",
+      ],
+    });
     await expect(
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "task" }),
     ).resolves.toMatchObject({
       groups: [
         "demo.durable-pipeline",
+        "demo.feature-showcase",
         "demo.long-running",
         "demo.recurring",
         "demo.report",
-        "demo.timing-policy",
         "email.digest",
         "email.send",
         "order.process",
@@ -626,7 +681,7 @@ describe("Workhorse demo", () => {
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "status" }),
     ).resolves.toMatchObject({
       groupBy: "status",
-      groups: ["failed", "ready", "scheduled", "succeeded"],
+      groups: ["canceled", "failed", "ready", "scheduled", "succeeded"],
     });
   });
 
@@ -2915,7 +2970,7 @@ describe("Workhorse demo", () => {
     const seededJobId = keyedRows.rows[0]!.job_id;
 
     const tasks = await client.dashboard.tasks({ filter: "all", page: 1, pageSize: 100 });
-    expect(tasks.jobs.filter((job) => job.keyed).map((job) => job.id)).toEqual([seededJobId]);
+    expect(tasks.jobs.filter((job) => job.keyed).map((job) => job.id)).toContain(seededJobId);
     expect(tasks.jobs.find((job) => job.id === seededJobId)?.tags).toContain("idempotent");
     expect(JSON.stringify(tasks)).not.toContain(DEMO_SEED_IDEMPOTENCY_KEY);
 

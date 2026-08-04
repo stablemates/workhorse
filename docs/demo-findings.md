@@ -27,6 +27,9 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 - a named durable timer demo checkpoints preparation, suspends with no active lease, and later reclaims the
   same logical attempt with a new fence; replay reuses preparation exactly once before publishing;
 - the worker-owned scheduler synchronizes and fires a recurring definition with occurrence deduplication;
+- a data-driven living showcase keeps three one-off scenarios and one varied recurring definition for each
+  of eight task-visible feature families, including deadline, timeout, cancellation, progress, dead-letter,
+  redrive, and idempotent replay evidence;
 - the typed oRPC snapshot exposes queues, jobs, checkpoint and wait provenance, logical and final-claim
   attempt timestamps, demo-owned progress plans, schedules, workers, failures, and database health;
 - schema version 12 installs daily retained history, split scheduled maintenance, scoped enqueue-idempotency, and cooperative cancellation contracts, although the demo still omits a dedicated idempotency-key form or seed;
