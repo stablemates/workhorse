@@ -1,5 +1,7 @@
-import { serve } from "@hono/node-server";
+import { getRequestListener, serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
+import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMiddleware } from "hono/factory";
 import type { WorkhorseAdapter, Queryable, Queue, Worker, WorkerOptions } from "@workhorse/core";
 
@@ -101,6 +103,18 @@ export type ServeWithWorkhorseOptions<TTransaction> = Omit<NodeServeOptions, "fe
   fetch: NodeServeOptions["fetch"];
   workhorse: HonoWorkhorse<TTransaction>;
   onListen?: Parameters<typeof serve>[1];
+  /**
+   * Connect-style middleware to run before the Hono application.
+   *
+   * The intended use is a development bundler such as `@workhorse/dashboard/dev`, which needs to
+   * own its module and hot-reload routes while everything it does not recognize falls through to
+   * the application. It calls `next()` for unowned requests, so ordinary routing is unaffected.
+   */
+  nodeMiddleware?: (
+    request: IncomingMessage,
+    response: ServerResponse,
+    next: (error?: unknown) => void,
+  ) => void;
 };
 
 export interface HonoWorkhorseServer {
@@ -121,12 +135,39 @@ function closeServer(server: ServerType): Promise<void> {
 export async function serveWithWorkhorse<TTransaction>(
   options: ServeWithWorkhorseOptions<TTransaction>,
 ): Promise<HonoWorkhorseServer> {
-  const { workhorse, onListen, ...serverOptions } = options;
+  const { workhorse, onListen, nodeMiddleware, ...serverOptions } = options;
+  const fetchHandler = serverOptions.fetch;
 
   let server: ServerType;
   try {
     workhorse.start();
-    server = serve(serverOptions as NodeServeOptions, onListen);
+    if (nodeMiddleware) {
+      // Build the listener directly rather than letting `serve` own it, so the middleware runs
+      // first and Hono becomes its `next`. The bundler answers only what it owns, and the
+      // application keeps every route it already had.
+      const application = getRequestListener(fetchHandler);
+      const httpServer = createServer((request, response) => {
+        nodeMiddleware(request, response, (error) => {
+          if (error) {
+            response.statusCode = 500;
+            response.end("Internal Server Error");
+            return;
+          }
+          application(request, response);
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer.once("error", reject);
+        httpServer.listen(serverOptions.port, serverOptions.hostname, () => {
+          httpServer.removeListener("error", reject);
+          resolve();
+        });
+      });
+      server = httpServer as unknown as ServerType;
+      onListen?.(httpServer.address() as never);
+    } else {
+      server = serve(serverOptions as NodeServeOptions, onListen);
+    }
   } catch (error) {
     await workhorse.stop();
     throw error;

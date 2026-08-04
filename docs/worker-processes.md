@@ -21,6 +21,40 @@ The recommendation is not that co-hosting is always wrong. It is that production
 
 The optional Workhorse probe server described below is **not application HTTP ingress**. It serves only liveness and readiness status for an orchestrator.
 
+### Observing and controlling a fleet you do not host
+
+Separating workers from the web tier used to mean the operator dashboard could not see them: it read
+runtime state from process-local `Worker` objects, so it only ever knew about workers sharing its
+own process.
+
+Schema version 17 removes that constraint. Every worker upserts `workhorse.worker_registry` on its
+`registryIntervalMs` cadence with the concurrency it declared, the slots it currently has busy, and
+whether it is draining, and reads back the operator-requested pause flag in the same round trip.
+A dashboard mounted anywhere reads the fleet from that relation.
+
+This makes worker control cooperative and durable rather than a process-local method call:
+
+- `Queue.setWorkerPaused(workerId, paused, { requestedBy, reason })` commits the request to
+  PostgreSQL. The worker stops claiming when it next refreshes, so pause takes effect within roughly
+  one `registryIntervalMs`.
+- A handler already executing runs to completion. Pause never interrupts work.
+- The pause is scoped to the running process, not to the worker name. A restarted or replaced
+  worker comes back running, whether or not its id is stable, so a pause can never become a
+  forgotten flag that idles a worker after a later deployment. Use queue pause when you need to
+  stop work durably.
+- A local `worker.resume()` cannot clear an operator pause that is still in effect.
+- Reported slot use is only as fresh as the cadence. Treat it as an operational indicator, not as a
+  synchronous read of another process's event loop.
+
+The registry holds one row per live worker, is never consulted by the claim path, and cannot affect
+dispatch cost. `registryIntervalMs: 0` opts out entirely, at the cost of the worker becoming
+invisible to operator surfaces.
+
+Because the dashboard no longer observes handlers directly, it also needs a reason to refresh.
+`WorkerOptions.activityNotifications` publishes coalesced hints on `workhorse_activity`, and
+`listenForDashboardRefresh` from `@workhorse/dashboard/server` bridges them into the dashboard's SSE
+stream. See the dashboard package README.
+
 ## Configuration and CLI
 
 Create a configuration module in application code:
@@ -255,7 +289,7 @@ Restart=on-failure
 
 The dedicated process lifecycle does not implement:
 
-- notification-assisted dispatch;
+- notification-assisted dispatch (`workhorse_activity` is an operator refresh hint only; claims still poll);
 - OpenTelemetry spans or process metrics;
 - handler execution deadlines or forced handler cancellation;
 - global concurrency or rate limits across processes;

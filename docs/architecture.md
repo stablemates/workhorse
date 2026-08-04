@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 16.
+The current clean-install protocol is schema version 17.
 
 ## Design objective
 
@@ -29,9 +29,14 @@ flowchart LR
   Operator[Authorized application or operator layer] -->|cancel_v1 with attribution| PG
   Operator -->|list_dead_letters_v1 / redrive_v1 / redrive_many_v1| PG
   Worker -->|fire_schedule_v1 / tick_v1 / split maintenance tasks| PG
+  Worker -->|register_worker_v1| PG
   PG -->|payload + attempt + fence| Worker
+  PG -->|operator pause flag| Worker
   Worker -->|handler outside SQL transaction| Effects[External effects]
   Worker -->|complete_v1 / fail_v1| PG
+  Worker -.->|coalesced workhorse_activity hint| Dashboard[Dashboard host in any process]
+  Dashboard -->|read model + worker_registry| PG
+  Dashboard -->|set_worker_paused_v1 with attribution| PG
   Health[Health and scenarios] -->|read runtime + outcome + statistics| PG
 ```
 
@@ -42,6 +47,11 @@ Workers, optional probe-only listener, termination signals, bounded drain, and f
 Framework co-hosting remains available but is not the default scaling boundary. See
 [`worker-processes.md`](worker-processes.md) and
 [ADR 0012](decisions/0012-dedicated-worker-processes.md).
+
+The operator dashboard is a separate boundary from the worker fleet. It is a framework-neutral
+request host that reads everything it shows from PostgreSQL, including worker identity and runtime
+state, so it can be mounted in a process that runs no workers at all. Mounting requires only a
+database connection.
 
 ## Data model
 
@@ -273,6 +283,18 @@ Identity is the attribution anchor. Finite terminal-job retention requires both 
 Event and attempt retention are independent phases inside `retain_history_v1`. Each drops only fully expired completed daily partitions, retires at most the configured number per pass, skips busy day locks, caps DDL lock waits at 250 ms, and bounded-deletes expired rows from its own default partition. Explicit day creation and paired retirement functions remain available for controlled operator work. Default partitions preserve insert availability when partition maintenance is late, while health reports exact counts through 10,000 rows and explicit capped lower bounds beyond that so fallback spill cannot remain invisible or make health unbounded.
 
 History tables intentionally do not carry reverse foreign keys to `job`, because dropping a daily partition must not probe every retained partition during parent deletion. Instead, an insert trigger locks and verifies the parent identity and advances its history boundary. A global retained-through watermark advances only after both history categories are completely cleared before their cutoffs. `prune_terminal_storage_v1` may delete a terminal identity only behind that watermark; `purge_queue_v1` explicitly deletes associated history before deleting queued identities. Direct application SQL that deletes package-owned `job` rows is unsupported because it can bypass these guards.
+
+### `worker_registry`
+
+One row per live worker process, keyed by the durable `worker_id` used for leases and attempt history. `register_worker_v1` is a single round trip that both publishes the runtime state the worker owns — `queue_name`, `concurrency`, `active_slots`, `draining` — and returns the operator-requested `paused` flag that PostgreSQL owns. Workers call it on `WorkerOptions.registryIntervalMs`, five seconds by default.
+
+The relation exists because process-local memory cannot answer "which workers exist" once workers are deployed independently of the web tier. It is what allows an operator surface to report and control a fleet it does not host. It is never read by the claim path and holds one row per worker, so it cannot affect dispatch cost.
+
+Ownership is deliberately split. A worker may not write `paused`, and an operator may not write the runtime columns. `set_worker_paused_v1` records the flag plus bounded `paused_by` and `paused_reason` attribution and returns no rows for an unregistered worker. The flag is scoped to a process incarnation. Each worker announces a fresh `instance_id`, and `register_worker_v1` keeps the pause only while that instance keeps refreshing; a new instance of the same worker id clears the flag and its attribution. Without that column PostgreSQL could not tell a routine heartbeat from a restart, and the flag would be either indefinitely sticky or cleared by the worker's own next heartbeat. Durable "stop this work" belongs to queue pause.
+
+Pause is cooperative in exactly the sense cancellation is: the worker stops claiming at its next refresh, a handler already executing runs to completion, and a local `Worker.resume()` cannot clear a still-effective operator pause. Attribution is not authorization; callers enforce their own permission checks.
+
+Graceful shutdown calls `deregister_worker_v1`. A killed worker simply stops refreshing, is reported offline once its registration goes stale, and is removed by the bounded `prune_worker_registry_v1`. Reported slot use is therefore eventually consistent with the worker's real event loop, and should be read as an operational indicator rather than a synchronous cross-process read.
 
 ### `maintenance_policy` and `maintenance_state`
 

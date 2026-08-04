@@ -109,6 +109,9 @@ export type {
   RetentionCategoryValues,
   RetentionPolicy,
   RetentionPolicyDefinition,
+  WorkerPauseResult,
+  WorkerRegistration,
+  WorkerRegistryEntry,
 } from "./types.js";
 export {
   DEFAULT_IDEMPOTENCY_SCOPE,

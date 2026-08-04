@@ -18,15 +18,21 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P1-03 Deadlines and execution timeouts**
-2. **P1-04 Dead-letter views and redrive**
-3. **P2-01 Query and listing API**
-4. **P1-09 Progress and job metadata**
-5. **P0-02 Production telemetry**
+1. **P0-07 Release and compatibility matrix**
+2. **P0-02 Production telemetry**
+3. **P1-08 Payload contracts and limits**
+4. **P0-04 Notification-assisted dispatch**
+5. **P1-06 Queue concurrency policies**
 
-The demo and initial integration packages are complete. Full OpenTelemetry support is deliberately
-sequenced after the next product and reliability features; each earlier feature must still ship the
-focused diagnostics and benchmark evidence needed to validate its own correctness.
+The demo, the initial integration packages, the operator query surface, progress, dead letters,
+deadlines, the durable worker registry, and the framework-neutral dashboard host are complete.
+
+P0-07 is first because five packages are now published-shaped with no supported-version contract,
+and it gates both P2-06 and P2-07. Full OpenTelemetry support is sequenced next because two later
+features (P0-06, P2-10) wait on it; each earlier feature must still ship the focused diagnostics and
+benchmark evidence needed to validate its own correctness. P1-05 and P1-06 are deliberately after
+P0-02 because both make claims about claim latency that should be instrumented before the hot path
+changes.
 
 ## P0: demo vertical slice and production hardening
 
@@ -109,7 +115,8 @@ Configurable concurrency must ship focused lease, shutdown, and benchmark diagno
 not depend on the later full OpenTelemetry and metrics package.
 
 - [x] Accept integer `WorkerOptions.concurrency` values from 1 through 100, default to 1, and expose
-      readonly `worker.concurrency` plus `{ concurrency, activeSlots, paused, draining }` runtime state.
+      readonly `worker.concurrency` plus runtime state reporting concurrency, active slots, draining,
+      and both local and operator-requested pause.
 - [x] Preserve per-job heartbeat, abort, and fence ownership while handlers overlap.
 - [x] Fill only free slots with serial claims, stop at the first null claim, and never exceed the
       configured handler bound.
@@ -134,15 +141,58 @@ not depend on the later full OpenTelemetry and metrics package.
 - [x] Document dedicated workers as the production default, Hono co-hosting as an explicit small-app
       option, and one multi-slot coordinator per queue or policy group as the benchmark-backed topology.
 
+### [x] P0-03B Durable worker fleet registration
+
+**Depends on:** P0-03A
+
+Operator surfaces read worker identity and runtime state from process-local `Worker` objects, which
+made the fleet invisible to any process that did not host it. That was the single design decision
+forcing the dashboard and the workers into one process.
+
+- [x] Add `workhorse.worker_registry` with one row per live worker, keyed by the durable worker id.
+- [x] Split ownership: the worker publishes `concurrency`, `active_slots`, and `draining`;
+      PostgreSQL owns the operator-requested `paused` flag, returned by the same round trip.
+- [x] Add `Queue.registerWorker`, `deregisterWorker`, `setWorkerPaused`, `listWorkers`, and
+      `pruneWorkerRegistry`, plus `WorkerOptions.registryIntervalMs` with an explicit opt-out.
+- [x] Make operator pause cooperative and process-scoped: applied at the next refresh, never
+      interrupting a running handler, not clearable by a local `resume()`, and cleared when the
+      worker process is restarted or replaced. Durable "stop this work" remains queue pause.
+- [x] Default worker identity to `<hostname>-<pid>-<random>` so a fleet view is readable, and
+      document that the default is deliberately unstable across restarts.
+- [x] Publish a final draining registration on stop, deregister on graceful shutdown, and age out
+      plus prune a killed worker.
+- [x] Read the dashboard fleet from the registry, deleting the process-local worker controller, and
+      keep the relation off the claim path.
+
+### [x] P0-03C Framework-neutral dashboard host
+
+**Depends on:** P0-00B
+
+- [x] Move asset serving, HTML templating, runtime-config injection, oRPC prefixing, and the SSE
+      stream out of `@workhorse/hono` into a `Request`/`Response` host in `@workhorse/dashboard`.
+- [x] Change the mount input from a Hono worker-lifecycle object to `{ database, queue }` so mounting
+      never requires a worker runtime.
+- [x] Add a Connect-style Node bridge so Express, Connect, and Fastify integrate without new packages.
+- [x] Reduce `@workhorse/hono` to route registration and drop its `@orpc/server` dependency.
+- [x] Fall through untouched on requests outside the mount path.
+
 ### [ ] P0-04 Notification-assisted dispatch
 
 **Depends on:** P0-03
+
+The operator-facing half of this is done. `workhorse_activity` carries coalesced refresh hints to a
+dashboard in another process, and `listenForDashboardRefresh` consumes both channels. The dispatch
+half — using `workhorse_jobs` to wake a claiming worker instead of polling — is still open.
 
 - [ ] Listen to `workhorse_jobs` notifications as wake hints while retaining polling as the source
       of truth.
 - [ ] Coalesce wakeups and reconnect safely after PostgreSQL connection loss.
 - [ ] Bound idle polling so lost notifications cannot strand ready work.
 - [ ] Measure idle database load and enqueue-to-claim latency against polling-only behavior.
+- [x] Publish coalesced `workhorse_activity` hints from workers, rate limited by wall-clock time
+      rather than throughput, and off by default.
+- [x] Bridge both channels into the dashboard refresh hub behind a periodic fallback, so a dropped
+      notification only delays a refresh.
 
 ### [x] P0-05 Built-in retry policies
 
@@ -168,6 +218,33 @@ not depend on the later full OpenTelemetry and metrics package.
 - [ ] Separate exact transactional values from lagging PostgreSQL statistics.
 - [ ] Add health budgets and machine-readable degraded reasons.
 - [ ] Keep snapshot latency bounded on large runtime and history relations.
+
+### [x] P0-06B Installation path for existing applications
+
+**Depends on:** P0-03C
+
+- [x] Add `workhorse init` to detect ORM, framework, and package manager, write exactly one worker
+      configuration file, and print the dashboard mount for the detected framework.
+- [x] Never edit `package.json`, application routes, or anything else `init` does not own.
+- [x] Promote schema installation to `workhorse schema install` and `workhorse schema status`,
+      resolving the database URL from `--database-url`, `WORKHORSE_DATABASE_URL`, then `DATABASE_URL`.
+- [x] Keep installation clean-database only and keep refusing to modify an existing schema. Ordered
+      migrations remain P2-07.
+- [x] Add `workhorse dashboard` to serve the operator console as its own process against any
+      database, binding loopback and read-only by default with explicit, warned opt-outs. The
+      dashboard package is an optional runtime dependency so worker-only installs stay lean.
+- [x] Record worker placement (`hostname`, `pid`) separately from worker identity so a fleet view
+      answers "which host" even when a deployment configures stable worker names.
+- [x] Share one `renderDashboardHtml` between the request host and the development harness so the
+      runtime-configuration contract cannot drift between them.
+- [x] Make the demo a plain consumer: it serves the packaged dashboard bundle in development and
+      production, owns no Vite config or browser entry, and needs no React dependency. The UI
+      harness moved into `@workhorse/dashboard`, which is the package it develops.
+- [ ] Reconsider a single shared `workhorse.config.ts` consumed by both the worker CLI and the
+      dashboard mount once P2-07 defines what configuration a migration step also needs.
+- [ ] Replace the raster brand marks with vector sources so the dashboard's library build no longer
+      ships copied PNGs. Needs the original vector artwork; tracing the rasters would change the
+      brand.
 
 ### [ ] P0-07 Release and compatibility matrix
 
@@ -368,7 +445,12 @@ roadmap references; all implementation requirements now live under P0-00B.
 
 ### [ ] P2-06 Additional ORM and framework integration packages
 
-**Depends on:** P0-00A, P0-07, P1-01
+**Depends on:** P0-00A, P0-03C, P0-07, P1-01
+
+Dashboard mounting is no longer a reason to add a framework package: P0-03C made the host
+framework-neutral, and the Node bridge already covers Connect-style hosts. What remains here is
+_lifecycle_ integration — transactional enqueue, startup, dependency injection, graceful shutdown —
+which genuinely differs per framework.
 
 - [ ] Evolve the adapter interface validated by Drizzle and Hono without moving lifecycle
       correctness out of SQL.

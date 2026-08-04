@@ -7,9 +7,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev:server": "tsx watch src/index.ts",
-    "dev:client": "vite",
+    "dev:worker": "tsx watch src/worker-main.ts",
     "start": "node dist/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.vite.json --noEmit"
+    "start:worker": "workhorse worker --config dist/worker.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.11",
@@ -27,13 +28,8 @@
   "devDependencies": {
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.5",
-    "@vitejs/plugin-react": "^4.7.0",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "react-grab": "^0.1.50",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3",
-    "vite": "^7.1.7"
+    "typescript": "^5.8.3"
   },
   "engines": {
     "node": ">=22"

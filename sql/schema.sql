@@ -179,6 +179,51 @@ CREATE TABLE IF NOT EXISTS workhorse.queue_control (
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Durable worker fleet registration.
+--
+-- Every worker process announces itself here and refreshes `last_heartbeat_at` on its maintenance
+-- cadence. This relation exists so that an operator surface running in a *different* process than
+-- the workers can still observe and control the fleet: process-local memory cannot answer "which
+-- workers exist" once workers are deployed independently of the web tier.
+--
+-- Ownership is deliberately split. The worker owns the reported runtime columns (`concurrency`,
+-- `active_slots`, `draining`); PostgreSQL owns the operator-requested `paused` flag, which each
+-- worker reads back on every registration heartbeat. This relation is never consulted by the claim
+-- path and holds one row per live worker, so it cannot affect dispatch cost.
+CREATE TABLE IF NOT EXISTS workhorse.worker_registry (
+  worker_id text PRIMARY KEY CHECK (worker_id <> ''),
+  -- One process incarnation of `worker_id`, generated fresh by every Worker instance.
+  --
+  -- This is what makes operator pause process-scoped: a routine heartbeat arrives with the same
+  -- instance, while a restarted or replaced worker arrives with a new one. Without it PostgreSQL
+  -- cannot tell "still running" from "started again" and the pause flag would be either
+  -- indefinitely sticky or cleared by the very next heartbeat.
+  instance_id uuid NOT NULL,
+  -- Where this worker is running, recorded independently of what it is called.
+  --
+  -- Identity and placement are different questions. A deployment that configures a stable
+  -- `workerId` gets a recognizable name but would otherwise lose any trace of which host or
+  -- process it lives on, which is the first thing an operator asks about a busy worker.
+  hostname text NOT NULL CHECK (hostname <> ''),
+  pid integer NOT NULL CHECK (pid > 0),
+  queue_name text NOT NULL CHECK (queue_name <> ''),
+  concurrency integer NOT NULL CHECK (concurrency BETWEEN 1 AND 100),
+  active_slots integer NOT NULL DEFAULT 0 CHECK (active_slots >= 0),
+  draining boolean NOT NULL DEFAULT false,
+  paused boolean NOT NULL DEFAULT false,
+  paused_by text CHECK (paused_by IS NULL OR paused_by <> ''),
+  paused_reason text CHECK (paused_reason IS NULL OR paused_reason <> ''),
+  paused_at timestamptz,
+  started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  last_heartbeat_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE INDEX IF NOT EXISTS worker_registry_heartbeat_idx
+  ON workhorse.worker_registry (last_heartbeat_at);
+
+CREATE INDEX IF NOT EXISTS worker_registry_queue_idx
+  ON workhorse.worker_registry (queue_name, worker_id);
+
 -- Immutable accepted-job identity and payload.
 CREATE TABLE IF NOT EXISTS workhorse.job (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1830,6 +1875,167 @@ BEGIN
   ON CONFLICT (queue_name) DO UPDATE
     SET paused = false, updated_at = clock_timestamp();
   RETURN false;
+END;
+$$;
+
+-- Announce or refresh one worker registration and read back the operator-requested pause flag.
+--
+-- This is intentionally a single round trip: the worker pushes the runtime state it owns and pulls
+-- the pause decision PostgreSQL owns.
+--
+-- Operator pause is deliberately **process-scoped**. A heartbeat from the same instance preserves
+-- the flag; a new instance of the same worker id clears it, so a restarted or replaced worker
+-- always comes back running. The durable lever for "stop processing this work" is queue pause,
+-- which is keyed by queue name and unaffected by worker lifecycles. Keeping the two distinct means
+-- a pause can never become a forgotten flag that silently idles a worker after a later deployment.
+CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
+  p_worker_id text,
+  p_instance_id uuid,
+  p_hostname text,
+  p_pid integer,
+  p_queue_name text,
+  p_concurrency integer,
+  p_active_slots integer,
+  p_draining boolean
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_paused boolean;
+BEGIN
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN
+    RAISE EXCEPTION 'worker_id must not be empty';
+  END IF;
+  IF p_instance_id IS NULL THEN
+    RAISE EXCEPTION 'instance_id must not be null';
+  END IF;
+  IF p_queue_name IS NULL OR p_queue_name = '' THEN
+    RAISE EXCEPTION 'queue_name must not be empty';
+  END IF;
+  IF p_hostname IS NULL OR p_hostname = '' THEN
+    RAISE EXCEPTION 'hostname must not be empty';
+  END IF;
+  IF p_pid IS NULL OR p_pid <= 0 THEN
+    RAISE EXCEPTION 'pid must be positive';
+  END IF;
+
+  INSERT INTO workhorse.worker_registry AS registry
+    (worker_id, instance_id, hostname, pid, queue_name, concurrency, active_slots, draining)
+  VALUES (p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_name, p_concurrency,
+          COALESCE(p_active_slots, 0), COALESCE(p_draining, false))
+  ON CONFLICT (worker_id) DO UPDATE
+    SET instance_id = EXCLUDED.instance_id,
+        hostname = EXCLUDED.hostname,
+        pid = EXCLUDED.pid,
+        queue_name = EXCLUDED.queue_name,
+        concurrency = EXCLUDED.concurrency,
+        active_slots = EXCLUDED.active_slots,
+        draining = EXCLUDED.draining,
+        last_heartbeat_at = clock_timestamp(),
+        -- A new incarnation of this worker id is a different process, so it starts running and
+        -- inherits no operator decision made about the process it replaced.
+        started_at = CASE
+          WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.started_at
+          ELSE clock_timestamp()
+        END,
+        paused = CASE
+          WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.paused
+          ELSE false
+        END,
+        paused_by = CASE
+          WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.paused_by
+          ELSE NULL
+        END,
+        paused_reason = CASE
+          WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.paused_reason
+          ELSE NULL
+        END,
+        paused_at = CASE
+          WHEN registry.instance_id = EXCLUDED.instance_id THEN registry.paused_at
+          ELSE NULL
+        END
+  RETURNING registry.paused INTO v_paused;
+
+  RETURN v_paused;
+END;
+$$;
+
+-- Remove one worker registration during graceful shutdown. A worker that is killed instead simply
+-- stops heartbeating and ages out of the fleet view.
+CREATE OR REPLACE FUNCTION workhorse.deregister_worker_v1(p_worker_id text)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_deleted integer;
+BEGIN
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN
+    RAISE EXCEPTION 'worker_id must not be empty';
+  END IF;
+  DELETE FROM workhorse.worker_registry WHERE worker_id = p_worker_id;
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  RETURN v_deleted > 0;
+END;
+$$;
+
+-- Request or clear an operator pause for one registered worker.
+--
+-- `requested_by` and `reason` are bounded audit attribution, never authorization; callers must
+-- enforce their own permission checks. The flag is advisory in exactly the same cooperative sense
+-- as cancellation: the worker stops claiming when it next reads the flag, and any in-flight handler
+-- runs to completion.
+CREATE OR REPLACE FUNCTION workhorse.set_worker_paused_v1(
+  p_worker_id text,
+  p_paused boolean,
+  p_requested_by text DEFAULT NULL,
+  p_reason text DEFAULT NULL
+)
+RETURNS TABLE (
+  worker_id text,
+  paused boolean,
+  paused_by text,
+  paused_reason text,
+  paused_at timestamptz,
+  last_heartbeat_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN
+    RAISE EXCEPTION 'worker_id must not be empty';
+  END IF;
+  IF p_paused IS NULL THEN
+    RAISE EXCEPTION 'paused must not be null';
+  END IF;
+
+  RETURN QUERY
+  UPDATE workhorse.worker_registry AS registry
+     SET paused = p_paused,
+         paused_by = CASE WHEN p_paused THEN NULLIF(p_requested_by, '') ELSE NULL END,
+         paused_reason = CASE WHEN p_paused THEN NULLIF(p_reason, '') ELSE NULL END,
+         paused_at = CASE WHEN p_paused THEN clock_timestamp() ELSE NULL END
+   WHERE registry.worker_id = p_worker_id
+  RETURNING registry.worker_id, registry.paused, registry.paused_by, registry.paused_reason,
+            registry.paused_at, registry.last_heartbeat_at;
+END;
+$$;
+
+-- Drop registrations whose process stopped heartbeating long ago. The relation holds one row per
+-- worker, so this stays a trivial bounded delete regardless of job volume.
+CREATE OR REPLACE FUNCTION workhorse.prune_worker_registry_v1(
+  p_max_age interval DEFAULT interval '1 day'
+)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  DELETE FROM workhorse.worker_registry
+   WHERE last_heartbeat_at < clock_timestamp() - GREATEST(p_max_age, interval '1 minute');
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
 END;
 $$;
 
@@ -4274,7 +4480,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (16) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (17) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

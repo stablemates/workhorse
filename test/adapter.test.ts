@@ -55,6 +55,8 @@ describe("createWorkhorseAdapter", () => {
       concurrency: 1,
       activeSlots: 0,
       paused: false,
+      locallyPaused: false,
+      remotelyPaused: false,
       draining: false,
     });
     worker.pause();
