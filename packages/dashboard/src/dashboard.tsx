@@ -108,6 +108,11 @@ import {
   type TaskLocationState,
   type TaskPageSize,
 } from "./task-location.js";
+import {
+  createLatestRequestGuard,
+  taskDrawerModelessProps,
+  taskDrawerOpened,
+} from "./task-drawer.js";
 import { ThemeSchemeSwitch } from "./theme.js";
 
 const DashboardClientContext = createContext<DashboardClient | null>(null);
@@ -3774,6 +3779,13 @@ function useDashboardController(
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedJob, setSelectedJob] = useState<DashboardJobDetail | null>(null);
   const [jobDetailError, setJobDetailError] = useState<string | null>(null);
+  /**
+   * Which task detail load may still write to the drawer.
+   *
+   * Clicking task A then task B leaves two requests racing for the same panel, and the slower
+   * one is not necessarily the older one, so the drawer only accepts the newest claim.
+   */
+  const jobDetailRequests = useRef(createLatestRequestGuard());
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
@@ -4034,6 +4046,9 @@ function useDashboardController(
 
   const inspectJob = useCallback(
     async (id: string) => {
+      // Claim the drawer before the await, so a later click wins even if this request
+      // resolves after it.
+      const ticket = jobDetailRequests.current.begin();
       setSelectedJobId(id);
       setSelectedJob(null);
       setJobDetailError(null);
@@ -4043,13 +4058,29 @@ function useDashboardController(
       setCancelError(null);
       setCancelFeedback(null);
       try {
-        setSelectedJob(await client.jobDetail({ id }));
+        const detail = await client.jobDetail({ id });
+        if (!jobDetailRequests.current.current(ticket)) return;
+        setSelectedJob(detail);
       } catch (cause) {
+        if (!jobDetailRequests.current.current(ticket)) return;
         setJobDetailError(cause instanceof Error ? cause.message : "Unable to load the task");
       }
     },
     [client],
   );
+
+  /**
+   * Close the drawer and abandon any detail load still in flight.
+   *
+   * Without dropping the claim, a request that arrives after the operator closed the panel would
+   * set detail or an error and reopen it on a task they already dismissed.
+   */
+  const closeJobDetail = useCallback(() => {
+    jobDetailRequests.current.cancel();
+    setSelectedJobId(null);
+    setSelectedJob(null);
+    setJobDetailError(null);
+  }, []);
 
   /**
    * Request cancellation of one task and report exactly what PostgreSQL did.
@@ -4223,11 +4254,9 @@ function useDashboardController(
     handleLink,
     content,
     selectedJobId,
-    setSelectedJobId,
     selectedJob,
-    setSelectedJob,
     jobDetailError,
-    setJobDetailError,
+    closeJobDetail,
     confirmingCancel,
     setConfirmingCancel,
     cancelReason,
@@ -4263,11 +4292,9 @@ function DashboardContent({
     handleLink,
     content,
     selectedJobId,
-    setSelectedJobId,
     selectedJob,
-    setSelectedJob,
     jobDetailError,
-    setJobDetailError,
+    closeJobDetail,
     confirmingCancel,
     setConfirmingCancel,
     cancelReason,
@@ -4466,19 +4493,19 @@ function DashboardContent({
         <Box w="100%">{content}</Box>
       </AppShell.Main>
       <Drawer
-        opened={selectedJobId !== null}
-        onClose={() => {
-          setSelectedJobId(null);
-          setSelectedJob(null);
-          setJobDetailError(null);
-        }}
+        opened={taskDrawerOpened(selectedJobId)}
+        onClose={closeJobDetail}
         title={
-          <Text component="h2" fw={600} size="md" my={0}>
+          <Text component="h2" fw={600} size="lg" my={0}>
             Task details
           </Text>
         }
         position="right"
         size="lg"
+        // The panel sits beside the task list instead of over it, so a row behind it stays
+        // clickable and picking another task swaps the contents in place.
+        {...taskDrawerModelessProps}
+        classNames={{ content: "task-drawer__content" }}
       >
         {jobDetailError ? (
           <Text c="red" size="sm">
