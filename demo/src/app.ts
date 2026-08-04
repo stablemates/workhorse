@@ -220,6 +220,15 @@ export interface DemoCancelTaskResult {
 }
 
 export interface TaskController {
+  runTaskNow?: (
+    jobId: string,
+    audit: AuditContext,
+  ) => Promise<{
+    status: "released" | "already_ready" | "not_scheduled" | "waiting" | "not_found";
+    id: string;
+    state: string | null;
+    runAt: string | null;
+  }>;
   cancelTask?: (jobId: string, audit: CancellationAuditContext) => Promise<DemoCancelTaskResult>;
 }
 
@@ -786,6 +795,47 @@ function isoTimestamp(value: Date | string | null): string | null {
  */
 export function createLocalTaskController(database: DemoDatabase): TaskController {
   return {
+    async runTaskNow(jobId, audit) {
+      return database.transaction(async (transaction) => {
+        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+        const beforeRows = await transaction.execute<{
+          state: string | null;
+          run_at: Date | string | null;
+          wait_name: string | null;
+        }>(sql`
+          SELECT COALESCE(r.state, o.state) AS state,
+                 COALESCE(r.run_at, o.run_at) AS run_at,
+                 r.wait_name
+            FROM workhorse.job j
+            LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+            LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+           WHERE j.id = ${jobId}
+        `);
+        const result = await workhorse.queue.runTaskNow(jobId);
+        const projected = {
+          status: result.status,
+          id: result.jobId,
+          state: result.state,
+          runAt: isoTimestamp(result.runAt),
+        };
+        const before = beforeRows.rows[0];
+        await transaction.execute(sql`
+          INSERT INTO public.workhorse_demo_audit
+            (actor, reason, request_id, occurred_at, action, target, before, after, status)
+          VALUES
+            (${audit.actor}, ${audit.reason}, ${audit.requestId},
+             ${audit.occurredAt ?? new Date().toISOString()}, 'runTaskNow', ${`job:${jobId}`},
+             ${JSON.stringify({
+               state: before?.state ?? null,
+               runAt: isoTimestamp(before?.run_at ?? null),
+               waitName: before?.wait_name ?? null,
+             })}::jsonb,
+             ${JSON.stringify(projected)}::jsonb,
+             ${result.status === "not_found" || result.status === "waiting" ? "failed" : "succeeded"})
+        `);
+        return projected;
+      });
+    },
     async cancelTask(jobId, audit) {
       return database.transaction(async (transaction) => {
         const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });

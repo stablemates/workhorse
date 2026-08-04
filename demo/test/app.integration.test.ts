@@ -2593,6 +2593,99 @@ describe("Workhorse demo", () => {
     ).toEqual({ count: 2 });
   });
 
+  it("releases a future-scheduled task now with audit and refuses durable waits", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+    const queue = new Queue(pool, "demo");
+    const originalRunAt = new Date(Date.now() + 3_600_000);
+    const jobId = await queue.enqueue(
+      "demo.success",
+      { label: "run-now" },
+      { queue: "run-now-release", runAt: originalRunAt },
+    );
+
+    const released = await client.dashboard.runTaskNow({
+      id: jobId,
+      audit: { actor: "operator", reason: "Needed for incident recovery", requestId: "run-now-1" },
+    });
+    expect(released).toMatchObject({ status: "released", id: jobId, state: "ready" });
+    expect(new Date(released.runAt!).getTime()).toBeLessThan(originalRunAt.getTime());
+    await expect(
+      client.dashboard.runTaskNow({
+        id: jobId,
+        audit: { actor: "operator", reason: "Retry click", requestId: "run-now-2" },
+      }),
+    ).resolves.toMatchObject({ status: "already_ready", id: jobId, state: "ready" });
+
+    const waitingId = await queue.enqueue(
+      "demo.success",
+      { label: "waiting" },
+      { queue: "run-now-wait" },
+    );
+    const claimed = await queue.claim("run-now-wait-worker", { queue: "run-now-wait" });
+    expect(claimed?.id).toBe(waitingId);
+    await queue.scheduleWait(claimed!, "run-now-wait-worker", "approval", {
+      wakeAt: new Date(Date.now() + 3_600_000),
+    });
+    const waitingBefore = await queue.getJob(waitingId);
+    await expect(
+      client.dashboard.runTaskNow({
+        id: waitingId,
+        audit: { actor: "operator", reason: "Unsafe override attempt", requestId: "run-now-wait" },
+      }),
+    ).resolves.toMatchObject({
+      status: "waiting",
+      id: waitingId,
+      state: "scheduled",
+      runAt: waitingBefore!.runAt.toISOString(),
+    });
+    await expect(queue.getJob(waitingId)).resolves.toMatchObject({
+      state: "scheduled",
+      runAt: waitingBefore!.runAt,
+    });
+
+    const audit = await pool.query<{
+      request_id: string;
+      action: string;
+      target: string;
+      status: string;
+      reason: string;
+      before: { state: string | null; runAt: string | null; waitName: string | null };
+      after: { status: string; id: string; state: string | null; runAt: string | null };
+    }>(
+      `SELECT request_id, action, target, status, reason, before, after
+         FROM public.workhorse_demo_audit
+        WHERE request_id IN ('run-now-1', 'run-now-2', 'run-now-wait')
+        ORDER BY id`,
+    );
+    expect(audit.rows).toMatchObject([
+      {
+        request_id: "run-now-1",
+        action: "runTaskNow",
+        target: `job:${jobId}`,
+        status: "succeeded",
+        reason: "Needed for incident recovery",
+        before: { state: "scheduled", runAt: originalRunAt.toISOString(), waitName: null },
+        after: { status: "released", id: jobId, state: "ready" },
+      },
+      {
+        request_id: "run-now-2",
+        action: "runTaskNow",
+        target: `job:${jobId}`,
+        status: "succeeded",
+        after: { status: "already_ready", id: jobId, state: "ready" },
+      },
+      {
+        request_id: "run-now-wait",
+        action: "runTaskNow",
+        target: `job:${waitingId}`,
+        status: "failed",
+        before: { state: "scheduled", waitName: "approval" },
+        after: { status: "waiting", id: waitingId, state: "scheduled" },
+      },
+    ]);
+  });
+
   it("cancels an unstarted task immediately, as a distinct terminal state with a recorded audit", async () => {
     // No workers are started, so this task is provably still waiting to be claimed. Cancelling it
     // must be immediate and final, because no handler ever observed it.

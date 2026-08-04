@@ -6,6 +6,7 @@ import type {
   DashboardCronPage,
   DashboardJobDetail,
   DashboardQueuesPage,
+  DashboardRunNowStatus,
   DashboardSystemPage,
   DashboardSystemWindow,
   DashboardTaskCounts,
@@ -108,5 +109,23 @@ export interface DashboardClient {
     state: string | null;
     finishedAt: string | null;
     requestedAt: string | null;
+  }>;
+  /**
+   * Release one scheduled task so a worker can claim it now.
+   *
+   * This moves only that task's own start time forward. It does not execute the handler in this
+   * request, and for a task a recurring schedule created it leaves the schedule's next occurrence
+   * exactly where it was. A task suspended at a durable wait is refused with `waiting`, because
+   * that boundary belongs to the handler that asked for it.
+   *
+   * Optional, because a host that cannot mutate task scheduling should be able to omit it rather
+   * than implement a method that always throws. The dashboard keeps the action visible but disabled
+   * and explains that the connected host does not support it.
+   */
+  runTaskNow?(input: { id: string; audit: DashboardAuditInput }): Promise<{
+    status: DashboardRunNowStatus;
+    id: string;
+    state: string | null;
+    runAt: string | null;
   }>;
 }

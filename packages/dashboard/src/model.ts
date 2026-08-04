@@ -357,6 +357,88 @@ export function describeCancellationRequest(
   };
 }
 
+/**
+ * Statuses the run-now mutation can report. Mirrors the server contract rather than inventing a
+ * dashboard-only vocabulary, exactly as `DashboardCancelStatus` mirrors `Queue.cancel`.
+ */
+export type DashboardRunNowStatus =
+  | "released"
+  | "already_ready"
+  | "not_scheduled"
+  | "waiting"
+  | "not_found";
+
+export interface RunNowOutcomeDescription {
+  /** Short badge text. Never the raw status string. */
+  label: string;
+  /** One sentence an operator can act on, complete without colour or icon. */
+  summary: string;
+  /** Precise wording, including what running now does and does not change. */
+  exact: string;
+}
+
+/**
+ * Run-now wording that matches what the server actually did.
+ *
+ * Running a scheduled task now only moves *that* task's own start time forward. It does not run the
+ * handler here and now, it does not skip a retry budget, and for a task a recurring schedule
+ * created it does not touch the schedule's next occurrence. Each sentence below is deliberately
+ * limited to those claims, because an operator who believes more happened than did will reconcile
+ * the wrong thing.
+ */
+export function describeRunNowOutcome(
+  status: DashboardRunNowStatus,
+  context: { state?: string | null } = {},
+): RunNowOutcomeDescription {
+  if (status === "released") {
+    return {
+      label: "Released to the queue",
+      summary: "This task's start time was moved to now, so a worker can claim it on its next poll",
+      exact:
+        "The scheduled start time was moved forward to now and the task is queued. A worker claims " +
+        "it on its next poll, so this releases the task rather than running the handler here. " +
+        "Nothing else about the task changed, and a recurring schedule that created it keeps its " +
+        "own next occurrence.",
+    };
+  }
+  if (status === "already_ready") {
+    return {
+      label: "Already queued",
+      summary: "This task was already waiting to be claimed, so nothing needed to change",
+      exact:
+        "The task was no longer holding a future start time when the request arrived, so it was " +
+        "left exactly as it was. It is already queued or already running.",
+    };
+  }
+  if (status === "waiting") {
+    return {
+      label: "Suspended at a wait",
+      summary: "This task is suspended at a durable wait, so its start time was left alone",
+      exact:
+        "The task is parked at a durable wait boundary its handler asked for. Moving that boundary " +
+        "would resume the handler earlier than the code it is running asked to be resumed, so the " +
+        "wait was left exactly as it was.",
+    };
+  }
+  if (status === "not_scheduled") {
+    return {
+      label: "Not scheduled",
+      summary: `This task is not waiting on a start time${
+        context.state ? ` because it is ${context.state}` : ""
+      }, so nothing was released`,
+      exact:
+        "Only a task holding a future start time can be released early. This one holds no such " +
+        "time, so it was left exactly as it was.",
+    };
+  }
+  return {
+    label: "Task not found",
+    summary: "This task no longer exists, so nothing was released",
+    exact:
+      "No job identity matched this id. It may have been removed by retention after it finished.",
+  };
+}
+
 export interface DashboardQueueRow {
   queue: string;
   state: string;
@@ -421,6 +503,7 @@ export type TaskRowActionId =
   | "filter-type"
   | "filter-queue"
   | "filter-worker"
+  | "run-now"
   | "cancel";
 
 export interface TaskRowAction {
@@ -492,13 +575,104 @@ function cancelRowAction(job: DashboardJobRow): TaskRowAction {
 }
 
 /**
+ * Run-now wording for one list row, resolved against that row's own state.
+ *
+ * The action releases a task that is holding a future start time, and nothing else. It is offered
+ * only for `scheduled`, because that is the only state where a start time is actually being waited
+ * on, and it is refused for a scheduled task suspended at a durable wait: that boundary belongs to
+ * the handler's own code, and pulling it forward would resume a handler earlier than it asked to be
+ * resumed. Every refusal names its reason so the operator learns it here rather than from a menu
+ * item that is simply dim.
+ */
+function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowAction {
+  const destructive = false;
+  if (!supported) {
+    return {
+      id: "run-now",
+      label: "Run now",
+      unavailable:
+        "This dashboard is connected to a host that does not allow changing when a task runs.",
+      destructive,
+    };
+  }
+  if (isTerminalTaskState(job.state)) {
+    return {
+      id: "run-now",
+      label: "Run now",
+      unavailable: `This task already finished as ${job.state}, so there is no start time to bring forward.`,
+      destructive,
+    };
+  }
+  if (job.cancellation !== null) {
+    return {
+      id: "run-now",
+      label: "Run now",
+      unavailable:
+        "Cancellation was already requested for this task, so releasing it early would start work " +
+        "that is meant to stop.",
+      destructive,
+    };
+  }
+  if (job.state === "active") {
+    return {
+      id: "run-now",
+      label: "Run now",
+      unavailable: "This task is already running, so it has no start time left to wait for.",
+      destructive,
+    };
+  }
+  if (job.state === "ready") {
+    return {
+      id: "run-now",
+      label: "Run now",
+      unavailable:
+        "This task is already queued and waiting to be claimed, so it is running as soon as it can.",
+      destructive,
+    };
+  }
+  if (job.state === "scheduled") {
+    if (job.waitName !== null || job.wait !== null) {
+      return {
+        id: "run-now",
+        label: "Run now",
+        unavailable:
+          `This task is suspended at the durable wait ${job.waitName ?? job.wait!.name}. That ` +
+          "boundary belongs to the running handler, so it cannot be brought forward from here.",
+        destructive,
+      };
+    }
+    return { id: "run-now", label: "Run now", unavailable: null, destructive };
+  }
+  return {
+    id: "run-now",
+    label: "Run now",
+    unavailable: "This task holds no start time, so there is nothing to bring forward.",
+    destructive,
+  };
+}
+
+/**
+ * What the connected host is able to do, so the menu can state a capability limit as a reason
+ * rather than by quietly dropping an item.
+ */
+export interface TaskRowActionCapabilities {
+  /** True when the host exposes `runTaskNow`. */
+  runNow: boolean;
+}
+
+/**
  * The action menu offered for one task row, grouped and already resolved against its state.
  *
  * Everything is kept in the menu whether or not it applies, and an inapplicable action carries the
  * reason it cannot be taken. An operator learns why a task cannot be canceled from the same place
- * they would have canceled it, rather than from a menu that silently changes shape row by row.
+ * they would have canceled it, rather than from a menu that silently changes shape row by row. A
+ * capability the host does not offer is treated the same way, so a read-only host reads as a stated
+ * limit rather than as a missing feature.
  */
-export function taskRowActionGroups(job: DashboardJobRow): TaskRowActionGroup[] {
+export function taskRowActionGroups(
+  job: DashboardJobRow,
+  capabilities: TaskRowActionCapabilities = { runNow: true },
+): TaskRowActionGroup[] {
   const worker = job.workerId ?? job.lastWorkerId;
   return [
     {
@@ -538,7 +712,10 @@ export function taskRowActionGroups(job: DashboardJobRow): TaskRowActionGroup[] 
         },
       ],
     },
-    { label: "State", actions: [cancelRowAction(job)] },
+    {
+      label: "State",
+      actions: [runNowRowAction(job, capabilities.runNow), cancelRowAction(job)],
+    },
   ];
 }
 

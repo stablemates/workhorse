@@ -2068,6 +2068,97 @@ describe("live-runtime queue protocol", () => {
     ).toBe(1);
   });
 
+  it("releases only an ordinary scheduled task now and preserves recurring schedule state", async () => {
+    await queue.syncSchedules("integration", [
+      {
+        name: "daily-report",
+        schedule: "0 8 * * *",
+        job: { type: "report", payload: { scope: "daily" } },
+      },
+    ]);
+    const scheduleBefore = await pool.query(
+      `SELECT namespace, schedule_name, cron_expression, revision, enabled, updated_at
+         FROM workhorse.schedule_definition
+        WHERE namespace = 'integration' AND schedule_name = 'daily-report'`,
+    );
+    const originalRunAt = new Date(Date.now() + 3_600_000);
+    const jobId = await queue.enqueue(
+      "manual-release",
+      {},
+      {
+        queue: "manual-release",
+        runAt: originalRunAt,
+      },
+    );
+    const requestedAt = Date.now();
+
+    await expect(queue.runTaskNow(jobId)).resolves.toMatchObject({
+      status: "released",
+      jobId,
+      state: "ready",
+      runAt: expect.any(Date),
+    });
+    const released = await queue.getJob(jobId);
+    expect(released).toMatchObject({ state: "ready" });
+    expect(released!.runAt.getTime()).toBeGreaterThanOrEqual(requestedAt);
+    expect(released!.runAt.getTime()).toBeLessThan(originalRunAt.getTime());
+    await expect(queue.runTaskNow(jobId)).resolves.toMatchObject({
+      status: "already_ready",
+      state: "ready",
+      runAt: released!.runAt,
+    });
+    await expect(
+      pool.query(
+        `SELECT attempt, event_type, details FROM workhorse.job_event
+          WHERE job_id = $1 AND event_type = 'promoted'`,
+        [jobId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ attempt: 1, event_type: "promoted", details: { reason: "manual" } }],
+    });
+    await expect(
+      pool.query(
+        `SELECT namespace, schedule_name, cron_expression, revision, enabled, updated_at
+           FROM workhorse.schedule_definition
+          WHERE namespace = 'integration' AND schedule_name = 'daily-report'`,
+      ),
+    ).resolves.toEqual(scheduleBefore);
+
+    const waitingId = await queue.enqueue("durable-wait", {}, { queue: "durable-wait" });
+    const claimed = await queue.claim("wait-worker", { queue: "durable-wait" });
+    expect(claimed?.id).toBe(waitingId);
+    await queue.scheduleWait(claimed!, "wait-worker", "approval", {
+      wakeAt: new Date(Date.now() + 3_600_000),
+    });
+    const waitingBefore = await queue.getJob(waitingId);
+    await expect(queue.runTaskNow(waitingId)).resolves.toMatchObject({
+      status: "waiting",
+      jobId: waitingId,
+      state: "scheduled",
+      runAt: waitingBefore!.runAt,
+    });
+    await expect(queue.getJob(waitingId)).resolves.toMatchObject({
+      state: "scheduled",
+      runAt: waitingBefore!.runAt,
+    });
+
+    const terminalId = await queue.enqueue("terminal", {}, { queue: "run-now-terminal" });
+    const terminalClaim = await queue.claim("terminal-worker", { queue: "run-now-terminal" });
+    expect(terminalClaim?.id).toBe(terminalId);
+    expect(await queue.complete(terminalClaim!, "terminal-worker", { ok: true })).toBe(true);
+    await expect(queue.runTaskNow(terminalId)).resolves.toMatchObject({
+      status: "not_scheduled",
+      jobId: terminalId,
+      state: "succeeded",
+    });
+    await expect(queue.runTaskNow("00000000-0000-4000-8000-000000000099")).resolves.toEqual({
+      status: "not_found",
+      jobId: "00000000-0000-4000-8000-000000000099",
+      state: null,
+      runAt: null,
+    });
+  });
+
   it("returns per-phase tick and background maintenance telemetry", async () => {
     const scheduledId = await queue.enqueue(
       "scheduled-maintenance",

@@ -63,6 +63,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent,
@@ -75,6 +76,7 @@ import {
   describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
+  describeRunNowOutcome,
   formatRetryDelay,
   idempotencyEvidenceLine,
   isTerminalTaskState,
@@ -97,6 +99,7 @@ import type {
   DashboardTaskFilter,
   DashboardTasksPage,
   DashboardWorkersPage,
+  TaskRowActionCapabilities,
   TaskRowActionId,
 } from "./model.js";
 import type { DashboardClient, DashboardDemoTools } from "./client.js";
@@ -1166,6 +1169,18 @@ interface CancelFeedback {
   at: string | null;
 }
 
+/**
+ * What one run-now request reported, held so the list can state it and offer the released task.
+ *
+ * A transport failure and a server refusal are both outcomes worth showing, so this carries either
+ * a described status or a failure sentence rather than modelling failure as absence.
+ */
+interface RunNowFeedback {
+  jobId: string;
+  described: ReturnType<typeof describeRunNowOutcome> | null;
+  failure: string | null;
+}
+
 /** The lifecycle states an operator may cancel. Everything else is terminal or unknown. */
 function canCancelTask(job: DashboardJobDetail): boolean {
   const runtime = job.current.runtime;
@@ -2162,6 +2177,7 @@ function taskRowActionIcon(id: TaskRowActionId): ReactNode {
   if (id === "inspect") return <Info size={16} />;
   if (id === "copy-id" || id === "copy-args") return <Copy size={16} />;
   if (id === "cancel") return <Prohibit size={16} />;
+  if (id === "run-now") return <PlayCircle size={16} />;
   return <FunnelSimple size={16} />;
 }
 
@@ -2175,16 +2191,23 @@ function taskRowActionIcon(id: TaskRowActionId): ReactNode {
  * that quietly changes shape from row to row.
  *
  * Cancellation is never applied from here. It opens the task drawer with the confirmation armed,
- * because cancellation is irreversible and its reason belongs in the audit trail.
+ * because cancellation is irreversible and its reason belongs in the audit trail. Running a
+ * scheduled task now is applied in place instead: it deliberately releases the task early, shows
+ * the mutation in flight, and reports the durable result without claiming the handler ran inline.
  */
 function TaskRowActions({
   job,
   onAction,
+  capabilities,
+  pendingAction,
 }: {
   job: DashboardJobRow;
   onAction: (id: TaskRowActionId, job: DashboardJobRow) => void;
+  capabilities: TaskRowActionCapabilities;
+  /** The action currently in flight for this row, so its item can show it rather than look idle. */
+  pendingAction: TaskRowActionId | null;
 }) {
-  const groups = taskRowActionGroups(job);
+  const groups = taskRowActionGroups(job, capabilities);
   return (
     <Menu position="bottom-end" withinPortal shadow="md" width={280}>
       <Menu.Target>
@@ -2193,6 +2216,7 @@ function TaskRowActions({
           variant="subtle"
           color="gray"
           aria-label={`Actions for task ${job.id}`}
+          loading={pendingAction !== null}
           // The row itself opens the drawer on click, which is not what opening this menu means.
           onClick={(event) => event.stopPropagation()}
         >
@@ -2204,24 +2228,27 @@ function TaskRowActions({
           <Fragment key={group.label}>
             {index > 0 ? <Menu.Divider /> : null}
             <Menu.Label>{group.label}</Menu.Label>
-            {group.actions.map((action) => (
-              <Menu.Item
-                key={action.id}
-                leftSection={taskRowActionIcon(action.id)}
-                color={action.destructive && action.unavailable === null ? "red" : undefined}
-                disabled={action.unavailable !== null}
-                onClick={() => onAction(action.id, job)}
-              >
-                <Text size="sm" lh={1.3}>
-                  {action.label}
-                </Text>
-                {action.unavailable === null ? null : (
-                  <Text size="xs" c="dimmed" lh={1.3} mt={2} style={{ whiteSpace: "normal" }}>
-                    {action.unavailable}
+            {group.actions.map((action) => {
+              const pending = pendingAction === action.id;
+              return (
+                <Menu.Item
+                  key={action.id}
+                  leftSection={pending ? <Loader size={14} /> : taskRowActionIcon(action.id)}
+                  color={action.destructive && action.unavailable === null ? "red" : undefined}
+                  disabled={action.unavailable !== null || pendingAction !== null}
+                  onClick={() => onAction(action.id, job)}
+                >
+                  <Text size="sm" lh={1.3}>
+                    {action.label}
                   </Text>
-                )}
-              </Menu.Item>
-            ))}
+                  {action.unavailable === null ? null : (
+                    <Text size="xs" c="dimmed" lh={1.3} mt={2} style={{ whiteSpace: "normal" }}>
+                      {action.unavailable}
+                    </Text>
+                  )}
+                </Menu.Item>
+              );
+            })}
           </Fragment>
         ))}
       </Menu.Dropdown>
@@ -2238,6 +2265,7 @@ function TasksPage({
   inspectJob,
   replace,
   taskLocation,
+  runTaskNow,
 }: {
   data: DashboardTasksPage;
   navigate: (href: string) => void;
@@ -2247,6 +2275,11 @@ function TasksPage({
   runningDemoJob: DemoJobKind | null;
   actionError: string | null;
   inspectJob: (id: string, options?: { confirmCancel?: boolean }) => void;
+  /**
+   * Release one scheduled task, or null when the host cannot. Null is passed through to the menu
+   * as a stated reason rather than removing the item.
+   */
+  runTaskNow: ((id: string) => Promise<RunNowFeedback>) | null;
 }) {
   const [fullArgs, setFullArgs] = useState(
     () => localStorage.getItem("workhorse-full-args") === "true",
@@ -2254,6 +2287,9 @@ function TasksPage({
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
   // What the last row action did. Announced rather than left to a colour or a vanished menu.
   const [rowFeedback, setRowFeedback] = useState<string | null>(null);
+  // The one row action that is applied here rather than in the drawer, and what it reported.
+  const [runningNowJobId, setRunningNowJobId] = useState<string | null>(null);
+  const [runNowFeedback, setRunNowFeedback] = useState<RunNowFeedback | null>(null);
   const searchInput = searchDraft ?? taskLocation.search ?? "";
   const taskFacets = useTaskFacets(data);
   const locationState: TaskLocationState = taskLocation;
@@ -2279,6 +2315,13 @@ function TasksPage({
     const timer = setTimeout(() => setRowFeedback(null), 4_000);
     return () => clearTimeout(timer);
   }, [rowFeedback]);
+  // Run-now feedback carries a link to the task it released, so it is given longer than a copy
+  // confirmation: it is only useful for as long as the operator can still act on it.
+  useEffect(() => {
+    if (runNowFeedback === null) return;
+    const timer = setTimeout(() => setRunNowFeedback(null), 12_000);
+    return () => clearTimeout(timer);
+  }, [runNowFeedback]);
   /**
    * Apply one row action.
    *
@@ -2291,6 +2334,16 @@ function TasksPage({
     (id: TaskRowActionId, job: DashboardJobRow) => {
       if (id === "inspect") return inspectJob(job.id);
       if (id === "cancel") return inspectJob(job.id, { confirmCancel: true });
+      if (id === "run-now") {
+        if (runTaskNow === null || runningNowJobId !== null) return;
+        setRowFeedback(null);
+        setRunNowFeedback(null);
+        setRunningNowJobId(job.id);
+        void runTaskNow(job.id)
+          .then(setRunNowFeedback)
+          .finally(() => setRunningNowJobId(null));
+        return;
+      }
       if (id === "filter-type") return updateLocation({ jobType: job.type });
       if (id === "filter-queue") return updateLocation({ queue: job.queue });
       if (id === "filter-worker") {
@@ -2303,7 +2356,7 @@ function TasksPage({
         setRowFeedback(failure ?? `${copying} copied to the clipboard.`),
       );
     },
-    [inspectJob, updateLocation],
+    [inspectJob, runTaskNow, runningNowJobId, updateLocation],
   );
   const toggleFullArgs = (checked: boolean) => {
     setFullArgs(checked);
@@ -2455,6 +2508,32 @@ function TasksPage({
               </Text>
             </>
           )}
+          {runNowFeedback === null ? null : (
+            <>
+              <Divider />
+              <Group gap="sm" px="md" py="xs" wrap="nowrap" align="baseline">
+                <Text size="sm" c={runNowFeedback.failure === null ? "dimmed" : "red"}>
+                  {runNowFeedback.failure ?? runNowFeedback.described!.exact}
+                </Text>
+                {/* The released task is the thing the operator now wants to watch, so it is
+                    offered directly rather than left to be found again in the list. A failed
+                    request is not offered a link, because the commonest failure is the task no
+                    longer existing and a link would only lead to a second error. */}
+                {runNowFeedback.failure === null ? (
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    onClick={() => {
+                      setRunNowFeedback(null);
+                      inspectJob(runNowFeedback.jobId);
+                    }}
+                  >
+                    Open task
+                  </Button>
+                ) : null}
+              </Group>
+            </>
+          )}
         </Box>
         <Divider />
         <ScrollArea>
@@ -2572,7 +2651,12 @@ function TasksPage({
                       </Text>
                     </Table.Td>
                     <Table.Td>
-                      <TaskRowActions job={job} onAction={runRowAction} />
+                      <TaskRowActions
+                        job={job}
+                        onAction={runRowAction}
+                        capabilities={{ runNow: runTaskNow !== null }}
+                        pendingAction={runningNowJobId === job.id ? "run-now" : null}
+                      />
                     </Table.Td>
                   </Table.Tr>
                 ))
@@ -4388,6 +4472,46 @@ function useDashboardController(
     [auditActor, client, loadPage],
   );
 
+  /**
+   * Release one scheduled task so a worker can claim it now.
+   *
+   * The reported status is exactly what the server did, so the list can distinguish a task that was
+   * actually released from one that was already queued and from one refused because it is parked at
+   * a durable wait. The list is reloaded afterwards rather than optimistically edited, because
+   * whether the task is now ready is a durable fact this dashboard does not get to guess.
+   *
+   * Null when the host does not expose the mutation, which the row menu states as the reason the
+   * action is unavailable rather than hiding the item.
+   */
+  const runTaskNow = useMemo(() => {
+    const mutate = client.runTaskNow;
+    if (!mutate) return null;
+    return async (id: string): Promise<RunNowFeedback> => {
+      try {
+        const result = await mutate.call(client, {
+          id,
+          audit: {
+            actor: auditActor,
+            reason: `Run scheduled task ${id} now from the dashboard`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        await loadPage();
+        return {
+          jobId: id,
+          described: describeRunNowOutcome(result.status, { state: result.state }),
+          failure: null,
+        };
+      } catch (cause) {
+        return {
+          jobId: id,
+          described: null,
+          failure: cause instanceof Error ? cause.message : "Unable to run the task now",
+        };
+      }
+    };
+  }, [auditActor, client, loadPage]);
+
   useEffect(() => {
     const onPopState = () => {
       const next = readLocation(basePath);
@@ -4457,6 +4581,7 @@ function useDashboardController(
         runningDemoJob={runningDemoJob}
         actionError={actionError}
         inspectJob={inspectJob}
+        runTaskNow={runTaskNow}
       />
     );
   } else if (loadState.data?.route === "/cron") {

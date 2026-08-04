@@ -21,6 +21,8 @@ export {
 export type {
   MaintenancePhase,
   MaintenancePhaseResult,
+  RunTaskNowResult,
+  RunTaskNowStatus,
   ScheduleWaitRequest,
   ScheduleWaitResult,
   ScheduleDefinition,

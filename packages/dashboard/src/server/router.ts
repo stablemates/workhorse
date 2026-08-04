@@ -125,6 +125,10 @@ const cancelTaskInput = z.object({
   id: z.uuid(),
   audit: cancellationAuditSchema,
 });
+const runTaskNowInput = z.object({
+  id: z.uuid(),
+  audit: auditSchema,
+});
 
 function auditWithOccurredAt<
   TAudit extends { actor: string; reason: string | null; requestId: string },
@@ -244,6 +248,19 @@ export const dashboardRouter = {
         input.paused,
         auditWithOccurredAt(input.audit),
       );
+    }),
+    runTaskNow: procedure.input(runTaskNowInput).handler(async ({ context, input }) => {
+      if (context.operator.mode !== "local" || !context.taskController?.runTaskNow) {
+        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+      }
+      const result = await context.taskController.runTaskNow(
+        input.id,
+        auditWithOccurredAt(input.audit),
+      );
+      if (result.status === "not_found") {
+        throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+      }
+      return result;
     }),
     /**
      * Cancel one task. The returned status is exactly what PostgreSQL reported, so the caller can

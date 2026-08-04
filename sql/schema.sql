@@ -1911,6 +1911,74 @@ BEGIN
 END;
 $$;
 
+-- Release one ordinary future-scheduled task without bypassing a durable wait. This operator path
+-- deliberately changes only the task occurrence. It never reads or updates schedule_definition or
+-- schedule_occurrence, so a recurring schedule's cadence and next evaluation remain untouched.
+CREATE OR REPLACE FUNCTION workhorse.run_task_now_v1(p_job_id uuid)
+RETURNS TABLE(status text, state text, run_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_outcome workhorse.job_outcome%ROWTYPE;
+  v_now timestamptz := clock_timestamp();
+BEGIN
+  SELECT * INTO v_runtime
+    FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id
+   FOR UPDATE;
+
+  IF FOUND THEN
+    IF v_runtime.state IN ('ready', 'active') THEN
+      RETURN QUERY VALUES ('already_ready'::text, v_runtime.state, v_runtime.run_at);
+      RETURN;
+    END IF;
+
+    -- A scheduled row with a retained attempt is suspended at a durable wait boundary. Releasing it
+    -- would skip the named wait and violate durable execution semantics, so refuse even if wait_name
+    -- is momentarily unavailable due to a racing reader.
+    IF v_runtime.wait_name IS NOT NULL OR v_runtime.attempt_started_at IS NOT NULL THEN
+      RETURN QUERY VALUES ('waiting'::text, v_runtime.state, v_runtime.run_at);
+      RETURN;
+    END IF;
+
+    UPDATE workhorse.job_runtime runtime
+       SET state = 'ready', run_at = v_now, ready_at = v_now,
+           sequence = nextval('workhorse.ready_sequence_seq'), updated_at = v_now
+     WHERE runtime.job_id = p_job_id AND runtime.state = 'scheduled'
+    RETURNING * INTO v_runtime;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'locked scheduled task % changed state unexpectedly', p_job_id;
+    END IF;
+
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id,
+        v_runtime.current_attempt,
+        'promoted',
+        jsonb_build_object('reason', 'manual')
+      );
+    PERFORM pg_notify('workhorse_jobs', '*');
+    RETURN QUERY VALUES ('released'::text, v_runtime.state, v_runtime.run_at);
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_outcome
+    FROM workhorse.job_outcome outcome
+   WHERE outcome.job_id = p_job_id;
+  IF FOUND THEN
+    RETURN QUERY VALUES ('not_scheduled'::text, v_outcome.state, v_outcome.run_at);
+    RETURN;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM workhorse.job job WHERE job.id = p_job_id) THEN
+    RETURN QUERY VALUES ('not_scheduled'::text, NULL::text, NULL::timestamptz);
+  ELSE
+    RETURN QUERY VALUES ('not_found'::text, NULL::text, NULL::timestamptz);
+  END IF;
+END;
+$$;
+
 DROP FUNCTION IF EXISTS workhorse.claim_v1(text, text, integer);
 CREATE OR REPLACE FUNCTION workhorse.claim_v1(
   p_queue_name text,

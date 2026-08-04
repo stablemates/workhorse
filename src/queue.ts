@@ -67,6 +67,20 @@ export interface StoredSchedule {
   lastOccurrenceAt: Date | null;
 }
 
+export type RunTaskNowStatus =
+  | "released"
+  | "already_ready"
+  | "not_scheduled"
+  | "waiting"
+  | "not_found";
+
+export interface RunTaskNowResult {
+  status: RunTaskNowStatus;
+  jobId: string;
+  state: string | null;
+  runAt: Date | null;
+}
+
 export type MaintenancePhase =
   | "promote"
   | "recover"
@@ -1119,6 +1133,21 @@ export class Queue {
       [namespace, name, revision.toString(), occurrenceAt.toISOString()],
     );
     return result.rows[0]!.job_id;
+  }
+
+  async runTaskNow(jobId: string): Promise<RunTaskNowResult> {
+    const result = await this.database.query<{
+      status: RunTaskNowStatus;
+      state: string | null;
+      run_at: Date | string | null;
+    }>("SELECT status, state, run_at FROM workhorse.run_task_now_v1($1)", [jobId]);
+    const row = result.rows[0]!;
+    return {
+      status: row.status,
+      jobId,
+      state: row.state,
+      runAt: nullableClaimedTimestamp(row.run_at, "run_at"),
+    };
   }
 
   async cancel(jobId: string, request: CancellationRequest = {}): Promise<CancelResult> {
