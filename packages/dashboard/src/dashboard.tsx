@@ -3013,7 +3013,6 @@ function HealthKpi({
   color = "blue",
   icon,
   children,
-  divided = false,
 }: {
   title: string;
   value: ReactNode;
@@ -3023,67 +3022,61 @@ function HealthKpi({
   color?: string;
   icon: ReactNode;
   children?: ReactNode;
-  divided?: boolean;
 }) {
   return (
-    <Box
-      px="md"
-      py="xs"
-      style={divided ? { borderTop: "1px solid var(--mantine-color-default-border)" } : undefined}
-    >
-      <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-        <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
+    // Each measure is its own card so the tile grid can reflow by breakpoint instead of
+    // squeezing every metric into one narrow column.
+    <Paper withBorder p="md" h="100%">
+      <Stack gap={6} h="100%">
+        <Group gap="sm" wrap="nowrap" align="center">
           <ThemeIcon variant="light" color={color} size="md" style={{ flexShrink: 0 }}>
             {icon}
           </ThemeIcon>
-          <Box style={{ minWidth: 0 }}>
-            <Group gap={6} wrap="nowrap">
-              <Tooltip
-                label={help}
-                multiline
-                w={280}
-                withArrow
-                position="top-start"
-                openDelay={150}
-                closeDelay={80}
-                events={{ hover: true, focus: true, touch: true }}
-              >
-                <Text
-                  fw={600}
-                  size="sm"
-                  tabIndex={0}
-                  style={{
-                    cursor: "help",
-                    textDecoration: "underline dotted",
-                    textUnderlineOffset: 3,
-                  }}
-                >
-                  {title}
-                </Text>
-              </Tooltip>
-              <Text c="dimmed" fz={10} fw={600} lh={1} tt="uppercase">
-                {scope}
-              </Text>
-            </Group>
-            <Text c="dimmed" size="xs" lineClamp={1}>
-              {detail}
+          <Tooltip
+            label={help}
+            multiline
+            w={280}
+            withArrow
+            position="top-start"
+            openDelay={150}
+            closeDelay={80}
+            events={{ hover: true, focus: true, touch: true }}
+          >
+            <Text
+              fw={600}
+              size="sm"
+              tabIndex={0}
+              style={{
+                cursor: "help",
+                textDecoration: "underline dotted",
+                textUnderlineOffset: 3,
+                minWidth: 0,
+                flex: 1,
+              }}
+              truncate
+            >
+              {title}
             </Text>
-          </Box>
-        </Group>
-        {children ? (
-          <Box visibleFrom="sm" w={140} style={{ flexShrink: 0 }}>
-            {children}
-          </Box>
-        ) : null}
-        {typeof value === "string" || typeof value === "number" ? (
-          <Text fw={750} fz={20} lh={1.2} ta="right" style={{ flexShrink: 0 }}>
-            {value}
+          </Tooltip>
+          <Text c="dimmed" fz={10} fw={600} lh={1} tt="uppercase" style={{ flexShrink: 0 }}>
+            {scope}
           </Text>
-        ) : (
-          value
-        )}
-      </Group>
-    </Box>
+        </Group>
+        <Box mt="auto" pt="xs">
+          {typeof value === "string" || typeof value === "number" ? (
+            <Text fw={750} fz={28} lh={1.1}>
+              {value}
+            </Text>
+          ) : (
+            value
+          )}
+          <Text c="dimmed" size="xs" mt={4} lineClamp={2}>
+            {detail}
+          </Text>
+        </Box>
+        {children ? <Box mt={2}>{children}</Box> : null}
+      </Stack>
+    </Paper>
   );
 }
 
@@ -3098,13 +3091,91 @@ function systemBucketLabel(value: string, window: DashboardSystemWindow): string
   }).format(date);
 }
 
-function SystemOperations({
+function QueuePressure({
   data,
   navigate,
 }: {
   data: DashboardSystemPage;
   navigate: (href: string) => void;
 }) {
+  return (
+    // Nine numeric columns never fit a third of the viewport, so this table owns a full-width row.
+    <Paper withBorder>
+      <Group justify="space-between" p="md">
+        <Box>
+          <Group gap={4} wrap="nowrap">
+            <Text fw={650}>Queue pressure</Text>
+            <HelpButton
+              label="Queue pressure"
+              help="Current queue state ranked by backlog risk. Ready, oldest, due, active, and retrying are snapshots; enqueue and completion rates use the selected window. Select a row to inspect its tasks."
+            />
+          </Group>
+          <Text c="dimmed" size="xs">
+            Worst queues first · select a row to inspect its tasks
+          </Text>
+        </Box>
+        <Badge
+          variant="light"
+          color={data.queues.some((queue) => queue.paused) ? "yellow" : "gray"}
+        >
+          {data.queues.length} queues
+        </Badge>
+      </Group>
+      <ScrollArea>
+        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={920}>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Queue</Table.Th>
+              <Table.Th>Status</Table.Th>
+              <Table.Th ta="right">Ready</Table.Th>
+              <Table.Th ta="right">Oldest</Table.Th>
+              <Table.Th ta="right">Due ≤5m</Table.Th>
+              <Table.Th ta="right">Active</Table.Th>
+              <Table.Th ta="right">Retrying</Table.Th>
+              <Table.Th ta="right">Enq/min</Table.Th>
+              <Table.Th ta="right">Done/min</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {data.queues.map((queue) => (
+              <Table.Tr
+                key={queue.queue}
+                tabIndex={0}
+                style={{ cursor: "pointer" }}
+                onClick={() => navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`);
+                  }
+                }}
+              >
+                <Table.Td>
+                  <Code fz="xs" style={{ background: "transparent", padding: 0 }}>
+                    {queue.queue}
+                  </Code>
+                </Table.Td>
+                <Table.Td>
+                  <Badge color={queue.paused ? "yellow" : "teal"} variant="light" size="sm">
+                    {queue.paused ? "Paused" : "Running"}
+                  </Badge>
+                </Table.Td>
+                <Table.Td ta="right">{queue.ready}</Table.Td>
+                <Table.Td ta="right">{formatDuration(queue.oldestReadyMs)}</Table.Td>
+                <Table.Td ta="right">{queue.dueSoon}</Table.Td>
+                <Table.Td ta="right">{queue.active}</Table.Td>
+                <Table.Td ta="right">{queue.retrying}</Table.Td>
+                <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
+                <Table.Td ta="right">{formatRate(queue.completedPerMinute)}</Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </ScrollArea>
+    </Paper>
+  );
+}
+
+function SystemKpiGrid({ data }: { data: DashboardSystemPage }) {
   const errorColor =
     data.kpis.errorRate.current >= systemErrorRateWarning
       ? "red"
@@ -3119,244 +3190,174 @@ function SystemOperations({
     { label: "p95", duration: data.kpis.queueWait.p95Ms },
     { label: "p99", duration: data.kpis.queueWait.p99Ms },
   ];
+  const deadline = data.kpis.deadline ?? {
+    pending: 0,
+    overdue: 0,
+    dueWithinMinute: 0,
+    earliestAt: null,
+    activeTimeouts: 0,
+    overdueTimeouts: 0,
+  };
 
   return (
-    <Grid gutter="xl">
-      <Grid.Col span={{ base: 12, lg: 8 }} order={{ base: 2, lg: 2 }}>
-        <Paper withBorder h="100%">
-          <Group justify="space-between" p="md">
-            <Box>
-              <Group gap={4} wrap="nowrap">
-                <Text fw={650}>Queue pressure</Text>
-                <HelpButton
-                  label="Queue pressure"
-                  help="Current queue state ranked by backlog risk. Ready, oldest, due, active, and retrying are snapshots; enqueue and completion rates use the selected window. Select a row to inspect its tasks."
-                />
-              </Group>
-              <Text c="dimmed" size="xs">
-                Worst queues first · select a row to inspect its tasks
-              </Text>
-            </Box>
-            <Badge
-              variant="light"
-              color={data.queues.some((queue) => queue.paused) ? "yellow" : "gray"}
-            >
-              {data.queues.length} queues
-            </Badge>
-          </Group>
-          <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={920}>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Queue</Table.Th>
-                  <Table.Th>Status</Table.Th>
-                  <Table.Th ta="right">Ready</Table.Th>
-                  <Table.Th ta="right">Oldest</Table.Th>
-                  <Table.Th ta="right">Due ≤5m</Table.Th>
-                  <Table.Th ta="right">Active</Table.Th>
-                  <Table.Th ta="right">Retrying</Table.Th>
-                  <Table.Th ta="right">Enq/min</Table.Th>
-                  <Table.Th ta="right">Done/min</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {data.queues.map((queue) => (
-                  <Table.Tr
-                    key={queue.queue}
-                    tabIndex={0}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`);
-                      }
-                    }}
-                  >
-                    <Table.Td>
-                      <Code fz="xs" style={{ background: "transparent", padding: 0 }}>
-                        {queue.queue}
-                      </Code>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge color={queue.paused ? "yellow" : "teal"} variant="light" size="sm">
-                        {queue.paused ? "Paused" : "Running"}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td ta="right">{queue.ready}</Table.Td>
-                    <Table.Td ta="right">{formatDuration(queue.oldestReadyMs)}</Table.Td>
-                    <Table.Td ta="right">{queue.dueSoon}</Table.Td>
-                    <Table.Td ta="right">{queue.active}</Table.Td>
-                    <Table.Td ta="right">{queue.retrying}</Table.Td>
-                    <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
-                    <Table.Td ta="right">{formatRate(queue.completedPerMinute)}</Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </ScrollArea>
-        </Paper>
+    // Headline measures lead the page as a reflowing tile band: 1 up on phones, 2 on tablets,
+    // 4 on desktop. The wait tile takes a double slot because it carries three percentiles.
+    <Grid gutter="md">
+      <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+        <HealthKpi
+          title="Drain balance"
+          value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
+          detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} enqueued · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
+          help="Average completed jobs per minute compared with enqueued jobs per minute during the selected window. A negative net means work arrived faster than it completed."
+          scope={data.window}
+          color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
+          icon={<ArrowClockwise size={18} />}
+        >
+          <MiniTrend
+            series={[
+              {
+                values: recentOutcomes.map((bucket) => bucket.enqueued),
+                color: "var(--mantine-color-blue-6)",
+              },
+              {
+                values: recentOutcomes.map((bucket) => bucket.succeeded + bucket.failed),
+                color: "var(--mantine-color-teal-6)",
+              },
+            ]}
+          />
+        </HealthKpi>
       </Grid.Col>
-      <Grid.Col span={{ base: 12, lg: 4 }} order={{ base: 1, lg: 1 }}>
-        <Stack gap="xl">
-          <Paper withBorder>
-            <HealthKpi
-              title="Drain balance"
-              value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
-              detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} enqueued · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
-              help="Average completed jobs per minute compared with enqueued jobs per minute during the selected window. A negative net means work arrived faster than it completed."
-              scope={data.window}
-              color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
-              icon={<ArrowClockwise size={18} />}
-            >
-              <MiniTrend
-                series={[
-                  {
-                    values: recentOutcomes.map((bucket) => bucket.enqueued),
-                    color: "var(--mantine-color-blue-6)",
-                  },
-                  {
-                    values: recentOutcomes.map((bucket) => bucket.succeeded + bucket.failed),
-                    color: "var(--mantine-color-teal-6)",
-                  },
-                ]}
-              />
-            </HealthKpi>
-            <HealthKpi
-              divided
-              title="Backlog risk"
-              value={data.kpis.backlog.ready}
-              detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)}`}
-              help="A current snapshot of jobs ready to run. The age of the oldest ready job highlights queues that are not draining promptly; yellow begins after 60 seconds."
-              scope="now"
-              color={backlogColor}
-              icon={<ListChecks size={18} />}
-            />
-            <HealthKpi
-              divided
-              title="Attempt error rate"
-              value={formatPercent(data.kpis.errorRate.current)}
-              detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior ${data.window}`}
-              help="The share of attempts that did not succeed during the selected window, compared with the immediately preceding window of the same length. Caution starts at 1% and warning at 5%."
-              scope={data.window}
-              color={errorColor}
-              icon={<WarningCircle size={18} />}
-            />
-            <HealthKpi
-              divided
-              title="First-attempt wait"
-              value={
-                <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0 }}>
-                  {queueWaitPercentiles.map((percentile) => (
-                    <Box key={percentile.label} ta="right">
-                      <Text c="dimmed" fz={10} lh={1}>
-                        {percentile.label}
-                      </Text>
-                      <Text fw={700} size="sm" lh={1.2}>
-                        {formatDuration(percentile.duration)}
-                      </Text>
-                    </Box>
-                  ))}
-                </Group>
-              }
-              detail="Enqueue to first claim"
-              help="The median, 95th, and 99th percentile delay from enqueue to the first claim for jobs first claimed during the selected window."
-              scope={data.window}
-              color="indigo"
-              icon={<Clock size={18} />}
-            />
-            <HealthKpi
-              divided
-              title="Retry pressure"
-              value={data.kpis.retry.backoff}
-              detail={`${data.kpis.retry.dueSoon} due in the next 5m`}
-              help="A current snapshot of jobs waiting for PostgreSQL-selected persisted-policy or compatibility backoff. The secondary count shows how many scheduled retries become due within the next five minutes."
-              scope="now"
-              color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
-              icon={<ArrowCounterClockwise size={18} />}
-            />
-            <HealthKpi
-              divided
-              title="Lease danger"
-              value={data.kpis.lease.expired}
-              detail={`${data.kpis.lease.expiringSoon} expire in 30s · ${data.kpis.lease.recovered} recovered/${data.window}`}
-              help="A current snapshot of active jobs with expired leases. It also shows leases expiring within 30 seconds and lease expirations recorded during the selected window."
-              scope="now"
-              color={data.kpis.lease.expired > 0 ? "red" : "teal"}
-              icon={<Pulse size={18} />}
-            />
-            {(() => {
-              const deadline = data.kpis.deadline ?? {
-                pending: 0,
-                overdue: 0,
-                dueWithinMinute: 0,
-                earliestAt: null,
-                activeTimeouts: 0,
-                overdueTimeouts: 0,
-              };
-              return (
-                <HealthKpi
-                  divided
-                  title="Deadline pressure"
-                  value={deadline.overdue}
-                  detail={`${deadline.dueWithinMinute} due in 1m · ${deadline.overdueTimeouts} timed-out attempts awaiting reap`}
-                  help="A current snapshot of live jobs past their absolute deadline, jobs due within one minute, and active execution timeouts whose PostgreSQL target has elapsed."
-                  scope="now"
-                  color={
-                    deadline.overdue > 0 || deadline.overdueTimeouts > 0
-                      ? "red"
-                      : deadline.dueWithinMinute > 0
-                        ? "orange"
-                        : "teal"
-                  }
-                  icon={<Clock size={18} />}
-                />
-              );
-            })()}
-          </Paper>
-
-          <Paper withBorder p="md">
-            <Group gap={4} wrap="nowrap">
-              <Text fw={650}>Retry storm</Text>
-              <HelpButton
-                label="Retry storm"
-                help="A current snapshot of jobs in retry backoff, grouped by when they become due: within 1 minute, 5 minutes, 15 minutes, 1 hour, or later. Contributors are the job types with the most pending retries now."
-              />
+      <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+        <HealthKpi
+          title="Backlog risk"
+          value={data.kpis.backlog.ready}
+          detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)}`}
+          help="A current snapshot of jobs ready to run. The age of the oldest ready job highlights queues that are not draining promptly; yellow begins after 60 seconds."
+          scope="now"
+          color={backlogColor}
+          icon={<ListChecks size={18} />}
+        />
+      </Grid.Col>
+      <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+        <HealthKpi
+          title="Attempt error rate"
+          value={formatPercent(data.kpis.errorRate.current)}
+          detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior ${data.window}`}
+          help="The share of attempts that did not succeed during the selected window, compared with the immediately preceding window of the same length. Caution starts at 1% and warning at 5%."
+          scope={data.window}
+          color={errorColor}
+          icon={<WarningCircle size={18} />}
+        />
+      </Grid.Col>
+      <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+        <HealthKpi
+          title="First-attempt wait"
+          value={
+            <Group gap="lg" wrap="nowrap">
+              {queueWaitPercentiles.map((percentile) => (
+                <Box key={percentile.label}>
+                  <Text c="dimmed" fz={10} fw={600} lh={1} tt="uppercase">
+                    {percentile.label}
+                  </Text>
+                  <Text fw={750} fz={18} lh={1.3}>
+                    {formatDuration(percentile.duration)}
+                  </Text>
+                </Box>
+              ))}
             </Group>
-            <Text c="dimmed" size="xs" mb="lg">
-              Scheduled retries arriving next
-            </Text>
-            <RetryBars buckets={data.retryStorm.buckets} />
-            <Divider my="lg" />
-            <Text c="dimmed" fw={600} size="xs" tt="uppercase" mb="xs">
-              Top contributors
-            </Text>
-            {data.retryStorm.topTypes.length === 0 ? (
-              <Text c="dimmed" size="sm">
-                No retries are in backoff.
-              </Text>
-            ) : (
-              <Stack gap="xs">
-                {data.retryStorm.topTypes.map((type) => (
-                  <Group key={`${type.queue}:${type.type}`} justify="space-between" wrap="nowrap">
-                    <Box style={{ minWidth: 0 }}>
-                      <Text size="sm" fw={600} truncate>
-                        {taskDisplayName(type.type, type.queue)}
-                      </Text>
-                      <Text c="dimmed" size="xs">
-                        {type.queue}
-                      </Text>
-                    </Box>
-                    <Badge color="orange" variant="light">
-                      {type.count}
-                    </Badge>
-                  </Group>
-                ))}
-              </Stack>
-            )}
-          </Paper>
-        </Stack>
+          }
+          detail="Enqueue to first claim"
+          help="The median, 95th, and 99th percentile delay from enqueue to the first claim for jobs first claimed during the selected window."
+          scope={data.window}
+          color="indigo"
+          icon={<Clock size={18} />}
+        />
+      </Grid.Col>
+      <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+        <HealthKpi
+          title="Retry pressure"
+          value={data.kpis.retry.backoff}
+          detail={`${data.kpis.retry.dueSoon} due in the next 5m`}
+          help="A current snapshot of jobs waiting for PostgreSQL-selected persisted-policy or compatibility backoff. The secondary count shows how many scheduled retries become due within the next five minutes."
+          scope="now"
+          color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
+          icon={<ArrowCounterClockwise size={18} />}
+        />
+      </Grid.Col>
+      <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+        <HealthKpi
+          title="Lease danger"
+          value={data.kpis.lease.expired}
+          detail={`${data.kpis.lease.expiringSoon} expire in 30s · ${data.kpis.lease.recovered} recovered/${data.window}`}
+          help="A current snapshot of active jobs with expired leases. It also shows leases expiring within 30 seconds and lease expirations recorded during the selected window."
+          scope="now"
+          color={data.kpis.lease.expired > 0 ? "red" : "teal"}
+          icon={<Pulse size={18} />}
+        />
+      </Grid.Col>
+      <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+        <HealthKpi
+          title="Deadline pressure"
+          value={deadline.overdue}
+          detail={`${deadline.dueWithinMinute} due in 1m · ${deadline.overdueTimeouts} timed-out attempts awaiting reap`}
+          help="A current snapshot of live jobs past their absolute deadline, jobs due within one minute, and active execution timeouts whose PostgreSQL target has elapsed."
+          scope="now"
+          color={
+            deadline.overdue > 0 || deadline.overdueTimeouts > 0
+              ? "red"
+              : deadline.dueWithinMinute > 0
+                ? "orange"
+                : "teal"
+          }
+          icon={<Clock size={18} />}
+        />
       </Grid.Col>
     </Grid>
+  );
+}
+
+function RetryStorm({ data }: { data: DashboardSystemPage }) {
+  return (
+    <Paper withBorder p="md" h="100%">
+      <Group gap={4} wrap="nowrap">
+        <Text fw={650}>Retry storm</Text>
+        <HelpButton
+          label="Retry storm"
+          help="A current snapshot of jobs in retry backoff, grouped by when they become due: within 1 minute, 5 minutes, 15 minutes, 1 hour, or later. Contributors are the job types with the most pending retries now."
+        />
+      </Group>
+      <Text c="dimmed" size="xs" mb="lg">
+        Scheduled retries arriving next
+      </Text>
+      <RetryBars buckets={data.retryStorm.buckets} />
+      <Divider my="lg" />
+      <Text c="dimmed" fw={600} size="xs" tt="uppercase" mb="xs">
+        Top contributors
+      </Text>
+      {data.retryStorm.topTypes.length === 0 ? (
+        <Text c="dimmed" size="sm">
+          No retries are in backoff.
+        </Text>
+      ) : (
+        <Stack gap="xs">
+          {data.retryStorm.topTypes.map((type) => (
+            <Group key={`${type.queue}:${type.type}`} justify="space-between" wrap="nowrap">
+              <Box style={{ minWidth: 0 }}>
+                <Text size="sm" fw={600} truncate>
+                  {taskDisplayName(type.type, type.queue)}
+                </Text>
+                <Text c="dimmed" size="xs">
+                  {type.queue}
+                </Text>
+              </Box>
+              <Badge color="orange" variant="light">
+                {type.count}
+              </Badge>
+            </Group>
+          ))}
+        </Stack>
+      )}
+    </Paper>
   );
 }
 
@@ -3471,39 +3472,52 @@ function SystemPage({
         </Stack>
       </Group>
 
-      <Paper withBorder p="md">
-        <Group justify="space-between" mb="sm">
-          <Box>
-            <Group gap={4} wrap="nowrap">
-              <Text fw={650}>Outcome rate</Text>
-              <HelpButton
-                label="Outcome rate"
-                help="One-minute buckets across the selected window. Bars show closed-attempt outcomes and the line shows jobs enqueued during each minute."
-              />
-            </Group>
-            <Text c="dimmed" size="xs">
-              Minute buckets · enqueued line over closed-attempt outcomes
-            </Text>
-          </Box>
-          <Badge variant="light" color="gray">
-            {data.window}
-          </Badge>
-        </Group>
-        <Box h={300}>
-          <Suspense
-            fallback={
-              <Center h="100%">
-                <Loader size="sm" />
-              </Center>
-            }
-          >
-            <SystemOutcomeChart data={outcomeChartData} />
-          </Suspense>
-        </Box>
-      </Paper>
-      <SystemOperations data={data} navigate={navigate} />
+      <SystemKpiGrid data={data} />
+
+      {/* The chart and the retry outlook answer the same question — what is arriving next — so
+          they sit side by side instead of stacking a wide chart over a narrow column. */}
       <Grid gutter="xl">
-        <Grid.Col span={{ base: 12, lg: 6 }}>
+        <Grid.Col span={{ base: 12, lg: 8 }}>
+          <Paper withBorder p="md" h="100%">
+            <Group justify="space-between" mb="sm">
+              <Box>
+                <Group gap={4} wrap="nowrap">
+                  <Text fw={650}>Outcome rate</Text>
+                  <HelpButton
+                    label="Outcome rate"
+                    help="One-minute buckets across the selected window. Bars show closed-attempt outcomes and the line shows jobs enqueued during each minute."
+                  />
+                </Group>
+                <Text c="dimmed" size="xs">
+                  Minute buckets · enqueued line over closed-attempt outcomes
+                </Text>
+              </Box>
+              <Badge variant="light" color="gray">
+                {data.window}
+              </Badge>
+            </Group>
+            <Box h={320}>
+              <Suspense
+                fallback={
+                  <Center h="100%">
+                    <Loader size="sm" />
+                  </Center>
+                }
+              >
+                <SystemOutcomeChart data={outcomeChartData} />
+              </Suspense>
+            </Box>
+          </Paper>
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, lg: 4 }}>
+          <RetryStorm data={data} />
+        </Grid.Col>
+      </Grid>
+
+      <QueuePressure data={data} navigate={navigate} />
+
+      <Grid gutter="xl">
+        <Grid.Col span={{ base: 12, lg: 7 }}>
           <Paper withBorder h="100%">
             <Box p="md">
               <Group gap={4} wrap="nowrap">
@@ -3572,7 +3586,7 @@ function SystemPage({
             )}
           </Paper>
         </Grid.Col>
-        <Grid.Col span={{ base: 12, lg: 6 }}>
+        <Grid.Col span={{ base: 12, lg: 5 }}>
           <Paper withBorder p="md" h="100%">
             <Group gap={4} wrap="nowrap">
               <Text fw={650}>Integrity</Text>
