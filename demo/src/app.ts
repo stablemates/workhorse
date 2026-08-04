@@ -7,6 +7,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Hono } from "hono";
 import {
+  CancellationRequestedError,
+  type EnqueueOptions,
   MIN_PROGRESS_UPDATE_INTERVAL_MS,
   Queue,
   type CancelStatus,
@@ -26,6 +28,16 @@ import {
   persistentFailureFor,
 } from "./durable-demo.js";
 import { orders } from "./schema.js";
+import {
+  DEMO_FEATURE_RECURRING_SOURCE,
+  DEMO_FEATURE_SHOWCASE_FAMILIES,
+  DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+  DEMO_FEATURE_SHOWCASE_SEED_NAME,
+  DEMO_FEATURE_SHOWCASE_SOURCE,
+  demoFeatureRecurringVariant,
+  type DemoFeatureBehavior,
+  type DemoFeaturePayload,
+} from "./feature-showcase.js";
 
 const ORDER_JOB_TYPE = "order.process";
 const RETRY_JOB_TYPE = "demo.retry";
@@ -478,6 +490,30 @@ function longRunningSchedule(enabled = true) {
   } as const;
 }
 
+function featureShowcaseSchedules(enabledByName: ReadonlyMap<string, boolean>) {
+  return DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => ({
+    name: family.scheduleName,
+    schedule: family.schedule,
+    enabled: enabledByName.get(family.scheduleName) ?? true,
+    job: {
+      type: DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+      queue: DEMO_QUEUE,
+      payload: {
+        source: DEMO_FEATURE_RECURRING_SOURCE,
+        family: family.key,
+        scenario: "rotating",
+        behavior: "rotating",
+        label: `${family.title} recurring showcase`,
+        durationMs: null,
+        waitMs: null,
+        checkpointCount: null,
+      } satisfies DemoFeaturePayload,
+      maxAttempts: family.recurringMaxAttempts,
+      retryPolicy: family.recurringRetryPolicy,
+    },
+  }));
+}
+
 export async function installDemoSchema(database: DemoDatabase): Promise<void> {
   await database.execute(sql`
     CREATE TABLE IF NOT EXISTS public.workhorse_demo_order (
@@ -542,6 +578,7 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
     heartbeatSchedule(enabledByName.get(HEARTBEAT_SCHEDULE_NAME) ?? true),
     reportSchedule(enabledByName.get(REPORT_SCHEDULE_NAME) ?? true),
     longRunningSchedule(enabledByName.get(LONG_RUNNING_SCHEDULE_NAME) ?? true),
+    ...featureShowcaseSchedules(enabledByName),
   ]);
 }
 
@@ -1027,6 +1064,98 @@ export function createDemoApplication(
           dashboardRefresh.publish("worker");
           return { source, recurring: true, attempt: job.attempt };
         });
+        worker.handle<DemoFeaturePayload>(
+          DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+          async (payload, context) => {
+            const variant =
+              payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
+            const behavior: DemoFeatureBehavior =
+              variant === null
+                ? payload.behavior
+                : variant === 0
+                  ? "success"
+                  : variant === 1
+                    ? payload.family === "cancellation"
+                      ? "self-cancel"
+                      : "retry-once"
+                    : "always-fail";
+            const scenario =
+              variant === null ? payload.scenario : `${payload.scenario}:variant-${variant + 1}`;
+
+            if (payload.family === "durable-checkpoints") {
+              const checkpointCount =
+                payload.checkpointCount ?? (variant === null ? 1 : variant + 1);
+              for (let index = 1; index <= checkpointCount; index += 1) {
+                await context.checkpoint(`${payload.scenario}:stage-${index}`, () => ({
+                  artifactId: randomUUID(),
+                  stage: index,
+                  createdOnAttempt: context.job.attempt,
+                }));
+              }
+            }
+
+            if (payload.family === "durable-waits") {
+              await context.sleep(
+                `${payload.scenario}:wait`,
+                payload.waitMs ?? (variant === null ? 500 : 400 + variant * 300),
+              );
+            }
+
+            if (payload.family === "progress") {
+              const durationMs = Math.max(
+                payload.durationMs ?? 300,
+                MIN_PROGRESS_UPDATE_INTERVAL_MS,
+              );
+              await context.setProgress({ scenario, phase: "running", completed: 1, total: 2 });
+              dashboardRefresh.publish("worker");
+              await sleep(durationMs, undefined, { signal: context.signal });
+              await context.setProgress({ scenario, phase: "finishing", completed: 2, total: 2 });
+            } else if (payload.family === "timing-controls" || behavior === "self-cancel") {
+              await sleep(
+                payload.durationMs ?? (variant === null ? 250 : 200 + variant * 200),
+                undefined,
+                {
+                  signal: context.signal,
+                },
+              );
+            }
+
+            if (behavior === "self-cancel") {
+              await adapter.queue.cancel(context.job.id, {
+                requestedBy: "demo-showcase",
+                reason: `Cooperative cancellation for ${scenario}`,
+              });
+              throw new CancellationRequestedError(context.job.id);
+            }
+
+            const shouldRetry =
+              (behavior === "retry-once" ||
+                behavior === "checkpoint-retry" ||
+                behavior === "wait-retry" ||
+                behavior === "progress-retry") &&
+              context.job.attempt === 1;
+            const shouldRetryTwice = behavior === "retry-twice" && context.job.attempt <= 2;
+            if (
+              shouldRetry ||
+              shouldRetryTwice ||
+              behavior === "always-fail" ||
+              behavior === "progress-fail"
+            ) {
+              throw new Error(
+                `Intentional showcase outcome for ${scenario} on attempt ${context.job.attempt}`,
+              );
+            }
+
+            dashboardRefresh.publish("worker");
+            return {
+              family: payload.family,
+              scenario,
+              variant,
+              outcome: context.job.attempt > 1 ? "recovered" : "succeeded",
+              attempt: context.job.attempt,
+            };
+          },
+        );
         worker.handle<{ report: string; source: string }>(REPORT_JOB_TYPE, async (payload) => {
           dashboardRefresh.publish("worker");
           return { ...payload, generated: true };
@@ -1208,6 +1337,128 @@ export async function seedDemoData(database: DemoDatabase) {
   // These jobs are inserted first but start after a short grace period, so startup work is never
   // starved. Their handler only awaits a Node timer, occupying slots without burning CPU or memory.
   const longRunningJobIds = await seedLongRunningDemoData(database);
+  const featureShowcaseJobIds = await database.transaction(async (transaction) => {
+    const marker = await transaction.execute<{ name: string }>(sql`
+      INSERT INTO public.workhorse_demo_seed (name)
+      VALUES (${DEMO_FEATURE_SHOWCASE_SEED_NAME})
+      ON CONFLICT (name) DO NOTHING
+      RETURNING name
+    `);
+    if (marker.rows.length === 0) return [] as string[];
+
+    const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+    const jobIds: string[] = [];
+    for (const family of DEMO_FEATURE_SHOWCASE_FAMILIES) {
+      for (const example of family.examples) {
+        const payload: DemoFeaturePayload = {
+          source: DEMO_FEATURE_SHOWCASE_SOURCE,
+          family: family.key,
+          scenario: example.scenario,
+          behavior: example.behavior,
+          label: example.label,
+          durationMs: example.durationMs ?? null,
+          waitMs: example.waitMs ?? null,
+          checkpointCount: example.checkpointCount ?? null,
+        };
+        const now = Date.now();
+        const enqueueOptions: EnqueueOptions = {
+          maxAttempts: example.maxAttempts,
+          retryPolicy: example.retryPolicy,
+          tags: example.tags,
+          ...(example.runAfterMs === undefined
+            ? {}
+            : { runAt: new Date(now + example.runAfterMs) }),
+          ...(example.deadlineAfterMs === undefined
+            ? {}
+            : { deadline: new Date(now + example.deadlineAfterMs) }),
+          ...(example.executionTimeoutMs === undefined
+            ? {}
+            : { executionTimeoutMs: example.executionTimeoutMs }),
+          ...(example.idempotencyKey === undefined
+            ? {}
+            : {
+                idempotency: {
+                  key: example.idempotencyKey,
+                  scope: "workhorse-demo:feature-showcase",
+                  ttlMs: DEMO_IDEMPOTENCY_TTL_MS,
+                },
+              }),
+        };
+
+        if (example.seedTransition) {
+          const queue = `showcase-${example.scenario}`;
+          const isolated = createDrizzleAdapter(transaction, { defaultQueue: queue });
+          const sourceJobId = await isolated.queue.enqueue(
+            DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+            payload,
+            enqueueOptions,
+          );
+          jobIds.push(sourceJobId);
+          const workerId = `showcase-seed-${example.scenario}`;
+          const claimed = await isolated.queue.claim(workerId, { queue });
+          if (!claimed || claimed.id !== sourceJobId) {
+            throw new Error(`Could not claim showcase dead letter ${example.scenario}`);
+          }
+          const failedState = await isolated.queue.fail(
+            claimed,
+            workerId,
+            new Error(`Intentional seeded dead letter for ${example.scenario}`),
+          );
+          if (failedState !== "failed") {
+            throw new Error(`Expected ${example.scenario} to become a dead letter`);
+          }
+          if (example.seedTransition !== "fail") {
+            const request = {
+              requestedBy: "demo-seed",
+              reason: `Show redrive lineage for ${example.scenario}`,
+              requestId: `feature-showcase:${example.scenario}`,
+            };
+            const redrive = await isolated.queue.redrive(sourceJobId, request);
+            if (!redrive.targetJobId) throw new Error(`Redrive did not create ${example.scenario}`);
+            jobIds.push(redrive.targetJobId);
+            if (example.seedTransition === "fail-and-redrive-replay") {
+              const replay = await isolated.queue.redrive(sourceJobId, request);
+              if (replay.status !== "replayed" || replay.targetJobId !== redrive.targetJobId) {
+                throw new Error("Expected idempotent showcase redrive replay");
+              }
+            }
+            const target = await isolated.queue.claim(workerId, { queue });
+            if (!target || target.id !== redrive.targetJobId) {
+              throw new Error(`Could not claim redrive target ${example.scenario}`);
+            }
+            await isolated.queue.complete(target, workerId, {
+              family: family.key,
+              scenario: example.scenario,
+              redriven: true,
+            });
+          }
+          continue;
+        }
+
+        const jobId = await workhorse.queue.enqueue(
+          DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+          payload,
+          enqueueOptions,
+        );
+        jobIds.push(jobId);
+        if (example.idempotencyKey) {
+          const replayedJobId = await workhorse.queue.enqueue(
+            DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+            payload,
+            enqueueOptions,
+          );
+          if (replayedJobId !== jobId) throw new Error("Expected showcase enqueue replay");
+        }
+        if (example.afterEnqueue === "cancel") {
+          await workhorse.queue.cancel(jobId, {
+            requestedBy: "demo-seed",
+            reason: `Seeded ${example.scenario} cancellation`,
+          });
+        }
+      }
+    }
+    return jobIds;
+  });
   const representativeSeed = await database.transaction(async (transaction) => {
     const marker = await transaction.execute<{ name: string }>(sql`
       INSERT INTO public.workhorse_demo_seed (name)
@@ -1366,7 +1617,7 @@ export async function seedDemoData(database: DemoDatabase) {
   }
 
   const historicalJobCount = await seedHistoricalDemoData(database);
-  const jobIds = [...longRunningJobIds, ...representativeSeed.jobIds];
+  const jobIds = [...longRunningJobIds, ...featureShowcaseJobIds, ...representativeSeed.jobIds];
   return {
     seeded: jobIds.length > 0 || historicalJobCount > 0,
     jobIds,
