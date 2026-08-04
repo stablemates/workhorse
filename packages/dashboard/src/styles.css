@@ -32,6 +32,41 @@ body {
   border: 1px solid var(--mantine-color-default-border);
 }
 
+/*
+ * Task detail drawer.
+ *
+ * The default panel text was set from the compact table scale and reads too small for a panel
+ * an operator actually stops to read, so the whole panel is rescaled at the font-size variables
+ * rather than by editing every `size` prop. Every child, including Stepper, Code and Badge,
+ * resolves its size from these variables, so one bump keeps the panel internally consistent.
+ */
+.task-drawer__content {
+  --mantine-font-size-xs: 0.8125rem;
+  --mantine-font-size-sm: 0.9375rem;
+  --mantine-font-size-md: 1.0625rem;
+  --mantine-font-size-lg: 1.1875rem;
+  --mantine-line-height-xs: 1.45;
+  --mantine-line-height-sm: 1.5;
+  --mantine-line-height-md: 1.55;
+}
+
+/*
+ * Durable step text is evidence an operator copies into a ticket, so it must be selectable.
+ * Mantine renders every step as a button, and a button is not text-selectable in every engine,
+ * so selection is restored explicitly on the step body.
+ */
+.task-drawer__content .mantine-Stepper-step {
+  cursor: auto;
+}
+
+.task-drawer__content .mantine-Stepper-stepBody,
+.task-drawer__content .mantine-Stepper-stepLabel,
+.task-drawer__content .mantine-Stepper-stepDescription {
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
   filter: none;
 }

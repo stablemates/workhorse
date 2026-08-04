@@ -15,7 +15,7 @@ only demo-owned workers, controllers, projections, and seed data.
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
-The demo installs schema version 15, including daily retained history, split scheduled maintenance,
+The demo installs schema version 16, including daily retained history, split scheduled maintenance,
 a dedicated operator query projection with bounded payload controls and merged timelines,
 scoped enqueue idempotency, cooperative cancellation, absolute deadlines, and per-attempt execution
 timeouts. One deterministic keyed seed exposes deduplication evidence without persisting or displaying
@@ -40,7 +40,15 @@ API. The previous `/workhorse/*` URLs redirect to the equivalent root routes. Se
 `WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay. Each development run
 allocates a free private Hono API port. Set `WORKHORSE_API_PORT` to a positive value only when a fixed
 internal port is required; `0` or an omitted value requests automatic allocation.
-Startup seeds one successful transactional order, one named durable timer, fixed, exponential, and
+Startup also creates a living feature showcase: eight task-visible feature families each contribute three
+one-off scenarios and one recurring definition. The 24 scenarios cover ingress and routing, retry policies,
+durable checkpoints, durable waits, mutable progress, timing controls, cancellation, and dead letters with
+redrive. Each recurring occurrence deterministically selects a success, recovery, cancellation, or terminal
+failure variant as appropriate, so the dashboard continues changing while it is open. See
+[`docs/demo-feature-coverage.md`](../docs/demo-feature-coverage.md) for the complete mapping and the
+operational features intentionally represented outside task rows.
+
+The earlier representative layer still seeds one successful transactional order, one named durable timer, fixed, exponential, and
 decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
 durable pipelines, three intentionally persistent durable pipelines, one terminal failure, one future
 scheduled job, and three timing examples. The timing examples include a materialized expired deadline,
@@ -112,8 +120,9 @@ and durable-wait jobs cancel immediately. The handler receives `CancellationRequ
 not authorization, and the demo does not claim exactly-once external effects. Canceling a recurring job
 changes only that occurrence, not the schedule or its next fire.
 
-Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, and a one-minute
-lightweight long-running schedule through `Queue.syncSchedules`. The workers evaluate due schedules
+Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, a one-minute lightweight
+long-running schedule, and one one-minute definition for each of the eight feature families through
+`Queue.syncSchedules`. The workers evaluate due schedules
 in-process with advisory-lock coordination and SQL-level occurrence deduplication. The Cron view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, six-hour partition preparation, daily local-03:00 history retention, and five-minute terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone and task due state. The heartbeat's
 audited control updates the durable schedule definition, and Jobs and Workers show each resulting
 execution.
