@@ -413,6 +413,135 @@ export interface DashboardJobRow extends Record<string, unknown> {
   wait: { name: string; wakeAt: string; mode: "relative" | "absolute" } | null;
 }
 
+/** Every action a task row can offer. Ids are stable so the menu and its tests never drift. */
+export type TaskRowActionId =
+  | "inspect"
+  | "copy-id"
+  | "copy-args"
+  | "filter-type"
+  | "filter-queue"
+  | "filter-worker"
+  | "cancel";
+
+export interface TaskRowAction {
+  id: TaskRowActionId;
+  /** What the item reads as for this row's state. Never a raw state string. */
+  label: string;
+  /**
+   * Why this action cannot be taken for this row right now, or null when it can. A complete
+   * sentence, because it is shown as the reason rather than leaving a dimmed item unexplained.
+   */
+  unavailable: string | null;
+  /** True for an irreversible action, so the menu can mark it and confirm before applying it. */
+  destructive: boolean;
+}
+
+export interface TaskRowActionGroup {
+  label: string;
+  actions: TaskRowAction[];
+}
+
+/**
+ * Cancel wording for one list row, derived from the same facts the drawer uses.
+ *
+ * A terminal outcome is immutable, an already-requested cancellation is not repeated, and an active
+ * task is described as cooperative rather than forced. The row never promises more than
+ * `Queue.cancel` delivers, and it never offers a one-click cancel: the item opens the task drawer
+ * where the irreversibility is stated and an optional reason is recorded.
+ */
+function cancelRowAction(job: DashboardJobRow): TaskRowAction {
+  const destructive = true;
+  if (isTerminalTaskState(job.state)) {
+    return {
+      id: "cancel",
+      label: "Cancel task",
+      unavailable: `This task already finished as ${job.state}, and a terminal outcome is immutable, so it cannot be canceled.`,
+      destructive,
+    };
+  }
+  if (job.cancellation !== null) {
+    return {
+      id: "cancel",
+      label: "Cancellation requested",
+      unavailable:
+        "Cancellation was already requested. The running handler stops when it observes the signal, " +
+        "so requesting it again changes nothing.",
+      destructive,
+    };
+  }
+  if (job.state === "active") {
+    return { id: "cancel", label: "Request cancellation…", unavailable: null, destructive };
+  }
+  if (job.state === "scheduled") {
+    return {
+      id: "cancel",
+      label: job.waitName === null ? "Cancel scheduled task…" : "Cancel waiting task…",
+      unavailable: null,
+      destructive,
+    };
+  }
+  if (job.state === "ready") {
+    return { id: "cancel", label: "Cancel queued task…", unavailable: null, destructive };
+  }
+  return {
+    id: "cancel",
+    label: "Cancel task",
+    unavailable: "This task has no live runtime, so there is nothing to cancel.",
+    destructive,
+  };
+}
+
+/**
+ * The action menu offered for one task row, grouped and already resolved against its state.
+ *
+ * Everything is kept in the menu whether or not it applies, and an inapplicable action carries the
+ * reason it cannot be taken. An operator learns why a task cannot be canceled from the same place
+ * they would have canceled it, rather than from a menu that silently changes shape row by row.
+ */
+export function taskRowActionGroups(job: DashboardJobRow): TaskRowActionGroup[] {
+  const worker = job.workerId ?? job.lastWorkerId;
+  return [
+    {
+      label: "Task",
+      actions: [
+        { id: "inspect", label: "Open details", unavailable: null, destructive: false },
+        { id: "copy-id", label: "Copy task id", unavailable: null, destructive: false },
+        {
+          id: "copy-args",
+          label: "Copy args",
+          unavailable:
+            job.payload === undefined || job.payload === null
+              ? "This task stored no args, so there is nothing to copy."
+              : null,
+          destructive: false,
+        },
+      ],
+    },
+    {
+      label: "Filter this list",
+      actions: [
+        { id: "filter-type", label: `Only ${job.type}`, unavailable: null, destructive: false },
+        {
+          id: "filter-queue",
+          label: `Only queue ${job.queue}`,
+          unavailable: null,
+          destructive: false,
+        },
+        {
+          id: "filter-worker",
+          label: worker === null ? "Only this worker" : `Only worker ${worker}`,
+          unavailable:
+            worker === null
+              ? "No worker has claimed this task, so there is none to filter by."
+              : null,
+          destructive: false,
+        },
+      ],
+    },
+    { label: "State", actions: [cancelRowAction(job)] },
+  ];
+}
+
 export interface DashboardScheduleRow {
   kind: "user" | "system";
   identity: {
