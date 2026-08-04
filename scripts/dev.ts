@@ -1,34 +1,59 @@
 import { spawn } from "node:child_process";
-import { resolveInternalApiPort } from "./development-port.js";
 
 const usesProcessGroups = process.platform !== "win32";
 const forceKillAfterMs = 5_000;
 
 const publicPort = Number(process.env.PORT ?? 3000);
-const apiPort = await resolveInternalApiPort(process.env.WORKHORSE_API_PORT);
-const commands = [
+const dashboardDevPort = Number(process.env.WORKHORSE_DASHBOARD_DEV_PORT ?? 4173);
+const commands: Array<{
+  command: string;
+  arguments: string[];
+  env: NodeJS.ProcessEnv;
+}> = [
   {
     command: "pnpm",
     arguments: ["--filter", "@workhorse/demo", "dev:server"],
     env: {
       ...process.env,
-      PORT: String(apiPort),
-      PORTLESS_URL: "",
-      WORKHORSE_API_PORT: String(apiPort),
+      PORT: String(publicPort),
       WORKHORSE_DEMO_MODE: "development",
     },
   },
   {
+    // The demo's workers deliberately run as their own process, exactly as the documented
+    // production topology recommends. Nothing but PostgreSQL connects them to the server above.
     command: "pnpm",
-    arguments: ["--filter", "@workhorse/demo", "dev:client"],
+    arguments: ["--filter", "@workhorse/demo", "dev:worker"],
     env: {
       ...process.env,
-      PORT: String(publicPort),
-      WORKHORSE_API_PORT: String(apiPort),
       WORKHORSE_DEMO_MODE: "development",
     },
   },
-] as const;
+];
+
+/**
+ * Optionally run the dashboard's own UI harness alongside the demo.
+ *
+ * The demo always serves the packaged bundle on the public port, so this adds a second view rather
+ * than replacing the one a consumer would get. It is opt-in because someone looking at the demo
+ * should not pay for a Vite dev server, and because two URLs for the same dashboard is a cost worth
+ * choosing deliberately.
+ */
+if (process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true") {
+  commands.push({
+    command: "pnpm",
+    arguments: ["--filter", "@workhorse/dashboard", "dev"],
+    env: {
+      ...process.env,
+      PORT: String(dashboardDevPort),
+      WORKHORSE_DASHBOARD_API: `http://127.0.0.1:${publicPort}`,
+      // Match what the demo itself records, so the same action is attributed identically
+      // regardless of which of the two views an operator used.
+      WORKHORSE_DASHBOARD_ACTOR: "local-demo",
+    },
+  });
+}
+
 const children = commands.map(({ command, arguments: arguments_, env }) =>
   spawn(command, arguments_, {
     detached: usesProcessGroups,
@@ -42,7 +67,11 @@ console.log(
     ? `Workhorse demo development environment available at ${process.env.PORTLESS_URL}`
     : `Workhorse demo development environment available at http://localhost:${publicPort}`,
 );
-console.log(`Development API listening internally on http://localhost:${apiPort}`);
+if (process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true") {
+  console.log(
+    `Dashboard UI harness (source, hot reload) at http://localhost:${dashboardDevPort}; the demo above still serves the packaged bundle`,
+  );
+}
 
 let stopping = false;
 let shutdownRequested = false;

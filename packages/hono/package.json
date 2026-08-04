@@ -21,9 +21,6 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": {
-    "@orpc/server": "^1.14.8"
-  },
   "devDependencies": {
     "@hono/node-server": "^2.0.11",
     "@workhorse/core": "workspace:*",

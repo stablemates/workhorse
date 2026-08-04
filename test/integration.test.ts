@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -110,7 +110,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
     workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.queue_control, workhorse.job_wait, workhorse.job_checkpoint,
+    workhorse.queue_control, workhorse.worker_registry, workhorse.job_wait, workhorse.job_checkpoint,
     workhorse.enqueue_idempotency, workhorse.job_redrive, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
@@ -137,11 +137,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v16 with fenced mutable progress storage", async () => {
+  it("installs schema v17 with fenced mutable progress storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(16);
+    expect(version.rows[0]?.version).toBe(17);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -1855,7 +1855,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(16);
+    expect(health.schemaVersion).toBe(17);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2458,7 +2458,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v16 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v17 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -3424,6 +3424,148 @@ describe("live-runtime queue protocol", () => {
     expect(await worker.runOnce()).toBe(false);
   });
 
+  it("registers a running worker durably and deregisters it once its loop stops", async () => {
+    const worker = new Worker(queue, {
+      workerId: "registry-lifecycle",
+      queue: "default",
+      concurrency: 4,
+      pollMs: 10,
+      registryIntervalMs: 100,
+    }).handle("registry-lifecycle", () => ({ ok: true }));
+
+    const registration = async () =>
+      (await queue.listWorkers()).find((entry) => entry.workerId === "registry-lifecycle");
+
+    const running = worker.run();
+    await vi.waitFor(async () => {
+      expect(await registration()).toMatchObject({
+        workerId: "registry-lifecycle",
+        queue: "default",
+        concurrency: 4,
+        paused: false,
+        draining: false,
+        // Placement is recorded independently of the configured name, so a stably named worker
+        // still answers "which host and process is this".
+        hostname: expect.any(String),
+        pid: process.pid,
+      });
+    });
+
+    worker.stop();
+    await running;
+    await expect(registration()).resolves.toBeUndefined();
+  });
+
+  it("applies an operator pause written to PostgreSQL by another process", async () => {
+    // The pause is written through a separate Queue instance holding no reference to the worker
+    // object, which is exactly the situation of a dashboard running outside the worker process.
+    const operatorQueue = new Queue(pool);
+    const handled: number[] = [];
+    const worker = new Worker(queue, {
+      workerId: "registry-remote-pause",
+      pollMs: 10,
+      registryIntervalMs: 100,
+    }).handle<{ sequence: number }>("registry-remote-pause", ({ sequence }) => {
+      handled.push(sequence);
+      return { sequence };
+    });
+
+    const running = worker.run();
+    await vi.waitFor(async () => {
+      expect((await operatorQueue.listWorkers()).map((entry) => entry.workerId)).toContain(
+        "registry-remote-pause",
+      );
+    });
+
+    await expect(
+      operatorQueue.setWorkerPaused("registry-remote-pause", true, {
+        requestedBy: "operator",
+        reason: "rolling deploy",
+      }),
+    ).resolves.toMatchObject({ paused: true, pausedBy: "operator", reason: "rolling deploy" });
+    await vi.waitFor(() => expect(worker.isPaused()).toBe(true));
+    expect(worker.runtimeState()).toMatchObject({
+      paused: true,
+      remotelyPaused: true,
+      locallyPaused: false,
+    });
+
+    // A worker paused by an operator must not claim, and a local resume() must not override it.
+    await queue.enqueue("registry-remote-pause", { sequence: 1 });
+    worker.resume();
+    await sleep(300);
+    expect(handled).toEqual([]);
+    expect(worker.isPaused()).toBe(true);
+
+    await operatorQueue.setWorkerPaused("registry-remote-pause", false, {
+      requestedBy: "operator",
+    });
+    await vi.waitFor(() => expect(handled).toEqual([1]));
+    expect(worker.runtimeState()).toMatchObject({ paused: false, remotelyPaused: false });
+
+    worker.stop();
+    await running;
+  });
+
+  it("returns null when pausing a worker that has never registered", async () => {
+    await expect(queue.setWorkerPaused("never-registered", true)).resolves.toBeNull();
+  });
+
+  it("scopes an operator pause to the running process rather than to the worker name", async () => {
+    const instance = randomUUID();
+    const registration = {
+      workerId: "registry-process-scope",
+      hostname: "test-host",
+      pid: 4321,
+      queue: "default",
+      concurrency: 1,
+      activeSlots: 0,
+      draining: false,
+    };
+
+    await queue.registerWorker({ ...registration, instanceId: instance });
+    await expect(
+      queue.setWorkerPaused("registry-process-scope", true, { requestedBy: "operator" }),
+    ).resolves.toMatchObject({ paused: true });
+
+    // The same process refreshing must keep the pause, or a pause would clear on its own heartbeat.
+    await expect(queue.registerWorker({ ...registration, instanceId: instance })).resolves.toEqual({
+      paused: true,
+    });
+
+    // A replacement process for the same worker name comes back running, and inherits no
+    // attribution from the operator decision that was aimed at the process it replaced.
+    await expect(
+      queue.registerWorker({ ...registration, instanceId: randomUUID() }),
+    ).resolves.toEqual({ paused: false });
+    const entry = (await queue.listWorkers()).find(
+      (worker) => worker.workerId === "registry-process-scope",
+    );
+    expect(entry).toMatchObject({ paused: false, pausedBy: null, reason: null, pausedAt: null });
+  });
+
+  it("prunes only registrations whose heartbeat aged past the requested window", async () => {
+    await queue.registerWorker({
+      workerId: "registry-prune",
+      instanceId: randomUUID(),
+      hostname: "test-host",
+      pid: 4321,
+      queue: "default",
+      concurrency: 1,
+      activeSlots: 0,
+      draining: false,
+    });
+
+    await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(0);
+    await pool.query(
+      "UPDATE workhorse.worker_registry SET last_heartbeat_at = clock_timestamp() - interval '10 minutes'",
+    );
+    await expect(queue.pruneWorkerRegistry(60_000)).resolves.toBe(1);
+    await expect(
+      queue.listWorkers().then((entries) => entries.map((entry) => entry.workerId)),
+    ).resolves.not.toContain("registry-prune");
+  });
+
   it("bounds overlap, claims only free slots, and breaks the claim loop on the first null", async () => {
     const release = deferred();
     let active = 0;
@@ -3451,6 +3593,8 @@ describe("live-runtime queue protocol", () => {
         concurrency: 5,
         activeSlots: 2,
         paused: false,
+        locallyPaused: false,
+        remotelyPaused: false,
         draining: false,
       });
 
@@ -3682,6 +3826,8 @@ describe("live-runtime queue protocol", () => {
       concurrency: 2,
       activeSlots: 0,
       paused: false,
+      locallyPaused: false,
+      remotelyPaused: false,
       draining: false,
     });
     const states = await Promise.all(ids.map(async (id) => (await queue.getJob(id))?.state));
@@ -5733,7 +5879,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(16);
+    expect(health.schemaVersion).toBe(17);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);

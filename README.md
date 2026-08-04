@@ -17,6 +17,8 @@ The current implementation remains an evidence-first validation release rather t
 - [`demo/README.md`](demo/README.md): interactive Workhorse demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
 - [`docs/decisions/0009-enqueue-idempotency-keys.md`](docs/decisions/0009-enqueue-idempotency-keys.md): scoped enqueue-key ownership, request equivalence, safe diagnostics, expiry, and cleanup.
 - [`docs/decisions/0010-cooperative-job-cancellation.md`](docs/decisions/0010-cooperative-job-cancellation.md): cooperative delivery, exact-fence acknowledgement, race ownership, truthful history, recurring behavior, and non-goals.
+- [`docs/decisions/0017-durable-worker-registry.md`](docs/decisions/0017-durable-worker-registry.md): fleet registration, split row ownership, process-scoped operator pause, identity versus placement, and non-goals.
+- [`docs/decisions/0018-framework-neutral-dashboard-host.md`](docs/decisions/0018-framework-neutral-dashboard-host.md): the `Request`/`Response` dashboard host, Node bridge, one HTML contract, single-origin development, and why the mount takes a connection rather than a URL.
 
 Run the Fumadocs site locally without PostgreSQL:
 
@@ -57,9 +59,16 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
   retained lineage;
 - cursor-based cross-state job listing on a dedicated operator projection, with payload omission,
   top-level redaction, byte bounds, and merged lifecycle timelines;
+- a durable worker registry that discovers the live fleet, reports declared concurrency, slot use,
+  and draining, and carries cooperative operator pause to workers in any process;
 - separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
-- a separately packaged `@workhorse/dashboard` React operator dashboard with an injected,
-  transport-neutral client boundary, package-owned styles/assets, and audited local controls;
+- a separately packaged `@workhorse/dashboard` React operator dashboard with a framework-neutral
+  request host, a Connect-style Node bridge, an injected transport-neutral client boundary,
+  package-owned styles/assets, and audited local controls;
+- optional coalesced `workhorse_activity` notifications and a listener that keeps an out-of-process
+  dashboard live without polling;
+- `workhorse init` project scaffolding, `workhorse schema install`/`status`, and a standalone
+  `workhorse dashboard` console for any Workhorse database;
 - deterministic worker crash failpoints;
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.
@@ -158,6 +167,56 @@ cursor-based stream. Pages are capped at 1,000. Listing is intentionally weakly 
 new jobs can appear before an existing cursor, and concurrent state changes can change membership in a
 filtered later page. Timeline retention is independent, so an existing job may have partial or empty
 history. Use `Queue.getJob()` separately when identity existence matters.
+
+### Worker fleet registration
+
+Schema version 17 adds `workhorse.worker_registry`. Every worker announces itself and refreshes its
+runtime state on a configurable cadence (`WorkerOptions.registryIntervalMs`, five seconds by
+default; set it to `0` to opt out). Ownership is split deliberately: the worker owns the reported
+`concurrency`, `active_slots`, and `draining` columns, while PostgreSQL owns the operator-requested
+`paused` flag, which the worker reads back on every refresh.
+
+This exists so an operator surface can observe and control a fleet it does not host. Process-local
+memory cannot answer "which workers exist" once workers are deployed independently of the web tier.
+
+```ts
+const workers = await queue.listWorkers();
+await queue.setWorkerPaused("billing-worker-1", true, {
+  requestedBy: "operator",
+  reason: "rolling deploy",
+});
+```
+
+Pause is cooperative in exactly the same sense as cancellation. The worker stops claiming when it
+next refreshes its registration, any handler already executing runs to completion, and a local
+`worker.resume()` cannot override an operator pause that is still in effect. `requestedBy` and
+`reason` are bounded audit attribution, never authorization; callers must enforce their own
+permission checks.
+
+Pause is **process-scoped**. Each worker announces a fresh instance id, so a restarted or replaced
+worker always comes back running and inherits no decision aimed at the process it replaced. This is
+deliberate: a pause that outlived deployments would become a forgotten flag that silently idles a
+worker weeks later. The durable lever for "stop processing this work" is queue pause, which is keyed
+by queue name and unaffected by worker lifecycles.
+
+A worker that stops refreshing is reported offline once its registration goes stale, and is
+eventually dropped by `prune_worker_registry_v1`. Graceful shutdown deregisters explicitly. The
+registry holds one row per live worker and is never consulted by the claim path, so it cannot affect
+dispatch cost.
+
+### Operator activity notifications
+
+`workhorse_jobs` is the dispatch wake channel and means only "ready work may exist". It deliberately
+does not fire on transitions such as completion that create no ready work, so it is not sufficient
+to keep an operator dashboard live.
+
+Setting `WorkerOptions.activityNotifications` makes a worker publish coalesced hints on a separate
+`workhorse_activity` channel. Coalescing is the point: a worker completing a thousand jobs a second
+still issues at most one notification per `activityNotificationIntervalMs` (250ms by default), so
+enabling it cannot turn job throughput into notification-queue pressure. It is off by default.
+
+Nothing in the protocol depends on delivery. A dropped hint only delays a refresh until the
+dashboard's own periodic fallback fires.
 
 ### Enqueue idempotency keys
 
@@ -281,12 +340,19 @@ drop its databases without removing the checkout.
 
 After `pnpm install`, the demo needs only PostgreSQL 15+ and the local `workhorse` role described above.
 One command safely recreates the purpose-guarded `workhorse_demo` database, installs the application
-schema, builds the development runtime artifacts, starts the Hono worker, and serves
-`@workhorse/dashboard` from source through Vite:
+schema, builds the development runtime artifacts, starts the Hono server, starts a **separate worker
+process**, and serves `@workhorse/dashboard` from source through Vite:
 
 ```bash
 pnpm demo
 ```
+
+The demo deliberately runs its workers as their own process, which is the topology the documentation
+recommends for production. The server and the workers share nothing but PostgreSQL: the workers
+announce themselves in `workhorse.worker_registry`, the dashboard reads the fleet from there, and
+coalesced `workhorse_activity` notifications keep the views live without polling. Set
+`WORKHORSE_DEMO_IN_PROCESS_WORKERS=true` to co-host workers in the server instead, which is the
+supported small-application topology.
 
 Open `http://workhorse.localhost:43155/tasks` for the operator dashboard. The standalone demo mounts the
 packaged dashboard at `/`; host applications may instead mount the same dashboard below a namespace such
@@ -297,6 +363,34 @@ checkpoint-backed interim artifacts, attempt failures, and eventual terminal res
 inspectable in the existing task drawer. Set `SEED_DEMO_DATA=false` for an empty console. The recurring
 heartbeat demonstration runs on the worker's built-in scheduler with no extra infrastructure. See the
 demo README for development, production-mode, fixture, and connection overrides.
+
+## Adding Workhorse to an existing project
+
+```bash
+# Scaffold a worker configuration. This writes one file and never edits package.json or your routes.
+npx workhorse init
+
+# Install the schema into a clean database. Reads --database-url, WORKHORSE_DATABASE_URL, or DATABASE_URL.
+npx workhorse schema install
+npx workhorse schema status
+
+# Run the workers as their own process.
+npx workhorse worker --config workhorse.config.js
+
+# Or just look at the queue, with no application involved.
+npx workhorse dashboard --port 3000
+```
+
+`workhorse dashboard` serves the operator console as its own process against any Workhorse
+database. It binds `127.0.0.1` and is read-only by default, because a standalone server has no
+session to authorize against; `--host` and `--allow-mutations` widen that and say so on startup.
+
+`init` detects your ORM and framework from `package.json`, generates a worker configuration, and
+prints the dashboard mount for your framework. Nothing about the mount needs to know where the
+workers run: they register themselves in PostgreSQL.
+
+Schema installation is clean-database only and refuses to modify an existing schema rather than
+pretending to be a migration. Ordered migrations are roadmap item P2-07.
 
 ## Minimal usage
 
@@ -398,10 +492,22 @@ await db.transaction(async (tx) => {
 });
 ```
 
-`@workhorse/hono` exposes the queue through typed middleware, starts configured workers once, and
-provides a Node server handle whose idempotent shutdown stops new claims, drains in-flight handlers
-and requests, then closes explicitly provider-owned resources. See the package READMEs for complete
-configuration and ownership behavior.
+`@workhorse/hono` exposes the queue through typed middleware, optionally starts co-hosted workers,
+and provides a Node server handle whose idempotent shutdown stops new claims, drains in-flight
+handlers and requests, then closes explicitly provider-owned resources. See the package READMEs for
+complete configuration and ownership behavior.
+
+### Mounting the dashboard on any framework
+
+Dashboard behavior lives in a framework-neutral host in `@workhorse/dashboard/server` that takes a
+`Request` and returns a `Response`, or `null` when the request is not its own. Fetch-native hosts
+(Hono, Next.js route handlers, SvelteKit, Nitro) call `host.handle(request)` directly;
+Connect-style hosts (Express, Connect, Fastify via `@fastify/middie`) use `dashboardNodeMiddleware`.
+`mountWorkhorseDashboard` in `@workhorse/hono` is a thin binding over the same host.
+
+Mounting requires only a database connection. It does not require a worker runtime,
+because worker identity and runtime state are read from `workhorse.worker_registry` rather than from
+process-local objects. This is what allows the dashboard and the workers to be separate deployments.
 
 Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs, recovers expired leases, and drives schedule evaluation. Three slower SQL-owned tasks have independent advisory locks and persisted due state: `prepare_history_partitions_v1` maintains UTC-daily history partitions every six hours, `retain_history_v1` retires event, attempt, and schedule-occurrence history once per local date at or after 03:00 in the configured IANA timezone, and `prune_terminal_storage_v1` removes expired idempotency bindings and safe terminal bundles every five minutes. Workers poll task eligibility every minute by default, but PostgreSQL decides whether work is due globally, so additional workers produce cheap no-ops rather than multiplying cleanup. Every task returns per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and `onMaintenance`.
 

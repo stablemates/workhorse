@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { CronExpressionParser } from "cron-parser";
 import { Queue } from "./queue.js";
 import type { MaintenancePhaseResult } from "./queue.js";
@@ -85,7 +86,13 @@ export class ExecutionTimeoutError extends Error {
 export interface WorkerOptions {
   /** Queue name used for claims. */
   queue?: string;
-  /** Durable lease owner identity. It should be unique among simultaneously running workers. */
+  /**
+   * Durable lease owner identity. It must be unique among simultaneously running workers.
+   *
+   * Defaults to `<hostname>-<pid>-<random>`. Set a stable value when you want a recognizable name
+   * in operator views; nothing about correctness depends on stability, because operator pause is
+   * scoped to a running process rather than to this name.
+   */
   workerId?: string;
   /** Maximum number of jobs this worker may execute concurrently. */
   concurrency?: number;
@@ -99,6 +106,34 @@ export interface WorkerOptions {
   maintenanceIntervalMs?: number;
   /** Minimum delay between checks for database-scheduled background maintenance tasks. */
   maintenanceTaskPollMs?: number;
+  /**
+   * Minimum delay between durable worker-registry refreshes.
+   *
+   * Each refresh publishes this worker's runtime state and reads back the operator-requested pause
+   * flag, which is how an operator surface running in another process observes and controls a
+   * worker it does not host. A pause therefore takes effect within roughly one interval, and is
+   * cleared automatically if this process is replaced. Set to 0 to opt out of registration.
+   */
+  registryIntervalMs?: number;
+  /**
+   * Publish coalesced `workhorse_activity` hints so an operator dashboard in another process can
+   * refresh on transitions that create no ready work, such as completion and progress.
+   *
+   * Off by default. Delivery is never part of the protocol, and the publisher is rate limited by
+   * `activityNotificationIntervalMs` so notification volume stays bounded by wall-clock time
+   * rather than by job throughput.
+   */
+  activityNotifications?: boolean;
+  /** Minimum delay between coalesced activity notifications. Defaults to 250ms. */
+  activityNotificationIntervalMs?: number;
+  /**
+   * Receives registration failures.
+   *
+   * Registration is not part of the dispatch contract, so a failure must never stop a worker from
+   * claiming. It must not be invisible either: a worker that cannot register disappears from every
+   * operator surface while continuing to run, which is indistinguishable from being dead.
+   */
+  onRegistrationError?: (error: unknown) => void;
   /** Receives one telemetry event for every SQL-owned maintenance phase. */
   onMaintenance?: (telemetry: WorkerMaintenanceTelemetry) => void;
   /** Namespaces whose enabled recurring schedules this worker should evaluate and fire. */
@@ -112,10 +147,34 @@ export interface WorkerOptions {
   failpoint?: Failpoint | ((point: Failpoint, job: ClaimedJob) => boolean | Promise<boolean>);
 }
 
+/**
+ * Generate a readable, unique default worker identity.
+ *
+ * Host and pid make a worker recognizable in an operator fleet view, which a bare UUID does not:
+ * "which pod is that" is the first question anyone asks about a busy worker. The random suffix
+ * keeps two workers in one process distinct.
+ *
+ * This identity is deliberately unstable across restarts, because it owns leases and attempt
+ * history and must never be reused by a concurrently running process. That costs nothing
+ * operationally: an operator pause is scoped to a process incarnation, not to this name.
+ */
+function workerHostname(): string {
+  return hostname().replaceAll(/[^\w.-]/g, "-") || "unknown-host";
+}
+
+function defaultWorkerId(): string {
+  return `${workerHostname()}-${process.pid}-${randomUUID().slice(0, 8)}`;
+}
+
 export interface WorkerRuntimeState {
   concurrency: number;
   activeSlots: number;
+  /** Effective pause: either a local `pause()` call or an operator pause recorded in PostgreSQL. */
   paused: boolean;
+  /** True only for a local `pause()` call. */
+  locallyPaused: boolean;
+  /** True only for an operator pause read back from the durable worker registry. */
+  remotelyPaused: boolean;
   draining: boolean;
 }
 
@@ -134,16 +193,33 @@ export class Worker {
   private readonly pollMs: number;
   private readonly maintenanceIntervalMs: number;
   private readonly maintenanceTaskPollMs: number;
+  private readonly registryIntervalMs: number;
+  private readonly activityNotifications: boolean;
+  private readonly activityNotificationIntervalMs: number;
+  private activityPending = false;
+  private activityPublishedAt = Number.NEGATIVE_INFINITY;
+  private activityTimer: NodeJS.Timeout | undefined;
   private readonly scheduleNamespaces: readonly string[];
   private readonly scheduleCatchupLimit: number;
   public readonly concurrency: number;
   private lastTickAt = Number.NEGATIVE_INFINITY;
   private lastMaintenanceTaskPollAt = Number.NEGATIVE_INFINITY;
+  /**
+   * Identifies this Worker instance to the durable registry.
+   *
+   * Generated once per object, so every restart or replacement of a worker id arrives as a new
+   * incarnation. That is what lets PostgreSQL scope an operator pause to a running process instead
+   * of leaving it attached to a name that a later deployment will reuse.
+   */
+  private readonly instanceId = randomUUID();
+  private lastRegistryRefreshAt = Number.NEGATIVE_INFINITY;
+  private registered = false;
   private lastClaimAt = Number.NEGATIVE_INFINITY;
   private previousPassWorked = false;
   private readonly latestMaintenance = new Map<string, WorkerMaintenanceTelemetry>();
   private stopping = false;
-  private paused = false;
+  private locallyPaused = false;
+  private remotelyPaused = false;
   private activeSlots = 0;
   private draining = false;
   private running = false;
@@ -155,7 +231,7 @@ export class Worker {
     private readonly queue: Queue,
     private readonly options: WorkerOptions = {},
   ) {
-    this.workerId = options.workerId ?? `worker-${process.pid}-${randomUUID()}`;
+    this.workerId = options.workerId ?? defaultWorkerId();
     this.queueName = options.queue ?? queue.defaultQueue;
     this.concurrency = options.concurrency ?? 1;
     this.leaseMs = options.leaseMs ?? 30_000;
@@ -163,6 +239,9 @@ export class Worker {
     this.pollMs = options.pollMs ?? 250;
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1_000;
     this.maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? 60_000;
+    this.registryIntervalMs = options.registryIntervalMs ?? 5_000;
+    this.activityNotifications = options.activityNotifications ?? false;
+    this.activityNotificationIntervalMs = options.activityNotificationIntervalMs ?? 250;
     this.scheduleNamespaces = [...new Set(options.scheduleNamespaces ?? [])];
     this.scheduleCatchupLimit = options.scheduleCatchupLimit ?? 100;
     if (!Number.isSafeInteger(this.concurrency) || this.concurrency < 1 || this.concurrency > 100)
@@ -172,6 +251,10 @@ export class Worker {
       throw new Error("maintenanceIntervalMs must be at least 100");
     if (this.maintenanceTaskPollMs < 100)
       throw new Error("maintenanceTaskPollMs must be at least 100");
+    if (this.registryIntervalMs !== 0 && this.registryIntervalMs < 100)
+      throw new Error("registryIntervalMs must be 0 or at least 100");
+    if (this.activityNotificationIntervalMs < 50)
+      throw new Error("activityNotificationIntervalMs must be at least 50");
     if (this.scheduleCatchupLimit < 1 || this.scheduleCatchupLimit > 10_000)
       throw new Error("scheduleCatchupLimit must be between 1 and 10000");
   }
@@ -188,18 +271,31 @@ export class Worker {
     this.stopVersion += 1;
     this.stopping = true;
     this.draining = this.running || this.activeSlots > 0;
+    // The maintenance loop exits immediately on stop, so a draining worker would otherwise never
+    // publish that state and would simply vanish from an operator's fleet view mid-drain.
+    if (this.draining && this.registered) void this.refreshRegistration(true);
     this.wakeLoops();
+  }
+
+  /**
+   * Effective pause state.
+   *
+   * A local `pause()` call and an operator pause recorded in PostgreSQL are independent. Either one
+   * stops claims, and a local `resume()` cannot override an operator pause that is still in effect.
+   */
+  private get paused(): boolean {
+    return this.locallyPaused || this.remotelyPaused;
   }
 
   /** Stop claiming new jobs while leaving maintenance and any in-flight handler running. */
   pause(): void {
-    this.paused = true;
+    this.locallyPaused = true;
     this.wakeLoops();
   }
 
   /** Resume claims immediately instead of waiting for the previous idle poll deadline. */
   resume(): void {
-    this.paused = false;
+    this.locallyPaused = false;
     this.previousPassWorked = false;
     this.lastClaimAt = Number.NEGATIVE_INFINITY;
     this.wakeLoops();
@@ -214,8 +310,15 @@ export class Worker {
       concurrency: this.concurrency,
       activeSlots: this.activeSlots,
       paused: this.paused,
+      locallyPaused: this.locallyPaused,
+      remotelyPaused: this.remotelyPaused,
       draining: this.draining,
     };
+  }
+
+  /** Stable durable identity used for leases, attempt history, and fleet registration. */
+  get id(): string {
+    return this.workerId;
   }
 
   maintenanceTelemetry(): WorkerMaintenanceTelemetry[] {
@@ -278,6 +381,8 @@ export class Worker {
 
   private startExecution(job: ClaimedJob): Promise<PromiseSettledResult<void>> {
     this.activeSlots += 1;
+    // A claim and a settle are both operator-visible transitions; the publisher coalesces them.
+    this.markActivity();
     return this.executeJob(job)
       .then<PromiseSettledResult<void>, PromiseSettledResult<void>>(
         () => ({ status: "fulfilled", value: undefined }),
@@ -286,6 +391,7 @@ export class Worker {
       .finally(() => {
         this.activeSlots -= 1;
         if (!this.running && this.activeSlots === 0) this.draining = false;
+        this.markActivity();
       });
   }
 
@@ -578,7 +684,97 @@ export class Worker {
     }
   }
 
+  /**
+   * Publish this worker's runtime state and read back the operator-requested pause flag.
+   *
+   * Registration failures are deliberately non-fatal. The durable registry is an operator
+   * observability and control surface, not part of the dispatch contract, so a worker that cannot
+   * reach it keeps claiming and executing exactly as before.
+   */
+  private async refreshRegistration(force = false): Promise<void> {
+    if (this.registryIntervalMs === 0) return;
+    const nowMs = Date.now();
+    if (!force && nowMs - this.lastRegistryRefreshAt < this.registryIntervalMs) return;
+    this.lastRegistryRefreshAt = nowMs;
+
+    const wasRemotelyPaused = this.remotelyPaused;
+    let paused: boolean;
+    try {
+      ({ paused } = await this.queue.registerWorker({
+        workerId: this.workerId,
+        instanceId: this.instanceId,
+        hostname: workerHostname(),
+        pid: process.pid,
+        queue: this.queueName,
+        concurrency: this.concurrency,
+        activeSlots: this.activeSlots,
+        draining: this.draining,
+      }));
+    } catch (error) {
+      // Keep the last known pause decision rather than silently resuming a paused worker.
+      this.options.onRegistrationError?.(error);
+      return;
+    }
+    this.registered = true;
+    this.remotelyPaused = paused;
+    // Resuming must not wait for the next idle poll deadline, exactly like a local resume().
+    if (wasRemotelyPaused && !paused) {
+      this.previousPassWorked = false;
+      this.lastClaimAt = Number.NEGATIVE_INFINITY;
+    }
+    if (wasRemotelyPaused !== paused) this.wakeLoops();
+  }
+
+  /**
+   * Record that operator-visible state changed and publish at most one hint per interval.
+   *
+   * Coalescing is the point: a worker completing a thousand jobs a second still issues at most
+   * `1000 / activityNotificationIntervalMs` notifications, so enabling this cannot turn job
+   * throughput into notification-queue pressure. Failures are ignored because the dashboard's own
+   * periodic fallback already guarantees eventual refresh.
+   */
+  private markActivity(): void {
+    if (!this.activityNotifications) return;
+    this.activityPending = true;
+    if (this.activityTimer) return;
+
+    const elapsed = Date.now() - this.activityPublishedAt;
+    const delay = Math.max(0, this.activityNotificationIntervalMs - elapsed);
+    this.activityTimer = setTimeout(() => {
+      this.activityTimer = undefined;
+      if (!this.activityPending) return;
+      this.activityPending = false;
+      this.activityPublishedAt = Date.now();
+      void this.queue.notifyActivity(this.queueName).catch(() => undefined);
+    }, delay);
+    this.activityTimer.unref();
+  }
+
+  /** Flush any pending activity hint so a draining worker's last transition is not lost. */
+  private async flushActivity(): Promise<void> {
+    if (this.activityTimer) {
+      clearTimeout(this.activityTimer);
+      this.activityTimer = undefined;
+    }
+    if (!this.activityPending) return;
+    this.activityPending = false;
+    this.activityPublishedAt = Date.now();
+    await this.queue.notifyActivity(this.queueName).catch(() => undefined);
+  }
+
+  /** Best-effort removal of this worker's registration once its loop has stopped. */
+  private async deregister(): Promise<void> {
+    if (!this.registered) return;
+    this.registered = false;
+    try {
+      await this.queue.deregisterWorker(this.workerId);
+    } catch {
+      // A worker that cannot deregister ages out of the fleet view on its heartbeat window.
+    }
+  }
+
   private async runMaintenance(): Promise<void> {
+    await this.refreshRegistration();
     const nowMs = Date.now();
     if (nowMs - this.lastTickAt >= this.maintenanceIntervalMs) {
       const tick = await this.queue.tick();
@@ -613,6 +809,11 @@ export class Worker {
         this.recordMaintenance("history_retention", result);
       for (const result of await this.queue.pruneTerminalStorage())
         this.recordMaintenance("terminal_storage", result);
+      // Registrations are operator state, not lifecycle attribution, so a failed prune must never
+      // stop maintenance that retention and partitioning depend on.
+      if (this.registryIntervalMs !== 0) {
+        await this.queue.pruneWorkerRegistry().catch(() => 0);
+      }
       this.lastMaintenanceTaskPollAt = nowMs;
     }
   }
@@ -653,12 +854,32 @@ export class Worker {
       if (shouldStop()) return;
 
       const maintenance = this.maintenanceLoop(shouldStop, signal).catch(fail);
+      const registration = this.registrationLoop(shouldStop, signal).catch(fail);
       const dispatch = this.dispatchLoop(shouldStop, signal).catch(fail);
-      await Promise.all([maintenance, dispatch]);
+      await Promise.all([maintenance, registration, dispatch]);
       if (firstError !== undefined) throw firstError;
     } finally {
       this.running = false;
       this.draining = this.activeSlots > 0;
+      await this.flushActivity();
+      await this.deregister();
+    }
+  }
+
+  /**
+   * Refresh this worker's registration on its own cadence.
+   *
+   * This is deliberately a separate loop from maintenance. A maintenance pass runs `tick_v1` and,
+   * when it owns the tick, evaluates and fires every due schedule, so sharing a loop would let a
+   * slow or busy maintenance pass starve fleet liveness. Operator visibility and the pause signal
+   * must not degrade because schedule evaluation got expensive.
+   */
+  private async registrationLoop(shouldStop: () => boolean, signal?: AbortSignal): Promise<void> {
+    if (this.registryIntervalMs === 0) return;
+    while (!shouldStop()) {
+      await this.refreshRegistration();
+      if (shouldStop()) break;
+      await this.waitForWake(this.registryIntervalMs, signal);
     }
   }
 

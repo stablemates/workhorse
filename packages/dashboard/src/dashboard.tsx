@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Alert,
   AppShell,
   Badge,
   Box,
@@ -3767,8 +3768,19 @@ function WorkersPage({
     <Stack gap="xl">
       <PageHeader
         title="Workers"
-        description="Declared concurrency, live claim state, and one-hour execution throughput for this demo process."
+        description="Declared concurrency, live claim state, and one-hour execution throughput for every registered worker."
       />
+      {data.canManageWorkers ? (
+        // Pause is easy to misread as a durable setting, so the surface that offers it says plainly
+        // what it is scoped to. Operators should reach for queue pause when they mean "stop this
+        // work" rather than "quiet this process".
+        <Alert color="blue" variant="light" title="Pausing a worker applies to its running process">
+          A paused worker stops claiming new work but finishes what it is already running. The pause
+          is cleared automatically if that worker process restarts or is replaced by a deployment,
+          so it will not silently idle a worker later. To stop work durably, pause its queue
+          instead.
+        </Alert>
+      ) : null}
       {actionError ? (
         <Text c="red" size="sm">
           {actionError}
@@ -3797,12 +3809,21 @@ function WorkersPage({
                 {data.workers.map((worker) => (
                   <Table.Tr key={worker.id}>
                     <Table.Td>
-                      <Code
-                        fz="xs"
-                        style={{ background: "transparent", paddingBlock: 0, paddingInline: 0 }}
-                      >
-                        {worker.id}
-                      </Code>
+                      <Stack gap={2}>
+                        <Code
+                          fz="xs"
+                          style={{ background: "transparent", paddingBlock: 0, paddingInline: 0 }}
+                        >
+                          {worker.id}
+                        </Code>
+                        {/* Placement is reported separately from identity, so a worker with a
+                            stable configured name still says which host and process it is. */}
+                        {worker.hostname ? (
+                          <Text c="dimmed" fz="xs">
+                            {worker.hostname} · pid {worker.pid}
+                          </Text>
+                        ) : null}
+                      </Stack>
                     </Table.Td>
                     <Table.Td>
                       <Group gap={6} wrap="nowrap">
@@ -3843,12 +3864,16 @@ function WorkersPage({
                       // carries the spelled-out meaning for assistive technology.
                       aria-label={
                         worker.concurrency === null
-                          ? `${worker.id} slot use is unknown because it does not run in this process`
+                          ? `${worker.id} slot use is unknown because it has never registered`
                           : `${worker.id} is using ${worker.activeSlots ?? 0} of ${worker.concurrency} configured execution slots`
                       }
                     >
                       {worker.concurrency === null ? (
-                        <Text c="dimmed" size="sm" title="This worker does not run in this process">
+                        <Text
+                          c="dimmed"
+                          size="sm"
+                          title="This worker has never registered, so its declared capacity is unknown"
+                        >
                           —
                         </Text>
                       ) : (
@@ -3881,12 +3906,16 @@ function WorkersPage({
         </Paper>
       )}
       <Text c="dimmed" size="xs">
-        Slots in use counts handlers running inside this server process against the concurrency
-        declared at startup; current jobs is what PostgreSQL reports as active, so the two can
-        differ briefly. Concurrency is startup configuration and is not changeable at runtime. Pause
-        stops new claims only, and draining means shutdown is waiting on in-flight handlers. Active
-        jobs keep heartbeating until they finish. Worker pause state is held in this server process
-        and clears on restart.
+        Workers register themselves in PostgreSQL, so this list covers every live worker process,
+        not only workers sharing this server. Slots in use is what each worker reported at its last
+        registration refresh against the concurrency it declared at startup; current jobs is what
+        PostgreSQL reports as active, so the two can differ briefly. Concurrency is startup
+        configuration and is not changeable at runtime. Pause is cooperative and process-scoped: it
+        stops new claims once the worker next refreshes its registration, never interrupts a handler
+        already running, and is cleared when that worker process is restarted or replaced. Draining
+        means shutdown is waiting on in-flight handlers, and active jobs keep heartbeating until
+        they finish. A worker that stops refreshing is reported offline and is eventually dropped
+        from the fleet.
       </Text>
     </Stack>
   );

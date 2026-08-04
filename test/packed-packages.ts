@@ -154,7 +154,7 @@ try {
     `import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { defineWorkerProcess } from "@workhorse/core";
 import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
-import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";
+import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";\nimport { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboard/server";\nimport type { DashboardNodeMiddleware } from "@workhorse/dashboard/server";
 import type { DashboardTaskCounts } from "@workhorse/dashboard/model";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Hono } from "hono";
@@ -170,7 +170,12 @@ const workerProcess = defineWorkerProcess({
 });
 const integration = new HonoWorkhorse(adapter);
 const app = new Hono();
-mountWorkhorseDashboard(app, { workhorse: integration, authorize: () => true });
+// Mounting takes a database and a Queue, never a worker runtime, so a packed consumer can host the
+// dashboard in a process that runs no workers at all.
+mountWorkhorseDashboard(app, { database: pool, authorize: () => true });
+const dashboardHost = createDashboardHost({ database: pool, authorize: () => true });
+const nodeMiddleware: DashboardNodeMiddleware = dashboardNodeMiddleware(dashboardHost);
+void nodeMiddleware;
 void integration.context.queue;
 void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { ok: true }));
 declare const dashboardClient: DashboardClient;

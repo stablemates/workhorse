@@ -42,6 +42,9 @@ import type {
   RetryPolicy,
   RetentionPolicy,
   RetentionPolicyDefinition,
+  WorkerPauseResult,
+  WorkerRegistration,
+  WorkerRegistryEntry,
 } from "./types.js";
 
 export interface ScheduleJobDefinition {
@@ -970,6 +973,143 @@ export class Queue {
     const result = await this.database.query<{ count: number }>(
       "SELECT workhorse.purge_queue_v1($1) AS count",
       [queueName],
+    );
+    return result.rows[0]!.count;
+  }
+
+  /**
+   * Publish one coalesced operator-activity hint on the `workhorse_activity` channel.
+   *
+   * This is deliberately separate from the `workhorse_jobs` dispatch channel, which means "ready
+   * work may exist" and must stay cheap enough for the claim path. Activity hints instead mean
+   * "durable state an operator is watching has changed", including transitions such as completion
+   * that create no ready work at all. Callers are expected to coalesce; nothing in the protocol
+   * depends on delivery, so a dropped hint only delays a refresh until the next fallback.
+   */
+  async notifyActivity(queueName = this.defaultQueue): Promise<void> {
+    await this.database.query("SELECT pg_notify('workhorse_activity', $1)", [queueName]);
+  }
+
+  /**
+   * Announce or refresh this worker's registration and read back the operator-requested pause flag.
+   *
+   * One round trip pushes the runtime state the worker owns and pulls the pause decision
+   * PostgreSQL owns, so an operator surface in a different process can observe and control a
+   * worker fleet it does not host.
+   *
+   * `instanceId` identifies this process incarnation. A refresh from the same instance keeps any
+   * operator pause; a new instance of the same worker id clears it, which is what makes pause
+   * process-scoped rather than a flag that outlives the process it was aimed at.
+   */
+  async registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }> {
+    const result = await this.database.query<{ paused: boolean }>(
+      "SELECT workhorse.register_worker_v1($1, $2, $3, $4, $5, $6, $7, $8) AS paused",
+      [
+        registration.workerId,
+        registration.instanceId,
+        registration.hostname,
+        registration.pid,
+        registration.queue ?? this.defaultQueue,
+        registration.concurrency,
+        registration.activeSlots,
+        registration.draining,
+      ],
+    );
+    return { paused: result.rows[0]!.paused };
+  }
+
+  /** Remove one worker registration. A killed worker instead ages out of the fleet view. */
+  async deregisterWorker(workerId: string): Promise<boolean> {
+    const result = await this.database.query<{ deregistered: boolean }>(
+      "SELECT workhorse.deregister_worker_v1($1) AS deregistered",
+      [workerId],
+    );
+    return result.rows[0]!.deregistered;
+  }
+
+  /**
+   * Request or clear an operator pause for one registered worker.
+   *
+   * `requestedBy` and `reason` are bounded audit attribution rather than authorization. The pause
+   * is cooperative: the worker stops claiming when it next refreshes its registration, and any
+   * in-flight handler runs to completion. Returns null when the worker is not registered.
+   */
+  async setWorkerPaused(
+    workerId: string,
+    paused: boolean,
+    options: { requestedBy?: string; reason?: string } = {},
+  ): Promise<WorkerPauseResult | null> {
+    const result = await this.database.query<{
+      worker_id: string;
+      paused: boolean;
+      paused_by: string | null;
+      paused_reason: string | null;
+      paused_at: Date | null;
+      last_heartbeat_at: Date;
+    }>("SELECT * FROM workhorse.set_worker_paused_v1($1, $2, $3, $4)", [
+      workerId,
+      paused,
+      options.requestedBy ?? null,
+      options.reason ?? null,
+    ]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      workerId: row.worker_id,
+      paused: row.paused,
+      pausedBy: row.paused_by,
+      reason: row.paused_reason,
+      pausedAt: row.paused_at,
+      lastHeartbeatAt: row.last_heartbeat_at,
+    };
+  }
+
+  /** List every registered worker, most recently seen first. */
+  async listWorkers(): Promise<WorkerRegistryEntry[]> {
+    const result = await this.database.query<{
+      worker_id: string;
+      instance_id: string;
+      hostname: string;
+      pid: number;
+      queue_name: string;
+      concurrency: number;
+      active_slots: number;
+      draining: boolean;
+      paused: boolean;
+      paused_by: string | null;
+      paused_reason: string | null;
+      paused_at: Date | null;
+      started_at: Date;
+      last_heartbeat_at: Date;
+    }>(
+      `SELECT worker_id, instance_id, hostname, pid, queue_name, concurrency, active_slots, draining, paused, paused_by,
+              paused_reason, paused_at, started_at, last_heartbeat_at
+         FROM workhorse.worker_registry
+        ORDER BY last_heartbeat_at DESC, worker_id`,
+    );
+    return result.rows.map((row) => ({
+      workerId: row.worker_id,
+      instanceId: row.instance_id,
+      hostname: row.hostname,
+      pid: row.pid,
+      queue: row.queue_name,
+      concurrency: row.concurrency,
+      activeSlots: row.active_slots,
+      draining: row.draining,
+      paused: row.paused,
+      pausedBy: row.paused_by,
+      reason: row.paused_reason,
+      pausedAt: row.paused_at,
+      startedAt: row.started_at,
+      lastHeartbeatAt: row.last_heartbeat_at,
+    }));
+  }
+
+  /** Drop registrations whose process stopped heartbeating longer ago than the given window. */
+  async pruneWorkerRegistry(maxAgeMs = 24 * 60 * 60 * 1_000): Promise<number> {
+    const result = await this.database.query<{ count: number }>(
+      "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1)) AS count",
+      [maxAgeMs / 1_000],
     );
     return result.rows[0]!.count;
   }
