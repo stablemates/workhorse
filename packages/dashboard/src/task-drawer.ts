@@ -70,3 +70,49 @@ export function createLatestRequestGuard(): LatestRequestGuard {
     },
   };
 }
+
+/**
+ * Whether a settled cancellation for one task may still write to the drawer.
+ *
+ * Cancellation state (the pending row, the reason field, the failure message, and the result
+ * line) is single-slot: the drawer holds one of each for whichever task it currently shows.
+ * Because the drawer is modeless, the operator can request cancellation of task A and click task
+ * B before the server answers, so a late answer for A would otherwise plant A's error or A's
+ * result under B's heading. The request guard cannot decide this on its own: it tracks detail
+ * loads, and a cancellation outlives the load that opened it. The task id the operator is
+ * looking at now is the fact that settles it.
+ */
+export function cancelResultAppliesTo(jobId: string, selectedJobId: string | null): boolean {
+  return selectedJobId === jobId;
+}
+
+/**
+ * The next pending-cancellation task id once the cancellation of `jobId` has settled.
+ *
+ * The pending flag is a single slot holding at most one task id. Clearing it unconditionally
+ * would let a slow cancellation, settling after the operator started a second one, unstick a
+ * spinner belonging to a request that is still running, so only the owner clears it.
+ */
+export function clearPendingCancel(pending: string | null, jobId: string): string | null {
+  return pending === jobId ? null : pending;
+}
+
+/**
+ * What the drawer must do to agree with the URL it is being reconciled against.
+ *
+ * The URL is the only source of truth for the open task, so a click, a pasted deep link, a
+ * reload, and Back all arrive here as the same question. `none` is the load guard that matters
+ * in practice: this reconciliation runs on every render of the controller, and without it an
+ * unrelated re-render (a poll landing, a filter changing, a timezone tick) would restart the
+ * detail request for the task already on screen, discarding an in-flight load and flashing the
+ * panel back to its spinner.
+ */
+export type TaskDrawerSync = "none" | "open" | "close";
+
+export function taskDrawerSync(
+  requestedTaskId: string | null,
+  shownTaskId: string | null,
+): TaskDrawerSync {
+  if (requestedTaskId === shownTaskId) return "none";
+  return requestedTaskId === null ? "close" : "open";
+}

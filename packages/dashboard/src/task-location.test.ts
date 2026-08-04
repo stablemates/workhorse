@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseTaskLocation, taskLocationHref } from "./task-location.js";
+import {
+  parseTaskLocation,
+  taskDetailNavigation,
+  taskListingKey,
+  taskLocationHref,
+} from "./task-location.js";
 
 describe("task location state", () => {
   it("round-trips shareable task filters and omits defaults", () => {
@@ -17,6 +22,7 @@ describe("task location state", () => {
       pageSize: 100,
       period: "7d",
       group: "task",
+      taskId: null,
     });
     expect(parseTaskLocation(taskLocationHref(state).split("?")[1] ?? "")).toEqual(state);
     expect(
@@ -31,6 +37,7 @@ describe("task location state", () => {
         pageSize: 50,
         period: "1h",
         group: "queue",
+        taskId: null,
       }),
     ).toBe("/tasks");
   });
@@ -54,5 +61,64 @@ describe("task location state", () => {
     const state = parseTaskLocation("?filter=canceled");
     expect(state.filter).toBe("canceled");
     expect(taskLocationHref(state)).toBe("/tasks?filter=canceled");
+  });
+
+  it("carries the open task detail in the URL beside the listing parameters", () => {
+    // A deep link has to restore the same list and the same open task, so the drawer id is
+    // parsed alongside the filters rather than instead of them.
+    const state = parseTaskLocation("?filter=running&queue=orders&page=2&task=job-42");
+    expect(state.taskId).toBe("job-42");
+    expect(state.filter).toBe("running");
+    expect(state.queue).toBe("orders");
+    expect(state.page).toBe(2);
+    expect(parseTaskLocation(taskLocationHref(state).split("?")[1] ?? "")).toEqual(state);
+  });
+
+  it("drops only the task parameter when the drawer closes", () => {
+    // Closing the drawer is not a change of what the operator is looking at, so every filter,
+    // the page, and the chart settings survive it untouched.
+    const opened = parseTaskLocation("?filter=running&tags=billing&per=100&group=task&task=job-42");
+    expect(taskLocationHref({ ...opened, taskId: null })).toBe(
+      "/tasks?filter=running&tags=billing&per=100&group=task",
+    );
+  });
+
+  it("treats a blank or oversized task id as no open drawer", () => {
+    expect(parseTaskLocation("?task=").taskId).toBe(null);
+    expect(parseTaskLocation("?task=%20%20").taskId).toBe(null);
+    expect(parseTaskLocation(`?task=${"x".repeat(201)}`).taskId).toBe(null);
+    expect(parseTaskLocation(`?task=${"x".repeat(200)}`).taskId).toBe("x".repeat(200));
+  });
+
+  it("pushes only when the drawer opens, so Back does not walk every task glanced at", () => {
+    expect(taskDetailNavigation(null, "job-a")).toBe("push");
+    // Swapping tasks happens inside a panel that is already open.
+    expect(taskDetailNavigation("job-a", "job-b")).toBe("replace");
+    // Closing is a dismissal; Forward must not resurrect the panel.
+    expect(taskDetailNavigation("job-a", null)).toBe("replace");
+    expect(taskDetailNavigation(null, null)).toBe("replace");
+  });
+
+  it("keeps the task list request unchanged while the drawer opens, switches, and closes", () => {
+    // The list behind a modeless drawer must not refetch or flash a loader when the operator
+    // clicks from one task to the next, so the drawer id is not part of the listing request.
+    const closed = parseTaskLocation("?filter=running&queue=orders&tags=billing&page=2&per=100");
+    const opened = parseTaskLocation(
+      "?filter=running&queue=orders&tags=billing&page=2&per=100&task=job-a",
+    );
+    expect(taskListingKey(opened)).toBe(taskListingKey(closed));
+    expect(taskListingKey({ ...opened, taskId: "job-b" })).toBe(taskListingKey(closed));
+    // Nor do the activity chart controls, which are served by a separate request.
+    expect(taskListingKey({ ...opened, period: "7d", group: "worker" })).toBe(
+      taskListingKey(closed),
+    );
+
+    // Anything that really is a different list still is one.
+    expect(taskListingKey({ ...closed, page: 3 })).not.toBe(taskListingKey(closed));
+    expect(taskListingKey({ ...closed, filter: "completed" })).not.toBe(taskListingKey(closed));
+    expect(taskListingKey({ ...closed, tags: ["billing", "weekly"] })).not.toBe(
+      taskListingKey(closed),
+    );
+    expect(taskListingKey({ ...closed, search: "invoice" })).not.toBe(taskListingKey(closed));
   });
 });

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  cancelResultAppliesTo,
+  clearPendingCancel,
   createLatestRequestGuard,
   taskDrawerBody,
   taskDrawerModelessProps,
   taskDrawerOpened,
+  taskDrawerSync,
 } from "./task-drawer.js";
 
 describe("task detail drawer", () => {
@@ -113,5 +116,86 @@ describe("latest task detail request guard", () => {
     slowA.resolve("job-a");
     await a;
     expect(drawer).toBe("job-b");
+  });
+});
+
+describe("late cancellation result ownership", () => {
+  it("writes the result only while the drawer still shows that task", () => {
+    expect(cancelResultAppliesTo("job-a", "job-a")).toBe(true);
+    // The operator clicked task B while A's cancellation was still in flight.
+    expect(cancelResultAppliesTo("job-a", "job-b")).toBe(false);
+    // Closing the drawer discards the result rather than re-opening the panel.
+    expect(cancelResultAppliesTo("job-a", null)).toBe(false);
+  });
+
+  it("keeps a late failure for the previous task out of the newly selected task's panel", () => {
+    let selected: string | null = "job-a";
+    let shownError: string | null = null;
+
+    const settleCancel = (id: string, message: string) => {
+      if (!cancelResultAppliesTo(id, selected)) return;
+      shownError = message;
+    };
+
+    // Cancellation of A is requested, then B is selected before the server answers.
+    selected = "job-b";
+    settleCancel("job-a", "Unable to cancel the task");
+    expect(shownError).toBe(null);
+
+    // B's own failure is still reported, so the guard silences staleness and nothing else.
+    settleCancel("job-b", "boom");
+    expect(shownError).toBe("boom");
+  });
+
+  it("clears the pending flag only for the task whose cancellation settled", () => {
+    // The flag is a single slot holding at most one task id, so a late settle clearing it
+    // unconditionally would unstick the spinner of a cancellation that is still running.
+    expect(clearPendingCancel("job-b", "job-a")).toBe("job-b");
+    expect(clearPendingCancel("job-a", "job-a")).toBe(null);
+    expect(clearPendingCancel(null, "job-a")).toBe(null);
+  });
+});
+
+describe("reconciling the drawer with the URL", () => {
+  it("opens, switches, and closes to match the address bar", () => {
+    // A deep link or a reload arrives with no drawer showing yet.
+    expect(taskDrawerSync("job-a", null)).toBe("open");
+    // Clicking another row, and Back or Forward between two tasks, both swap in place.
+    expect(taskDrawerSync("job-b", "job-a")).toBe("open");
+    // Removing the task parameter, whether by the close button or by Back, closes the panel.
+    expect(taskDrawerSync(null, "job-a")).toBe("close");
+  });
+
+  it("does nothing when the drawer already agrees with the URL", () => {
+    // This runs on every render of the controller, so re-rendering for an unrelated reason (a
+    // poll landing, a filter changing) must not restart the load or discard one in flight.
+    expect(taskDrawerSync("job-a", "job-a")).toBe("none");
+    expect(taskDrawerSync(null, null)).toBe("none");
+  });
+
+  it("never reloads the task the drawer is already showing, however often it is asked", () => {
+    let shown: string | null = null;
+    const loads: string[] = [];
+    const reconcile = (requested: string | null) => {
+      const sync = taskDrawerSync(requested, shown);
+      if (sync === "close") shown = null;
+      else if (sync === "open") {
+        shown = requested;
+        loads.push(requested!);
+      }
+    };
+
+    reconcile("job-a");
+    // Three unrelated re-renders while the same task is open.
+    reconcile("job-a");
+    reconcile("job-a");
+    reconcile("job-a");
+    expect(loads).toEqual(["job-a"]);
+
+    // Back to the list, then Forward to the same task, is a genuine open again.
+    reconcile(null);
+    reconcile("job-a");
+    expect(loads).toEqual(["job-a", "job-a"]);
+    expect(shown).toBe("job-a");
   });
 });
