@@ -58,6 +58,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type MouseEvent,
@@ -103,15 +104,20 @@ import {
 } from "./refresh-policy.js";
 import {
   parseTaskLocation,
+  taskDetailNavigation,
+  taskListingKey,
   taskLocationHref,
   taskPageSizes,
   type TaskLocationState,
   type TaskPageSize,
 } from "./task-location.js";
 import {
+  cancelResultAppliesTo,
+  clearPendingCancel,
   createLatestRequestGuard,
   taskDrawerModelessProps,
   taskDrawerOpened,
+  taskDrawerSync,
 } from "./task-drawer.js";
 import { ThemeSchemeSwitch } from "./theme.js";
 
@@ -3776,7 +3782,12 @@ function useDashboardController(
   const [queueActionFeedback, setQueueActionFeedback] = useState<string | null>(null);
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
   const [workerActionError, setWorkerActionError] = useState<string | null>(null);
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  /**
+   * The open task is read from the URL rather than held beside it, so a copied or reloaded link
+   * restores the same list and the same open drawer, and Back/Forward can only ever agree with
+   * what is on screen.
+   */
+  const selectedJobId = location.route === "/tasks" ? location.taskId : null;
   const [selectedJob, setSelectedJob] = useState<DashboardJobDetail | null>(null);
   const [jobDetailError, setJobDetailError] = useState<string | null>(null);
   /**
@@ -3786,6 +3797,14 @@ function useDashboardController(
    * one is not necessarily the older one, so the drawer only accepts the newest claim.
    */
   const jobDetailRequests = useRef(createLatestRequestGuard());
+  /**
+   * The task the drawer is showing right now, readable from an async callback.
+   *
+   * `selectedJobId` is what renders, but a callback that awaited the server closed over the
+   * value from the render that started it, which is exactly the stale answer these guards must
+   * not trust. This ref is written at the same moment the selection changes.
+   */
+  const selectedJobIdRef = useRef<string | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
@@ -3847,6 +3866,18 @@ function useDashboardController(
     [navigate],
   );
 
+  /**
+   * What the task listing request is made of, separated from the rest of the location.
+   *
+   * Opening, switching, and closing the drawer all rewrite the URL, and the list behind the
+   * panel must not refetch or flash a loader for any of them, so the page load is keyed on the
+   * listing parameters instead of on the location object.
+   */
+  const { route } = location;
+  const listingKey = taskListingKey(location);
+  const listingRef = useRef(location);
+  listingRef.current = location;
+
   const loadPage = useCallback(async () => {
     const activeRequest = ++requestId.current;
     setLoadState((current) => ({
@@ -3856,30 +3887,31 @@ function useDashboardController(
     }));
     try {
       let data: PageData;
-      if (location.route === "/tasks") {
+      if (route === "/tasks") {
+        const listing = listingRef.current;
         data = {
           route: "/tasks",
           value: await client.tasks({
-            filter: location.filter,
-            queue: location.queue,
-            worker: location.worker,
-            jobType: location.jobType,
-            tags: location.tags,
-            search: location.search ?? undefined,
-            page: location.page,
-            pageSize: location.pageSize,
+            filter: listing.filter,
+            queue: listing.queue,
+            worker: listing.worker,
+            jobType: listing.jobType,
+            tags: listing.tags,
+            search: listing.search ?? undefined,
+            page: listing.page,
+            pageSize: listing.pageSize,
           }),
         };
-      } else if (location.route === "/cron") {
+      } else if (route === "/cron") {
         data = { route: "/cron", value: await client.cron() };
-      } else if (location.route === "/queues") {
+      } else if (route === "/queues") {
         data = { route: "/queues", value: await client.queues() };
-      } else if (location.route === "/system") {
+      } else if (route === "/system") {
         data = {
           route: "/system",
           value: await client.system({ window: systemWindow }),
         };
-      } else if (location.route === "/settings") {
+      } else if (route === "/settings") {
         data = { route: "/settings", value: null };
       } else {
         data = {
@@ -3900,7 +3932,9 @@ function useDashboardController(
         }));
       }
     }
-  }, [client, location, systemWindow]);
+    // `listingKey` is the dependency the task listing actually has; the values themselves are
+    // read from a ref so that a re-render for an unrelated reason cannot send a stale request.
+  }, [client, route, listingKey, systemWindow]);
 
   const loadTaskCounts = useCallback(async () => {
     try {
@@ -4044,12 +4078,19 @@ function useDashboardController(
     [auditActor, client, loadPage],
   );
 
-  const inspectJob = useCallback(
+  /**
+   * Show one task in the drawer and load its detail.
+   *
+   * This is driven by the URL rather than called from the click handler, so a deep link, a
+   * reload, and Back all reach the drawer through the same path as a click and cannot disagree
+   * with the address bar.
+   */
+  const showJobDetail = useCallback(
     async (id: string) => {
       // Claim the drawer before the await, so a later click wins even if this request
       // resolves after it.
       const ticket = jobDetailRequests.current.begin();
-      setSelectedJobId(id);
+      selectedJobIdRef.current = id;
       setSelectedJob(null);
       setJobDetailError(null);
       // Opening a different task must never inherit the previous task's confirmation or result.
@@ -4070,17 +4111,58 @@ function useDashboardController(
   );
 
   /**
-   * Close the drawer and abandon any detail load still in flight.
+   * Empty the drawer and abandon any detail load still in flight.
    *
    * Without dropping the claim, a request that arrives after the operator closed the panel would
    * set detail or an error and reopen it on a task they already dismissed.
    */
-  const closeJobDetail = useCallback(() => {
+  const clearJobDetail = useCallback(() => {
     jobDetailRequests.current.cancel();
-    setSelectedJobId(null);
+    selectedJobIdRef.current = null;
     setSelectedJob(null);
     setJobDetailError(null);
   }, []);
+
+  /**
+   * Move the open task into the address bar; the drawer follows from there.
+   *
+   * Writing the URL first, and letting one effect reconcile the drawer with it, is what makes
+   * every route into the drawer behave alike: a click, a pasted link, a reload, and Back all end
+   * as the same `task` parameter. Opening pushes so Back closes the panel, while swapping tasks
+   * and closing replace, so history does not fill with every task the operator glanced at.
+   */
+  const selectTask = useCallback(
+    (id: string | null) => {
+      if (id === location.taskId) return;
+      const href = taskHref({ ...location, taskId: id });
+      if (taskDetailNavigation(location.taskId, id) === "push") navigate(href);
+      else replace(href);
+    },
+    [location, navigate, replace],
+  );
+
+  const inspectJob = useCallback((id: string) => selectTask(id), [selectTask]);
+  const closeJobDetail = useCallback(() => selectTask(null), [selectTask]);
+
+  /**
+   * The single reconciliation between the URL and the drawer.
+   *
+   * It runs for every way the address can change (click, deep link, reload, popstate) and does
+   * nothing when the drawer already shows the requested task, so re-rendering for an unrelated
+   * reason cannot restart a load or discard one in flight. Leaving the task list also closes the
+   * drawer, because no other route carries a `task` parameter.
+   *
+   * It is a layout effect because the drawer contents would otherwise be one paint behind the
+   * URL: clicking from task A to task B renders once with the new address and A's detail still
+   * mounted, showing the operator A's payload, A's outcome, and A's cancel controls under B's
+   * heading. Running before paint means no frame ever shows a task the URL no longer names.
+   */
+  useLayoutEffect(() => {
+    const requested = location.route === "/tasks" ? location.taskId : null;
+    const sync = taskDrawerSync(requested, selectedJobIdRef.current);
+    if (sync === "close") clearJobDetail();
+    else if (sync === "open") void showJobDetail(requested!);
+  }, [location.route, location.taskId, clearJobDetail, showJobDetail]);
 
   /**
    * Request cancellation of one task and report exactly what PostgreSQL did.
@@ -4089,6 +4171,11 @@ function useDashboardController(
    * cancellation reason, so the two can never disagree. The drawer is refreshed from the server afterwards
    * rather than optimistically edited, because whether an active task is now canceled or only
    * cancel-requested is a durable fact this dashboard does not get to guess.
+   *
+   * The request is sent regardless of what the operator does next, because a cancellation the
+   * server accepted stays accepted. Only the drawer writes are conditional: once the operator has
+   * moved to another task, this task's result, failure, and refreshed detail belong to a panel
+   * that is no longer on screen, so reporting them there would attribute them to the wrong task.
    */
   const cancelTask = useCallback(
     async (id: string, reason: string) => {
@@ -4104,6 +4191,11 @@ function useDashboardController(
             requestId: crypto.randomUUID(),
           },
         });
+        if (!cancelResultAppliesTo(id, selectedJobIdRef.current)) {
+          // The task list still has to show the new state, even though the drawer moved on.
+          await loadPage();
+          return;
+        }
         setCancelFeedback({
           jobId: id,
           status: result.status,
@@ -4112,13 +4204,18 @@ function useDashboardController(
         });
         setConfirmingCancel(false);
         setCancelReason("");
+        // Claim the drawer for this refresh, so a detail load started by a later click wins.
+        const ticket = jobDetailRequests.current.begin();
         const detail = await client.jobDetail({ id }).catch(() => null);
-        if (detail) setSelectedJob(detail);
+        if (detail && jobDetailRequests.current.current(ticket)) setSelectedJob(detail);
         await loadPage();
       } catch (cause) {
+        if (!cancelResultAppliesTo(id, selectedJobIdRef.current)) return;
         setCancelError(cause instanceof Error ? cause.message : "Unable to cancel the task");
       } finally {
-        setCancelingJobId(null);
+        // Clearing unconditionally would unstick a spinner this call never started, so only the
+        // task whose cancellation is settling drops the pending flag.
+        setCancelingJobId((pending) => clearPendingCancel(pending, id));
       }
     },
     [auditActor, client, loadPage],
@@ -4192,7 +4289,7 @@ function useDashboardController(
         runDemoJob={demoTools ? runDemoJob : null}
         runningDemoJob={runningDemoJob}
         actionError={actionError}
-        inspectJob={(id) => void inspectJob(id)}
+        inspectJob={inspectJob}
       />
     );
   } else if (loadState.data?.route === "/cron") {
