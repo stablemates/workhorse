@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cancelOutcomeTone,
   describeCancelOutcome,
   describeCancellationRequest,
   isTerminalTaskState,
@@ -23,6 +24,18 @@ describe("cancellation vocabulary", () => {
       expect(described.summary.length).toBeGreaterThan(0);
       expect(described.exact.length).toBeGreaterThan(0);
     }
+  });
+
+  /**
+   * A notification's colour is read before its sentence is. A task that had already finished, or
+   * that no longer exists, was left alone on purpose, so tone must not accuse the operator of a
+   * failure they did not cause and cannot fix.
+   */
+  it("reserves the failure tone for requests that never reached a decision", () => {
+    expect(cancelOutcomeTone("canceled")).toBe("success");
+    expect(cancelOutcomeTone("cancel_requested")).toBe("success");
+    expect(cancelOutcomeTone("already_terminal")).toBe("neutral");
+    expect(cancelOutcomeTone("not_found")).toBe("neutral");
   });
 
   it("describes an unstarted cancellation as immediate and handler-free", () => {

@@ -77,7 +77,6 @@ import {
   describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
-  describeRunNowOutcome,
   formatRetryDelay,
   idempotencyEvidenceLine,
   isTerminalTaskState,
@@ -87,7 +86,6 @@ import {
 import { describeDurableBoundary, readTaskResultEvidence, type TaskResultState } from "./model.js";
 import type {
   DashboardCancellationRequest,
-  DashboardCancelStatus,
   DashboardCronPage,
   DashboardJobDetail,
   DashboardJobRow,
@@ -104,6 +102,8 @@ import type {
   TaskRowActionId,
 } from "./model.js";
 import type { DashboardClient, DashboardDemoTools } from "./client.js";
+import { requestRunNow, type RunNowFeedback } from "./run-now.js";
+import { notifyCancel, notifyDashboard, notifyFailure, notifyRunNow } from "./notifications.js";
 import { WorkhorseBrand } from "./brand.js";
 import {
   dashboardRefreshIntervalMs,
@@ -1158,30 +1158,6 @@ function retryEventDescription(event: JobEvent): { text: string; title: string }
   return { text, title };
 }
 
-/**
- * Result of the last cancellation this dashboard requested, kept so the drawer can report what
- * PostgreSQL actually did rather than assuming the action succeeded.
- */
-interface CancelFeedback {
-  jobId: string;
-  status: DashboardCancelStatus;
-  state: string | null;
-  /** Exact timestamp of the request or the recorded outcome, for a title attribute. */
-  at: string | null;
-}
-
-/**
- * What one run-now request reported, held so the list can state it and offer the released task.
- *
- * A transport failure and a server refusal are both outcomes worth showing, so this carries either
- * a described status or a failure sentence rather than modelling failure as absence.
- */
-interface RunNowFeedback {
-  jobId: string;
-  described: ReturnType<typeof describeRunNowOutcome> | null;
-  failure: string | null;
-}
-
 /** The lifecycle states an operator may cancel. Everything else is terminal or unknown. */
 function canCancelTask(job: DashboardJobDetail): boolean {
   const runtime = job.current.runtime;
@@ -1208,8 +1184,6 @@ function CancelTaskPanel({
   reason,
   setReason,
   pending,
-  feedback,
-  error,
   cancelTask,
 }: {
   job: DashboardJobDetail;
@@ -1218,8 +1192,6 @@ function CancelTaskPanel({
   reason: string;
   setReason: (reason: string) => void;
   pending: boolean;
-  feedback: CancelFeedback | null;
-  error: string | null;
   cancelTask: (id: string, reason: string) => void;
 }) {
   const reasonRef = useRef<HTMLInputElement>(null);
@@ -1234,13 +1206,10 @@ function CancelTaskPanel({
   const waiting =
     job.current.runtime?.state === "scheduled" && job.current.runtime.waitName !== null;
   const trimmedReason = reason.trim();
-  const forThisJob = feedback !== null && feedback.jobId === job.identity.id;
-  const described = forThisJob
-    ? describeCancelOutcome(feedback.status, { state: feedback.state })
-    : null;
 
-  // Everything an assistive technology needs is in text: the heading, the current state sentence,
-  // and the live region below. Colour and the icon add nothing that is not already written out.
+  // Everything an assistive technology needs is in text: the heading and the current state
+  // sentence. What a cancellation reported is announced by the notification it raises, which
+  // outlives this panel, because closing the drawer must not take the answer with it.
   return (
     <Box>
       <Group gap="xs" mb="xs" align="baseline">
@@ -1333,22 +1302,6 @@ function CancelTaskPanel({
             : "This task has no live runtime, so there is nothing to cancel."}
         </Text>
       )}
-      {/* One live region for both success and failure, so a screen reader hears every result. */}
-      <Box role="status" aria-live="polite" mt={error || described ? "xs" : 0}>
-        {error ? (
-          <Text c="red" size="xs">
-            {error}
-          </Text>
-        ) : described && forThisJob ? (
-          <Text
-            c="dimmed"
-            size="xs"
-            title={feedback.at ? formatExact(feedback.at) : described.exact}
-          >
-            {described.summary}.
-          </Text>
-        ) : null}
-      </Box>
     </Box>
   );
 }
@@ -2262,7 +2215,6 @@ function TasksPage({
   navigate,
   runDemoJob,
   runningDemoJob,
-  actionError,
   inspectJob,
   replace,
   taskLocation,
@@ -2274,7 +2226,6 @@ function TasksPage({
   taskLocation: TaskLocationState;
   runDemoJob: ((kind: DemoJobKind, scenario?: DurableDemoScenario) => Promise<void>) | null;
   runningDemoJob: DemoJobKind | null;
-  actionError: string | null;
   inspectJob: (id: string, options?: { confirmCancel?: boolean }) => void;
   /**
    * Release one scheduled task, or null when the host cannot. Null is passed through to the menu
@@ -2286,11 +2237,9 @@ function TasksPage({
     () => localStorage.getItem("workhorse-full-args") === "true",
   );
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
-  // What the last row action did. Announced rather than left to a colour or a vanished menu.
-  const [rowFeedback, setRowFeedback] = useState<string | null>(null);
-  // The one row action that is applied here rather than in the drawer, and what it reported.
+  // The one row action that is applied here rather than in the drawer. What it reported goes to
+  // the notification system, so only the in-flight row is state this page has to hold.
   const [runningNowJobId, setRunningNowJobId] = useState<string | null>(null);
-  const [runNowFeedback, setRunNowFeedback] = useState<RunNowFeedback | null>(null);
   const searchInput = searchDraft ?? taskLocation.search ?? "";
   const taskFacets = useTaskFacets(data);
   const locationState: TaskLocationState = taskLocation;
@@ -2311,18 +2260,6 @@ function TasksPage({
     }, 300);
     return () => clearTimeout(timer);
   }, [searchDraft, taskLocation.search, updateLocation]);
-  useEffect(() => {
-    if (rowFeedback === null) return;
-    const timer = setTimeout(() => setRowFeedback(null), 4_000);
-    return () => clearTimeout(timer);
-  }, [rowFeedback]);
-  // Run-now feedback carries a link to the task it released, so it is given longer than a copy
-  // confirmation: it is only useful for as long as the operator can still act on it.
-  useEffect(() => {
-    if (runNowFeedback === null) return;
-    const timer = setTimeout(() => setRunNowFeedback(null), 12_000);
-    return () => clearTimeout(timer);
-  }, [runNowFeedback]);
   /**
    * Apply one row action.
    *
@@ -2337,11 +2274,9 @@ function TasksPage({
       if (id === "cancel") return inspectJob(job.id, { confirmCancel: true });
       if (id === "run-now") {
         if (runTaskNow === null || runningNowJobId !== null) return;
-        setRowFeedback(null);
-        setRunNowFeedback(null);
         setRunningNowJobId(job.id);
         void runTaskNow(job.id)
-          .then(setRunNowFeedback)
+          .then((feedback) => notifyRunNow(feedback, { openTask: inspectJob }))
           .finally(() => setRunningNowJobId(null));
         return;
       }
@@ -2354,7 +2289,13 @@ function TasksPage({
       }
       const copying = id === "copy-id" ? "Task id" : "Args";
       void copyToClipboard(id === "copy-id" ? job.id : formatJson(job.payload)).then((failure) =>
-        setRowFeedback(failure ?? `${copying} copied to the clipboard.`),
+        notifyDashboard({
+          // One id for both clipboard actions: copying twice is one running answer, not a stack.
+          id: "workhorse-task-clipboard",
+          title: failure ? `${copying} not copied` : `${copying} copied`,
+          message: failure ?? `${copying} copied to the clipboard.`,
+          tone: failure ? "failure" : "neutral",
+        }),
       );
     },
     [inspectJob, runTaskNow, runningNowJobId, updateLocation],
@@ -2490,52 +2431,6 @@ function TasksPage({
             </Group>
           </Group>
         </Stack>
-        {actionError ? (
-          <>
-            <Divider />
-            <Text c="red" size="sm" px="md" py="sm">
-              {actionError}
-            </Text>
-          </>
-        ) : null}
-        {/* One live region for row actions, so a screen reader hears a copy that a menu item
-            performed and then closed itself. */}
-        <Box role="status" aria-live="polite">
-          {rowFeedback === null ? null : (
-            <>
-              <Divider />
-              <Text c="dimmed" size="sm" px="md" py="xs">
-                {rowFeedback}
-              </Text>
-            </>
-          )}
-          {runNowFeedback === null ? null : (
-            <>
-              <Divider />
-              <Group gap="sm" px="md" py="xs" wrap="nowrap" align="baseline">
-                <Text size="sm" c={runNowFeedback.failure === null ? "dimmed" : "red"}>
-                  {runNowFeedback.failure ?? runNowFeedback.described!.exact}
-                </Text>
-                {/* The released task is the thing the operator now wants to watch, so it is
-                    offered directly rather than left to be found again in the list. A failed
-                    request is not offered a link, because the commonest failure is the task no
-                    longer existing and a link would only lead to a second error. */}
-                {runNowFeedback.failure === null ? (
-                  <Button
-                    size="compact-xs"
-                    variant="subtle"
-                    onClick={() => {
-                      setRunNowFeedback(null);
-                      inspectJob(runNowFeedback.jobId);
-                    }}
-                  >
-                    Open task
-                  </Button>
-                ) : null}
-              </Group>
-            </>
-          )}
-        </Box>
         <Divider />
         <ScrollArea>
           <Table
@@ -2677,12 +2572,10 @@ function TasksPage({
 function CronPage({
   data,
   togglingSchedule,
-  actionError,
   setScheduleEnabled,
 }: {
   data: DashboardCronPage;
   togglingSchedule: string | null;
-  actionError: string | null;
   setScheduleEnabled: (namespace: string, name: string, enabled: boolean) => void;
 }) {
   return (
@@ -2691,11 +2584,6 @@ function CronPage({
         title="Schedules"
         description="Recurring application and system schedules registered with Workhorse."
       />
-      {actionError ? (
-        <Text c="red" size="sm">
-          {actionError}
-        </Text>
-      ) : null}
       {data.schedules.length === 0 ? (
         <EmptyState>No recurring schedules are registered.</EmptyState>
       ) : (
@@ -2789,8 +2677,6 @@ function QueuesPage({
   togglingQueue,
   purgingQueue,
   confirmingQueue,
-  actionError,
-  actionFeedback,
   setQueuePaused,
   setConfirmingQueue,
   purgeQueue,
@@ -2799,8 +2685,6 @@ function QueuesPage({
   togglingQueue: string | null;
   purgingQueue: string | null;
   confirmingQueue: string | null;
-  actionError: string | null;
-  actionFeedback: string | null;
   setQueuePaused: (queue: string, paused: boolean) => void;
   setConfirmingQueue: (queue: string | null) => void;
   purgeQueue: (queue: string) => void;
@@ -2811,15 +2695,6 @@ function QueuesPage({
         title="Queues"
         description="Pause dispatch, inspect queue-level task counts, or clear waiting work."
       />
-      {actionError ? (
-        <Text c="red" size="sm">
-          {actionError}
-        </Text>
-      ) : actionFeedback ? (
-        <Text c="teal" size="sm">
-          {actionFeedback}
-        </Text>
-      ) : null}
       {data.queues.length === 0 ? (
         <EmptyState>No queues have accepted work yet.</EmptyState>
       ) : (
@@ -3781,12 +3656,10 @@ function SystemPage({
 function WorkersPage({
   data,
   togglingWorker,
-  actionError,
   setWorkerPaused,
 }: {
   data: DashboardWorkersPage;
   togglingWorker: string | null;
-  actionError: string | null;
   setWorkerPaused: (workerId: string, paused: boolean) => void;
 }) {
   return (
@@ -3805,11 +3678,6 @@ function WorkersPage({
           so it will not silently idle a worker later. To stop work durably, pause its queue
           instead.
         </Alert>
-      ) : null}
-      {actionError ? (
-        <Text c="red" size="sm">
-          {actionError}
-        </Text>
       ) : null}
       {data.workers.length === 0 ? (
         <EmptyState>No workers have reported activity.</EmptyState>
@@ -4052,16 +3920,11 @@ function useDashboardController(
     };
   }, [client]);
   const [runningDemoJob, setRunningDemoJob] = useState<DemoJobKind | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
   const [togglingSchedule, setTogglingSchedule] = useState<string | null>(null);
-  const [scheduleActionError, setScheduleActionError] = useState<string | null>(null);
   const [togglingQueue, setTogglingQueue] = useState<string | null>(null);
   const [purgingQueue, setPurgingQueue] = useState<string | null>(null);
   const [confirmingQueue, setConfirmingQueue] = useState<string | null>(null);
-  const [queueActionError, setQueueActionError] = useState<string | null>(null);
-  const [queueActionFeedback, setQueueActionFeedback] = useState<string | null>(null);
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
-  const [workerActionError, setWorkerActionError] = useState<string | null>(null);
   /**
    * The open task is read from the URL rather than held beside it, so a copied or reloaded link
    * restores the same list and the same open drawer, and Back/Forward can only ever agree with
@@ -4095,8 +3958,6 @@ function useDashboardController(
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
-  const [cancelFeedback, setCancelFeedback] = useState<CancelFeedback | null>(null);
-  const [cancelError, setCancelError] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<DashboardRefreshIntervalValue>(readStoredRefreshInterval);
   const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(() => {
@@ -4234,7 +4095,6 @@ function useDashboardController(
   const runDemoJob = useCallback(
     async (kind: DemoJobKind, scenario?: DurableDemoScenario) => {
       setRunningDemoJob(kind);
-      setActionError(null);
       try {
         if (!demoTools) return;
         await demoTools.enqueueTest({
@@ -4249,7 +4109,7 @@ function useDashboardController(
         if (location.filter !== "all" || location.page !== 1) navigate("/tasks");
         await loadPage();
       } catch (cause) {
-        setActionError(cause instanceof Error ? cause.message : "Unable to enqueue the demo job");
+        notifyFailure("Demo task not enqueued", cause, "Unable to enqueue the demo job");
       } finally {
         setRunningDemoJob(null);
       }
@@ -4261,7 +4121,6 @@ function useDashboardController(
     async (namespace: string, name: string, enabled: boolean) => {
       const scheduleKey = `${namespace}:${name}`;
       setTogglingSchedule(scheduleKey);
-      setScheduleActionError(null);
       try {
         await client.setScheduleEnabled({
           kind: "user",
@@ -4274,11 +4133,16 @@ function useDashboardController(
             requestId: crypto.randomUUID(),
           },
         });
+        notifyDashboard({
+          title: enabled ? "Schedule enabled" : "Schedule disabled",
+          message: enabled
+            ? `${scheduleKey} fires again from its next occurrence.`
+            : `${scheduleKey} stopped firing. Occurrences already enqueued are untouched.`,
+          tone: "success",
+        });
         await loadPage();
       } catch (cause) {
-        setScheduleActionError(
-          cause instanceof Error ? cause.message : "Unable to update the schedule",
-        );
+        notifyFailure("Schedule not updated", cause, "Unable to update the schedule");
       } finally {
         setTogglingSchedule(null);
       }
@@ -4289,8 +4153,6 @@ function useDashboardController(
   const toggleQueue = useCallback(
     async (queue: string, paused: boolean) => {
       setTogglingQueue(queue);
-      setQueueActionError(null);
-      setQueueActionFeedback(null);
       try {
         await client.setQueuePaused({
           queue,
@@ -4301,9 +4163,16 @@ function useDashboardController(
             requestId: crypto.randomUUID(),
           },
         });
+        notifyDashboard({
+          title: paused ? "Queue paused" : "Queue resumed",
+          message: paused
+            ? `${queue} stopped dispatching. Tasks already running finish; nothing new is claimed.`
+            : `${queue} is dispatching again.`,
+          tone: "success",
+        });
         await loadPage();
       } catch (cause) {
-        setQueueActionError(cause instanceof Error ? cause.message : "Unable to update the queue");
+        notifyFailure("Queue not updated", cause, "Unable to update the queue");
       } finally {
         setTogglingQueue(null);
       }
@@ -4314,8 +4183,6 @@ function useDashboardController(
   const clearQueue = useCallback(
     async (queue: string) => {
       setPurgingQueue(queue);
-      setQueueActionError(null);
-      setQueueActionFeedback(null);
       try {
         const result = await client.purgeQueue({
           queue,
@@ -4326,12 +4193,16 @@ function useDashboardController(
           },
         });
         setConfirmingQueue(null);
-        setQueueActionFeedback(
-          `Cleared ${result.deletedCount} waiting ${result.deletedCount === 1 ? "task" : "tasks"} from ${queue}.`,
-        );
+        notifyDashboard({
+          title: "Queue cleared",
+          message: `Cleared ${result.deletedCount} waiting ${
+            result.deletedCount === 1 ? "task" : "tasks"
+          } from ${queue}.`,
+          tone: result.deletedCount > 0 ? "success" : "neutral",
+        });
         await loadPage();
       } catch (cause) {
-        setQueueActionError(cause instanceof Error ? cause.message : "Unable to clear the queue");
+        notifyFailure("Queue not cleared", cause, "Unable to clear the queue");
       } finally {
         setPurgingQueue(null);
       }
@@ -4342,7 +4213,6 @@ function useDashboardController(
   const toggleWorker = useCallback(
     async (workerId: string, paused: boolean) => {
       setTogglingWorker(workerId);
-      setWorkerActionError(null);
       try {
         await client.setWorkerPaused({
           workerId,
@@ -4353,11 +4223,16 @@ function useDashboardController(
             requestId: crypto.randomUUID(),
           },
         });
+        notifyDashboard({
+          title: paused ? "Worker paused" : "Worker resumed",
+          message: paused
+            ? `${workerId} stopped claiming new work and finishes what it is already running. The pause is cleared if that process restarts.`
+            : `${workerId} is claiming work again.`,
+          tone: "success",
+        });
         await loadPage();
       } catch (cause) {
-        setWorkerActionError(
-          cause instanceof Error ? cause.message : "Unable to update the worker",
-        );
+        notifyFailure("Worker not updated", cause, "Unable to update the worker");
       } finally {
         setTogglingWorker(null);
       }
@@ -4386,11 +4261,9 @@ function useDashboardController(
       armCancelForJobId.current = null;
       setSelectedJob(null);
       setJobDetailError(null);
-      // Opening a different task must never inherit the previous task's confirmation or result.
+      // Opening a different task must never inherit the previous task's confirmation.
       setConfirmingCancel(armCancel);
       setCancelReason("");
-      setCancelError(null);
-      setCancelFeedback(null);
       try {
         const detail = await client.jobDetail({ id });
         if (!jobDetailRequests.current.current(ticket)) return;
@@ -4485,8 +4358,6 @@ function useDashboardController(
   const cancelTask = useCallback(
     async (id: string, reason: string) => {
       setCancelingJobId(id);
-      setCancelError(null);
-      setCancelFeedback(null);
       try {
         const result = await client.cancelTask({
           id,
@@ -4496,17 +4367,17 @@ function useDashboardController(
             requestId: crypto.randomUUID(),
           },
         });
+        // Announced for the task that was canceled, not for whichever task the drawer now shows,
+        // and offered as a link back to it so an operator who has moved on can still reach it.
+        notifyCancel(
+          { jobId: id, status: result.status, state: result.state },
+          { openTask: inspectJob },
+        );
         if (!cancelResultAppliesTo(id, selectedJobIdRef.current)) {
           // The task list still has to show the new state, even though the drawer moved on.
           await loadPage();
           return;
         }
-        setCancelFeedback({
-          jobId: id,
-          status: result.status,
-          state: result.state,
-          at: result.finishedAt ?? result.requestedAt,
-        });
         setConfirmingCancel(false);
         setCancelReason("");
         // Claim the drawer for this refresh, so a detail load started by a later click wins.
@@ -4515,15 +4386,14 @@ function useDashboardController(
         if (detail && jobDetailRequests.current.current(ticket)) setSelectedJob(detail);
         await loadPage();
       } catch (cause) {
-        if (!cancelResultAppliesTo(id, selectedJobIdRef.current)) return;
-        setCancelError(cause instanceof Error ? cause.message : "Unable to cancel the task");
+        notifyFailure("Task not canceled", cause, "Unable to cancel the task");
       } finally {
         // Clearing unconditionally would unstick a spinner this call never started, so only the
         // task whose cancellation is settling drops the pending flag.
         setCancelingJobId((pending) => clearPendingCancel(pending, id));
       }
     },
-    [auditActor, client, loadPage],
+    [auditActor, client, inspectJob, loadPage],
   );
 
   /**
@@ -4538,31 +4408,17 @@ function useDashboardController(
    * action is unavailable rather than hiding the item.
    */
   const runTaskNow = useMemo(() => {
-    const mutate = client.runTaskNow;
-    if (!mutate) return null;
+    if (!client.runTaskNow) return null;
     return async (id: string): Promise<RunNowFeedback> => {
-      try {
-        const result = await mutate.call(client, {
-          id,
-          audit: {
-            actor: auditActor,
-            reason: `Run scheduled task ${id} now from the dashboard`,
-            requestId: crypto.randomUUID(),
-          },
-        });
-        await loadPage();
-        return {
-          jobId: id,
-          described: describeRunNowOutcome(result.status, { state: result.state }),
-          failure: null,
-        };
-      } catch (cause) {
-        return {
-          jobId: id,
-          described: null,
-          failure: cause instanceof Error ? cause.message : "Unable to run the task now",
-        };
-      }
+      const feedback = await requestRunNow(client, {
+        id,
+        auditActor,
+        requestId: crypto.randomUUID(),
+      });
+      // Reloaded on every outcome: a refusal is still a statement about durable state this list
+      // should be showing, and a released task has already changed row.
+      await loadPage();
+      return feedback;
     };
   }, [auditActor, client, loadPage]);
 
@@ -4633,7 +4489,6 @@ function useDashboardController(
         taskLocation={location}
         runDemoJob={demoTools ? runDemoJob : null}
         runningDemoJob={runningDemoJob}
-        actionError={actionError}
         inspectJob={inspectJob}
         runTaskNow={runTaskNow}
       />
@@ -4643,7 +4498,6 @@ function useDashboardController(
       <CronPage
         data={loadState.data.value}
         togglingSchedule={togglingSchedule}
-        actionError={scheduleActionError}
         setScheduleEnabled={(namespace, name, enabled) =>
           void toggleSchedule(namespace, name, enabled)
         }
@@ -4656,8 +4510,6 @@ function useDashboardController(
         togglingQueue={togglingQueue}
         purgingQueue={purgingQueue}
         confirmingQueue={confirmingQueue}
-        actionError={queueActionError}
-        actionFeedback={queueActionFeedback}
         setQueuePaused={(queue, paused) => void toggleQueue(queue, paused)}
         setConfirmingQueue={setConfirmingQueue}
         purgeQueue={(queue) => void clearQueue(queue)}
@@ -4672,7 +4524,6 @@ function useDashboardController(
       <WorkersPage
         data={loadState.data.value}
         togglingWorker={togglingWorker}
-        actionError={workerActionError}
         setWorkerPaused={(workerId, paused) => void toggleWorker(workerId, paused)}
       />
     );
@@ -4705,8 +4556,6 @@ function useDashboardController(
     cancelReason,
     setCancelReason,
     cancelingJobId,
-    cancelFeedback,
-    cancelError,
     cancelTask,
   };
 }
@@ -4743,8 +4592,6 @@ function DashboardContent({
     cancelReason,
     setCancelReason,
     cancelingJobId,
-    cancelFeedback,
-    cancelError,
     cancelTask,
   } = controller;
 
@@ -4982,8 +4829,6 @@ function DashboardContent({
               reason={cancelReason}
               setReason={setCancelReason}
               pending={cancelingJobId === selectedJob.identity.id}
-              feedback={cancelFeedback}
-              error={cancelError}
               cancelTask={cancelTask}
             />
             <JobProgress job={selectedJob} />
