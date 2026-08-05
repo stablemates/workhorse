@@ -340,7 +340,7 @@ function readLocation(basePath = ""): {
       group:
         storedGroup && activityGroupings.some(({ value }) => value === storedGroup)
           ? storedGroup
-          : "queue",
+          : "task",
     }),
   };
 }
@@ -1922,7 +1922,7 @@ function TasksActivityChart({
   const changeGroupBy = (value: string) => {
     const next = activityGroupings.some((g) => g.value === value)
       ? (value as ActivityGroupBy)
-      : "queue";
+      : "task";
     localStorage.setItem("workhorse-activity-group", next);
     updateLocation({ group: next });
   };

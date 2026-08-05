@@ -386,7 +386,7 @@ export async function readDashboardActivity(
   database: DashboardDatabase,
   filter: DashboardTaskFilter,
   period: DashboardActivityPeriod,
-  groupBy: DashboardActivityGroupBy = "queue",
+  groupBy: DashboardActivityGroupBy = "task",
   tags: readonly string[] = [],
   queue: string | null = null,
   worker: string | null = null,
