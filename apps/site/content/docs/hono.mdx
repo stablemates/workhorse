@@ -91,7 +91,7 @@ does not leak workers or pools.
 import { mountWorkhorseDashboard } from "@workhorse/hono";
 
 mountWorkhorseDashboard(app, {
-  workhorse,
+  database: pool,
   path: "/workhorse", // use "/" to own the host root
   environment: "production",
   authorize: (request) => isAdmin(request),
@@ -99,7 +99,12 @@ mountWorkhorseDashboard(app, {
 ```
 
 The mount owns the configured path: the packaged React application, static assets, oRPC API, and SSE
-refresh stream.
+refresh stream. Requests outside that path fall through to your own routes untouched.
+
+It needs only a database connection — never a worker runtime. Workers register
+themselves in PostgreSQL, so this same mount reports a fleet running in entirely separate processes.
+`mountWorkhorseDashboard` is a thin binding over the framework-neutral host in
+`@workhorse/dashboard/server`, which is also what Express, Fastify, Next.js, and SvelteKit use.
 
 <Callout type="warn">
   `authorize` is **required** and must explicitly authorize every dashboard, RPC, asset, and
@@ -116,3 +121,7 @@ See [Dashboard](/docs/dashboard) for options and the standalone React surface.
 Running workers in your web process is convenient, but it couples job capacity to HTTP replica count
 and couples two unrelated drains. For production, prefer a dedicated worker process; see
 [Workers](/docs/workers) and [Deployment and operations](/docs/operations).
+
+Splitting them costs you nothing on the operator side. The dashboard reads worker identity, declared
+concurrency, slot use, draining, and pause from PostgreSQL, so a mount in your web tier reports and
+controls workers it does not host.

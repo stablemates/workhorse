@@ -13,37 +13,71 @@ no dependency on the demo application.
 - Durable checkpoint progress (a Steps column and a stepper of saved, running, and pending boundaries)
 - Terminal results and per-attempt failure evidence
 - Recurring schedules and their occurrences
-- Queues and workers, including audited pause and resume controls
+- Queues and the live worker fleet, including audited pause and resume that reach workers in any process
 - System health: deadline pressure, retention lag, and PostgreSQL diagnostics
 
-## Recommended: mount it with the framework adapter
+## Mounting
 
-For Hono, `mountWorkhorseDashboard` serves the whole application without you building a transport
-adapter:
+The dashboard host is framework-neutral. It takes a `Request` and returns a `Response`, or `null`
+when the request does not belong to its mount path, so unrelated host routes are never taken over.
 
 ```ts
-import { mountWorkhorseDashboard } from "@workhorse/hono";
+import { createDashboardHost } from "@workhorse/dashboard/server";
 
-mountWorkhorseDashboard(app, {
-  workhorse,
+const host = createDashboardHost({
   path: "/workhorse", // "/" to own the host root
+  database: pool,
   environment: "production",
   authorize: (request) => isAdmin(request),
 });
 ```
 
+**Fetch-native hosts** — Hono, Next.js route handlers, SvelteKit, Nitro:
+
+```ts
+const response = (await host.handle(request)) ?? new Response("Not found", { status: 404 });
+```
+
+**Connect-style hosts** — Express, Connect, Fastify via `@fastify/middie`:
+
+```ts
+import { dashboardNodeMiddleware } from "@workhorse/dashboard/server";
+
+app.use(dashboardNodeMiddleware(host));
+```
+
+For Hono, `mountWorkhorseDashboard` is a thin binding that registers these routes for you:
+
+```ts
+import { mountWorkhorseDashboard } from "@workhorse/hono";
+
+mountWorkhorseDashboard(app, {
+  database: pool,
+  path: "/workhorse",
+  environment: "production",
+  authorize: (request) => isAdmin(request),
+});
+```
+
+<Callout>
+  Mounting needs only a database connection. It does **not** need a worker runtime. Workers register
+  themselves in PostgreSQL, so the dashboard reports every live worker even when they run in
+  separate processes — which is the recommended production topology.
+</Callout>
+
 Selected options:
 
-| Option                                                                                    | Purpose                                                                   |
-| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `path`                                                                                    | Mount namespace. Defaults to `/workhorse`.                                |
-| `authorize`                                                                               | **Required.** Authorizes every dashboard, RPC, asset, and stream request. |
-| `environment`                                                                             | Label shown in the UI                                                     |
-| `configuredWorkers`                                                                       | Worker identities the host knows about                                    |
-| `auditActor`                                                                              | Actor recorded for mutations initiated from the dashboard                 |
-| `browserModules`                                                                          | Trusted host-owned ES modules loaded before the dashboard entry           |
-| `operator`, `queueController`, `taskController`, `workerController`, `scheduleController` | Host-owned control surfaces                                               |
-| `projectDurability`                                                                       | Host projection of durable-step progress                                  |
+| Option                                                                                    | Purpose                                                                                                                                            |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`                                                                                    | Mount namespace. Defaults to `/workhorse`.                                                                                                         |
+| `authorize`                                                                               | **Required.** Authorizes every dashboard, RPC, asset, and stream request.                                                                          |
+| `environment`                                                                             | Label shown in the UI                                                                                                                              |
+| `configuredWorkers`                                                                       | Optional. Expected worker identities, so a declared worker that has never started is still visible. Live workers are discovered from the registry. |
+| `auditActor`                                                                              | Actor recorded for mutations initiated from the dashboard                                                                                          |
+| `browserModules`                                                                          | Trusted host-owned ES modules loaded before the dashboard entry                                                                                    |
+| `operator`, `queueController`, `taskController`, `workerController`, `scheduleController` | Host-owned control surfaces, used to wrap mutations in your own audit and authorization                                                            |
+| `refresh`                                                                                 | Refresh hub to publish into; pair with `listenForDashboardRefresh`                                                                                 |
+| `projectDurability`                                                                       | Host projection of durable-step progress                                                                                                           |
 
 ## Authorization
 
@@ -61,7 +95,7 @@ deliberately never installs or migrates database objects.
 
 ## Custom integrations
 
-The React surface remains available for hosts that are not on Hono:
+The React surface remains available for hosts that want to render the dashboard themselves:
 
 ```tsx
 import { Dashboard, WorkhorseThemeProvider } from "@workhorse/dashboard";
@@ -82,8 +116,22 @@ seeding menu is not part of the required client contract; opt in only when a hos
 supplies demo fixtures. All sample and seed data stay owned by the demo project, never the package.
 
 Server-side building blocks are exported from `@workhorse/dashboard/server`, including
-`dashboardRouter`, `readDashboardSnapshot`, `dashboardDatabase`, `dashboardAssetsDirectory`, and
-`DashboardRefreshHub`.
+`createDashboardHost`, `dashboardNodeMiddleware`, `listenForDashboardRefresh`, `dashboardRouter`,
+`readDashboardSnapshot`, `dashboardDatabase`, `dashboardAssetsDirectory`, and `DashboardRefreshHub`.
+
+## Standalone console
+
+To look at a queue without wiring the dashboard into an application at all:
+
+```bash
+npx workhorse dashboard --port 3000
+```
+
+This owns its process, so unlike an embedded mount it takes a connection string. It binds
+`127.0.0.1` and is read-only by default, because a standalone server has no session to authorize
+against. `--host` publishes it and `--allow-mutations` enables operator actions attributed to
+`--actor`; both print a warning, and neither is a substitute for putting it behind your own
+authenticated proxy.
 
 ## Requirements
 
@@ -97,6 +145,26 @@ Server-side building blocks are exported from `@workhorse/dashboard/server`, inc
 
 The browser refreshes only the active page through its dedicated reader on a bounded polling cadence.
 The default is 30 seconds, with 5-second, 15-second, 1-minute, 5-minute, and manual-only options.
+
+To react promptly to work happening in another process, bridge PostgreSQL notifications into the
+mount's refresh hub:
+
+```ts
+import { listenForDashboardRefresh } from "@workhorse/dashboard/server";
+
+const client = new Client({ connectionString });
+await client.connect();
+await listenForDashboardRefresh({ client, refresh });
+```
+
+This listens on `workhorse_jobs` (the dispatch wake hint, meaning ready work may exist) and
+`workhorse_activity` (coalesced operator hints that workers publish when
+`WorkerOptions.activityNotifications` is enabled, covering transitions such as completion that
+create no ready work). The client must be a dedicated connection, not a pooled one, because
+`LISTEN` registers against a specific backend session.
+
+Both channels are liveness optimizations, never a source of truth. A dropped notification only
+delays a refresh until the stream's periodic fallback fires.
 
 ## Try it locally
 

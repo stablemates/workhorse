@@ -3,19 +3,37 @@
 This is the end-to-end product demo for Workhorse. It lets you create test jobs from the operator dashboard, request cooperative cancellation, watch workers process them, inspect retries and terminal failures, and observe recurring work, retention health, and queue health.
 
 The demo application uses Hono and Drizzle to exercise both integration packages in a realistic setup.
-Seed data includes a transactionally created order and durable job, two Hono-managed workers process
-the queue, and worker-owned in-process scheduling drives recurring work. Those frameworks support the demo;
-Workhorse's durable execution model is what the demo is designed to show.
+Seed data includes a transactionally created order and durable job, and worker-owned scheduling drives
+recurring work. Those frameworks support the demo; Workhorse's durable execution model is what the demo
+is designed to show.
+
+**The demo runs its workers as a separate process.** That is the topology the documentation recommends
+for production, and running it here means the demo has to actually solve the problem it recommends:
+the server and the workers share nothing but PostgreSQL. Workers announce themselves in
+`workhorse.worker_registry`, the dashboard reads the fleet from there, operator pause travels through
+SQL, and coalesced `workhorse_activity` notifications keep the views live without polling. Set
+`WORKHORSE_DEMO_IN_PROCESS_WORKERS=true` to co-host workers in the server instead, which is the
+supported small-application topology and what the integration tests exercise.
 
 The demo imports the complete admin application from the publishable packages. `@workhorse/hono`
-mounts `@workhorse/dashboard` at `/`, including its oRPC API and event endpoint. Development serves
-dashboard source through Vite, while production serves the packaged browser assets. The demo contributes
-only demo-owned workers, controllers, projections, and seed data.
+mounts `@workhorse/dashboard` at `/`, including its oRPC API and event endpoint. The demo owns no
+Vite config, no browser entry, and no React dependency: it is a plain consumer, doing nothing a real
+application could not copy. It contributes only demo-owned workers, controllers, projections, and
+seed data.
+
+Editing the dashboard UI still works out of the box. In development the demo mounts
+`@workhorse/dashboard`'s own Vite middleware, so the single demo URL serves the live-compiled UI
+with hot reload while the page itself is assembled by the same packaged host a production consumer
+runs. There is no second server, no second port, and no separate command. Production serves the
+packaged bundle through that same host, so the two differ only in where modules come from.
+
+`pnpm dashboard:dev` remains available for working on the UI against some other backend, such as a
+`workhorse dashboard` console pointed at a different database.
 
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
-The demo installs schema version 16, including daily retained history, split scheduled maintenance,
+The demo installs schema version 17, including daily retained history, split scheduled maintenance,
 a dedicated operator query projection with bounded payload controls and merged timelines,
 scoped enqueue idempotency, cooperative cancellation, absolute deadlines, and per-attempt execution
 timeouts. One deterministic keyed seed exposes deduplication evidence without persisting or displaying
@@ -32,14 +50,9 @@ pnpm demo
 ```
 
 The command recreates only the purpose-guarded `workhorse_demo` database, compiles the server-side runtime
-packages, then starts a watched Hono API and a Vite development frontend at
-`http://workhorse.localhost:43155/`. Vite serves `@workhorse/dashboard` directly from source with React
-development metadata, HMR, source maps, and the demo-owned React Grab module. It does not run a production
-dashboard bundle first. The Hono API is mounted at `/`; the demo intentionally exposes no ad hoc public job
-API. The previous `/workhorse/*` URLs redirect to the equivalent root routes. Set
-`WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay. Each development run
-allocates a free private Hono API port. Set `WORKHORSE_API_PORT` to a positive value only when a fixed
-internal port is required; `0` or an omitted value requests automatic allocation.
+packages, then starts a watched Hono server and a watched dedicated worker process. Everything is served from
+`http://workhorse.localhost:43155/`, mounted at `/`; the demo intentionally exposes no ad hoc public job
+API. Set `WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay.
 Startup also creates a living feature showcase: eight task-visible feature families each contribute three
 one-off scenarios and one recurring definition. The 24 scenarios cover ingress and routing, retry policies,
 durable checkpoints, durable waits, mutable progress, timing controls, cancellation, and dead letters with
@@ -80,15 +93,29 @@ application shell keeps the header and responsive sidebar in place while browser
 `/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
 the `filter` query parameter, with pagination persisted as `page`.
 
-The demo starts `demo-worker-1` and `demo-worker-2`. Worker status is explicit: `busy` owns an active
-lease, `recent` completed an attempt during the bounded five-minute observation window, and `idle` is a
-configured worker without current or recent work. The global header shows connection state and supports
-an explicit refresh. Both workers use a 15-second idle polling delay by default; pass `workerPollMs` to
-`createDemoApplication` to override it. Mantine follows the browser's preferred light or dark color
-scheme.
+The demo runs **one** worker process hosting **two** workers, one with three execution slots and one
+strictly serial. They therefore share a hostname and pid and differ only in their generated identity
+— which is exactly why the default id carries a random suffix as well as host and pid. A production
+deployment would more often run one worker per replica; the demo packs two into a process so the
+fleet view shows heterogeneous capacity without needing two deployments.
 
-The demo declares three slots for `demo-worker-1` and one for `demo-worker-2`. Core workers may configure
-an integer from 1 through 100 and expose local `{ concurrency, activeSlots, paused, draining }` state, but
+Neither worker is **named**. They take the same generated
+`<hostname>-<pid>-<random>` identity any deployment gets by default, so the dashboard has to
+discover the fleet from PostgreSQL rather than be told about it in advance. The mount passes no
+declared worker list at all. Worker status is explicit: `busy` owns an active lease,
+`idle` is a registered worker refreshing its registration with no current work, `recent` completed an
+attempt during the bounded five-minute observation window without a live registration, and `offline` is
+a declared worker that has stopped refreshing. The global header shows connection state and supports an
+explicit refresh. Both workers use a 15-second idle polling delay by default; set
+`WORKHORSE_WORKER_POLL_MS`, or pass `workerPollMs` to `createDemoApplication` for the in-process
+topology. Mantine follows the browser's preferred light or dark color scheme.
+
+Pausing a worker from the dashboard writes to `workhorse.worker_registry` rather than calling a method
+on a local object, so it reaches the worker process. Like cancellation it is cooperative: claiming stops
+at the worker's next registration refresh and any handler already running finishes.
+
+The demo declares three slots for one worker and one slot for the other. Core workers may configure
+an integer from 1 through 100 and publish `{ concurrency, activeSlots, draining }` to the registry, but
 the demo's two-worker shape
 is for lifecycle visibility and failover behavior, not a measured throughput comparison. Use the
 `worker-concurrency` lifecycle benchmark against a `_bench` database for invariant-gated concurrency

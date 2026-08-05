@@ -20,16 +20,13 @@ import {
   DashboardTaskFacets,
   DashboardTaskFilter,
   DashboardTasksPage,
+  DashboardWorkerRow,
   DashboardWorkersPage,
   MaintenanceLoopCadences,
   readIdempotencyEvidence,
 } from "../model.js";
 import { sql, type DashboardDatabase } from "./sql.js";
-import type {
-  DashboardDurabilityProjector,
-  DashboardOperator,
-  DashboardWorkerRuntimeState,
-} from "./types.js";
+import type { DashboardDurabilityProjector, DashboardOperator } from "./types.js";
 
 function toIso(value: Date | string): string {
   return new Date(value).toISOString();
@@ -96,6 +93,18 @@ function workerValues(workers: readonly string[]) {
     workers.map((worker) => sql`(${worker})`),
     sql`, `,
   );
+}
+
+/**
+ * Declared worker identities as a relation, or an empty relation when none are declared.
+ *
+ * Declaring workers is optional now that live workers register themselves durably. It remains
+ * useful for showing an expected fleet member that has never started.
+ */
+function declaredWorkerRows(workers: readonly string[]) {
+  return workers.length === 0
+    ? sql`SELECT NULL::text AS id WHERE false`
+    : sql`SELECT id FROM (VALUES ${workerValues(workers)}) declared(id)`;
 }
 
 function textArrayExpression(values: readonly string[]) {
@@ -1499,27 +1508,48 @@ export async function readDashboardSystem(
   };
 }
 
+/**
+ * A registration older than this is treated as a stopped process rather than a live worker.
+ *
+ * Workers refresh on a 5 second cadence by default, so this tolerates several consecutive missed
+ * refreshes before a worker is reported offline.
+ */
+const WORKER_REGISTRATION_STALE_MS = 30_000;
+
 export async function readDashboardWorkers(
   database: DashboardDatabase,
-  configuredWorkers: readonly string[],
-  workerStates: ReadonlyMap<string, DashboardWorkerRuntimeState> = new Map(),
+  configuredWorkers: readonly string[] = [],
   canManageWorkers = false,
 ): Promise<DashboardWorkersPage> {
   const now = new Date();
   const workerRows = await database.execute<{
     id: string;
+    registered: boolean;
+    hostname: string | null;
+    pid: number | null;
+    concurrency: number | null;
+    active_slots: number | null;
+    draining: boolean | null;
+    paused: boolean | null;
+    started_at: Date | string | null;
+    last_heartbeat_at: Date | string | null;
     active_jobs: number;
     completed_attempts: number;
     failed_attempts: number;
     average_execution_ms: number | null;
     last_seen_at: Date | string | null;
   }>(sql`
-    WITH configured(id) AS (
-      VALUES ${workerValues(configuredWorkers)}
+    WITH declared AS (${declaredWorkerRows(configuredWorkers)}
+    ), fleet(id) AS (
+      -- Live workers register themselves, so the fleet is discovered rather than configured. Any
+      -- explicitly declared worker is unioned in so an expected-but-never-started worker is visible.
+      SELECT worker_id FROM workhorse.worker_registry
+      UNION
+      SELECT id FROM declared
     ), active AS (
       SELECT worker_id AS id, count(*)::integer AS active_jobs, max(acquired_at) AS last_seen_at
         FROM workhorse.job_runtime
-       WHERE state = 'active' AND worker_id IN (SELECT id FROM configured)
+       WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
        GROUP BY worker_id
     ), recent_history AS (
       -- Exact counts are cheap here because both time predicates keep partition scans to one hour.
@@ -1531,40 +1561,53 @@ export async function readDashboardWorkers(
         FROM workhorse.attempt_history
        WHERE occurred_at >= clock_timestamp() - interval '1 hour'
          AND finished_at >= clock_timestamp() - interval '1 hour'
-         AND worker_id IN (SELECT id FROM configured)
+         AND worker_id IN (SELECT id FROM fleet)
        GROUP BY worker_id
     )
-    SELECT c.id, COALESCE(a.active_jobs, 0)::integer AS active_jobs,
+    SELECT f.id,
+           r.worker_id IS NOT NULL AS registered,
+           r.hostname, r.pid,
+           r.concurrency, r.active_slots, r.draining, r.paused, r.started_at, r.last_heartbeat_at,
+           COALESCE(a.active_jobs, 0)::integer AS active_jobs,
            COALESCE(h.completed_attempts, 0)::integer AS completed_attempts,
            COALESCE(h.failed_attempts, 0)::integer AS failed_attempts,
            h.average_execution_ms,
-           GREATEST(a.last_seen_at, h.last_seen_at) AS last_seen_at
-      FROM configured c
-      LEFT JOIN active a ON a.id = c.id
-      LEFT JOIN recent_history h ON h.id = c.id
-     ORDER BY c.id
+           GREATEST(a.last_seen_at, h.last_seen_at, r.last_heartbeat_at) AS last_seen_at
+      FROM fleet f
+      LEFT JOIN workhorse.worker_registry r ON r.worker_id = f.id
+      LEFT JOIN active a ON a.id = f.id
+      LEFT JOIN recent_history h ON h.id = f.id
+     ORDER BY f.id
   `);
 
   return {
     capturedAt: now.toISOString(),
     canManageWorkers,
     workers: workerRows.rows.map((row) => {
-      const state = workerStates.get(row.id);
+      const heartbeatAt = row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : null;
+      const live =
+        row.registered &&
+        heartbeatAt !== null &&
+        heartbeatAt.getTime() >= now.getTime() - WORKER_REGISTRATION_STALE_MS;
       return {
         id: row.id,
+        hostname: row.hostname,
+        pid: row.pid,
         activeJobs: row.active_jobs,
-        concurrency: state?.concurrency ?? null,
-        activeSlots: state?.activeSlots ?? null,
-        draining: state?.draining ?? false,
+        concurrency: row.concurrency,
+        activeSlots: row.active_slots,
+        draining: row.draining ?? false,
         completedAttempts: row.completed_attempts,
         failedAttempts: row.failed_attempts,
         averageExecutionMs: row.average_execution_ms,
         lastSeenAt: toIsoOrNull(row.last_seen_at),
-        paused: state?.paused ?? false,
+        startedAt: toIsoOrNull(row.started_at),
+        registered: row.registered,
+        paused: row.paused ?? false,
         status:
           row.active_jobs > 0
             ? "active"
-            : state
+            : live
               ? "idle"
               : row.last_seen_at &&
                   new Date(row.last_seen_at).getTime() >= now.getTime() - 5 * 60_000
@@ -1665,33 +1708,52 @@ export async function readDashboardSnapshot(
       `),
       database.execute<{
         id: string;
+        registered: boolean;
+        hostname: string | null;
+        pid: number | null;
+        concurrency: number | null;
+        active_slots: number | null;
+        draining: boolean | null;
+        paused: boolean | null;
+        started_at: Date | string | null;
+        last_heartbeat_at: Date | string | null;
         active_jobs: number;
         completed_attempts: number;
         last_seen_at: Date | string | null;
       }>(sql`
-        WITH configured(id) AS (
-          VALUES ${workerValues(configuredWorkers)}
+        WITH declared AS (${declaredWorkerRows(configuredWorkers)}
+        ), fleet(id) AS (
+          SELECT worker_id FROM workhorse.worker_registry
+          UNION
+          SELECT id FROM declared
         ), observed AS (
           SELECT worker_id AS id, count(*)::integer AS active_jobs, 0::integer AS completed_attempts,
                  max(heartbeat_at) AS last_seen_at
             FROM workhorse.job_runtime
-           WHERE state = 'active' AND worker_id IN (SELECT id FROM configured)
+           WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
            GROUP BY worker_id
           UNION ALL
           SELECT worker_id AS id, 0::integer AS active_jobs,
                  count(*)::integer AS completed_attempts, max(finished_at) AS last_seen_at
             FROM workhorse.attempt_history
            WHERE occurred_at >= clock_timestamp() - interval '5 minutes'
-             AND worker_id IN (SELECT id FROM configured)
+             AND worker_id IN (SELECT id FROM fleet)
            GROUP BY worker_id
         )
-        SELECT c.id, COALESCE(sum(o.active_jobs), 0)::integer AS active_jobs,
+        SELECT f.id,
+               r.worker_id IS NOT NULL AS registered,
+               r.hostname, r.pid,
+               r.concurrency, r.active_slots, r.draining, r.paused, r.started_at,
+               r.last_heartbeat_at,
+               COALESCE(sum(o.active_jobs), 0)::integer AS active_jobs,
                COALESCE(sum(o.completed_attempts), 0)::integer AS completed_attempts,
-               max(o.last_seen_at) AS last_seen_at
-          FROM configured c
-          LEFT JOIN observed o ON o.id = c.id
-         GROUP BY c.id
-         ORDER BY c.id
+               GREATEST(max(o.last_seen_at), r.last_heartbeat_at) AS last_seen_at
+          FROM fleet f
+          LEFT JOIN workhorse.worker_registry r ON r.worker_id = f.id
+          LEFT JOIN observed o ON o.id = f.id
+         GROUP BY f.id, r.worker_id, r.hostname, r.pid, r.concurrency, r.active_slots, r.draining,
+                  r.paused, r.started_at, r.last_heartbeat_at
+         ORDER BY f.id
       `),
       database.execute<{
         id: string;
@@ -1823,26 +1885,38 @@ export async function readDashboardSnapshot(
         maintenance: null,
       };
     }),
-    workers: workerRows.rows.map((row) => ({
-      id: row.id,
-      activeJobs: row.active_jobs,
-      // The snapshot is a pure SQL projection with no access to process-local worker objects, so
-      // declared capacity and in-process slot use are reported as unknown rather than guessed.
-      concurrency: null,
-      activeSlots: null,
-      draining: false,
-      completedAttempts: row.completed_attempts,
-      failedAttempts: 0,
-      averageExecutionMs: null,
-      lastSeenAt: toIsoOrNull(row.last_seen_at),
-      paused: false,
-      status:
-        row.active_jobs > 0
+    // Declared capacity, slot use, and pause state come from the durable worker registry, so this
+    // pure SQL projection reports the same fleet whether or not workers share the host process.
+    workers: workerRows.rows.map((row) => {
+      const heartbeatAt = row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : null;
+      const live =
+        row.registered &&
+        heartbeatAt !== null &&
+        heartbeatAt.getTime() >= now.getTime() - WORKER_REGISTRATION_STALE_MS;
+      return {
+        id: row.id,
+        hostname: row.hostname,
+        pid: row.pid,
+        activeJobs: row.active_jobs,
+        concurrency: row.concurrency,
+        activeSlots: row.active_slots,
+        draining: row.draining ?? false,
+        completedAttempts: row.completed_attempts,
+        failedAttempts: 0,
+        averageExecutionMs: null,
+        lastSeenAt: toIsoOrNull(row.last_seen_at),
+        startedAt: toIsoOrNull(row.started_at),
+        registered: row.registered,
+        paused: row.paused ?? false,
+        status: (row.active_jobs > 0
           ? "active"
-          : row.last_seen_at && new Date(row.last_seen_at).getTime() >= now.getTime() - 5 * 60_000
-            ? "recent"
-            : "offline",
-    })),
+          : live
+            ? "idle"
+            : row.last_seen_at && new Date(row.last_seen_at).getTime() >= now.getTime() - 5 * 60_000
+              ? "recent"
+              : "offline") as DashboardWorkerRow["status"],
+      };
+    }),
     failures: failureRows.rows.map((row) => ({
       id: row.id,
       queue: row.queue,

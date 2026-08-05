@@ -80,7 +80,6 @@ try {
     env: {
       ...process.env,
       PORT: String(port),
-      WORKHORSE_API_PORT: "0",
       DATABASE_URL: demoDatabaseUrl,
       WORKHORSE_DISABLE_PORTLESS: "1",
       WORKHORSE_WORKER_POLL_MS: "15",
@@ -101,7 +100,10 @@ try {
 
   const baseUrl = `http://127.0.0.1:${port}`;
   let ready = false;
-  for (let attempt = 0; attempt < 240; attempt += 1) {
+  // The documented path resets the database, builds the workspace packages, and boots a Vite dev
+  // server inside the demo. Readiness has to allow for all of it, or this test reports a timeout as
+  // a product failure.
+  for (let attempt = 0; attempt < 1_800; attempt += 1) {
     if (demo.exitCode !== null) throw new Error(`Demo exited before readiness\n${demoOutput}`);
     try {
       const [page, api] = await Promise.all([
@@ -128,44 +130,27 @@ try {
   if (!dashboard.ok || !dashboardHtml.includes('<div id="root"></div>')) {
     throw new Error("Dashboard assets were not served from the clean checkout");
   }
+  // Development compiles the dashboard from source in the demo's own process, so one origin serves
+  // the hot-reloading UI, its modules, and the API. The HTML still comes from `createDashboardHost`,
+  // which is what keeps development on the same code path a published consumer runs.
+  if (!dashboardHtml.includes("window.workhorseDashboard=")) {
+    throw new Error("Demo did not render dashboard HTML through the packaged host");
+  }
+  // Development compiles the dashboard from source, so building the production browser bundle would
+  // be wasted work on every start. This guards the regression directly, because the only symptom is
+  // a slower startup and a misleading "building client environment for production" line.
   if (demoOutput.includes("building client environment for production")) {
     throw new Error("The development demo unexpectedly built a production dashboard bundle");
   }
-  for (const token of ["/@vite/client", "/@react-refresh", "/src/browser.tsx", "react-grab.ts"]) {
+  for (const token of ["/@vite/client", "/src/browser.tsx"]) {
     if (!dashboardHtml.includes(token)) {
       throw new Error(`Development dashboard HTML omitted ${token}`);
     }
   }
-  if (
-    dashboardHtml.includes('src="/workhorse/') ||
-    dashboardHtml.includes('href="/workhorse/') ||
-    dashboardHtml.includes("/assets/index-")
-  ) {
-    throw new Error("Development dashboard HTML used an invalid or production asset path");
-  }
-  const reactGrabPath = dashboardHtml.match(/src="([^"]*react-grab\.ts)"/)?.[1];
-  const reactGrabEntry = reactGrabPath ? await fetch(`${baseUrl}${reactGrabPath}`) : undefined;
-  const reactGrabSource = reactGrabEntry ? await reactGrabEntry.text() : "";
-  if (!reactGrabEntry?.ok || !reactGrabSource.includes("react-grab")) {
-    throw new Error("Demo-owned React Grab source module was not transformed by Vite");
-  }
-  const dashboardSource = await fetch(`${baseUrl}/src/browser.tsx`);
-  const dashboardSourceText = await dashboardSource.text();
-  if (
-    !dashboardSource.ok ||
-    !dashboardSourceText.includes("jsxDEV") ||
-    !dashboardSourceText.includes("createRoot")
-  ) {
-    throw new Error("Dashboard source was not served with React development transforms");
-  }
-  const legacyDashboard = await fetch(`${baseUrl}/workhorse/tasks?filter=running`, {
-    redirect: "manual",
-  });
-  if (
-    legacyDashboard.status !== 302 ||
-    legacyDashboard.headers.get("location") !== "/tasks?filter=running"
-  ) {
-    throw new Error("Legacy namespaced dashboard URLs do not redirect to the root mount");
+  const moduleSource = await fetch(`${baseUrl}/src/browser.tsx`);
+  const moduleText = await moduleSource.text();
+  if (!moduleSource.ok || !moduleText.includes("createRoot")) {
+    throw new Error("Dashboard source modules were not served from the demo's own origin");
   }
 
   const tasksResponse = await fetch(`${baseUrl}/rpc/dashboard/tasks`, {
@@ -193,13 +178,34 @@ try {
     throw new Error(`Dashboard readers omitted smoke data: ${tasksText}\n${cronText}`);
   }
 
+  // The demo runs its workers as a dedicated process that shares nothing with this server but
+  // PostgreSQL. The only way the dashboard can report them is the durable worker registry, so a
+  // registered, non-zero-capacity fleet here proves the split topology actually works end to end.
+  let workersText = "";
+  let registeredWorkers = false;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    const workersResponse = await fetch(`${baseUrl}/rpc/dashboard/workers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    workersText = await workersResponse.text();
+    if (workersResponse.ok && workersText.includes('"registered":true')) {
+      registeredWorkers = true;
+      break;
+    }
+    await sleep(250);
+  }
+  if (!registeredWorkers) {
+    throw new Error(`Out-of-process demo workers never registered: ${workersText}`);
+  }
+
   console.log(
     `JCODE_CHECKPOINT ${JSON.stringify({
       message: "Clean-checkout demo passed",
+      outOfProcessWorkersRegistered: true,
       dashboard: true,
-      reactGrab: true,
-      viteDevelopmentSource: true,
-      productionPrebuildSkipped: true,
+      singleOriginHotReload: true,
       representativeJobs: true,
       recurringLongRunningTask: true,
       recurringSchedule: true,

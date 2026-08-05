@@ -69,15 +69,15 @@ export interface DashboardTaskController {
   ) => Promise<DashboardCancelTaskResult>;
 }
 
-export interface DashboardWorkerRuntimeState {
-  paused: boolean;
-  concurrency: number;
-  activeSlots: number;
-  draining: boolean;
-}
-
+/**
+ * Operator control over the worker fleet.
+ *
+ * Worker identity and runtime state are read from the durable `workhorse.worker_registry`
+ * relation, so the dashboard reports every live worker whether or not it shares a process with
+ * the host application. This controller exists only so the host can wrap the pause mutation in
+ * its own audit and authorization; omit it for a read-only deployment.
+ */
 export interface DashboardWorkerController {
-  workerStates(): ReadonlyMap<string, DashboardWorkerRuntimeState>;
   setWorkerPaused?: (
     workerId: string,
     paused: boolean,

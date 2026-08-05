@@ -94,7 +94,7 @@ the bound, and stops filling the pass at the first null claim.
 
 ```ts
 worker.concurrency; // readonly number
-worker.runtimeState(); // { concurrency, activeSlots, paused, draining }
+worker.runtimeState(); // { concurrency, activeSlots, paused, locallyPaused, remotelyPaused, draining }
 ```
 
 **Recommendation:** use one multi-slot `Worker` per distinct queue or policy group per process, and
@@ -114,7 +114,57 @@ worker.isPaused();
 await worker.runOnce(); // single claim pass, useful in tests
 ```
 
-These are **process-local** controls, not a durable worker registry or a cross-worker rate limit.
+These are **process-local** controls, and they are not a cross-worker rate limit.
+
+## Fleet registration and remote pause
+
+Every worker announces itself in `workhorse.worker_registry` and refreshes its runtime state on
+`WorkerOptions.registryIntervalMs` (five seconds by default; `0` opts out). The same round trip
+returns the operator-requested pause flag, so an operator surface running in a different process can
+both see and control the fleet.
+
+```ts
+const fleet = await queue.listWorkers();
+await queue.setWorkerPaused("worker-1", true, {
+  requestedBy: "operator",
+  reason: "rolling deploy",
+});
+```
+
+Operator pause is cooperative and durable, exactly like cancellation:
+
+- it takes effect when the worker next refreshes, roughly one `registryIntervalMs`;
+- a handler already executing runs to completion;
+- it is scoped to the running process: a restarted or replaced worker comes back running, so a
+  pause cannot silently idle a worker after a later deployment. Use queue pause to stop work
+  durably;
+- a local `worker.resume()` cannot clear it while it is still in effect — `runtimeState()` reports
+  `locallyPaused` and `remotelyPaused` separately for exactly this reason;
+- `requestedBy` and `reason` are bounded attribution, never authorization.
+
+A worker that stops refreshing is reported offline and eventually pruned. Graceful shutdown
+deregisters. The registry holds one row per live worker and is never read by the claim path.
+
+Reported slot use is only as fresh as the refresh cadence. Treat it as an operational indicator, not
+as a synchronous read of another process's event loop.
+
+## Keeping an out-of-process dashboard live
+
+`workhorse_jobs` is the dispatch wake channel and means only "ready work may exist", so it does not
+fire on transitions such as completion. Set `activityNotifications` to publish coalesced hints on a
+separate `workhorse_activity` channel instead:
+
+```ts
+const worker = new Worker(queue, {
+  activityNotifications: true, // off by default
+  activityNotificationIntervalMs: 250,
+});
+```
+
+Coalescing is the point: a worker completing a thousand jobs a second still issues at most one
+notification per interval, so enabling this cannot turn throughput into notification-queue pressure.
+Delivery is never part of the protocol. Consume it with `listenForDashboardRefresh` from
+[`@workhorse/dashboard/server`](/docs/dashboard).
 
 ## Maintenance telemetry
 
