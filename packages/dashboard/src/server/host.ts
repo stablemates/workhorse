@@ -121,6 +121,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       runtime: {
         basePath: path,
         rpcUrl: `${path}/rpc`,
+        eventsUrl: `${path}/events`,
         auditActor: options.auditActor ?? "dashboard",
         demoTools: Boolean(options.operator?.enqueueTest),
       },

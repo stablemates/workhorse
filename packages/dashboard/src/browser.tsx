@@ -9,6 +9,8 @@ import { WorkhorseThemeProvider } from "./theme.js";
 export interface WorkhorseDashboardRuntimeConfig {
   basePath: string;
   rpcUrl: string;
+  /** Optional so a host serving an older template still boots, with polling instead of streaming. */
+  eventsUrl?: string;
   auditActor: string;
   demoTools?: boolean;
 }
@@ -29,6 +31,7 @@ createRoot(document.getElementById("root")!).render(
       <Dashboard
         client={client}
         basePath={config.basePath}
+        eventsUrl={config.eventsUrl ?? null}
         auditActor={config.auditActor}
         demoTools={config.demoTools ? { enqueueTest: client.enqueueTest } : undefined}
       />

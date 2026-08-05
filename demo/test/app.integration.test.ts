@@ -55,8 +55,17 @@ import {
 } from "../src/feature-showcase.js";
 import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/model";
 
-const databaseUrl = localDatabaseUrl("demo");
-assertLocalDatabasePurpose(databaseUrl, "demo");
+/**
+ * These tests exercise the demo application, but they must never run against the demo database.
+ *
+ * `beforeAll` drops and reinstalls the schema, `beforeEach` truncates every table, and `afterAll`
+ * drops the demo's own tables. Pointed at the demo database that is destructive to a demo someone
+ * is watching: its data disappears mid-session and its tables are gone when the run ends. Worse in
+ * the other direction, a running demo registers two workers of its own, and any assertion about the
+ * fleet then sees four workers instead of the two the test started.
+ */
+const databaseUrl = localDatabaseUrl("test");
+assertLocalDatabasePurpose(databaseUrl, "test");
 const pool = new Pool({ connectionString: databaseUrl, max: 4 });
 const database = createDemoDatabase(pool);
 
@@ -3156,5 +3165,192 @@ describe("Workhorse demo", () => {
       ).rows[0],
     ).toEqual({ count: 1 });
     expect(app).toBeDefined();
+  });
+});
+
+/**
+ * The events feed is the only dashboard surface that reads the append-only history directly, and
+ * the only one whose correctness question is "does it show what actually happened". These tests run
+ * real work through a real worker and then assert the feed against it, rather than against fixtures.
+ */
+describe("Workhorse dashboard events feed", () => {
+  it("merges lifecycle events and closed attempts for work a worker really ran", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      const { jobId } = await enqueueDemoTest("success");
+      const page = await waitFor(
+        () => client.dashboard.events({ window: "1h", pageSize: 100 }),
+        (value) =>
+          value.events.some(
+            (event) =>
+              event.jobId === jobId && event.kind === "attempt" && event.type === "succeeded",
+          ),
+      );
+
+      const rows = page.events.filter((event) => event.jobId === jobId);
+      // Both history tables reach the same feed, and the row says which one it came from.
+      expect(rows.map((event) => `${event.kind}:${event.type}`)).toEqual(
+        expect.arrayContaining(["event:enqueued", "attempt:succeeded"]),
+      );
+      // The job identity is joined in, so a feed row names the task rather than only its uuid.
+      for (const row of rows) {
+        expect(row.queue).toBe("demo");
+        expect(row.jobType).toMatch(/^demo\./);
+      }
+      const attempt = rows.find((event) => event.kind === "attempt")!;
+      expect(attempt.workerId).toEqual(expect.any(String));
+      expect(attempt.durationMs).toBeGreaterThanOrEqual(0);
+      expect(attempt.attempt).toBe(1);
+
+      // Newest first, with lifecycle and attempt rows interleaved by time rather than by table.
+      const timestamps = page.events.map((event) => Date.parse(event.occurredAt));
+      expect(
+        timestamps.every((value, index) => index === 0 || timestamps[index - 1]! >= value),
+      ).toBe(true);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("filters by source table, event type, and the queue the job belongs to", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      const { jobId } = await enqueueDemoTest("success");
+      await waitFor(
+        () => client.dashboard.events({ window: "1h", pageSize: 100, kind: "attempt" }),
+        (value) => value.events.some((event) => event.jobId === jobId),
+      );
+
+      const attempts = await client.dashboard.events({
+        window: "1h",
+        pageSize: 100,
+        kind: "attempt",
+      });
+      expect(attempts.events.length).toBeGreaterThan(0);
+      expect(attempts.events.every((event) => event.kind === "attempt")).toBe(true);
+
+      const enqueues = await client.dashboard.events({
+        window: "1h",
+        pageSize: 100,
+        types: ["enqueued"],
+      });
+      expect(enqueues.events.length).toBeGreaterThan(0);
+      expect(enqueues.events.every((event) => event.type === "enqueued")).toBe(true);
+
+      // Queue and task filters are matched through the job the history row points at.
+      expect(
+        (await client.dashboard.events({ window: "1h", pageSize: 100, queue: "demo" })).events
+          .length,
+      ).toBeGreaterThan(0);
+      expect(
+        (await client.dashboard.events({ window: "1h", pageSize: 100, queue: "not-a-queue" }))
+          .events,
+      ).toEqual([]);
+      expect(
+        (await client.dashboard.events({ window: "1h", pageSize: 100, jobId })).events.every(
+          (event) => event.jobId === jobId,
+        ),
+      ).toBe(true);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("pages through a busy window and reports retention depth", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      // Enough work that the window certainly holds more than one page, so the paging assertions
+      // below are about the feed rather than about how fast the fleet drained.
+      for (let index = 0; index < 20; index += 1) await enqueueDemoTest("success");
+      await waitFor(
+        () => client.dashboard.events({ window: "1h", pageSize: 100 }),
+        (value) => value.total > 50,
+      );
+      // Stop writing before comparing two pages: fresh rows arriving between the reads shift every
+      // offset behind them, which would show up as an overlap that has nothing to do with paging.
+      await workhorse.stop();
+
+      const first = await client.dashboard.events({ window: "1h", pageSize: 25, page: 1 });
+      const second = await client.dashboard.events({ window: "1h", pageSize: 25, page: 2 });
+      expect(first.page).toBe(1);
+      expect(second.page).toBe(2);
+      expect(first.events).toHaveLength(25);
+      expect(second.events).toHaveLength(25);
+      expect(first.total).toBeGreaterThan(50);
+      expect(second.total).toBe(first.total);
+      // A later page continues the ordering rather than repeating what the page above it showed.
+      const shown = new Set(first.events.map((event) => event.id));
+      expect(second.events.filter((event) => shown.has(event.id))).toEqual([]);
+      expect(second.events[0]!.occurredAt <= first.events.at(-1)!.occurredAt).toBe(true);
+
+      const full = await client.dashboard.events({ window: "1h", pageSize: 100 });
+      expect(full.total).toBe(first.total);
+      expect(full.windowSeconds).toBe(3_600);
+      // Depth is bounded by retention, so the page carries the policy rather than leaving an
+      // operator to infer it from a feed that simply stops.
+      const policy = await pool.query<{ days: number | null }>(
+        "SELECT job_event_retention_days AS days FROM workhorse.retention_policy WHERE singleton",
+      );
+      expect(full.retention.jobEventDays).toBe(policy.rows[0]?.days ?? null);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("excludes work that finished before the requested window", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      const { jobId } = await enqueueDemoTest("success");
+      await waitFor(
+        () => client.dashboard.events({ window: "15m", pageSize: 100, jobId }),
+        (value) => value.events.some((event) => event.kind === "attempt"),
+      );
+      // Stop the fleet before rewriting history: a worker still claiming work would write fresh
+      // rows for this job after the aging update and the window assertion would race it.
+      await workhorse.stop();
+
+      // Age the history past the shortest window without touching the clock the queue runs on.
+      await pool.query(
+        "UPDATE workhorse.job_event SET occurred_at = occurred_at - interval '20 minutes' WHERE job_id = $1",
+        [jobId],
+      );
+      await pool.query(
+        "UPDATE workhorse.attempt_history SET occurred_at = occurred_at - interval '20 minutes' WHERE job_id = $1",
+        [jobId],
+      );
+
+      expect(
+        (await client.dashboard.events({ window: "15m", pageSize: 100, jobId })).events,
+      ).toEqual([]);
+      expect(
+        (await client.dashboard.events({ window: "1h", pageSize: 100, jobId })).events.length,
+      ).toBeGreaterThan(0);
+    } finally {
+      await workhorse.stop();
+    }
   });
 });
