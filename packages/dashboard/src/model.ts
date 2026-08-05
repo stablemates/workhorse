@@ -761,13 +761,22 @@ export interface MaintenanceLoopCadences {
 export interface DashboardWorkerRow {
   id: string;
   /**
+   * Where the worker runs, reported independently of its name.
+   *
+   * A deployment that configures a stable `workerId` still needs to answer "which host is that",
+   * so placement is not inferred from the identity string. Null when the worker has never
+   * registered.
+   */
+  hostname: string | null;
+  pid: number | null;
+  /**
    * Jobs PostgreSQL currently reports as active for this worker. It is observed durable state and
    * can briefly differ from `activeSlots`, which is the in-process handler count.
    */
   activeJobs: number;
-  /** Declared execution slots configured for this worker, or null when it is not local. */
+  /** Declared execution slots, or null when the worker has no durable registration. */
   concurrency: number | null;
-  /** Handlers executing inside this process right now, or null when the worker is not local. */
+  /** Handlers the worker reported executing at its last registration refresh. */
   activeSlots: number | null;
   /** Stopping while in-flight handlers finish. New claims have already ceased. */
   draining: boolean;
@@ -775,6 +784,10 @@ export interface DashboardWorkerRow {
   failedAttempts: number;
   averageExecutionMs: number | null;
   lastSeenAt: string | null;
+  /** When the worker process announced itself, or null when it has no durable registration. */
+  startedAt: string | null;
+  /** True when the worker has a row in the durable registry, whether or not it is still live. */
+  registered: boolean;
   paused: boolean;
   status: "active" | "idle" | "recent" | "offline";
 }

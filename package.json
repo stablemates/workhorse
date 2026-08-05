@@ -45,7 +45,7 @@
     "docs:build": "pnpm --filter @workhorse/site build",
     "docs:start": "pnpm --filter @workhorse/site start",
     "docs:typecheck": "pnpm --filter @workhorse/site typecheck",
-    "typecheck": "pnpm typecheck:core && tsc -p tsconfig.scripts.json --noEmit && pnpm build:runtime:dev && pnpm --filter './packages/*' typecheck && pnpm --filter @workhorse/demo typecheck && pnpm docs:typecheck",
+    "typecheck": "pnpm typecheck:core && tsc -p tsconfig.scripts.json --noEmit && pnpm build:runtime && pnpm --filter './packages/*' typecheck && pnpm --filter @workhorse/demo typecheck && pnpm docs:typecheck",
     "typecheck:core": "tsc -p tsconfig.json --noEmit",
     "test": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run",
     "test:integration": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run test/integration.test.ts",
@@ -71,7 +71,9 @@
     "db:reset:test": "node --env-file-if-exists=.env --import tsx src/cli/reset-db.ts --database test --yes",
     "db:reset:bench": "node --env-file-if-exists=.env --import tsx src/cli/reset-db.ts --database bench --yes",
     "db:reset:demo": "node --env-file-if-exists=.env --import tsx src/cli/reset-db.ts --database demo --yes",
-    "db:reset:all": "pnpm db:reset:dev && pnpm db:reset:test && pnpm db:reset:bench && pnpm db:reset:demo"
+    "db:reset:all": "pnpm db:reset:dev && pnpm db:reset:test && pnpm db:reset:bench && pnpm db:reset:demo",
+    "dashboard:dev": "pnpm --filter @workhorse/dashboard dev",
+    "demo:ui": "WORKHORSE_DEMO_DASHBOARD_DEV=true pnpm demo"
   },
   "dependencies": {
     "cron-parser": "5.6.2",
@@ -80,6 +82,7 @@
   "devDependencies": {
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.5",
+    "@workhorse/dashboard": "workspace:*",
     "graphile-worker": "0.17.3",
     "lefthook": "^2.1.10",
     "oxfmt": "^0.59.0",

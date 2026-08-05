@@ -1,129 +1,77 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
 import { DashboardRefreshHub } from "@workhorse/dashboard/server";
-import { and, eq, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {
-  CancellationRequestedError,
   type EnqueueOptions,
-  MIN_PROGRESS_UPDATE_INTERVAL_MS,
   Queue,
   type CancelStatus,
   type Json,
   type JobState,
-  type RetryPolicy,
-  type Worker,
 } from "@workhorse/core";
 import type { Pool } from "pg";
 import {
   DURABLE_DEMO_JOB_TYPE,
-  type DurableDemoPayload,
   type DurableDemoScenario,
-  durableDemoScenarios,
   durableDemoPlanForJob,
-  parseDurableDemoScenario,
-  persistentFailureFor,
+  durableDemoScenarios,
 } from "./durable-demo.js";
-import { orders } from "./schema.js";
 import {
   DEMO_FEATURE_RECURRING_SOURCE,
   DEMO_FEATURE_SHOWCASE_FAMILIES,
   DEMO_FEATURE_SHOWCASE_JOB_TYPE,
   DEMO_FEATURE_SHOWCASE_SEED_NAME,
   DEMO_FEATURE_SHOWCASE_SOURCE,
-  demoFeatureRecurringVariant,
-  type DemoFeatureBehavior,
   type DemoFeaturePayload,
 } from "./feature-showcase.js";
+import { registerDemoHandlers } from "./handlers.js";
+import type { DemoDatabase } from "./database.js";
 
-const ORDER_JOB_TYPE = "order.process";
-const RETRY_JOB_TYPE = "demo.retry";
-const RETRY_CHECKPOINT_NAME = "reserve-capacity";
-const FAILURE_JOB_TYPE = "demo.failure";
-const LONG_RUNNING_JOB_TYPE = "demo.long-running";
-const TIMING_JOB_TYPE = "demo.timing-policy";
-export const DURABLE_TIMER_JOB_TYPE = "demo.durable-timer";
-export const DURABLE_TIMER_PREPARE_CHECKPOINT = "prepare-publication";
-export const DURABLE_TIMER_WAIT_NAME = "publication-delay";
-export const DURABLE_TIMER_PUBLISH_CHECKPOINT = "publish-after-wait";
-const RECURRING_JOB_TYPE = "demo.recurring";
-const REPORT_JOB_TYPE = "demo.report";
-const DEMO_QUEUE = "demo";
-const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
-const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v1";
-const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
-const HISTORICAL_JOB_COUNT = 362;
-export const DEMO_WORKERS = ["demo-worker-1", "demo-worker-2"] as const;
-export const DEMO_WORKER_POLL_MS = 15_000;
-/**
- * Declared execution slots per demo worker. The values are deliberately different and fixed so the
- * dashboard shows a heterogeneous, reproducible fleet: one worker overlaps handlers while the other
- * stays strictly serial. Concurrency is configuration, not a runtime control, so nothing mutates it.
- */
-export const DEMO_WORKER_CONCURRENCY: Readonly<Record<(typeof DEMO_WORKERS)[number], number>> = {
-  "demo-worker-1": 3,
-  "demo-worker-2": 1,
-};
-export const DEMO_MAINTENANCE_INTERVAL_MS = 1_000;
-export const DEMO_MAINTENANCE_TASK_POLL_MS = 60_000;
-export const DEMO_LONG_RUNNING_MS = 20_000;
-export const DEMO_LONG_RUNNING_SEED_DELAY_MS = 10_000;
-export const DEMO_TIMING_TIMEOUT_MS = 1_000;
-export const DEMO_TIMING_HANDLER_MS = 5_000;
-export const DEMO_TIMING_POLICY_TIMEOUT_MS = 90_000;
-export const DEMO_LONG_RUNNING_SEED_JOBS = [
-  { label: "archive-validation" },
-  { label: "partner-catalog-sync" },
-  { label: "quarterly-report-export" },
-] as const;
-export const DEMO_DURABLE_STEP_MS = 2_000;
-export const DEMO_DURABLE_TIMER_WAIT_MS = 10_000;
-export const DEMO_PERSISTENT_RETRY_DELAYS_MS = [5 * 60_000, 7 * 60_000, 10 * 60_000] as const;
-/**
- * One persisted policy per intentionally failing seed. Each policy is chosen so the first
- * scheduled retry lands in the same 5, 7, and 10 minute analytic window the demo has always
- * shown, while PostgreSQL, not the worker, now owns the delay.
- */
-export const DEMO_PERSISTENT_RETRY_POLICIES: readonly RetryPolicy[] = [
-  { type: "fixed", delayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[0] },
-  {
-    type: "exponential",
-    initialDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[1],
-    multiplier: 2,
-    maxDelayMs: 30 * 60_000,
-  },
-  // The jitter cap deliberately equals its base so the published ten minute window stays exact and
-  // deterministic for the demo and its assertions while still exercising the jitter code path.
-  {
-    type: "decorrelated-jitter",
-    baseDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[2],
-    maxDelayMs: DEMO_PERSISTENT_RETRY_DELAYS_MS[2],
-  },
-] as const;
-/** The recoverable retry seed stays fixed and fast so it still recovers while the demo is watched. */
-export const DEMO_RECOVERABLE_RETRY_POLICY: RetryPolicy = { type: "fixed", delayMs: 100 };
-export const DEMO_SCHEDULE_NAMESPACE = "workhorse-demo";
-export const HEARTBEAT_SCHEDULE_NAME = "heartbeat";
-export const REPORT_SCHEDULE_NAME = "demo.report";
-export const LONG_RUNNING_SCHEDULE_NAME = "demo.long-running";
-/**
- * The demo always asks for the documented 24 hour retention window so a repeated submission is
- * still recognised across a demo session and an operator can see one stable retention claim.
- */
-export const DEMO_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1_000;
-/** Namespace used by the dashboard operator path, kept distinct from HTTP caller namespaces. */
-export const DEMO_OPERATOR_IDEMPOTENCY_SCOPE = "workhorse-demo:operator";
-/**
- * One fixed operator key. Repeating the menu action is meant to return the same task rather than
- * creating another one, which is the whole point of the demonstration.
- */
-export const DEMO_OPERATOR_IDEMPOTENCY_KEY = "operator-idempotent-task";
-/** Namespace and key for the single deterministic keyed seed shown on a fresh demo database. */
-export const DEMO_SEED_IDEMPOTENCY_SCOPE = "workhorse-demo:seed";
-export const DEMO_SEED_IDEMPOTENCY_KEY = "representative-keyed-task";
+import {
+  DEMO_DURABLE_STEP_MS,
+  DEMO_DURABLE_TIMER_WAIT_MS,
+  DEMO_IDEMPOTENCY_TTL_MS,
+  DEMO_LONG_RUNNING_SEED_DELAY_MS,
+  DEMO_LONG_RUNNING_SEED_JOBS,
+  DEMO_MAINTENANCE_INTERVAL_MS,
+  DEMO_MAINTENANCE_TASK_POLL_MS,
+  DEMO_OPERATOR_IDEMPOTENCY_KEY,
+  DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
+  DEMO_PERSISTENT_RETRY_DELAYS_MS,
+  DEMO_PERSISTENT_RETRY_POLICIES,
+  DEMO_QUEUE,
+  DEMO_RECOVERABLE_RETRY_POLICY,
+  DEMO_REGISTRY_INTERVAL_MS,
+  DEMO_SCHEDULE_NAMESPACE,
+  DEMO_SEED_IDEMPOTENCY_KEY,
+  DEMO_SEED_IDEMPOTENCY_SCOPE,
+  DEMO_TIMING_HANDLER_MS,
+  DEMO_TIMING_POLICY_TIMEOUT_MS,
+  DEMO_TIMING_TIMEOUT_MS,
+  DEMO_WORKER_CONCURRENCY,
+  DEMO_WORKER_POLL_MS,
+  DURABLE_TIMER_JOB_TYPE,
+  FAILURE_JOB_TYPE,
+  HEARTBEAT_SCHEDULE_NAME,
+  HISTORICAL_JOB_COUNT,
+  HISTORICAL_SEED_NAME,
+  HISTORICAL_WORKER_IDS,
+  LONG_RUNNING_JOB_TYPE,
+  LONG_RUNNING_SCHEDULE_NAME,
+  LONG_RUNNING_SEED_NAME,
+  ORDER_JOB_TYPE,
+  RECURRING_JOB_TYPE,
+  REPORT_JOB_TYPE,
+  REPORT_SCHEDULE_NAME,
+  REPRESENTATIVE_SEED_NAME,
+  RETRY_JOB_TYPE,
+  TIMING_JOB_TYPE,
+} from "./constants.js";
+import { orders } from "./schema.js";
+
+export * from "./constants.js";
 
 interface DemoIdempotency {
   key: string;
@@ -136,8 +84,24 @@ export interface CreateDemoApplicationOptions {
   onWorkerError?: (error: unknown) => void;
   dashboardRefresh?: DashboardRefreshHub;
   dashboard?: boolean;
-  /** Trusted development modules injected before the dashboard browser entry. */
-  browserModules?: readonly string[];
+  /**
+   * Run the demo workers inside this process.
+   *
+   * The demo's own `pnpm demo` deployment sets this to false and runs `demo/src/worker.ts` as a
+   * dedicated process, which is the topology the documentation recommends. In-process workers
+   * remain supported for small applications and are what the integration tests exercise.
+   */
+  workers?: boolean;
+  /**
+   * Serve the dashboard from source with hot reload instead of the packaged bundle.
+   *
+   * Supplied by the development entry point. The HTML still goes through the packaged host, so this
+   * changes where modules come from, not how the page is assembled.
+   */
+  dev?: {
+    readTemplate(): Promise<string>;
+    transformHtml(url: string, html: string): Promise<string>;
+  };
   /** Display-only deployment environment label shown in the dashboard header. */
   environment?: string;
   operator?: DashboardOperator;
@@ -146,6 +110,13 @@ export interface CreateDemoApplicationOptions {
   taskController?: TaskController;
   workerController?: WorkerController;
   workerPollMs?: number;
+  /**
+   * How often in-process workers refresh their durable registration.
+   *
+   * Reported slot use is only as fresh as this cadence, so the demo keeps it short enough that the
+   * workers view tracks overlapping handlers as they happen.
+   */
+  registryIntervalMs?: number;
   maintenanceIntervalMs?: number;
   maintenanceTaskPollMs?: number;
   longRunningJobMs?: number;
@@ -233,7 +204,6 @@ export interface TaskController {
 }
 
 export interface WorkerController {
-  workerStates(): ReadonlyMap<string, DemoWorkerRuntimeState>;
   setWorkerPaused?: (
     workerId: string,
     paused: boolean,
@@ -241,23 +211,8 @@ export interface WorkerController {
   ) => Promise<{ paused: boolean }>;
 }
 
-/**
- * Process-local view of one running worker. `concurrency` is the declared slot budget from startup
- * configuration, while `activeSlots` counts handlers currently executing inside this process. Both
- * are distinct from the SQL-observed active job count the read model reports separately.
- */
-export interface DemoWorkerRuntimeState {
-  paused: boolean;
-  concurrency: number;
-  activeSlots: number;
-  draining: boolean;
-}
-
-export function createDemoDatabase(pool: Pool) {
-  return drizzle({ client: pool, schema: { orders } });
-}
-
-export type DemoDatabase = ReturnType<typeof createDemoDatabase>;
+export { createDemoDatabase } from "./database.js";
+export type { DemoDatabase } from "./database.js";
 
 interface HistoricalJob {
   id: string;
@@ -274,14 +229,14 @@ interface HistoricalJob {
   result: Json | null;
   error: Json | null;
   finishedAt: Date;
-  workerId: (typeof DEMO_WORKERS)[number];
+  workerId: (typeof HISTORICAL_WORKER_IDS)[number];
   attempts: HistoricalAttempt[];
 }
 
 interface HistoricalAttempt {
   attempt: number;
   fenceToken: number;
-  workerId: (typeof DEMO_WORKERS)[number];
+  workerId: (typeof HISTORICAL_WORKER_IDS)[number];
   outcome: "succeeded" | "failed" | "retry";
   startedAt: Date;
   finishedAt: Date;
@@ -389,7 +344,7 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
           ? 300 + random() * 4_500
           : 500 + random() * 12_000;
     const finishedAt = new Date(runAt.getTime() + durationMs + (retried ? 4_000 : 0));
-    const workerId = DEMO_WORKERS[index % DEMO_WORKERS.length]!;
+    const workerId = HISTORICAL_WORKER_IDS[index % HISTORICAL_WORKER_IDS.length]!;
     const fenceToken = index * 10 + currentAttempt + 1;
     const error = failed ? errors[index % errors.length]! : null;
     const attempts: HistoricalAttempt[] = [];
@@ -400,7 +355,7 @@ function buildHistoricalJobs(now = new Date()): HistoricalJob[] {
       attempts.push({
         attempt: 1,
         fenceToken: index * 10 + 1,
-        workerId: DEMO_WORKERS[(index + 1) % DEMO_WORKERS.length]!,
+        workerId: HISTORICAL_WORKER_IDS[(index + 1) % HISTORICAL_WORKER_IDS.length]!,
         outcome: "retry",
         startedAt: retryStartedAt,
         finishedAt: retryFinishedAt,
@@ -876,49 +831,38 @@ export function createLocalTaskController(database: DemoDatabase): TaskControlle
   };
 }
 
-export function createLocalWorkerController(
-  database: DemoDatabase,
-  workers: ReadonlyMap<string, Worker>,
-): WorkerController {
+/**
+ * Audited pause and resume for one registered worker.
+ *
+ * The pause is written to `workhorse.worker_registry` rather than applied to a process-local
+ * `Worker` object, so it reaches workers running in their own processes. Like cancellation, it is
+ * cooperative: the worker stops claiming when it next refreshes its registration, and any handler
+ * already executing runs to completion.
+ */
+export function createLocalWorkerController(database: DemoDatabase): WorkerController {
   return {
-    workerStates() {
-      return new Map(
-        [...workers].map(([workerId, worker]) => {
-          const state = worker.runtimeState();
-          return [
-            workerId,
-            {
-              paused: state.paused,
-              concurrency: state.concurrency,
-              activeSlots: state.activeSlots,
-              draining: state.draining,
-            },
-          ] as const;
-        }),
-      );
-    },
     async setWorkerPaused(workerId, paused, audit) {
-      const worker = workers.get(workerId);
-      if (!worker) throw new Error(`Worker ${workerId} is not running in this demo process`);
-      const before = { paused: worker.isPaused() };
-      if (paused) worker.pause();
-      else worker.resume();
-
-      try {
-        await database.execute(sql`
+      return database.transaction(async (transaction) => {
+        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+        const beforeRows = await transaction.execute<{ paused: boolean }>(sql`
+          SELECT paused FROM workhorse.worker_registry WHERE worker_id = ${workerId} FOR UPDATE
+        `);
+        const result = await workhorse.queue.setWorkerPaused(workerId, paused, {
+          requestedBy: audit.actor,
+          reason: audit.reason,
+        });
+        if (!result) throw new Error(`Worker ${workerId} is not registered`);
+        await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
              ${audit.occurredAt ?? new Date().toISOString()}, 'setWorkerPaused', ${`worker:${workerId}`},
-             ${JSON.stringify(before)}::jsonb, ${JSON.stringify({ paused })}::jsonb, 'succeeded')
+             ${JSON.stringify({ paused: beforeRows.rows[0]?.paused ?? false })}::jsonb,
+             ${JSON.stringify({ paused: result.paused })}::jsonb, 'succeeded')
         `);
-      } catch (error) {
-        if (before.paused) worker.pause();
-        else worker.resume();
-        throw error;
-      }
-      return { paused };
+        return { paused: result.paused };
+      });
     },
   };
 }
@@ -933,10 +877,8 @@ export function createDemoApplication(
   const durableTimerWaitMs = options.durableTimerWaitMs ?? DEMO_DURABLE_TIMER_WAIT_MS;
   const dashboardRefresh = options.dashboardRefresh ?? new DashboardRefreshHub();
   const environment = options.environment ?? "development";
-  // Worker pause state belongs to this application process and intentionally resets on restart.
-  const workerRegistry = new Map<string, Worker>();
-  const workerController =
-    options.workerController ?? createLocalWorkerController(database, workerRegistry);
+  // Worker pause state is durable and fleet-wide; it survives restarts and reaches remote workers.
+  const workerController = options.workerController ?? createLocalWorkerController(database);
   // Cancellation is offered only where the rest of the mutating operator surface is. A read-only
   // deployment keeps exactly the dashboard it had, with no cancel action anywhere.
   const taskController =
@@ -946,298 +888,33 @@ export function createDemoApplication(
     defaultQueue: DEMO_QUEUE,
     close: options.close,
   });
+  const runWorkersInProcess = options.workers !== false;
   const workhorse = new HonoWorkhorse(adapter, {
-    workers: DEMO_WORKERS.map((workerId) => ({
+    workers: (runWorkersInProcess ? DEMO_WORKER_CONCURRENCY : []).map((concurrency) => ({
       options: {
         queue: DEMO_QUEUE,
-        workerId,
+        // Unnamed, exactly like the dedicated worker process: identity is generated per instance.
         scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
         pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
         // Declared once at startup. The demo deliberately offers no runtime concurrency control.
-        concurrency: DEMO_WORKER_CONCURRENCY[workerId],
+        concurrency,
         maintenanceIntervalMs,
         maintenanceTaskPollMs,
+        registryIntervalMs: options.registryIntervalMs ?? DEMO_REGISTRY_INTERVAL_MS,
         // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
         // Returning undefined omits the worker override and lets SQL select the stored policy.
         retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
       },
       configure(worker) {
-        workerRegistry.set(workerId, worker);
-        worker.handle<{ orderId: string }>(ORDER_JOB_TYPE, async ({ orderId }) => {
-          const updated = await database
-            .update(orders)
-            .set({ status: "processed", processedAt: new Date() })
-            .where(and(eq(orders.id, orderId), eq(orders.status, "queued")))
-            .returning({ id: orders.id });
-
-          if (updated.length === 0) throw new Error(`Order ${orderId} is not queued`);
-          dashboardRefresh.publish("worker");
-          return { orderId, processed: true };
+        registerDemoHandlers(worker, {
+          database,
+          queue: adapter.queue,
+          durableStepMs,
+          durableTimerWaitMs,
+          longRunningJobMs: options.longRunningJobMs,
+          onDurableStepOperation: options.onDurableStepOperation,
+          onDurableTimerOperation: options.onDurableTimerOperation,
         });
-        worker.handle<{ label: string; failUntilAttempt?: number }>(
-          RETRY_JOB_TYPE,
-          async ({ label, failUntilAttempt }, { checkpoint, job }) => {
-            const failuresBefore = failUntilAttempt ?? 1;
-            const reservation = await checkpoint(RETRY_CHECKPOINT_NAME, () => ({
-              reservationId: randomUUID(),
-              reservedAt: new Date().toISOString(),
-              reservedOnAttempt: job.attempt,
-            }));
-            dashboardRefresh.publish("worker");
-            if (job.attempt <= failuresBefore) {
-              throw new Error(`Intentional demo failure ${job.attempt}/${failuresBefore}`);
-            }
-            return {
-              label,
-              recovered: true,
-              attempt: job.attempt,
-              checkpointReused: reservation.reservedOnAttempt < job.attempt,
-              reservation,
-            };
-          },
-        );
-        worker.handle<DurableDemoPayload>(
-          DURABLE_DEMO_JOB_TYPE,
-          async ({ scenario: scenarioInput, failureMode }, { checkpoint, job, signal }) => {
-            const scenario = parseDurableDemoScenario(scenarioInput);
-            if (!scenario)
-              throw new Error(`Unknown durable demo scenario ${String(scenarioInput)}`);
-            const definition = durableDemoScenarios[scenario];
-            const artifacts: Record<
-              string,
-              {
-                operationId: string;
-                completedAt: string;
-                completedOnAttempt: number;
-                output: string;
-              }
-            > = {};
-            const operationDelayMs = failureMode === "continuous" ? 0 : durableStepMs;
-            const persistentFailAfterStep = persistentFailureFor(scenario).afterStepIndex;
-
-            for (const [stepIndex, step] of definition.steps.entries()) {
-              const artifact = await checkpoint(step.name, async () => {
-                options.onDurableStepOperation?.(scenario, step.name, job.attempt);
-                await sleep(operationDelayMs, undefined, { signal });
-                return {
-                  operationId: randomUUID(),
-                  completedAt: new Date().toISOString(),
-                  completedOnAttempt: job.attempt,
-                  output: `${step.label} completed`,
-                };
-              });
-              artifacts[step.name] = artifact;
-              dashboardRefresh.publish("worker");
-
-              if (failureMode === "continuous" && stepIndex === persistentFailAfterStep) {
-                const nextStep = definition.steps[stepIndex + 1];
-                throw new Error(
-                  nextStep
-                    ? `Intentional persistent demo failure between durable stages ${step.name} and ${nextStep.name}`
-                    : `Intentional persistent demo failure at the boundary after durable stage ${step.name}`,
-                );
-              }
-
-              if (
-                failureMode !== "continuous" &&
-                job.attempt === 1 &&
-                stepIndex === definition.failAfterStep
-              ) {
-                throw new Error(`Intentional crash after durable step ${step.name}`);
-              }
-            }
-
-            return {
-              scenario,
-              completed: true,
-              attempt: job.attempt,
-              reusedCheckpoints: definition.steps
-                .filter((step) => artifacts[step.name]!.completedOnAttempt < job.attempt)
-                .map((step) => step.name),
-              artifacts,
-            };
-          },
-        );
-        worker.handle<{ source: string }>(DURABLE_TIMER_JOB_TYPE, async ({ source }, context) => {
-          const currentFence = context.job.fenceToken.toString();
-          const prepared = await context.checkpoint(DURABLE_TIMER_PREPARE_CHECKPOINT, () => {
-            options.onDurableTimerOperation?.(
-              "prepare",
-              context.job.attempt,
-              context.job.fenceToken,
-            );
-            return {
-              artifactId: randomUUID(),
-              preparedAt: new Date().toISOString(),
-              preparedOnAttempt: context.job.attempt,
-              preparedOnFence: currentFence,
-            };
-          });
-          dashboardRefresh.publish("worker");
-
-          const existingWait = await context.getWait(DURABLE_TIMER_WAIT_NAME);
-          await context.sleep(DURABLE_TIMER_WAIT_NAME, durableTimerWaitMs);
-          const durableWait = await context.getWait(DURABLE_TIMER_WAIT_NAME);
-          if (!durableWait) throw new Error("Durable timer wait was not replayed");
-
-          const publication = await context.checkpoint(DURABLE_TIMER_PUBLISH_CHECKPOINT, () => {
-            options.onDurableTimerOperation?.(
-              "publish",
-              context.job.attempt,
-              context.job.fenceToken,
-            );
-            return {
-              publicationId: randomUUID(),
-              publishedAt: new Date().toISOString(),
-              publishedOnAttempt: context.job.attempt,
-              publishedOnFence: currentFence,
-            };
-          });
-          dashboardRefresh.publish("worker");
-
-          return {
-            source,
-            completed: true,
-            attempt: context.job.attempt,
-            prepareCheckpointReused: prepared.preparedOnFence !== currentFence,
-            waitReplayed: existingWait !== null,
-            wait: {
-              name: durableWait.name,
-              wakeAt: new Date(durableWait.wakeAt).toISOString(),
-              firstFence: durableWait.fenceToken.toString(),
-            },
-            prepared,
-            publication,
-          };
-        });
-        worker.handle<{ source: string }>(RECURRING_JOB_TYPE, async ({ source }, { job }) => {
-          dashboardRefresh.publish("worker");
-          return { source, recurring: true, attempt: job.attempt };
-        });
-        worker.handle<DemoFeaturePayload>(
-          DEMO_FEATURE_SHOWCASE_JOB_TYPE,
-          async (payload, context) => {
-            const variant =
-              payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
-            const behavior: DemoFeatureBehavior =
-              variant === null
-                ? payload.behavior
-                : variant === 0
-                  ? "success"
-                  : variant === 1
-                    ? payload.family === "cancellation"
-                      ? "self-cancel"
-                      : "retry-once"
-                    : "always-fail";
-            const scenario =
-              variant === null ? payload.scenario : `${payload.scenario}:variant-${variant + 1}`;
-
-            if (payload.family === "durable-checkpoints") {
-              const checkpointCount =
-                payload.checkpointCount ?? (variant === null ? 1 : variant + 1);
-              for (let index = 1; index <= checkpointCount; index += 1) {
-                await context.checkpoint(`${payload.scenario}:stage-${index}`, () => ({
-                  artifactId: randomUUID(),
-                  stage: index,
-                  createdOnAttempt: context.job.attempt,
-                }));
-              }
-            }
-
-            if (payload.family === "durable-waits") {
-              await context.sleep(
-                `${payload.scenario}:wait`,
-                payload.waitMs ?? (variant === null ? 500 : 400 + variant * 300),
-              );
-            }
-
-            if (payload.family === "progress") {
-              const durationMs = Math.max(
-                payload.durationMs ?? 300,
-                MIN_PROGRESS_UPDATE_INTERVAL_MS,
-              );
-              await context.setProgress({ scenario, phase: "running", completed: 1, total: 2 });
-              dashboardRefresh.publish("worker");
-              await sleep(durationMs, undefined, { signal: context.signal });
-              await context.setProgress({ scenario, phase: "finishing", completed: 2, total: 2 });
-            } else if (payload.family === "timing-controls" || behavior === "self-cancel") {
-              await sleep(
-                payload.durationMs ?? (variant === null ? 250 : 200 + variant * 200),
-                undefined,
-                {
-                  signal: context.signal,
-                },
-              );
-            }
-
-            if (behavior === "self-cancel") {
-              await adapter.queue.cancel(context.job.id, {
-                requestedBy: "demo-showcase",
-                reason: `Cooperative cancellation for ${scenario}`,
-              });
-              throw new CancellationRequestedError(context.job.id);
-            }
-
-            const shouldRetry =
-              (behavior === "retry-once" ||
-                behavior === "checkpoint-retry" ||
-                behavior === "wait-retry" ||
-                behavior === "progress-retry") &&
-              context.job.attempt === 1;
-            const shouldRetryTwice = behavior === "retry-twice" && context.job.attempt <= 2;
-            if (
-              shouldRetry ||
-              shouldRetryTwice ||
-              behavior === "always-fail" ||
-              behavior === "progress-fail"
-            ) {
-              throw new Error(
-                `Intentional showcase outcome for ${scenario} on attempt ${context.job.attempt}`,
-              );
-            }
-
-            dashboardRefresh.publish("worker");
-            return {
-              family: payload.family,
-              scenario,
-              variant,
-              outcome: context.job.attempt > 1 ? "recovered" : "succeeded",
-              attempt: context.job.attempt,
-            };
-          },
-        );
-        worker.handle<{ report: string; source: string }>(REPORT_JOB_TYPE, async (payload) => {
-          dashboardRefresh.publish("worker");
-          return { ...payload, generated: true };
-        });
-        worker.handle(FAILURE_JOB_TYPE, () => {
-          throw new Error("Intentional terminal demo failure");
-        });
-        worker.handle(LONG_RUNNING_JOB_TYPE, async (_payload, context) => {
-          dashboardRefresh.publish("worker");
-          const durationMs = options.longRunningJobMs ?? DEMO_LONG_RUNNING_MS;
-          if (durationMs >= MIN_PROGRESS_UPDATE_INTERVAL_MS * 2) {
-            await context.setProgress({ phase: "running", completed: 0, total: durationMs });
-            dashboardRefresh.publish("worker");
-          }
-          await sleep(durationMs);
-          await context.setProgress({
-            phase: "complete",
-            completed: durationMs,
-            total: durationMs,
-          });
-          dashboardRefresh.publish("worker");
-          return { completed: true, durationMs };
-        });
-        worker.handle<{ durationMs: number; source: string }>(
-          TIMING_JOB_TYPE,
-          async ({ durationMs, source }, { signal }) => {
-            dashboardRefresh.publish("worker");
-            await sleep(durationMs, undefined, { signal });
-            dashboardRefresh.publish("worker");
-            return { completed: true, durationMs, source };
-          },
-        );
       },
     })),
     onWorkerError(error) {
@@ -1249,10 +926,9 @@ export function createDemoApplication(
   if (options.dashboard !== false) {
     mountWorkhorseDashboard(app, {
       path: "/",
-      workhorse,
+      database: workhorse.database,
       authorize: () => true,
       environment,
-      configuredWorkers: DEMO_WORKERS,
       maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs },
       operator: options.operator ?? createReadOnlyOperator(),
       scheduleController: options.scheduleController,
@@ -1262,7 +938,7 @@ export function createDemoApplication(
       projectDurability: durableDemoPlanForJob,
       refresh: dashboardRefresh,
       auditActor: "local-demo",
-      browserModules: options.browserModules,
+      dev: options.dev,
     });
   }
 

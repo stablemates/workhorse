@@ -184,12 +184,7 @@ export const dashboardRouter = {
     workers: procedure.handler(({ context }) => {
       const canManageWorkers =
         context.operator.mode === "local" && Boolean(context.workerController?.setWorkerPaused);
-      return readDashboardWorkers(
-        context.database,
-        context.configuredWorkers,
-        context.workerController?.workerStates(),
-        canManageWorkers,
-      );
+      return readDashboardWorkers(context.database, context.configuredWorkers, canManageWorkers);
     }),
     jobDetail: procedure.input(jobDetailInput).handler(async ({ context, input }) => {
       const detail = await readDashboardJobDetail(

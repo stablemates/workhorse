@@ -26,8 +26,8 @@ import {
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
   DEMO_WORKER_POLL_MS,
-  DEMO_WORKERS,
   DEMO_WORKER_CONCURRENCY,
+  HISTORICAL_WORKER_IDS,
   DURABLE_TIMER_JOB_TYPE,
   DURABLE_TIMER_PREPARE_CHECKPOINT,
   DURABLE_TIMER_PUBLISH_CHECKPOINT,
@@ -41,7 +41,11 @@ import {
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
 import type { DashboardRouter } from "@workhorse/dashboard/server";
-import { dashboardDatabase, readDashboardSnapshot } from "@workhorse/dashboard/server";
+import {
+  dashboardDatabase,
+  readDashboardSnapshot,
+  readDashboardWorkers,
+} from "@workhorse/dashboard/server";
 import { durableDemoScenarios } from "../src/durable-demo.js";
 import {
   DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT,
@@ -56,13 +60,52 @@ assertLocalDatabasePurpose(databaseUrl, "demo");
 const pool = new Pool({ connectionString: databaseUrl, max: 4 });
 const database = createDemoDatabase(pool);
 
+/**
+ * Slot use and operator pause both travel through the durable worker registry, so these tests need
+ * a refresh cadence far shorter than the work they observe.
+ */
+const TEST_REGISTRY_INTERVAL_MS = 100;
+
+/**
+ * The identity shape a worker generates for itself: `<hostname>-<pid>-<8 hex>`.
+ *
+ * The demo names no workers, so tests assert the shape of a generated identity rather than a
+ * literal an application chose.
+ */
+const GENERATED_WORKER_ID = /^\S+-\d+-[\da-f]{8}$/;
+
+/**
+ * Duration for jobs whose *transient* in-flight state a test asserts on.
+ *
+ * Reported slot use is only as fresh as the registry cadence, so a test that wants to observe
+ * overlapping handlers has to keep them overlapping for many refresh cycles. Tuning this close to
+ * the cadence makes the test race with load on the machine rather than with the behavior it checks.
+ *
+ * It also has to stay comfortably inside `waitFor`'s polling budget, because the same tests then
+ * wait for those jobs to succeed. Ten registry refreshes is enough headroom for the first
+ * constraint without approaching the second.
+ */
+const TEST_OBSERVABLE_JOB_MS = TEST_REGISTRY_INTERVAL_MS * 10;
+
+/**
+ * Applications created by the current test, stopped before the next one truncates.
+ *
+ * Worker registration is durable, so a worker still running from a previous test would re-register
+ * itself after `beforeEach` truncates and pollute the next test's fleet view. Stopping is idempotent,
+ * so tests that already stop their own runtime in a `finally` are unaffected.
+ */
+const runningApplications: Array<{ stop: () => Promise<void> }> = [];
+
 function createTestApplication(options: CreateDemoApplicationOptions = {}) {
-  return createDemoApplication(database, {
+  const application = createDemoApplication(database, {
     workerPollMs: 15,
+    registryIntervalMs: TEST_REGISTRY_INTERVAL_MS,
     longRunningJobMs: 25,
     durableStepMs: 0,
     ...options,
   });
+  runningApplications.push(application.workhorse);
+  return application;
 }
 
 beforeAll(async () => {
@@ -72,9 +115,13 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  // Stop any worker left running by the previous test before truncating, so a straggler cannot
+  // re-register itself into the fleet view this test is about to assert on.
+  await Promise.all(runningApplications.splice(0).map((workhorse) => workhorse.stop()));
   await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
     workhorse.job_wait, workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.queue_control, workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
+    workhorse.queue_control, workhorse.worker_registry,
+    workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job RESTART IDENTITY CASCADE`);
   await new Queue(pool).syncRetentionPolicy({
     jobIdentityRetentionDays: null,
@@ -155,6 +202,29 @@ async function waitForWorker(
     },
   );
   return page.workers.find((candidate) => candidate.id === workerId)!;
+}
+
+/**
+ * Wait for the demo's workers to announce themselves and return them by declared capacity.
+ *
+ * The demo does not name its workers, exactly as a real deployment usually does not, so tests have
+ * to discover the fleet from the registry rather than assume identities. Capacity is what
+ * distinguishes the two: one worker overlaps handlers, the other is strictly serial.
+ */
+async function waitForRegisteredFleet(
+  client: RouterClient<DashboardRouter>,
+): Promise<{ overlapping: DashboardWorkerRow; serial: DashboardWorkerRow }> {
+  const page = await waitFor(
+    () => client.dashboard.workers(),
+    (value) =>
+      value.workers.filter((worker) => worker.registered).length === DEMO_WORKER_CONCURRENCY.length,
+  );
+  const registered = page.workers.filter((worker) => worker.registered);
+  const overlapping = registered.find((worker) => worker.concurrency === 3);
+  const serial = registered.find((worker) => worker.concurrency === 1);
+  expect(overlapping, "a worker with three declared slots").toBeDefined();
+  expect(serial, "a worker with one declared slot").toBeDefined();
+  return { overlapping: overlapping!, serial: serial! };
 }
 
 describe("Workhorse demo", () => {
@@ -498,8 +568,8 @@ describe("Workhorse demo", () => {
         "showcase-redrive-success",
       ],
       workers: [
-        "demo-worker-1",
-        "demo-worker-2",
+        HISTORICAL_WORKER_IDS[0],
+        HISTORICAL_WORKER_IDS[1],
         "showcase-seed-dead-letter",
         "showcase-seed-redrive-replay",
         "showcase-seed-redrive-success",
@@ -559,9 +629,11 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      worker: "demo-worker-1",
+      worker: HISTORICAL_WORKER_IDS[0],
     });
-    expect(workerFiltered.jobs.every((job) => job.lastWorkerId === "demo-worker-1")).toBe(true);
+    expect(workerFiltered.jobs.every((job) => job.lastWorkerId === HISTORICAL_WORKER_IDS[0])).toBe(
+      true,
+    );
     const typeFiltered = await client.dashboard.tasks({
       filter: "all",
       page: 1,
@@ -574,7 +646,7 @@ describe("Workhorse demo", () => {
       page: 1,
       pageSize: 25,
       queue: "emails",
-      worker: "demo-worker-1",
+      worker: HISTORICAL_WORKER_IDS[0],
       jobType: "email.send",
       tags: ["email"],
     });
@@ -583,7 +655,7 @@ describe("Workhorse demo", () => {
       combined.jobs.every(
         (job) =>
           job.queue === "emails" &&
-          job.lastWorkerId === "demo-worker-1" &&
+          job.lastWorkerId === HISTORICAL_WORKER_IDS[0] &&
           job.type === "email.send" &&
           job.tags.includes("email"),
       ),
@@ -621,15 +693,15 @@ describe("Workhorse demo", () => {
       groupBy: "task",
       tags: ["email"],
       queue: "emails",
-      worker: "demo-worker-1",
+      worker: HISTORICAL_WORKER_IDS[0],
     });
     expect(filteredActivity.groups.every((group) => group.startsWith("email."))).toBe(true);
     await expect(
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "worker" }),
     ).resolves.toMatchObject({
       groups: [
-        "demo-worker-1",
-        "demo-worker-2",
+        HISTORICAL_WORKER_IDS[0],
+        HISTORICAL_WORKER_IDS[1],
         "showcase-seed-dead-letter",
         "showcase-seed-redrive-replay",
         "showcase-seed-redrive-success",
@@ -844,7 +916,7 @@ describe("Workhorse demo", () => {
             output: expect.stringMatching(/ completed$/),
           },
           fence_token: expect.any(String),
-          worker_id: expect.stringMatching(/^demo-worker-/),
+          worker_id: expect.stringMatching(GENERATED_WORKER_ID),
         });
       }
       await pool.query(`
@@ -1016,7 +1088,7 @@ describe("Workhorse demo", () => {
           },
           attempt: 1,
           fence_token: expect.any(String),
-          worker_id: expect.stringMatching(/^demo-worker-/),
+          worker_id: expect.stringMatching(GENERATED_WORKER_ID),
         },
       ]);
       expect(
@@ -1041,7 +1113,10 @@ describe("Workhorse demo", () => {
         counts: { all: 1, retried: 1, completed: 1 },
       });
       expect(await client.dashboard.workers()).toMatchObject({
-        workers: [{ id: "demo-worker-1" }, { id: "demo-worker-2" }],
+        workers: [
+          { id: expect.stringMatching(GENERATED_WORKER_ID), registered: true },
+          { id: expect.stringMatching(GENERATED_WORKER_ID), registered: true },
+        ],
       });
       expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
         window: "1h",
@@ -1054,7 +1129,7 @@ describe("Workhorse demo", () => {
             name: "reserve-capacity",
             attempt: 1,
             fenceToken: expect.any(String),
-            workerId: expect.stringMatching(/^demo-worker-/),
+            workerId: expect.stringMatching(GENERATED_WORKER_ID),
             value: { reservedOnAttempt: 1 },
           },
         ],
@@ -1167,7 +1242,7 @@ describe("Workhorse demo", () => {
           wake_at: expect.any(Date),
           attempt: 1,
           fence_token: expect.any(String),
-          worker_id: expect.stringMatching(/^demo-worker-/),
+          worker_id: expect.stringMatching(GENERATED_WORKER_ID),
         },
       ]);
       const firstFence = waits.rows[0]!.fence_token;
@@ -1703,7 +1778,7 @@ describe("Workhorse demo", () => {
     ).rejects.toThrow(/read-only|FORBIDDEN/i);
     await expect(
       client.dashboard.setWorkerPaused({
-        workerId: DEMO_WORKERS[0],
+        workerId: "any-worker",
         paused: true,
         audit: { actor: "test", reason: "verify read-only", requestId: "readonly-worker" },
       }),
@@ -1927,15 +2002,14 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      await expect(client.dashboard.workers()).resolves.toMatchObject({
-        canManageWorkers: true,
-        workers: expect.arrayContaining([
-          expect.objectContaining({ id: DEMO_WORKERS[0], paused: false, status: "idle" }),
-        ]),
-      });
+      // Workers are unnamed, so the fleet is discovered from the registry rather than assumed.
+      const { overlapping } = await waitForRegisteredFleet(client);
+      const workerId = overlapping.id;
+      expect(overlapping).toMatchObject({ paused: false, status: "idle" });
+      await expect(client.dashboard.workers()).resolves.toMatchObject({ canManageWorkers: true });
       await expect(
         client.dashboard.setWorkerPaused({
-          workerId: DEMO_WORKERS[0],
+          workerId,
           paused: true,
           audit: {
             actor: "operator",
@@ -1947,7 +2021,7 @@ describe("Workhorse demo", () => {
 
       await expect(client.dashboard.workers()).resolves.toMatchObject({
         workers: expect.arrayContaining([
-          expect.objectContaining({ id: DEMO_WORKERS[0], paused: true, status: "idle" }),
+          expect.objectContaining({ id: workerId, paused: true, status: "idle" }),
         ]),
       });
       expect(
@@ -1960,7 +2034,7 @@ describe("Workhorse demo", () => {
       ).toEqual([
         {
           action: "setWorkerPaused",
-          target: `worker:${DEMO_WORKERS[0]}`,
+          target: `worker:${workerId}`,
           actor: "operator",
           reason: "pause one demo worker",
           request_id: "worker-pause",
@@ -1975,34 +2049,34 @@ describe("Workhorse demo", () => {
   });
 
   it("declares deterministic demo worker concurrency and projects it through RPC", async () => {
-    expect(DEMO_WORKER_CONCURRENCY).toEqual({ "demo-worker-1": 3, "demo-worker-2": 1 });
+    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 1]);
 
     const { app, workhorse } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);
-    // Worker objects are registered synchronously by start(), so the projection needs no waiting.
+    // Declared concurrency travels through the durable registry rather than a process-local Worker
+    // object, and the workers are unnamed, so the fleet is discovered rather than looked up by id.
     workhorse.start();
 
     try {
-      await expect(client.dashboard.workers()).resolves.toMatchObject({
-        workers: [
-          {
-            id: "demo-worker-1",
-            concurrency: 3,
-            activeSlots: 0,
-            activeJobs: 0,
-            paused: false,
-            draining: false,
-          },
-          {
-            id: "demo-worker-2",
-            concurrency: 1,
-            activeSlots: 0,
-            activeJobs: 0,
-            paused: false,
-            draining: false,
-          },
-        ],
+      const { overlapping, serial } = await waitForRegisteredFleet(client);
+      expect(overlapping).toMatchObject({
+        concurrency: 3,
+        activeSlots: 0,
+        activeJobs: 0,
+        paused: false,
+        draining: false,
       });
+      expect(serial).toMatchObject({
+        concurrency: 1,
+        activeSlots: 0,
+        activeJobs: 0,
+        paused: false,
+        draining: false,
+      });
+      // Generated identities, not names the application chose.
+      for (const worker of [overlapping, serial]) {
+        expect(worker.id).toMatch(/^\S+-\d+-[\da-f]{8}$/);
+      }
     } finally {
       await workhorse.stop();
     }
@@ -2012,18 +2086,27 @@ describe("Workhorse demo", () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: 400,
+      longRunningJobMs: TEST_OBSERVABLE_JOB_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();
 
     try {
+      // Pause targets a durable registration, so wait for both unnamed workers to announce
+      // themselves before acting on either. An operator cannot hit this from the UI, which lists
+      // registered workers, but a test that starts and immediately pauses can.
+      const { overlapping, serial } = await waitForRegisteredFleet(client);
+
       // Parking the single-slot worker makes every claim below land on the three-slot worker.
       await client.dashboard.setWorkerPaused({
-        workerId: DEMO_WORKERS[1],
+        workerId: serial.id,
         paused: true,
         audit: { actor: "operator", reason: "isolate slot use", requestId: "slots-isolate" },
       });
+      // Pause is durable and cooperative rather than an in-process method call: the request is
+      // committed to PostgreSQL and the worker stops claiming when it next refreshes its
+      // registration. Give it more than one refresh cycle before assuming it will not claim.
+      await sleep(TEST_REGISTRY_INTERVAL_MS * 3);
 
       const enqueued = await Promise.all([
         client.dashboard.enqueueTest({
@@ -2038,7 +2121,7 @@ describe("Workhorse demo", () => {
 
       const overlapped = await waitForWorker(
         client,
-        DEMO_WORKERS[0],
+        overlapping.id,
         (worker) => worker.activeSlots === 2,
       );
       expect(overlapped).toMatchObject({ concurrency: 3, activeSlots: 2, paused: false });
@@ -2047,7 +2130,7 @@ describe("Workhorse demo", () => {
 
       await expect(
         client.dashboard.setWorkerPaused({
-          workerId: DEMO_WORKERS[0],
+          workerId: overlapping.id,
           paused: true,
           audit: { actor: "operator", reason: "pause while busy", requestId: "slots-pause" },
         }),
@@ -2055,7 +2138,7 @@ describe("Workhorse demo", () => {
 
       // Pause stops new claims only, so both in-flight handlers keep their slots.
       const paused = (await client.dashboard.workers()).workers.find(
-        (worker) => worker.id === DEMO_WORKERS[0],
+        (worker) => worker.id === overlapping.id,
       );
       expect(paused).toMatchObject({ paused: true, activeSlots: 2, concurrency: 3 });
 
@@ -2069,7 +2152,7 @@ describe("Workhorse demo", () => {
 
       const drained = await waitForWorker(
         client,
-        DEMO_WORKERS[0],
+        overlapping.id,
         (worker) => worker.activeSlots === 0,
       );
       expect(drained).toMatchObject({ paused: true, activeSlots: 0, draining: false });
@@ -2083,7 +2166,7 @@ describe("Workhorse demo", () => {
         ).rows,
       ).toEqual([
         {
-          target: `worker:${DEMO_WORKERS[0]}`,
+          target: `worker:${overlapping.id}`,
           before: { paused: false },
           after: { paused: true },
         },
@@ -2093,28 +2176,40 @@ describe("Workhorse demo", () => {
     }
   });
 
-  it("reports unknown capacity for a worker that is not running in this process", async () => {
-    // A supplied controller that knows no workers stands in for an out-of-process fleet: capacity
-    // is genuinely unknown, so the read model must say so instead of implying zero or one slot.
-    const { app } = createTestApplication({
-      operator: createLocalOperator(database),
-      workerController: { workerStates: () => new Map() },
-    });
-
-    await expect(dashboardClient(app).dashboard.workers()).resolves.toMatchObject({
+  it("reports unknown capacity for a declared worker that has never registered", async () => {
+    // The demo declares no fleet, because real deployments do not name their workers. Hosts that do
+    // declare one still get an expected-but-never-started worker rendered with unknown capacity
+    // rather than an implied zero or one slot.
+    await expect(
+      readDashboardWorkers(dashboardDatabase(pool), ["expected-worker-a", "expected-worker-b"]),
+    ).resolves.toMatchObject({
       canManageWorkers: false,
       workers: [
-        { id: "demo-worker-1", concurrency: null, activeSlots: null, draining: false },
-        { id: "demo-worker-2", concurrency: null, activeSlots: null, draining: false },
+        {
+          id: "expected-worker-a",
+          registered: false,
+          concurrency: null,
+          activeSlots: null,
+          draining: false,
+          status: "offline",
+        },
+        {
+          id: "expected-worker-b",
+          registered: false,
+          concurrency: null,
+          activeSlots: null,
+          draining: false,
+          status: "offline",
+        },
       ],
     });
   });
 
-  it("separates SQL-observed active jobs from unknown declared capacity in the snapshot", async () => {
+  it("reports declared capacity and slot use in the snapshot from the durable registry", async () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: 400,
+      longRunningJobMs: TEST_OBSERVABLE_JOB_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();
@@ -2129,19 +2224,27 @@ describe("Workhorse demo", () => {
         (page) => page.workers.some((worker) => worker.activeSlots === 1),
       );
 
+      // No declared fleet is passed: the snapshot discovers workers from the registry alone.
       const snapshot = await readDashboardSnapshot(
         dashboardDatabase(pool),
         new Queue(pool, "demo"),
-        DEMO_WORKERS,
+        [],
         createLocalOperator(database),
       );
-      // The snapshot has no process-local worker handle, so it reports observed active work while
-      // leaving declared capacity and in-process slot use explicitly unknown.
+      // The snapshot is a pure SQL projection with no process-local worker handle, yet it still
+      // reports declared capacity and slot use because workers publish both to the durable
+      // registry. SQL-observed active jobs remain a separate, independently sourced number.
       expect(snapshot.workers.map((worker) => worker.activeJobs).reduce((a, b) => a + b, 0)).toBe(
         1,
       );
+      expect(snapshot.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
+      const declared = snapshot.workers.map((worker) => worker.concurrency);
+      expect([Math.min(...(declared as number[])), Math.max(...(declared as number[]))]).toEqual([
+        1, 3,
+      ]);
       for (const worker of snapshot.workers) {
-        expect(worker).toMatchObject({ concurrency: null, activeSlots: null, draining: false });
+        expect(worker).toMatchObject({ registered: true, draining: false });
+        expect(worker.activeSlots).not.toBeNull();
       }
     } finally {
       await workhorse.stop();
@@ -2152,7 +2255,7 @@ describe("Workhorse demo", () => {
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
       workerPollMs: 5,
-      longRunningJobMs: 400,
+      longRunningJobMs: TEST_OBSERVABLE_JOB_MS,
     });
     const client = dashboardClient(app);
     workhorse.start();
@@ -2184,11 +2287,10 @@ describe("Workhorse demo", () => {
       await expect(client.dashboard.jobDetail({ id: enqueued.jobId })).resolves.toMatchObject({
         identity: { state: "succeeded" },
       });
-      await expect(client.dashboard.workers()).resolves.toMatchObject({
-        workers: expect.arrayContaining([
-          expect.objectContaining({ id: busyWorker.id, draining: false, activeSlots: 0 }),
-        ]),
-      });
+      // A drained worker has stopped, so it deregisters. The demo declares no expected fleet, so it
+      // simply leaves the list rather than lingering as an offline row nobody asked for.
+      const afterDrain = await client.dashboard.workers();
+      expect(afterDrain.workers.map((worker) => worker.id)).not.toContain(busyWorker.id);
     } finally {
       if (quiesced) await quiesced;
       await workhorse.stop();

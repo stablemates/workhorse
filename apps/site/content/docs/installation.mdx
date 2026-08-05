@@ -29,6 +29,19 @@ pnpm add @workhorse/hono hono @hono/node-server  # Hono lifecycle + dashboard mo
 pnpm add @workhorse/dashboard react react-dom    # Embeddable operator UI
 ```
 
+`@workhorse/dashboard` mounts on any framework. Hono, Next.js route handlers, SvelteKit, and Nitro
+use its Fetch-native host directly; Express, Connect, and Fastify use its Connect-style Node bridge.
+`@workhorse/hono` is a thin convenience binding over the same host.
+
+## Scaffold an existing project
+
+`workhorse init` inspects your `package.json`, writes a single worker configuration file, and prints
+the dashboard mount for your framework. It never edits `package.json` or your application routes.
+
+```bash
+npx workhorse init
+```
+
 ## Provide a database
 
 Workhorse creates a `workhorse` schema inside a database you own. Nothing outside that schema is
@@ -44,7 +57,14 @@ the target database.
 
 ## Install the schema
 
-`installSchema` applies the canonical clean-install schema for protocol version 15.
+The fastest path is the CLI:
+
+```bash
+npx workhorse schema install   # reads --database-url, WORKHORSE_DATABASE_URL, or DATABASE_URL
+npx workhorse schema status
+```
+
+The same thing from application code, when installation belongs in your deployment script:
 
 ```ts
 import { Pool } from "pg";

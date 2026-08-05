@@ -22,10 +22,9 @@ function adapter(overrides: Partial<WorkhorseAdapter<{ transaction: true }>> = {
 describe("HonoWorkhorse", () => {
   it("requires authorization at both the dashboard namespace root and nested routes", async () => {
     const runtimeAdapter = adapter();
-    const integration = new HonoWorkhorse(runtimeAdapter);
     const app = new Hono();
     mountWorkhorseDashboard(app, {
-      workhorse: integration,
+      database: runtimeAdapter.database,
       authorize: () => false,
     });
 
@@ -36,11 +35,10 @@ describe("HonoWorkhorse", () => {
 
   it("supports a protected dashboard mounted at the host root", async () => {
     const runtimeAdapter = adapter();
-    const integration = new HonoWorkhorse(runtimeAdapter);
     const app = new Hono();
     mountWorkhorseDashboard(app, {
       path: "/",
-      workhorse: integration,
+      database: runtimeAdapter.database,
       authorize: () => false,
     });
 
@@ -48,6 +46,19 @@ describe("HonoWorkhorse", () => {
     expect((await app.request("/tasks")).status).toBe(403);
     expect((await app.request("/rpc/dashboard/tasks", { method: "POST" })).status).toBe(403);
     expect(runtimeAdapter.database.query).not.toHaveBeenCalled();
+  });
+
+  it("mounts without a worker runtime and leaves unrelated host routes alone", async () => {
+    const runtimeAdapter = adapter();
+    const app = new Hono().get("/orders", (context) => context.text("orders"));
+    mountWorkhorseDashboard(app, {
+      database: runtimeAdapter.database,
+      authorize: () => false,
+    });
+
+    expect(await (await app.request("/orders")).text()).toBe("orders");
+    expect((await app.request("/workhorse/tasks")).status).toBe(403);
+    expect(runtimeAdapter.createWorker).not.toHaveBeenCalled();
   });
 
   it("provides the adapter queue and transaction bridge through typed middleware", async () => {

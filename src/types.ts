@@ -578,3 +578,48 @@ export interface QueueHealth {
   /** Fraction of PostgreSQL's global async notification queue currently occupied. */
   notificationQueueUsage: number;
 }
+
+/** One worker's self-reported runtime state, pushed on its registration cadence. */
+export interface WorkerRegistration {
+  workerId: string;
+  /**
+   * Identifies this process incarnation of `workerId`.
+   *
+   * A refresh from the same instance preserves an operator pause; a new instance clears it, so a
+   * restarted worker always comes back running.
+   */
+  instanceId: string;
+  /** Host this worker runs on, recorded independently of what the worker is called. */
+  hostname: string;
+  /** Operating-system process id of this worker. */
+  pid: number;
+  /** Queue this worker claims from. Defaults to the queue's own default. */
+  queue?: string;
+  concurrency: number;
+  activeSlots: number;
+  draining: boolean;
+}
+
+/** Result of an operator pause request against one registered worker. */
+export interface WorkerPauseResult {
+  workerId: string;
+  paused: boolean;
+  /** Bounded audit attribution, never authorization. */
+  pausedBy: string | null;
+  reason: string | null;
+  pausedAt: Date | null;
+  lastHeartbeatAt: Date;
+}
+
+/** One row of the durable worker fleet registration. */
+export interface WorkerRegistryEntry extends WorkerPauseResult {
+  /** The process incarnation currently holding this worker id. */
+  instanceId: string;
+  hostname: string;
+  pid: number;
+  queue: string;
+  concurrency: number;
+  activeSlots: number;
+  draining: boolean;
+  startedAt: Date;
+}

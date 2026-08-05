@@ -24,6 +24,10 @@
     "./client": {
       "types": "./dist/rpc-client.d.ts",
       "import": "./dist/rpc-client.js"
+    },
+    "./dev": {
+      "types": "./dist/dev.d.ts",
+      "import": "./dist/dev.js"
     }
   },
   "publishConfig": {
@@ -34,7 +38,8 @@
     "build": "rm -rf dist && pnpm build:library && pnpm build:app",
     "build:library": "tsc -p tsconfig.json && cp src/styles.css dist/styles.css && cp -R src/assets dist/assets",
     "build:app": "vite build",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "vite"
   },
   "dependencies": {
     "@mantine/charts": "^8.3.18",
@@ -53,13 +58,20 @@
     "@workhorse/core": "workspace:*",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-grab": "^0.1.50",
     "typescript": "^5.8.3",
     "vite": "^7.1.7"
   },
   "peerDependencies": {
     "@workhorse/core": ">=0.1.0 <1",
     "react": ">=19 <20",
-    "react-dom": ">=19 <20"
+    "react-dom": ">=19 <20",
+    "vite": ">=6 <9"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22"
