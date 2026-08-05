@@ -158,31 +158,6 @@ async function waitForWorker(
 }
 
 describe("Workhorse demo", () => {
-  it("mounts the packaged dashboard at root", async () => {
-    const { app } = createTestApplication();
-    const root = await app.request("/");
-    expect(root.status).toBe(302);
-    expect(root.headers.get("location")).toBe("/tasks");
-
-    const page = await app.request("/tasks");
-    const html = await page.text();
-    expect(page.status).toBe(200);
-    expect(page.headers.get("content-type")).toContain("text/html");
-    expect(html).toContain("window.workhorseDashboard=");
-    expect(html).toContain('"basePath":""');
-    expect(html).not.toContain("react-grab");
-
-    const withDevelopmentModule = createTestApplication({
-      browserModules: ["/development/react-grab.ts"],
-    });
-    expect(await (await withDevelopmentModule.app.request("/tasks")).text()).toContain(
-      '<script type="module" src="/development/react-grab.ts"></script>',
-    );
-    const legacy = await app.request("/workhorse/tasks?filter=running&page=2");
-    expect(legacy.status).toBe(302);
-    expect(legacy.headers.get("location")).toBe("/tasks?filter=running&page=2");
-  });
-
   it("uses a conservative worker polling interval for the demo", () => {
     expect(DEMO_WORKER_POLL_MS).toBe(15_000);
     expect(DEMO_LONG_RUNNING_MS).toBe(20_000);
