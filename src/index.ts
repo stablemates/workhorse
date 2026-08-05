@@ -7,6 +7,16 @@ export {
   WORKHORSE_SCHEMA_VERSION,
 } from "./schema.js";
 export {
+  assertSupportedPostgres,
+  describePostgresSupport,
+  MINIMUM_NODE_MAJOR,
+  MINIMUM_POSTGRES_MAJOR,
+  readPostgresSupport,
+  SUPPORTED_NODE_MAJORS,
+  SUPPORTED_POSTGRES_MAJORS,
+} from "./support.js";
+export type { PostgresSupport } from "./support.js";
+export {
   CheckpointConflictError,
   CheckpointLeaseLostError,
   EnqueueIdempotencyConflictError,

@@ -18,21 +18,20 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P0-07 Release and compatibility matrix**
-2. **P0-02 Production telemetry**
-3. **P1-08 Payload contracts and limits**
-4. **P0-04 Notification-assisted dispatch**
-5. **P1-06 Queue concurrency policies**
+1. **P0-02 Production telemetry**
+2. **P1-08 Payload contracts and limits**
+3. **P0-04 Notification-assisted dispatch**
+4. **P1-06 Queue concurrency policies**
 
 The demo, the initial integration packages, the operator query surface, progress, dead letters,
-deadlines, the durable worker registry, and the framework-neutral dashboard host are complete.
+deadlines, the durable worker registry, the framework-neutral dashboard host, and the release and
+compatibility matrix are complete.
 
-P0-07 is first because five packages are now published-shaped with no supported-version contract,
-and it gates both P2-06 and P2-07. Full OpenTelemetry support is sequenced next because two later
-features (P0-06, P2-10) wait on it; each earlier feature must still ship the focused diagnostics and
-benchmark evidence needed to validate its own correctness. P1-05 and P1-06 are deliberately after
-P0-02 because both make claims about claim latency that should be instrumented before the hot path
-changes.
+Full OpenTelemetry support is first because two later features (P0-06, P2-10) wait on it; each
+earlier feature must still ship the focused diagnostics and benchmark evidence needed to validate
+its own correctness. P1-05 and P1-06 are deliberately after P0-02 because both make claims about
+claim latency that should be instrumented before the hot path changes. P0-07 landed first because
+the published packages had no supported-version contract, and it unblocks P2-06 and P2-07.
 
 ## P0: demo vertical slice and production hardening
 
@@ -246,14 +245,26 @@ half — using `workhorse_jobs` to wake a claiming worker instead of polling —
       ships copied PNGs. Needs the original vector artwork; tracing the rasters would change the
       brand.
 
-### [ ] P0-07 Release and compatibility matrix
+### [x] P0-07 Release and compatibility matrix
 
 **Depends on:** none
 
-- [ ] Test supported Node.js and PostgreSQL versions in CI.
-- [ ] Publish package provenance, changelog, upgrade notes, and protocol compatibility guarantees.
-- [ ] Add install and smoke tests against a packed package rather than source-only imports.
-- [ ] Define the production-support boundary separately from benchmark validation.
+- [x] Test supported Node.js and PostgreSQL versions in CI. `src/support.ts` owns the matrix,
+      `.github/workflows/ci.yml` runs the full suite across every Node 22/24 by PostgreSQL 15-18
+      combination, and `test/support-matrix.test.ts` fails when the constants, the workflow, the
+      package `engines` fields, and the documentation disagree.
+- [x] Publish package provenance, changelog, upgrade notes, and protocol compatibility guarantees.
+      `.github/workflows/release.yml` verifies the tag against every manifest and the changelog,
+      runs `pnpm check`, and publishes each packed tarball with `npm publish --provenance`.
+      `CHANGELOG.md` carries versions, required schema version, and upgrade notes;
+      `docs/compatibility.md` and the site's Compatibility page carry the protocol guarantees.
+- [x] Add install and smoke tests against a packed package rather than source-only imports. The
+      existing `test:packed` consumer now also runs on both supported Node majors in CI, alongside
+      `test:demo-smoke` and `test:site-smoke`.
+- [x] Define the production-support boundary separately from benchmark validation. Supported means
+      exercised by the CI matrix; installation refuses PostgreSQL below the minimum with the
+      server's own version, a newer-than-tested major runs but claims nothing, and benchmark
+      evidence stays one fixed configuration that implies neither.
 
 ## P1: job controls and reliability
 
