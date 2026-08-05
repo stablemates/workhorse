@@ -1,5 +1,8 @@
+import { createORPCClient } from "@orpc/client";
 import { describe, expect, it } from "vitest";
-import { describeRunNowOutcome, type DashboardRunNowStatus } from "./model.js";
+import type { DashboardClient } from "./client.js";
+import { describeRunNowOutcome, runNowOutcomeTone, type DashboardRunNowStatus } from "./model.js";
+import { requestRunNow } from "./run-now.js";
 
 const statuses: DashboardRunNowStatus[] = [
   "released",
@@ -26,6 +29,17 @@ describe("run-now vocabulary", () => {
       expect(described.label).not.toBe(status);
       expect(described.summary.length).toBeGreaterThan(0);
       expect(described.exact.length).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * Three of these statuses are the server deliberately leaving a task alone. Reporting them in the
+   * colour of a failure would send an operator to investigate a fault that does not exist.
+   */
+  it("reserves the failure tone for requests that never reached a decision", () => {
+    expect(runNowOutcomeTone("released")).toBe("success");
+    for (const status of ["already_ready", "not_scheduled", "waiting", "not_found"] as const) {
+      expect(runNowOutcomeTone(status)).toBe("neutral");
     }
   });
 
@@ -68,6 +82,53 @@ describe("run-now vocabulary", () => {
     const described = describeRunNowOutcome("not_found");
     expect(described.summary).toContain("nothing was released");
     expect(described.exact).toContain("retention");
+  });
+
+  /**
+   * The packaged browser client is an oRPC proxy whose every property read is another segment of a
+   * procedure path. A reference lifted off it and invoked with `call` or `bind` therefore addresses
+   * `dashboard.runTaskNow.call`, which no router serves: the request 404s, the operator reads "Not
+   * found", and the task stays scheduled. TypeScript cannot see the difference, because the proxy
+   * satisfies the method type either way, so the request path is asserted here against a real
+   * client rather than a hand-written stub.
+   */
+  it("addresses the runTaskNow procedure itself through a real oRPC client", async () => {
+    const calls: { path: readonly string[]; input: unknown }[] = [];
+    const client = createORPCClient<{
+      dashboard: DashboardClient;
+    }>({
+      call(path, input) {
+        calls.push({ path, input });
+        return Promise.resolve({ status: "released", id: "job", state: "ready", runAt: null });
+      },
+    }).dashboard;
+
+    const feedback = await requestRunNow(client, {
+      id: "1e3d0f4a-2a1d-4f4f-9a6d-6d5c2b7f0f11",
+      auditActor: "operator",
+      requestId: "request-1",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.path).toEqual(["dashboard", "runTaskNow"]);
+    expect(calls[0]!.input).toMatchObject({
+      id: "1e3d0f4a-2a1d-4f4f-9a6d-6d5c2b7f0f11",
+      audit: { actor: "operator", requestId: "request-1" },
+    });
+    expect(feedback).toMatchObject({ failure: null });
+    expect(feedback.described?.label).toBe("Released to the queue");
+  });
+
+  it("reports a rejected request as a failure sentence rather than a silent no-op", async () => {
+    const client = createORPCClient<{ dashboard: DashboardClient }>({
+      call() {
+        return Promise.reject(new Error("Job not found"));
+      },
+    }).dashboard;
+
+    await expect(
+      requestRunNow(client, { id: "job", auditActor: "operator", requestId: "request-2" }),
+    ).resolves.toMatchObject({ jobId: "job", described: null, failure: "Job not found" });
   });
 
   it("never overclaims what running a task now does", () => {
