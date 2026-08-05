@@ -23,17 +23,23 @@ failure modes follow from it:
 
 ## Run commands from the checkout they belong to
 
-`scripts/setup-worktree.ts` provisions a dedicated set of databases for each linked worktree and
-writes their URLs into that worktree's `.env`. Repository commands read that file through
-`node --env-file-if-exists=.env`, which keeps checkouts isolated.
+`scripts/setup-worktree.ts` provisions a dedicated set of databases for each linked worktree —
+`dev`, `test`, `bench`, and `demo` alike — and writes their URLs into that worktree's `.env`.
 
-`--env-file` does not override variables already present in the environment. A shell configured
-for one worktree therefore carries its `WORKHORSE_*_DATABASE_URL` values into any command it
-runs — including commands run in a different checkout, which will then quietly read and write
-the first worktree's databases. Run a checkout's commands from that checkout's own environment.
+Repository commands run through `scripts/with-env.ts`, which resolves `.env` relative to its own
+file rather than the working directory, and lets the four `WORKHORSE_*_DATABASE_URL` values and
+`DATABASE_URL` from that file win over anything already exported. So a command belongs to the
+checkout whose `package.json` defines it, no matter which directory or shell invoked it.
 
-If an integration test fails on a row count that looks slightly off, confirm which database the
-process actually resolved before concluding anything about the test.
+This matters because plain `node --env-file` loses to variables already in the environment. An
+interactive shell hides that when a directory-aware loader such as mise or direnv re-exports on
+every `cd`; a shell that changed directory without such a hook keeps the previous checkout's
+values, and before `with-env.ts` those values silently won. Do not reintroduce
+`--env-file-if-exists=.env` in a `package.json` script.
+
+Anything spawned outside those scripts still inherits the ambient environment. If an integration
+test fails on a row count that looks slightly off, confirm which database the process actually
+resolved before concluding anything about the test.
 
 ## One worktree, one branch
 
