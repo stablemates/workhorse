@@ -86,7 +86,7 @@ const tasksInput = z.object({
 const activityInput = z.object({
   filter: taskFilter.default("all"),
   period: z.enum(["15m", "1h", "6h", "24h", "7d"]).default("1h"),
-  groupBy: z.enum(["queue", "worker", "task", "status"]).default("queue"),
+  groupBy: z.enum(["queue", "worker", "task", "status"]).default("task"),
   tags: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
   queue: z.string().trim().min(1).nullable().default(null),
   worker: z.string().trim().min(1).nullable().default(null),

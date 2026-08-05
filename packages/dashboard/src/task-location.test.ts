@@ -36,7 +36,7 @@ describe("task location state", () => {
         page: 1,
         pageSize: 50,
         period: "1h",
-        group: "queue",
+        group: "task",
         taskId: null,
       }),
     ).toBe("/tasks");
@@ -77,9 +77,11 @@ describe("task location state", () => {
   it("drops only the task parameter when the drawer closes", () => {
     // Closing the drawer is not a change of what the operator is looking at, so every filter,
     // the page, and the chart settings survive it untouched.
-    const opened = parseTaskLocation("?filter=running&tags=billing&per=100&group=task&task=job-42");
+    const opened = parseTaskLocation(
+      "?filter=running&tags=billing&per=100&group=queue&task=job-42",
+    );
     expect(taskLocationHref({ ...opened, taskId: null })).toBe(
-      "/tasks?filter=running&tags=billing&per=100&group=task",
+      "/tasks?filter=running&tags=billing&per=100&group=queue",
     );
   });
 

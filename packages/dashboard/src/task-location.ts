@@ -99,7 +99,7 @@ export function parseTaskLocation(
       : (defaults.period ?? "1h"),
     group: ["queue", "worker", "task", "status"].includes(requestedGroup ?? "")
       ? requestedGroup!
-      : (defaults.group ?? "queue"),
+      : (defaults.group ?? "task"),
   };
 }
 
@@ -114,7 +114,7 @@ export function taskLocationHref(state: TaskLocationState): string {
   if (state.page > 1) parameters.set("page", String(state.page));
   if (state.pageSize !== 50) parameters.set("per", String(state.pageSize));
   if (state.period !== "1h") parameters.set("period", state.period);
-  if (state.group !== "queue") parameters.set("group", state.group);
+  if (state.group !== "task") parameters.set("group", state.group);
   if (state.taskId) parameters.set("task", state.taskId);
   const query = parameters.toString();
   return query ? `/tasks?${query}` : "/tasks";
