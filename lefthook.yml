@@ -10,12 +10,26 @@ pre-commit:
 
 post-checkout:
   jobs:
-    - name: set up new worktree
+    - name: install dependencies the checkout needs
       run: |
+        # Git hands post-checkout the previous HEAD, the new HEAD, and a flag that is 1 for a
+        # branch checkout and 0 for a file checkout.
+
+        # A freshly created worktree reports the null SHA as its previous HEAD, and only a
+        # linked worktree has a git dir distinct from the common dir. Together they mean this
+        # tree was just created and has nothing installed yet, so provision it from scratch.
         if [ "{1}" = "0000000000000000000000000000000000000000" ] &&
           [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
           pnpm install --frozen-lockfile
           pnpm worktree:setup
+        # Any other branch checkout can still move dependencies underneath us. The primary
+        # clone never satisfies the branch above, so switching branches there left node_modules
+        # describing the branch being left behind: a dependency added on the branch being
+        # entered was simply absent from disk, and the build failed on a missing module.
+        # Comparing the lockfile keeps unrelated switches instant. This must stay an elif
+        # because the null SHA above is not a valid argument to git diff.
+        elif [ "{3}" = "1" ] && ! git diff --quiet "{1}" "{2}" -- pnpm-lock.yaml; then
+          pnpm install --frozen-lockfile
         fi
         pnpm worktree:prune
 
