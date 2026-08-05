@@ -56,7 +56,7 @@ If the transaction rolls back, the job never existed.
 ## Workers
 
 ```ts
-const worker = workhorse.createWorker({ workerId: "worker-1", concurrency: 4 });
+const worker = workhorse.createWorker({ concurrency: 4 });
 worker.handle("account.created", async (payload) => ({ ok: true }));
 await worker.run();
 ```

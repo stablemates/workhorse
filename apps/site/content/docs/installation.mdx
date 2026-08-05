@@ -113,7 +113,7 @@ import { Pool } from "pg";
 import { Queue, Worker } from "@workhorse/core";
 
 const queue = new Queue(new Pool({ connectionString: process.env.DATABASE_URL }));
-const worker = new Worker(queue, { workerId: "worker-1" });
+const worker = new Worker(queue);
 worker.handle("email.send", async (payload) => ({ delivered: payload.to }));
 await worker.run();
 ```

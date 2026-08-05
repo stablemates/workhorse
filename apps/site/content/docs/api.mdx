@@ -13,7 +13,7 @@ type declarations.
 | `installSchema`            | `(database: Queryable) => Promise<void>`           |
 | `readSchemaVersion`        | `(database: Queryable) => Promise<number \| null>` |
 | `assertSchemaCompatible`   | `(database: Queryable) => Promise<void>`           |
-| `WORKHORSE_SCHEMA_VERSION` | `number` (currently `16`)                          |
+| `WORKHORSE_SCHEMA_VERSION` | `number` (currently `17`)                          |
 
 ## `Queue`
 
@@ -30,12 +30,27 @@ new Queue(database: Queryable, defaultQueue = "default")
 
 ### Queue controls
 
-| Method        | Signature                             |
-| ------------- | ------------------------------------- |
-| `pauseQueue`  | `(queue?: string) => Promise<void>`   |
-| `resumeQueue` | `(queue?: string) => Promise<void>`   |
-| `purgeQueue`  | `(queue?: string) => Promise<number>` |
-| `promote`     | `(limit = 100) => Promise<number>`    |
+| Method           | Signature                                      |
+| ---------------- | ---------------------------------------------- |
+| `pauseQueue`     | `(queue?: string) => Promise<void>`            |
+| `resumeQueue`    | `(queue?: string) => Promise<void>`            |
+| `purgeQueue`     | `(queue?: string) => Promise<number>`          |
+| `promote`        | `(limit = 100) => Promise<number>`             |
+| `notifyActivity` | `(queue?: string) => Promise<void>`            |
+| `runTaskNow`     | `(jobId: string) => Promise<RunTaskNowResult>` |
+
+### Worker registry
+
+Durable fleet visibility and cooperative remote pause. See
+[Fleet registration and remote pause](/docs/workers#fleet-registration-and-remote-pause).
+
+| Method                | Signature                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------- |
+| `registerWorker`      | `(registration: WorkerRegistration) => Promise<{ paused: boolean }>`                            |
+| `deregisterWorker`    | `(workerId: string) => Promise<boolean>`                                                        |
+| `setWorkerPaused`     | `(workerId, paused, options?: { requestedBy?, reason? }) => Promise<WorkerPauseResult \| null>` |
+| `listWorkers`         | `() => Promise<WorkerRegistryEntry[]>`                                                          |
+| `pruneWorkerRegistry` | `(maxAgeMs = 86_400_000) => Promise<number>`                                                    |
 
 ### Protocol operations
 
@@ -112,17 +127,34 @@ Normally driven by `Worker`; exposed for custom runtimes and tests.
 new Worker(queue: Queue, options?: WorkerOptions)
 ```
 
-| Member                 | Signature                                 |
-| ---------------------- | ----------------------------------------- |
-| `handle`               | `(type, handler: Handler) => this`        |
-| `run`                  | `(signal?: AbortSignal) => Promise<void>` |
-| `runOnce`              | `() => Promise<boolean>`                  |
-| `pause` / `resume`     | `() => void`                              |
-| `isPaused`             | `() => boolean`                           |
-| `stop`                 | `() => void`                              |
-| `concurrency`          | readonly `number`                         |
-| `runtimeState`         | `() => WorkerRuntimeState`                |
-| `maintenanceTelemetry` | `() => WorkerMaintenanceTelemetry[]`      |
+| Member                 | Signature                                    |
+| ---------------------- | -------------------------------------------- |
+| `handle`               | `(type, handler: Handler) => this`           |
+| `run`                  | `(signal?: AbortSignal) => Promise<void>`    |
+| `runOnce`              | `() => Promise<boolean>`                     |
+| `pause` / `resume`     | `() => void`                                 |
+| `isPaused`             | `() => boolean`                              |
+| `stop`                 | `() => void`                                 |
+| `concurrency`          | readonly `number`                            |
+| `runtimeState`         | `() => WorkerRuntimeState`                   |
+| `maintenanceTelemetry` | `() => WorkerMaintenanceTelemetry[]`         |
+| `id`                   | readonly `string` (the lease owner identity) |
+
+## `HandlerContext`
+
+The second argument to every handler, and the only durable primitives available inside an attempt.
+
+| Member          | Signature                                                |
+| --------------- | -------------------------------------------------------- |
+| `job`           | `ClaimedJob<TPayload>`                                   |
+| `signal`        | `AbortSignal`                                            |
+| `checkpoint`    | `(name, operation: () => Promise<T> \| T) => Promise<T>` |
+| `getCheckpoint` | `(name) => Promise<JobCheckpoint<T> \| null>`            |
+| `sleep`         | `(name, durationMs: number) => Promise<void>`            |
+| `sleepUntil`    | `(name, wakeAt: Date) => Promise<void>`                  |
+| `getWait`       | `(name) => Promise<JobWait \| null>`                     |
+| `getProgress`   | `() => Promise<JobProgress<T> \| null>`                  |
+| `setProgress`   | `(value: T) => Promise<JobProgress<T>>`                  |
 
 ## Adapters and worker processes
 
@@ -164,6 +196,8 @@ new Worker(queue: Queue, options?: WorkerOptions)
 | `MAX_IDEMPOTENCY_SCOPE_BYTES`              | 256                                       |
 | `MAX_IDEMPOTENCY_TTL_MS`                   | 31,536,000,000 (365 days)                 |
 | `MAX_CHECKPOINT_VALUE_BYTES`               | 1,048,576 (1 MiB)                         |
+| `MAX_PROGRESS_VALUE_BYTES`                 | 65,536 (64 KiB)                           |
+| `MIN_PROGRESS_UPDATE_INTERVAL_MS`          | 100                                       |
 | `MAX_WAIT_DURATION_MS`                     | 31,536,000,000 (365 days)                 |
 | `MAX_EXECUTION_TIMEOUT_MS`                 | 31,536,000,000 (365 days)                 |
 | `MAX_CANCELLATION_REQUESTED_BY_CHARACTERS` | 200                                       |
