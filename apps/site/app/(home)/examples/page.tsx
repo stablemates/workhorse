@@ -96,7 +96,6 @@ await queue.syncSchedules("billing-production", [
 
 // The worker that evaluates this namespace's schedules.
 const worker = new Worker(queue, {
-  workerId: "billing-1",
   scheduleNamespaces: ["billing-production"],
 });`,
   },

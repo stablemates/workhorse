@@ -441,7 +441,6 @@ await queue.syncRetentionPolicy({
 await queue.enqueue("email", { to: "person@example.com" });
 
 const worker = new Worker(queue, {
-  workerId: "email-1",
   // Integer 1..100. The default is 1 for backward-compatible serial execution.
   concurrency: 4,
   // This worker also evaluates and fires this namespace's recurring schedules.

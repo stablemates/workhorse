@@ -164,3 +164,142 @@ body {
 .wh-link-underline:hover {
   text-decoration-color: var(--wh-accent);
 }
+
+/* ---------- Code surface ----------
+ *
+ * Snippets are the primary evidence on this site, so the code frame gets its
+ * own slightly recessed surface rather than reusing the panel colour. Shiki
+ * writes both themes into the same markup and CSS variables pick one, so the
+ * frame has to darken in step with the tokens.
+ */
+.wh-code-surface {
+  background-color: var(--shiki-light-bg);
+}
+
+.dark .wh-code-surface {
+  background-color: var(--shiki-dark-bg);
+}
+
+/* ---------- CSS-only tab group ----------
+ *
+ * The panels are server-highlighted markup, so the switcher must not require
+ * hydration. Radio inputs carry the state, native radiogroup semantics carry
+ * the keyboard and screen-reader behaviour, and the pairing rules below map
+ * the nth checked input to the nth label and nth panel. Six tabs is the
+ * ceiling; add another pair here before adding a seventh tab.
+ */
+.wh-tabs {
+  position: relative;
+}
+
+.wh-tabs > input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wh-tab {
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 0.375rem;
+  padding: 0.3125rem 0.625rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-fd-muted-foreground);
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
+}
+
+.wh-tab:hover {
+  color: var(--color-fd-foreground);
+}
+
+.wh-tab-panel {
+  display: none;
+}
+
+/* Focus follows the hidden input, so the visible label has to render the ring. */
+.wh-tabs > input:focus-visible ~ .wh-tablist > .wh-tab:nth-of-type(1),
+.wh-tabs > input:nth-of-type(1):checked ~ .wh-tablist > .wh-tab:nth-of-type(1),
+.wh-tabs > input:nth-of-type(2):checked ~ .wh-tablist > .wh-tab:nth-of-type(2),
+.wh-tabs > input:nth-of-type(3):checked ~ .wh-tablist > .wh-tab:nth-of-type(3),
+.wh-tabs > input:nth-of-type(4):checked ~ .wh-tablist > .wh-tab:nth-of-type(4),
+.wh-tabs > input:nth-of-type(5):checked ~ .wh-tablist > .wh-tab:nth-of-type(5),
+.wh-tabs > input:nth-of-type(6):checked ~ .wh-tablist > .wh-tab:nth-of-type(6) {
+  background-color: color-mix(in oklab, var(--wh-accent) 12%, transparent);
+  color: var(--wh-accent);
+}
+
+.wh-tabs > input:nth-of-type(1):checked ~ .wh-tab-panel:nth-of-type(1),
+.wh-tabs > input:nth-of-type(2):checked ~ .wh-tab-panel:nth-of-type(2),
+.wh-tabs > input:nth-of-type(3):checked ~ .wh-tab-panel:nth-of-type(3),
+.wh-tabs > input:nth-of-type(4):checked ~ .wh-tab-panel:nth-of-type(4),
+.wh-tabs > input:nth-of-type(5):checked ~ .wh-tab-panel:nth-of-type(5),
+.wh-tabs > input:nth-of-type(6):checked ~ .wh-tab-panel:nth-of-type(6) {
+  display: block;
+}
+
+.wh-tabs > input:focus-visible ~ .wh-tablist {
+  outline: 2px solid var(--color-fd-ring);
+  outline-offset: -2px;
+  border-radius: 0.5rem;
+}
+
+/* ---------- Capability matrix ---------- */
+
+/* A hairline cell grid.
+ *
+ * Interior rules are drawn on one side only so they stay single-width, and the
+ * column-1 cells keep zero left padding so the grid's text edge lines up with
+ * the band heading above it. The column count changes at each breakpoint, so
+ * which cells are "column 1" has to be recomputed rather than set in the JSX.
+ */
+.wh-cell {
+  border-top: 1px solid var(--wh-rule);
+  padding-block: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .wh-cell:nth-child(2n + 1) {
+    padding-right: 1.25rem;
+  }
+  .wh-cell:nth-child(2n) {
+    border-left: 1px solid var(--wh-rule);
+    padding-left: 1.25rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .wh-cell:nth-child(2n) {
+    border-left: none;
+    padding-left: 0;
+  }
+  .wh-cell:nth-child(2n + 1) {
+    padding-right: 0;
+  }
+  .wh-cell:not(:nth-child(3n + 1)) {
+    border-left: 1px solid var(--wh-rule);
+    padding-left: 1.25rem;
+  }
+  .wh-cell:not(:nth-child(3n)) {
+    padding-right: 1.25rem;
+  }
+}
+
+/* Status pip used by the capability matrix and the honesty band. */
+.wh-pip {
+  display: inline-block;
+  block-size: 0.375rem;
+  inline-size: 0.375rem;
+  border-radius: 9999px;
+  background-color: var(--color-safety-500);
+}
+
+.wh-pip[data-state="partial"] {
+  background-color: var(--color-signal-500);
+}
+
+.wh-pip[data-state="none"] {
+  background-color: color-mix(in oklab, var(--color-fd-muted-foreground) 55%, transparent);
+}

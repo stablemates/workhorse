@@ -135,7 +135,6 @@ await queue.syncSchedules("reports-production", [
 ]);
 
 const worker = new Worker(queue, {
-  workerId: "reports-1",
   queue: "reports",
   concurrency: 2,
   scheduleNamespaces: ["reports-production"],
@@ -192,10 +191,9 @@ await installSchema(pool);
 
 const jobId = await queue.enqueue("greet", { name: "Ada" });
 
-const worker = new Worker(queue, { workerId: "test-1" }).handle(
-  "greet",
-  async (payload: { name: string }) => ({ greeting: `Hello, ${payload.name}` }),
-);
+const worker = new Worker(queue).handle("greet", async (payload: { name: string }) => ({
+  greeting: `Hello, ${payload.name}`,
+}));
 
 await worker.runOnce();
 
@@ -207,7 +205,7 @@ For crash-boundary tests, `WorkerOptions.failpoint` deterministically throws at 
 `beforeHandler`, `afterHandler`, `beforeComplete`, or `afterComplete`:
 
 ```ts
-const crashing = new Worker(queue, { workerId: "crash-1", failpoint: "beforeComplete" });
+const crashing = new Worker(queue, { failpoint: "beforeComplete" });
 ```
 
 Injected crashes deliberately bypass normal fail/retry handling so you can exercise lease recovery.
