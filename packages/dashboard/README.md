@@ -53,8 +53,20 @@ PostgreSQL and applied cooperatively by the worker when it next refreshes.
 
 ## Staying live
 
-The dashboard's SSE stream has a periodic fallback, so it is always eventually fresh. To make it
-react promptly to work happening elsewhere, bridge PostgreSQL notifications into its refresh hub:
+Auto refresh defaults to **Live**: the application subscribes to the host's SSE stream and re-reads
+whenever PostgreSQL says something changed, falling back to the timed intervals in the same menu
+when a host serves no stream. `createDashboardHost` serves the stream at `{basePath}/events` and
+hands its URL to the browser entry, so the packaged application needs no configuration.
+
+Nothing on screen is rendered from a notification payload. Every frame is a hint to re-read, and the
+page re-reads through the same queries a manual refresh uses, so a frame lost to a reconnect costs a
+slightly later refetch and never a gap in what is displayed. This is also why the Events page reads
+the durable `job_event` and `attempt_history` tables rather than the notification channels: those
+payloads carry only a queue name, are coalesced twice before arriving, and are dropped entirely
+while nothing is listening.
+
+The stream has a periodic fallback, so it is always eventually fresh. To make it react promptly to
+work happening elsewhere, bridge PostgreSQL notifications into its refresh hub:
 
 ```ts
 import { listenForDashboardRefresh } from "@workhorse/dashboard/server";

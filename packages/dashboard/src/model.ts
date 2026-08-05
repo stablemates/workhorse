@@ -1022,6 +1022,105 @@ export interface DashboardWorkersPage {
   workers: DashboardWorkerRow[];
 }
 
+/**
+ * Lifecycle event names `workhorse.job_event` records.
+ *
+ * Declared here rather than discovered with a `DISTINCT` scan: the set is fixed by the SQL that
+ * writes it, and a filter list built from observed rows would silently lose an option whenever the
+ * chosen window happens to contain none of that kind.
+ */
+export const dashboardJobEventTypes = [
+  "enqueued",
+  "claimed",
+  "succeeded",
+  "failed",
+  "retry_scheduled",
+  "canceled",
+  "promoted",
+  "lease_expired",
+  "execution_timed_out",
+  "redriven",
+  "redrive_created",
+  "wait_elapsed",
+] as const;
+
+/** Terminal outcomes `workhorse.attempt_history` records, constrained by a CHECK in the schema. */
+export const dashboardAttemptOutcomes = [
+  "succeeded",
+  "failed",
+  "retry",
+  "lease_expired",
+  "canceled",
+  "deadline_exceeded",
+  "timeout",
+] as const;
+
+/** Which of the two append-only history tables a feed row came from. */
+export type DashboardEventKind = "event" | "attempt";
+
+export type DashboardEventsWindow = "15m" | "1h" | "6h" | "24h";
+
+export interface DashboardEventRow {
+  /**
+   * Stable render identity, `kind:recordId`.
+   *
+   * The two source tables have independent identity sequences, so neither `recordId` alone is
+   * unique across a merged feed.
+   */
+  id: string;
+  kind: DashboardEventKind;
+  recordId: string;
+  jobId: string;
+  /**
+   * Queue and type of the job this row belongs to, or null once that job has been retained away.
+   *
+   * History outlives the `job` row it describes, so the feed reports the orphan rather than
+   * dropping it: a deleted job is exactly the case an operator is trying to see.
+   */
+  queue: string | null;
+  jobType: string | null;
+  occurredAt: string;
+  attempt: number | null;
+  /** Lifecycle event name for `event` rows; the attempt outcome for `attempt` rows. */
+  type: string;
+  /** Event payload for `event` rows. Always null for `attempt` rows. */
+  details: unknown;
+  workerId: string | null;
+  fenceToken: string | null;
+  /** Wall-clock the attempt occupied, for the `attempt` rows that closed one. */
+  durationMs: number | null;
+  errorMessage: string | null;
+}
+
+/**
+ * A page of the durable event history inside a time window, newest first.
+ *
+ * Paged by offset and total, the same way the task listing is, so an operator moves through a busy
+ * window with the control they already know rather than reading a warning that the feed was cut
+ * short. It is not keyset-paginated: the page live-updates from the refresh stream, and a cursor
+ * walking backwards through a list whose head keeps moving is a contradiction an operator has to
+ * reason about. Deep history for a single task belongs to that task's timeline, which *is* keyset
+ * paginated in the drawer; this page answers "what is happening across the fleet".
+ */
+export interface DashboardEventsPage {
+  capturedAt: string;
+  window: DashboardEventsWindow;
+  windowSeconds: number;
+  events: DashboardEventRow[];
+  /** 1-based page index, matching the task listing. */
+  page: number;
+  pageSize: number;
+  /** Rows matching the window and filters, across both source tables. */
+  total: number;
+  /**
+   * Retention days for the two source tables, or null when retention is disabled for one.
+   *
+   * The feed can only reach as far back as the partitions retention still keeps, so the depth is
+   * shown rather than left for an operator to infer from a feed that simply stops.
+   */
+  retention: { jobEventDays: number | null; attemptHistoryDays: number | null };
+}
+
 export interface DashboardMetricBucket {
   bucketStart: string;
   enqueued: number;

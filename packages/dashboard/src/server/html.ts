@@ -8,6 +8,8 @@ export interface DashboardRuntimeConfig {
   /** Normalized mount path. Empty string when the dashboard owns the host root. */
   basePath: string;
   rpcUrl: string;
+  /** Server-sent refresh stream this host serves. The application subscribes when set to "Live". */
+  eventsUrl: string;
   auditActor: string;
   /** Enables the job-seeding menu. Only hosts that intentionally supply fixtures should set it. */
   demoTools: boolean;

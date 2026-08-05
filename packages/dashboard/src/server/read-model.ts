@@ -6,6 +6,9 @@ import {
   DashboardActivityPeriod,
   DashboardCancellationRequest,
   DashboardCronPage,
+  DashboardEventKind,
+  DashboardEventsPage,
+  DashboardEventsWindow,
   DashboardJobDetail,
   DashboardQueuesPage,
   DashboardRetentionCategory,
@@ -25,7 +28,7 @@ import {
   MaintenanceLoopCadences,
   readIdempotencyEvidence,
 } from "../model.js";
-import { sql, type DashboardDatabase } from "./sql.js";
+import { sql, type DashboardDatabase, type DashboardSql } from "./sql.js";
 import type { DashboardDurabilityProjector, DashboardOperator } from "./types.js";
 
 function toIso(value: Date | string): string {
@@ -2170,6 +2173,236 @@ export async function readDashboardJobDetail(
       type: row.event_type,
       details: row.details,
       occurredAt: toIso(row.occurred_at),
+    })),
+  };
+}
+
+const eventsWindows: Record<DashboardEventsWindow, number> = {
+  "15m": 900,
+  "1h": 3_600,
+  "6h": 21_600,
+  "24h": 86_400,
+};
+
+export interface DashboardEventsQuery {
+  window?: DashboardEventsWindow;
+  /** 1-based page index. */
+  page?: number;
+  pageSize?: number;
+  kind?: DashboardEventKind | "all";
+  queue?: string | null;
+  jobType?: string | null;
+  /** Lifecycle event names and attempt outcomes to keep. Empty means every type. */
+  types?: readonly string[];
+  /** Restrict the feed to one job, for following a single task live. */
+  jobId?: string | null;
+}
+
+/**
+ * Read the fleet-wide event feed from the durable history tables.
+ *
+ * The feed is sourced from `job_event` and `attempt_history`, never from `LISTEN`/`NOTIFY`.
+ * Notification payloads carry only a queue name, are coalesced by both the worker and the dashboard
+ * listener, and are dropped entirely while no session is listening — a feed built from them would
+ * be uninformative and silently incomplete. The notification channels keep their real job of
+ * telling this page *when* to re-read; the rows below are what it shows.
+ *
+ * Every query is bounded by a time window so the descending scan stays on
+ * `job_event (occurred_at, event_id)` and `attempt_history (occurred_at, attempt_id)` instead of
+ * walking the whole retained history to fill a page that a narrow filter would otherwise starve.
+ * The window is also what keeps the total count affordable: it is a count over one bounded slice of
+ * two partitioned tables, not over everything retention still holds.
+ */
+export async function readDashboardEvents(
+  database: DashboardDatabase,
+  query: DashboardEventsQuery = {},
+): Promise<DashboardEventsPage> {
+  const window = query.window ?? "1h";
+  const windowSeconds = eventsWindows[window];
+  const pageSize = query.pageSize ?? 50;
+  const page = Math.max(1, query.page ?? 1);
+  const offset = (page - 1) * pageSize;
+  // Either source can supply the whole page on its own, so each must be able to reach past the
+  // offset by a full page before the merge picks between them.
+  const reach = offset + pageSize;
+  const kind = query.kind ?? "all";
+  const queue = query.queue ?? null;
+  const jobType = query.jobType ?? null;
+  const jobId = query.jobId ?? null;
+  const types = query.types ?? [];
+  const typeArray = textArrayExpression([...types]);
+
+  // Queue and task filters live on `job`, which history rows only reference. Testing them with a
+  // primary-key EXISTS keeps the driving scan on the time-ordered history index; joining `job`
+  // first would sort the whole window before the limit could apply.
+  const jobMatches = (column: DashboardSql) => sql`(
+    (${queue}::text IS NULL AND ${jobType}::text IS NULL)
+    OR EXISTS (
+      SELECT 1 FROM workhorse.job j
+       WHERE j.id = ${column}
+         AND (${queue}::text IS NULL OR j.queue_name = ${queue})
+         AND (${jobType}::text IS NULL OR j.job_type = ${jobType})
+    )
+  )`;
+
+  const eventCondition = sql`
+    event.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
+    AND (${jobId}::uuid IS NULL OR event.job_id = ${jobId}::uuid)
+    AND (cardinality(${typeArray}) = 0 OR event.event_type = ANY (${typeArray}))
+    AND ${jobMatches(sql`event.job_id`)}
+  `;
+  const attemptCondition = sql`
+    history.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
+    AND (${jobId}::uuid IS NULL OR history.job_id = ${jobId}::uuid)
+    AND (cardinality(${typeArray}) = 0 OR history.outcome = ANY (${typeArray}))
+    AND ${jobMatches(sql`history.job_id`)}
+  `;
+
+  const eventSource = sql`
+    SELECT 'event'::text AS kind,
+           event.event_id AS record_id,
+           event.job_id,
+           event.occurred_at,
+           event.attempt,
+           event.event_type AS type,
+           event.details,
+           NULL::text AS worker_id,
+           NULL::bigint AS fence_token,
+           NULL::timestamptz AS started_at,
+           NULL::timestamptz AS finished_at,
+           NULL::jsonb AS error,
+           1 AS kind_rank
+      FROM workhorse.job_event event
+     WHERE ${eventCondition}
+     ORDER BY event.occurred_at DESC, event.event_id DESC
+     LIMIT ${reach}
+  `;
+  const attemptSource = sql`
+    SELECT 'attempt'::text AS kind,
+           history.attempt_id AS record_id,
+           history.job_id,
+           history.occurred_at,
+           history.attempt,
+           history.outcome AS type,
+           NULL::jsonb AS details,
+           history.worker_id,
+           history.fence_token,
+           history.started_at,
+           history.finished_at,
+           history.error,
+           0 AS kind_rank
+      FROM workhorse.attempt_history history
+     WHERE ${attemptCondition}
+     ORDER BY history.occurred_at DESC, history.attempt_id DESC
+     LIMIT ${reach}
+  `;
+  const sources =
+    kind === "event"
+      ? eventSource
+      : kind === "attempt"
+        ? attemptSource
+        : // Each branch carries its own ORDER BY and LIMIT so neither source can starve the other,
+          // which is only legal inside parentheses.
+          sql`
+      (${eventSource})
+      UNION ALL
+      (${attemptSource})
+    `;
+
+  // Counted from the source tables rather than from `merged`, which stops at one page's reach.
+  const countedEvents =
+    kind === "attempt"
+      ? sql`0::bigint`
+      : sql`(SELECT count(*) FROM workhorse.job_event event WHERE ${eventCondition})`;
+  const countedAttempts =
+    kind === "event"
+      ? sql`0::bigint`
+      : sql`(SELECT count(*) FROM workhorse.attempt_history history WHERE ${attemptCondition})`;
+
+  const [rows, totals, retention] = await Promise.all([
+    database.execute<{
+      kind: DashboardEventKind;
+      record_id: string;
+      job_id: string;
+      queue_name: string | null;
+      job_type: string | null;
+      occurred_at: Date | string;
+      attempt: number | null;
+      type: string;
+      details: unknown;
+      worker_id: string | null;
+      fence_token: string | null;
+      duration_ms: string | null;
+      error: unknown;
+    }>(sql`
+      WITH merged AS MATERIALIZED (
+        ${sources}
+      ), page AS MATERIALIZED (
+        SELECT merged.* FROM merged
+        ORDER BY merged.occurred_at DESC, merged.kind_rank DESC, merged.record_id DESC
+        LIMIT ${pageSize}
+       OFFSET ${offset}
+      )
+      SELECT page.kind,
+             page.record_id::text,
+             page.job_id::text,
+             job.queue_name,
+             job.job_type,
+             page.occurred_at,
+             page.attempt,
+             page.type,
+             page.details,
+             page.worker_id,
+             page.fence_token::text,
+             CASE
+               WHEN page.started_at IS NULL OR page.finished_at IS NULL THEN NULL
+               ELSE round(extract(epoch FROM page.finished_at - page.started_at) * 1000)::text
+             END AS duration_ms,
+             page.error
+        FROM page
+        LEFT JOIN workhorse.job job ON job.id = page.job_id
+       ORDER BY page.occurred_at DESC, page.kind_rank DESC, page.record_id DESC
+    `),
+    database.execute<{ count: string }>(sql`
+      SELECT (${countedEvents} + ${countedAttempts})::text AS count
+    `),
+    database.execute<{
+      job_event_retention_days: number | null;
+      attempt_history_retention_days: number | null;
+    }>(sql`
+      SELECT job_event_retention_days, attempt_history_retention_days
+        FROM workhorse.retention_policy
+       WHERE singleton
+    `),
+  ]);
+
+  const policy = retention.rows[0];
+  return {
+    capturedAt: new Date().toISOString(),
+    window,
+    windowSeconds,
+    page,
+    pageSize,
+    total: Number(totals.rows[0]?.count ?? 0),
+    retention: {
+      jobEventDays: policy?.job_event_retention_days ?? null,
+      attemptHistoryDays: policy?.attempt_history_retention_days ?? null,
+    },
+    events: rows.rows.map((row) => ({
+      id: `${row.kind}:${row.record_id}`,
+      kind: row.kind,
+      recordId: row.record_id,
+      jobId: row.job_id,
+      queue: row.queue_name,
+      jobType: row.job_type,
+      occurredAt: toIso(row.occurred_at),
+      attempt: row.attempt,
+      type: row.type,
+      details: row.details ?? null,
+      workerId: row.worker_id,
+      fenceToken: row.fence_token,
+      durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
+      errorMessage: errorMessageOrNull(row.error),
     })),
   };
 }
