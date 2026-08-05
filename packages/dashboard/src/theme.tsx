@@ -12,6 +12,7 @@ import {
 } from "@mantine/core";
 import { Moon, Palette, Sun } from "@phosphor-icons/react";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { DashboardNotifications } from "./notifications.js";
 
 export type DashboardColorScheme = "light" | "dark";
 
@@ -74,6 +75,9 @@ export function WorkhorseThemeProvider({ children }: { children: ReactNode }) {
   return (
     <ThemeContext.Provider value={contextValue}>
       <MantineProvider theme={theme} forceColorScheme={scheme}>
+        {/* Mounted above the application so an operator result raised during navigation, or by a
+            panel that closes itself, still has a container to arrive in. */}
+        <DashboardNotifications />
         {children}
       </MantineProvider>
     </ThemeContext.Provider>

@@ -335,6 +335,26 @@ export function describeCancelOutcome(
 }
 
 /**
+ * How one operator result reads.
+ *
+ * The distinction that matters is between a request that failed and a request the server answered
+ * with a deliberate refusal. A task already finished, already queued, or parked at a durable wait
+ * was left alone on purpose and by design; colouring that as an error would send an operator
+ * looking for a fault that does not exist. Only `failure` means no decision was reached at all.
+ */
+export type DashboardResultTone = "neutral" | "success" | "failure";
+
+/** A cancellation changed durable state only when PostgreSQL applied or recorded one. */
+export function cancelOutcomeTone(status: DashboardCancelStatus): DashboardResultTone {
+  return status === "canceled" || status === "cancel_requested" ? "success" : "neutral";
+}
+
+/** Only a release moved a task's start time; every other status left the task exactly as it was. */
+export function runNowOutcomeTone(status: DashboardRunNowStatus): DashboardResultTone {
+  return status === "released" ? "success" : "neutral";
+}
+
+/**
  * How a live task's pending cancellation reads in a list row or drawer.
  *
  * Returns null when nothing was requested, so an untouched task keeps exactly the surface it had.
