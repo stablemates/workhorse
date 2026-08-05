@@ -42,6 +42,11 @@ export const localDatabasePurposes: readonly LocalDatabasePurpose[] = [
   "demo",
 ];
 
+/** Name the environment override dedicated to a role, so tooling never hardcodes the string. */
+export function localDatabaseEnvironmentVariable(purpose: LocalDatabasePurpose): string {
+  return localDatabaseDefinitions[purpose].environmentVariable;
+}
+
 /** Resolve a repository-tooling URL without allowing one purpose to inherit another's URL. */
 export function localDatabaseUrl(
   purpose: LocalDatabasePurpose,
