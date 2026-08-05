@@ -115,6 +115,11 @@ root.render(
 );
 ```
 
+`WorkhorseThemeProvider` also mounts the notification container every operator result is reported
+in — pausing a queue, clearing one, releasing a scheduled task, cancelling a task — as a toast in
+the bottom-right corner. A custom integration that renders `Dashboard` without this provider gets no
+results at all, and `@workhorse/dashboard/styles.css` carries the styles the container needs.
+
 Set `eventsUrl={null}` when a custom host does not expose server-sent refresh events. The demo's
 job-seeding menu is not part of the required client contract. Opt into it with `demoTools` only when
 a host intentionally supplies demo fixtures. All sample and seed data remain owned by the demo
