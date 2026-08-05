@@ -1247,12 +1247,6 @@ export function createDemoApplication(
   const app = new Hono().use("*", workhorse.middleware());
 
   if (options.dashboard !== false) {
-    app.get("/workhorse", (context) => context.redirect("/tasks"));
-    app.get("/workhorse/*", (context) => {
-      const url = new URL(context.req.url);
-      const destination = url.pathname.slice("/workhorse".length) || "/tasks";
-      return context.redirect(`${destination}${url.search}`);
-    });
     mountWorkhorseDashboard(app, {
       path: "/",
       workhorse,
