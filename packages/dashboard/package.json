@@ -2,6 +2,15 @@
   "name": "@workhorse/dashboard",
   "version": "0.1.0",
   "description": "Embeddable React operator dashboard for Workhorse",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "packages/dashboard"
+  },
   "files": [
     "dist",
     "README.md"

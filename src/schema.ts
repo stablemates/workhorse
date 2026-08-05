@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { assertSupportedPostgres } from "./support.js";
 import type { Queryable } from "./types.js";
 
 /** Canonical schema version for the current pre-release line. */
@@ -34,6 +35,9 @@ export async function assertSchemaCompatible(database: Queryable): Promise<void>
 }
 
 export async function installSchema(database: Queryable): Promise<void> {
+  // An unsupported server must fail here, with its own version in the message, rather than part
+  // way through executing schema.sql.
+  await assertSupportedPostgres(database);
   // Validation uses a canonical clean-database schema rather than incremental migrations.
   // Production callers must not treat this as a safe upgrade mechanism for an existing schema.
   const existing = await database.query<{

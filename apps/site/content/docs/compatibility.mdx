@@ -1,0 +1,69 @@
+---
+title: Compatibility
+description: Supported Node.js and PostgreSQL versions, schema compatibility guarantees, and what a release promises.
+---
+
+A version is **supported** when CI runs the full test suite against it on every change. That is the
+whole definition, and it is deliberately narrower than the set of versions Workhorse will run on.
+The authoritative matrix lives in
+[`docs/compatibility.md`](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md);
+this page is the summary.
+
+## Supported versions
+
+| Runtime    | Supported      | Minimum | Notes                                                  |
+| ---------- | -------------- | ------- | ------------------------------------------------------ |
+| Node.js    | 22, 24         | 22      | Even-numbered releases only                            |
+| PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed |
+
+A PostgreSQL major newer than the tested set is not refused — a release cannot know about a database
+published after it — but it carries no evidence. A major below the minimum is refused at schema
+installation, with the server's own version in the error rather than a failure from inside
+`schema.sql`.
+
+`workhorse schema status` reports which of the three cases the connected server falls into:
+
+```bash
+npx workhorse schema status
+```
+
+```
+Installed Workhorse schema v17. Runtime expects v17.
+PostgreSQL 17.2 (Debian 17.2-1.pgdg120+1): supported and covered by CI.
+```
+
+## Schema compatibility
+
+The durable protocol is the PostgreSQL schema, not the TypeScript API.
+
+<Callout type="warn">
+  The runtime's schema version and the installed schema version must match **exactly**. An older
+  runtime against a newer schema fails just as loudly as the reverse, so a mixed fleet mid-deploy is
+  not supported.
+</Callout>
+
+- Installation is clean-database only. There is no online migration path in the `0.x` line; a schema
+  version bump means installing into a fresh schema and draining the old one.
+- Correctness-sensitive transitions stay in versioned SQL functions, so anything speaking the same
+  schema version speaks the same protocol.
+- Job payloads are caller-owned JSON, stored and returned unchanged.
+- The dashboard's oRPC transport is private and changes without a schema bump. The supported
+  operator surface is the `Queue` query API.
+
+## Releases
+
+The four packages are versioned in lockstep and released from one `vX.Y.Z` tag. Every release runs
+the full check suite — including the packed-package install test and the demo smoke test — before
+publishing, and every published tarball carries an [npm provenance
+attestation](https://docs.npmjs.com/generating-provenance-statements) linking it to the commit and
+workflow that built it. Verify one with `npm audit signatures`.
+
+Breaking changes and the schema version each release requires are listed in
+[`CHANGELOG.md`](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md).
+
+## Support is not a performance claim
+
+Benchmark evidence is recorded on a single fixed configuration, because throughput compared across
+machines is meaningless. Supported versions are the ones proven **correct** in CI; the benchmarked
+configuration is the only one with published numbers. Neither implies the other. See
+[Limitations](/docs/limitations) for what Workhorse deliberately does not do.

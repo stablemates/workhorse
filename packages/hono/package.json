@@ -2,6 +2,15 @@
   "name": "@workhorse/hono",
   "version": "0.1.0",
   "description": "Hono lifecycle and mountable admin-dashboard integration for Workhorse",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "packages/hono"
+  },
   "files": [
     "dist",
     "README.md"
