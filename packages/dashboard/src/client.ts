@@ -4,6 +4,9 @@ import type {
   DashboardActivityPeriod,
   DashboardCancelStatus,
   DashboardCronPage,
+  DashboardEventKind,
+  DashboardEventsPage,
+  DashboardEventsWindow,
   DashboardJobDetail,
   DashboardQueuesPage,
   DashboardRunNowStatus,
@@ -78,6 +81,17 @@ export interface DashboardClient {
     queue?: string | null;
     worker?: string | null;
   }): Promise<DashboardActivityPage>;
+  /** Fleet-wide append-only history, newest first, bounded by a window and paged by offset. */
+  events(input: {
+    window?: DashboardEventsWindow;
+    page?: number;
+    pageSize?: 25 | 50 | 100;
+    kind?: DashboardEventKind | "all";
+    queue?: string | null;
+    jobType?: string | null;
+    types?: string[];
+    jobId?: string | null;
+  }): Promise<DashboardEventsPage>;
   cron(): Promise<DashboardCronPage>;
   queues(): Promise<DashboardQueuesPage>;
   system(input: { window?: DashboardSystemWindow }): Promise<DashboardSystemPage>;

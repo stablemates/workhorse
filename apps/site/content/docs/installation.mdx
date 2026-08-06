@@ -9,6 +9,9 @@ description: Install the Workhorse packages, provision PostgreSQL, and install t
 - PostgreSQL **15 or newer**, with no extensions required
 - An ESM project (`"type": "module"` in `package.json`)
 
+Node.js 22 and 24 and PostgreSQL 15 through 18 are tested in CI on every change. See
+[Compatibility](/docs/compatibility) for the full support boundary.
+
 ## Install the packages
 
 ```bash
@@ -110,7 +113,7 @@ import { Pool } from "pg";
 import { Queue, Worker } from "@workhorse/core";
 
 const queue = new Queue(new Pool({ connectionString: process.env.DATABASE_URL }));
-const worker = new Worker(queue, { workerId: "worker-1" });
+const worker = new Worker(queue);
 worker.handle("email.send", async (payload) => ({ delivered: payload.to }));
 await worker.run();
 ```

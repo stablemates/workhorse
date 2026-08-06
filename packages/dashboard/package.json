@@ -2,6 +2,15 @@
   "name": "@workhorse/dashboard",
   "version": "0.1.0",
   "description": "Embeddable React operator dashboard for Workhorse",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "packages/dashboard"
+  },
   "files": [
     "dist",
     "README.md"
@@ -45,6 +54,7 @@
     "@mantine/charts": "^8.3.18",
     "@mantine/core": "^8.3.14",
     "@mantine/hooks": "^8.3.14",
+    "@mantine/notifications": "^8.3.18",
     "@orpc/client": "^1.14.8",
     "@orpc/server": "^1.14.8",
     "@phosphor-icons/react": "^2.1.10",

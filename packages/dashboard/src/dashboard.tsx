@@ -45,6 +45,7 @@ import {
   FunnelSimple,
   GearSix,
   Info,
+  Lightning,
   ListDashes,
   ListChecks,
   MagnifyingGlass,
@@ -77,7 +78,6 @@ import {
   describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
-  describeRunNowOutcome,
   formatRetryDelay,
   idempotencyEvidenceLine,
   isTerminalTaskState,
@@ -87,8 +87,10 @@ import {
 import { describeDurableBoundary, readTaskResultEvidence, type TaskResultState } from "./model.js";
 import type {
   DashboardCancellationRequest,
-  DashboardCancelStatus,
   DashboardCronPage,
+  DashboardEventRow,
+  DashboardEventsPage,
+  DashboardEventsWindow,
   DashboardJobDetail,
   DashboardJobRow,
   DashboardQueuesPage,
@@ -107,14 +109,18 @@ import type {
   TaskRowActionId,
 } from "./model.js";
 import type { DashboardClient, DashboardDemoTools } from "./client.js";
+import { requestRunNow, type RunNowFeedback } from "./run-now.js";
+import { notifyCancel, notifyDashboard, notifyFailure, notifyRunNow } from "./notifications.js";
 import { WorkhorseBrand } from "./brand.js";
 import {
   dashboardRefreshIntervalMs,
   dashboardRefreshIntervals,
+  dashboardRefreshIsLive,
   defaultDashboardRefreshInterval,
   startDashboardPolling,
   type DashboardRefreshIntervalValue,
 } from "./refresh-policy.js";
+import { subscribeDashboardRefresh, type DashboardLiveStatus } from "./live-refresh.js";
 import {
   parseTaskLocation,
   taskDetailNavigation,
@@ -252,7 +258,7 @@ function activityChartKey(group: string): string {
   return group.replaceAll(".", "_");
 }
 
-type PageRoute = "/tasks" | "/cron" | "/queues" | "/system" | "/workers" | "/settings";
+type PageRoute = "/tasks" | "/events" | "/cron" | "/queues" | "/system" | "/workers" | "/settings";
 type DemoJobKind =
   | "success"
   | "retry"
@@ -264,6 +270,7 @@ type DemoJobKind =
 type DurableDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
+  | { route: "/events"; value: DashboardEventsPage }
   | { route: "/cron"; value: DashboardCronPage }
   | { route: "/queues"; value: DashboardQueuesPage }
   | { route: "/system"; value: DashboardSystemPage }
@@ -276,6 +283,7 @@ type LoadState =
 
 const pageRoutes = new Set<PageRoute>([
   "/tasks",
+  "/events",
   "/cron",
   "/queues",
   "/system",
@@ -1182,30 +1190,6 @@ function retryEventDescription(event: JobEvent): { text: string; title: string }
   return { text, title };
 }
 
-/**
- * Result of the last cancellation this dashboard requested, kept so the drawer can report what
- * PostgreSQL actually did rather than assuming the action succeeded.
- */
-interface CancelFeedback {
-  jobId: string;
-  status: DashboardCancelStatus;
-  state: string | null;
-  /** Exact timestamp of the request or the recorded outcome, for a title attribute. */
-  at: string | null;
-}
-
-/**
- * What one run-now request reported, held so the list can state it and offer the released task.
- *
- * A transport failure and a server refusal are both outcomes worth showing, so this carries either
- * a described status or a failure sentence rather than modelling failure as absence.
- */
-interface RunNowFeedback {
-  jobId: string;
-  described: ReturnType<typeof describeRunNowOutcome> | null;
-  failure: string | null;
-}
-
 /** The lifecycle states an operator may cancel. Everything else is terminal or unknown. */
 function canCancelTask(job: DashboardJobDetail): boolean {
   const runtime = job.current.runtime;
@@ -1232,8 +1216,6 @@ function CancelTaskPanel({
   reason,
   setReason,
   pending,
-  feedback,
-  error,
   cancelTask,
 }: {
   job: DashboardJobDetail;
@@ -1242,8 +1224,6 @@ function CancelTaskPanel({
   reason: string;
   setReason: (reason: string) => void;
   pending: boolean;
-  feedback: CancelFeedback | null;
-  error: string | null;
   cancelTask: (id: string, reason: string) => void;
 }) {
   const reasonRef = useRef<HTMLInputElement>(null);
@@ -1258,13 +1238,10 @@ function CancelTaskPanel({
   const waiting =
     job.current.runtime?.state === "scheduled" && job.current.runtime.waitName !== null;
   const trimmedReason = reason.trim();
-  const forThisJob = feedback !== null && feedback.jobId === job.identity.id;
-  const described = forThisJob
-    ? describeCancelOutcome(feedback.status, { state: feedback.state })
-    : null;
 
-  // Everything an assistive technology needs is in text: the heading, the current state sentence,
-  // and the live region below. Colour and the icon add nothing that is not already written out.
+  // Everything an assistive technology needs is in text: the heading and the current state
+  // sentence. What a cancellation reported is announced by the notification it raises, which
+  // outlives this panel, because closing the drawer must not take the answer with it.
   return (
     <Box>
       <Group gap="xs" mb="xs" align="baseline">
@@ -1357,22 +1334,6 @@ function CancelTaskPanel({
             : "This task has no live runtime, so there is nothing to cancel."}
         </Text>
       )}
-      {/* One live region for both success and failure, so a screen reader hears every result. */}
-      <Box role="status" aria-live="polite" mt={error || described ? "xs" : 0}>
-        {error ? (
-          <Text c="red" size="xs">
-            {error}
-          </Text>
-        ) : described && forThisJob ? (
-          <Text
-            c="dimmed"
-            size="xs"
-            title={feedback.at ? formatExact(feedback.at) : described.exact}
-          >
-            {described.summary}.
-          </Text>
-        ) : null}
-      </Box>
     </Box>
   );
 }
@@ -2286,7 +2247,6 @@ function TasksPage({
   navigate,
   runDemoJob,
   runningDemoJob,
-  actionError,
   inspectJob,
   replace,
   taskLocation,
@@ -2298,7 +2258,6 @@ function TasksPage({
   taskLocation: TaskLocationState;
   runDemoJob: ((kind: DemoJobKind, scenario?: DurableDemoScenario) => Promise<void>) | null;
   runningDemoJob: DemoJobKind | null;
-  actionError: string | null;
   inspectJob: (id: string, options?: { confirmCancel?: boolean }) => void;
   /**
    * Release one scheduled task, or null when the host cannot. Null is passed through to the menu
@@ -2310,11 +2269,9 @@ function TasksPage({
     () => localStorage.getItem("workhorse-full-args") === "true",
   );
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
-  // What the last row action did. Announced rather than left to a colour or a vanished menu.
-  const [rowFeedback, setRowFeedback] = useState<string | null>(null);
-  // The one row action that is applied here rather than in the drawer, and what it reported.
+  // The one row action that is applied here rather than in the drawer. What it reported goes to
+  // the notification system, so only the in-flight row is state this page has to hold.
   const [runningNowJobId, setRunningNowJobId] = useState<string | null>(null);
-  const [runNowFeedback, setRunNowFeedback] = useState<RunNowFeedback | null>(null);
   const searchInput = searchDraft ?? taskLocation.search ?? "";
   const taskFacets = useTaskFacets(data);
   const locationState: TaskLocationState = taskLocation;
@@ -2335,18 +2292,6 @@ function TasksPage({
     }, 300);
     return () => clearTimeout(timer);
   }, [searchDraft, taskLocation.search, updateLocation]);
-  useEffect(() => {
-    if (rowFeedback === null) return;
-    const timer = setTimeout(() => setRowFeedback(null), 4_000);
-    return () => clearTimeout(timer);
-  }, [rowFeedback]);
-  // Run-now feedback carries a link to the task it released, so it is given longer than a copy
-  // confirmation: it is only useful for as long as the operator can still act on it.
-  useEffect(() => {
-    if (runNowFeedback === null) return;
-    const timer = setTimeout(() => setRunNowFeedback(null), 12_000);
-    return () => clearTimeout(timer);
-  }, [runNowFeedback]);
   /**
    * Apply one row action.
    *
@@ -2361,11 +2306,9 @@ function TasksPage({
       if (id === "cancel") return inspectJob(job.id, { confirmCancel: true });
       if (id === "run-now") {
         if (runTaskNow === null || runningNowJobId !== null) return;
-        setRowFeedback(null);
-        setRunNowFeedback(null);
         setRunningNowJobId(job.id);
         void runTaskNow(job.id)
-          .then(setRunNowFeedback)
+          .then((feedback) => notifyRunNow(feedback, { openTask: inspectJob }))
           .finally(() => setRunningNowJobId(null));
         return;
       }
@@ -2378,7 +2321,13 @@ function TasksPage({
       }
       const copying = id === "copy-id" ? "Task id" : "Args";
       void copyToClipboard(id === "copy-id" ? job.id : formatJson(job.payload)).then((failure) =>
-        setRowFeedback(failure ?? `${copying} copied to the clipboard.`),
+        notifyDashboard({
+          // One id for both clipboard actions: copying twice is one running answer, not a stack.
+          id: "workhorse-task-clipboard",
+          title: failure ? `${copying} not copied` : `${copying} copied`,
+          message: failure ?? `${copying} copied to the clipboard.`,
+          tone: failure ? "failure" : "neutral",
+        }),
       );
     },
     [inspectJob, runTaskNow, runningNowJobId, updateLocation],
@@ -2514,52 +2463,6 @@ function TasksPage({
             </Group>
           </Group>
         </Stack>
-        {actionError ? (
-          <>
-            <Divider />
-            <Text c="red" size="sm" px="md" py="sm">
-              {actionError}
-            </Text>
-          </>
-        ) : null}
-        {/* One live region for row actions, so a screen reader hears a copy that a menu item
-            performed and then closed itself. */}
-        <Box role="status" aria-live="polite">
-          {rowFeedback === null ? null : (
-            <>
-              <Divider />
-              <Text c="dimmed" size="sm" px="md" py="xs">
-                {rowFeedback}
-              </Text>
-            </>
-          )}
-          {runNowFeedback === null ? null : (
-            <>
-              <Divider />
-              <Group gap="sm" px="md" py="xs" wrap="nowrap" align="baseline">
-                <Text size="sm" c={runNowFeedback.failure === null ? "dimmed" : "red"}>
-                  {runNowFeedback.failure ?? runNowFeedback.described!.exact}
-                </Text>
-                {/* The released task is the thing the operator now wants to watch, so it is
-                    offered directly rather than left to be found again in the list. A failed
-                    request is not offered a link, because the commonest failure is the task no
-                    longer existing and a link would only lead to a second error. */}
-                {runNowFeedback.failure === null ? (
-                  <Button
-                    size="compact-xs"
-                    variant="subtle"
-                    onClick={() => {
-                      setRunNowFeedback(null);
-                      inspectJob(runNowFeedback.jobId);
-                    }}
-                  >
-                    Open task
-                  </Button>
-                ) : null}
-              </Group>
-            </>
-          )}
-        </Box>
         <Divider />
         <ScrollArea>
           <Table
@@ -2701,12 +2604,10 @@ function TasksPage({
 function CronPage({
   data,
   togglingSchedule,
-  actionError,
   setScheduleEnabled,
 }: {
   data: DashboardCronPage;
   togglingSchedule: string | null;
-  actionError: string | null;
   setScheduleEnabled: (namespace: string, name: string, enabled: boolean) => void;
 }) {
   return (
@@ -2715,11 +2616,6 @@ function CronPage({
         title="Schedules"
         description="Recurring application and system schedules registered with Workhorse."
       />
-      {actionError ? (
-        <Text c="red" size="sm">
-          {actionError}
-        </Text>
-      ) : null}
       {data.schedules.length === 0 ? (
         <EmptyState>No recurring schedules are registered.</EmptyState>
       ) : (
@@ -2813,8 +2709,6 @@ function QueuesPage({
   togglingQueue,
   purgingQueue,
   confirmingQueue,
-  actionError,
-  actionFeedback,
   setQueuePaused,
   setConfirmingQueue,
   purgeQueue,
@@ -2823,8 +2717,6 @@ function QueuesPage({
   togglingQueue: string | null;
   purgingQueue: string | null;
   confirmingQueue: string | null;
-  actionError: string | null;
-  actionFeedback: string | null;
   setQueuePaused: (queue: string, paused: boolean) => void;
   setConfirmingQueue: (queue: string | null) => void;
   purgeQueue: (queue: string) => void;
@@ -2835,15 +2727,6 @@ function QueuesPage({
         title="Queues"
         description="Pause dispatch, inspect queue-level task counts, or clear waiting work."
       />
-      {actionError ? (
-        <Text c="red" size="sm">
-          {actionError}
-        </Text>
-      ) : actionFeedback ? (
-        <Text c="teal" size="sm">
-          {actionFeedback}
-        </Text>
-      ) : null}
       {data.queues.length === 0 ? (
         <EmptyState>No queues have accepted work yet.</EmptyState>
       ) : (
@@ -3975,15 +3858,347 @@ function StoragePanel({
   );
 }
 
+const eventsWindowOptions: ReadonlyArray<{ value: DashboardEventsWindow; label: string }> = [
+  { value: "15m", label: "15m" },
+  { value: "1h", label: "1h" },
+  { value: "6h", label: "6h" },
+  { value: "24h", label: "24h" },
+];
+
+const eventsKindOptions = [
+  { value: "all", label: "All" },
+  { value: "event", label: "Lifecycle" },
+  { value: "attempt", label: "Attempts" },
+];
+
+/**
+ * Colour for one history row, keyed on what the row says happened.
+ *
+ * `succeeded` and `failed` name both a lifecycle event and an attempt outcome, which is why this
+ * reads the type alone and not the source table.
+ */
+function eventTypeColor(type: string): string {
+  if (type === "succeeded") return "teal";
+  if (
+    ["failed", "lease_expired", "execution_timed_out", "deadline_exceeded", "timeout"].includes(
+      type,
+    )
+  ) {
+    return "red";
+  }
+  if (["retry", "retry_scheduled", "redriven", "redrive_created"].includes(type)) return "orange";
+  if (["canceled"].includes(type)) return "gray";
+  if (["enqueued", "promoted", "wait_elapsed"].includes(type)) return "yellow";
+  if (type === "claimed") return "blue";
+  return "gray";
+}
+
+/** One-line rendering of an event payload, for a table cell that cannot hold formatted JSON. */
+function eventDetailSummary(details: unknown): string | null {
+  if (details === null || details === undefined) return null;
+  if (typeof details !== "object") return String(details);
+  const entries = Object.entries(details as Record<string, unknown>);
+  if (entries.length === 0) return null;
+  return entries
+    .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : value}`)
+    .join(" · ");
+}
+
+function uniqueSorted(values: Array<string | null>): string[] {
+  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+  return [...new Set(values.filter((value): value is string => value !== null))].sort();
+}
+
+/**
+ * The fleet-wide feed of durable lifecycle history.
+ *
+ * Rows come from `job_event` and `attempt_history`, never from the PostgreSQL notification
+ * channels. Those channels carry only a queue name, are coalesced by both the worker and the
+ * dashboard's listener, and are dropped while nothing is listening — a feed built from them would
+ * be both uninformative and quietly incomplete. They are still what makes this page live: a
+ * notification tells the dashboard to re-read, and this table is what it re-reads.
+ *
+ * The feed is a window, not a paginated log. It updates in place while an operator watches, and a
+ * cursor walking backwards through a list whose head keeps moving is not something anyone should
+ * have to reason about. One task's complete history is in its own timeline in the task drawer.
+ */
+function EventsPage({
+  data,
+  query,
+  setQuery,
+  inspectJob,
+  live,
+}: {
+  data: DashboardEventsPage;
+  query: EventsQueryState;
+  setQuery: (next: EventsQueryState) => void;
+  inspectJob: (id: string) => void;
+  live: DashboardLiveStatus | null;
+}) {
+  const queueOptions = includeSelectedOption(
+    uniqueSorted(data.events.map((event) => event.queue)),
+    query.queue,
+  );
+  const typeOptions = includeSelectedOption(
+    uniqueSorted(data.events.map((event) => event.jobType)),
+    query.jobType,
+  );
+  const eventTypeOptions = includeSelectedOptions(
+    uniqueSorted(data.events.map((event) => event.type)),
+    query.types,
+  );
+  const retentionNote = [
+    data.retention.jobEventDays === null
+      ? "lifecycle events are retained indefinitely"
+      : `lifecycle events are retained for ${data.retention.jobEventDays} days`,
+    data.retention.attemptHistoryDays === null
+      ? "attempt history is retained indefinitely"
+      : `attempt history is retained for ${data.retention.attemptHistoryDays} days`,
+  ].join(", ");
+  // Any change to what is being asked for returns to the first page: page 4 of the old filter
+  // addresses nothing in the new result set.
+  const filter = (next: Partial<EventsQueryState>) => setQuery({ ...query, ...next, page: 1 });
+  const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
+
+  return (
+    <Stack gap="xl">
+      <PageHeader
+        title="Events"
+        description="Everything the queue recorded across the fleet, newest first, read from the append-only lifecycle history."
+      />
+      <Paper withBorder p="md">
+        <Group gap="md" align="flex-end" wrap="wrap">
+          <Box>
+            <Text c="dimmed" fw={600} size="xs" mb={4}>
+              Window
+            </Text>
+            <SegmentedControl
+              size="xs"
+              value={query.window}
+              data={[...eventsWindowOptions]}
+              onChange={(value) => filter({ window: value as DashboardEventsWindow })}
+            />
+          </Box>
+          <Box>
+            <Text c="dimmed" fw={600} size="xs" mb={4}>
+              Source
+            </Text>
+            <SegmentedControl
+              size="xs"
+              value={query.kind}
+              data={eventsKindOptions}
+              onChange={(value) => filter({ kind: value as EventsQueryState["kind"] })}
+            />
+          </Box>
+          <Select
+            size="xs"
+            label="Queue"
+            placeholder="Any queue"
+            clearable
+            searchable
+            w={180}
+            data={queueOptions}
+            value={query.queue}
+            onChange={(value) => filter({ queue: value })}
+          />
+          <Select
+            size="xs"
+            label="Task type"
+            placeholder="Any type"
+            clearable
+            searchable
+            w={200}
+            data={typeOptions}
+            value={query.jobType}
+            onChange={(value) => filter({ jobType: value })}
+          />
+          <MultiSelect
+            size="xs"
+            label="Event"
+            placeholder={query.types.length === 0 ? "Any event" : undefined}
+            clearable
+            searchable
+            w={260}
+            data={eventTypeOptions}
+            value={query.types}
+            onChange={(value) => filter({ types: value })}
+          />
+          <Select
+            size="xs"
+            label="Rows"
+            w={100}
+            allowDeselect={false}
+            data={["25", "50", "100"]}
+            value={String(query.pageSize)}
+            onChange={(value) =>
+              filter({ pageSize: Number(value ?? 50) as EventsQueryState["pageSize"] })
+            }
+          />
+        </Group>
+      </Paper>
+      {/* Queue and task filters are matched against the job a history row points at. History
+          outlives the job it describes, so rows whose job has already been retained away can only
+          be reached with those filters cleared. */}
+      {data.events.length === 0 ? (
+        <EmptyState>
+          Nothing was recorded in the last {query.window}. History is bounded by retention:{" "}
+          {retentionNote}.
+        </EmptyState>
+      ) : (
+        <Paper withBorder>
+          <ScrollArea>
+            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1100}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th w={150}>When</Table.Th>
+                  <Table.Th w={190}>Event</Table.Th>
+                  <Table.Th w={90}>ID</Table.Th>
+                  <Table.Th>Task</Table.Th>
+                  <Table.Th w={140}>Queue</Table.Th>
+                  <Table.Th w={80} ta="right">
+                    Attempt
+                  </Table.Th>
+                  <Table.Th w={160}>Worker</Table.Th>
+                  <Table.Th w={110} ta="right">
+                    Duration
+                  </Table.Th>
+                  <Table.Th>Detail</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {data.events.map((event) => (
+                  <EventRow key={event.id} event={event} inspectJob={inspectJob} />
+                ))}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea>
+        </Paper>
+      )}
+      {totalPages > 1 ? (
+        <Group justify="space-between" wrap="wrap" gap="xs">
+          <Pagination
+            value={Math.min(data.page, totalPages)}
+            onChange={(page) => setQuery({ ...query, page })}
+            total={totalPages}
+            size="xs"
+            aria-label="Events pagination"
+          />
+          {/* Pages are offsets into a list whose head keeps moving, so say so rather than let an
+              operator wonder why a row they were reading moved down a page. */}
+          {data.page > 1 && live === "live" ? (
+            <Text c="dimmed" size="xs">
+              Newer events push these boundaries down while the feed is live.
+            </Text>
+          ) : null}
+        </Group>
+      ) : null}
+      <Text c="dimmed" size="xs">
+        Sourced from the durable lifecycle tables, not from PostgreSQL notifications: notification
+        payloads carry only a queue name and are dropped while nothing is listening, so a feed built
+        from them would have invisible gaps. Depth is bounded by retention — {retentionNote}. One
+        task&rsquo;s complete history, including every attempt, is in its own timeline in the task
+        drawer.
+      </Text>
+    </Stack>
+  );
+}
+
+function EventRow({
+  event,
+  inspectJob,
+}: {
+  event: DashboardEventRow;
+  inspectJob: (id: string) => void;
+}) {
+  const detail = event.errorMessage ?? eventDetailSummary(event.details);
+  return (
+    <Table.Tr>
+      <Table.Td>
+        <Tooltip label={formatExact(event.occurredAt)} withArrow>
+          <Text size="sm">{formatRelative(event.occurredAt)}</Text>
+        </Tooltip>
+      </Table.Td>
+      <Table.Td>
+        <Group gap={6} wrap="nowrap">
+          <Badge color={eventTypeColor(event.type)} variant="light" style={{ flexShrink: 0 }}>
+            {event.type.replaceAll("_", " ")}
+          </Badge>
+          {/* Which table the row came from is worth stating: an attempt row is a closed attempt
+              with a measured duration, a lifecycle row is a transition the queue recorded. */}
+          {event.kind === "attempt" ? (
+            <Badge color="gray" variant="outline" size="xs" style={{ flexShrink: 0 }}>
+              attempt
+            </Badge>
+          ) : null}
+        </Group>
+      </Table.Td>
+      {/* The identifier is abbreviated to the prefix a person actually reads, with the whole value
+          on the title so it stays copyable in full from the drawer the click opens. */}
+      <Table.Td>
+        <Code
+          component="button"
+          fz="xs"
+          c="blue"
+          title={event.jobId}
+          onClick={() => inspectJob(event.jobId)}
+          style={{
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            paddingBlock: 0,
+            paddingInline: 0,
+          }}
+        >
+          {event.jobId.slice(0, 8)}
+        </Code>
+      </Table.Td>
+      <Table.Td style={{ whiteSpace: "nowrap" }}>
+        <Text size="sm">{event.jobType ?? "—"}</Text>
+      </Table.Td>
+      <Table.Td>
+        <Text size="sm">
+          {event.queue ?? (
+            <Text component="span" c="dimmed" fz="xs">
+              retained away
+            </Text>
+          )}
+        </Text>
+      </Table.Td>
+      <Table.Td ta="right">
+        <Text size="sm">{event.attempt ?? "—"}</Text>
+      </Table.Td>
+      <Table.Td>
+        <Text size="sm" truncate>
+          {event.workerId ?? "—"}
+        </Text>
+      </Table.Td>
+      <Table.Td ta="right">
+        <Text size="sm">{formatDuration(event.durationMs)}</Text>
+      </Table.Td>
+      <Table.Td>
+        {detail ? (
+          <Tooltip label={detail} withArrow multiline maw={480}>
+            <Text size="xs" c={event.errorMessage ? "red" : "dimmed"} lineClamp={1}>
+              {detail}
+            </Text>
+          </Tooltip>
+        ) : (
+          <Text c="dimmed" fz="xs">
+            —
+          </Text>
+        )}
+      </Table.Td>
+    </Table.Tr>
+  );
+}
+
 function WorkersPage({
   data,
   togglingWorker,
-  actionError,
   setWorkerPaused,
 }: {
   data: DashboardWorkersPage;
   togglingWorker: string | null;
-  actionError: string | null;
   setWorkerPaused: (workerId: string, paused: boolean) => void;
 }) {
   return (
@@ -4002,11 +4217,6 @@ function WorkersPage({
           so it will not silently idle a worker later. To stop work durably, pause its queue
           instead.
         </Alert>
-      ) : null}
-      {actionError ? (
-        <Text c="red" size="sm">
-          {actionError}
-        </Text>
       ) : null}
       {data.workers.length === 0 ? (
         <EmptyState>No workers have reported activity.</EmptyState>
@@ -4210,6 +4420,7 @@ function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
 }
 
 function routeTitle(route: PageRoute): string {
+  if (route === "/events") return "events";
   if (route === "/cron") return "schedules";
   if (route === "/queues") return "queues";
   if (route === "/system") return "system health";
@@ -4218,10 +4429,32 @@ function routeTitle(route: PageRoute): string {
   return "current tasks";
 }
 
+/** Everything the events feed sends with its request, held together so one ref can carry it. */
+interface EventsQueryState {
+  window: DashboardEventsWindow;
+  page: number;
+  pageSize: 25 | 50 | 100;
+  kind: "all" | "event" | "attempt";
+  queue: string | null;
+  jobType: string | null;
+  types: string[];
+}
+
+const defaultEventsQuery: EventsQueryState = {
+  window: "1h",
+  page: 1,
+  pageSize: 50,
+  kind: "all",
+  queue: null,
+  jobType: null,
+  types: [],
+};
+
 function useDashboardController(
   auditActor: string,
   demoTools: DashboardDemoTools | null,
   basePath: string,
+  eventsUrl: string | null,
 ) {
   const client = useDashboardClient();
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
@@ -4249,16 +4482,11 @@ function useDashboardController(
     };
   }, [client]);
   const [runningDemoJob, setRunningDemoJob] = useState<DemoJobKind | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
   const [togglingSchedule, setTogglingSchedule] = useState<string | null>(null);
-  const [scheduleActionError, setScheduleActionError] = useState<string | null>(null);
   const [togglingQueue, setTogglingQueue] = useState<string | null>(null);
   const [purgingQueue, setPurgingQueue] = useState<string | null>(null);
   const [confirmingQueue, setConfirmingQueue] = useState<string | null>(null);
-  const [queueActionError, setQueueActionError] = useState<string | null>(null);
-  const [queueActionFeedback, setQueueActionFeedback] = useState<string | null>(null);
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
-  const [workerActionError, setWorkerActionError] = useState<string | null>(null);
   /**
    * The open task is read from the URL rather than held beside it, so a copied or reloaded link
    * restores the same list and the same open drawer, and Back/Forward can only ever agree with
@@ -4292,10 +4520,10 @@ function useDashboardController(
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
-  const [cancelFeedback, setCancelFeedback] = useState<CancelFeedback | null>(null);
-  const [cancelError, setCancelError] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<DashboardRefreshIntervalValue>(readStoredRefreshInterval);
+  const [liveStatus, setLiveStatus] = useState<DashboardLiveStatus>("offline");
+  const [eventsQuery, setEventsQuery] = useState<EventsQueryState>(defaultEventsQuery);
   const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(() => {
     const initial = readLocation(basePath);
     return initial.route === "/system" &&
@@ -4361,6 +4589,11 @@ function useDashboardController(
   const listingKey = taskListingKey(location);
   const listingRef = useRef(location);
   listingRef.current = location;
+  // The events feed follows the same shape as the task listing: the request is keyed on a
+  // serialized copy of the filters, and the values themselves are read from a ref at send time.
+  const eventsKey = JSON.stringify(eventsQuery);
+  const eventsRef = useRef(eventsQuery);
+  eventsRef.current = eventsQuery;
 
   const loadPage = useCallback(async () => {
     const activeRequest = ++requestId.current;
@@ -4384,6 +4617,20 @@ function useDashboardController(
             search: listing.search ?? undefined,
             page: listing.page,
             pageSize: listing.pageSize,
+          }),
+        };
+      } else if (route === "/events") {
+        const events = eventsRef.current;
+        data = {
+          route: "/events",
+          value: await client.events({
+            window: events.window,
+            page: events.page,
+            pageSize: events.pageSize,
+            kind: events.kind,
+            queue: events.queue,
+            jobType: events.jobType,
+            types: events.types,
           }),
         };
       } else if (route === "/cron") {
@@ -4418,7 +4665,7 @@ function useDashboardController(
     }
     // `listingKey` is the dependency the task listing actually has; the values themselves are
     // read from a ref so that a re-render for an unrelated reason cannot send a stale request.
-  }, [client, route, listingKey, systemWindow]);
+  }, [client, route, listingKey, systemWindow, eventsKey]);
 
   const loadTaskCounts = useCallback(async () => {
     try {
@@ -4431,7 +4678,6 @@ function useDashboardController(
   const runDemoJob = useCallback(
     async (kind: DemoJobKind, scenario?: DurableDemoScenario) => {
       setRunningDemoJob(kind);
-      setActionError(null);
       try {
         if (!demoTools) return;
         await demoTools.enqueueTest({
@@ -4446,7 +4692,7 @@ function useDashboardController(
         if (location.filter !== "all" || location.page !== 1) navigate("/tasks");
         await loadPage();
       } catch (cause) {
-        setActionError(cause instanceof Error ? cause.message : "Unable to enqueue the demo job");
+        notifyFailure("Demo task not enqueued", cause, "Unable to enqueue the demo job");
       } finally {
         setRunningDemoJob(null);
       }
@@ -4458,7 +4704,6 @@ function useDashboardController(
     async (namespace: string, name: string, enabled: boolean) => {
       const scheduleKey = `${namespace}:${name}`;
       setTogglingSchedule(scheduleKey);
-      setScheduleActionError(null);
       try {
         await client.setScheduleEnabled({
           kind: "user",
@@ -4471,11 +4716,16 @@ function useDashboardController(
             requestId: crypto.randomUUID(),
           },
         });
+        notifyDashboard({
+          title: enabled ? "Schedule enabled" : "Schedule disabled",
+          message: enabled
+            ? `${scheduleKey} fires again from its next occurrence.`
+            : `${scheduleKey} stopped firing. Occurrences already enqueued are untouched.`,
+          tone: "success",
+        });
         await loadPage();
       } catch (cause) {
-        setScheduleActionError(
-          cause instanceof Error ? cause.message : "Unable to update the schedule",
-        );
+        notifyFailure("Schedule not updated", cause, "Unable to update the schedule");
       } finally {
         setTogglingSchedule(null);
       }
@@ -4486,8 +4736,6 @@ function useDashboardController(
   const toggleQueue = useCallback(
     async (queue: string, paused: boolean) => {
       setTogglingQueue(queue);
-      setQueueActionError(null);
-      setQueueActionFeedback(null);
       try {
         await client.setQueuePaused({
           queue,
@@ -4498,9 +4746,16 @@ function useDashboardController(
             requestId: crypto.randomUUID(),
           },
         });
+        notifyDashboard({
+          title: paused ? "Queue paused" : "Queue resumed",
+          message: paused
+            ? `${queue} stopped dispatching. Tasks already running finish; nothing new is claimed.`
+            : `${queue} is dispatching again.`,
+          tone: "success",
+        });
         await loadPage();
       } catch (cause) {
-        setQueueActionError(cause instanceof Error ? cause.message : "Unable to update the queue");
+        notifyFailure("Queue not updated", cause, "Unable to update the queue");
       } finally {
         setTogglingQueue(null);
       }
@@ -4511,8 +4766,6 @@ function useDashboardController(
   const clearQueue = useCallback(
     async (queue: string) => {
       setPurgingQueue(queue);
-      setQueueActionError(null);
-      setQueueActionFeedback(null);
       try {
         const result = await client.purgeQueue({
           queue,
@@ -4523,12 +4776,16 @@ function useDashboardController(
           },
         });
         setConfirmingQueue(null);
-        setQueueActionFeedback(
-          `Cleared ${result.deletedCount} waiting ${result.deletedCount === 1 ? "task" : "tasks"} from ${queue}.`,
-        );
+        notifyDashboard({
+          title: "Queue cleared",
+          message: `Cleared ${result.deletedCount} waiting ${
+            result.deletedCount === 1 ? "task" : "tasks"
+          } from ${queue}.`,
+          tone: result.deletedCount > 0 ? "success" : "neutral",
+        });
         await loadPage();
       } catch (cause) {
-        setQueueActionError(cause instanceof Error ? cause.message : "Unable to clear the queue");
+        notifyFailure("Queue not cleared", cause, "Unable to clear the queue");
       } finally {
         setPurgingQueue(null);
       }
@@ -4539,7 +4796,6 @@ function useDashboardController(
   const toggleWorker = useCallback(
     async (workerId: string, paused: boolean) => {
       setTogglingWorker(workerId);
-      setWorkerActionError(null);
       try {
         await client.setWorkerPaused({
           workerId,
@@ -4550,11 +4806,16 @@ function useDashboardController(
             requestId: crypto.randomUUID(),
           },
         });
+        notifyDashboard({
+          title: paused ? "Worker paused" : "Worker resumed",
+          message: paused
+            ? `${workerId} stopped claiming new work and finishes what it is already running. The pause is cleared if that process restarts.`
+            : `${workerId} is claiming work again.`,
+          tone: "success",
+        });
         await loadPage();
       } catch (cause) {
-        setWorkerActionError(
-          cause instanceof Error ? cause.message : "Unable to update the worker",
-        );
+        notifyFailure("Worker not updated", cause, "Unable to update the worker");
       } finally {
         setTogglingWorker(null);
       }
@@ -4583,11 +4844,9 @@ function useDashboardController(
       armCancelForJobId.current = null;
       setSelectedJob(null);
       setJobDetailError(null);
-      // Opening a different task must never inherit the previous task's confirmation or result.
+      // Opening a different task must never inherit the previous task's confirmation.
       setConfirmingCancel(armCancel);
       setCancelReason("");
-      setCancelError(null);
-      setCancelFeedback(null);
       try {
         const detail = await client.jobDetail({ id });
         if (!jobDetailRequests.current.current(ticket)) return;
@@ -4682,8 +4941,6 @@ function useDashboardController(
   const cancelTask = useCallback(
     async (id: string, reason: string) => {
       setCancelingJobId(id);
-      setCancelError(null);
-      setCancelFeedback(null);
       try {
         const result = await client.cancelTask({
           id,
@@ -4693,17 +4950,17 @@ function useDashboardController(
             requestId: crypto.randomUUID(),
           },
         });
+        // Announced for the task that was canceled, not for whichever task the drawer now shows,
+        // and offered as a link back to it so an operator who has moved on can still reach it.
+        notifyCancel(
+          { jobId: id, status: result.status, state: result.state },
+          { openTask: inspectJob },
+        );
         if (!cancelResultAppliesTo(id, selectedJobIdRef.current)) {
           // The task list still has to show the new state, even though the drawer moved on.
           await loadPage();
           return;
         }
-        setCancelFeedback({
-          jobId: id,
-          status: result.status,
-          state: result.state,
-          at: result.finishedAt ?? result.requestedAt,
-        });
         setConfirmingCancel(false);
         setCancelReason("");
         // Claim the drawer for this refresh, so a detail load started by a later click wins.
@@ -4712,15 +4969,14 @@ function useDashboardController(
         if (detail && jobDetailRequests.current.current(ticket)) setSelectedJob(detail);
         await loadPage();
       } catch (cause) {
-        if (!cancelResultAppliesTo(id, selectedJobIdRef.current)) return;
-        setCancelError(cause instanceof Error ? cause.message : "Unable to cancel the task");
+        notifyFailure("Task not canceled", cause, "Unable to cancel the task");
       } finally {
         // Clearing unconditionally would unstick a spinner this call never started, so only the
         // task whose cancellation is settling drops the pending flag.
         setCancelingJobId((pending) => clearPendingCancel(pending, id));
       }
     },
-    [auditActor, client, loadPage],
+    [auditActor, client, inspectJob, loadPage],
   );
 
   /**
@@ -4735,31 +4991,17 @@ function useDashboardController(
    * action is unavailable rather than hiding the item.
    */
   const runTaskNow = useMemo(() => {
-    const mutate = client.runTaskNow;
-    if (!mutate) return null;
+    if (!client.runTaskNow) return null;
     return async (id: string): Promise<RunNowFeedback> => {
-      try {
-        const result = await mutate.call(client, {
-          id,
-          audit: {
-            actor: auditActor,
-            reason: `Run scheduled task ${id} now from the dashboard`,
-            requestId: crypto.randomUUID(),
-          },
-        });
-        await loadPage();
-        return {
-          jobId: id,
-          described: describeRunNowOutcome(result.status, { state: result.state }),
-          failure: null,
-        };
-      } catch (cause) {
-        return {
-          jobId: id,
-          described: null,
-          failure: cause instanceof Error ? cause.message : "Unable to run the task now",
-        };
-      }
+      const feedback = await requestRunNow(client, {
+        id,
+        auditActor,
+        requestId: crypto.randomUUID(),
+      });
+      // Reloaded on every outcome: a refusal is still a statement about durable state this list
+      // should be showing, and a released task has already changed row.
+      await loadPage();
+      return feedback;
     };
   }, [auditActor, client, loadPage]);
 
@@ -4790,6 +5032,28 @@ function useDashboardController(
       if (location.route !== "/tasks") void loadTaskCounts();
     });
   }, [refreshInterval, loadPage, loadTaskCounts, location.route]);
+
+  /**
+   * Refresh from the host's event stream instead of a timer.
+   *
+   * The stream only says that something durable changed; the page re-reads through the same
+   * queries a manual refresh uses. Nothing rendered comes from a notification payload, so a frame
+   * lost to a reconnect costs a later refetch and never a gap in what is displayed.
+   */
+  useEffect(() => {
+    if (!eventsUrl || !dashboardRefreshIsLive(refreshInterval)) {
+      setLiveStatus("offline");
+      return;
+    }
+    return subscribeDashboardRefresh({
+      url: eventsUrl,
+      onStatus: setLiveStatus,
+      onRefresh: () => {
+        void loadPage();
+        if (location.route !== "/tasks") void loadTaskCounts();
+      },
+    });
+  }, [eventsUrl, refreshInterval, loadPage, loadTaskCounts, location.route]);
 
   const connected = loadState.status !== "error" && loadState.data !== null;
   const loading = loadState.status === "loading";
@@ -4830,9 +5094,18 @@ function useDashboardController(
         taskLocation={location}
         runDemoJob={demoTools ? runDemoJob : null}
         runningDemoJob={runningDemoJob}
-        actionError={actionError}
         inspectJob={inspectJob}
         runTaskNow={runTaskNow}
+      />
+    );
+  } else if (loadState.data?.route === "/events") {
+    content = (
+      <EventsPage
+        data={loadState.data.value}
+        query={eventsQuery}
+        setQuery={setEventsQuery}
+        inspectJob={inspectJob}
+        live={dashboardRefreshIsLive(refreshInterval) ? liveStatus : null}
       />
     );
   } else if (loadState.data?.route === "/cron") {
@@ -4840,7 +5113,6 @@ function useDashboardController(
       <CronPage
         data={loadState.data.value}
         togglingSchedule={togglingSchedule}
-        actionError={scheduleActionError}
         setScheduleEnabled={(namespace, name, enabled) =>
           void toggleSchedule(namespace, name, enabled)
         }
@@ -4853,8 +5125,6 @@ function useDashboardController(
         togglingQueue={togglingQueue}
         purgingQueue={purgingQueue}
         confirmingQueue={confirmingQueue}
-        actionError={queueActionError}
-        actionFeedback={queueActionFeedback}
         setQueuePaused={(queue, paused) => void toggleQueue(queue, paused)}
         setConfirmingQueue={setConfirmingQueue}
         purgeQueue={(queue) => void clearQueue(queue)}
@@ -4869,7 +5139,6 @@ function useDashboardController(
       <WorkersPage
         data={loadState.data.value}
         togglingWorker={togglingWorker}
-        actionError={workerActionError}
         setWorkerPaused={(workerId, paused) => void toggleWorker(workerId, paused)}
       />
     );
@@ -4889,6 +5158,8 @@ function useDashboardController(
     loadPage,
     refreshInterval,
     changeRefreshInterval,
+    liveStatus,
+    liveAvailable: eventsUrl !== null,
     location,
     taskCounts,
     handleLink,
@@ -4902,8 +5173,6 @@ function useDashboardController(
     cancelReason,
     setCancelReason,
     cancelingJobId,
-    cancelFeedback,
-    cancelError,
     cancelTask,
   };
 }
@@ -4912,11 +5181,13 @@ function DashboardContent({
   auditActor,
   demoTools,
   basePath,
+  eventsUrl,
 }: Required<Pick<DashboardProps, "auditActor">> & {
   demoTools: DashboardDemoTools | null;
   basePath: string;
+  eventsUrl: string | null;
 }) {
-  const controller = useDashboardController(auditActor, demoTools, basePath);
+  const controller = useDashboardController(auditActor, demoTools, basePath, eventsUrl);
   const {
     navbarOpened,
     toggleNavbar,
@@ -4927,6 +5198,8 @@ function DashboardContent({
     loadPage,
     refreshInterval,
     changeRefreshInterval,
+    liveStatus,
+    liveAvailable,
     location,
     taskCounts,
     handleLink,
@@ -4940,8 +5213,6 @@ function DashboardContent({
     cancelReason,
     setCancelReason,
     cancelingJobId,
-    cancelFeedback,
-    cancelError,
     cancelTask,
   } = controller;
 
@@ -4997,6 +5268,21 @@ function DashboardContent({
                   ? "Connected"
                   : "Connecting"}
             </Badge>
+            {dashboardRefreshIsLive(refreshInterval) && liveAvailable ? (
+              <Badge
+                color={liveStatus === "live" ? "teal" : "gray"}
+                variant={liveStatus === "live" ? "filled" : "light"}
+                leftSection={<Lightning size={12} weight="fill" />}
+                visibleFrom="xs"
+                title={
+                  liveStatus === "live"
+                    ? "Streaming refreshes from PostgreSQL notifications"
+                    : "The refresh stream is not connected; use Refresh to re-read now"
+                }
+              >
+                {liveStatus === "live" ? "Live" : "Reconnecting"}
+              </Badge>
+            ) : null}
             <Group gap={0} wrap="nowrap">
               <Button
                 variant="default"
@@ -5029,12 +5315,17 @@ function DashboardContent({
                   {dashboardRefreshIntervals.map((option) => (
                     <Menu.Item
                       key={option.value}
+                      // A host that serves no event stream cannot stream; the option stays visible
+                      // and disabled rather than vanishing, so the absence is explained.
+                      disabled={option.value === "live" && !liveAvailable}
                       onClick={() => changeRefreshInterval(option.value)}
                       rightSection={
                         refreshInterval === option.value ? <CheckCircle size={14} /> : null
                       }
                     >
-                      {option.label}
+                      {option.value === "live" && !liveAvailable
+                        ? "Live (not served by this host)"
+                        : option.label}
                     </Menu.Item>
                   ))}
                 </Menu.Dropdown>
@@ -5080,6 +5371,15 @@ function DashboardContent({
             <Text c="dimmed" fw={600} size="xs" px="sm" mb={4}>
               Operations
             </Text>
+            <NavLink
+              component="a"
+              href={mountedHref(basePath, "/events")}
+              active={location.route === "/events"}
+              label="Events"
+              leftSection={<Lightning size={18} />}
+              variant="light"
+              onClick={(event) => handleLink(event, "/events")}
+            />
             <NavLink
               component="a"
               href={mountedHref(basePath, "/cron")}
@@ -5179,8 +5479,6 @@ function DashboardContent({
               reason={cancelReason}
               setReason={setCancelReason}
               pending={cancelingJobId === selectedJob.identity.id}
-              feedback={cancelFeedback}
-              error={cancelError}
               cancelTask={cancelTask}
             />
             <JobProgress job={selectedJob} />
@@ -5235,7 +5533,14 @@ function DashboardContent({
 
 export interface DashboardProps {
   client: DashboardClient;
-  /** @deprecated Retained for API compatibility. Dashboard refresh is currently polling-only. */
+  /**
+   * Server-sent refresh stream to subscribe to while auto refresh is set to "Live".
+   *
+   * `createDashboardHost` serves one at `{basePath}/events` and supplies this through the runtime
+   * config, so the packaged application needs no configuration. Omit it in a host that does not
+   * serve the stream: the dashboard then offers only its timed refresh intervals rather than a
+   * "Live" setting that would sit permanently disconnected.
+   */
   eventsUrl?: string | null;
   /** Actor stored in audit metadata for mutations initiated by this dashboard. */
   auditActor?: string;
@@ -5250,11 +5555,17 @@ export function Dashboard({
   auditActor = "dashboard",
   demoTools = undefined,
   basePath: basePathInput = "",
+  eventsUrl = null,
 }: DashboardProps) {
   const basePath = normalizeBasePath(basePathInput);
   return (
     <DashboardClientContext.Provider value={client}>
-      <DashboardContent auditActor={auditActor} demoTools={demoTools ?? null} basePath={basePath} />
+      <DashboardContent
+        auditActor={auditActor}
+        demoTools={demoTools ?? null}
+        basePath={basePath}
+        eventsUrl={eventsUrl}
+      />
     </DashboardClientContext.Provider>
   );
 }

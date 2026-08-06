@@ -13,7 +13,6 @@ slots.
 import { Worker } from "@workhorse/core";
 
 const worker = new Worker(queue, {
-  workerId: "email-1",
   queue: "email",
   concurrency: 4,
 }).handle("email.send", async (payload: { to: string }, context) => {
@@ -28,24 +27,36 @@ JSON-serializable and becomes the job's immutable terminal result.
 
 ## `WorkerOptions`
 
-| Option                  | Default               | Meaning                                                            |
-| ----------------------- | --------------------- | ------------------------------------------------------------------ |
-| `queue`                 | `"default"`           | Queue name used for claims                                         |
-| `workerId`              | `worker-<pid>-<uuid>` | Durable lease owner identity; must be unique among live workers    |
-| `concurrency`           | `1`                   | Integer 1 to 100; concurrent handler executions in this instance   |
-| `leaseMs`               | `30_000`              | Ownership granted by claim and each accepted heartbeat             |
-| `heartbeatMs`           | `leaseMs / 3`         | Local heartbeat interval; must be less than `leaseMs`              |
-| `pollMs`                | `250`                 | Idle polling delay                                                 |
-| `maintenanceIntervalMs` | `1_000`               | Minimum delay between tick/schedule passes; at least 100           |
-| `maintenanceTaskPollMs` | `60_000`              | Minimum delay between background maintenance eligibility checks    |
-| `onMaintenance`         | –                     | Receives one telemetry event per SQL maintenance phase             |
-| `scheduleNamespaces`    | `[]`                  | Namespaces whose schedules this worker evaluates                   |
-| `scheduleCatchupLimit`  | `100`                 | Max missed occurrences fired per schedule per pass (1 to 10,000)   |
-| `retryDelayMs`          | –                     | Number or `(attempt, job) => number \| undefined` backoff override |
-| `failpoint`             | –                     | Test-only deterministic crash hook                                 |
+| Option                           | Default                     | Meaning                                                            |
+| -------------------------------- | --------------------------- | ------------------------------------------------------------------ |
+| `queue`                          | `"default"`                 | Queue name used for claims                                         |
+| `workerId`                       | `<hostname>-<pid>-<random>` | Durable lease owner identity; must be unique among live workers    |
+| `concurrency`                    | `1`                         | Integer 1 to 100; concurrent handler executions in this instance   |
+| `leaseMs`                        | `30_000`                    | Ownership granted by claim and each accepted heartbeat             |
+| `heartbeatMs`                    | `leaseMs / 3`               | Local heartbeat interval; must be less than `leaseMs`              |
+| `pollMs`                         | `250`                       | Idle polling delay                                                 |
+| `maintenanceIntervalMs`          | `1_000`                     | Minimum delay between tick/schedule passes; at least 100           |
+| `maintenanceTaskPollMs`          | `60_000`                    | Minimum delay between background maintenance eligibility checks    |
+| `registryIntervalMs`             | `5_000`                     | Fleet registry refresh cadence; `0` opts out of registration       |
+| `activityNotifications`          | `false`                     | Publish coalesced hints on the `workhorse_activity` channel        |
+| `activityNotificationIntervalMs` | `250`                       | Minimum delay between coalesced activity notifications             |
+| `onRegistrationError`            | –                           | Receives registry refresh failures instead of throwing in the loop |
+| `onMaintenance`                  | –                           | Receives one telemetry event per SQL maintenance phase             |
+| `scheduleNamespaces`             | `[]`                        | Namespaces whose schedules this worker evaluates                   |
+| `scheduleCatchupLimit`           | `100`                       | Max missed occurrences fired per schedule per pass (1 to 10,000)   |
+| `retryDelayMs`                   | –                           | Number or `(attempt, job) => number \| undefined` backoff override |
+| `failpoint`                      | –                           | Test-only deterministic crash hook                                 |
 
 Invalid combinations throw at construction: `heartbeatMs >= leaseMs`, out-of-range concurrency, and
 cadences below 100 ms are rejected immediately.
+
+<Callout>
+  Leave `workerId` unset unless you specifically want a recognizable name in operator views. The
+  generated identity is deliberately **unstable across restarts**: it owns leases and attempt
+  history, so it must never be reused by a concurrently running process. Nothing about correctness
+  depends on its stability, because operator pause is scoped to a process incarnation rather than to
+  the name. Hard-coding one value across replicas is a collision, not a convention.
+</Callout>
 
 ## Handler context
 
@@ -55,6 +66,8 @@ interface HandlerContext<TPayload> {
   signal: AbortSignal;
   getCheckpoint<T>(name: string): Promise<JobCheckpoint<T> | null>;
   getWait(name: string): Promise<JobWait | null>;
+  getProgress<T>(): Promise<JobProgress<T> | null>;
+  setProgress<T>(value: T): Promise<JobProgress<T>>;
   checkpoint<T>(name: string, operation: () => Promise<T> | T): Promise<T>;
   sleep(name: string, durationMs: number): Promise<void>;
   sleepUntil(name: string, wakeAt: Date): Promise<void>;
@@ -124,11 +137,15 @@ returns the operator-requested pause flag, so an operator surface running in a d
 both see and control the fleet.
 
 ```ts
-const fleet = await queue.listWorkers();
-await queue.setWorkerPaused("worker-1", true, {
-  requestedBy: "operator",
-  reason: "rolling deploy",
-});
+// Names are generated per process incarnation, so resolve them at call time
+// rather than hard-coding one.
+for (const entry of await queue.listWorkers()) {
+  if (entry.queue !== "billing") continue;
+  await queue.setWorkerPaused(entry.workerId, true, {
+    requestedBy: "operator",
+    reason: "rolling deploy",
+  });
+}
 ```
 
 Operator pause is cooperative and durable, exactly like cancellation:
@@ -170,7 +187,6 @@ Delivery is never part of the protocol. Consume it with `listenForDashboardRefre
 
 ```ts
 const worker = new Worker(queue, {
-  workerId: "worker-1",
   onMaintenance: (telemetry) => {
     // { loop, phase, rowsAffected, durationMs, skippedLock, error, observedAt }
     metrics.record(telemetry);

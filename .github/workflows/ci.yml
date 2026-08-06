@@ -1,0 +1,146 @@
+# The supported-version contract for the published packages.
+#
+# The Node.js and PostgreSQL majors below are the ones `src/support.ts` declares supported, and
+# `test/support-matrix.test.ts` fails if this file and that module disagree. Adding a version here
+# without adding it there (or the reverse) is a build failure, not a silent claim.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # A packed install resolves the published tarballs, so the store cache is the only thing worth
+  # sharing between jobs.
+  PNPM_HOME: ${{ github.workspace }}/.pnpm-home
+
+jobs:
+  static:
+    name: format, lint, types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+
+  test:
+    name: test (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+        postgres: [15, 16, 17, 18]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The package test suites import @workhorse/core through its published entry point, so the
+      # library half has to exist before vitest runs. The browser bundle is only needed by the
+      # demo smoke test.
+      - run: pnpm build:runtime:dev
+      # The reset creates the database and installs sql/schema.sql, which is also the first proof
+      # that the canonical schema is accepted by this PostgreSQL major at all.
+      - run: pnpm db:reset:test
+      - run: pnpm test
+
+  packed:
+    name: packed install (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:reset:test
+      # Installs the packed tarballs into a throwaway consumer project and runs it, so publishing
+      # mistakes fail here rather than after a release.
+      - run: pnpm test:packed
+
+  demo:
+    name: demo smoke
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORKHORSE_DEMO_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # test:demo-smoke serves packages/dashboard/dist/app, which only a full build produces.
+      - run: pnpm build
+      - run: pnpm test:demo-smoke
+      - run: pnpm test:site-smoke
