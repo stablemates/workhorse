@@ -1,6 +1,11 @@
 import { ORPCError, os } from "@orpc/server";
 import type { Queue } from "@workhorse/core";
-import type { DashboardSystemWindow, MaintenanceLoopCadences } from "../model.js";
+import {
+  dashboardAttemptOutcomes,
+  dashboardJobEventTypes,
+  type DashboardSystemWindow,
+  type MaintenanceLoopCadences,
+} from "../model.js";
 import { z } from "zod";
 import type {
   DashboardDurabilityProjector,
@@ -14,6 +19,7 @@ import type { DashboardDatabase } from "./sql.js";
 import {
   readDashboardActivity,
   readDashboardCron,
+  readDashboardEvents,
   readDashboardJobDetail,
   readDashboardQueues,
   readDashboardSystem,
@@ -94,6 +100,26 @@ const activityInput = z.object({
 const systemInput = z.object({
   window: z.enum(["15m", "1h", "24h"]).default("1h"),
 });
+/**
+ * The event feed is bounded by a window and paged by offset, like the task listing.
+ *
+ * `types` is validated against the closed sets the schema itself writes, so an unbounded string
+ * from a browser can never reach a filter that would otherwise scan the whole retained window for
+ * a value no row can hold.
+ */
+const eventsInput = z.object({
+  window: z.enum(["15m", "1h", "6h", "24h"]).default("1h"),
+  page: z.number().int().min(1).default(1),
+  pageSize: z.union([z.literal(25), z.literal(50), z.literal(100)]).default(50),
+  kind: z.enum(["all", "event", "attempt"]).default("all"),
+  queue: z.string().trim().min(1).nullable().default(null),
+  jobType: z.string().trim().min(1).nullable().default(null),
+  types: z
+    .array(z.enum([...dashboardJobEventTypes, ...dashboardAttemptOutcomes]))
+    .max(dashboardJobEventTypes.length + dashboardAttemptOutcomes.length)
+    .default([]),
+  jobId: z.uuid().nullable().default(null),
+});
 const enqueueTestInput = z.object({
   kind: z.enum(["success", "retry", "durable", "timer", "failure", "idempotent", "long-running"]),
   scenario: z.enum(["order-fulfillment", "customer-onboarding", "report-publication"]).optional(),
@@ -172,6 +198,9 @@ export const dashboardRouter = {
           input.worker,
         ),
       ),
+    events: procedure
+      .input(eventsInput)
+      .handler(({ context, input }) => readDashboardEvents(context.database, input)),
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),
     ),

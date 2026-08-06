@@ -71,7 +71,6 @@ Precedence, highest first:
 
 ```ts
 const worker = new Worker(queue, {
-  workerId: "sync-1",
   retryDelayMs: (attempt, job) => {
     if (job.type === "provider.sync") return Math.min(60_000, 1_000 * 2 ** attempt);
     return undefined; // defer to the persisted policy or SQL default

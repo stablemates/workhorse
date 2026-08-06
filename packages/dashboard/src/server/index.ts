@@ -17,7 +17,8 @@ export type {
 export type { DashboardNodeMiddleware } from "./node.js";
 export { DashboardRefreshHub } from "./refresh.js";
 export type { DashboardRefreshEvent, DashboardRefreshReason } from "./refresh.js";
-export { readDashboardSnapshot, readDashboardWorkers } from "./read-model.js";
+export { readDashboardEvents, readDashboardSnapshot, readDashboardWorkers } from "./read-model.js";
+export type { DashboardEventsQuery } from "./read-model.js";
 export { dashboardRouter } from "./router.js";
 export type { DashboardRouter, DashboardRpcContext } from "./router.js";
 export { dashboardDatabase, sql } from "./sql.js";

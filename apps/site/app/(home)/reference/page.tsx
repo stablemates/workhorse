@@ -73,7 +73,7 @@ const surface = [
     entries: [
       {
         term: "new Worker(queue, options)",
-        body: "Options include workerId, concurrency (1–100), scheduleNamespaces, retryDelayMs override, failpoints, and maintenance callbacks.",
+        body: "Options include workerId, concurrency (1–100), scheduleNamespaces, lease and heartbeat cadences, the registry refresh interval, activity notifications, a retryDelayMs override, failpoints, and maintenance callbacks.",
       },
       {
         term: "handle(type, handler)",
@@ -85,7 +85,11 @@ const surface = [
       },
       {
         term: "pause() / resume()",
-        body: "Process-local claim control. Neither interrupts an active handler nor forms a durable worker registry.",
+        body: "Process-local claim control. Neither interrupts an active handler. A local resume() cannot clear an operator pause requested through the registry, which is why runtimeState() reports locallyPaused and remotelyPaused separately.",
+      },
+      {
+        term: "queue.listWorkers() / queue.setWorkerPaused(id, paused, options?)",
+        body: "Every worker announces itself in workhorse.worker_registry and refreshes its runtime state, so an operator process elsewhere can list the fleet and request a cooperative, durable pause with bounded attribution. The registry is never read by the claim path.",
       },
       {
         term: "runtimeState() / maintenanceTelemetry()",
@@ -105,6 +109,18 @@ const surface = [
       {
         term: "sleep(name, ms) / sleepUntil(name, date)",
         body: "Commits a named PostgreSQL timer, releases the lease and worker slot, then restarts the handler in the same logical attempt. The target is a not-before boundary, not an exact alarm.",
+      },
+      {
+        term: "getProgress() / setProgress(value)",
+        body: "Bounded latest-value operational projection, fenced to the owning attempt and rate limited to one changed write per 100 ms. It is observability, not a restart boundary.",
+      },
+      {
+        term: "getCheckpoint(name) / getWait(name)",
+        body: "Read a persisted restart boundary or a named durable wait from this activation's snapshot, without executing user code.",
+      },
+      {
+        term: "job",
+        body: "The claimed job: id, type, payload, attempt, maxAttempts, retryPolicy, deadlineAt, executionTimeoutMs, attemptTimeoutAt, fenceToken, and leaseExpiresAt.",
       },
       {
         term: "signal",

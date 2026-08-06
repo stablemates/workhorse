@@ -1,0 +1,101 @@
+# Publishes the four packages from a tag, with npm provenance attesting that these tarballs were
+# built by this workflow from this commit.
+#
+# Provenance requires `id-token: write`, a public repository, and a `repository` field in each
+# published manifest. Nothing else in the release is implicit: the tag must match the version in
+# package.json, and the full check suite runs before anything is published.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Pack and validate without publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+      WORKHORSE_DEMO_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+
+      # A tag that disagrees with the manifests would publish a version nobody can reproduce from
+      # the repository, so it fails before the build rather than after the publish.
+      - name: Check the tag against every package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for manifest in package.json packages/*/package.json; do
+            version="$(node -p "require('./$manifest').version")"
+            if [ "$version" != "$tag" ]; then
+              echo "$manifest is $version but the tag is $tag" >&2
+              exit 1
+            fi
+          done
+
+      - name: Check the changelog documents this release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: grep -q "^## ${GITHUB_REF_NAME#v} " CHANGELOG.md
+
+      - run: pnpm db:reset:test
+      - run: pnpm check
+
+      - name: Pack the publishable packages
+        run: |
+          mkdir -p dist-tarballs
+          pnpm --silent pack --pack-destination dist-tarballs
+          for package in dashboard drizzle hono; do
+            pnpm --silent --dir "packages/$package" pack --pack-destination "$PWD/dist-tarballs"
+          done
+          ls -l dist-tarballs
+
+      # @workhorse/core first: the other three declare it as a peer, so a failed core publish must
+      # not leave dependents pointing at a version that does not exist.
+      - name: Publish with provenance
+        if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          npm publish --provenance --access public "dist-tarballs/workhorse-core-$version.tgz"
+          for package in dashboard drizzle hono; do
+            npm publish --provenance --access public "dist-tarballs/workhorse-$package-$version.tgz"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarballs
+          path: dist-tarballs/*.tgz

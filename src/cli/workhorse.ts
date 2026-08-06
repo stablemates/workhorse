@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Client, Pool } from "pg";
 import { installSchema, readSchemaVersion, WORKHORSE_SCHEMA_VERSION } from "../schema.js";
+import { MINIMUM_POSTGRES_MAJOR, readPostgresSupport } from "../support.js";
 import { runWorkerProcess } from "../worker-process.js";
 import type { WorkerProcessDefinition } from "../worker-process.js";
 import { startDashboardServer } from "./dashboard.js";
@@ -128,7 +129,20 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
           ? `No Workhorse schema is installed. Runtime expects v${WORKHORSE_SCHEMA_VERSION}.\n`
           : `Installed Workhorse schema v${version}. Runtime expects v${WORKHORSE_SCHEMA_VERSION}.\n`,
       );
+      // Status is also where an operator finds out that the server itself is outside the tested
+      // matrix, which no schema version can express.
+      const support = await readPostgresSupport(pool);
+      process.stdout.write(
+        `PostgreSQL ${support.version}: ${
+          !support.supported
+            ? `unsupported, below the required major ${MINIMUM_POSTGRES_MAJOR}`
+            : support.tested
+              ? "supported and covered by CI"
+              : "supported, but this major is not covered by CI"
+        }.\n`,
+      );
       if (version !== null && version !== WORKHORSE_SCHEMA_VERSION) process.exitCode = 1;
+      if (!support.supported) process.exitCode = 1;
       return;
     }
     // Installation is clean-database only by design. It refuses to touch an existing schema rather

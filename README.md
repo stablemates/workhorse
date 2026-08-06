@@ -10,6 +10,8 @@ The current implementation remains an evidence-first validation release rather t
 - [`TODO.md`](TODO.md): prioritized, dependency-aware roadmap for future feature development.
 - [`docs/architecture.md`](docs/architecture.md): system boundaries, module ownership, data model, field-by-field database and API dictionaries, lifecycle, transactions, fencing, crash semantics, health model, and invariants.
 - [`docs/features.md`](docs/features.md): authoritative Supported, Partial, and Not Supported feature matrix.
+- [`docs/compatibility.md`](docs/compatibility.md): supported Node.js and PostgreSQL versions, schema and protocol compatibility guarantees, release and provenance process, and why the support boundary is not the benchmark boundary.
+- [`CHANGELOG.md`](CHANGELOG.md): released versions, the schema version each requires, and upgrade notes.
 - [`docs/mvp-protocol.md`](docs/mvp-protocol.md): concise table and SQL transition reference.
 - [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
 - [`docs/worker-processes.md`](docs/worker-processes.md): dedicated production worker CLI, signal and drain semantics, probes, deployment examples, concurrency findings, and topology guidance.
@@ -294,7 +296,10 @@ persisted policy. `retry_scheduled` and `lease_expired` event details expose `re
 
 ## Development
 
-Requirements: Node.js 22+, pnpm, and PostgreSQL 15+. No PostgreSQL extension is required.
+Requirements: Node.js **>= 22**, pnpm, and PostgreSQL **15 or newer**. No PostgreSQL extension is
+required. CI runs the full suite against every combination of Node.js 22, 24 and PostgreSQL 15, 16,
+17, 18; see [`docs/compatibility.md`](docs/compatibility.md) for what that support boundary does and
+does not promise.
 
 ```bash
 pnpm install
@@ -439,7 +444,6 @@ await queue.syncRetentionPolicy({
 await queue.enqueue("email", { to: "person@example.com" });
 
 const worker = new Worker(queue, {
-  workerId: "email-1",
   // Integer 1..100. The default is 1 for backward-compatible serial execution.
   concurrency: 4,
   // This worker also evaluates and fires this namespace's recurring schedules.

@@ -43,6 +43,7 @@ export default defineConfig({
             runtime: {
               basePath: "",
               rpcUrl: "/rpc",
+              eventsUrl: "/events",
               auditActor,
               demoTools,
             },

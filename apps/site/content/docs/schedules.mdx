@@ -72,7 +72,6 @@ A worker only evaluates namespaces it was configured with:
 
 ```ts
 const worker = new Worker(queue, {
-  workerId: "worker-1",
   scheduleNamespaces: ["billing-production"],
   scheduleCatchupLimit: 100, // max missed occurrences fired per schedule per pass
 });

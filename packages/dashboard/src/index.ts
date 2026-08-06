@@ -1,5 +1,13 @@
 export { Dashboard, type DashboardProps } from "./dashboard.js";
 export { WorkhorseThemeProvider, type DashboardColorScheme, useWorkhorseTheme } from "./theme.js";
+export {
+  clearDashboardNotifications,
+  DashboardNotifications,
+  dashboardNotificationPosition,
+  notifyDashboard,
+  notifyFailure,
+  type DashboardNotification,
+} from "./notifications.js";
 export type {
   DashboardAuditInput,
   DashboardClient,

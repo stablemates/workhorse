@@ -62,7 +62,6 @@ import { Worker } from "@workhorse/core";
 import { queue } from "./workhorse.js";
 
 const worker = new Worker(queue, {
-  workerId: "email-1",
   queue: "email",
   concurrency: 4,
 }).handle("email.welcome", async (payload: { accountId: string; to: string }, context) => {
@@ -119,10 +118,9 @@ await installSchema(pool);
 const queue = new Queue(pool);
 const jobId = await queue.enqueue("greet", { name: "Ada" });
 
-const worker = new Worker(queue, { workerId: "local-1" }).handle(
-  "greet",
-  async (payload: { name: string }) => ({ greeting: `Hello, ${payload.name}` }),
-);
+const worker = new Worker(queue).handle("greet", async (payload: { name: string }) => ({
+  greeting: `Hello, ${payload.name}`,
+}));
 
 await worker.runOnce();
 console.log(await queue.getJob(jobId));
