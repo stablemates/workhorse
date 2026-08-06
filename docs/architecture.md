@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 17.
+The current clean-install protocol is schema version 18.
 
 ## Design objective
 
@@ -283,6 +283,24 @@ Identity is the attribution anchor. Finite terminal-job retention requires both 
 Event and attempt retention are independent phases inside `retain_history_v1`. Each drops only fully expired completed daily partitions, retires at most the configured number per pass, skips busy day locks, caps DDL lock waits at 250 ms, and bounded-deletes expired rows from its own default partition. Explicit day creation and paired retirement functions remain available for controlled operator work. Default partitions preserve insert availability when partition maintenance is late, while health reports exact counts through 10,000 rows and explicit capped lower bounds beyond that so fallback spill cannot remain invisible or make health unbounded.
 
 History tables intentionally do not carry reverse foreign keys to `job`, because dropping a daily partition must not probe every retained partition during parent deletion. Instead, an insert trigger locks and verifies the parent identity and advances its history boundary. A global retained-through watermark advances only after both history categories are completely cleared before their cutoffs. `prune_terminal_storage_v1` may delete a terminal identity only behind that watermark; `purge_queue_v1` explicitly deletes associated history before deleting queued identities. Direct application SQL that deletes package-owned `job` rows is unsupported because it can bypass these guards.
+
+### `job_stat_bucket` and `job_stat_state`
+
+Rolling statistics are the operator read path for anything expressed as a time window. Without them a page like "throughput over the last 24 hours" scans every retained event and attempt, which makes an auto-refreshing dashboard cost proportional to throughput and turns operator curiosity into database load exactly when the system is busiest.
+
+`job_stat_bucket` holds one row per closed minute per `(queue_name, job_type)`. Measures are split by grain and never conflated: `enqueued` and the `job_*` columns count jobs, the `attempt_*` columns count closed attempts, so a job that retried four times before succeeding contributes one `job_succeeded` and five attempts. Each row also carries the latest attempt error in its minute, which is what lets the failing-types panel name a cause without reading history at all. First-attempt wait percentiles are deliberately not rolled up: exact percentiles are not mergeable across buckets, and a histogram that would be was measured as both less accurate and slower at realistic volumes.
+
+`aggregate_stats_v1(from, to)` is the single definition of what a bucket means. `rollup_stats_v1` materializes it for fully elapsed minutes and advances the `job_stat_state` watermark; `stat_buckets_v1(from, to)` reads materialized buckets below the watermark and evaluates the same aggregation live above it. A window is therefore correct the instant a job runs, without waiting for a rollup pass, and a rollup that is behind costs a longer live tail rather than a wrong answer.
+
+Each pass rewrites the last few closed minutes. A bucket is a pure function of the raw history in its minute, so a transaction that commits its history row after its own minute closed is absorbed by the rewrite instead of being lost, and running the pass twice converges rather than double counting. Cardinality is bounded per bucket: pairs beyond the group limit are folded into the `__other__` job type within their own queue, so generated job types cannot make statistics grow without limit.
+
+The watermark is a retention interlock. Raw history is the only input a bucket can be rebuilt from, so `retain_history_v1` clamps its event and attempt cutoffs to `rolled_up_through`. A stalled rollup holds history and surfaces as growing retention lag and a rising `QueueHealth.statistics.lagMs`, rather than silently deleting the input to a window nobody has computed yet.
+
+Buckets are a sixth retained category with its own configurable window, defaulting to 14 days and bounded per pass like every other prune. It sits outside the `job_identity >= dependents` constraint on purpose: a bucket summarizes jobs rather than attributing one, so keeping aggregates long after their source events are gone is the intended configuration rather than a violation.
+
+Workers run `rollup_stats_v1` on `WorkerOptions.statisticsRollupIntervalMs`, one minute by default and matching the bucket width, before the retention pass in the same cycle so the pass can reclaim the history it just summarized. Passes serialize on a transaction-scoped advisory lock, so every worker may run it. Setting the interval to zero opts out: windows stay fully derived and history retention holds at the current watermark.
+
+Full reference in [`rolling-statistics.md`](rolling-statistics.md); the design tradeoffs are recorded in [ADR 0019](decisions/0019-derived-rolling-statistics.md).
 
 ### `worker_registry`
 

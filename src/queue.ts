@@ -88,6 +88,8 @@ export type MaintenancePhase =
   | "promote"
   | "recover"
   | "history_partitions"
+  | "stat_rollup"
+  | "stat_retention"
   | "event_retention"
   | "attempt_retention"
   | "schedule_occurrences"
@@ -298,10 +300,12 @@ type RetentionPolicyRow = {
   job_event_retention_days: number | null;
   attempt_history_retention_days: number | null;
   schedule_occurrence_retention_days: number | null;
+  statistics_retention_days: number | null;
   terminal_job_prune_limit: number;
   history_partitions_per_pass: number;
   default_partition_rows_per_pass: number;
   occurrence_rows_per_pass: number;
+  statistics_rows_per_pass: number;
   updated_at: Date;
 };
 
@@ -492,10 +496,12 @@ function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
     jobEventRetentionDays: row.job_event_retention_days,
     attemptHistoryRetentionDays: row.attempt_history_retention_days,
     scheduleOccurrenceRetentionDays: row.schedule_occurrence_retention_days,
+    statisticsRetentionDays: row.statistics_retention_days,
     terminalJobPruneLimit: row.terminal_job_prune_limit,
     historyPartitionsPerPass: row.history_partitions_per_pass,
     defaultPartitionRowsPerPass: row.default_partition_rows_per_pass,
     occurrenceRowsPerPass: row.occurrence_rows_per_pass,
+    statisticsRowsPerPass: row.statistics_rows_per_pass,
     updatedAt: row.updated_at,
   };
 }
@@ -1134,6 +1140,24 @@ export class Queue {
     return result.rows.map(maintenancePhaseResult);
   }
 
+  /**
+   * Materialize closed minutes of rolling statistics and advance the rollup watermark.
+   *
+   * Operator time windows read these aggregates instead of scanning retained history, so this pass
+   * is what keeps a dashboard's cost proportional to the window rather than to throughput. It is
+   * safe to run from every worker and safe to run repeatedly: a bucket is a pure function of the
+   * raw history in its minute, and passes serialize on an advisory lock.
+   */
+  async rollupStatistics(
+    options: { now?: Date; maxBuckets?: number; recomputeBuckets?: number } = {},
+  ): Promise<MaintenancePhaseResult[]> {
+    const result = await this.database.query<MaintenancePhaseRow>(
+      "SELECT * FROM workhorse.rollup_stats_v1($1, $2, $3)",
+      [options.now ?? new Date(), options.maxBuckets ?? 240, options.recomputeBuckets ?? 2],
+    );
+    return result.rows.map(maintenancePhaseResult);
+  }
+
   async retainHistory(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
@@ -1157,7 +1181,7 @@ export class Queue {
   async syncRetentionPolicy(definition: RetentionPolicyDefinition): Promise<RetentionPolicy> {
     const result = await this.database.query<RetentionPolicyRow>(
       `SELECT (policy).* FROM workhorse.sync_retention_policy_v1(
-         $1, $2, $3, $4, $5, $6, $7, $8, $9
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
        ) policy`,
       [
         definition.jobIdentityRetentionDays,
@@ -1165,10 +1189,12 @@ export class Queue {
         definition.jobEventRetentionDays,
         definition.attemptHistoryRetentionDays,
         definition.scheduleOccurrenceRetentionDays,
+        definition.statisticsRetentionDays,
         definition.terminalJobPruneLimit ?? null,
         definition.historyPartitionsPerPass ?? null,
         definition.defaultPartitionRowsPerPass ?? null,
         definition.occurrenceRowsPerPass ?? null,
+        definition.statisticsRowsPerPass ?? null,
       ],
     );
     return retentionPolicy(result.rows[0]!);
@@ -2037,7 +2063,7 @@ export class Queue {
   async health(): Promise<QueueHealth> {
     // Run independent read-only diagnostics concurrently. PostgreSQL statistics are observations,
     // not transactional facts, and can lag until the statistics collector flushes.
-    const [version, counts, depths, relations, activity, notification, retention] =
+    const [version, counts, depths, relations, activity, notification, retention, statistics] =
       await Promise.all([
         this.database.query<{ version: number }>(
           `SELECT CASE
@@ -2117,18 +2143,34 @@ export class Queue {
           hot_update_ratio: number | null;
           last_vacuum: Date | null;
           last_autovacuum: Date | null;
+          partitions: string;
         }>(`
-        SELECT c.relname AS relation, pg_total_relation_size(c.oid)::text AS total_bytes,
-               pg_relation_size(c.oid)::text AS table_bytes, pg_indexes_size(c.oid)::text AS index_bytes,
-               COALESCE(s.n_live_tup, 0)::text AS live_tuples, COALESCE(s.n_dead_tup, 0)::text AS dead_tuples,
-               COALESCE(s.n_mod_since_analyze, 0)::text AS modifications_since_analyze,
-               CASE WHEN COALESCE(s.n_tup_upd, 0) = 0 THEN NULL
-                    ELSE s.n_tup_hot_upd::double precision / s.n_tup_upd END AS hot_update_ratio,
-               s.last_vacuum, s.last_autovacuum
-          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-          LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-         WHERE n.nspname = 'workhorse' AND c.relkind IN ('r', 'p')
-         ORDER BY c.relname`),
+        -- Partitioned parents own no storage themselves, so a plain pg_class lookup reports the two
+        -- largest relations as empty. Summing each partition tree is what makes history visible.
+        SELECT parent.relname AS relation,
+               sum(pg_total_relation_size(COALESCE(tree.relid, parent.oid)))::text AS total_bytes,
+               sum(pg_relation_size(COALESCE(tree.relid, parent.oid)))::text AS table_bytes,
+               sum(pg_indexes_size(COALESCE(tree.relid, parent.oid)))::text AS index_bytes,
+               sum(COALESCE(s.n_live_tup, 0))::text AS live_tuples,
+               sum(COALESCE(s.n_dead_tup, 0))::text AS dead_tuples,
+               sum(COALESCE(s.n_mod_since_analyze, 0))::text AS modifications_since_analyze,
+               CASE WHEN sum(COALESCE(s.n_tup_upd, 0)) = 0 THEN NULL
+                    ELSE sum(s.n_tup_hot_upd)::double precision / sum(s.n_tup_upd) END
+                 AS hot_update_ratio,
+               max(s.last_vacuum) AS last_vacuum, max(s.last_autovacuum) AS last_autovacuum,
+               count(*) FILTER (WHERE tree.relid IS NOT NULL AND tree.relid <> parent.oid)::text
+                 AS partitions
+          FROM pg_class parent
+          JOIN pg_namespace n ON n.oid = parent.relnamespace
+          -- pg_partition_tree returns no rows for an ordinary table, so the join must be outer and
+          -- fall back to the relation itself. A plain inner join silently drops every unpartitioned
+          -- relation from health, which is most of them.
+          LEFT JOIN LATERAL pg_partition_tree(parent.oid) tree ON true
+          LEFT JOIN pg_stat_user_tables s ON s.relid = COALESCE(tree.relid, parent.oid)
+         WHERE n.nspname = 'workhorse' AND parent.relkind IN ('r', 'p')
+           AND parent.relispartition = false
+         GROUP BY parent.relname, parent.oid
+         ORDER BY parent.relname`),
         this.database.query<{ age_ms: number | null; lock_wait_count: string }>(`
         SELECT extract(epoch FROM clock_timestamp() - min(xact_start)) * 1000 AS age_ms,
                count(*) FILTER (WHERE wait_event_type = 'Lock')::text AS lock_wait_count
@@ -2141,11 +2183,13 @@ export class Queue {
             oldest_job_event_at: Date | null;
             oldest_attempt_history_at: Date | null;
             oldest_schedule_occurrence_at: Date | null;
+            oldest_statistics_at: Date | null;
             job_identity_lag_ms: number | null;
             terminal_outcome_lag_ms: number | null;
             job_event_lag_ms: number | null;
             attempt_history_lag_ms: number | null;
             schedule_occurrence_lag_ms: number | null;
+            statistics_lag_ms: number | null;
             eligible_event_partitions: string;
             eligible_attempt_partitions: string;
             default_event_rows: string;
@@ -2202,7 +2246,9 @@ export class Queue {
             (SELECT occurred_at FROM workhorse.attempt_history_default
               ORDER BY occurred_at, attempt_id LIMIT 1) AS oldest_default_attempt_history_at,
             (SELECT occurrence_at FROM workhorse.schedule_occurrence ORDER BY occurrence_at LIMIT 1)
-              AS oldest_schedule_occurrence_at
+              AS oldest_schedule_occurrence_at,
+            (SELECT bucket_start FROM workhorse.job_stat_bucket ORDER BY bucket_start LIMIT 1)
+              AS oldest_statistics_at
           FROM policy
         ), partitions AS (
           SELECT parent.relname AS parent_name,
@@ -2304,8 +2350,29 @@ export class Queue {
                       - make_interval(days => policy.schedule_occurrence_retention_days)
                       - boundaries.oldest_schedule_occurrence_at) * 1000) END
                  AS schedule_occurrence_lag_ms,
+               CASE WHEN policy.statistics_retention_days IS NULL
+                      OR boundaries.oldest_statistics_at IS NULL THEN NULL
+                    ELSE GREATEST(0, extract(epoch FROM
+                      clock_timestamp()
+                      - make_interval(days => policy.statistics_retention_days)
+                      - boundaries.oldest_statistics_at) * 1000) END
+                 AS statistics_lag_ms,
                eligible.*, default_rows.*
           FROM policy CROSS JOIN boundaries CROSS JOIN eligible CROSS JOIN default_rows`),
+        this.database.query<{
+          rolled_up_through: Date;
+          lag_ms: number;
+          last_run_at: Date | null;
+          buckets: string;
+          newest_bucket_at: Date | null;
+        }>(`
+        SELECT state.rolled_up_through,
+               GREATEST(0, extract(epoch FROM clock_timestamp() - state.rolled_up_through) * 1000)
+                 AS lag_ms,
+               state.last_run_at,
+               (SELECT count(*) FROM workhorse.job_stat_bucket)::text AS buckets,
+               (SELECT max(bucket_start) FROM workhorse.job_stat_bucket) AS newest_bucket_at
+          FROM workhorse.job_stat_state state WHERE state.singleton`),
       ]);
 
     const stateCounts: QueueHealth["counts"] = {
@@ -2319,6 +2386,7 @@ export class Queue {
     for (const row of counts.rows) stateCounts[row.state] = Number(row.count);
     const depth = depths.rows[0]!;
     const retentionRow = retention.rows[0]!;
+    const statisticsRow = statistics.rows[0]!;
     return {
       schemaVersion: version.rows[0]?.version ?? null,
       counts: stateCounts,
@@ -2339,6 +2407,14 @@ export class Queue {
       },
       activeExecutionTimeouts: Number(depth.active_execution_timeouts),
       overdueExecutionTimeouts: Number(depth.overdue_execution_timeouts),
+      statistics: {
+        rolledUpThrough: statisticsRow.rolled_up_through,
+        lagMs: Number(statisticsRow.lag_ms),
+        lastRunAt: statisticsRow.last_run_at,
+        buckets: Number(statisticsRow.buckets),
+        oldestBucketAt: retentionRow.oldest_statistics_at,
+        newestBucketAt: statisticsRow.newest_bucket_at,
+      },
       retentionPolicy: retentionPolicy(retentionRow),
       retentionLagMs: {
         jobIdentity:
@@ -2359,6 +2435,8 @@ export class Queue {
           retentionRow.schedule_occurrence_lag_ms === null
             ? null
             : Number(retentionRow.schedule_occurrence_lag_ms),
+        statistics:
+          retentionRow.statistics_lag_ms === null ? null : Number(retentionRow.statistics_lag_ms),
       },
       oldestRetainedAt: {
         jobIdentity: retentionRow.oldest_job_identity_at,
@@ -2366,6 +2444,7 @@ export class Queue {
         jobEvents: retentionRow.oldest_job_event_at,
         attemptHistory: retentionRow.oldest_attempt_history_at,
         scheduleOccurrences: retentionRow.oldest_schedule_occurrence_at,
+        statistics: retentionRow.oldest_statistics_at,
       },
       eligibleHistoryPartitions: {
         jobEvents: Number(retentionRow.eligible_event_partitions),
@@ -2390,6 +2469,7 @@ export class Queue {
         hotUpdateRatio: row.hot_update_ratio === null ? null : Number(row.hot_update_ratio),
         lastVacuum: row.last_vacuum,
         lastAutovacuum: row.last_autovacuum,
+        partitions: Number(row.partitions),
       })),
       oldestTransactionAgeMs:
         activity.rows[0]?.age_ms === null ? null : Number(activity.rows[0]?.age_ms ?? 0),

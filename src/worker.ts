@@ -45,7 +45,12 @@ export type Handler<TPayload = Json, TResult extends Json = Json> = (
 ) => Promise<TResult> | TResult;
 
 export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
-  loop: "tick" | "history_partitions" | "history_retention" | "terminal_storage";
+  loop:
+    | "tick"
+    | "statistics_rollup"
+    | "history_partitions"
+    | "history_retention"
+    | "terminal_storage";
   observedAt: string;
 }
 
@@ -106,6 +111,13 @@ export interface WorkerOptions {
   maintenanceIntervalMs?: number;
   /** Minimum delay between checks for database-scheduled background maintenance tasks. */
   maintenanceTaskPollMs?: number;
+  /**
+   * Minimum delay between rolling-statistics passes. Defaults to one minute, which is the bucket
+   * width: passing more often only rewrites the same closed minutes, and passing less often makes
+   * operator windows derive a longer live tail from raw history. Set to 0 to opt out, which leaves
+   * every window fully derived and holds history retention at the current watermark.
+   */
+  statisticsRollupIntervalMs?: number;
   /**
    * Minimum delay between durable worker-registry refreshes.
    *
@@ -193,6 +205,7 @@ export class Worker {
   private readonly pollMs: number;
   private readonly maintenanceIntervalMs: number;
   private readonly maintenanceTaskPollMs: number;
+  private readonly statisticsRollupIntervalMs: number;
   private readonly registryIntervalMs: number;
   private readonly activityNotifications: boolean;
   private readonly activityNotificationIntervalMs: number;
@@ -204,6 +217,7 @@ export class Worker {
   public readonly concurrency: number;
   private lastTickAt = Number.NEGATIVE_INFINITY;
   private lastMaintenanceTaskPollAt = Number.NEGATIVE_INFINITY;
+  private lastStatisticsRollupAt = Number.NEGATIVE_INFINITY;
   /**
    * Identifies this Worker instance to the durable registry.
    *
@@ -239,6 +253,7 @@ export class Worker {
     this.pollMs = options.pollMs ?? 250;
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1_000;
     this.maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? 60_000;
+    this.statisticsRollupIntervalMs = options.statisticsRollupIntervalMs ?? 60_000;
     this.registryIntervalMs = options.registryIntervalMs ?? 5_000;
     this.activityNotifications = options.activityNotifications ?? false;
     this.activityNotificationIntervalMs = options.activityNotificationIntervalMs ?? 250;
@@ -251,6 +266,8 @@ export class Worker {
       throw new Error("maintenanceIntervalMs must be at least 100");
     if (this.maintenanceTaskPollMs < 100)
       throw new Error("maintenanceTaskPollMs must be at least 100");
+    if (this.statisticsRollupIntervalMs !== 0 && this.statisticsRollupIntervalMs < 1_000)
+      throw new Error("statisticsRollupIntervalMs must be 0 or at least 1000");
     if (this.registryIntervalMs !== 0 && this.registryIntervalMs < 100)
       throw new Error("registryIntervalMs must be 0 or at least 100");
     if (this.activityNotificationIntervalMs < 50)
@@ -800,6 +817,18 @@ export class Worker {
           }
         }
       }
+    }
+
+    // Statistics roll up before retention rather than after it. Retention refuses to delete raw
+    // history past the rollup watermark, so advancing the watermark first is what lets the same
+    // pass reclaim the history it just summarized.
+    if (
+      this.statisticsRollupIntervalMs !== 0 &&
+      nowMs - this.lastStatisticsRollupAt >= this.statisticsRollupIntervalMs
+    ) {
+      for (const result of await this.queue.rollupStatistics())
+        this.recordMaintenance("statistics_rollup", result);
+      this.lastStatisticsRollupAt = nowMs;
     }
 
     if (nowMs - this.lastMaintenanceTaskPollAt >= this.maintenanceTaskPollMs) {

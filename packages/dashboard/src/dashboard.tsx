@@ -92,8 +92,11 @@ import type {
   DashboardJobDetail,
   DashboardJobRow,
   DashboardQueuesPage,
+  DashboardStorageRelation,
   DashboardSystemPage,
+  DashboardSystemRetention,
   DashboardSystemRetryBucket,
+  DashboardSystemStorage,
   DashboardSystemWindow,
   DashboardTaskFacets,
   DashboardTaskCounts,
@@ -467,6 +470,27 @@ function formatSpan(milliseconds: number | null | undefined): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours} hr`;
   return `${Math.floor(hours / 24)} days`;
+}
+
+/** Relation size in the units an operator reads storage dashboards in. */
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["kB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/** Row counts come from PostgreSQL statistics, so they are estimates and read better abbreviated. */
+function formatRows(rows: number): string {
+  if (rows < 1_000) return String(rows);
+  if (rows < 1_000_000) return `${(rows / 1_000).toFixed(rows < 10_000 ? 1 : 0)}k`;
+  return `${(rows / 1_000_000).toFixed(rows < 10_000_000 ? 1 : 0)}M`;
 }
 
 /**
@@ -3773,8 +3797,181 @@ function SystemPage({
             </Stack>
           </Paper>
         </Grid.Col>
+        <Grid.Col span={12}>
+          <StoragePanel storage={data.integrity.storage} retention={retention} />
+        </Grid.Col>
       </Grid>
     </Stack>
+  );
+}
+
+const storageGroupLabels: Record<DashboardStorageRelation["group"], string> = {
+  tasks: "Tasks",
+  history: "History",
+  statistics: "Statistics",
+};
+
+/**
+ * What the history and statistics tables hold, and whether the pass that reclaims them is running.
+ *
+ * These two questions belong together. Rolled-up statistics are derived from history, and history
+ * retention deliberately refuses to delete anything the rollup has not summarized yet — so a
+ * stalled rollup shows up first as history that stops shrinking, which is impossible to diagnose
+ * from a size number alone.
+ */
+function StoragePanel({
+  storage,
+  retention,
+}: {
+  storage: DashboardSystemStorage;
+  retention: DashboardSystemRetention;
+}) {
+  const rollup = storage.rollup;
+  const statisticsRetention = retention.categories.find((row) => row.category === "statistics");
+  const coveredMs =
+    rollup.oldestBucketAt === null || rollup.newestBucketAt === null
+      ? null
+      : new Date(rollup.newestBucketAt).getTime() - new Date(rollup.oldestBucketAt).getTime();
+  return (
+    <Paper withBorder p="md">
+      <Group gap={4} wrap="nowrap">
+        <Text fw={650}>Storage</Text>
+        <HelpButton
+          label="Storage"
+          help="Size and row counts for the tables Workhorse owns, with daily history partitions folded into their parent, alongside the rolling-statistics rollup that summarizes history into per-minute buckets. History cleanup will not delete anything the rollup has not summarized yet, so a rollup that falls behind holds history storage rather than losing data. All figures are current totals from PostgreSQL statistics and ignore the window selector."
+        />
+      </Group>
+      <Text c="dimmed" size="xs" mb="lg">
+        Table sizes and rolling-statistics progress
+      </Text>
+      <Grid gutter="lg">
+        <Grid.Col span={{ base: 12, md: 5 }}>
+          <Stack gap="md">
+            <Group justify="space-between" wrap="nowrap" align="flex-start">
+              <Box>
+                <Text size="sm" fw={600}>
+                  Statistics rollup
+                </Text>
+                <Text c="dimmed" size="xs">
+                  {rollup.lastRunAt === null
+                    ? "Has not run yet"
+                    : `Last pass ${formatRelative(rollup.lastRunAt)}`}
+                </Text>
+              </Box>
+              <Badge
+                color={rollup.stalled ? "yellow" : "teal"}
+                variant="light"
+                title={`Summarized through ${formatExact(rollup.rolledUpThrough)}`}
+              >
+                {rollup.stalled ? `${formatSpan(rollup.lagMs)} behind` : "Up to date"}
+              </Badge>
+            </Group>
+            <Group justify="space-between" wrap="nowrap" align="flex-start">
+              <Box>
+                <Text size="sm" fw={600}>
+                  Buckets materialized
+                </Text>
+                <Text c="dimmed" size="xs">
+                  {coveredMs === null
+                    ? "No minutes summarized yet"
+                    : `Covering ${formatSpan(coveredMs)}`}
+                </Text>
+              </Box>
+              <Badge color="gray" variant="light">
+                {formatRows(rollup.buckets)}
+              </Badge>
+            </Group>
+            <Group justify="space-between" wrap="nowrap" align="flex-start">
+              <Box>
+                <Text size="sm" fw={600}>
+                  Statistics kept for
+                </Text>
+                <Text c="dimmed" size="xs">
+                  Independent of history retention
+                </Text>
+              </Box>
+              <Badge color="gray" variant="light">
+                {statisticsRetention?.retentionDays === null ||
+                statisticsRetention?.retentionDays === undefined
+                  ? "Forever"
+                  : `${statisticsRetention.retentionDays} days`}
+              </Badge>
+            </Group>
+            <Group justify="space-between" wrap="nowrap" align="flex-start">
+              <Box>
+                <Text size="sm" fw={600}>
+                  Total owned storage
+                </Text>
+                <Text c="dimmed" size="xs">
+                  Tables and indexes together
+                </Text>
+              </Box>
+              <Badge color="gray" variant="light">
+                {formatBytes(storage.totalBytes)}
+              </Badge>
+            </Group>
+          </Stack>
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, md: 7 }}>
+          <ScrollArea.Autosize mah={320} type="auto">
+            <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top" stickyHeader>
+              <Table.Caption ta="left" c="dimmed" fz="xs" mt={0} mb={4}>
+                Largest first. Row counts are PostgreSQL estimates.
+              </Table.Caption>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th scope="col">Table</Table.Th>
+                  <Table.Th scope="col">Holds</Table.Th>
+                  <Table.Th scope="col" ta="right">
+                    Size
+                  </Table.Th>
+                  <Table.Th scope="col" ta="right">
+                    Rows
+                  </Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {storage.relations.map((row) => (
+                  <Table.Tr key={row.relation}>
+                    <Table.Th scope="row" fw={400}>
+                      <Text size="xs" title={row.relation}>
+                        {row.label}
+                      </Text>
+                      {row.partitions > 0 ? (
+                        <Text c="dimmed" fz={10}>
+                          {row.partitions} daily {row.partitions === 1 ? "part" : "parts"}
+                        </Text>
+                      ) : null}
+                    </Table.Th>
+                    <Table.Td>
+                      <Badge color="gray" variant="light" size="sm">
+                        {storageGroupLabels[row.group]}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td ta="right">
+                      <Text
+                        size="xs"
+                        title={`${row.tableBytes} B table, ${row.indexBytes} B index`}
+                      >
+                        {formatBytes(row.totalBytes)}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td ta="right">
+                      <Text size="xs">{formatRows(row.rows)}</Text>
+                      {row.deadRows > 0 ? (
+                        <Text c="dimmed" fz={10} title="Deleted rows awaiting vacuum">
+                          {formatRows(row.deadRows)} dead
+                        </Text>
+                      ) : null}
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </ScrollArea.Autosize>
+        </Grid.Col>
+      </Grid>
+    </Paper>
   );
 }
 
