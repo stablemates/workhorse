@@ -930,7 +930,8 @@ export type DashboardRetentionCategory =
   | "terminalOutcome"
   | "jobEvents"
   | "attemptHistory"
-  | "scheduleOccurrences";
+  | "scheduleOccurrences"
+  | "statistics";
 
 export interface DashboardRetentionCategoryRow {
   category: DashboardRetentionCategory;
@@ -959,6 +960,44 @@ export interface DashboardSystemRetention {
   /** Cumulative rows that landed in the catch-all partitions; never window-scoped. */
   defaultHistoryRows: { jobEvents: number; attemptHistory: number };
   defaultHistoryRowsCapped: { jobEvents: boolean; attemptHistory: boolean };
+}
+
+/** One relation an operator can reason about, with partitioned children already folded in. */
+export interface DashboardStorageRelation {
+  relation: string;
+  /** Operator-facing name; avoids table and partition jargon. */
+  label: string;
+  group: "tasks" | "history" | "statistics";
+  totalBytes: number;
+  tableBytes: number;
+  indexBytes: number;
+  rows: number;
+  deadRows: number;
+  /** Daily partitions attached to this relation; zero for ordinary tables. */
+  partitions: number;
+  lastVacuumAt: string | null;
+}
+
+/**
+ * What the derived-statistics and history tables are actually doing.
+ *
+ * Operators ask two questions when storage grows: what is big, and is the thing that reclaims it
+ * still running. This answers both in one place rather than making them infer it from lag numbers.
+ */
+export interface DashboardSystemStorage {
+  rollup: {
+    /** Every closed minute below this is materialized; above it, windows derive from raw history. */
+    rolledUpThrough: string;
+    lagMs: number;
+    lastRunAt: string | null;
+    buckets: number;
+    oldestBucketAt: string | null;
+    newestBucketAt: string | null;
+    /** True once the watermark has fallen far enough behind to hold history retention. */
+    stalled: boolean;
+  };
+  relations: DashboardStorageRelation[];
+  totalBytes: number;
 }
 
 export interface DashboardSystemPage {
@@ -1013,6 +1052,7 @@ export interface DashboardSystemPage {
     defaultEventRows: number;
     defaultAttemptRows: number;
     retention: DashboardSystemRetention;
+    storage: DashboardSystemStorage;
   };
 }
 

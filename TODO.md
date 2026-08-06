@@ -528,18 +528,60 @@ HTTP. This is separate from the existing dashboard mount and its private oRPC tr
 
 **Depends on:** P0-01, P0-02, P2-01
 
-- [ ] Define hourly and daily aggregate tables for low-cardinality queue, job-type, state, latency,
+The per-minute tier is implemented: `job_stat_bucket`, `job_stat_state`, `aggregate_stats_v1`,
+`rollup_stats_v1`, `stat_buckets_v1`, and the dashboard system page reading through them. What
+remains is the long-horizon tier — coarser buckets, a retention ladder, and the benchmarks that
+would justify stabilizing the schema.
+
+- [x] Define a per-minute aggregate table for low-cardinality queue, job-type, state, latency,
       retry, cancellation, and throughput dimensions.
-- [ ] Specify job-level versus attempt-level metric semantics and mergeable histogram buckets before
+- [ ] Add hourly and daily tiers derived from the minute tier, with a tier-aware read path.
+- [x] Specify job-level versus attempt-level metric semantics and mergeable histogram buckets before
       stabilizing the schema.
-- [ ] Recompute bounded time buckets idempotently so late terminal outcomes and retries converge
+- [x] Recompute bounded time buckets idempotently so late terminal outcomes and retries converge
       without double counting.
-- [ ] Persist a rollup watermark and prohibit raw-history retention from crossing it. A stalled
+- [x] Persist a rollup watermark and prohibit raw-history retention from crossing it. A stalled
       rollup must degrade health rather than silently create incomplete long-term statistics.
-- [ ] Stitch recent raw detail and older aggregates in dashboard queries without scanning retained
+- [x] Stitch recent raw detail and older aggregates in dashboard queries without scanning retained
       job history.
-- [ ] Define independent aggregate retention tiers and benchmark write amplification, query latency,
-      and storage on production-shaped payloads.
+- [x] Give aggregates their own configurable, bounded retention category, independent of the
+      identity chain so they may outlive the history they were derived from.
+- [ ] Add mergeable latency percentiles. A fixed-edge histogram was implemented and removed: it cost
+      accuracy at every scale and was slower than the exact self join below roughly 1M jobs/day.
+- [ ] Benchmark write amplification, query latency, and storage on production-shaped payloads. The
+      current evidence is a synthetic seed at 200k and 2M jobs/day, recorded in
+      `docs/rolling-statistics.md`.
+- [ ] Decide whether worker and tag dimensions belong in the rollup. Both are currently served by
+      live queries because their cardinality is unbounded in a way queue and job type are not.
+
+### [ ] P2-12 Database-authoritative configuration and the operator settings page
+
+**Depends on:** P2-01
+
+**Design recorded in** [ADR 0020](docs/decisions/0020-database-authoritative-configuration.md).
+Decide the ownership question before building any form field: it determines whether the page can be
+editable at all.
+
+- [ ] Make `syncRetentionPolicy` and `syncMaintenancePolicy` seed rather than overwrite, with an
+      explicit opt-in that restores assert-on-deploy semantics for infrastructure-as-code callers.
+- [ ] Record provenance per policy value so sync can skip operator-set values, and expose an explicit
+      revert-to-application-default that clears the override.
+- [ ] Move the rolling-statistics cadence out of `WorkerOptions` and into `maintenance_policy`
+      alongside the other three maintenance cadences, and move the rollup group limit and recompute
+      window into policy as well.
+- [ ] Build one settings page grouped by ownership — editable here, set at deploy, per-object toggles
+      — rather than by topic. Process-owned options are shown read-only with provenance; omitting
+      them silently would imply they do not exist.
+- [ ] Derive recommendations from measured state rather than restating defaults. The queue already
+      knows its enqueue rate, retention lag, rollup watermark, partition spill, and HOT-update
+      ratios. The terminal-cleanup throughput ceiling — roughly 288k jobs/day at the default limit
+      and cadence — is the worked example: it was found by benchmarking and should have been
+      reported by the product.
+- [ ] Require an impact preview for destructive edits, computed from the same boundary queries health
+      already runs. Shortening a retention window deletes irreversibly on the next pass; pausing a
+      queue does not, and the two must not look alike.
+- [ ] Reuse the existing operator-mutation contract and audit context rather than adding a second
+      authorization path.
 
 ### [ ] P2-11 Cold history export
 
