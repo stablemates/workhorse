@@ -131,17 +131,22 @@ beforeEach(async () => {
     workhorse.job_wait, workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
     workhorse.queue_control, workhorse.worker_registry,
     workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
-    workhorse.job RESTART IDENTITY CASCADE`);
+    workhorse.job_stat_bucket, workhorse.job RESTART IDENTITY CASCADE`);
+  await pool.query(`UPDATE workhorse.job_stat_state SET
+    rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
+    last_run_at = NULL, updated_at = clock_timestamp()`);
   await new Queue(pool).syncRetentionPolicy({
     jobIdentityRetentionDays: null,
     terminalOutcomeRetentionDays: null,
     jobEventRetentionDays: null,
     attemptHistoryRetentionDays: null,
     scheduleOccurrenceRetentionDays: 30,
+    statisticsRetentionDays: 14,
     terminalJobPruneLimit: 1_000,
     historyPartitionsPerPass: 4,
     defaultPartitionRowsPerPass: 10_000,
     occurrenceRowsPerPass: 10_000,
+    statisticsRowsPerPass: 10_000,
   });
 });
 
@@ -2616,6 +2621,7 @@ describe("Workhorse demo", () => {
       "jobEvents",
       "attemptHistory",
       "scheduleOccurrences",
+      "statistics",
     ]);
     expect(
       system.integrity.retention.categories.find((row) => row.category === "scheduleOccurrences")

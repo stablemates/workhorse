@@ -15,12 +15,15 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/mvp-protocol.md`](docs/mvp-protocol.md): concise table and SQL transition reference.
 - [`docs/benchmarking.md`](docs/benchmarking.md): exact benchmark commands, scale ladder, JSON interpretation, environment capture, limitations, and troubleshooting.
 - [`docs/worker-processes.md`](docs/worker-processes.md): dedicated production worker CLI, signal and drain semantics, probes, deployment examples, concurrency findings, and topology guidance.
+- [`docs/rolling-statistics.md`](docs/rolling-statistics.md): per-minute operator aggregates, bucket schema and grain semantics, the rollup watermark and its retention interlock, the stitched read path, mergeable wait histograms, and current limits.
 - [`docs/demo-findings.md`](docs/demo-findings.md): API, packaging, documentation, and developer-experience gaps found by the end-to-end demo.
 - [`demo/README.md`](demo/README.md): interactive Workhorse demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
 - [`docs/decisions/0009-enqueue-idempotency-keys.md`](docs/decisions/0009-enqueue-idempotency-keys.md): scoped enqueue-key ownership, request equivalence, safe diagnostics, expiry, and cleanup.
 - [`docs/decisions/0010-cooperative-job-cancellation.md`](docs/decisions/0010-cooperative-job-cancellation.md): cooperative delivery, exact-fence acknowledgement, race ownership, truthful history, recurring behavior, and non-goals.
 - [`docs/decisions/0017-durable-worker-registry.md`](docs/decisions/0017-durable-worker-registry.md): fleet registration, split row ownership, process-scoped operator pause, identity versus placement, and non-goals.
 - [`docs/decisions/0018-framework-neutral-dashboard-host.md`](docs/decisions/0018-framework-neutral-dashboard-host.md): the `Request`/`Response` dashboard host, Node bridge, one HTML contract, single-origin development, and why the mount takes a connection rather than a URL.
+- [`docs/decisions/0019-derived-rolling-statistics.md`](docs/decisions/0019-derived-rolling-statistics.md): why operator statistics are derived from history rather than counted on the dispatch path, one bucket definition evaluated two ways, idempotent recomputation, the retention interlock, and bounded dimensions.
+- [`docs/decisions/0020-database-authoritative-configuration.md`](docs/decisions/0020-database-authoritative-configuration.md): why the database rather than the last deploy owns policy, seed-versus-assert sync semantics, per-setting provenance, the database/process boundary, and what an operator settings surface owes its reader.
 
 Run the Fumadocs site locally without PostgreSQL:
 
