@@ -2329,6 +2329,7 @@ async function retentionPruning(
     jobEventRetentionDays: 7,
     attemptHistoryRetentionDays: 7,
     scheduleOccurrenceRetentionDays: 30,
+    statisticsRetentionDays: 30,
     terminalJobPruneLimit: context.options.pruneLimit,
     historyPartitionsPerPass: 2,
     defaultPartitionRowsPerPass: context.options.pruneLimit,

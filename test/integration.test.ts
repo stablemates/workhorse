@@ -61,10 +61,12 @@ const defaultRetentionPolicy: RetentionPolicyDefinition = {
   jobEventRetentionDays: 14,
   attemptHistoryRetentionDays: 14,
   scheduleOccurrenceRetentionDays: 14,
+  statisticsRetentionDays: 14,
   terminalJobPruneLimit: 1_000,
   historyPartitionsPerPass: 4,
   defaultPartitionRowsPerPass: 10_000,
   occurrenceRowsPerPass: 10_000,
+  statisticsRowsPerPass: 10_000,
 };
 
 async function createFailedJob({
@@ -112,7 +114,10 @@ beforeEach(async () => {
     workhorse.schedule_occurrence, workhorse.schedule_definition,
     workhorse.queue_control, workhorse.worker_registry, workhorse.job_wait, workhorse.job_checkpoint,
     workhorse.enqueue_idempotency, workhorse.job_redrive, workhorse.job_outcome, workhorse.job_runtime,
-    workhorse.job RESTART IDENTITY CASCADE`);
+    workhorse.job_stat_bucket, workhorse.job RESTART IDENTITY CASCADE`);
+  await pool.query(`UPDATE workhorse.job_stat_state SET
+    rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
+    last_run_at = NULL, updated_at = clock_timestamp()`);
   await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
   await queue.syncRetentionPolicy(defaultRetentionPolicy);
   await queue.syncMaintenancePolicy({
@@ -137,11 +142,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v17 with fenced mutable progress storage", async () => {
+  it("installs schema v18 with fenced mutable progress storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(17);
+    expect(version.rows[0]?.version).toBe(18);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -1855,7 +1860,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(17);
+    expect(health.schemaVersion).toBe(18);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2458,7 +2463,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v17 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v18 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -4151,6 +4156,9 @@ describe("live-runtime queue protocol", () => {
     expect(telemetry.map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
       "tick:promote",
       "tick:recover",
+      // Statistics roll up before retention so the same pass can reclaim the history it summarized.
+      "statistics_rollup:stat_rollup",
+      "statistics_rollup:stat_retention",
       "history_partitions:history_partitions",
       "history_retention:event_retention",
       "history_retention:attempt_retention",
@@ -4162,10 +4170,228 @@ describe("live-runtime queue protocol", () => {
 
     await sleep(110);
     expect(await worker.runOnce()).toBe(false);
-    expect(telemetry.slice(8).map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
+    expect(telemetry.slice(10).map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
       "tick:promote",
       "tick:recover",
     ]);
+  });
+
+  it("materializes closed minutes of statistics and converges when a minute is recomputed", async () => {
+    await queue.enqueue("stat-alpha", {});
+    await queue.enqueue("stat-alpha", {});
+    await queue.enqueue("stat-beta", {});
+    await queue.tick();
+    const worker = new Worker(queue, {
+      workerId: "worker-statistics",
+      statisticsRollupIntervalMs: 0,
+    })
+      .handle("stat-alpha", () => ({ ok: true }))
+      .handle("stat-beta", () => {
+        throw new Error("stat failure");
+      });
+    for (let index = 0; index < 3; index += 1) await worker.runOnce();
+
+    // Roll up as if the minute holding this work had already closed.
+    const later = new Date(Date.now() + 120_000);
+    const first = await queue.rollupStatistics({ now: later });
+    expect(first.map(({ phase }) => phase)).toEqual(["stat_rollup", "stat_retention"]);
+    expect(first.every(({ error }) => error === null)).toBe(true);
+
+    const stored = async () =>
+      (
+        await pool.query<{
+          job_type: string;
+          enqueued: number;
+          job_succeeded: number;
+          attempt_succeeded: number;
+          attempt_retry: number;
+          last_error: string | null;
+        }>(`SELECT job_type, sum(enqueued)::integer AS enqueued,
+                   sum(job_succeeded)::integer AS job_succeeded,
+                   sum(attempt_succeeded)::integer AS attempt_succeeded,
+                   sum(attempt_retry)::integer AS attempt_retry,
+                   max(last_error) AS last_error
+              FROM workhorse.job_stat_bucket GROUP BY job_type ORDER BY job_type`)
+      ).rows;
+
+    expect(await stored()).toEqual([
+      {
+        job_type: "stat-alpha",
+        enqueued: 2,
+        job_succeeded: 2,
+        attempt_succeeded: 2,
+        attempt_retry: 0,
+        last_error: null,
+      },
+      {
+        job_type: "stat-beta",
+        enqueued: 1,
+        job_succeeded: 0,
+        attempt_succeeded: 0,
+        attempt_retry: 1,
+        last_error: "stat failure",
+      },
+    ]);
+
+    // A bucket is a pure function of the history in its minute, so rerunning the pass rewrites the
+    // same numbers rather than adding to them.
+    const before = await stored();
+    await queue.rollupStatistics({ now: later });
+    await queue.rollupStatistics({ now: later });
+    expect(await stored()).toEqual(before);
+  });
+
+  it("stitches materialized buckets to a live tail so a window covers unrolled minutes", async () => {
+    await queue.enqueue("stat-tail", {});
+    await queue.tick();
+
+    const window = async () =>
+      (
+        await pool.query<{ enqueued: number }>(
+          `SELECT COALESCE(sum(enqueued), 0)::integer AS enqueued
+             FROM workhorse.stat_buckets_v1(clock_timestamp() - interval '1 hour', clock_timestamp())`,
+        )
+      ).rows[0]!.enqueued;
+
+    // Nothing is materialized yet: the window is derived entirely from raw history.
+    expect(
+      (await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_stat_bucket"))
+        .rows[0]?.count,
+    ).toBe("0");
+    expect(await window()).toBe(1);
+
+    await queue.rollupStatistics({ now: new Date(Date.now() + 120_000) });
+    expect(
+      (await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_stat_bucket"))
+        .rows[0]?.count,
+    ).not.toBe("0");
+    // The same window now reads a materialized bucket and still reports the same total.
+    expect(await window()).toBe(1);
+  });
+
+  it("folds statistics beyond the group limit into an overflow type instead of growing unbounded", async () => {
+    for (let index = 0; index < 5; index += 1) await queue.enqueue(`stat-type-${index}`, {});
+    await pool.query("SELECT * FROM workhorse.rollup_stats_v1($1, 240, 2, 2)", [
+      new Date(Date.now() + 120_000),
+    ]);
+    const rows = await pool.query<{ job_type: string; enqueued: number }>(
+      `SELECT job_type, sum(enqueued)::integer AS enqueued
+         FROM workhorse.job_stat_bucket GROUP BY job_type ORDER BY job_type`,
+    );
+    expect(rows.rows).toHaveLength(3);
+    const overflow = rows.rows.find((row) => row.job_type === "__other__");
+    expect(overflow?.enqueued).toBe(3);
+    expect(rows.rows.reduce((total, row) => total + row.enqueued, 0)).toBe(5);
+  });
+
+  it("prunes statistics buckets on their own policy, bounded per pass", async () => {
+    await queue.enqueue("stat-prune", {});
+    await queue.tick();
+    await queue.rollupStatistics({ now: new Date(Date.now() + 120_000) });
+    await pool.query(
+      "UPDATE workhorse.job_stat_bucket SET bucket_start = bucket_start - interval '30 days'",
+    );
+
+    // Statistics deliberately sit outside the identity chain: aggregates may outlive the history
+    // they were derived from, so a long statistics window with short history retention is legal.
+    await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, statisticsRetentionDays: 365 });
+    await queue.rollupStatistics({ now: new Date() });
+    expect(
+      Number(
+        (await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_stat_bucket"))
+          .rows[0]!.count,
+      ),
+    ).toBeGreaterThan(0);
+
+    await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, statisticsRetentionDays: 1 });
+    const pruned = await queue.rollupStatistics({ now: new Date() });
+    expect(pruned.find((phase) => phase.phase === "stat_retention")?.rowsAffected).toBeGreaterThan(
+      0,
+    );
+    expect(
+      Number(
+        (await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_stat_bucket"))
+          .rows[0]!.count,
+      ),
+    ).toBe(0);
+  });
+
+  it("bounds statistics pruning by the configured rows per pass", async () => {
+    await pool.query(
+      `INSERT INTO workhorse.job_stat_bucket (bucket_start, queue_name, job_type, enqueued)
+       SELECT clock_timestamp() - make_interval(days => 30, mins => i), 'default', 'bulk', 1
+         FROM generate_series(1, 5) i`,
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      statisticsRetentionDays: 1,
+      statisticsRowsPerPass: 2,
+    });
+    const first = await queue.rollupStatistics({ now: new Date() });
+    expect(first.find((phase) => phase.phase === "stat_retention")?.rowsAffected).toBe(2);
+    expect(
+      Number(
+        (await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_stat_bucket"))
+          .rows[0]!.count,
+      ),
+    ).toBe(3);
+  });
+
+  it("reports rollup progress through health", async () => {
+    const behind = await queue.health();
+    expect(behind.statistics.lastRunAt).toBeNull();
+    const now = new Date();
+    await queue.rollupStatistics({ now });
+    const caught = await queue.health();
+    expect(caught.statistics.lastRunAt).not.toBeNull();
+    expect(caught.statistics.lagMs).toBeLessThan(120_000);
+    expect(caught.statistics.rolledUpThrough.getTime()).toBeLessThanOrEqual(now.getTime());
+    expect(caught.statistics.buckets).toBe(0);
+  });
+
+  it("reports history size with daily partitions folded into their parent", async () => {
+    await queue.enqueue("stat-size", {});
+    const health = await queue.health();
+    const events = health.relations.find((relation) => relation.relation === "job_event");
+    // The partitioned parent owns no storage itself, so an unaggregated reading is always zero.
+    expect(events?.partitions).toBeGreaterThan(0);
+    expect(events?.totalBytes).toBeGreaterThan(0);
+    const buckets = health.relations.find((relation) => relation.relation === "job_stat_bucket");
+    expect(buckets?.partitions).toBe(0);
+  });
+
+  it("refuses to delete raw history past the rollup watermark", async () => {
+    await queue.enqueue("stat-retention", {});
+    await queue.tick();
+    // Hold the watermark far in the past, as a stalled rollup would.
+    await pool.query(
+      `UPDATE workhorse.job_stat_state
+          SET rolled_up_through = clock_timestamp() - interval '30 days'`,
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobEventRetentionDays: 1,
+      attemptHistoryRetentionDays: 1,
+    });
+    await pool.query(
+      `UPDATE workhorse.job_event SET occurred_at = clock_timestamp() - interval '10 days'`,
+    );
+
+    await queue.retainHistory({ force: true });
+    const retained = await pool.query<{ count: string }>(
+      "SELECT count(*) FROM workhorse.job_event",
+    );
+    // The cutoff was clamped to the watermark, so history older than the policy survives the pass.
+    expect(Number(retained.rows[0]!.count)).toBeGreaterThan(0);
+
+    await pool.query(
+      `UPDATE workhorse.job_stat_state
+          SET rolled_up_through = date_bin('1 minute', clock_timestamp(),
+            timestamp with time zone '2000-01-01')`,
+    );
+    await queue.retainHistory({ force: true });
+    const pruned = await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_event");
+    expect(Number(pruned.rows[0]!.count)).toBeLessThan(Number(retained.rows[0]!.count));
   });
 
   it("keeps idle claim polling on pollMs despite more frequent maintenance wakeups", async () => {
@@ -5879,7 +6105,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(17);
+    expect(health.schemaVersion).toBe(18);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -5899,10 +6125,12 @@ describe("live-runtime queue protocol", () => {
       jobEventRetentionDays: 30,
       attemptHistoryRetentionDays: 45,
       scheduleOccurrenceRetentionDays: 14,
+      statisticsRetentionDays: 120,
       terminalJobPruneLimit: 17,
       historyPartitionsPerPass: 2,
       defaultPartitionRowsPerPass: 23,
       occurrenceRowsPerPass: 29,
+      statisticsRowsPerPass: 31,
     };
     const persisted = await queue.syncRetentionPolicy(definition);
     expect(persisted).toEqual({ ...definition, updatedAt: expect.any(Date) });
@@ -5939,6 +6167,7 @@ describe("live-runtime queue protocol", () => {
       jobEventRetentionDays: null,
       attemptHistoryRetentionDays: null,
       scheduleOccurrenceRetentionDays: 30,
+      statisticsRetentionDays: null,
     });
     expect(withoutLimits).toMatchObject({
       terminalJobPruneLimit: definition.terminalJobPruneLimit,
@@ -6435,6 +6664,7 @@ describe("live-runtime queue protocol", () => {
       jobEventRetentionDays: 365,
       attemptHistoryRetentionDays: 365,
       scheduleOccurrenceRetentionDays: 365,
+      statisticsRetentionDays: 365,
     });
 
     const protectedHealth = await queue.health();
@@ -6448,6 +6678,7 @@ describe("live-runtime queue protocol", () => {
       jobEventRetentionDays: 1,
       attemptHistoryRetentionDays: 1,
       scheduleOccurrenceRetentionDays: 1,
+      statisticsRetentionDays: 1,
     });
     const eligible = await queue.health();
     expect(eligible.retentionLagMs.jobIdentity).toBeGreaterThan(0);

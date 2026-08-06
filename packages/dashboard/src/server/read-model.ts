@@ -12,9 +12,11 @@ import {
   DashboardRetentionCategoryRow,
   DashboardScheduleRow,
   DashboardSnapshot,
+  DashboardStorageRelation,
   DashboardSystemPage,
   DashboardSystemRetention,
   DashboardSystemRetryBucket,
+  DashboardSystemStorage,
   DashboardSystemWindow,
   DashboardTaskCounts,
   DashboardTaskFacets,
@@ -25,6 +27,13 @@ import {
   MaintenanceLoopCadences,
   readIdempotencyEvidence,
 } from "../model.js";
+import {
+  statAttemptErrors,
+  statAttempts,
+  statCompleted,
+  statWindow,
+  statWindowStart,
+} from "./rolling-stats.js";
 import { sql, type DashboardDatabase } from "./sql.js";
 import type { DashboardDurabilityProjector, DashboardOperator } from "./types.js";
 
@@ -393,6 +402,22 @@ export async function readDashboardActivity(
 ): Promise<DashboardActivityPage> {
   const { windowSeconds, bucketSeconds } = activityPeriods[period];
   const tagArray = textArrayExpression(tags);
+  // Attributing a task to a worker means reading its latest attempt, which is one probe per task.
+  // Only worker grouping and the worker filter need it, so it stays out of every other view.
+  const needsAttemptWorker = groupBy === "worker" || worker !== null;
+  const workerExpression = needsAttemptWorker
+    ? sql`COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned')`
+    : sql`COALESCE(r.worker_id, 'unassigned')`;
+  const attemptWorkerJoin = needsAttemptWorker
+    ? sql`
+        LEFT JOIN LATERAL (
+          SELECT ah.worker_id
+            FROM workhorse.attempt_history ah
+           WHERE ah.job_id = candidate.job_id
+           ORDER BY ah.attempt DESC
+           LIMIT 1
+        ) attempt_worker ON true`
+    : sql``;
   const groupExpression =
     groupBy === "queue"
       ? sql`j.queue_name`
@@ -400,29 +425,32 @@ export async function readDashboardActivity(
         ? sql`j.job_type`
         : groupBy === "status"
           ? sql`COALESCE(r.state, o.state)`
-          : sql`COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned')`;
+          : workerExpression;
   const rows = await database.execute<{
     bucket_start: Date | string;
     group_key: string | null;
     count: number;
   }>(sql`
-    WITH tasks AS (
+    -- Start from the tasks that changed inside the window rather than from every task that ever
+    -- existed. A live runtime row and a terminal outcome row can briefly coexist for one task, so
+    -- the candidate set is a UNION and the projection keeps the runtime-wins precedence.
+    WITH candidate AS (
+      SELECT r.job_id FROM workhorse.job_runtime r
+       WHERE r.updated_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
+      UNION
+      SELECT o.job_id FROM workhorse.job_outcome o
+       WHERE o.updated_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
+    ), tasks AS (
       SELECT ${groupExpression} AS group_key,
              COALESCE(r.state, o.state) AS state,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-             COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
+             COALESCE(r.updated_at, o.updated_at) AS updated_at,
              j.tags, j.queue_name AS queue,
-             COALESCE(r.worker_id, attempt_worker.worker_id, 'unassigned') AS worker_id
-        FROM workhorse.job j
-        LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-        LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-        LEFT JOIN LATERAL (
-          SELECT ah.worker_id
-            FROM workhorse.attempt_history ah
-           WHERE ah.job_id = j.id
-           ORDER BY ah.attempt DESC
-           LIMIT 1
-        ) attempt_worker ON true
+             ${workerExpression} AS worker_id
+        FROM candidate
+        JOIN workhorse.job j ON j.id = candidate.job_id
+        LEFT JOIN workhorse.job_runtime r ON r.job_id = candidate.job_id
+        LEFT JOIN workhorse.job_outcome o ON o.job_id = candidate.job_id${attemptWorkerJoin}
     ), buckets AS (
       SELECT generate_series(
         date_bin(
@@ -1030,7 +1058,73 @@ const dashboardRetentionCategories: ReadonlyArray<{
     policyKey: "scheduleOccurrenceRetentionDays",
     prunedByPartition: false,
   },
+  {
+    category: "statistics",
+    label: "Rolled-up statistics",
+    policyKey: "statisticsRetentionDays",
+    prunedByPartition: false,
+  },
 ];
+
+/**
+ * A rollup this far behind is treated as stalled.
+ *
+ * History retention refuses to delete past the watermark, so a stalled rollup turns into unbounded
+ * history growth. The threshold is generous against the one-minute pass cadence: several missed
+ * passes are a busy database, half an hour is something being wrong.
+ */
+const rollupStalledLagMs = 30 * 60 * 1_000;
+
+/** Relations worth showing an operator, grouped by what they are for. */
+const dashboardStorageRelations: ReadonlyArray<{
+  relation: string;
+  label: string;
+  group: DashboardStorageRelation["group"];
+}> = [
+  { relation: "job", label: "Task records", group: "tasks" },
+  { relation: "job_outcome", label: "Finished results", group: "tasks" },
+  { relation: "job_runtime", label: "Live runtime", group: "tasks" },
+  { relation: "job_query", label: "Operator projection", group: "tasks" },
+  { relation: "job_event", label: "Task events", group: "history" },
+  { relation: "attempt_history", label: "Attempt history", group: "history" },
+  { relation: "schedule_occurrence", label: "Schedule runs", group: "history" },
+  { relation: "job_stat_bucket", label: "Statistics buckets", group: "statistics" },
+];
+
+function dashboardStorage(health: QueueHealthSnapshot): DashboardSystemStorage {
+  const byRelation = new Map(health.relations.map((row) => [row.relation, row]));
+  const relations = dashboardStorageRelations
+    .map((definition) => {
+      const row = byRelation.get(definition.relation);
+      return {
+        relation: definition.relation,
+        label: definition.label,
+        group: definition.group,
+        totalBytes: Number(row?.totalBytes ?? 0),
+        tableBytes: Number(row?.tableBytes ?? 0),
+        indexBytes: Number(row?.indexBytes ?? 0),
+        rows: Number(row?.liveTuples ?? 0),
+        deadRows: Number(row?.deadTuples ?? 0),
+        partitions: Number(row?.partitions ?? 0),
+        lastVacuumAt: toIsoOrNull(row?.lastAutovacuum ?? row?.lastVacuum ?? null),
+      };
+    })
+    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+    .sort((left, right) => right.totalBytes - left.totalBytes);
+  return {
+    rollup: {
+      rolledUpThrough: toIso(health.statistics.rolledUpThrough),
+      lagMs: Number(health.statistics.lagMs),
+      lastRunAt: toIsoOrNull(health.statistics.lastRunAt),
+      buckets: Number(health.statistics.buckets),
+      oldestBucketAt: toIsoOrNull(health.statistics.oldestBucketAt),
+      newestBucketAt: toIsoOrNull(health.statistics.newestBucketAt),
+      stalled: Number(health.statistics.lagMs) > rollupStalledLagMs,
+    },
+    relations,
+    totalBytes: relations.reduce((total, row) => total + row.totalBytes, 0),
+  };
+}
 
 // Row cleanup runs every five minutes, while daily partition cleanup is bounded per pass. Grace
 // avoids turning normal maintenance cadence and a partial boundary day into an alert.
@@ -1150,39 +1244,29 @@ export async function readDashboardSystem(
     }>(sql`
       WITH buckets AS (
         SELECT generate_series(
-          date_bin('1 minute', clock_timestamp() - make_interval(secs => ${windowSeconds}),
-            timestamp with time zone '2000-01-01') + interval '1 minute',
+          ${statWindowStart(windowSeconds)},
           date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
           interval '1 minute'
         ) AS bucket_start
-      ), events AS (
-        SELECT date_bin('1 minute', occurred_at, timestamp with time zone '2000-01-01') AS bucket_start,
-               count(*)::integer AS enqueued
-          FROM workhorse.job_event
-         WHERE occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-           AND event_type = 'enqueued'
-         GROUP BY 1
-      ), attempts AS (
-        SELECT date_bin('1 minute', finished_at, timestamp with time zone '2000-01-01') AS bucket_start,
-               count(*) FILTER (WHERE outcome = 'succeeded')::integer AS succeeded,
-               count(*) FILTER (WHERE outcome = 'failed')::integer AS failed,
-               count(*) FILTER (WHERE outcome = 'retry')::integer AS retry,
-               count(*) FILTER (WHERE outcome = 'lease_expired')::integer AS lease_expired,
-               count(*) FILTER (WHERE outcome = 'canceled')::integer AS canceled
-          FROM workhorse.attempt_history
-         WHERE occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-           AND finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
+      ), rolled AS (
+        SELECT stat.bucket_start,
+               sum(stat.enqueued)::integer AS enqueued,
+               sum(stat.attempt_succeeded)::integer AS succeeded,
+               sum(stat.attempt_failed)::integer AS failed,
+               sum(stat.attempt_retry)::integer AS retry,
+               sum(stat.attempt_lease_expired)::integer AS lease_expired,
+               sum(stat.attempt_canceled)::integer AS canceled
+          FROM ${statWindow(windowSeconds)}
          GROUP BY 1
       )
-      SELECT b.bucket_start, COALESCE(e.enqueued, 0)::integer AS enqueued,
-             COALESCE(a.succeeded, 0)::integer AS succeeded,
-             COALESCE(a.failed, 0)::integer AS failed,
-             COALESCE(a.retry, 0)::integer AS retry,
-             COALESCE(a.lease_expired, 0)::integer AS lease_expired,
-             COALESCE(a.canceled, 0)::integer AS canceled
+      SELECT b.bucket_start, COALESCE(r.enqueued, 0)::integer AS enqueued,
+             COALESCE(r.succeeded, 0)::integer AS succeeded,
+             COALESCE(r.failed, 0)::integer AS failed,
+             COALESCE(r.retry, 0)::integer AS retry,
+             COALESCE(r.lease_expired, 0)::integer AS lease_expired,
+             COALESCE(r.canceled, 0)::integer AS canceled
         FROM buckets b
-        LEFT JOIN events e USING (bucket_start)
-        LEFT JOIN attempts a USING (bucket_start)
+        LEFT JOIN rolled r USING (bucket_start)
        ORDER BY b.bucket_start
     `),
     database.execute<{
@@ -1194,28 +1278,30 @@ export async function readDashboardSystem(
       previous_errors: number;
       recovered: number;
     }>(sql`
-      SELECT
-        (SELECT count(*)::integer FROM workhorse.job_event
-          WHERE occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-            AND event_type = 'enqueued') AS current_enqueued,
-        count(*) FILTER (WHERE finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-          AND outcome IN ('succeeded', 'failed', 'canceled'))::integer AS current_completed,
-        count(*) FILTER (WHERE finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds}))::integer
-          AS current_attempts,
-        count(*) FILTER (WHERE finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-          AND outcome NOT IN ('succeeded', 'canceled'))::integer AS current_errors,
-        count(*) FILTER (WHERE finished_at < clock_timestamp() - make_interval(secs => ${windowSeconds})
-          AND finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds * 2}))::integer
-          AS previous_attempts,
-        count(*) FILTER (WHERE finished_at < clock_timestamp() - make_interval(secs => ${windowSeconds})
-          AND finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds * 2})
-          AND outcome NOT IN ('succeeded', 'canceled'))::integer AS previous_errors,
-        count(*) FILTER (WHERE finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-          AND outcome = 'lease_expired')::integer AS recovered
-        FROM workhorse.attempt_history
-       WHERE occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds * 2})
-         AND finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds * 2})
+      WITH current_window AS (
+        SELECT COALESCE(sum(stat.enqueued), 0)::integer AS enqueued,
+               COALESCE(sum(${statCompleted}), 0)::integer AS completed,
+               COALESCE(sum(${statAttempts}), 0)::integer AS attempts,
+               COALESCE(sum(${statAttemptErrors}), 0)::integer AS errors,
+               COALESCE(sum(stat.attempt_lease_expired), 0)::integer AS recovered
+          FROM ${statWindow(windowSeconds)}
+      ), previous_window AS (
+        SELECT COALESCE(sum(${statAttempts}), 0)::integer AS attempts,
+               COALESCE(sum(${statAttemptErrors}), 0)::integer AS errors
+          FROM ${statWindow(windowSeconds, 2)}
+      )
+      SELECT current_window.enqueued AS current_enqueued,
+             current_window.completed AS current_completed,
+             current_window.attempts AS current_attempts,
+             current_window.errors AS current_errors,
+             previous_window.attempts AS previous_attempts,
+             previous_window.errors AS previous_errors,
+             current_window.recovered
+        FROM current_window CROSS JOIN previous_window
     `),
+    // Exact percentiles are not mergeable across rolled-up buckets without keeping every sample, so
+    // this one panel still reads the event log. It is the most expensive query on the page at high
+    // throughput; a coarser aggregate tier is the intended answer, not an approximation here.
     database.execute<{ p50_ms: number | null; p95_ms: number | null; p99_ms: number | null }>(sql`
       SELECT percentile_cont(0.50) WITHIN GROUP (
                ORDER BY extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
@@ -1283,11 +1369,16 @@ export async function readDashboardSystem(
       enqueued: number;
       completed: number;
     }>(sql`
-      WITH queue_names AS (
+      WITH rolled AS (
+        SELECT stat.queue_name,
+               COALESCE(sum(stat.enqueued), 0)::integer AS enqueued,
+               COALESCE(sum(${statCompleted}), 0)::integer AS completed
+          FROM ${statWindow(windowSeconds)}
+         GROUP BY 1
+      ), queue_names AS (
         SELECT queue_name FROM workhorse.job_runtime
         UNION SELECT queue_name FROM workhorse.queue_control
-        UNION SELECT queue_name FROM workhorse.job
-          WHERE created_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
+        UNION SELECT queue_name FROM rolled
       ), runtime AS (
         SELECT queue_name,
                count(*) FILTER (WHERE state = 'ready')::integer AS ready,
@@ -1298,30 +1389,18 @@ export async function readDashboardSystem(
                count(*) FILTER (WHERE state = 'active')::integer AS active,
                count(*) FILTER (WHERE state = 'scheduled' AND current_attempt > 1)::integer AS retrying
           FROM workhorse.job_runtime GROUP BY queue_name
-      ), enqueued AS (
-        SELECT j.queue_name, count(*)::integer AS count
-          FROM workhorse.job_event e JOIN workhorse.job j ON j.id = e.job_id
-         WHERE e.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-           AND e.event_type = 'enqueued' GROUP BY j.queue_name
-      ), completed AS (
-        SELECT j.queue_name, count(*)::integer AS count
-          FROM workhorse.attempt_history a JOIN workhorse.job j ON j.id = a.job_id
-         WHERE a.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-           AND a.finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-           AND a.outcome IN ('succeeded', 'failed', 'canceled') GROUP BY j.queue_name
       )
       SELECT q.queue_name AS queue, COALESCE(c.paused, false) AS paused,
              COALESCE(r.ready, 0)::integer AS ready, r.oldest_ready_ms,
              COALESCE(r.due_soon, 0)::integer AS due_soon,
              COALESCE(r.active, 0)::integer AS active,
              COALESCE(r.retrying, 0)::integer AS retrying,
-             COALESCE(e.count, 0)::integer AS enqueued,
-             COALESCE(d.count, 0)::integer AS completed
+             COALESCE(s.enqueued, 0)::integer AS enqueued,
+             COALESCE(s.completed, 0)::integer AS completed
         FROM queue_names q
         LEFT JOIN workhorse.queue_control c USING (queue_name)
         LEFT JOIN runtime r USING (queue_name)
-        LEFT JOIN enqueued e USING (queue_name)
-        LEFT JOIN completed d USING (queue_name)
+        LEFT JOIN rolled s USING (queue_name)
     `),
     database.execute<{ queue: string; type: string; count: number }>(sql`
       SELECT j.queue_name AS queue, j.job_type AS type, count(*)::integer AS count
@@ -1340,17 +1419,16 @@ export async function readDashboardSystem(
       last_error: string | null;
       last_seen_at: Date | string;
     }>(sql`
-      SELECT j.queue_name AS queue, j.job_type AS type, count(*)::integer AS attempts,
-             count(*) FILTER (WHERE a.outcome NOT IN ('succeeded', 'canceled'))::integer AS errors,
-             count(*) FILTER (WHERE a.outcome = 'failed')::integer AS terminal_failures,
-             (array_agg(COALESCE(a.error->>'message', a.error->>'code', a.error::text)
-               ORDER BY a.finished_at DESC) FILTER (WHERE a.error IS NOT NULL))[1] AS last_error,
-             max(a.finished_at) AS last_seen_at
-        FROM workhorse.attempt_history a JOIN workhorse.job j ON j.id = a.job_id
-       WHERE a.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-         AND a.finished_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-       GROUP BY j.queue_name, j.job_type
-      HAVING count(*) FILTER (WHERE a.outcome NOT IN ('succeeded', 'canceled')) > 0
+      SELECT stat.queue_name AS queue, stat.job_type AS type,
+             sum(${statAttempts})::integer AS attempts,
+             sum(${statAttemptErrors})::integer AS errors,
+             sum(stat.attempt_failed)::integer AS terminal_failures,
+             (array_agg(stat.last_error ORDER BY stat.last_error_at DESC NULLS LAST)
+               FILTER (WHERE stat.last_error IS NOT NULL))[1] AS last_error,
+             max(stat.last_attempt_at) AS last_seen_at
+        FROM ${statWindow(windowSeconds)}
+       GROUP BY 1, 2
+      HAVING sum(${statAttemptErrors}) > 0
        ORDER BY errors DESC, last_seen_at DESC
        LIMIT 8
     `),
@@ -1380,6 +1458,7 @@ export async function readDashboardSystem(
   const runtime = runtimeRows.rows[0]!;
   const wait = waitRows.rows[0]!;
   const retention = dashboardRetention(health);
+  const storage = dashboardStorage(health);
   const minutes = windowSeconds / 60;
   const errorRate =
     summary.current_attempts === 0 ? 0 : summary.current_errors / summary.current_attempts;
@@ -1407,6 +1486,9 @@ export async function readDashboardSystem(
   ].filter((check): check is string => check !== null);
   // Critical means work is stopping or being lost. Retention only costs storage, so it degrades.
   const degradedChecks = retentionDegradedChecks(retention);
+  // A stalled rollup is a storage problem rather than a dispatch one: history retention holds at
+  // the watermark rather than deleting the input to windows nobody has computed yet.
+  if (storage.rollup.stalled) degradedChecks.push("Statistics rollup behind");
   const level =
     criticalChecks.length > 0 ? "critical" : degradedChecks.length > 0 ? "degraded" : "healthy";
   const status = {
@@ -1504,6 +1586,7 @@ export async function readDashboardSystem(
       defaultEventRows: retention.defaultHistoryRows.jobEvents,
       defaultAttemptRows: retention.defaultHistoryRows.attemptHistory,
       retention,
+      storage,
     },
   };
 }

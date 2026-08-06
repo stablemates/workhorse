@@ -484,10 +484,19 @@ export interface RetentionPolicyDefinition {
   jobEventRetentionDays: number | null;
   attemptHistoryRetentionDays: number | null;
   scheduleOccurrenceRetentionDays: number | null;
+  /**
+   * How long derived per-minute statistics are kept.
+   *
+   * Deliberately independent of every window above rather than bounded by job identity. A bucket
+   * summarizes jobs, it does not attribute one, so keeping aggregates long after the history they
+   * came from has been deleted is the intended use rather than a violation. Null keeps them forever.
+   */
+  statisticsRetentionDays: number | null;
   terminalJobPruneLimit?: number;
   historyPartitionsPerPass?: number;
   defaultPartitionRowsPerPass?: number;
   occurrenceRowsPerPass?: number;
+  statisticsRowsPerPass?: number;
 }
 
 /** Persisted retention policy plus its PostgreSQL-owned update timestamp. */
@@ -512,6 +521,7 @@ export interface RetentionCategoryValues<T> {
   jobEvents: T;
   attemptHistory: T;
   scheduleOccurrences: T;
+  statistics: T;
 }
 
 export interface QueueHealth {
@@ -540,6 +550,22 @@ export interface QueueHealth {
   activeExecutionTimeouts: number;
   /** Active attempts whose execution timeout target has elapsed but is not yet reaped. */
   overdueExecutionTimeouts: number;
+  /**
+   * Rolling-statistics rollup progress.
+   *
+   * `lagMs` is how far the watermark trails now. Raw history retention refuses to delete past the
+   * watermark, so a stalled rollup shows up here and as growing retention lag rather than as
+   * silently incomplete operator windows.
+   */
+  statistics: {
+    rolledUpThrough: Date;
+    lagMs: number;
+    lastRunAt: Date | null;
+    /** Materialized minute buckets, and the span they currently cover. */
+    buckets: number;
+    oldestBucketAt: Date | null;
+    newestBucketAt: Date | null;
+  };
   retentionPolicy: RetentionPolicy;
   /** Delay beyond each enabled policy cutoff. Null means disabled or no retained data. */
   retentionLagMs: RetentionCategoryValues<number | null>;
@@ -571,6 +597,8 @@ export interface QueueHealth {
     hotUpdateRatio: number | null;
     lastVacuum: Date | null;
     lastAutovacuum: Date | null;
+    /** Daily partitions attached to this relation; zero for ordinary tables. */
+    partitions: number;
   }>;
   oldestTransactionAgeMs: number | null;
   /** Sessions currently waiting on PostgreSQL locks, excluding the health query itself. */

@@ -438,6 +438,12 @@ CREATE INDEX IF NOT EXISTS job_outcome_retention_idx
 -- supports dead-letter keyset scans without adding failed work to any runtime dispatch index.
 CREATE INDEX IF NOT EXISTS job_outcome_failed_finished_idx
   ON workhorse.job_outcome (finished_at DESC, job_id DESC) WHERE state = 'failed';
+-- Operator activity views ask which tasks changed inside a trailing window. Without this they have
+-- to start from every job that ever existed; with it they start from the window. updated_at is
+-- stamped once when the row is written, so this never costs a heartbeat a HOT update the way the
+-- same index on job_runtime would.
+CREATE INDEX IF NOT EXISTS job_outcome_updated_idx
+  ON workhorse.job_outcome (updated_at, job_id);
 
 -- Bounded operator metadata projection. Payloads and heartbeat-owned fields deliberately remain in
 -- their authoritative relations so operator reads cannot become claim paths or churn on heartbeats.
@@ -698,6 +704,52 @@ INSERT INTO workhorse.maintenance_state(
   ('terminal_storage', NULL)
 ON CONFLICT (task_name) DO NOTHING;
 
+-- Rolling statistics. Operator time windows are answered from bounded per-minute aggregates rather
+-- than from scans over retained history: one row per closed minute per (queue, task type) instead
+-- of one row per event. Buckets are derived from raw history and recomputed idempotently, so a pass
+-- that reruns a closed minute to absorb a late commit converges instead of double counting.
+--
+-- Measures are deliberately split by grain. Job-level measures count terminal jobs, attempt-level
+-- measures count closed attempts, and a job that retried four times before succeeding contributes
+-- one job_succeeded and five attempts. Conflating the two is the usual way a throughput panel
+-- starts disagreeing with a task list.
+CREATE TABLE IF NOT EXISTS workhorse.job_stat_bucket (
+  bucket_start timestamptz NOT NULL CHECK (isfinite(bucket_start)),
+  queue_name text NOT NULL CHECK (queue_name <> ''),
+  job_type text NOT NULL CHECK (job_type <> ''),
+  enqueued integer NOT NULL DEFAULT 0 CHECK (enqueued >= 0),
+  job_succeeded integer NOT NULL DEFAULT 0 CHECK (job_succeeded >= 0),
+  job_failed integer NOT NULL DEFAULT 0 CHECK (job_failed >= 0),
+  job_canceled integer NOT NULL DEFAULT 0 CHECK (job_canceled >= 0),
+  attempt_succeeded integer NOT NULL DEFAULT 0 CHECK (attempt_succeeded >= 0),
+  attempt_failed integer NOT NULL DEFAULT 0 CHECK (attempt_failed >= 0),
+  attempt_retry integer NOT NULL DEFAULT 0 CHECK (attempt_retry >= 0),
+  attempt_lease_expired integer NOT NULL DEFAULT 0 CHECK (attempt_lease_expired >= 0),
+  attempt_canceled integer NOT NULL DEFAULT 0 CHECK (attempt_canceled >= 0),
+  -- Deadline and execution-timeout closures. They are errors but not handler failures, so they are
+  -- counted apart from attempt_failed rather than folded into it.
+  attempt_other integer NOT NULL DEFAULT 0 CHECK (attempt_other >= 0),
+  attempt_duration_ms bigint NOT NULL DEFAULT 0 CHECK (attempt_duration_ms >= 0),
+  last_attempt_at timestamptz,
+  last_error text CHECK (last_error IS NULL OR char_length(last_error) <= 500),
+  last_error_at timestamptz,
+  PRIMARY KEY (bucket_start, queue_name, job_type)
+);
+
+-- One watermark for the derived aggregates above. Raw history retention is forbidden from crossing
+-- it, so a stalled rollup degrades health instead of silently producing gaps that no later pass can
+-- fill.
+CREATE TABLE IF NOT EXISTS workhorse.job_stat_state (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  -- Exclusive, minute-aligned. Every closed minute below this is materialized in job_stat_bucket.
+  rolled_up_through timestamptz NOT NULL CHECK (isfinite(rolled_up_through)),
+  last_run_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+INSERT INTO workhorse.job_stat_state(singleton, rolled_up_through)
+VALUES (true, date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'))
+ON CONFLICT (singleton) DO NOTHING;
+
 -- History deliberately has no reverse foreign key to job. Parent deletion would otherwise probe
 -- every retained history partition. This insert-side lock preserves the important half of the
 -- relationship: history must be attributed to an existing job, and insertion serializes with
@@ -803,6 +855,12 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
     schedule_occurrence_retention_days IS NULL
     OR schedule_occurrence_retention_days BETWEEN 1 AND 36500
   ),
+  -- Derived statistics are deliberately outside the identity chain below. A bucket is not
+  -- attribution for a job, it is a summary that outlives one, so keeping aggregates far longer than
+  -- the history they were derived from is the intended configuration rather than a violation.
+  statistics_retention_days integer CHECK (
+    statistics_retention_days IS NULL OR statistics_retention_days BETWEEN 1 AND 36500
+  ),
   terminal_job_prune_limit integer NOT NULL CHECK (terminal_job_prune_limit BETWEEN 1 AND 100000),
   history_partitions_per_pass integer NOT NULL CHECK (
     history_partitions_per_pass BETWEEN 1 AND 52
@@ -812,6 +870,9 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
   ),
   occurrence_rows_per_pass integer NOT NULL CHECK (
     occurrence_rows_per_pass BETWEEN 1 AND 1000000
+  ),
+  statistics_rows_per_pass integer NOT NULL CHECK (
+    statistics_rows_per_pass BETWEEN 1 AND 1000000
   ),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (
@@ -834,9 +895,10 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
 INSERT INTO workhorse.retention_policy(
   singleton, job_identity_retention_days, terminal_outcome_retention_days,
   job_event_retention_days, attempt_history_retention_days,
-  schedule_occurrence_retention_days, terminal_job_prune_limit,
-  history_partitions_per_pass, default_partition_rows_per_pass, occurrence_rows_per_pass
-) VALUES (true, 14, 14, 14, 14, 14, 1000, 4, 10000, 10000)
+  schedule_occurrence_retention_days, statistics_retention_days, terminal_job_prune_limit,
+  history_partitions_per_pass, default_partition_rows_per_pass, occurrence_rows_per_pass,
+  statistics_rows_per_pass
+) VALUES (true, 14, 14, 14, 14, 14, 14, 1000, 4, 10000, 10000, 10000)
 ON CONFLICT (singleton) DO NOTHING;
 
 CREATE OR REPLACE FUNCTION workhorse.sync_retention_policy_v1(
@@ -845,10 +907,12 @@ CREATE OR REPLACE FUNCTION workhorse.sync_retention_policy_v1(
   p_job_event_retention_days integer,
   p_attempt_history_retention_days integer,
   p_schedule_occurrence_retention_days integer,
+  p_statistics_retention_days integer DEFAULT NULL,
   p_terminal_job_prune_limit integer DEFAULT NULL,
   p_history_partitions_per_pass integer DEFAULT NULL,
   p_default_partition_rows_per_pass integer DEFAULT NULL,
-  p_occurrence_rows_per_pass integer DEFAULT NULL
+  p_occurrence_rows_per_pass integer DEFAULT NULL,
+  p_statistics_rows_per_pass integer DEFAULT NULL
 ) RETURNS workhorse.retention_policy
 LANGUAGE plpgsql
 AS $$
@@ -865,6 +929,7 @@ BEGIN
     job_event_retention_days = p_job_event_retention_days,
     attempt_history_retention_days = p_attempt_history_retention_days,
     schedule_occurrence_retention_days = p_schedule_occurrence_retention_days,
+    statistics_retention_days = p_statistics_retention_days,
     terminal_job_prune_limit = COALESCE(
       p_terminal_job_prune_limit, policy.terminal_job_prune_limit
     ),
@@ -876,6 +941,9 @@ BEGIN
     ),
     occurrence_rows_per_pass = COALESCE(
       p_occurrence_rows_per_pass, policy.occurrence_rows_per_pass
+    ),
+    statistics_rows_per_pass = COALESCE(
+      p_statistics_rows_per_pass, policy.statistics_rows_per_pass
     ),
     updated_at = clock_timestamp()
   WHERE singleton
@@ -3803,6 +3871,330 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS workhorse.stat_wait_edges_v1();
+
+-- Job type used when a bucket exceeds its group limit. Statistics stay bounded even if job types
+-- are generated rather than declared, and the overflow stays attributed to its queue.
+CREATE OR REPLACE FUNCTION workhorse.stat_overflow_type_v1() RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE
+AS $$ SELECT '__other__'::text $$;
+
+-- Derive per-minute statistics from raw history for [p_from, p_to). This is the single definition
+-- of what a bucket means: workhorse.rollup_stats_v1 materializes it for closed minutes, and
+-- workhorse.stat_buckets_v1 evaluates it live for the minutes a rollup has not reached yet.
+--
+-- Sources are bucketed by the timestamp each grain is stamped with when it lands: enqueue events
+-- and closed attempts by occurred_at, which is also the history partition key, and terminal jobs by
+-- finished_at. Bucketing by anything the row does not carry would make recomputation non-idempotent.
+CREATE OR REPLACE FUNCTION workhorse.aggregate_stats_v1(
+  p_from timestamptz, p_to timestamptz, p_group_limit integer DEFAULT 200
+) RETURNS TABLE (
+  bucket_start timestamptz, queue_name text, job_type text, enqueued integer,
+  job_succeeded integer, job_failed integer, job_canceled integer,
+  attempt_succeeded integer, attempt_failed integer, attempt_retry integer,
+  attempt_lease_expired integer, attempt_canceled integer, attempt_other integer,
+  attempt_duration_ms bigint,
+  last_attempt_at timestamptz, last_error text, last_error_at timestamptz
+)
+LANGUAGE sql STABLE
+AS $$
+  WITH enqueue_source AS (
+    SELECT date_bin('1 minute', event.occurred_at, timestamp with time zone '2000-01-01') AS bucket,
+           job.queue_name AS queue, job.job_type AS type,
+           count(*)::integer AS enqueued
+      FROM workhorse.job_event event
+      JOIN workhorse.job job ON job.id = event.job_id
+     WHERE event.event_type = 'enqueued'
+       AND event.occurred_at >= p_from AND event.occurred_at < p_to
+     GROUP BY 1, 2, 3
+  ), attempt_source AS (
+    SELECT date_bin('1 minute', history.occurred_at, timestamp with time zone '2000-01-01') AS bucket,
+           job.queue_name AS queue, job.job_type AS type,
+           count(*) FILTER (WHERE history.outcome = 'succeeded')::integer AS attempt_succeeded,
+           count(*) FILTER (WHERE history.outcome = 'failed')::integer AS attempt_failed,
+           count(*) FILTER (WHERE history.outcome = 'retry')::integer AS attempt_retry,
+           count(*) FILTER (WHERE history.outcome = 'lease_expired')::integer AS attempt_lease_expired,
+           count(*) FILTER (WHERE history.outcome = 'canceled')::integer AS attempt_canceled,
+           count(*) FILTER (
+             WHERE history.outcome IN ('deadline_exceeded', 'timeout')
+           )::integer AS attempt_other,
+           COALESCE(sum(GREATEST(
+             0, round(extract(epoch FROM history.finished_at - history.started_at) * 1000)
+           )), 0)::bigint AS attempt_duration_ms,
+           max(history.finished_at) AS last_attempt_at,
+           (array_agg(
+              left(COALESCE(
+                history.error->>'message', history.error->>'code', history.error::text
+              ), 500)
+              ORDER BY history.finished_at DESC, history.attempt_id DESC
+            ) FILTER (WHERE history.error IS NOT NULL))[1] AS last_error,
+           max(history.finished_at) FILTER (WHERE history.error IS NOT NULL) AS last_error_at
+      FROM workhorse.attempt_history history
+      JOIN workhorse.job job ON job.id = history.job_id
+     WHERE history.occurred_at >= p_from AND history.occurred_at < p_to
+     GROUP BY 1, 2, 3
+  ), outcome_source AS (
+    SELECT date_bin('1 minute', outcome.finished_at, timestamp with time zone '2000-01-01') AS bucket,
+           job.queue_name AS queue, job.job_type AS type,
+           count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS job_succeeded,
+           count(*) FILTER (WHERE outcome.state = 'failed')::integer AS job_failed,
+           count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS job_canceled
+      FROM workhorse.job_outcome outcome
+      JOIN workhorse.job job ON job.id = outcome.job_id
+     WHERE outcome.finished_at >= p_from AND outcome.finished_at < p_to
+     GROUP BY 1, 2, 3
+  ), measure AS (
+    SELECT source.bucket, source.queue, source.type, source.enqueued,
+           0 AS job_succeeded, 0 AS job_failed, 0 AS job_canceled,
+           0 AS attempt_succeeded, 0 AS attempt_failed, 0 AS attempt_retry,
+           0 AS attempt_lease_expired, 0 AS attempt_canceled, 0 AS attempt_other,
+           0::bigint AS attempt_duration_ms,
+           NULL::timestamptz AS last_attempt_at, NULL::text AS last_error,
+           NULL::timestamptz AS last_error_at
+      FROM enqueue_source source
+     UNION ALL
+    SELECT source.bucket, source.queue, source.type, 0,
+           0, 0, 0,
+           source.attempt_succeeded, source.attempt_failed, source.attempt_retry,
+           source.attempt_lease_expired, source.attempt_canceled, source.attempt_other,
+           source.attempt_duration_ms,
+           source.last_attempt_at, source.last_error, source.last_error_at
+      FROM attempt_source source
+     UNION ALL
+    SELECT source.bucket, source.queue, source.type, 0,
+           source.job_succeeded, source.job_failed, source.job_canceled,
+           0, 0, 0,
+           0, 0, 0,
+           0::bigint,
+           NULL::timestamptz, NULL::text, NULL::timestamptz
+      FROM outcome_source source
+  ), total AS (
+    SELECT measure.bucket, measure.queue, measure.type,
+           sum(measure.enqueued)::integer AS enqueued,
+           sum(measure.job_succeeded)::integer AS job_succeeded,
+           sum(measure.job_failed)::integer AS job_failed,
+           sum(measure.job_canceled)::integer AS job_canceled,
+           sum(measure.attempt_succeeded)::integer AS attempt_succeeded,
+           sum(measure.attempt_failed)::integer AS attempt_failed,
+           sum(measure.attempt_retry)::integer AS attempt_retry,
+           sum(measure.attempt_lease_expired)::integer AS attempt_lease_expired,
+           sum(measure.attempt_canceled)::integer AS attempt_canceled,
+           sum(measure.attempt_other)::integer AS attempt_other,
+           sum(measure.attempt_duration_ms)::bigint AS attempt_duration_ms,
+           max(measure.last_attempt_at) AS last_attempt_at,
+           (array_agg(measure.last_error ORDER BY measure.last_error_at DESC NULLS LAST)
+             FILTER (WHERE measure.last_error IS NOT NULL))[1] AS last_error,
+           max(measure.last_error_at) AS last_error_at
+      FROM measure
+     GROUP BY 1, 2, 3
+  ), fold AS (
+    SELECT total.bucket, total.queue, total.type,
+           CASE
+             WHEN row_number() OVER (
+               PARTITION BY total.bucket
+               ORDER BY total.enqueued + total.attempt_succeeded + total.attempt_failed
+                        + total.attempt_retry + total.attempt_lease_expired
+                        + total.attempt_canceled + total.attempt_other DESC,
+                        total.queue, total.type
+             ) <= p_group_limit
+             THEN total.type
+             ELSE workhorse.stat_overflow_type_v1()
+           END AS fold_type
+      FROM total
+  ), folded AS (
+    SELECT total.bucket, total.queue, fold.fold_type,
+           sum(total.enqueued)::integer AS enqueued,
+           sum(total.job_succeeded)::integer AS job_succeeded,
+           sum(total.job_failed)::integer AS job_failed,
+           sum(total.job_canceled)::integer AS job_canceled,
+           sum(total.attempt_succeeded)::integer AS attempt_succeeded,
+           sum(total.attempt_failed)::integer AS attempt_failed,
+           sum(total.attempt_retry)::integer AS attempt_retry,
+           sum(total.attempt_lease_expired)::integer AS attempt_lease_expired,
+           sum(total.attempt_canceled)::integer AS attempt_canceled,
+           sum(total.attempt_other)::integer AS attempt_other,
+           sum(total.attempt_duration_ms)::bigint AS attempt_duration_ms,
+           max(total.last_attempt_at) AS last_attempt_at,
+           (array_agg(total.last_error ORDER BY total.last_error_at DESC NULLS LAST)
+             FILTER (WHERE total.last_error IS NOT NULL))[1] AS last_error,
+           max(total.last_error_at) AS last_error_at
+      FROM total
+      JOIN fold ON fold.bucket = total.bucket AND fold.queue = total.queue
+                AND fold.type = total.type
+     GROUP BY 1, 2, 3
+  )
+  SELECT folded.bucket, folded.queue, folded.fold_type, folded.enqueued,
+         folded.job_succeeded, folded.job_failed, folded.job_canceled,
+         folded.attempt_succeeded, folded.attempt_failed, folded.attempt_retry,
+         folded.attempt_lease_expired, folded.attempt_canceled, folded.attempt_other,
+         folded.attempt_duration_ms,
+         folded.last_attempt_at, folded.last_error, folded.last_error_at
+    FROM folded
+$$;
+
+-- Statistics for [p_from, p_to) stitched from materialized buckets and a live tail. Callers never
+-- need to know where the rollup watermark sits: everything below it is read, everything above it is
+-- derived from the few minutes of raw history a rollup pass has not closed yet.
+CREATE OR REPLACE FUNCTION workhorse.stat_buckets_v1(
+  p_from timestamptz, p_to timestamptz
+) RETURNS TABLE (
+  bucket_start timestamptz, queue_name text, job_type text, enqueued integer,
+  job_succeeded integer, job_failed integer, job_canceled integer,
+  attempt_succeeded integer, attempt_failed integer, attempt_retry integer,
+  attempt_lease_expired integer, attempt_canceled integer, attempt_other integer,
+  attempt_duration_ms bigint,
+  last_attempt_at timestamptz, last_error text, last_error_at timestamptz
+)
+LANGUAGE sql STABLE
+AS $$
+  -- The watermark is read through scalar subqueries rather than joined in from a CTE. A CTE here
+  -- reads better but plans catastrophically: the planner has no statistics for it, estimates
+  -- hundreds of rows, and the resulting cross-join estimate carries the plan past jit_above_cost.
+  -- Every call then pays roughly a second of LLVM compilation to scan a few thousand rows. A
+  -- scalar subquery over a singleton primary key is an InitPlan evaluated once, and it keeps the
+  -- `p_to > watermark` test a one-time filter, so the live tail is skipped outright when the
+  -- window ends at or below the watermark.
+  SELECT bucket.bucket_start, bucket.queue_name, bucket.job_type, bucket.enqueued,
+         bucket.job_succeeded, bucket.job_failed, bucket.job_canceled,
+         bucket.attempt_succeeded, bucket.attempt_failed, bucket.attempt_retry,
+         bucket.attempt_lease_expired, bucket.attempt_canceled, bucket.attempt_other,
+         bucket.attempt_duration_ms,
+         bucket.last_attempt_at, bucket.last_error, bucket.last_error_at
+    FROM workhorse.job_stat_bucket bucket
+   WHERE bucket.bucket_start >= p_from
+     AND bucket.bucket_start < LEAST(p_to, (
+           SELECT state.rolled_up_through FROM workhorse.job_stat_state state WHERE state.singleton
+         ))
+   UNION ALL
+  SELECT live.bucket_start, live.queue_name, live.job_type, live.enqueued,
+         live.job_succeeded, live.job_failed, live.job_canceled,
+         live.attempt_succeeded, live.attempt_failed, live.attempt_retry,
+         live.attempt_lease_expired, live.attempt_canceled, live.attempt_other,
+         live.attempt_duration_ms,
+         live.last_attempt_at, live.last_error, live.last_error_at
+    FROM workhorse.aggregate_stats_v1(
+           GREATEST(p_from, (
+             SELECT state.rolled_up_through FROM workhorse.job_stat_state state WHERE state.singleton
+           )),
+           p_to
+         ) live
+   WHERE p_to > (
+           SELECT state.rolled_up_through FROM workhorse.job_stat_state state WHERE state.singleton
+         )
+$$;
+
+-- Materialize closed minutes and advance the watermark. Only fully elapsed minutes are rolled up,
+-- and the pass rewrites the last few of them each time: a transaction that commits its history row
+-- after its own minute closed is absorbed by the rewrite instead of being lost. Rewriting is safe
+-- because a bucket is a pure function of the raw history in its minute.
+CREATE OR REPLACE FUNCTION workhorse.rollup_stats_v1(
+  p_now timestamptz DEFAULT clock_timestamp(),
+  p_max_buckets integer DEFAULT 240,
+  p_recompute_buckets integer DEFAULT 2,
+  p_group_limit integer DEFAULT 200
+) RETURNS TABLE (
+  phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE v_started_at timestamptz;
+DECLARE v_state workhorse.job_stat_state%ROWTYPE;
+DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+DECLARE v_from timestamptz;
+DECLARE v_to timestamptz;
+DECLARE v_closed timestamptz;
+BEGIN
+  IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
+  IF p_max_buckets NOT BETWEEN 1 AND 100000 THEN
+    RAISE EXCEPTION 'bucket limit must be between 1 and 100000';
+  END IF;
+  IF p_recompute_buckets NOT BETWEEN 0 AND 1440 THEN
+    RAISE EXCEPTION 'recompute window must be between 0 and 1440 buckets';
+  END IF;
+  IF p_group_limit NOT BETWEEN 1 AND 10000 THEN
+    RAISE EXCEPTION 'group limit must be between 1 and 10000';
+  END IF;
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:maintenance:stat-rollup', 0)) THEN
+    RETURN QUERY VALUES
+      ('stat_rollup'::text, 0, 0, true, NULL::jsonb),
+      ('stat_retention'::text, 0, 0, true, NULL::jsonb);
+    RETURN;
+  END IF;
+  SELECT * INTO STRICT v_state FROM workhorse.job_stat_state WHERE singleton FOR UPDATE;
+  SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
+
+  phase := 'stat_rollup';
+  rows_affected := 0;
+  skipped_lock := false;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    v_closed := date_bin('1 minute', p_now, timestamp with time zone '2000-01-01');
+    v_from := LEAST(
+      v_state.rolled_up_through - make_interval(mins => p_recompute_buckets), v_closed
+    );
+    -- Catching up after an outage advances in bounded passes rather than in one long transaction.
+    v_to := LEAST(v_closed, v_from + make_interval(mins => p_max_buckets));
+    IF v_to > v_from THEN
+      DELETE FROM workhorse.job_stat_bucket
+       WHERE bucket_start >= v_from AND bucket_start < v_to;
+      INSERT INTO workhorse.job_stat_bucket (
+        bucket_start, queue_name, job_type, enqueued,
+        job_succeeded, job_failed, job_canceled,
+        attempt_succeeded, attempt_failed, attempt_retry,
+        attempt_lease_expired, attempt_canceled, attempt_other,
+        attempt_duration_ms, last_attempt_at, last_error, last_error_at
+      )
+      SELECT * FROM workhorse.aggregate_stats_v1(v_from, v_to, p_group_limit);
+      GET DIAGNOSTICS rows_affected = ROW_COUNT;
+      UPDATE workhorse.job_stat_state
+         SET rolled_up_through = v_to, last_run_at = p_now, updated_at = clock_timestamp()
+       WHERE singleton;
+    ELSE
+      UPDATE workhorse.job_stat_state
+         SET last_run_at = p_now, updated_at = clock_timestamp()
+       WHERE singleton;
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+
+  -- Bucket retention is bounded per pass like every other retained category. Shortening the policy
+  -- makes the next pass eligible to delete months of buckets at once, and an unbounded statement
+  -- there would hold a long lock on the relation every operator window reads.
+  phase := 'stat_retention';
+  rows_affected := 0;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    IF v_policy.statistics_retention_days IS NOT NULL THEN
+      WITH expired AS (
+        SELECT bucket.ctid
+          FROM workhorse.job_stat_bucket bucket
+         WHERE bucket.bucket_start < p_now
+               - make_interval(days => v_policy.statistics_retention_days)
+         ORDER BY bucket.bucket_start
+           FOR UPDATE SKIP LOCKED
+         LIMIT v_policy.statistics_rows_per_pass
+      )
+      DELETE FROM workhorse.job_stat_bucket bucket USING expired
+       WHERE bucket.ctid = expired.ctid;
+      GET DIAGNOSTICS rows_affected = ROW_COUNT;
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.retain_history_v1(
   p_force boolean DEFAULT false,
   p_now timestamptz DEFAULT clock_timestamp()
@@ -3820,6 +4212,7 @@ DECLARE v_event_before timestamptz;
 DECLARE v_attempt_before timestamptz;
 DECLARE v_occurrence_before timestamptz;
 DECLARE v_safe_before timestamptz;
+DECLARE v_rolled_up_through timestamptz;
 DECLARE v_success boolean := true;
 DECLARE v_complete boolean := false;
 BEGIN
@@ -3852,6 +4245,16 @@ BEGIN
     - make_interval(days => COALESCE(v_policy.attempt_history_retention_days, 0));
   v_occurrence_before := p_now
     - make_interval(days => COALESCE(v_policy.schedule_occurrence_retention_days, 0));
+  -- Raw history is the only input a statistics bucket can be rebuilt from. Deleting past the rollup
+  -- watermark would create a permanent hole in long-window operator views, so a stalled rollup
+  -- holds history instead: the cutoff waits, retention reports itself incomplete, and the growing
+  -- retention lag is what surfaces on the health page.
+  SELECT state.rolled_up_through INTO v_rolled_up_through
+    FROM workhorse.job_stat_state state WHERE state.singleton;
+  IF v_rolled_up_through IS NOT NULL THEN
+    v_event_before := LEAST(v_event_before, v_rolled_up_through);
+    v_attempt_before := LEAST(v_attempt_before, v_rolled_up_through);
+  END IF;
 
   phase := 'event_retention';
   rows_affected := 0;
@@ -4480,7 +4883,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (17) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (18) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )
