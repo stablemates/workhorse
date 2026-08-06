@@ -1,5 +1,7 @@
 # Working in this repository
 
+Always talk in ASD-STE100 Simplified Technical English. Always read CONTEXT.md files, and use their ubiquitous language.
+
 Instructions for coding agents. Everything here is a rule an agent has broken before.
 
 ## Never run the demo server
