@@ -1,7 +1,5 @@
 # Working in this repository
 
-Always talk in ASD-STE100 Simplified Technical English. Always read CONTEXT.md files, and use their ubiquitous language.
-
 Instructions for coding agents. Everything here is a rule an agent has broken before.
 
 ## Never run the demo server
@@ -58,3 +56,56 @@ remote-tracking ref and is never checked out by anyone.
 `pnpm test` does not build the dashboard browser bundle. Anything that serves
 `packages/dashboard/dist/app` — `test:demo-smoke`, `test:packed` — needs a full `pnpm build`
 first. `pnpm build:runtime:dev` only compiles the library half.
+
+## Writing documentation
+
+The docs have two layers, for two different readers. Keep both.
+
+- `docs/architecture.md` is the precise reference. Name every function, column, and limit.
+  Do not simplify it, and do not soften it into plain language — its job is to answer
+  "is this behaviour a bug?" exactly.
+- `docs/guides/` explains one concept per file, for someone who has never seen this system.
+  Explain it as you would to a smart 16-year-old who codes, but keep every identifier. Say
+  what problem a thing solves before you name it. Expect roughly three times the length of
+  the equivalent reference text; that is the cost of the on-ramp. Match the register of
+  `020-leases-and-fences.md`, which is the reference example.
+
+Rules that keep the two layers from drifting into each other:
+
+- **A guide states no numbers.** No byte limits, no timeouts, no batch sizes, no function
+  signatures. Say "size-capped and rate-limited"; the reference says how much. Exact values
+  then live in exactly one place and can change freely.
+- **One link to `architecture.md` per guide**, in the footer, never inline. Guides link to
+  each other freely.
+- **One owner per concept.** Fence tokens are explained in `020-leases-and-fences.md` and
+  nowhere else; other guides get one clause and a link. Without this you get thirteen
+  partial explanations that disagree.
+- **Never renumber a guide.** Numbers appear in links. Insert into the gaps — bands of one
+  hundred, gaps of ten — and let the reading order absorb it.
+- **Verify examples against the source** before writing them. `HandlerContext` is in
+  `src/worker.ts`; `EnqueueOptions` and the `Queue` methods are in `src/types.ts` and
+  `src/queue.ts`. Do not write an example from memory.
+
+Both layers name real identifiers, so a rename stays greppable across both. If you change
+behaviour a guide describes, update it in the same commit.
+
+Every guide follows the same shape: title as the reader's question, one or two sentences of
+what and why, the explanation, a small verified example where one helps, a `## Next` block
+of two to three sibling links, then the single reference link.
+
+Prose rules for either layer:
+
+- One idea per sentence, under 25 words where you can manage it.
+- No noun cluster longer than three words. Write "recovery of an expired lease", not
+  "bounded expired-lease recovery".
+- Put the condition first: "If the rollup stalls, history accumulates."
+- Name the actor. "PostgreSQL validates the policy", not "the policy is validated".
+- Say what a thing is for before you say how it works.
+- One meaning per term. `claim`, `fence`, `wait`, `pause`, and `redrive` are each currently
+  used as both noun and verb — pick one part of speech per term and stay with it.
+
+Do not write in ASD-STE100 Simplified Technical English, and do not reply in it either. Its
+approved vocabulary excludes most of this domain, and its ban on subordinate clauses turns
+design rationale into a list of flat assertions — the sentence that explains _why_ a
+tradeoff was made is exactly the sentence it breaks. The rules above keep the part of STE
+that helps and drop the part that does not.

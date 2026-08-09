@@ -4,6 +4,10 @@ Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifec
 
 The current clean-install protocol is schema version 18.
 
+This page is the precise reference. For the ideas it assumes — leases and fence tokens,
+at-least-once delivery, cooperative cancellation, the runtime/outcome split — start with
+[`guides/000-start-here.md`](guides/000-start-here.md).
+
 ## Design objective
 
 Dispatch cost should scale with live work, not lifetime completed work. Schema version 2 therefore stores:
