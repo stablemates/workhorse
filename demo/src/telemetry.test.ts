@@ -25,5 +25,7 @@ describe("demo telemetry preload", () => {
     expect(manifest.scripts["demo:otel"]).toBe(
       "pnpm signoz:up && WORKHORSE_DEMO_TELEMETRY=true pnpm demo",
     );
+    expect(manifest.scripts["signoz:up"]).toContain("scripts/signoz-portless.ts add");
+    expect(manifest.scripts["signoz:down"]).toContain("scripts/signoz-portless.ts remove");
   });
 });

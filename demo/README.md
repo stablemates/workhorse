@@ -51,7 +51,7 @@ curl -fsSL https://signoz.io/foundry.sh | bash
 pnpm demo:otel
 ```
 
-Open SigNoz at `http://localhost:3301`. The server and worker appear as separate services, while HTTP,
+Open SigNoz at `http://signoz.localhost:43155`. The server and worker appear as separate services, while HTTP,
 PostgreSQL, Node.js runtime, and Workhorse maintenance telemetry share the same local OTLP endpoint. Run
 `pnpm signoz:down` to stop the containers without deleting their volumes. Plain `pnpm demo` does not
 initialize OpenTelemetry or require SigNoz. The loopback-only local stack uses SigNoz impersonation mode,

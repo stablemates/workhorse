@@ -53,4 +53,45 @@ describe("demo Portless launcher", () => {
       ]);
     },
   );
+
+  it.skipIf(process.platform === "win32")(
+    "registers and removes the SigNoz static route",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "workhorse-signoz-portless-"));
+      temporaryDirectories.push(directory);
+      const fakePortless = join(directory, "portless");
+      await writeFile(
+        fakePortless,
+        `#!/usr/bin/env node\n` +
+          `require("node:fs").writeFileSync(process.env.ARGUMENT_LOG, JSON.stringify(process.argv.slice(2)));\n`,
+      );
+      await chmod(fakePortless, 0o755);
+
+      for (const [action, expectedArguments] of [
+        ["add", ["alias", "signoz", "3301"]],
+        ["remove", ["alias", "--remove", "signoz"]],
+      ] as const) {
+        const argumentLog = join(directory, `${action}.json`);
+        const child = spawn(
+          process.execPath,
+          ["--import", "tsx", resolve("scripts/signoz-portless.ts"), action],
+          {
+            env: {
+              ...process.env,
+              ARGUMENT_LOG: argumentLog,
+              PATH: `${directory}:${process.env.PATH ?? ""}`,
+            },
+            stdio: "ignore",
+          },
+        );
+        const exitCode = await new Promise<number | null>((resolveExit, reject) => {
+          child.once("error", reject);
+          child.once("exit", resolveExit);
+        });
+
+        expect(exitCode).toBe(0);
+        expect(JSON.parse(await readFile(argumentLog, "utf8"))).toEqual(expectedArguments);
+      }
+    },
+  );
 });
