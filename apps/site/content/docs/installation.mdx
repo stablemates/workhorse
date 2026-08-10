@@ -1,126 +1,81 @@
 ---
-title: Installation
-description: Install the Workhorse packages, provision PostgreSQL, and install the versioned schema.
+title: How do I install Workhorse?
+description: Add the core package, install its PostgreSQL schema, and check compatibility before a process starts.
 ---
 
-## Requirements
+Workhorse needs an ESM Node.js application and a supported PostgreSQL server. Installation is a
+deployment action because application processes must never change the schema implicitly.
 
-- Node.js **>= 22**
-- PostgreSQL **15 or newer**, with no extensions required
-- An ESM project (`"type": "module"` in `package.json`)
+## Add the package
 
-Node.js 22 and 24 and PostgreSQL 15 through 18 are tested in CI on every change. See
-[Compatibility](/docs/compatibility) for the full support boundary.
-
-## Install the packages
-
-```bash
-npm install @workhorse/core pg
-```
+Install `@workhorse/core` with the PostgreSQL client your application already uses.
 
 ```bash
 pnpm add @workhorse/core pg
 ```
 
-`pg` (node-postgres) is a peer of normal usage: you own the `Pool` and its lifetime.
+Add `@workhorse/drizzle`, `@workhorse/hono`, or `@workhorse/dashboard` only when that integration
+belongs in the same process.
 
-Optional integrations:
-
-```bash
-pnpm add @workhorse/drizzle drizzle-orm      # Drizzle transactions
-pnpm add @workhorse/hono hono @hono/node-server  # Hono lifecycle + dashboard mount
-pnpm add @workhorse/dashboard react react-dom    # Embeddable operator UI
-```
-
-`@workhorse/dashboard` mounts on any framework. Hono, Next.js route handlers, SvelteKit, and Nitro
-use its Fetch-native host directly; Express, Connect, and Fastify use its Connect-style Node bridge.
-`@workhorse/hono` is a thin convenience binding over the same host.
-
-## Scaffold an existing project
-
-`workhorse init` inspects your `package.json`, writes a single worker configuration file, and prints
-the dashboard mount for your framework. It never edits `package.json` or your application routes.
+The `workhorse init` command can inspect an existing project. It writes a worker configuration and
+prints a dashboard mount, but it leaves your routes and package manifest alone.
 
 ```bash
 npx workhorse init
 ```
 
-## Provide a database
+## Give Workhorse a database
 
-Workhorse creates a `workhorse` schema inside a database you own. Nothing outside that schema is
-touched.
+Workhorse creates its objects inside the `workhorse` schema. The database role must be able to create
+the schema, tables, indexes, partitions, and functions.
 
-```bash
-createdb workhorse_app
-export DATABASE_URL="postgres://workhorse:workhorse@localhost:5432/workhorse_app"
-```
+Your process supplies the connection through its normal configuration. The CLI accepts its database
+flag and the documented Workhorse or application environment variables.
 
-The database role needs permission to create a schema, tables, indexes, partitions, and functions in
-the target database.
+## Install the schema deliberately
 
-## Install the schema
-
-The fastest path is the CLI:
+Use the CLI in a deployment step when the target database is new.
 
 ```bash
-npx workhorse schema install   # reads --database-url, WORKHORSE_DATABASE_URL, or DATABASE_URL
+npx workhorse schema install
 npx workhorse schema status
 ```
 
-The same thing from application code, when installation belongs in your deployment script:
+You can perform the same step from deployment code with `installSchema`.
 
 ```ts
+import { installSchema } from "@workhorse/core";
 import { Pool } from "pg";
-import { installSchema, WORKHORSE_SCHEMA_VERSION } from "@workhorse/core";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
 await installSchema(pool);
-console.log(`Workhorse schema version ${WORKHORSE_SCHEMA_VERSION} installed`);
+await pool.end();
 ```
 
-Installation is an explicit deployment step. Runtimes never install or migrate the schema implicitly.
-`installSchema` refuses to treat an existing mixed or non-current Workhorse schema as a clean
-installation, so it will not silently corrupt an older database.
+`installSchema` rejects a mixed or incompatible Workhorse schema. It will not guess how to migrate
+durable state from another protocol version.
 
-<Callout type="warn">
-  The schema is **clean-install only**. There is no supported online migration path between protocol
-  versions. Treat a version change as a deliberate, separately engineered operation.
-</Callout>
+## Check before a runtime starts
 
-## Verify compatibility at startup
-
-Long-lived processes should assert compatibility instead of installing:
+Long-lived application and worker processes should call `assertSchemaCompatible`. That separates a
+safe startup check from the destructive authority to install database objects.
 
 ```ts
-import { assertSchemaCompatible, readSchemaVersion } from "@workhorse/core";
+import { assertSchemaCompatible } from "@workhorse/core";
 
-const installed = await readSchemaVersion(pool); // number | null
-await assertSchemaCompatible(pool); // throws when the runtime and database disagree
+await assertSchemaCompatible(pool);
 ```
 
-`readSchemaVersion` returns `null` when the schema is absent. `assertSchemaCompatible` throws when the
-installed version differs from the runtime's `WORKHORSE_SCHEMA_VERSION`.
+Every published package is ESM and includes type declarations. JavaScript uses the same runtime API,
+while TypeScript also checks payloads and configuration during development.
 
-## JavaScript usage
+## Next
 
-Every package is published as ESM with bundled type declarations. Plain JavaScript works without any
-build step:
+- [Quickstart](/docs/quickstart) — create a queue and run a handler
+- [Compatibility](/docs/compatibility) — understand the tested support boundary
+- [Drizzle](/docs/drizzle) — adapt an existing Drizzle connection
 
-```js
-// worker.mjs
-import { Pool } from "pg";
-import { Queue, Worker } from "@workhorse/core";
+---
 
-const queue = new Queue(new Pool({ connectionString: process.env.DATABASE_URL }));
-const worker = new Worker(queue);
-worker.handle("email.send", async (payload) => ({ delivered: payload.to }));
-await worker.run();
-```
-
-CommonJS `require()` is not supported.
-
-## Next steps
-
-Continue with the [Quickstart](/docs/quickstart), then read
-[Core concepts](/docs/concepts) before designing handlers.
+Exact schema requirements and installation boundaries:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#operational-limits).

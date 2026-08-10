@@ -1,69 +1,65 @@
 ---
-title: Compatibility
-description: Supported Node.js and PostgreSQL versions, schema compatibility guarantees, and what a release promises.
+title: Which runtimes does Workhorse support?
+description: Understand the tested Node.js, PostgreSQL, module, package, and schema compatibility boundaries.
 ---
 
-A version is **supported** when CI runs the full test suite against it on every change. That is the
-whole definition, and it is deliberately narrower than the set of versions Workhorse will run on.
-The authoritative matrix lives in
-[`docs/compatibility.md`](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md);
-this page is the summary.
+A runtime is supported when continuous integration runs the full suite against it. Workhorse may run
+elsewhere, but untested versions do not carry the same correctness evidence.
 
-## Supported versions
+## Check the current matrix
 
-| Runtime    | Supported      | Minimum | Notes                                                  |
-| ---------- | -------------- | ------- | ------------------------------------------------------ |
-| Node.js    | 22, 24         | 22      | Even-numbered releases only                            |
-| PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed |
+The exact Node.js and PostgreSQL majors change over time, so the
+[compatibility matrix](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md) owns
+those values.
 
-A PostgreSQL major newer than the tested set is not refused — a release cannot know about a database
-published after it — but it carries no evidence. A major below the minimum is refused at schema
-installation, with the server's own version in the error rather than a failure from inside
-`schema.sql`.
+`SUPPORTED_NODE_MAJORS` and `SUPPORTED_POSTGRES_MAJORS` expose the same release boundary to tooling.
+`describePostgresSupport` explains whether a connected server is tested, merely newer, or refused.
 
-`workhorse schema status` reports which of the three cases the connected server falls into:
+```ts
+import { readPostgresSupport } from "@workhorse/core";
 
-```bash
-npx workhorse schema status
+const support = await readPostgresSupport(pool);
+console.log(support);
 ```
 
-```
-Installed Workhorse schema v17. Runtime expects v17.
-PostgreSQL 17.2 (Debian 17.2-1.pgdg120+1): supported and covered by CI.
-```
+Workhorse requires plain PostgreSQL with its default procedural language. It installs no optional
+extension.
 
-## Schema compatibility
+Published packages are ESM and include TypeScript declarations. JavaScript uses the same runtime,
+while CommonJS loading is outside the supported package format.
 
-The durable protocol is the PostgreSQL schema, not the TypeScript API.
+## Match the schema exactly
 
-<Callout type="warn">
-  The runtime's schema version and the installed schema version must match **exactly**. An older
-  runtime against a newer schema fails just as loudly as the reverse, so a mixed fleet mid-deploy is
-  not supported.
-</Callout>
+The PostgreSQL schema is the durable protocol. An application runtime and installed schema must agree
+exactly because workers can otherwise interpret lifecycle state differently.
 
-- Installation is clean-database only. There is no online migration path in the `0.x` line; a schema
-  version bump means installing into a fresh schema and draining the old one.
-- Correctness-sensitive transitions stay in versioned SQL functions, so anything speaking the same
-  schema version speaks the same protocol.
-- Job payloads are caller-owned JSON, stored and returned unchanged.
-- The dashboard's oRPC transport is private and changes without a schema bump. The supported
-  operator surface is the `Queue` query API.
+Call `assertSchemaCompatible` during startup. A mismatch should fail the process before it claims or
+changes work.
 
-## Releases
+Schema installation is clean-install only. Workhorse does not provide an online migration path, so a
+protocol change needs a separately designed drain and data transition.
 
-The four packages are versioned in lockstep and released from one `vX.Y.Z` tag. Every release runs
-the full check suite — including the packed-package install test and the demo smoke test — before
-publishing, and every published tarball carries an [npm provenance
-attestation](https://docs.npmjs.com/generating-provenance-statements) linking it to the commit and
-workflow that built it. Verify one with `npm audit signatures`.
+The dashboard transport can change without a schema bump because it is private to matching package
+versions. Use the public `Queue` read API for application integrations.
 
-Breaking changes and the schema version each release requires are listed in
-[`CHANGELOG.md`](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md).
+## Treat releases as one package set
 
-## Support is not a performance claim
+Core and its integration packages release together. Keep their versions aligned so adapters,
+dashboard contracts, and exported types describe the same source revision.
 
-Benchmark evidence is recorded on a single fixed configuration, because throughput compared across
-machines is meaningless. Supported versions are the ones proven **correct** in CI; the benchmarked
-configuration is the only one with published numbers. Neither implies the other. See
-[Limitations](/docs/limitations) for what Workhorse deliberately does not do.
+The [changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) records breaking
+changes and the schema required by each release.
+
+Support proves correctness under the tested matrix. It does not promise a throughput level for your
+database, payloads, handlers, or deployment topology.
+
+## Next
+
+- [Installation](/docs/installation) — install and check the schema deliberately
+- [Limitations](/docs/limitations) — compare support with your application requirements
+- [Deployment and operations](/docs/operations) — enforce compatibility before workers start
+
+---
+
+Exact database requirements and schema compatibility boundary:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#operational-limits).

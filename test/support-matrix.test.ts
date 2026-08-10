@@ -113,7 +113,7 @@ describe("continuous integration", () => {
 });
 
 describe("documentation", () => {
-  it("states the same matrix everywhere it is claimed", async () => {
+  it("keeps the exact matrix in the reference and links guides to it", async () => {
     const [compatibility, sitePage, installation, readme] = await Promise.all([
       read("docs/compatibility.md"),
       read("apps/site/content/docs/compatibility.mdx"),
@@ -121,15 +121,18 @@ describe("documentation", () => {
       read("README.md"),
     ]);
     const claimed = `${SUPPORTED_POSTGRES_MAJORS.join(", ")}`;
+    const claimedNodeMajors = SUPPORTED_NODE_MAJORS.join(", ");
 
     expect(compatibility).toContain(claimed);
-    expect(sitePage).toContain(claimed);
-    expect(compatibility).toContain(SUPPORTED_NODE_MAJORS.join(", "));
-    expect(sitePage).toContain(SUPPORTED_NODE_MAJORS.join(", "));
-    for (const document of [installation, readme]) {
-      expect(document).toContain(`PostgreSQL **${MINIMUM_POSTGRES_MAJOR} or newer**`);
-      expect(document).toContain(`Node.js **>= ${MINIMUM_NODE_MAJOR}**`);
-    }
+    expect(compatibility).toContain(claimedNodeMajors);
+    expect(sitePage).toContain(
+      "https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md",
+    );
+    expect(sitePage).not.toContain(claimed);
+    expect(sitePage).not.toContain(claimedNodeMajors);
+    expect(installation).toContain("[Compatibility](/docs/compatibility)");
+    expect(readme).toContain(`PostgreSQL **${MINIMUM_POSTGRES_MAJOR} or newer**`);
+    expect(readme).toContain(`Node.js **>= ${MINIMUM_NODE_MAJOR}**`);
   });
 
   it("documents the released version in the changelog", async () => {

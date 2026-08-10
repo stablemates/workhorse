@@ -1,127 +1,89 @@
 ---
-title: Hono
-description: Typed middleware, worker lifecycle, graceful server shutdown, and dashboard mounting with @workhorse/hono.
+title: How do I use Workhorse with Hono?
+description: Add typed queue access, coordinated lifecycle management, and an authorized dashboard mount.
 ---
 
-`@workhorse/hono` owns Workhorse's lifecycle inside one Hono application process: typed middleware,
-worker startup, idempotent graceful shutdown, and an optional dashboard mount.
+`@workhorse/hono` joins a `WorkhorseAdapter` to one Hono process. It provides typed request context,
+worker startup, ordered shutdown, and a dashboard mount.
+
+## Create the runtime
+
+Install the Hono integration with the server packages your application uses.
 
 ```bash
 pnpm add @workhorse/hono hono @hono/node-server
 ```
 
-## Minimal application
+`HonoWorkhorse` accepts an adapter from core or the Drizzle integration. Its worker definitions use
+the same `WorkerOptions` and `Worker.handle` methods as a dedicated process.
 
 ```ts
-import { Hono } from "hono";
-import { installSchema } from "@workhorse/core";
-import { HonoWorkhorse, serveWithWorkhorse } from "@workhorse/hono";
-
-// Installation is an explicit deployment/startup step.
-await installSchema(adapter.database);
+import { HonoWorkhorse } from "@workhorse/hono";
 
 const workhorse = new HonoWorkhorse(adapter, {
   workers: [
     {
-      options: { concurrency: 4 },
       configure(worker) {
-        worker.handle("email.send", async (payload: { to: string }) => ({ delivered: payload.to }));
+        worker.handle("email.send", sendEmail);
       },
     },
   ],
-  onWorkerError: (error, worker) => logger.error({ error }, "worker loop failed"),
 });
-
-const app = new Hono().use(workhorse.middleware()).post("/jobs", async (c) => {
-  const id = await c.var.workhorse.queue.enqueue("email.send", await c.req.json());
-  return c.json({ id }, 202);
-});
-
-const server = await serveWithWorkhorse({ fetch: app.fetch, workhorse, port: 3000 });
-process.once("SIGTERM", () => void server.shutdown());
 ```
 
-`adapter` is any `WorkhorseAdapter`: build it with `createWorkhorseAdapter` from `@workhorse/core` or
-`createDrizzleAdapter` from [`@workhorse/drizzle`](/docs/drizzle).
+Co-hosting workers is useful for small deployments, but HTTP replicas then multiply job capacity.
+Use a dedicated worker process when the two workloads need independent scaling or drains.
 
-## Typed middleware
+## Add typed queue access
 
-`workhorse.middleware()` sets `c.var.workhorse`:
+`workhorse.middleware()` stores `queue` and `forTransaction` on `c.var.workhorse`.
 
 ```ts
-interface HonoWorkhorseContext<TTransaction> {
-  readonly queue: Queue;
-  forTransaction(transaction: TTransaction): Queue;
-}
-```
-
-Enqueue inside a request transaction:
-
-```ts
-app.post("/accounts", async (c) => {
-  const id = await db.transaction(async (tx) => {
-    const account = await createAccount(tx, await c.req.json());
-    await c.var.workhorse.forTransaction(tx).enqueue("account.created", { id: account.id });
-    return account.id;
-  });
-  return c.json({ id }, 201);
+const app = new Hono().use(workhorse.middleware()).post("/jobs", async (context) => {
+  const id = await context.var.workhorse.queue.enqueue("email.send", await context.req.json());
+  return context.json({ id });
 });
 ```
 
-## Lifecycle
+Inside a database transaction, call `forTransaction(transaction)` before enqueue. That keeps the job
+inside the caller's commit boundary.
 
-| Method      | Behavior                                                                  |
-| ----------- | ------------------------------------------------------------------------- |
-| `start()`   | Starts every configured worker once. Idempotent. Run loops go background. |
-| `quiesce()` | Stops new claims and waits for in-flight handlers.                        |
-| `stop()`    | Quiesces, then closes provider-owned resources. Idempotent.               |
+## Coordinate startup and shutdown
 
-A stopped runtime cannot be restarted; construct a new one.
+`serveWithWorkhorse` starts the worker runtime and Hono server together. Its returned `shutdown`
+method stops new connections, quiesces workers, drains requests, and closes adapter resources.
 
-`serveWithWorkhorse` starts workers and the Node server together and returns
-`{ server, shutdown() }`. `shutdown()` is idempotent and orders operations correctly: stop accepting
-connections, quiesce workers, wait for in-flight requests, then close provider-owned resources.
+If server startup fails, the helper stops the runtime before it rethrows. After
+`HonoWorkhorse.stop` closes owned resources, the instance cannot restart.
 
-If server startup throws, `serveWithWorkhorse` stops the runtime before rethrowing, so a failed boot
-does not leak workers or pools.
+## Mount the dashboard behind authorization
 
-## Mounting the dashboard
+`mountWorkhorseDashboard` maps the framework-neutral dashboard host onto a Hono path.
 
 ```ts
 import { mountWorkhorseDashboard } from "@workhorse/hono";
 
 mountWorkhorseDashboard(app, {
-  database: pool,
-  path: "/workhorse", // use "/" to own the host root
+  database: adapter.database,
+  path: "/workhorse",
   environment: "production",
-  authorize: (request) => isAdmin(request),
+  authorize: (request) => isOperator(request),
 });
 ```
 
-The mount owns the configured path: the packaged React application, static assets, and oRPC API.
-Requests outside that path fall through to your own routes untouched.
+The mount owns only its configured path and falls through elsewhere. It needs a database connection,
+not a worker runtime, because workers publish fleet state to PostgreSQL.
 
-It needs only a database connection — never a worker runtime. Workers register
-themselves in PostgreSQL, so this same mount reports a fleet running in entirely separate processes.
-`mountWorkhorseDashboard` is a thin binding over the framework-neutral host in
-`@workhorse/dashboard/server`, which is also what Express, Fastify, Next.js, and SvelteKit use.
+`authorize` must protect every HTML, asset, and RPC request. Workhorse records operator attribution
+but provides no authentication or role model.
 
-<Callout type="warn">
-  `authorize` is **required** and must explicitly authorize every dashboard, RPC, and asset request.
-  Workhorse has no built-in authentication, RBAC, or multi-tenancy.
-</Callout>
+## Next
 
-The mount verifies that the installed schema is compatible and returns `503` when it is not. It never
-installs or migrates database objects.
+- [Drizzle](/docs/drizzle) — create an adapter from a Drizzle database
+- [Dashboard](/docs/dashboard) — understand the framework-neutral host
+- [Deployment and operations](/docs/operations) — decide when workers need their own process
 
-See [Dashboard](/docs/dashboard) for options and the standalone React surface.
+---
 
-## Production caveat
-
-Running workers in your web process is convenient, but it couples job capacity to HTTP replica count
-and couples two unrelated drains. For production, prefer a dedicated worker process; see
-[Workers](/docs/workers) and [Deployment and operations](/docs/operations).
-
-Splitting them costs you nothing on the operator side. The dashboard reads worker identity, declared
-concurrency, slot use, draining, and pause from PostgreSQL, so a mount in your web tier reports and
-controls workers it does not host.
+Exact co-hosted lifecycle and worker process boundaries:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#worker-process-lifecycle).

@@ -1,230 +1,96 @@
 ---
-title: Workers
-description: Handler registration, concurrency, leases and heartbeats, lifecycle controls, and the dedicated worker process.
+title: How should I run workers?
+description: Register handlers, choose process boundaries, control how workers take jobs, and drain active work safely.
 ---
 
-A `Worker` is a bounded-concurrency polling client of the durable protocol. PostgreSQL distributes
-ready rows between workers with `SKIP LOCKED`; each instance claims only enough jobs to fill its local
-slots.
+A `Worker` owns a bounded set of handler executions for one queue. Production deployments should
+place workers in a dedicated process so job capacity can scale independently from HTTP traffic.
 
-## Creating a worker
+## Register handlers
+
+`Worker.handle` associates a job type with an async function. The returned worker supports chained
+registration, while each handler result must be JSON.
 
 ```ts
 import { Worker } from "@workhorse/core";
 
-const worker = new Worker(queue, {
-  queue: "email",
-  concurrency: 4,
-}).handle("email.send", async (payload: { to: string }, context) => {
-  return { deliveredTo: payload.to };
-});
+const worker = new Worker(queue, { queue: "email" }).handle(
+  "email.send",
+  async (payload: { to: string }, context) => {
+    await mailer.send(payload.to, { signal: context.signal });
+    return { deliveredTo: payload.to };
+  },
+);
 
 await worker.run();
 ```
 
-`handle()` returns the worker, so registrations chain. A handler's return value must be
-JSON-serializable and becomes the job's immutable terminal result.
+The `HandlerContext` exposes the claimed job, its `AbortSignal`, checkpoints, waits, and progress.
+Those methods preserve the current fence, so custom handler code cannot accidentally write as a
+stale owner.
 
-## `WorkerOptions`
+## Choose concurrency by policy group
 
-| Option                  | Default                     | Meaning                                                            |
-| ----------------------- | --------------------------- | ------------------------------------------------------------------ |
-| `queue`                 | `"default"`                 | Queue name used for claims                                         |
-| `workerId`              | `<hostname>-<pid>-<random>` | Durable lease owner identity; must be unique among live workers    |
-| `concurrency`           | `1`                         | Integer 1 to 100; concurrent handler executions in this instance   |
-| `leaseMs`               | `30_000`                    | Ownership granted by claim and each accepted heartbeat             |
-| `heartbeatMs`           | `leaseMs / 3`               | Local heartbeat interval; must be less than `leaseMs`              |
-| `pollMs`                | `250`                       | Idle polling delay                                                 |
-| `maintenanceIntervalMs` | `1_000`                     | Minimum delay between tick/schedule passes; at least 100           |
-| `maintenanceTaskPollMs` | `60_000`                    | Minimum delay between background maintenance eligibility checks    |
-| `registryIntervalMs`    | `5_000`                     | Fleet registry refresh cadence; `0` opts out of registration       |
-| `onRegistrationError`   | –                           | Receives registry refresh failures instead of throwing in the loop |
-| `onMaintenance`         | –                           | Receives one telemetry event per SQL maintenance phase             |
-| `scheduleNamespaces`    | `[]`                        | Namespaces whose schedules this worker evaluates                   |
-| `scheduleCatchupLimit`  | `100`                       | Max missed occurrences fired per schedule per pass (1 to 10,000)   |
-| `retryDelayMs`          | –                           | Number or `(attempt, job) => number \| undefined` backoff override |
-| `failpoint`             | –                           | Test-only deterministic crash hook                                 |
+`WorkerOptions.concurrency` limits active handlers in one `Worker`. Replicas multiply that capacity,
+so it is not a process-wide or fleet-wide rate limit.
 
-Invalid combinations throw at construction: `heartbeatMs >= leaseMs`, out-of-range concurrency, and
-cadences below 100 ms are rejected immediately.
+Use one multi-slot worker for handlers that share a queue and operational policy. Add another worker
+when work needs a different queue, lease policy, retry override, schedule namespace, or handler set.
 
-<Callout>
-  Leave `workerId` unset unless you specifically want a recognizable name in operator views. The
-  generated identity is deliberately **unstable across restarts**: it owns leases and attempt
-  history, so it must never be reused by a concurrently running process. Nothing about correctness
-  depends on its stability, because operator pause is scoped to a process incarnation rather than to
-  the name. Hard-coding one value across replicas is a collision, not a convention.
-</Callout>
+Each active job owns its own heartbeat loop and fence generation. The [core concepts](/docs/concepts)
+guide owns the lease explanation; the practical consequence is that one failed slot does not transfer
+ownership from another.
 
-## Handler context
+## Use a dedicated process
+
+`defineWorkerProcess` describes the adapter and worker configurations. `runWorkerProcess` adds signal
+handling and process supervision, while the `workhorse worker` CLI loads the compiled definition.
 
 ```ts
-interface HandlerContext<TPayload> {
-  job: ClaimedJob<TPayload>;
-  signal: AbortSignal;
-  getCheckpoint<T>(name: string): Promise<JobCheckpoint<T> | null>;
-  getWait(name: string): Promise<JobWait | null>;
-  getProgress<T>(): Promise<JobProgress<T> | null>;
-  setProgress<T>(value: T): Promise<JobProgress<T>>;
-  checkpoint<T>(name: string, operation: () => Promise<T> | T): Promise<T>;
-  sleep(name: string, durationMs: number): Promise<void>;
-  sleepUntil(name: string, wakeAt: Date): Promise<void>;
-}
-```
-
-`job` exposes `id`, `type`, `payload`, `attempt`, `maxAttempts`, `retryPolicy`, `deadlineAt`,
-`executionTimeoutMs`, `attemptTimeoutAt`, `fenceToken`, and `leaseExpiresAt`.
-
-`signal` aborts with `CancellationRequestedError`, `DeadlineExceededError`, or `ExecutionTimeoutError`.
-See [Cancellation, deadlines, and timeouts](/docs/cancellation).
-
-## Leases and heartbeats
-
-A claim grants a lease for `leaseMs`. Each active job runs its **own** heartbeat loop and fence
-lifecycle. An accepted heartbeat extends only that job's lease.
-
-Choose values so that:
-
-- `heartbeatMs` is comfortably below `leaseMs` to tolerate event-loop and network jitter;
-- `leaseMs` is short enough to meet your recovery objective after a hard process kill.
-
-If a lease expires, bounded recovery closes the old attempt immutably and creates a new one. The old
-worker's later writes are rejected by fencing.
-
-## Concurrency
-
-`concurrency` is the number of async handler executions one `Worker` may own concurrently. It is:
-
-- not an OS thread count;
-- not a Node worker-thread pool;
-- not a process-global limit;
-- multiplied by the number of worker instances and process replicas claiming the same work.
-
-A claim pass issues one claim at a time, starts each claimed job in its own slot, never claims beyond
-the bound, and stops filling the pass at the first null claim.
-
-```ts
-worker.concurrency; // readonly number
-worker.runtimeState(); // { concurrency, activeSlots, paused, locallyPaused, remotelyPaused, draining }
-```
-
-**Recommendation:** use one multi-slot `Worker` per distinct queue or policy group per process, and
-scale process replicas for availability and aggregate capacity. Do not create one `Worker` per
-concurrency slot.
-
-Add another worker definition only when it needs materially different queue names, handler registries,
-lease or heartbeat policy, schedule namespaces, maintenance behavior, or retry overrides.
-
-## Lifecycle controls
-
-```ts
-worker.pause(); // stop new claims; active handlers and heartbeats continue
-worker.resume(); // reopen claims immediately
-worker.stop(); // stop new claims; run() resolves after active handlers drain
-worker.isPaused();
-await worker.runOnce(); // single claim pass, useful in tests
-```
-
-These are **process-local** controls, and they are not a cross-worker rate limit.
-
-## Fleet registration and remote pause
-
-Every worker announces itself in `workhorse.worker_registry` and refreshes its runtime state on
-`WorkerOptions.registryIntervalMs` (five seconds by default; `0` opts out). The same round trip
-returns the operator-requested pause flag, so an operator surface running in a different process can
-both see and control the fleet.
-
-```ts
-// Names are generated per process incarnation, so resolve them at call time
-// rather than hard-coding one.
-for (const entry of await queue.listWorkers()) {
-  if (entry.queue !== "billing") continue;
-  await queue.setWorkerPaused(entry.workerId, true, {
-    requestedBy: "operator",
-    reason: "rolling deploy",
-  });
-}
-```
-
-Operator pause is cooperative and durable, exactly like cancellation:
-
-- it takes effect when the worker next refreshes, roughly one `registryIntervalMs`;
-- a handler already executing runs to completion;
-- it is scoped to the running process: a restarted or replaced worker comes back running, so a
-  pause cannot silently idle a worker after a later deployment. Use queue pause to stop work
-  durably;
-- a local `worker.resume()` cannot clear it while it is still in effect — `runtimeState()` reports
-  `locallyPaused` and `remotelyPaused` separately for exactly this reason;
-- `requestedBy` and `reason` are bounded attribution, never authorization.
-
-A worker that stops refreshing is reported offline and eventually pruned. Graceful shutdown
-deregisters. The registry holds one row per live worker and is never read by the claim path.
-
-Reported slot use is only as fresh as the refresh cadence. Treat it as an operational indicator, not
-as a synchronous read of another process's event loop.
-
-## Maintenance telemetry
-
-```ts
-const worker = new Worker(queue, {
-  onMaintenance: (telemetry) => {
-    // { loop, phase, rowsAffected, durationMs, skippedLock, error, observedAt }
-    metrics.record(telemetry);
-  },
-});
-
-worker.maintenanceTelemetry(); // latest event per loop
-```
-
-`loop` is one of `tick`, `history_partitions`, `history_retention`, or `terminal_storage`.
-
-## Dedicated worker processes
-
-Production deployments should run workers in their own process. Define the process once:
-
-```ts
-// src/workhorse.worker.ts
 import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse/core";
-import { Pool } from "pg";
-import { generateReport, sendEmail } from "./jobs.js";
 
 export default defineWorkerProcess({
-  adapter() {
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
-    return createWorkhorseAdapter({
-      database: pool,
-      adaptTransaction: (transaction: typeof pool) => transaction,
-      close: () => pool.end(),
-    });
-  },
+  adapter: () => createWorkhorseAdapter(adapterOptions),
   workers: [
     {
-      options: { concurrency: 8, scheduleNamespaces: ["production"] },
+      options: { queue: "email" },
       configure(worker) {
         worker.handle("email.send", sendEmail);
-        worker.handle("report.generate", generateReport);
       },
     },
   ],
-  shutdownTimeoutMs: 25_000,
-  probes: { hostname: "0.0.0.0", port: 9090 },
 });
 ```
 
-Run the compiled module with the packaged CLI:
+The process owns its database resources, worker loops, optional probes, and shutdown. Compile the
+configuration before the CLI imports it because the CLI does not install a TypeScript loader.
 
-```bash
-workhorse worker --config ./dist/workhorse.worker.js --shutdown-timeout-ms 25000
-```
+## Pause and stop for different reasons
 
-The CLI imports JavaScript understood by the current Node.js process. It does not bundle a TypeScript
-loader, so production should run compiled output.
+`Worker.pause` stops the local worker from asking for jobs while active handlers continue.
+`Worker.resume` lets it ask again, and `Worker.stop` drains active work before `run` resolves.
 
-Applications that own their own supervision can use the APIs directly:
+`Queue.setWorkerPaused` stores an operator request in `worker_registry`. A worker receives it during
+registration refresh, so a dashboard can pause a process that runs elsewhere.
 
-- `defineWorkerProcess(definition)` type-checks and returns a configuration.
-- `startWorkerProcess(definition)` starts workers without installing global signal handlers.
-- `runWorkerProcess(definition, options)` installs the standalone Node process lifecycle.
+When an operator asks a worker to pause, the request belongs to one process incarnation. Use
+`Queue.pauseQueue` when a replacement worker must also stop asking for work.
 
-Signal handling, probe endpoints, drain deadlines, and deployment manifests are covered in
-[Deployment and operations](/docs/operations).
+## Read fleet state carefully
+
+`Queue.listWorkers` reads the durable registry, while `Worker.runtimeState` reads the local process.
+Registry slot counts are recent observations rather than synchronous views of another event loop.
+
+Unless a process manager guarantees uniqueness, leave `workerId` generated. Reusing one identity
+across live replicas creates an ownership collision.
+
+## Next
+
+- [Deployment and operations](/docs/operations) — supervise and drain the worker process
+- [Cancellation](/docs/cancellation) — make handlers stop cooperatively
+- [Schedules](/docs/schedules) — let workers evaluate recurring work
+
+---
+
+Exact worker options, registry fields, heartbeat behavior, and process lifecycle:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#worker-concurrency-and-lifecycle).
