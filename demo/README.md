@@ -43,19 +43,19 @@ Prerequisites are Node.js 22+, pnpm 10+, workspace dependencies installed with `
 PostgreSQL 15+ with the local `workhorse` role described in the root README. No PostgreSQL extensions are
 required; recurring work runs through the workers themselves.
 
-The demo exports OpenTelemetry traces and metrics to the local SigNoz collector. Install the supported
-SigNoz Foundry CLI, then create the loopback-only Docker stack from the repository root:
+The observability demo exports OpenTelemetry traces and metrics to a local SigNoz collector. Install the
+supported SigNoz Foundry CLI, then start SigNoz and the instrumented demo from the repository root:
 
 ```bash
 curl -fsSL https://signoz.io/foundry.sh | bash
-pnpm signoz:up
+pnpm demo:otel
 ```
 
 Open SigNoz at `http://localhost:3301`. The server and worker appear as separate services, while HTTP,
 PostgreSQL, Node.js runtime, and Workhorse maintenance telemetry share the same local OTLP endpoint. Run
-`pnpm signoz:down` to stop the containers without deleting their volumes. Set
-`WORKHORSE_DEMO_TELEMETRY=false` to run the demo without exporting telemetry. The loopback-only local
-stack uses SigNoz impersonation mode, so any process on this machine has administrator access to it.
+`pnpm signoz:down` to stop the containers without deleting their volumes. Plain `pnpm demo` does not
+initialize OpenTelemetry or require SigNoz. The loopback-only local stack uses SigNoz impersonation mode,
+so any process on this machine has administrator access to it.
 
 From the repository root, run the complete demo with one command:
 
