@@ -1,11 +1,28 @@
-import { WorkhorseMetricsObserver, type Queryable } from "@workhorse/core";
+import {
+  registerQueueMetrics,
+  WorkhorseMetricsObserver,
+  type Queryable,
+  type QueueMetricSource,
+} from "@workhorse/core";
 
-/** Start the single database-wide observer only for the OpenTelemetry demo command. */
+export interface DemoMetricsObserver {
+  stop(): void;
+}
+
+/** Start database-wide metric observations only for the OpenTelemetry demo command. */
 export function startDemoMetricsObserver(
   database: Queryable,
-): WorkhorseMetricsObserver | undefined {
+  queueMetrics: QueueMetricSource,
+): DemoMetricsObserver | undefined {
   if (process.env.WORKHORSE_DEMO_TELEMETRY !== "true") return undefined;
-  return new WorkhorseMetricsObserver(database, {
+  const observer = new WorkhorseMetricsObserver(database, {
     onError: (error) => console.error("Workhorse metrics collection failed", error),
   }).start();
+  const unregisterQueueMetrics = registerQueueMetrics(queueMetrics);
+  return {
+    stop() {
+      unregisterQueueMetrics();
+      observer.stop();
+    },
+  };
 }
