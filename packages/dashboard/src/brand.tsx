@@ -1,6 +1,6 @@
 import { Box, Group, type BoxProps } from "@mantine/core";
-import workhorseMarkUrl from "./assets/workhorse-mark.png";
-import workhorseWordmarkUrl from "./assets/workhorse-wordmark.png";
+import workhorseMarkUrl from "./assets/workhorse-mark.svg";
+import workhorseWordmarkUrl from "./assets/workhorse-wordmark.svg";
 
 interface WorkhorseMarkProps extends BoxProps {
   label?: string;
