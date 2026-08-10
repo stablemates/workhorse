@@ -59,7 +59,14 @@ import type {
   WorkerRegistryEntry,
   TraceContext,
 } from "./types.js";
-import { injectTraceContext, jobSpanAttributes, telemetryMetrics, withSpan } from "./telemetry.js";
+import {
+  injectTraceContext,
+  jobMetricAttributes,
+  jobSpanAttributes,
+  telemetryMetrics,
+  type QueueMetricSnapshot,
+  withSpan,
+} from "./telemetry.js";
 
 export interface ScheduleJobDefinition {
   type: string;
@@ -315,9 +322,13 @@ type MaintenancePhaseRow = {
   error: Json;
   expired_leases: number;
   retried: number;
+  retry_dimensions: Array<{ queue: string; type: string }>;
 };
 
-type RecoveryTelemetry = Pick<MaintenancePhaseRow, "rows_affected" | "expired_leases" | "retried">;
+type RecoveryTelemetry = Pick<
+  MaintenancePhaseRow,
+  "rows_affected" | "expired_leases" | "retried" | "retry_dimensions"
+>;
 
 type RetentionPolicyRow = {
   job_identity_retention_days: number | null;
@@ -359,7 +370,30 @@ function recordRecoveryTelemetry(span: Span, recovery: RecoveryTelemetry): void 
     "workhorse.recovery.retried": recovery.retried,
   });
   telemetryMetrics.expiredLeases.add(recovery.expired_leases);
-  telemetryMetrics.retried.add(recovery.retried);
+  const retriesByJob = new Map<string, { count: number; queue: string; type: string }>();
+  for (const dimension of recovery.retry_dimensions ?? []) {
+    const key = `${dimension.queue}\u0000${dimension.type}`;
+    const existing = retriesByJob.get(key);
+    if (existing === undefined) {
+      retriesByJob.set(key, { count: 1, ...dimension });
+    } else {
+      existing.count += 1;
+    }
+  }
+  let attributedRetries = 0;
+  for (const retry of retriesByJob.values()) {
+    attributedRetries += retry.count;
+    telemetryMetrics.retried.add(retry.count, {
+      "workhorse.queue.name": retry.queue,
+      "workhorse.job.type": retry.type,
+    });
+  }
+  if (attributedRetries < recovery.retried) {
+    telemetryMetrics.retried.add(recovery.retried - attributedRetries, {
+      "workhorse.queue.name": "unknown",
+      "workhorse.job.type": "unknown",
+    });
+  }
 }
 
 function claimedTimestamp(value: Date | string, field: string): Date {
@@ -1181,13 +1215,26 @@ export class Queue {
           };
         });
         try {
-          const result = await transaction.query<{ job_id: string }>(
-            "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+          const result = await transaction.query<{
+            ordinal: number;
+            job_id: string;
+            accepted: boolean;
+          }>(
+            "SELECT ordinal, job_id, accepted FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
             [JSON.stringify(input)],
           );
           const jobIds = result.rows.map((row) => row.job_id);
-          recordEnqueuedJobs(input);
-          telemetryMetrics.enqueued.add(jobIds.length);
+          recordEnqueuedJobs(
+            result.rows.filter((row) => row.accepted).map((row) => input[row.ordinal - 1]!),
+          );
+          for (const row of result.rows) {
+            if (!row.accepted) continue;
+            const request = requests[row.ordinal - 1]!;
+            telemetryMetrics.enqueued.add(1, {
+              "workhorse.queue.name": request.options?.queue ?? this.defaultQueue,
+              "workhorse.job.type": request.type,
+            });
+          }
           if (jobIds.length === 1) span.setAttribute("workhorse.job.id", jobIds[0]!);
           return jobIds;
         } catch (error) {
@@ -1955,6 +2002,7 @@ export class Queue {
       );
       const row = result.rows[0];
       telemetryMetrics.claimDuration.record(performance.now() - startedAt, {
+        "workhorse.queue.name": queueName,
         "workhorse.claim.result": row === undefined ? "empty" : "claimed",
       });
       if (!row) return null;
@@ -1963,10 +2011,14 @@ export class Queue {
         "workhorse.job.type": row.job_type,
         "workhorse.job.attempt": row.attempt,
       });
-      telemetryMetrics.claimed.add(1);
       recordClaimedJob(queueName, row.job_type);
+      telemetryMetrics.claimed.add(1, {
+        "workhorse.queue.name": queueName,
+        "workhorse.job.type": row.job_type,
+      });
       return {
         id: row.job_id,
+        queue: queueName,
         type: row.job_type,
         payload: row.payload as TPayload,
         contractVersion: row.contract_version,
@@ -2022,7 +2074,7 @@ export class Queue {
     if (expiration.retry_state !== null) {
       await withSpan("workhorse.retry", jobSpanAttributes(job), async (span) => {
         span.setAttribute("workhorse.retry.outcome", expiration.retry_state!);
-        telemetryMetrics.retried.add(1);
+        telemetryMetrics.retried.add(1, jobMetricAttributes(job));
       });
     }
     return expiration.status;
@@ -2249,7 +2301,7 @@ export class Queue {
       );
       const accepted = query.rows[0]!.accepted;
       span.setAttribute("workhorse.complete.accepted", accepted);
-      if (accepted) telemetryMetrics.completed.add(1);
+      if (accepted) telemetryMetrics.completed.add(1, jobMetricAttributes(job));
       return accepted;
     });
   }
@@ -2290,8 +2342,13 @@ export class Queue {
       ]);
       const state = result.rows[0]!.state;
       span.setAttribute("workhorse.retry.outcome", state);
-      telemetryMetrics.failed.add(1);
-      if (state === "ready" || state === "scheduled") telemetryMetrics.retried.add(1);
+      telemetryMetrics.failed.add(1, {
+        ...jobMetricAttributes(job),
+        "workhorse.attempt.outcome": state,
+      });
+      if (state === "ready" || state === "scheduled") {
+        telemetryMetrics.retried.add(1, jobMetricAttributes(job));
+      }
       return state;
     });
   }
@@ -2304,6 +2361,7 @@ export class Queue {
         rows_affected: number;
         expired_leases: number;
         retried: number;
+        retry_dimensions: Array<{ queue: string; type: string }>;
       }>("SELECT * FROM workhorse.recover_expired_telemetry_v1($1, $2)", [
         limit,
         retryDelayMs ?? null,
@@ -2827,5 +2885,42 @@ export class Queue {
       lockWaitCount: Number(activity.rows[0]?.lock_wait_count ?? 0),
       notificationQueueUsage: Number(notification.rows[0]?.usage ?? 0),
     };
+  }
+
+  /** Read the per-queue live pressure used by OpenTelemetry observable instruments. */
+  async queueMetricSnapshot(): Promise<QueueMetricSnapshot[]> {
+    const result = await this.database.query<{
+      queue_name: string;
+      ready: string;
+      scheduled: string;
+      active: string;
+      oldest_ready_age_ms: number | null;
+    }>(
+      `WITH queue_names AS (
+         SELECT $1::text AS queue_name
+         UNION SELECT queue_name FROM workhorse.job_runtime
+         UNION SELECT queue_name FROM workhorse.queue_control
+         UNION SELECT queue_name FROM workhorse.worker_registry
+       )
+       SELECT names.queue_name,
+              count(runtime.job_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
+              count(runtime.job_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
+              count(runtime.job_id) FILTER (WHERE runtime.state = 'active')::text AS active,
+              extract(epoch FROM clock_timestamp() - min(runtime.ready_at) FILTER (
+                WHERE runtime.state = 'ready'
+              )) * 1000 AS oldest_ready_age_ms
+         FROM queue_names names
+         LEFT JOIN workhorse.job_runtime runtime ON runtime.queue_name = names.queue_name
+        GROUP BY names.queue_name
+        ORDER BY names.queue_name`,
+      [this.defaultQueue],
+    );
+    return result.rows.map((row) => ({
+      queue: row.queue_name,
+      readyDepth: Number(row.ready),
+      scheduledDepth: Number(row.scheduled),
+      activeLeases: Number(row.active),
+      oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
+    }));
   }
 }

@@ -573,10 +573,12 @@ describe("live-runtime queue protocol", () => {
       rows_affected: number;
       expired_leases: number;
       retried: number;
+      retry_dimensions: Array<{ queue: string; type: string }>;
     }>("SELECT * FROM workhorse.tick_v1(100, 100)");
     const recovery = tick.rows.find((row) => row.phase === "recover");
 
     expect(recovery).toMatchObject({ rows_affected: 2, expired_leases: 2, retried: 1 });
+    expect(recovery?.retry_dimensions).toEqual([{ queue: "default", type: "telemetry-retry" }]);
     expect((await queue.getJob(retryId))?.state).toBe("ready");
     expect((await queue.getJob(terminalId))?.state).toBe("failed");
   });
@@ -6434,6 +6436,15 @@ describe("live-runtime queue protocol", () => {
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
     expect(health.lockWaitCount).toBeGreaterThanOrEqual(0);
     expect(health.notificationQueueUsage).toBeGreaterThanOrEqual(0);
+    expect(await queue.queueMetricSnapshot()).toEqual([
+      {
+        queue: "default",
+        readyDepth: 1,
+        scheduledDepth: 2,
+        activeLeases: 0,
+        oldestReadyAgeMs: expect.any(Number),
+      },
+    ]);
   });
 
   it("round trips retention policy defaults and rejects unsafe or malformed policies in PostgreSQL", async () => {

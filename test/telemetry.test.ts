@@ -66,12 +66,21 @@ function queryable(
 describe("OpenTelemetry", () => {
   it("persists the enqueue span context outside the payload and restores it on claim", async () => {
     spanExporter.reset();
+    metricExporter.reset();
     let acceptedRequest: Record<string, unknown> | undefined;
     const database = queryable(
       vi.fn(async (sql: string, values?: readonly unknown[]) => {
         if (sql.includes("enqueue_many_v1")) {
           acceptedRequest = JSON.parse(values?.[0] as string)[0] as Record<string, unknown>;
-          return { rows: [{ job_id: "00000000-0000-4000-8000-000000000001" }] as never[] };
+          return {
+            rows: [
+              {
+                ordinal: 1,
+                job_id: "00000000-0000-4000-8000-000000000001",
+                accepted: true,
+              },
+            ] as never[],
+          };
         }
         if (sql.includes("claim_v1")) {
           return {
@@ -145,10 +154,26 @@ describe("OpenTelemetry", () => {
 
     const extracted = propagation.extract(context.active(), claimed!.traceContext, carrierGetter);
     expect(trace.getSpanContext(extracted)?.spanId).toBe(enqueueSpan?.spanContext().spanId);
+
+    await meterProvider.forceFlush();
+    const enqueuedMetric = metricExporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics)
+      .flatMap((scope) => scope.metrics)
+      .find((metric) => metric.descriptor.name === "workhorse.jobs.enqueued");
+    expect(enqueuedMetric?.dataPoints).toContainEqual(
+      expect.objectContaining({
+        attributes: {
+          "workhorse.job.type": "mail.send",
+          "workhorse.queue.name": "mail",
+        },
+      }),
+    );
   });
 
   it("runs the handler and completion spans under the persisted remote parent", async () => {
     spanExporter.reset();
+    metricExporter.reset();
     const traceContext = {
       traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
     };
@@ -210,6 +235,66 @@ describe("OpenTelemetry", () => {
       "workhorse.job.attempt": 2,
     });
     expect(completionSpan?.parentSpanContext?.spanId).toBe(handlerSpan?.spanContext().spanId);
+
+    await meterProvider.forceFlush();
+    const metricsData = metricExporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics)
+      .flatMap((scope) => scope.metrics);
+    for (const metricName of [
+      "workhorse.jobs.claimed",
+      "workhorse.jobs.completed",
+      "workhorse.handler.duration",
+      "workhorse.handler.runtime",
+    ]) {
+      const metric = metricsData.find((candidate) => candidate.descriptor.name === metricName);
+      expect(metric?.dataPoints).toContainEqual(
+        expect.objectContaining({
+          attributes: {
+            "workhorse.job.type": "mail.send",
+            "workhorse.queue.name": "mail",
+          },
+        }),
+      );
+    }
+  });
+
+  it("does not count an idempotent replay as a newly enqueued job", async () => {
+    metricExporter.reset();
+    const database = queryable(
+      vi.fn(async (sql: string) => {
+        expect(sql).toContain("enqueue_many_v1");
+        return {
+          rows: [
+            {
+              ordinal: 1,
+              job_id: "00000000-0000-4000-8000-000000000004",
+              accepted: false,
+            },
+          ] as never[],
+        };
+      }),
+    );
+
+    await new Queue(database, "mail").enqueue(
+      "mail.replayed",
+      {},
+      {
+        idempotency: { key: "same-request" },
+      },
+    );
+    await meterProvider.forceFlush();
+
+    const enqueuedMetric = metricExporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics)
+      .flatMap((scope) => scope.metrics)
+      .find((metric) => metric.descriptor.name === "workhorse.jobs.enqueued");
+    expect(enqueuedMetric?.dataPoints).not.toContainEqual(
+      expect.objectContaining({
+        attributes: expect.objectContaining({ "workhorse.job.type": "mail.replayed" }),
+      }),
+    );
   });
 
   it("redacts sensitive handler errors before traces and failure persistence", async () => {
@@ -302,6 +387,10 @@ describe("OpenTelemetry", () => {
               error: null,
               expired_leases: 3,
               retried: 2,
+              retry_dimensions: [
+                { queue: "mail", type: "mail.recover" },
+                { queue: "mail", type: "mail.recover" },
+              ],
             },
           ] as never[],
         };
@@ -328,9 +417,16 @@ describe("OpenTelemetry", () => {
         ?.dataPoints[0]?.value,
     ).toBe(3);
     expect(
-      metricsData.find((metric) => metric.descriptor.name === "workhorse.jobs.retried")
-        ?.dataPoints[0]?.value,
-    ).toBe(2);
+      metricsData.find((metric) => metric.descriptor.name === "workhorse.jobs.retried")?.dataPoints,
+    ).toContainEqual(
+      expect.objectContaining({
+        value: 2,
+        attributes: {
+          "workhorse.job.type": "mail.recover",
+          "workhorse.queue.name": "mail",
+        },
+      }),
+    );
   });
 
   it("emits retry telemetry when a worker-owned execution timeout starts another attempt", async () => {
@@ -346,6 +442,7 @@ describe("OpenTelemetry", () => {
     );
     const job: ClaimedJob = {
       id: "00000000-0000-4000-8000-000000000003",
+      queue: "mail",
       type: "mail.send",
       payload: { recipient: "reader@example.com" },
       contractVersion: null,
@@ -379,18 +476,35 @@ describe("OpenTelemetry", () => {
       .flatMap((resource) => resource.scopeMetrics)
       .flatMap((scope) => scope.metrics)
       .find((metric) => metric.descriptor.name === "workhorse.jobs.retried");
-    expect(retriedMetric?.dataPoints[0]?.value).toBeGreaterThan(0);
+    expect(retriedMetric?.dataPoints).toContainEqual(
+      expect.objectContaining({
+        attributes: {
+          "workhorse.job.type": "mail.send",
+          "workhorse.queue.name": "mail",
+        },
+      }),
+    );
   });
 
-  it("exports queue depth and age with only fixed-cardinality metric attributes", async () => {
+  it("exports queue depth and age without per-job metric attributes", async () => {
     metricExporter.reset();
     const unregister = registerQueueMetrics({
-      health: vi.fn<QueueMetricSource["health"]>(async () => ({
-        readyDepth: 7,
-        scheduledDepth: 3,
-        activeLeases: 2,
-        oldestReadyAgeMs: 1_250,
-      })),
+      queueMetricSnapshot: vi.fn<QueueMetricSource["queueMetricSnapshot"]>(async () => [
+        {
+          queue: "mail",
+          readyDepth: 7,
+          scheduledDepth: 3,
+          activeLeases: 2,
+          oldestReadyAgeMs: 1_250,
+        },
+        {
+          queue: "billing",
+          readyDepth: 1,
+          scheduledDepth: 0,
+          activeLeases: 4,
+          oldestReadyAgeMs: 250,
+        },
+      ]),
     });
 
     await meterProvider.forceFlush();
@@ -407,19 +521,29 @@ describe("OpenTelemetry", () => {
     expect(metricsData.map((metric) => metric.descriptor.name)).toContain("workhorse.queue.depth");
     expect(depth?.dataPoints).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ value: 7, attributes: { "workhorse.job.state": "ready" } }),
-        expect.objectContaining({ value: 3, attributes: { "workhorse.job.state": "scheduled" } }),
-        expect.objectContaining({ value: 2, attributes: { "workhorse.job.state": "active" } }),
+        expect.objectContaining({
+          value: 7,
+          attributes: { "workhorse.job.state": "ready", "workhorse.queue.name": "mail" },
+        }),
+        expect.objectContaining({
+          value: 3,
+          attributes: { "workhorse.job.state": "scheduled", "workhorse.queue.name": "mail" },
+        }),
+        expect.objectContaining({
+          value: 4,
+          attributes: { "workhorse.job.state": "active", "workhorse.queue.name": "billing" },
+        }),
       ]),
     );
     expect(age?.dataPoints).toContainEqual(
-      expect.objectContaining({ value: 1_250, attributes: {} }),
+      expect.objectContaining({
+        value: 1_250,
+        attributes: { "workhorse.queue.name": "mail" },
+      }),
     );
     for (const metric of metricsData) {
       for (const point of metric.dataPoints) {
         expect(Object.keys(point.attributes)).not.toContain("workhorse.job.id");
-        expect(Object.keys(point.attributes)).not.toContain("workhorse.job.type");
-        expect(Object.keys(point.attributes)).not.toContain("workhorse.queue.name");
       }
     }
   });
