@@ -20,6 +20,7 @@ import {
   readDashboardActivity,
   readDashboardCron,
   readDashboardEvents,
+  readDashboardEventDetail,
   readDashboardJobDetail,
   readDashboardQueues,
   readDashboardSystem,
@@ -63,6 +64,7 @@ const cancellationAuditSchema = z.object({
 });
 
 const jobDetailInput = z.object({ id: z.uuid() });
+const eventDetailInput = z.object({ id: z.string().regex(/^(event|attempt):\d+$/) });
 const taskFilter = z.enum([
   "all",
   "scheduled",
@@ -201,6 +203,11 @@ export const dashboardRouter = {
     events: procedure
       .input(eventsInput)
       .handler(({ context, input }) => readDashboardEvents(context.database, input)),
+    eventDetail: procedure.input(eventDetailInput).handler(async ({ context, input }) => {
+      const detail = await readDashboardEventDetail(context.database, input.id);
+      if (!detail) throw new ORPCError("NOT_FOUND", { message: "Event not found" });
+      return detail;
+    }),
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),
     ),

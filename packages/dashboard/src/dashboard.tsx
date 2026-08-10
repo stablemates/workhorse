@@ -73,6 +73,8 @@ import {
 } from "react";
 import type { RetryPolicy } from "@workhorse/core";
 import {
+  dashboardAttemptOutcomes,
+  dashboardJobEventTypes,
   describeCancellationRequest,
   describeCancelOutcome,
   describeIdempotency,
@@ -88,6 +90,7 @@ import { describeDurableBoundary, readTaskResultEvidence, type TaskResultState }
 import type {
   DashboardCancellationRequest,
   DashboardCronPage,
+  DashboardEventDetail,
   DashboardEventRow,
   DashboardEventsPage,
   DashboardEventsWindow,
@@ -119,6 +122,12 @@ import {
   startDashboardPolling,
   type DashboardRefreshIntervalValue,
 } from "./refresh-policy.js";
+import {
+  eventsListingKey,
+  eventsLocationHref,
+  parseEventsLocation,
+  type EventsLocationState,
+} from "./events-location.js";
 import {
   parseTaskLocation,
   taskDetailNavigation,
@@ -332,6 +341,7 @@ function mountedHref(basePath: string, href: string): string {
 
 function readLocation(basePath = ""): {
   route: PageRoute;
+  events: EventsLocationState;
 } & TaskLocationState {
   const pathname =
     basePath && window.location.pathname.startsWith(`${basePath}/`)
@@ -344,7 +354,8 @@ function readLocation(basePath = ""): {
   const storedGroup = localStorage.getItem("workhorse-activity-group") as ActivityGroupBy | null;
   return {
     route,
-    ...parseTaskLocation(window.location.search, {
+    events: parseEventsLocation(window.location.search),
+    ...parseTaskLocation(route === "/events" ? "" : window.location.search, {
       period: storedPeriod && activityPeriods.includes(storedPeriod) ? storedPeriod : "1h",
       group:
         storedGroup && activityGroupings.some(({ value }) => value === storedGroup)
@@ -3921,23 +3932,23 @@ function EventsPage({
   data,
   query,
   setQuery,
-  inspectJob,
+  inspectEvent,
 }: {
   data: DashboardEventsPage;
-  query: EventsQueryState;
-  setQuery: (next: EventsQueryState) => void;
-  inspectJob: (id: string) => void;
+  query: EventsLocationState;
+  setQuery: (next: EventsLocationState) => void;
+  inspectEvent: (event: DashboardEventRow) => void;
 }) {
-  const queueOptions = includeSelectedOption(
-    uniqueSorted(data.events.map((event) => event.queue)),
-    query.queue,
-  );
-  const typeOptions = includeSelectedOption(
-    uniqueSorted(data.events.map((event) => event.jobType)),
-    query.jobType,
-  );
+  const eventFacets = useTaskFacets({
+    queue: query.queue,
+    worker: null,
+    jobType: query.jobType,
+    tags: [],
+  });
+  const queueOptions = includeSelectedOption(eventFacets.facets.queues, query.queue);
+  const typeOptions = includeSelectedOption(eventFacets.facets.jobTypes, query.jobType);
   const eventTypeOptions = includeSelectedOptions(
-    uniqueSorted(data.events.map((event) => event.type)),
+    uniqueSorted([...dashboardJobEventTypes, ...dashboardAttemptOutcomes]),
     query.types,
   );
   const retentionNote = [
@@ -3950,8 +3961,10 @@ function EventsPage({
   ].join(", ");
   // Any change to what is being asked for returns to the first page: page 4 of the old filter
   // addresses nothing in the new result set.
-  const filter = (next: Partial<EventsQueryState>) => setQuery({ ...query, ...next, page: 1 });
+  const filter = (next: Partial<EventsLocationState>) =>
+    setQuery({ ...query, ...next, page: 1, eventId: null });
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
+  const facetMessage = eventFacets.loading ? "Loading filters…" : eventFacets.error;
 
   return (
     <Stack gap="xl">
@@ -3980,7 +3993,7 @@ function EventsPage({
               size="xs"
               value={query.kind}
               data={eventsKindOptions}
-              onChange={(value) => filter({ kind: value as EventsQueryState["kind"] })}
+              onChange={(value) => filter({ kind: value as EventsLocationState["kind"] })}
             />
           </Box>
           <Select
@@ -3993,6 +4006,9 @@ function EventsPage({
             data={queueOptions}
             value={query.queue}
             onChange={(value) => filter({ queue: value })}
+            onDropdownOpen={eventFacets.load}
+            rightSection={eventFacets.loading ? <Loader size={14} /> : undefined}
+            nothingFoundMessage={facetMessage ?? "No queues found"}
           />
           <Select
             size="xs"
@@ -4004,6 +4020,9 @@ function EventsPage({
             data={typeOptions}
             value={query.jobType}
             onChange={(value) => filter({ jobType: value })}
+            onDropdownOpen={eventFacets.load}
+            rightSection={eventFacets.loading ? <Loader size={14} /> : undefined}
+            nothingFoundMessage={facetMessage ?? "No task types found"}
           />
           <MultiSelect
             size="xs"
@@ -4024,7 +4043,7 @@ function EventsPage({
             data={["25", "50", "100"]}
             value={String(query.pageSize)}
             onChange={(value) =>
-              filter({ pageSize: Number(value ?? 50) as EventsQueryState["pageSize"] })
+              filter({ pageSize: Number(value ?? 50) as EventsLocationState["pageSize"] })
             }
           />
         </Group>
@@ -4043,24 +4062,34 @@ function EventsPage({
             <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1100}>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th w={150}>When</Table.Th>
-                  <Table.Th w={190}>Event</Table.Th>
-                  <Table.Th w={90}>ID</Table.Th>
-                  <Table.Th>Task</Table.Th>
-                  <Table.Th w={140}>Queue</Table.Th>
-                  <Table.Th w={80} ta="right">
+                  <Table.Th w={150} style={{ whiteSpace: "nowrap" }}>
+                    When
+                  </Table.Th>
+                  <Table.Th w={190} style={{ whiteSpace: "nowrap" }}>
+                    Event
+                  </Table.Th>
+                  <Table.Th w={90} style={{ whiteSpace: "nowrap" }}>
+                    ID
+                  </Table.Th>
+                  <Table.Th style={{ whiteSpace: "nowrap" }}>Task</Table.Th>
+                  <Table.Th w={140} style={{ whiteSpace: "nowrap" }}>
+                    Queue
+                  </Table.Th>
+                  <Table.Th w={80} ta="right" style={{ whiteSpace: "nowrap" }}>
                     Attempt
                   </Table.Th>
-                  <Table.Th w={160}>Worker</Table.Th>
-                  <Table.Th w={110} ta="right">
+                  <Table.Th w={160} style={{ whiteSpace: "nowrap" }}>
+                    Worker
+                  </Table.Th>
+                  <Table.Th w={110} ta="right" style={{ whiteSpace: "nowrap" }}>
                     Duration
                   </Table.Th>
-                  <Table.Th>Detail</Table.Th>
+                  <Table.Th w={280}>Detail</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
                 {data.events.map((event) => (
-                  <EventRow key={event.id} event={event} inspectJob={inspectJob} />
+                  <EventRow key={event.id} event={event} inspectEvent={inspectEvent} />
                 ))}
               </Table.Tbody>
             </Table>
@@ -4071,7 +4100,7 @@ function EventsPage({
         <Group justify="space-between" wrap="wrap" gap="xs">
           <Pagination
             value={Math.min(data.page, totalPages)}
-            onChange={(page) => setQuery({ ...query, page })}
+            onChange={(page) => setQuery({ ...query, page, eventId: null })}
             total={totalPages}
             size="xs"
             aria-label="Events pagination"
@@ -4096,20 +4125,32 @@ function EventsPage({
 
 function EventRow({
   event,
-  inspectJob,
+  inspectEvent,
 }: {
   event: DashboardEventRow;
-  inspectJob: (id: string) => void;
+  inspectEvent: (event: DashboardEventRow) => void;
 }) {
   const detail = event.errorMessage ?? eventDetailSummary(event.details);
   return (
-    <Table.Tr>
-      <Table.Td>
+    <Table.Tr
+      onClick={() => inspectEvent(event)}
+      onKeyDown={(keyboardEvent) => {
+        if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
+          keyboardEvent.preventDefault();
+          inspectEvent(event);
+        }
+      }}
+      tabIndex={0}
+      role="button"
+      aria-label={`Inspect ${event.type.replaceAll("_", " ")} event for ${event.jobType ?? event.jobId}`}
+      style={{ cursor: "pointer" }}
+    >
+      <Table.Td style={{ whiteSpace: "nowrap" }}>
         <Tooltip label={formatExact(event.occurredAt)} withArrow>
           <Text size="sm">{formatRelative(event.occurredAt)}</Text>
         </Tooltip>
       </Table.Td>
-      <Table.Td>
+      <Table.Td style={{ whiteSpace: "nowrap" }}>
         <Group gap={6} wrap="nowrap">
           <Badge color={eventTypeColor(event.type)} variant="light" style={{ flexShrink: 0 }}>
             {event.type.replaceAll("_", " ")}
@@ -4125,17 +4166,13 @@ function EventRow({
       </Table.Td>
       {/* The identifier is abbreviated to the prefix a person actually reads, with the whole value
           on the title so it stays copyable in full from the drawer the click opens. */}
-      <Table.Td>
+      <Table.Td style={{ whiteSpace: "nowrap" }}>
         <Code
-          component="button"
           fz="xs"
           c="blue"
           title={event.jobId}
-          onClick={() => inspectJob(event.jobId)}
           style={{
             background: "transparent",
-            border: "none",
-            cursor: "pointer",
             paddingBlock: 0,
             paddingInline: 0,
           }}
@@ -4146,7 +4183,7 @@ function EventRow({
       <Table.Td style={{ whiteSpace: "nowrap" }}>
         <Text size="sm">{event.jobType ?? "—"}</Text>
       </Table.Td>
-      <Table.Td>
+      <Table.Td style={{ whiteSpace: "nowrap" }}>
         <Text size="sm">
           {event.queue ?? (
             <Text component="span" c="dimmed" fz="xs">
@@ -4155,21 +4192,21 @@ function EventRow({
           )}
         </Text>
       </Table.Td>
-      <Table.Td ta="right">
+      <Table.Td ta="right" style={{ whiteSpace: "nowrap" }}>
         <Text size="sm">{event.attempt ?? "—"}</Text>
       </Table.Td>
-      <Table.Td>
+      <Table.Td style={{ whiteSpace: "nowrap", maxWidth: 160 }}>
         <Text size="sm" truncate>
           {event.workerId ?? "—"}
         </Text>
       </Table.Td>
-      <Table.Td ta="right">
+      <Table.Td ta="right" style={{ whiteSpace: "nowrap" }}>
         <Text size="sm">{formatDuration(event.durationMs)}</Text>
       </Table.Td>
-      <Table.Td>
+      <Table.Td style={{ maxWidth: 280 }}>
         {detail ? (
           <Tooltip label={detail} withArrow multiline maw={480}>
-            <Text size="xs" c={event.errorMessage ? "red" : "dimmed"} lineClamp={1}>
+            <Text size="xs" c={event.errorMessage ? "red" : "dimmed"} truncate>
               {detail}
             </Text>
           </Tooltip>
@@ -4180,6 +4217,55 @@ function EventRow({
         )}
       </Table.Td>
     </Table.Tr>
+  );
+}
+
+function EventDetails({ event }: { event: DashboardEventDetail }) {
+  const fields: Array<[string, ReactNode]> = [
+    ["Event", event.type.replaceAll("_", " ")],
+    ["Source", event.kind === "event" ? "Lifecycle" : "Attempt history"],
+    ["Occurred", formatExact(event.occurredAt)],
+    ["Task", event.jobType ?? "Retained away"],
+    ["Task ID", <Code key="job-id">{event.jobId}</Code>],
+    ["Queue", event.queue ?? "Retained away"],
+    ["Attempt", event.attempt ?? "—"],
+    ["Worker", event.workerId ?? "—"],
+    ["Fence token", event.fenceToken ?? "—"],
+    ["Started", event.startedAt ? formatExact(event.startedAt) : "—"],
+    ["Claimed", event.claimedAt ? formatExact(event.claimedAt) : "—"],
+    ["Finished", event.finishedAt ? formatExact(event.finishedAt) : "—"],
+    ["Duration", formatDuration(event.durationMs)],
+    ["Record ID", <Code key="record-id">{event.recordId}</Code>],
+  ];
+  return (
+    <Stack gap="lg">
+      <Stack gap={8}>
+        {fields.map(([label, value]) => (
+          <Group key={label} justify="space-between" align="flex-start" wrap="nowrap">
+            <Text c="dimmed" size="sm">
+              {label}
+            </Text>
+            <Text component="div" size="sm" ta="right" style={{ overflowWrap: "anywhere" }}>
+              {value}
+            </Text>
+          </Group>
+        ))}
+      </Stack>
+      {event.error !== null ? (
+        <JsonValue
+          label="Error"
+          value={event.error}
+          emptyLabel="This attempt finished without an error."
+          copyLabel="the attempt error"
+        />
+      ) : null}
+      <JsonValue
+        label="Details"
+        value={event.details}
+        emptyLabel="This event was recorded without details."
+        copyLabel="the event details"
+      />
+    </Stack>
   );
 }
 
@@ -4413,27 +4499,6 @@ function routeTitle(route: PageRoute): string {
   return "current tasks";
 }
 
-/** Everything the events feed sends with its request, held together so one ref can carry it. */
-interface EventsQueryState {
-  window: DashboardEventsWindow;
-  page: number;
-  pageSize: 25 | 50 | 100;
-  kind: "all" | "event" | "attempt";
-  queue: string | null;
-  jobType: string | null;
-  types: string[];
-}
-
-const defaultEventsQuery: EventsQueryState = {
-  window: "1h",
-  page: 1,
-  pageSize: 50,
-  kind: "all",
-  queue: null,
-  jobType: null,
-  types: [],
-};
-
 function useDashboardController(
   auditActor: string,
   demoTools: DashboardDemoTools | null,
@@ -4476,6 +4541,11 @@ function useDashboardController(
    * what is on screen.
    */
   const selectedJobId = location.route === "/tasks" ? location.taskId : null;
+  const selectedEventId = location.route === "/events" ? location.events.eventId : null;
+  const [inspectedEvent, setInspectedEvent] = useState<DashboardEventDetail | null>(null);
+  const [eventDetailError, setEventDetailError] = useState<string | null>(null);
+  const eventDetailRequests = useRef(createLatestRequestGuard());
+  const selectedEventIdRef = useRef<string | null>(null);
   const [selectedJob, setSelectedJob] = useState<DashboardJobDetail | null>(null);
   const [jobDetailError, setJobDetailError] = useState<string | null>(null);
   /**
@@ -4505,7 +4575,7 @@ function useDashboardController(
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<DashboardRefreshIntervalValue>(readStoredRefreshInterval);
-  const [eventsQuery, setEventsQuery] = useState<EventsQueryState>(defaultEventsQuery);
+  const eventsQuery = location.events;
   const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(() => {
     const initial = readLocation(basePath);
     return initial.route === "/system" &&
@@ -4548,6 +4618,10 @@ function useDashboardController(
     },
     [basePath],
   );
+  const setEventsQuery = useCallback(
+    (next: EventsLocationState) => navigate(eventsLocationHref(next)),
+    [navigate],
+  );
 
   const handleLink = useCallback(
     (event: MouseEvent<HTMLElement>, href: string) => {
@@ -4573,7 +4647,7 @@ function useDashboardController(
   listingRef.current = location;
   // The events feed follows the same shape as the task listing: the request is keyed on a
   // serialized copy of the filters, and the values themselves are read from a ref at send time.
-  const eventsKey = JSON.stringify(eventsQuery);
+  const eventsKey = eventsListingKey(eventsQuery);
   const eventsRef = useRef(eventsQuery);
   eventsRef.current = eventsQuery;
 
@@ -4888,6 +4962,41 @@ function useDashboardController(
     [selectTask],
   );
   const closeJobDetail = useCallback(() => selectTask(null), [selectTask]);
+  const inspectEvent = useCallback(
+    (event: DashboardEventRow) => {
+      const next = { ...location.events, eventId: event.id };
+      if (taskDetailNavigation(location.events.eventId, event.id) === "push") {
+        navigate(eventsLocationHref(next));
+      } else {
+        replace(eventsLocationHref(next));
+      }
+    },
+    [location.events, navigate, replace],
+  );
+  const closeEventDetail = useCallback(() => {
+    eventDetailRequests.current.cancel();
+    selectedEventIdRef.current = null;
+    setInspectedEvent(null);
+    setEventDetailError(null);
+    replace(eventsLocationHref({ ...location.events, eventId: null }));
+  }, [location.events, replace]);
+
+  const showEventDetail = useCallback(
+    async (id: string) => {
+      const ticket = eventDetailRequests.current.begin();
+      selectedEventIdRef.current = id;
+      setInspectedEvent(null);
+      setEventDetailError(null);
+      try {
+        const detail = await client.eventDetail({ id });
+        if (eventDetailRequests.current.current(ticket)) setInspectedEvent(detail);
+      } catch (cause) {
+        if (!eventDetailRequests.current.current(ticket)) return;
+        setEventDetailError(cause instanceof Error ? cause.message : "Unable to load the event");
+      }
+    },
+    [client],
+  );
 
   /**
    * The single reconciliation between the URL and the drawer.
@@ -4908,6 +5017,19 @@ function useDashboardController(
     if (sync === "close") clearJobDetail();
     else if (sync === "open") void showJobDetail(requested!);
   }, [location.route, location.taskId, clearJobDetail, showJobDetail]);
+
+  useLayoutEffect(() => {
+    const requested = location.route === "/events" ? location.events.eventId : null;
+    const sync = taskDrawerSync(requested, selectedEventIdRef.current);
+    if (sync === "close") {
+      eventDetailRequests.current.cancel();
+      selectedEventIdRef.current = null;
+      setInspectedEvent(null);
+      setEventDetailError(null);
+    } else if (sync === "open") {
+      void showEventDetail(requested!);
+    }
+  }, [location.route, location.events.eventId, showEventDetail]);
 
   /**
    * Request cancellation of one task and report exactly what PostgreSQL did.
@@ -5019,6 +5141,7 @@ function useDashboardController(
 
   const connected = loadState.status !== "error" && loadState.data !== null;
   const loading = loadState.status === "loading";
+  const selectedEvent = inspectedEvent?.id === selectedEventId ? inspectedEvent : null;
 
   let content: ReactNode;
   if (loading && (!loadState.data || loadState.data.route !== location.route)) {
@@ -5066,7 +5189,7 @@ function useDashboardController(
         data={loadState.data.value}
         query={eventsQuery}
         setQuery={setEventsQuery}
-        inspectJob={inspectJob}
+        inspectEvent={inspectEvent}
       />
     );
   } else if (loadState.data?.route === "/cron") {
@@ -5124,9 +5247,13 @@ function useDashboardController(
     handleLink,
     content,
     selectedJobId,
+    selectedEventId,
+    selectedEvent,
+    eventDetailError,
     selectedJob,
     jobDetailError,
     closeJobDetail,
+    closeEventDetail,
     confirmingCancel,
     setConfirmingCancel,
     cancelReason,
@@ -5160,9 +5287,13 @@ function DashboardContent({
     handleLink,
     content,
     selectedJobId,
+    selectedEventId,
+    selectedEvent,
+    eventDetailError,
     selectedJob,
     jobDetailError,
     closeJobDetail,
+    closeEventDetail,
     confirmingCancel,
     setConfirmingCancel,
     cancelReason,
@@ -5456,6 +5587,31 @@ function DashboardContent({
               )}
             </Box>
           </Stack>
+        ) : (
+          <Center mih={200}>
+            <Loader size="sm" />
+          </Center>
+        )}
+      </Drawer>
+      <Drawer
+        opened={selectedEventId !== null}
+        onClose={closeEventDetail}
+        title={
+          <Text component="h2" fw={600} size="lg" my={0}>
+            Event details
+          </Text>
+        }
+        position="right"
+        size="lg"
+        {...taskDrawerModelessProps}
+        classNames={{ content: "task-drawer__content" }}
+      >
+        {eventDetailError ? (
+          <Text c="red" size="sm">
+            {eventDetailError}
+          </Text>
+        ) : selectedEvent ? (
+          <EventDetails event={selectedEvent} />
         ) : (
           <Center mih={200}>
             <Loader size="sm" />
