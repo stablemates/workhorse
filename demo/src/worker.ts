@@ -50,9 +50,6 @@ export default defineWorkerProcess({
       maintenanceIntervalMs: DEMO_MAINTENANCE_INTERVAL_MS,
       maintenanceTaskPollMs: DEMO_MAINTENANCE_TASK_POLL_MS,
       registryIntervalMs: DEMO_REGISTRY_INTERVAL_MS,
-      // The dashboard runs in another process, so operator liveness comes from PostgreSQL rather
-      // than from an in-process refresh hub.
-      activityNotifications: true,
       // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
       // Returning undefined omits the worker override and lets SQL select the stored policy.
       retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),

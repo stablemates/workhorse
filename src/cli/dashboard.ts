@@ -31,14 +31,12 @@ export interface RunningDashboard {
  */
 interface DashboardServerModule {
   createDashboardHost(options: Record<string, unknown>): {
-    refresh: unknown;
     handle(request: Request): Promise<Response | null>;
     owns(request: Request): boolean;
   };
   dashboardNodeMiddleware(
     host: unknown,
   ): (request: IncomingMessage, response: ServerResponse, next: (error?: unknown) => void) => void;
-  listenForDashboardRefresh(options: Record<string, unknown>): Promise<unknown>;
 }
 
 /**
@@ -132,13 +130,8 @@ function standaloneControllers(queue: Queue, actor: string) {
 export async function startDashboardServer(
   pool: Pool,
   options: DashboardCommandOptions,
-  notificationClient?: {
-    query(sql: string): Promise<unknown>;
-    on(event: never, listener: never): void;
-  },
 ): Promise<RunningDashboard> {
-  const { createDashboardHost, dashboardNodeMiddleware, listenForDashboardRefresh } =
-    await loadDashboard();
+  const { createDashboardHost, dashboardNodeMiddleware } = await loadDashboard();
   const queue = new Queue(pool);
   const controls = options.allowMutations
     ? standaloneControllers(queue, options.actor)
@@ -154,15 +147,6 @@ export async function startDashboardServer(
     authorize: () => true,
     ...controls,
   });
-
-  if (notificationClient) {
-    await listenForDashboardRefresh({
-      client: notificationClient as never,
-      refresh: host.refresh,
-      onError: (error: unknown) =>
-        console.error("Refresh listener stopped; the periodic fallback remains active", error),
-    });
-  }
 
   const middleware = dashboardNodeMiddleware(host);
   const server = createServer((request, response) => {

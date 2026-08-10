@@ -10,13 +10,13 @@ is designed to show.
 **The demo runs its workers as a separate process.** That is the topology the documentation recommends
 for production, and running it here means the demo has to actually solve the problem it recommends:
 the server and the workers share nothing but PostgreSQL. Workers announce themselves in
-`workhorse.worker_registry`, the dashboard reads the fleet from there, operator pause travels through
-SQL, and coalesced `workhorse_activity` notifications keep the views live without polling. Set
+`workhorse.worker_registry`, the dashboard reads the fleet from there, and operator pause travels
+through SQL. The browser refreshes on a bounded polling interval. Set
 `WORKHORSE_DEMO_IN_PROCESS_WORKERS=true` to co-host workers in the server instead, which is the
 supported small-application topology and what the integration tests exercise.
 
 The demo imports the complete admin application from the publishable packages. `@workhorse/hono`
-mounts `@workhorse/dashboard` at `/`, including its oRPC API and event endpoint. The demo owns no
+mounts `@workhorse/dashboard` at `/`, including its oRPC API. The demo owns no
 Vite config, no browser entry, and no React dependency: it is a plain consumer, doing nothing a real
 application could not copy. It contributes only demo-owned workers, controllers, projections, and
 seed data.
@@ -122,10 +122,10 @@ is for lifecycle visibility and failover behavior, not a measured throughput com
 evidence, and do not infer performance from the dashboard.
 
 The browser refreshes only the active page through its dedicated oRPC reader on a bounded polling cadence.
-The default is 30 seconds, with 5-second, 15-second, 1-minute, 5-minute, and manual-only options. It does
+The default is 15 seconds, with 5-second, 30-second, 1-minute, 5-minute, and manual-only options. It does
 not reload on every worker or PostgreSQL notification, so concurrent job volume cannot directly create a
 browser request storm. Task filtering and pagination happen in PostgreSQL, so the client never downloads
-the full task list. The mounted event endpoint remains available for a future explicitly coalesced design.
+the full task list.
 
 The System Health integrity panel shows future daily partition coverage, persisted retention lag,
 oldest retained data, fully expired days awaiting bounded cleanup, and cumulative rows in the default
@@ -155,7 +155,7 @@ audited control updates the durable schedule definition, and Jobs and Workers sh
 execution.
 
 Dashboard mounting is optional at the application boundary. Pass `{ dashboard: false }` to
-`createDemoApplication` to omit the browser application, oRPC, and event endpoint while retaining the
+`createDemoApplication` to omit the browser application and oRPC endpoint while retaining the
 configured workers. React Grab lives only in the demo development frontend; it is not a dependency or asset
 of `@workhorse/dashboard` and is not included in production.
 

@@ -50,7 +50,7 @@ latest-progress projection with defined frequency and size limits and exposes it
 | Packaging   | Starting the source demo without building workspace package outputs depended on stale local `dist` files.     | Made `pnpm demo` build core, integrations, and the demo before startup.                                                                  |
 | Integration | A dashboard coupled to process startup would make the queue unusable in API-only deployments.                 | Added `{ dashboard: false }` and an integration test that proves workers and Hono routes remain functional.                              |
 | Correctness | Transactional enqueue was documented but not demonstrated through an ORM-owned request transaction.           | Added a test comparing PostgreSQL `xmin` for the application row and accepted job.                                                       |
-| Operations  | Browser polling would repeatedly read queue tables even when nothing changed.                                 | Added coalesced SSE invalidation hints backed by local events, PostgreSQL `LISTEN`, and a bounded fallback.                              |
+| Operations  | Notification-driven refreshes made the browser update too often under high load.                              | Use a bounded, page-local polling interval with a 15-second default.                                                                     |
 | Timing      | A sleeping job could look worker-owned or inflate execution time across the sleep.                            | Project current ownership separately from last-held provenance and compute execution from final `claimed_at`.                            |
 | Retry       | Retry configuration was process-local callback logic with no durable policy or provenance.                    | Added PostgreSQL-owned persisted policies, deterministic jitter, compatibility defaults, and policy/delay/source inspection in the demo. |
 
@@ -165,20 +165,11 @@ protocol documentation rather than duplicating invariants.
 
 ## Remaining developer-experience gaps
 
-### X1. Dashboard refresh is application plumbing
+### X1. Startup failure cleanup is manual
 
-The demo owns a dedicated PostgreSQL client, `LISTEN` reconnect/error behavior, an in-process refresh
-hub, SSE serialization, coalescing, and a safety timer. PostgreSQL notifications are hints, but Workhorse
-does not expose a reusable invalidation stream or complete notification contract.
-
-**Needed:** after **P0-04 Notification-assisted dispatch**, consider a reusable hint subscription API
-that handles reconnect and coalescing without claiming to be an authoritative event stream.
-
-### X2. Startup failure cleanup is manual
-
-The executable creates multiple pools and a notification client before server startup. Graceful shutdown
-is centralized after startup, but failures during schema installation, schedule synchronization, or
-listener setup still rely on process exit to release resources.
+The executable creates its pool before server startup. Graceful shutdown is centralized after startup,
+but failures during schema installation or schedule synchronization still rely on process exit to release
+the resource.
 
 **Needed:** a small acquisition/cleanup helper or integration lifecycle that disposes partially acquired
 resources in reverse order. Ownership must remain explicit so caller-owned pools are never closed.

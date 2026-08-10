@@ -5,7 +5,6 @@ import { assertSchemaCompatible, Queue, type Queryable } from "@workhorse/core";
 import type { MaintenanceLoopCadences } from "../model.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { renderDashboardHtml } from "./html.js";
-import { DashboardRefreshHub, type DashboardRefreshEvent } from "./refresh.js";
 import { dashboardRouter } from "./router.js";
 import { dashboardDatabase } from "./sql.js";
 import type {
@@ -39,7 +38,6 @@ export interface DashboardHostOptions {
   taskController?: DashboardTaskController;
   workerController?: DashboardWorkerController;
   projectDurability?: DashboardDurabilityProjector;
-  refresh?: DashboardRefreshHub;
   auditActor?: string;
   /** Trusted host-owned ES modules loaded before the dashboard browser entry. */
   browserModules?: readonly string[];
@@ -54,14 +52,13 @@ export interface DashboardHostOptions {
     readTemplate(): Promise<string>;
     transformHtml(url: string, html: string): Promise<string>;
   };
-  /** Must explicitly authorize every dashboard, RPC, asset, and event-stream request. */
+  /** Must explicitly authorize every dashboard, RPC, and asset request. */
   authorize(request: Request): boolean | Response | Promise<boolean | Response>;
 }
 
 export interface DashboardHost {
   /** Normalized mount path. Empty string when the dashboard owns the host root. */
   readonly basePath: string;
-  readonly refresh: DashboardRefreshHub;
   /** True when this request belongs to the dashboard's mount path. */
   owns(request: Request): boolean;
   /** Handle one request, or return null when the path is not owned by the dashboard. */
@@ -83,17 +80,11 @@ const contentTypes: Readonly<Record<string, string>> = {
   ".woff2": "font/woff2",
 };
 
-const SSE_FALLBACK_INTERVAL_MS = 15_000;
-
-function serverSentEvent(event: DashboardRefreshEvent): string {
-  return `event: refresh\ndata: ${JSON.stringify(event)}\n\n`;
-}
-
 /**
  * Build a framework-neutral Workhorse dashboard request handler.
  *
- * The returned host serves the packaged React application, its private oRPC endpoint, the SSE
- * refresh stream, and static assets over standard `Request`/`Response` objects. It deliberately
+ * The returned host serves the packaged React application, its private oRPC endpoint, and static
+ * assets over standard `Request`/`Response` objects. It deliberately
  * never installs or migrates schema; it only asserts that the installed schema is compatible.
  *
  * Framework integration packages are expected to be thin: route every request under `basePath`
@@ -102,7 +93,6 @@ function serverSentEvent(event: DashboardRefreshEvent): string {
 export function createDashboardHost(options: DashboardHostOptions): DashboardHost {
   const path = normalizeDashboardPath(options.path ?? "/workhorse");
   const assets = dashboardAssetsDirectory();
-  const refresh = options.refresh ?? new DashboardRefreshHub();
   const rpc = new RPCHandler(dashboardRouter);
   const database = dashboardDatabase(options.database);
   // The read model needs a Queue only for `health()`, which reads through the same connection and
@@ -121,7 +111,6 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       runtime: {
         basePath: path,
         rpcUrl: `${path}/rpc`,
-        eventsUrl: `${path}/events`,
         auditActor: options.auditActor ?? "dashboard",
         demoTools: Boolean(options.operator?.enqueueTest),
       },
@@ -150,67 +139,8 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     }
   }
 
-  function serveEvents(request: Request): Response {
-    const encoder = new TextEncoder();
-    let unsubscribe: (() => void) | undefined;
-    let fallback: ReturnType<typeof setInterval> | undefined;
-    let onAbort: (() => void) | undefined;
-
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        let closed = false;
-        const publish = (event: DashboardRefreshEvent) => {
-          if (closed) return;
-          try {
-            controller.enqueue(encoder.encode(serverSentEvent(event)));
-          } catch {
-            closed = true;
-          }
-        };
-        const finish = () => {
-          if (closed) return;
-          closed = true;
-          unsubscribe?.();
-          if (fallback) clearInterval(fallback);
-          if (onAbort) request.signal.removeEventListener("abort", onAbort);
-          try {
-            controller.close();
-          } catch {
-            // The stream was already torn down by the host framework.
-          }
-        };
-
-        unsubscribe = refresh.subscribe(publish);
-        fallback = setInterval(
-          () => publish({ reason: "fallback", occurredAt: new Date().toISOString() }),
-          SSE_FALLBACK_INTERVAL_MS,
-        );
-        fallback.unref?.();
-        publish({ reason: "connected", occurredAt: new Date().toISOString() });
-
-        onAbort = finish;
-        if (request.signal.aborted) finish();
-        else request.signal.addEventListener("abort", onAbort, { once: true });
-      },
-      cancel() {
-        unsubscribe?.();
-        if (fallback) clearInterval(fallback);
-        if (onAbort) request.signal.removeEventListener("abort", onAbort);
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-      },
-    });
-  }
-
   return {
     basePath: path,
-    refresh,
     owns(request) {
       return owns(new URL(request.url).pathname);
     },
@@ -255,8 +185,6 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         });
         return response ?? null;
       }
-
-      if (pathname === `${path}/events`) return serveEvents(request);
 
       if (pathname.startsWith(`${path}/assets/`)) return serveAsset(pathname);
 

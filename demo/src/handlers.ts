@@ -47,7 +47,7 @@ import type { DemoDatabase } from "./database.js";
  * Handlers are registered identically by the dedicated worker process and by the in-process
  * composition used in tests, so this module must never reach for a Hono app, a dashboard refresh
  * hub, or anything else that only exists in the web tier. Operator surfaces learn about progress
- * from PostgreSQL, through the worker's coalesced `workhorse_activity` notifications.
+ * from PostgreSQL on the dashboard's bounded polling interval.
  */
 export interface DemoHandlerDependencies {
   database: DemoDatabase;

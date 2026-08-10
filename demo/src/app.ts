@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
-import { DashboardRefreshHub } from "@workhorse/dashboard/server";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {
@@ -82,7 +81,6 @@ interface DemoIdempotency {
 export interface CreateDemoApplicationOptions {
   close?: () => void | Promise<void>;
   onWorkerError?: (error: unknown) => void;
-  dashboardRefresh?: DashboardRefreshHub;
   dashboard?: boolean;
   /**
    * Run the demo workers inside this process.
@@ -875,7 +873,6 @@ export function createDemoApplication(
   const maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? DEMO_MAINTENANCE_TASK_POLL_MS;
   const durableStepMs = options.durableStepMs ?? DEMO_DURABLE_STEP_MS;
   const durableTimerWaitMs = options.durableTimerWaitMs ?? DEMO_DURABLE_TIMER_WAIT_MS;
-  const dashboardRefresh = options.dashboardRefresh ?? new DashboardRefreshHub();
   const environment = options.environment ?? "development";
   // Worker pause state is durable and fleet-wide; it survives restarts and reaches remote workers.
   const workerController = options.workerController ?? createLocalWorkerController(database);
@@ -936,13 +933,12 @@ export function createDemoApplication(
       taskController,
       workerController,
       projectDurability: durableDemoPlanForJob,
-      refresh: dashboardRefresh,
       auditActor: "local-demo",
       dev: options.dev,
     });
   }
 
-  return { app, workhorse, dashboardRefresh, workerController };
+  return { app, workhorse, workerController };
 }
 
 function jsonbValue(value: Json | null) {

@@ -128,17 +128,6 @@ export interface WorkerOptions {
    */
   registryIntervalMs?: number;
   /**
-   * Publish coalesced `workhorse_activity` hints so an operator dashboard in another process can
-   * refresh on transitions that create no ready work, such as completion and progress.
-   *
-   * Off by default. Delivery is never part of the protocol, and the publisher is rate limited by
-   * `activityNotificationIntervalMs` so notification volume stays bounded by wall-clock time
-   * rather than by job throughput.
-   */
-  activityNotifications?: boolean;
-  /** Minimum delay between coalesced activity notifications. Defaults to 250ms. */
-  activityNotificationIntervalMs?: number;
-  /**
    * Receives registration failures.
    *
    * Registration is not part of the dispatch contract, so a failure must never stop a worker from
@@ -207,11 +196,6 @@ export class Worker {
   private readonly maintenanceTaskPollMs: number;
   private readonly statisticsRollupIntervalMs: number;
   private readonly registryIntervalMs: number;
-  private readonly activityNotifications: boolean;
-  private readonly activityNotificationIntervalMs: number;
-  private activityPending = false;
-  private activityPublishedAt = Number.NEGATIVE_INFINITY;
-  private activityTimer: NodeJS.Timeout | undefined;
   private readonly scheduleNamespaces: readonly string[];
   private readonly scheduleCatchupLimit: number;
   public readonly concurrency: number;
@@ -255,8 +239,6 @@ export class Worker {
     this.maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? 60_000;
     this.statisticsRollupIntervalMs = options.statisticsRollupIntervalMs ?? 60_000;
     this.registryIntervalMs = options.registryIntervalMs ?? 5_000;
-    this.activityNotifications = options.activityNotifications ?? false;
-    this.activityNotificationIntervalMs = options.activityNotificationIntervalMs ?? 250;
     this.scheduleNamespaces = [...new Set(options.scheduleNamespaces ?? [])];
     this.scheduleCatchupLimit = options.scheduleCatchupLimit ?? 100;
     if (!Number.isSafeInteger(this.concurrency) || this.concurrency < 1 || this.concurrency > 100)
@@ -270,8 +252,6 @@ export class Worker {
       throw new Error("statisticsRollupIntervalMs must be 0 or at least 1000");
     if (this.registryIntervalMs !== 0 && this.registryIntervalMs < 100)
       throw new Error("registryIntervalMs must be 0 or at least 100");
-    if (this.activityNotificationIntervalMs < 50)
-      throw new Error("activityNotificationIntervalMs must be at least 50");
     if (this.scheduleCatchupLimit < 1 || this.scheduleCatchupLimit > 10_000)
       throw new Error("scheduleCatchupLimit must be between 1 and 10000");
   }
@@ -398,8 +378,6 @@ export class Worker {
 
   private startExecution(job: ClaimedJob): Promise<PromiseSettledResult<void>> {
     this.activeSlots += 1;
-    // A claim and a settle are both operator-visible transitions; the publisher coalesces them.
-    this.markActivity();
     return this.executeJob(job)
       .then<PromiseSettledResult<void>, PromiseSettledResult<void>>(
         () => ({ status: "fulfilled", value: undefined }),
@@ -408,7 +386,6 @@ export class Worker {
       .finally(() => {
         this.activeSlots -= 1;
         if (!this.running && this.activeSlots === 0) this.draining = false;
-        this.markActivity();
       });
   }
 
@@ -742,43 +719,6 @@ export class Worker {
     if (wasRemotelyPaused !== paused) this.wakeLoops();
   }
 
-  /**
-   * Record that operator-visible state changed and publish at most one hint per interval.
-   *
-   * Coalescing is the point: a worker completing a thousand jobs a second still issues at most
-   * `1000 / activityNotificationIntervalMs` notifications, so enabling this cannot turn job
-   * throughput into notification-queue pressure. Failures are ignored because the dashboard's own
-   * periodic fallback already guarantees eventual refresh.
-   */
-  private markActivity(): void {
-    if (!this.activityNotifications) return;
-    this.activityPending = true;
-    if (this.activityTimer) return;
-
-    const elapsed = Date.now() - this.activityPublishedAt;
-    const delay = Math.max(0, this.activityNotificationIntervalMs - elapsed);
-    this.activityTimer = setTimeout(() => {
-      this.activityTimer = undefined;
-      if (!this.activityPending) return;
-      this.activityPending = false;
-      this.activityPublishedAt = Date.now();
-      void this.queue.notifyActivity(this.queueName).catch(() => undefined);
-    }, delay);
-    this.activityTimer.unref();
-  }
-
-  /** Flush any pending activity hint so a draining worker's last transition is not lost. */
-  private async flushActivity(): Promise<void> {
-    if (this.activityTimer) {
-      clearTimeout(this.activityTimer);
-      this.activityTimer = undefined;
-    }
-    if (!this.activityPending) return;
-    this.activityPending = false;
-    this.activityPublishedAt = Date.now();
-    await this.queue.notifyActivity(this.queueName).catch(() => undefined);
-  }
-
   /** Best-effort removal of this worker's registration once its loop has stopped. */
   private async deregister(): Promise<void> {
     if (!this.registered) return;
@@ -890,7 +830,6 @@ export class Worker {
     } finally {
       this.running = false;
       this.draining = this.activeSlots > 0;
-      await this.flushActivity();
       await this.deregister();
     }
   }
