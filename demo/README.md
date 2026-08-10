@@ -55,8 +55,8 @@ Open SigNoz at `http://signoz.localhost:43155`. The server and worker appear as 
 PostgreSQL, Node.js runtime, and Workhorse queue, execution, schedule, maintenance, and fleet telemetry share
 the same local OTLP endpoint. The server owns the single database-wide metrics observer, so queue and worker
 gauges are not duplicated by the worker process. `signoz:up` also reconciles the version-controlled
-**Workhorse Operations** and **Workhorse Reliability** dashboards. Run `pnpm signoz:dashboards` to apply
-dashboard changes without restarting SigNoz. Run
+**Workhorse Operations**, **Workhorse Reliability**, and **Workhorse jobs** dashboards. Run
+`pnpm signoz:dashboards` to apply dashboard changes without restarting SigNoz. Run
 `pnpm signoz:down` to stop the containers without deleting their volumes. Plain `pnpm demo` does not
 initialize OpenTelemetry or require SigNoz. The loopback-only local stack uses SigNoz impersonation mode,
 so any process on this machine has administrator access to it.

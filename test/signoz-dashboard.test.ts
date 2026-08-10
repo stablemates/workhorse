@@ -1,9 +1,27 @@
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { loadProvisionedDashboards } from "../scripts/signoz-dashboard-manifest.js";
 
 const dashboardUrl = new URL("../docs/signoz/workhorse-business-metrics-v1.json", import.meta.url);
+const dashboardDirectory = new URL("../ops/signoz/dashboards/", import.meta.url);
 
 describe("SigNoz business dashboard", () => {
+  it("loads every dashboard reconciled by the demo telemetry command", async () => {
+    const dashboards = await loadProvisionedDashboards(fileURLToPath(dashboardDirectory), [
+      dashboardUrl,
+    ]);
+
+    expect(new Set(dashboards.map((dashboard) => dashboard.name))).toEqual(
+      new Set(["workhorse-jobs", "workhorse-operations", "workhorse-reliability"]),
+    );
+    expect(
+      dashboards.every((dashboard) =>
+        dashboard.tags.some((tag) => tag.key === "managed-by" && tag.value === "workhorse"),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps every business metric, filter, panel, and layout reference in the import artifact", async () => {
     const dashboard = JSON.parse(await readFile(dashboardUrl, "utf8")) as {
       schemaVersion: string;

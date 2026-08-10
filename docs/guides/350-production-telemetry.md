@@ -50,9 +50,10 @@ Set `deployment.environment.name` and `service.name` as OpenTelemetry resource a
 host application. The SDK attaches them to metrics and traces, so Workhorse does not repeat them at
 every recording site.
 
-Import the Workhorse jobs dashboard from `docs/signoz/` into SigNoz. Its variables filter by
-environment, service, queue, and job type. Its panels cover throughput, terminal failures, retries,
-runtime percentiles, worker capacity, queue pressure, and estimated drain time.
+`pnpm demo:otel` reconciles the Workhorse jobs dashboard into SigNoz. Run
+`pnpm signoz:dashboards` to apply dashboard changes without restarting SigNoz. Its variables filter
+by environment, service, queue, and job type. Its panels cover throughput, terminal failures,
+retries, runtime percentiles, worker capacity, queue pressure, and estimated drain time.
 
 The slow-task table ranks task types from handler spans. Trace sampling can change that ranking, so
 use the handler histogram when you need unsampled percentiles for one task type.
