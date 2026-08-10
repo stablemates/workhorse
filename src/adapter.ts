@@ -1,5 +1,5 @@
 import { Queue } from "./queue.js";
-import type { Queryable } from "./types.js";
+import type { Queryable, QueueOptions } from "./types.js";
 import { Worker } from "./worker.js";
 import type { WorkerOptions } from "./worker.js";
 
@@ -22,6 +22,7 @@ export interface WorkhorseAdapterOptions<TTransaction> {
   database: Queryable;
   adaptTransaction: (transaction: TTransaction) => Queryable;
   defaultQueue?: string;
+  queueOptions?: QueueOptions;
   close?: () => void | Promise<void>;
 }
 
@@ -29,14 +30,18 @@ export interface WorkhorseAdapterOptions<TTransaction> {
 export function createWorkhorseAdapter<TTransaction = Queryable>(
   options: WorkhorseAdapterOptions<TTransaction>,
 ): WorkhorseAdapter<TTransaction> {
-  const queue = new Queue(options.database, options.defaultQueue);
+  const queue = new Queue(options.database, options.defaultQueue, options.queueOptions);
   let closePromise: Promise<void> | undefined;
 
   return {
     database: options.database,
     queue,
     forTransaction(transaction) {
-      return new Queue(options.adaptTransaction(transaction), queue.defaultQueue);
+      return new Queue(
+        options.adaptTransaction(transaction),
+        queue.defaultQueue,
+        options.queueOptions,
+      );
     },
     createWorker(workerOptions) {
       return new Worker(queue, workerOptions);

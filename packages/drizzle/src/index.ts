@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import type { WorkhorseAdapter, Queryable } from "@workhorse/core";
+import type { WorkhorseAdapter, Queryable, QueueOptions } from "@workhorse/core";
 import { createWorkhorseAdapter } from "@workhorse/core";
 import type { QueryResult, QueryResultRow } from "pg";
 
@@ -11,6 +11,7 @@ export interface DrizzleExecutor {
 
 export interface DrizzleAdapterOptions {
   defaultQueue?: string;
+  queueOptions?: QueueOptions;
   /**
    * Optional provider resource cleanup. The adapter does not close caller-owned pools by default.
    * Pass `() => db.$client.end()` only when this adapter owns that pool.
@@ -94,6 +95,7 @@ export function createDrizzleAdapter<TTransaction extends DrizzleExecutor = Driz
     database: drizzleQueryable(database),
     adaptTransaction: drizzleQueryable,
     defaultQueue: options.defaultQueue,
+    queueOptions: options.queueOptions,
     close: options.close,
   });
 }

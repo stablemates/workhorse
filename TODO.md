@@ -18,9 +18,9 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P1-08 Payload contracts and limits**
-2. **P0-04 Notification-assisted dispatch**
-3. **P1-06 Queue concurrency policies**
+1. **P0-04 Notification-assisted dispatch**
+2. **P1-06 Queue concurrency policies**
+3. **P1-07 Rate limiting**
 
 The demo, the initial integration packages, the operator query surface, progress, dead letters,
 deadlines, the durable worker registry, the framework-neutral dashboard host, and the release and
@@ -348,14 +348,14 @@ hint, and polling stays the source of truth.
 - [ ] Report throttled depth, next eligibility, and effective throughput.
 - [ ] Test clock skew, bursts, retries, and crash recovery.
 
-### [ ] P1-08 Payload contracts and limits
+### [x] P1-08 Payload contracts and limits
 
 **Depends on:** none
 
-- [ ] Support optional per-job-type payload and result validators.
-- [ ] Enforce configurable payload and result size limits before durable writes.
-- [ ] Version contracts without making historical payloads unreadable.
-- [ ] Redact configured sensitive fields from logs, traces, and operator views.
+- [x] Support optional per-job-type payload and result validators.
+- [x] Enforce configurable payload and result size limits before durable writes.
+- [x] Version contracts without making historical payloads unreadable.
+- [x] Redact configured sensitive fields from logs, traces, and operator views.
 
 ### [x] P1-09 Progress and job metadata
 

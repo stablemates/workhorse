@@ -16,11 +16,13 @@ guide links for behavior and the published declarations for exact types.
 
 `Queue`, `EnqueueOptions`, `EnqueueRequest`, `EnqueueIdempotency`, `RetryPolicy`, `RunTaskNowResult`,
 `RunTaskNowStatus`, `ScheduleWaitRequest`, `ScheduleWaitResult`, `ScheduleDefinition`,
-`ScheduleJobDefinition`, and `StoredSchedule`.
+`ScheduleJobDefinition`, `StoredSchedule`, `QueueOptions`, `JobTypeContracts`,
+`JobContractVersion`, and `JobContractValidator`.
 
 The exported constants are `MAX_ENQUEUE_BATCH_SIZE`, `DEFAULT_IDEMPOTENCY_SCOPE`,
 `DEFAULT_IDEMPOTENCY_TTL_MS`, `MAX_IDEMPOTENCY_KEY_BYTES`, `MAX_IDEMPOTENCY_SCOPE_BYTES`,
-`MAX_IDEMPOTENCY_TTL_MS`, and `MAX_EXECUTION_TIMEOUT_MS`.
+`MAX_IDEMPOTENCY_TTL_MS`, `MAX_EXECUTION_TIMEOUT_MS`, `DEFAULT_JOB_VALUE_MAX_BYTES`,
+`MAX_JOB_VALUE_MAX_BYTES`, and `MAX_JOB_CONTRACT_SENSITIVE_KEYS`.
 
 ## Job reads and durable evidence
 
@@ -115,6 +117,7 @@ Its control types are `DashboardAuditContext`, `DashboardCancelTaskResult`,
 `RedriveIdempotencyConflictDetails`, `RedriveIdempotencyConflictField`,
 `CheckpointConflictError`, `CheckpointLeaseLostError`, `ProgressLeaseLostError`,
 `ProgressRateLimitError`, `WaitConflictError`, `WaitLeaseLostError`, `WaitLimitExceededError`,
+`JobContractValidationError`, `JobContractUnavailableError`, `JobValueSizeLimitError`,
 `CancellationRequestedError`, `DeadlineExceededError`, `ExecutionTimeoutError`, `InjectedCrashError`,
 and `Failpoint`.
 

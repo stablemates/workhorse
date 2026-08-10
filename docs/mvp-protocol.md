@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 19 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 20 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency. It also supports retry policies,
 checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
@@ -8,24 +8,24 @@ and per-minute statistics complete the protocol.
 
 ## Storage model
 
-| Relation              | Role                                                                 | Mutation model                                                                        |
-| --------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `job`                 | Immutable identity, queue, type, payload, retry limit and policy     | Insert once                                                                           |
-| `enqueue_idempotency` | Scoped retained enqueue ownership and canonical request fingerprint  | Reserve once per active `(scope, key)`; replace after expiry; delete on purge/cleanup |
-| `job_runtime`         | Sole live row, retry state, and optional active cancellation request | Insert at enqueue; CAS-update while live; delete at terminal transition               |
-| `job_checkpoint`      | Immutable named handler restart boundaries                           | Insert once per job and checkpoint name under a fenced active lease                   |
-| `job_progress`        | Latest bounded mutable operational progress                          | Fenced replace, at most once per 100 ms for changed values from one generation        |
-| `job_wait`            | Immutable named timer restart boundaries                             | Insert once per job and wait name under a fenced active lease                         |
-| `job_outcome`         | Terminal success, failure, or cancellation                           | Insert once after runtime deletion                                                    |
-| `job_query`           | Bounded operator lifecycle projection                                | Trigger-synchronized on meaningful lifecycle changes; heartbeat-independent           |
-| `job_redrive`         | Audited source-to-target redrive lineage and request replay evidence | Insert once per accepted source/request identity                                      |
-| `job_event`           | Lifecycle audit                                                      | Append-only, UTC-daily range partitions                                               |
-| `attempt_history`     | Closed attempt records                                               | Append-only, UTC-daily range partitions                                               |
-| `schedule_definition` | Namespaced recurring-job desired state including retry policy        | Deploy upsert; omitted definitions are disabled                                       |
-| `schedule_occurrence` | Deduplicated schedule fire mapped to a job                           | Insert once per schedule second; job ID populated atomically                          |
-| `retention_policy`    | Authoritative cleanup windows and bounded work limits                | Singleton deploy synchronization                                                      |
-| `maintenance_policy`  | IANA timezone and database-global maintenance cadences               | Singleton deploy synchronization                                                      |
-| `maintenance_state`   | Per-task due state and retained-history safety watermark             | SQL-owned maintenance state                                                           |
+| Relation              | Role                                                                       | Mutation model                                                                        |
+| --------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `job`                 | Immutable identity, payload, accepted contract, retry limit and policy     | Insert once                                                                           |
+| `enqueue_idempotency` | Scoped retained enqueue ownership and canonical request fingerprint        | Reserve once per active `(scope, key)`; replace after expiry; delete on purge/cleanup |
+| `job_runtime`         | Sole live row, retry state, and optional active cancellation request       | Insert at enqueue; CAS-update while live; delete at terminal transition               |
+| `job_checkpoint`      | Immutable named handler restart boundaries                                 | Insert once per job and checkpoint name under a fenced active lease                   |
+| `job_progress`        | Latest bounded mutable operational progress                                | Fenced replace, at most once per 100 ms for changed values from one generation        |
+| `job_wait`            | Immutable named timer restart boundaries                                   | Insert once per job and wait name under a fenced active lease                         |
+| `job_outcome`         | Terminal success, failure, or cancellation                                 | Insert once after runtime deletion                                                    |
+| `job_query`           | Bounded operator lifecycle projection                                      | Trigger-synchronized on meaningful lifecycle changes; heartbeat-independent           |
+| `job_redrive`         | Audited source-to-target redrive lineage and request replay evidence       | Insert once per accepted source/request identity                                      |
+| `job_event`           | Lifecycle audit                                                            | Append-only, UTC-daily range partitions                                               |
+| `attempt_history`     | Closed attempt records                                                     | Append-only, UTC-daily range partitions                                               |
+| `schedule_definition` | Namespaced recurring-job desired state including contract and retry policy | Deploy upsert; omitted definitions are disabled                                       |
+| `schedule_occurrence` | Deduplicated schedule fire mapped to a job                                 | Insert once per schedule second; job ID populated atomically                          |
+| `retention_policy`    | Authoritative cleanup windows and bounded work limits                      | Singleton deploy synchronization                                                      |
+| `maintenance_policy`  | IANA timezone and database-global maintenance cadences                     | Singleton deploy synchronization                                                      |
+| `maintenance_state`   | Per-task due state and retained-history safety watermark                   | SQL-owned maintenance state                                                           |
 
 A committed job has exactly one live runtime or one terminal outcome, never both. Version 1 write tables and compatibility write views are absent.
 
@@ -42,9 +42,9 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 
 ## Atomic transitions
 
-1. `enqueue_many_v1` validates up to 1,000 JSONB requests against one timestamp. Keyed requests first acquire deterministic sorted scoped-ownership locks, while acceptance side effects remain in caller ordinal order. New requests insert `job`, `job_runtime`, and one `enqueued` event; exact replays return the retained job ID before durable, FIFO, or notification side effects; mismatches abort the whole statement with structured safe conflict details. `enqueue_v1` delegates to it.
+1. `enqueue_many_v1` validates up to 1,000 JSONB requests against one timestamp, including canonical payload size, contract version, and redaction metadata. Keyed requests first acquire deterministic sorted scoped-ownership locks, while acceptance side effects remain in caller ordinal order. New requests insert `job`, `job_runtime`, and one `enqueued` event; exact replays return the retained job ID before durable, FIFO, or notification side effects; mismatches abort the whole statement with structured safe conflict details. `enqueue_v1` delegates to it.
 2. `promote_v1` locks a bounded due set with `SKIP LOCKED`, updates scheduled runtime rows to ready, assigns sequences, and appends events.
-3. `claim_v1` locks one FIFO ready row whose absolute deadline has not expired and performs one runtime state update to active with worker, fence, heartbeat, lease expiry, and the current attempt's execution-timeout budget, then appends the claim event.
+3. `claim_v1` locks one FIFO ready row whose absolute deadline has not expired and performs one runtime state update to active with worker, fence, heartbeat, lease expiry, and the current attempt's execution-timeout budget, then returns raw payload plus the accepted contract version and result limit and appends the claim event.
 4. `heartbeat_v2` returns `accepted`, `cancel_requested`, or `stale` for the exact unexpired active generation and extends only accepted leases. Additive compatibility `heartbeat_v1` returns true only for accepted.
 5. `cancel_v1` locks the sole runtime. Ready, scheduled, and durable-wait continuations become canceled immediately. Active work records one request and returns `cancel_requested`; repeats retain the first request. Existing terminal success/failure returns `already_terminal`; existing cancellation returns `canceled`.
 6. `acknowledge_cancel_v1` accepts only the exact unexpired worker/fence carrying a request, then inserts the canceled outcome, truthful attempt history, and terminal event atomically.
@@ -53,13 +53,13 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 8. `schedule_wait_v1` locks and revalidates the matching active generation, inserts at most one named relative or absolute timer definition, and either returns an elapsed boundary or changes runtime to wait-marked scheduled state without incrementing the attempt. Relative replay is first-write-wins; absolute target or mode changes conflict; cancellation-requested or stale owners are rejected; each job is limited to 1,000 names.
 9. `fail_v1` locks the matching active generation. A cancellation request returns `cancel_requested`. Otherwise retry asks PostgreSQL to select the persisted policy delay, CAS-updates the same runtime, increments attempt, persists any next jitter state, clears wait continuation metadata, and requeues ready or scheduled. Exhaustion deletes runtime and inserts failed outcome.
 10. `recover_expired_v1` locks expired active runtimes in bounded batches. Requested rows materialize canceled without retry; other rows perform policy selection and attempt increment/requeue or terminal failure with observed fence and expiry guards.
-11. `complete_v1` deletes only the matching unexpired active runtime with no cancellation request and inserts succeeded outcome, closed attempt history, and event atomically.
-12. `list_dead_letters_v1` validates failure-only filters and returns a bounded descending cursor page from immutable outcomes with redrive counts.
-13. `redrive_v1` locks one source, requires a failed outcome plus audit metadata, resolves source/request idempotency, and creates a new ready identity with copied immutable definition except for a cleared absolute deadline. It appends source and target events and one lineage edge without modifying the source outcome's semantic terminal columns; the existing retention watermark may advance with append-only history. `redrive_many_v1` selects at most 1,000 oldest matching sources after an optional keyset cursor; dry-run returns `eligible` rows without writes.
-14. `list_jobs_v1` validates exact queue/type/state/creation-time filters, a bounded payload projection, and a filter-bound immutable cursor. It selects at most 1,000 candidates from `job_query` before joining `job` for optional top-level-redacted payload output.
+11. `complete_v1` checks the persisted canonical result-size limit, then deletes only the matching unexpired active runtime with no cancellation request and inserts succeeded outcome, closed attempt history, and event atomically. `Queue.complete` first applies the accepted version's result validator.
+12. `list_dead_letters_v1` validates failure-only filters and returns a bounded descending cursor page from immutable outcomes with persisted top-level payload redaction and redrive counts.
+13. `redrive_v1` locks one source, requires a failed outcome plus audit metadata, resolves source/request idempotency, and creates a new ready identity with copied immutable definition and accepted contract metadata except for a cleared absolute deadline. It appends source and target events and one lineage edge without modifying the source outcome's semantic terminal columns; the existing retention watermark may advance with append-only history. `redrive_many_v1` selects at most 1,000 oldest matching sources after an optional keyset cursor; dry-run returns `eligible` rows without writes.
+14. `list_jobs_v1` validates exact queue/type/state/creation-time filters, a bounded payload projection, and a filter-bound immutable cursor. It selects at most 1,000 candidates from `job_query` before joining `job` for optional top-level-redacted payload output. Persisted contract keys are always combined with caller projection keys.
 15. `list_job_timeline_v1` merges retained `job_event` and `attempt_history` rows into one latest-first bounded cursor stream. Unknown identities and identities whose history was fully retired both return an empty stream; use point lookup when that distinction matters.
-16. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions, increments revisions for material changes, and optionally disables omitted names.
-17. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1`; stale revisions return null and duplicate fires return the existing job ID. Canceling its job does not alter the definition or later occurrences.
+16. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions with accepted contract metadata, increments revisions for material changes, and optionally disables omitted names.
+17. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1` with the stored contract version, limits, and redaction keys; stale revisions return null and duplicate fires return the existing job ID. Canceling its job does not alter the definition or later occurrences.
 18. `sync_retention_policy_v1` stores explicit nullable minimum windows and work bounds, rejecting policies that could delete identity before retained outcome, event, attempt, occurrence, or redrive-lineage attribution.
 19. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. Every promoted row emits `promoted`; timer-backed promotion also carries and clears `wait_name` and appends `wait_elapsed`. `prepare_history_partitions_v1`, `retain_history_v1`, and `prune_terminal_storage_v1` own separate due state and advisory locks for partition coverage, daily history retirement, and terminal/idempotency cleanup. Every phase is isolated in an exception subtransaction, and every entry point returns `(phase, rows_affected, duration_ms, skipped_lock, error)` telemetry. Terminal identity pruning skips a redrive source while any retained descendant edge still protects it.
 
@@ -71,7 +71,7 @@ Every closed logical attempt has one immutable `attempt_history` row. Never-star
 
 `Queue.redrive(sourceJobId, { requestedBy, reason, requestId })` accepts only a retained failed source. Actor is 1 through 200 characters, reason is 1 through 2,000 characters, and request ID is 1 through 512 UTF-8 bytes. The request ID is hashed; audit rows and conflict details expose only its safe preview, digest, and length.
 
-The target starts ready at attempt one with source queue, type, payload, tags, maximum attempts, retry policy, and execution timeout. Deadline, checkpoints, waits, attempts, results, and cancellation state are not copied. Exact source/request replay returns the retained target with status `replayed`; materially different attribution raises SQLSTATE `P1002` and `RedriveIdempotencyConflictError` without creating side effects.
+The target starts ready at attempt one with source queue, type, payload, accepted contract version, size limits, redaction keys, tags, maximum attempts, retry policy, and execution timeout. Deadline, checkpoints, waits, attempts, results, and cancellation state are not copied. Exact source/request replay returns the retained target with status `replayed`; materially different attribution raises SQLSTATE `P1002` and `RedriveIdempotencyConflictError` without creating side effects.
 
 `Queue.redriveMany(filter, request, { limit?, dryRun?, cursor? })` processes the oldest matching failures in one PostgreSQL statement and returns `{ results, nextCursor }`. The default limit is 100 and the maximum is 1,000. Passing `nextCursor` into the next call advances deterministically across equal timestamps; repeating the same cursor and request replays the same page. A dry-run returns `eligible` rows and performs no job, event, notification, or lineage writes. Each source derives independent idempotency from the shared request ID, so replaying a page cannot duplicate targets.
 

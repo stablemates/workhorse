@@ -1,0 +1,58 @@
+---
+title: How do I validate and redact job data?
+description: Version payload and result validators, bound durable JSON, and keep sensitive fields out of operator views.
+---
+
+Pass `contracts` through the third `Queue` constructor argument, or through an adapter's
+`queueOptions`. Each job type names the current version and retains every version that live or
+redrivable jobs may still carry.
+
+```ts
+const queue = new Queue(pool, "default", {
+  contracts: {
+    "mail.send": {
+      currentVersion: "mail-current",
+      versions: {
+        "mail-current": {
+          validatePayload: (value) =>
+            typeof value === "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            typeof value.recipient === "string",
+          validateResult: (value) =>
+            typeof value === "object" && value !== null && !Array.isArray(value),
+          sensitivePayloadKeys: ["accessToken"],
+          sensitiveResultKeys: ["providerReceipt"],
+        },
+      },
+    },
+  },
+});
+```
+
+Returning `false` or throwing from a validator produces a safe contract error without embedding the
+rejected value. Payload failures prevent enqueue. Result failures follow the handler's normal retry
+path instead of committing success.
+
+Size ceilings come from the queue defaults or a contract-version override. PostgreSQL checks its
+canonical JSON representation before writing, so clients cannot disagree about the accepted size.
+
+Sensitive key lists apply to top-level object fields. Claims return raw payloads to handlers, while
+job lookup, listing, dead letters, and dashboard detail remove persisted sensitive keys.
+
+## Deploy a new version
+
+Add the new version and move `currentVersion`. Keep old versions configured until the corresponding
+jobs and redrive sources have expired, because completion always uses the version captured at
+acceptance.
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue) — create jobs atomically
+- [Schedules](/docs/schedules) — capture contracts in recurring definitions
+- [Workers](/docs/workers) — understand result settlement
+
+---
+
+Exact fields, limits, and failure behavior:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#job).

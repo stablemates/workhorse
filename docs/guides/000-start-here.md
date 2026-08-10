@@ -36,10 +36,11 @@ How a job behaves once it's executing.
 
 ## Getting work in
 
-|                                                       |                                                     |
-| ----------------------------------------------------- | --------------------------------------------------- |
-| [210 Enqueue idempotency](210-enqueue-idempotency.md) | Stopping the double-click from creating two jobs    |
-| [220 Schedules](220-schedules.md)                     | Recurring jobs on cron, without a scheduler process |
+|                                                       |                                                      |
+| ----------------------------------------------------- | ---------------------------------------------------- |
+| [210 Enqueue idempotency](210-enqueue-idempotency.md) | Stopping the double-click from creating two jobs     |
+| [220 Schedules](220-schedules.md)                     | Recurring jobs on cron, without a scheduler process  |
+| [230 Payload contracts](230-payload-contracts.md)     | Rejecting malformed data and hiding sensitive fields |
 
 ## Operating the system
 

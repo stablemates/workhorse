@@ -18,6 +18,14 @@ describe("createWorkhorseAdapter", () => {
       database,
       adaptTransaction,
       defaultQueue: "mail",
+      queueOptions: {
+        contracts: {
+          send: {
+            currentVersion: "current",
+            versions: { current: { validatePayload: () => false } },
+          },
+        },
+      },
     });
 
     const transactionalQueue = adapter.forTransaction(transaction);
@@ -25,6 +33,10 @@ describe("createWorkhorseAdapter", () => {
     expect(adapter.queue.defaultQueue).toBe("mail");
     expect(transactionalQueue.defaultQueue).toBe("mail");
     expect(adaptTransaction).toHaveBeenCalledWith(transaction);
+    await expect(transactionalQueue.enqueue("send", null)).rejects.toThrow(
+      "send payload does not satisfy contract version current",
+    );
+    expect(transactionDatabase.query).not.toHaveBeenCalled();
   });
 
   it("creates workers from the shared queue and closes provider resources once", async () => {

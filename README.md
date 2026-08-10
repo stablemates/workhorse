@@ -138,6 +138,35 @@ another at-least-once execution and can repeat external effects, so handlers sti
 idempotency or compensation. `Queue.getRedriveLineage()` returns bounded retained edges and reports
 whether traversal was truncated.
 
+### Payload contracts
+
+The third `Queue` constructor argument accepts versioned contracts per job type. A contract can
+validate payloads before enqueue, validate handler results before completion, override durable JSON
+size ceilings, and name top-level fields that operator reads must remove.
+
+```ts
+const queue = new Queue(pool, "default", {
+  contracts: {
+    "mail.send": {
+      currentVersion: "mail-current",
+      versions: {
+        "mail-current": {
+          validatePayload: (value) =>
+            typeof value === "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            typeof value.recipient === "string",
+          sensitivePayloadKeys: ["accessToken"],
+        },
+      },
+    },
+  },
+});
+```
+
+Each job stores its accepted version, limits, and redaction keys. Keep old versions configured while
+old jobs can still run or be redriven; reads remain available without running historical validators.
+
 ### Job listing and lifecycle timelines
 
 Schema version 15 adds `Queue.listJobs()` over a dedicated `job_query` projection. Operator reads use
