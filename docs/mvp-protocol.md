@@ -1,6 +1,10 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 18 protocol reference. The canonical clean-install schema includes scoped enqueue idempotency, persisted retry policies, explicit durable checkpoints, fenced bounded latest-value progress, named timer waits, cooperative cancellation, absolute deadlines, per-attempt execution timeouts, failure-only dead-letter queries, audited redrive lineage, a dedicated operator job projection, bounded payload controls, merged lifecycle timelines, persisted automated retention, and derived per-minute rolling statistics.
+This is the compact schema version 19 protocol reference. The clean-install schema stores bounded
+W3C trace metadata and supports scoped enqueue idempotency. It also supports retry policies,
+checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
+redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
+and per-minute statistics complete the protocol.
 
 ## Storage model
 

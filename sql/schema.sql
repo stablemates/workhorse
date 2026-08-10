@@ -22,6 +22,22 @@ AS $$
      );
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.valid_trace_context_v1(p_context jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT p_context IS NULL OR (
+    jsonb_typeof(p_context) = 'object'
+    AND p_context ? 'traceparent'
+    AND p_context - ARRAY['traceparent', 'tracestate'] = '{}'::jsonb
+    AND jsonb_typeof(p_context->'traceparent') = 'string'
+    AND (NOT p_context ? 'tracestate' OR jsonb_typeof(p_context->'tracestate') = 'string')
+    AND octet_length(p_context::text) <= 1024
+  );
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.sha256_hex_v1(p_value text)
 RETURNS text
 LANGUAGE sql
@@ -230,6 +246,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
   queue_name text NOT NULL CHECK (queue_name <> ''),
   job_type text NOT NULL CHECK (job_type <> ''),
   payload jsonb NOT NULL,
+  trace_context jsonb
+    CONSTRAINT job_trace_context_valid CHECK (workhorse.valid_trace_context_v1(trace_context)),
   tags text[] NOT NULL DEFAULT '{}'
     CONSTRAINT job_tags_valid CHECK (workhorse.valid_tags(tags)),
   max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
@@ -1213,6 +1231,7 @@ DECLARE
   v_queue_name text;
   v_job_type text;
   v_payload jsonb;
+  v_trace_context jsonb;
   v_tags text[];
   v_run_at timestamptz;
   v_max_attempts integer;
@@ -1298,6 +1317,7 @@ BEGIN
     v_queue_name := v_request->>'queue';
     v_job_type := v_request->>'type';
     v_payload := COALESCE(v_request->'payload', 'null'::jsonb);
+    v_trace_context := v_request->'traceContext';
     IF COALESCE(v_queue_name, '') = '' OR COALESCE(v_job_type, '') = ''
        OR jsonb_typeof(COALESCE(v_request->'tags', '[]'::jsonb)) <> 'array'
        OR jsonb_array_length(COALESCE(v_request->'tags', '[]'::jsonb)) > 20
@@ -1311,6 +1331,9 @@ BEGIN
     v_tags := ARRAY(
       SELECT jsonb_array_elements_text(COALESCE(v_request->'tags', '[]'::jsonb))
     );
+    IF NOT workhorse.valid_trace_context_v1(v_trace_context) THEN
+      RAISE EXCEPTION 'traceContext must contain a string traceparent, optional string tracestate, and at most 1024 UTF-8 bytes';
+    END IF;
     v_max_attempts := COALESCE((v_request->>'maxAttempts')::integer, 25);
     IF v_max_attempts NOT BETWEEN 1 AND 100 THEN
       RAISE EXCEPTION 'each request requires non-empty queue/type, maxAttempts between 1 and 100, and at most 20 non-empty tags of at most 100 characters';
@@ -1444,10 +1467,11 @@ BEGIN
 
     IF v_is_new THEN
       INSERT INTO workhorse.job(
-        id, queue_name, job_type, payload, tags, max_attempts, retry_policy,
+        id, queue_name, job_type, payload, trace_context, tags, max_attempts, retry_policy,
         deadline_at, execution_timeout_ms
       ) VALUES (
-        job_id, v_queue_name, v_job_type, v_payload, v_tags, v_max_attempts, v_retry_policy,
+        job_id, v_queue_name, v_job_type, v_payload, v_trace_context, v_tags,
+        v_max_attempts, v_retry_policy,
         v_deadline_at, v_execution_timeout_ms::bigint
       );
       INSERT INTO workhorse.job_runtime(
@@ -2259,7 +2283,8 @@ CREATE OR REPLACE FUNCTION workhorse.claim_v1(
   p_worker_id text,
   p_lease_ms integer DEFAULT 30000
 ) RETURNS TABLE (
-  job_id uuid, job_type text, payload jsonb, attempt integer, max_attempts integer,
+  job_id uuid, job_type text, payload jsonb, trace_context jsonb,
+  attempt integer, max_attempts integer,
   retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
   attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
 )
@@ -2314,7 +2339,7 @@ BEGIN
     VALUES (v_runtime.job_id, v_runtime.current_attempt, 'claimed',
       jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
   RETURN QUERY
-    SELECT j.id, j.job_type, j.payload, v_runtime.current_attempt, j.max_attempts,
+    SELECT j.id, j.job_type, j.payload, j.trace_context, v_runtime.current_attempt, j.max_attempts,
            j.retry_policy, j.deadline_at, j.execution_timeout_ms,
            v_runtime.attempt_timeout_at, v_fence, v_expires
       FROM workhorse.job j WHERE j.id = v_runtime.job_id;
@@ -2571,6 +2596,20 @@ BEGIN
     RETURN 'stale';
   END IF;
   RETURN 'not_due';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.expire_owned_telemetry_v1(
+  p_job_id uuid, p_worker_id text, p_fence_token bigint
+) RETURNS TABLE(status text, retry_state text)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  status := workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
+  SELECT runtime.state INTO retry_state FROM workhorse.job_runtime runtime
+     WHERE runtime.job_id = p_job_id AND runtime.state IN ('ready', 'scheduled')
+       AND status = 'timeout_exceeded';
+  RETURN NEXT;
 END;
 $$;
 
@@ -3386,7 +3425,11 @@ DECLARE
   v_retry_delay_ms bigint;
   v_retry_source text;
   v_envelope jsonb;
+  v_expired_leases integer := 0;
+  v_retried integer := 0;
 BEGIN
+  PERFORM set_config('workhorse.recovery_expired_leases', '0', true);
+  PERFORM set_config('workhorse.recovery_retried', '0', true);
   FOR v_runtime IN
     SELECT runtime.* FROM workhorse.job_runtime runtime
      WHERE runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= clock_timestamp()
@@ -3421,11 +3464,18 @@ BEGIN
         v_runtime.job_id, v_runtime.worker_id, v_runtime.fence_token
       ) THEN
         v_count := v_count + 1;
+        IF v_runtime.current_attempt < (
+          SELECT job.max_attempts FROM workhorse.job job WHERE job.id = v_runtime.job_id
+        ) THEN
+          v_retried := v_retried + 1;
+        END IF;
       END IF;
     END LOOP;
   END IF;
 
   IF v_count >= GREATEST(1, LEAST(p_limit, 10000)) THEN
+    PERFORM set_config('workhorse.recovery_expired_leases', v_expired_leases::text, true);
+    PERFORM set_config('workhorse.recovery_retried', v_retried::text, true);
     IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
     RETURN v_count;
   END IF;
@@ -3480,6 +3530,7 @@ BEGIN
           )
         );
       v_count := v_count + 1;
+      v_expired_leases := v_expired_leases + 1;
       CONTINUE;
     END IF;
     IF v_runtime.current_attempt < v_job.max_attempts THEN
@@ -3504,6 +3555,7 @@ BEGIN
        WHERE r.job_id = v_runtime.job_id AND r.state = 'active'
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp();
       IF NOT FOUND THEN CONTINUE; END IF;
+      v_retried := v_retried + 1;
     ELSE
       v_state := 'failed';
       v_retry_delay_ms := NULL;
@@ -3527,9 +3579,29 @@ BEGIN
           'retry_policy', v_job.retry_policy, 'retry_delay_ms', v_retry_delay_ms,
           'retry_delay_source', v_retry_source));
     v_count := v_count + 1;
+    v_expired_leases := v_expired_leases + 1;
   END LOOP;
+  PERFORM set_config('workhorse.recovery_expired_leases', v_expired_leases::text, true);
+  PERFORM set_config('workhorse.recovery_retried', v_retried::text, true);
   IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
   RETURN v_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.recover_expired_telemetry_v1(
+  p_limit integer DEFAULT 100, p_retry_delay_ms integer DEFAULT NULL
+) RETURNS TABLE (rows_affected integer, expired_leases integer, retried integer)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  rows_affected := workhorse.recover_expired_v1(p_limit, p_retry_delay_ms);
+  expired_leases := COALESCE(
+    NULLIF(current_setting('workhorse.recovery_expired_leases', true), ''), '0'
+  )::integer;
+  retried := COALESCE(
+    NULLIF(current_setting('workhorse.recovery_retried', true), ''), '0'
+  )::integer;
+  RETURN NEXT;
 END;
 $$;
 
@@ -3538,7 +3610,8 @@ DROP FUNCTION IF EXISTS workhorse.maintain_v1(integer, integer, integer, integer
 CREATE OR REPLACE FUNCTION workhorse.tick_v1(
   p_promote_limit integer DEFAULT 1000, p_recover_limit integer DEFAULT 1000
 ) RETURNS TABLE (
-  phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
+  phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb,
+  expired_leases integer, retried integer
 )
 LANGUAGE plpgsql
 AS $$
@@ -3547,8 +3620,8 @@ DECLARE
 BEGIN
   IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:tick', 0)) THEN
     RETURN QUERY VALUES
-      ('promote'::text, 0, 0, true, NULL::jsonb),
-      ('recover'::text, 0, 0, true, NULL::jsonb);
+      ('promote'::text, 0, 0, true, NULL::jsonb, 0, 0),
+      ('recover'::text, 0, 0, true, NULL::jsonb, 0, 0);
     RETURN;
   END IF;
 
@@ -3556,6 +3629,8 @@ BEGIN
   rows_affected := 0;
   skipped_lock := false;
   error := NULL;
+  expired_leases := 0;
+  retried := 0;
   v_started_at := clock_timestamp();
   BEGIN
     rows_affected := workhorse.promote_v1(p_promote_limit);
@@ -3572,7 +3647,9 @@ BEGIN
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
-    rows_affected := workhorse.recover_expired_v1(p_recover_limit);
+    SELECT recovery.rows_affected, recovery.expired_leases, recovery.retried
+      INTO rows_affected, expired_leases, retried
+      FROM workhorse.recover_expired_telemetry_v1(p_recover_limit) recovery;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
   END;
@@ -4883,7 +4960,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (18) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (19) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )
