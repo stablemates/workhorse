@@ -53,6 +53,12 @@ function requireString(value: unknown, path: string): asserts value is string {
   }
 }
 
+function requireUniqueDashboardNames(dashboards: readonly { name: string }[]): void {
+  if (new Set(dashboards.map((dashboard) => dashboard.name)).size !== dashboards.length) {
+    throw new Error("Dashboard names must be unique");
+  }
+}
+
 function parseManifest(value: unknown, file: string): DashboardManifest {
   if (typeof value !== "object" || value === null) {
     throw new Error(`${file} must contain an object`);
@@ -213,8 +219,40 @@ export async function loadDashboardManifests(directory: string): Promise<Dashboa
       parseManifest(JSON.parse(await readFile(resolve(directory, file), "utf8")), file),
     ),
   );
-  if (new Set(manifests.map((manifest) => manifest.name)).size !== manifests.length) {
-    throw new Error("Dashboard names must be unique");
-  }
+  requireUniqueDashboardNames(manifests);
   return manifests;
+}
+
+function parseDashboard(value: unknown, file: string): SigNozDashboard {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${file} must contain an object`);
+  }
+  const dashboard = value as Partial<SigNozDashboard>;
+  requireString(dashboard.name, `${file}.name`);
+  requireString(dashboard.image, `${file}.image`);
+  if (dashboard.schemaVersion !== "v6") {
+    throw new Error(`${file}.schemaVersion must be v6`);
+  }
+  if (!Array.isArray(dashboard.tags)) {
+    throw new Error(`${file}.tags must be an array`);
+  }
+  if (typeof dashboard.spec !== "object" || dashboard.spec === null) {
+    throw new Error(`${file}.spec must be an object`);
+  }
+  return dashboard as SigNozDashboard;
+}
+
+export async function loadProvisionedDashboards(
+  manifestDirectory: string,
+  dashboardFiles: readonly (string | URL)[],
+): Promise<SigNozDashboard[]> {
+  const manifests = await loadDashboardManifests(manifestDirectory);
+  const imported = await Promise.all(
+    dashboardFiles.map(async (file) =>
+      parseDashboard(JSON.parse(await readFile(file, "utf8")), file.toString()),
+    ),
+  );
+  const dashboards = [...manifests.map(compileDashboard), ...imported];
+  requireUniqueDashboardNames(dashboards);
+  return dashboards;
 }

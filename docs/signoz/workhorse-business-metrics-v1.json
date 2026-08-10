@@ -1,10 +1,14 @@
 {
   "schemaVersion": "v6",
-  "name": "",
-  "generateName": true,
+  "name": "workhorse-jobs",
+  "image": "/assets/Icons/eight-ball",
   "tags": [
     {
       "key": "component",
+      "value": "workhorse"
+    },
+    {
+      "key": "managed-by",
       "value": "workhorse"
     }
   ],

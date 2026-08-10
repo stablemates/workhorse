@@ -1,15 +1,12 @@
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-  compileDashboard,
-  loadDashboardManifests,
-  type SigNozDashboard,
-} from "./signoz-dashboard-manifest.js";
+import { loadProvisionedDashboards, type SigNozDashboard } from "./signoz-dashboard-manifest.js";
 
 type SigNozResponse<T> = { status: "success"; data: T };
 type ListedDashboard = SigNozDashboard & { id: string };
 
 const dashboardDirectory = resolve("ops/signoz/dashboards");
+const importedDashboardFiles = [resolve("docs/signoz/workhorse-business-metrics-v1.json")];
 const baseUrl = (process.env.SIGNOZ_URL ?? "http://127.0.0.1:3301").replace(/\/$/, "");
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -50,11 +47,20 @@ function comparable(dashboard: SigNozDashboard): object {
 }
 
 async function main(): Promise<void> {
-  const manifests = await loadDashboardManifests(dashboardDirectory);
+  const desiredDashboards = await loadProvisionedDashboards(
+    dashboardDirectory,
+    importedDashboardFiles,
+  );
   await waitUntilReady();
   const listed = await request<{ dashboards: ListedDashboard[] }>("/api/v2/dashboards");
-  for (const manifest of manifests) {
-    const desired = compileDashboard(manifest);
+  for (const desired of desiredDashboards) {
+    const title =
+      typeof desired.spec.display === "object" &&
+      desired.spec.display !== null &&
+      "name" in desired.spec.display &&
+      typeof desired.spec.display.name === "string"
+        ? desired.spec.display.name
+        : desired.name;
     const matches = listed.dashboards.filter((dashboard) => dashboard.name === desired.name);
     if (matches.length > 1) {
       throw new Error(`SigNoz contains duplicate dashboards named ${desired.name}`);
@@ -66,7 +72,7 @@ async function main(): Promise<void> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(desired),
       });
-      console.log(`Created SigNoz dashboard ${manifest.title} (${created.id})`);
+      console.log(`Created SigNoz dashboard ${title} (${created.id})`);
       continue;
     }
 
@@ -75,7 +81,7 @@ async function main(): Promise<void> {
     }
     const current = await request<ListedDashboard>(`/api/v2/dashboards/${existing.id}`);
     if (isDeepStrictEqual(comparable(current), comparable(desired))) {
-      console.log(`SigNoz dashboard ${manifest.title} is current (${existing.id})`);
+      console.log(`SigNoz dashboard ${title} is current (${existing.id})`);
       continue;
     }
     await request<ListedDashboard>(`/api/v2/dashboards/${existing.id}`, {
@@ -83,7 +89,7 @@ async function main(): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(desired),
     });
-    console.log(`Updated SigNoz dashboard ${manifest.title} (${existing.id})`);
+    console.log(`Updated SigNoz dashboard ${title} (${existing.id})`);
   }
 }
 
