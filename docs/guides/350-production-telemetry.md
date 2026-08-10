@@ -33,14 +33,29 @@ unregisterQueueMetrics();
 Register the callback once for each database telemetry resource. If every worker registers the
 same database, the backend receives duplicate observations.
 
-## Keep metric dimensions bounded
+## Ask business questions by job type and queue
 
-Workhorse metrics use fixed state and outcome values. They never attach a job id, job type, queue
-name, worker id, schedule name, or namespace, because those values can create an unlimited number
-of time series.
+Lifecycle counters and handler timing metrics attach the job type and queue name. SigNoz can group
+throughput, failures, retries, and runtime by either value.
 
-Traces can carry job and queue identifiers because sampling bounds their event volume. Configure
-your exporter and backend retention according to the sensitivity of those identifiers.
+Keep both values as stable application identifiers. If a job type contains a customer or request
+identifier, every value creates more time series and makes metric storage grow continuously.
+
+Workhorse never attaches a job id, worker id, schedule name, payload value, or arbitrary job tag to
+a metric. Traces retain job identity because sampling and trace retention bound their event volume.
+
+## Filter every signal by its deployment
+
+Set `deployment.environment.name` and `service.name` as OpenTelemetry resource attributes in the
+host application. The SDK attaches them to metrics and traces, so Workhorse does not repeat them at
+every recording site.
+
+Import the Workhorse jobs dashboard from `docs/signoz/` into SigNoz. Its variables filter by
+environment, service, queue, and job type. Its panels cover throughput, terminal failures, retries,
+runtime percentiles, worker capacity, queue pressure, and estimated drain time.
+
+The slow-task table ranks task types from handler spans. Trace sampling can change that ranking, so
+use the handler histogram when you need unsampled percentiles for one task type.
 
 ## Next
 

@@ -22,7 +22,7 @@ export {
   registerQueueMetrics,
   TRACE_ATTRIBUTE_COUNT_LIMIT,
 } from "./telemetry.js";
-export type { QueueMetricSource } from "./telemetry.js";
+export type { QueueMetricSnapshot, QueueMetricSource } from "./telemetry.js";
 export {
   CheckpointConflictError,
   CheckpointLeaseLostError,
