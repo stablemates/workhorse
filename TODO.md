@@ -18,9 +18,8 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P0-04 Notification-assisted dispatch**
-2. **P1-06 Queue concurrency policies**
-3. **P1-07 Rate limiting**
+1. **P1-06 Queue concurrency policies**
+2. **P1-07 Rate limiting**
 
 The demo, the initial integration packages, the operator query surface, progress, dead letters,
 deadlines, the durable worker registry, the framework-neutral dashboard host, and the release and
@@ -172,18 +171,18 @@ forcing the dashboard and the workers into one process.
 - [x] Reduce `@workhorse/hono` to route registration and drop its `@orpc/server` dependency.
 - [x] Fall through untouched on requests outside the mount path.
 
-### [ ] P0-04 Notification-assisted dispatch
+### [x] P0-04 Notification-assisted dispatch
 
 **Depends on:** P0-03
 
 Use `workhorse_jobs` to wake a claiming worker instead of polling. The notification stays a wake
 hint, and polling stays the source of truth.
 
-- [ ] Listen to `workhorse_jobs` notifications as wake hints while retaining polling as the source
+- [x] Listen to `workhorse_jobs` notifications as wake hints while retaining polling as the source
       of truth.
-- [ ] Coalesce wakeups and reconnect safely after PostgreSQL connection loss.
-- [ ] Bound idle polling so lost notifications cannot strand ready work.
-- [ ] Measure idle database load and enqueue-to-claim latency against polling-only behavior.
+- [x] Coalesce wakeups and reconnect safely after PostgreSQL connection loss.
+- [x] Bound idle polling so lost notifications cannot strand ready work.
+- [x] Measure idle database load and enqueue-to-claim latency against polling-only behavior.
 
 ### [x] P0-05 Built-in retry policies
 

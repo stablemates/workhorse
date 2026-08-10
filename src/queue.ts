@@ -67,6 +67,11 @@ import {
   type QueueMetricSnapshot,
   withSpan,
 } from "./telemetry.js";
+import {
+  subscribeToJobNotifications,
+  supportsJobNotifications,
+  type JobNotificationSubscription,
+} from "./notifications.js";
 
 export interface ScheduleJobDefinition {
   type: string;
@@ -1149,6 +1154,20 @@ export class Queue {
     options: QueueOptions = {},
   ) {
     this.options = validateQueueOptions(options);
+  }
+
+  /** @internal Whether workers can reserve a node-postgres LISTEN connection. */
+  supportsJobNotifications(): boolean {
+    return supportsJobNotifications(this.database);
+  }
+
+  /** @internal Subscribe a worker to the process-local notification hub for this database. */
+  subscribeToJobNotifications(
+    queueName: string,
+    wake: () => void,
+    error: (error: unknown) => void,
+  ): Promise<JobNotificationSubscription | null> {
+    return subscribeToJobNotifications(this.database, { queueName, wake, error });
   }
 
   async enqueue<TPayload extends Json>(

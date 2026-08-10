@@ -164,6 +164,26 @@ describe("operational scenario contracts", () => {
     );
     expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|latency target|sla/);
   });
+
+  it("defines notification dispatch evidence without a production performance claim", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "notification-dispatch",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/both dispatch modes execute/);
+    expect(contract!.invariants.join("\n")).toMatch(/fewer empty claims/);
+    expect(contract!.invariants.join("\n")).toMatch(/bounded polling fallback/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "pollingIdleClaimCalls",
+        "notificationIdleClaimCalls",
+        "pollingEnqueueToClaimMs",
+        "notificationEnqueueToClaimMs",
+      ]),
+    );
+    expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|latency target|sla/);
+  });
 });
 
 describe("resolveOperationalScenarioOptions", () => {

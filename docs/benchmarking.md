@@ -6,6 +6,7 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 - [2026-08-10 payload-contract smoke analysis](benchmarks/2026-08-10-payload-contracts-smoke-analysis.md): contracted transition timings and redaction invariants without an overhead claim.
 - [`results/2026-08-10-payload-contracts-smoke.json`](benchmarks/results/2026-08-10-payload-contracts-smoke.json): schema-v20 lifecycle smoke artifact for the extended `retry-paths` scenario.
+- [`results/2026-08-10-notification-dispatch-smoke.json`](benchmarks/results/2026-08-10-notification-dispatch-smoke.json): notification-assisted dispatch smoke artifact comparing idle claims and enqueue-to-claim latency with polling-only dispatch.
 - [2026-07-22 performance pivot and competitor analysis](benchmarks/2026-07-22-performance-pivot-competitor-analysis.md): architecture pivot result, controlled Graphile Worker/pg-boss baseline, pg-boss batching sensitivity, resource costs, and supported product claims.
 - [`results/2026-07-22-competitor-default.json`](benchmarks/results/2026-07-22-competitor-default.json): controlled per-job competitor baseline with six repetitions at 1/4/16 workers.
 - [`results/2026-07-22-competitor-pgboss-batched-default.json`](benchmarks/results/2026-07-22-competitor-pgboss-batched-default.json): explicitly non-equivalent pg-boss batch-size sensitivity.
@@ -66,6 +67,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `retention-pruning`             | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                                                                                   |
 | `health-snapshot`               | health-query latency and internally consistent degraded-state counts                                                                                                                             |
 | `worker-concurrency`            | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants |
+| `notification-dispatch`         | polling-only versus notification-assisted idle claim pressure, enqueue-to-claim latency, completion, and bounded-fallback invariants                                                             |
 | `telemetry-context`             | equal-cohort enqueue and claiming timings with the OpenTelemetry SDK disabled and enabled, plus export, payload, and index invariants                                                            |
 
 Scenario invariant failures abort the suite. This prevents a fast but semantically incorrect run from being treated as evidence.
@@ -139,6 +141,13 @@ an I/O-like delayed profile. It records complete-run throughput, handler-start p
 heartbeat pressure, maximum concurrent claims, and maximum handler overlap. Every topology uses the real
 `Worker` runtime. These measurements cover process-local topology overhead, not operating-system process
 isolation or global queue concurrency.
+
+`notification-dispatch` holds polling-only and notification-assisted workers idle before enqueue,
+then records empty claim calls and client-observed enqueue-to-claim latency. The smoke artifact
+observed four empty polling claims versus zero notification-assisted claims in its short idle
+window, and about 94 ms versus 28 ms enqueue-to-claim latency. These values prove the benchmark
+wiring and the intended mechanism on one development machine; they are not production latency or
+capacity claims.
 
 `telemetry-context` records full enqueue and claiming durations for equal baseline and instrumented
 cohorts. The instrumented cohort uses in-memory span and metric exporters, so the timings include
@@ -265,6 +274,7 @@ pnpm benchmark -- --suite lifecycle --profile smoke --scenario lease-expiry-reco
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario idempotent-ingress
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario cancellation-lifecycle
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario worker-concurrency
+pnpm benchmark -- --suite lifecycle --profile smoke --scenario notification-dispatch
 ```
 
 ## Canonical JSON contract

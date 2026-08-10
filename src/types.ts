@@ -1,5 +1,24 @@
 import type { QueryResult, QueryResultRow } from "pg";
 
+export interface DatabaseNotification {
+  channel: string;
+  payload?: string;
+}
+
+/** Dedicated node-postgres connection used for LISTEN/NOTIFY wake hints. */
+export interface NotificationClient extends Queryable {
+  on(event: "notification", listener: (notification: DatabaseNotification) => void): this;
+  on(event: "error", listener: (error: Error) => void): this;
+  on(event: "end", listener: () => void): this;
+  removeListener(
+    event: "notification",
+    listener: (notification: DatabaseNotification) => void,
+  ): this;
+  removeListener(event: "error", listener: (error: Error) => void): this;
+  removeListener(event: "end", listener: () => void): this;
+  release(error?: Error | boolean): void;
+}
+
 export interface Queryable {
   /** Minimal structural contract shared by pg Pool and PoolClient. */
   query<R extends QueryResultRow = QueryResultRow>(

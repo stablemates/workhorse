@@ -647,4 +647,25 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 - Schedules have one-second precision; cron expressions are evaluated in the worker's configured timezone, for which UTC is recommended.
 - Runtime updates centralize churn in one relation and require vacuum and HOT-update validation under sustained heartbeat load.
 - `NOTIFY` is a wake hint. Polling remains the correctness mechanism.
+- `Worker.run()` subscribes through a process-local `JobNotificationHub` keyed by the exact
+  notification connection identity. `Queue.supportsJobNotifications()` checks that capability and
+  `Queue.subscribeToJobNotifications()` returns a `JobNotificationSubscription`; its `close()`
+  removes that worker and closes the hub after the final subscriber. A node-postgres pool therefore
+  reserves one shared connection for `LISTEN workhorse_jobs` regardless of the number of subscribing
+  `Queue` or `Worker` objects. The Drizzle adapter forwards its node-postgres `$client.connect()`
+  capability and uses `$client` as `notificationConnectionIdentity`; query-only adapters do not
+  listen. A pool whose `options.max` is 1 also remains polling-only, which prevents its sole
+  connection from being held away from claims. Queue-name payloads wake matching subscribers and
+  `*` wakes all subscribers. Repeated
+  notifications collapse through the worker's replace-on-wake `AbortController` rather than
+  creating concurrent claim loops.
+- Listener error or end events release the failed client, wake all subscribers, and reconnect after
+  exponential delays from 100 ms through 5,000 ms with ±10% jitter. Initial connection and every
+  reconnect also wake all subscribers, so work committed during the gap gets an immediate claim.
+  `WorkerOptions.onNotificationError` observes failures; they never fail dispatch. The final
+  subscriber issues `UNLISTEN`, releases the shared connection, and lets normal worker drain finish.
+- Notification-capable `Worker.run()` uses a 5,000 ms default fallback poll with ±10% jitter. An
+  explicit `pollMs` replaces that base. Query-only adapters and `runOnce()` retain the 250 ms
+  compatibility default; `runOnce()` never opens a listener. Every empty poll still runs the same
+  authoritative `claim_v1`, so lost notifications bound delay rather than changing correctness.
 - Retention operates on minimum windows. Daily granularity, bounded passes, and retained attribution can extend actual storage beyond a configured cutoff.

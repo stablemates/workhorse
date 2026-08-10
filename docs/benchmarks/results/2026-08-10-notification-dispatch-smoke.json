@@ -1,0 +1,133 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 4,
+        "sampleIntervalMs": 100,
+        "targetJobs": 20,
+        "targetRatePerSecond": 40,
+        "workerConcurrency": 2
+      },
+      "enqueueBatchSize": 4,
+      "jobsPerRun": 12,
+      "leaseMs": 5000,
+      "repetitions": 2,
+      "seed": 1,
+      "workerConcurrency": [1, 2]
+    },
+    "operational": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "retryDelayMs": 30,
+      "scenarios": ["notification-dispatch"],
+      "scheduleDelayMs": 30
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_next_feature_5caa1c63",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-10T20:40:32.317Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "queuePrefix": "operational",
+      "retryDelayMs": 30,
+      "scenarios": ["notification-dispatch"],
+      "scheduleDelayMs": 30
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": true,
+            "expected": true,
+            "name": "polling-only dispatch executes the job",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "notification-assisted dispatch executes the job",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "notification assistance reduces idle empty claims",
+            "passed": true
+          },
+          {
+            "actual": 5000,
+            "expected": 5000,
+            "name": "notification fallback remains bounded",
+            "passed": true
+          }
+        ],
+        "durationMs": 1047.694867,
+        "metrics": {
+          "idleWindowMs": 400,
+          "notificationEnqueueToClaimMs": 28.294338000000153,
+          "notificationEnqueueToHandlerMs": 28.710007000000132,
+          "notificationFallbackMs": 5000,
+          "notificationIdleClaimCalls": 0,
+          "pollingEnqueueToClaimMs": 94.444793,
+          "pollingEnqueueToHandlerMs": 95.71608500000002,
+          "pollingFallbackMs": 100,
+          "pollingIdleClaimCalls": 4
+        },
+        "name": "notification-dispatch"
+      }
+    ],
+    "totalDurationMs": 1047.7158849999998
+  },
+  "profile": "smoke",
+  "provenance": {
+    "command": [
+      "/home/anton/.local/share/mise/installs/node/24.15.0/bin/node",
+      "/home/anton/orca/workspaces/workhorse/next-feature/src/cli/benchmark.ts",
+      "--",
+      "--suite",
+      "lifecycle",
+      "--profile",
+      "smoke",
+      "--scenario",
+      "notification-dispatch",
+      "--output",
+      "docs/benchmarks/results/2026-08-10-notification-dispatch-smoke.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187801088
+    },
+    "source": {
+      "commit": "bb354f10356f8f1bfdd71a523bb4ae4813ded9a0",
+      "dirty": true
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}

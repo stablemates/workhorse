@@ -275,7 +275,7 @@ Restart=on-failure
 ## Operational guidance
 
 - Give every process its own database pool and close it only after workers drain.
-- Budget pool capacity across process replicas. Handler concurrency does not necessarily require one database connection per handler, but claims, heartbeats, handler queries, and maintenance share the pool.
+- Budget pool capacity across process replicas. Notification-assisted dispatch reserves one shared listener connection per node-postgres pool; claims, heartbeats, handler queries, and maintenance use the remaining pool capacity.
 - Keep the process-level deadline below the orchestrator grace period.
 - Keep job leases long enough to tolerate normal heartbeat jitter, but short enough to meet recovery objectives after hard termination.
 - Treat an unexpected worker-loop failure as process-fatal and let the supervisor restart a clean process.
@@ -287,7 +287,6 @@ Restart=on-failure
 
 The dedicated process lifecycle does not implement:
 
-- notification-assisted dispatch (`workhorse_jobs` exists as a hint, but claims still poll);
 - OpenTelemetry spans or process metrics;
 - handler execution deadlines or forced handler cancellation;
 - global concurrency or rate limits across processes;
