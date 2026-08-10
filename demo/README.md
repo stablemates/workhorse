@@ -43,7 +43,7 @@ Prerequisites are Node.js 22+, pnpm 10+, workspace dependencies installed with `
 PostgreSQL 15+ with the local `workhorse` role described in the root README. No PostgreSQL extensions are
 required; recurring work runs through the workers themselves.
 
-The observability demo exports OpenTelemetry traces and metrics to a local SigNoz collector. Install the
+The observability demo exports OpenTelemetry logs, traces, and metrics to a local SigNoz collector. Install the
 supported SigNoz Foundry CLI, then start SigNoz and the instrumented demo from the repository root:
 
 ```bash
@@ -53,7 +53,8 @@ pnpm demo:otel
 
 Open SigNoz at `http://signoz.localhost:43155`. The server and worker appear as separate services, while HTTP,
 PostgreSQL, Node.js runtime, and Workhorse queue, execution, schedule, maintenance, and fleet telemetry share
-the same local OTLP endpoint. The server owns the database-wide metric observations, so queue and worker
+the same local OTLP endpoint. Structured logs retain their active trace context, so SigNoz can correlate
+handler activity with its trace. The server owns the database-wide metric observations, so queue and worker
 gauges are not duplicated by the worker process. `signoz:up` also reconciles the version-controlled
 **Workhorse Operations**, **Workhorse Reliability**, and **Workhorse jobs** dashboards. Run
 `pnpm signoz:dashboards` to apply dashboard changes without restarting SigNoz. Run
