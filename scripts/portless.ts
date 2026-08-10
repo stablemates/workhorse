@@ -5,7 +5,7 @@ import { join } from "node:path";
 const bypassPortless = process.env.WORKHORSE_DISABLE_PORTLESS === "1";
 const child = spawn(
   bypassPortless ? "pnpm" : "portless",
-  bypassPortless ? ["run", "demo:app"] : ["workhorse", "pnpm", "run", "demo:app"],
+  bypassPortless ? ["run", "demo:app"] : ["run", "--name", "workhorse", "pnpm", "run", "demo:app"],
   {
     env: {
       ...process.env,
