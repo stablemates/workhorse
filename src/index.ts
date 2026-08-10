@@ -17,6 +17,13 @@ export {
 } from "./support.js";
 export type { PostgresSupport } from "./support.js";
 export {
+  MAX_TRACE_CONTEXT_BYTES,
+  METRIC_ATTRIBUTE_CARDINALITY_LIMIT,
+  registerQueueMetrics,
+  TRACE_ATTRIBUTE_COUNT_LIMIT,
+} from "./telemetry.js";
+export type { QueueMetricSource } from "./telemetry.js";
+export {
   CheckpointConflictError,
   CheckpointLeaseLostError,
   EnqueueIdempotencyConflictError,
@@ -116,6 +123,7 @@ export type {
   RedriveResult,
   RedriveStatus,
   RetryPolicy,
+  TraceContext,
   RetentionCategoryValues,
   RetentionPolicy,
   RetentionPolicyDefinition,

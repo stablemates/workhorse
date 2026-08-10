@@ -1,5 +1,24 @@
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  context as otelContext,
+  metrics as otelMetrics,
+  propagation,
+  trace,
+} from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { W3CTraceContextPropagator } from "@opentelemetry/core";
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from "@opentelemetry/sdk-metrics";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import type { QueryResult, QueryResultRow } from "pg";
 import {
   CancellationRequestedError,
@@ -29,6 +48,7 @@ export const operationalScenarioNames = [
   "retention-pruning",
   "health-snapshot",
   "worker-concurrency",
+  "telemetry-context",
 ] as const;
 
 export type OperationalScenarioName = (typeof operationalScenarioNames)[number];
@@ -375,6 +395,28 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "equal-capacity topology throughput, start latency, overlap, and query pressure by handler profile",
       "first-null claim count",
       "shutdown claimed, succeeded, and remaining-ready counts",
+    ],
+  },
+  {
+    name: "telemetry-context",
+    purpose:
+      "Compare enqueue and claiming timings with the OpenTelemetry SDK disabled and enabled, without making a performance claim.",
+    invariants: [
+      "instrumented and baseline batches accept and complete the same number of jobs",
+      "trace metadata remains separate from an unchanged application payload",
+      "only instrumented claims return a W3C parent context",
+      "the active SDK exports spans and metrics for the instrumented cohort",
+      "trace metadata adds no dispatch index",
+    ],
+    metrics: [
+      "jobsPerCohort",
+      "baselineEnqueueMs",
+      "instrumentedEnqueueMs",
+      "baselineClaimMs",
+      "instrumentedClaimMs",
+      "exportedSpans",
+      "exportedMetrics",
+      "traceContextIndexes",
     ],
   },
 ] as const;
@@ -2998,6 +3040,143 @@ async function workerConcurrency(
   return { name: "worker-concurrency", durationMs: 0, metrics, assertions };
 }
 
+async function drainTelemetryContextQueue(
+  queue: Queue,
+  workerId: string,
+): Promise<ClaimedJob<{ index: number }>[]> {
+  const claimed: ClaimedJob<{ index: number }>[] = [];
+  while (true) {
+    const job = await queue.claim<{ index: number }>(workerId);
+    if (job === null) return claimed;
+    claimed.push(job);
+    await queue.complete(job, workerId, { ok: true });
+  }
+}
+
+async function telemetryContext(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const assertions: ScenarioAssertion[] = [];
+  const jobsPerCohort = context.options.jobCount;
+  const baselineQueue = `${context.queueName}-baseline`;
+  const instrumentedQueue = `${context.queueName}-instrumented`;
+  const baseline = new Queue(context.pool, baselineQueue);
+  const instrumented = new Queue(context.pool, instrumentedQueue);
+  const requests = Array.from({ length: jobsPerCohort }, (_, index) => ({
+    type: "telemetry-context",
+    payload: { index },
+  }));
+
+  const baselineEnqueueStarted = context.now();
+  const baselineIds = await baseline.enqueueMany(requests);
+  const baselineEnqueueMs = context.now() - baselineEnqueueStarted;
+  const baselineClaimStarted = context.now();
+  const baselineClaims = await drainTelemetryContextQueue(baseline, "telemetry-baseline");
+  const baselineClaimMs = context.now() - baselineClaimStarted;
+
+  const spanExporter = new InMemorySpanExporter();
+  const tracerProvider = new BasicTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(spanExporter)],
+  });
+  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const metricReader = new PeriodicExportingMetricReader({
+    exporter: metricExporter,
+    exportIntervalMillis: 60_000,
+  });
+  const meterProvider = new MeterProvider({ readers: [metricReader] });
+  const contextManager = new AsyncLocalStorageContextManager().enable();
+  const sdkInstalled = [
+    otelContext.setGlobalContextManager(contextManager),
+    propagation.setGlobalPropagator(new W3CTraceContextPropagator()),
+    otelMetrics.setGlobalMeterProvider(meterProvider),
+    trace.setGlobalTracerProvider(tracerProvider),
+  ].every(Boolean);
+
+  const instrumentedEnqueueStarted = context.now();
+  const instrumentedIds = await instrumented.enqueueMany(requests);
+  const instrumentedEnqueueMs = context.now() - instrumentedEnqueueStarted;
+  const instrumentedClaimStarted = context.now();
+  const instrumentedClaims = await drainTelemetryContextQueue(
+    instrumented,
+    "telemetry-instrumented",
+  );
+  const instrumentedClaimMs = context.now() - instrumentedClaimStarted;
+  await tracerProvider.forceFlush();
+  await meterProvider.forceFlush();
+  const exportedSpans = spanExporter.getFinishedSpans().length;
+  const exportedMetrics = metricExporter
+    .getMetrics()
+    .flatMap((resource) => resource.scopeMetrics)
+    .flatMap((scope) => scope.metrics).length;
+  await tracerProvider.shutdown();
+  await meterProvider.shutdown();
+  contextManager.disable();
+  otelContext.disable();
+  propagation.disable();
+  trace.disable();
+  otelMetrics.disable();
+  const indexes = await context.pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM pg_indexes
+      WHERE schemaname = 'workhorse' AND indexdef ILIKE '%trace_context%'`,
+  );
+  const traceContextIndexes = Number(indexes.rows[0]?.count ?? 0);
+
+  recordInvariant(assertions, "baseline cohort accepted", baselineIds.length, jobsPerCohort);
+  recordInvariant(
+    assertions,
+    "instrumented cohort accepted",
+    instrumentedIds.length,
+    jobsPerCohort,
+  );
+  recordInvariant(assertions, "baseline cohort completed", baselineClaims.length, jobsPerCohort);
+  recordInvariant(
+    assertions,
+    "instrumented cohort completed",
+    instrumentedClaims.length,
+    jobsPerCohort,
+  );
+  recordInvariant(
+    assertions,
+    "baseline claims omit trace context",
+    baselineClaims.every((job) => job.traceContext === null),
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "instrumented claims retain trace context",
+    instrumentedClaims.every((job) => job.traceContext?.traceparent !== undefined),
+    true,
+  );
+  recordInvariant(assertions, "OpenTelemetry SDK installed", sdkInstalled, true);
+  recordInvariant(assertions, "instrumented spans exported", exportedSpans > 0, true);
+  recordInvariant(assertions, "instrumented metrics exported", exportedMetrics > 0, true);
+  recordInvariant(
+    assertions,
+    "payloads remain unchanged",
+    instrumentedClaims.every((job, index) => job.payload.index === index),
+    true,
+  );
+  recordInvariant(assertions, "trace context adds no index", traceContextIndexes, 0);
+
+  return {
+    name: "telemetry-context",
+    durationMs: 0,
+    metrics: {
+      jobsPerCohort,
+      baselineEnqueueMs,
+      instrumentedEnqueueMs,
+      baselineClaimMs,
+      instrumentedClaimMs,
+      exportedSpans,
+      exportedMetrics,
+      traceContextIndexes,
+    },
+    assertions,
+  };
+}
+
 export const operationalScenarioImplementations: Readonly<
   Record<OperationalScenarioName, OperationalScenarioRunner>
 > = {
@@ -3015,6 +3194,7 @@ export const operationalScenarioImplementations: Readonly<
   "retention-pruning": retentionPruning,
   "health-snapshot": healthSnapshot,
   "worker-concurrency": workerConcurrency,
+  "telemetry-context": telemetryContext,
 };
 
 export async function runOperationalScenarios(
