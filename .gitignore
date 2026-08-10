@@ -11,4 +11,5 @@ dist/
 benchmark*.json
 benchmark-artifacts/
 health*.json
+ops/signoz/pours/
 .jcode/

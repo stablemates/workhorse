@@ -385,6 +385,47 @@ Terminal-job pruning selects a bounded candidate window of identities with outco
 
 All maintenance functions return one row per phase, `(phase, rows_affected, duration_ms, skipped_lock, error)`. The worker records this telemetry per loop, exposes it through `worker.maintenanceTelemetry()`, and forwards each row to the optional `onMaintenance` callback. Between passes a worker issues only the claim query.
 
+## OpenTelemetry metrics
+
+`@workhorse/core` depends only on `@opentelemetry/api`. It creates the `@workhorse/core` meter at
+module evaluation and never installs an SDK, reader, exporter, or resource. Applications must install
+their OpenTelemetry SDK before importing Workhorse. Without a global meter provider every instrument
+is a no-op.
+
+Queue and worker operations emit these synchronous instruments:
+
+| Instrument                           | Kind and unit           | Recording point and attributes                                                                                                                                                                          |
+| ------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workhorse.job.enqueued`             | counter, `{job}`        | One accepted `enqueue_many_v1` member, grouped by `workhorse.queue.name` and `workhorse.job.type`. An outer caller transaction may still roll back after this statement returns.                        |
+| `workhorse.job.claimed`              | counter, `{job}`        | One successful `claim_v1`, by queue and job type. Empty claim polls emit nothing.                                                                                                                       |
+| `workhorse.job.execution`            | counter, `{execution}`  | One worker handler activation, by queue, job type, and `workhorse.job.outcome`. Outcomes are `succeeded`, `retry`, `failed`, `canceled`, `deadline_exceeded`, `timeout`, `lease_lost`, and `suspended`. |
+| `workhorse.job.execution.duration`   | histogram, `s`          | Wall-clock duration of the same activation, with the same attributes. Durable wait suspension closes an activation without closing its logical attempt.                                                 |
+| `workhorse.job.cancellation`         | counter, `{request}`    | One `cancel_v1` result, by `workhorse.cancellation.status`.                                                                                                                                             |
+| `workhorse.job.redrive`              | counter, `{request}`    | Every result from single or bulk redrive operations, by `workhorse.redrive.status`.                                                                                                                     |
+| `workhorse.schedule.fired`           | counter, `{occurrence}` | One `fire_schedule_v1` call that returns a job ID, by schedule namespace and name.                                                                                                                      |
+| `workhorse.schedule.lag`             | histogram, `s`          | Delay from the planned occurrence to the successful fire, with the schedule attributes.                                                                                                                 |
+| `workhorse.lease.recovered`          | counter, `{lease}`      | Rows changed by `recover_expired_v1`; zero-result passes emit nothing.                                                                                                                                  |
+| `workhorse.worker.heartbeat.failure` | counter, `{heartbeat}`  | Every `heartbeat_v2` status other than `accepted`, by `workhorse.heartbeat.status`.                                                                                                                     |
+| `workhorse.maintenance.runs`         | counter, `{run}`        | Each maintenance result, by loop, phase, and skipped-lock flag.                                                                                                                                         |
+| `workhorse.maintenance.rows`         | counter, `{row}`        | Rows affected by the same result and attributes.                                                                                                                                                        |
+| `workhorse.maintenance.duration`     | histogram, `ms`         | SQL-reported duration for the same result and attributes.                                                                                                                                               |
+| `workhorse.maintenance.errors`       | counter, `{error}`      | Maintenance results whose `error` is non-null, with the same attributes.                                                                                                                                |
+
+`WorkhorseMetricsObserver` performs two concurrent read-only queries every `intervalMs`, which
+defaults to 10,000 and must be a safe integer of at least 1,000. `start()` collects immediately and
+then repeats on an unreferenced timer; `stop()` clears the timer; `collect()` provides a serialized
+one-shot collection. `onError` receives interval failures. Applications must run at most one observer
+per database because every observer sees the same global PostgreSQL state.
+
+The observer records `workhorse.job.count` for scheduled, ready, and active rows by queue and state;
+`workhorse.queue.oldest_ready.age`; `workhorse.queue.paused`; `workhorse.lease.expired`;
+`workhorse.deadline.overdue`; and `workhorse.execution_timeout.overdue`. A second query groups
+`worker_registry` rows into mutually exclusive `running`, `paused`, `draining`, and `offline` states;
+`offline` means the last heartbeat is at least 30 seconds old. The observer then records
+`workhorse.worker.count`, `workhorse.worker.capacity`, and `workhorse.worker.active` by queue and worker
+state. The observer never uses job IDs, worker IDs, payloads, error text, cancellation attribution, or
+redrive attribution as metric attributes.
+
 ### Durable timer suspension
 
 `schedule_wait_v1` accepts either a relative bigint duration or an absolute timestamp, locks the exact active worker/fence generation, and rechecks lease expiry after acquiring the runtime lock. A first future target inserts `job_wait`, changes runtime to wait-marked scheduled state, clears ownership, and emits `wait_scheduled`. A first past-due target is still recorded but leaves runtime active and returns elapsed. Relative replay returns the first stored target even if later configuration supplies another duration; absolute target or mode changes conflict. Reaching an elapsed name emits `wait_replayed`.
@@ -484,11 +525,13 @@ PostgreSQL starts another attempt.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live jobs are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary day.
 
-## Production telemetry
+## OpenTelemetry traces and baseline metrics
 
-`@workhorse/core` uses only `@opentelemetry/api`; the host application installs and configures the
-OpenTelemetry SDK, context manager, propagator, readers, processors, and exporters before importing
-Workhorse. Without an SDK, every instrument is a no-op and queue correctness is unchanged.
+The host application configures the OpenTelemetry context manager, propagator, readers, processors,
+exporters, and resource. Queue correctness is unchanged when no SDK is installed. The operational
+instruments above provide the detailed queue, job type, outcome, and fleet dimensions used by the
+bundled SigNoz dashboards. The baseline instruments below retain a smaller attribute set for
+deployments that enforce a fixed cardinality cap.
 
 `Queue.enqueueMany` creates `workhorse.enqueue` and injects the active W3C context into the new
 job's `job.trace_context`. The column accepts only `traceparent` and optional `tracestate`, requires
@@ -505,7 +548,7 @@ The runtime emits `workhorse.enqueue`, `workhorse.claim`, `workhorse.handler`,
 Workhorse emits at most eight attributes on one span and exports
 `TRACE_ATTRIBUTE_COUNT_LIMIT = 8` for matching SDK span limits.
 
-The meter exposes these instruments:
+The meter also exposes these baseline instruments:
 
 - `workhorse.queue.depth` is an observable gauge split only by `workhorse.job.state` values
   `ready`, `scheduled`, and `active`.
@@ -515,13 +558,15 @@ The meter exposes these instruments:
 - `workhorse.claim.duration`, `workhorse.handler.duration`, and
   `workhorse.maintenance.drift` are millisecond histograms.
 
-`registerQueueMetrics(queue)` registers the database-wide depth and age callbacks and returns a
-cleanup function. Register it once per database and telemetry resource; registering it for every
-worker duplicates observations. Metric attributes are limited to the fixed enums
+`registerQueueMetrics(queue)` registers the baseline database-wide depth and age callbacks and
+returns a cleanup function. Register it once per database and telemetry resource; registering it for
+every worker duplicates observations. Baseline metric attributes are limited to the fixed enums
 `workhorse.job.state`, `workhorse.claim.result`, and `workhorse.maintenance.loop`. Workhorse emits
 at most 32 attribute combinations per instrument and exports
-`METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 32` for matching SDK views. Queue names, job types, job IDs,
-worker IDs, schedule names, and namespaces are forbidden metric attributes.
+`METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 32` for matching baseline SDK views. They do not use queue
+names, job types, job IDs, worker IDs, schedule names, or namespaces. The detailed operational
+instruments use the bounded attributes documented in the preceding metrics section and never use
+job IDs, worker IDs, payloads, or error text.
 
 Start production dashboards with ready and scheduled depth, oldest-ready age, and claiming and handler
 latency percentiles. Add rates for enqueueing, claiming, and completing jobs, plus failure and retry

@@ -22,7 +22,7 @@ const INSTRUMENTATION_NAME = "@workhorse/core";
 export const MAX_TRACE_CONTEXT_BYTES = 1_024;
 /** Maximum span attributes Workhorse emits on any one span. */
 export const TRACE_ATTRIBUTE_COUNT_LIMIT = 8;
-/** Upper bound applications should configure on each SDK metric stream. */
+/** Cardinality cap applications can configure for the baseline metric views. */
 export const METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 32;
 
 const tracer = trace.getTracer(INSTRUMENTATION_NAME);
