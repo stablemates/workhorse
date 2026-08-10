@@ -1,0 +1,158 @@
+{
+  "name": "workhorse-reliability",
+  "title": "Workhorse Reliability",
+  "description": "Execution latency, deadline pressure, schedules, maintenance, and operator recovery paths.",
+  "tags": {
+    "component": "workhorse",
+    "view": "reliability"
+  },
+  "panels": [
+    {
+      "id": "execution-latency",
+      "title": "Execution latency p95",
+      "description": "The slow end of handler execution time by job type.",
+      "unit": "s",
+      "queries": [
+        {
+          "metric": "workhorse.job.execution.duration.bucket",
+          "timeAggregation": "rate",
+          "spaceAggregation": "p95",
+          "groupBy": ["workhorse.job.type"],
+          "legend": "{{workhorse.job.type}}"
+        }
+      ]
+    },
+    {
+      "id": "deadline-pressure",
+      "title": "Overdue work",
+      "description": "Expired leases and jobs beyond deadline or execution timeout.",
+      "unit": "{job}",
+      "queries": [
+        {
+          "metric": "workhorse.lease.expired",
+          "timeAggregation": "latest",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.queue.name"],
+          "legend": "expired leases {{workhorse.queue.name}}"
+        },
+        {
+          "metric": "workhorse.deadline.overdue",
+          "timeAggregation": "latest",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.queue.name"],
+          "legend": "deadlines {{workhorse.queue.name}}"
+        },
+        {
+          "metric": "workhorse.execution_timeout.overdue",
+          "timeAggregation": "latest",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.queue.name"],
+          "legend": "timeouts {{workhorse.queue.name}}"
+        }
+      ]
+    },
+    {
+      "id": "schedule-lag",
+      "title": "Schedule lag p95",
+      "description": "Delay between a planned schedule occurrence and its durable firing.",
+      "unit": "s",
+      "queries": [
+        {
+          "metric": "workhorse.schedule.lag.bucket",
+          "timeAggregation": "rate",
+          "spaceAggregation": "p95",
+          "groupBy": ["workhorse.schedule.namespace", "workhorse.schedule.name"],
+          "legend": "{{workhorse.schedule.namespace}} / {{workhorse.schedule.name}}"
+        }
+      ]
+    },
+    {
+      "id": "maintenance-latency",
+      "title": "Maintenance latency p95",
+      "description": "SQL-reported maintenance phase duration.",
+      "unit": "ms",
+      "queries": [
+        {
+          "metric": "workhorse.maintenance.duration.bucket",
+          "timeAggregation": "rate",
+          "spaceAggregation": "p95",
+          "groupBy": ["workhorse.maintenance.loop", "workhorse.maintenance.phase"],
+          "legend": "{{workhorse.maintenance.loop}} / {{workhorse.maintenance.phase}}"
+        }
+      ]
+    },
+    {
+      "id": "maintenance-work",
+      "title": "Maintenance work",
+      "description": "Rows changed per second by each maintenance phase.",
+      "unit": "{row}/s",
+      "queries": [
+        {
+          "metric": "workhorse.maintenance.rows",
+          "timeAggregation": "rate",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.maintenance.loop", "workhorse.maintenance.phase"],
+          "legend": "{{workhorse.maintenance.loop}} / {{workhorse.maintenance.phase}}"
+        }
+      ]
+    },
+    {
+      "id": "recovery-signals",
+      "title": "Recovery signals",
+      "description": "Maintenance failures, lease recoveries, and rejected heartbeats per second.",
+      "unit": "ops/s",
+      "queries": [
+        {
+          "metric": "workhorse.maintenance.errors",
+          "timeAggregation": "rate",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.maintenance.phase"],
+          "legend": "maintenance error {{workhorse.maintenance.phase}}"
+        },
+        {
+          "metric": "workhorse.lease.recovered",
+          "timeAggregation": "rate",
+          "spaceAggregation": "sum",
+          "legend": "recovered leases"
+        },
+        {
+          "metric": "workhorse.worker.heartbeat.failure",
+          "timeAggregation": "rate",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.heartbeat.status"],
+          "legend": "heartbeat {{workhorse.heartbeat.status}}"
+        }
+      ]
+    },
+    {
+      "id": "cancellation-results",
+      "title": "Cancellation results",
+      "description": "Cancellation request rate split by durable result.",
+      "unit": "ops/s",
+      "queries": [
+        {
+          "metric": "workhorse.job.cancellation",
+          "timeAggregation": "rate",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.cancellation.status"],
+          "legend": "{{workhorse.cancellation.status}}"
+        }
+      ]
+    },
+    {
+      "id": "redrive-results",
+      "title": "Redrive results",
+      "description": "Redrive request rate split by durable result.",
+      "unit": "ops/s",
+      "queries": [
+        {
+          "metric": "workhorse.job.redrive",
+          "timeAggregation": "rate",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.redrive.status"],
+          "legend": "{{workhorse.redrive.status}}"
+        }
+      ]
+    }
+  ]
+}
