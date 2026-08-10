@@ -15,6 +15,7 @@ import {
   type TextMapGetter,
   type TextMapSetter,
 } from "@opentelemetry/api";
+import { SeverityNumber, logs, type LogAttributes, type Logger } from "@opentelemetry/api-logs";
 import type { ClaimedJob, TraceContext } from "./types.js";
 
 const INSTRUMENTATION_NAME = "@workhorse/core";
@@ -26,6 +27,92 @@ export const TRACE_ATTRIBUTE_COUNT_LIMIT = 8;
 export const METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 2_000;
 
 const tracer = trace.getTracer(INSTRUMENTATION_NAME);
+
+function lazyLogger(): Pick<Logger, "emit"> {
+  let logger: Logger | undefined;
+  let provider = logs.getLoggerProvider();
+  return {
+    emit(record) {
+      const activeProvider = logs.getLoggerProvider();
+      if (logger === undefined || activeProvider !== provider) {
+        provider = activeProvider;
+        logger = provider.getLogger(INSTRUMENTATION_NAME);
+      }
+      logger.emit(record);
+    },
+  };
+}
+
+const telemetryLogger = lazyLogger();
+
+type WorkhorseLogEvent =
+  | "workhorse.handler.finished"
+  | "workhorse.handler.registered"
+  | "workhorse.handler.started"
+  | "workhorse.job.cancellation_acknowledged"
+  | "workhorse.job.cancellation_processed"
+  | "workhorse.job.checkpoint_saved"
+  | "workhorse.job.claimed"
+  | "workhorse.job.completed"
+  | "workhorse.job.completion_rejected"
+  | "workhorse.job.enqueue_replayed"
+  | "workhorse.job.enqueued"
+  | "workhorse.job.execution_finished"
+  | "workhorse.job.failure_processed"
+  | "workhorse.job.heartbeat_accepted"
+  | "workhorse.job.heartbeat_rejected"
+  | "workhorse.job.ownership_expired"
+  | "workhorse.job.progress_updated"
+  | "workhorse.job.redrive_processed"
+  | "workhorse.job.run_now_requested"
+  | "workhorse.job.wait_processed"
+  | "workhorse.jobs.promoted"
+  | "workhorse.jobs.redrive_processed"
+  | "workhorse.leases.recovered"
+  | "workhorse.maintenance.completed"
+  | "workhorse.maintenance_policy.synchronized"
+  | "workhorse.queue.paused"
+  | "workhorse.queue.purged"
+  | "workhorse.queue.resumed"
+  | "workhorse.retention_policy.synchronized"
+  | "workhorse.schedule.fire_replayed"
+  | "workhorse.schedule.fired"
+  | "workhorse.schedules.synchronized"
+  | "workhorse.worker.deregistered"
+  | "workhorse.worker.paused"
+  | "workhorse.worker.registered"
+  | "workhorse.worker.registration_failed"
+  | "workhorse.worker.resumed"
+  | "workhorse.worker.started"
+  | "workhorse.worker.stop_requested"
+  | "workhorse.worker.stopped"
+  | "workhorse.worker_registry.pruned";
+
+function emitLog(
+  severityNumber: SeverityNumber,
+  severityText: "DEBUG" | "INFO",
+  eventName: WorkhorseLogEvent,
+  body: string,
+  attributes: LogAttributes,
+): void {
+  telemetryLogger.emit({ severityNumber, severityText, eventName, body, attributes });
+}
+
+export function logDebug(
+  eventName: WorkhorseLogEvent,
+  body: string,
+  attributes: LogAttributes = {},
+): void {
+  emitLog(SeverityNumber.DEBUG, "DEBUG", eventName, body, attributes);
+}
+
+export function logInfo(
+  eventName: WorkhorseLogEvent,
+  body: string,
+  attributes: LogAttributes = {},
+): void {
+  emitLog(SeverityNumber.INFO, "INFO", eventName, body, attributes);
+}
 
 function lazyMetric<TInstrument, TArguments extends unknown[]>(
   create: () => TInstrument,

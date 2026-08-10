@@ -8,7 +8,7 @@ if (process.env.WORKHORSE_DEMO_TELEMETRY === "true") {
   process.env.OTEL_EXPORTER_OTLP_PROTOCOL ??= "http/protobuf";
   process.env.OTEL_TRACES_EXPORTER ??= "otlp";
   process.env.OTEL_METRICS_EXPORTER ??= "otlp";
-  process.env.OTEL_LOGS_EXPORTER ??= "none";
+  process.env.OTEL_LOGS_EXPORTER ??= "otlp";
   process.env.OTEL_METRIC_EXPORT_INTERVAL ??= "10000";
   process.env.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE ??= "delta";
   process.env.OTEL_NODE_RESOURCE_DETECTORS ??= "env,host,os,process,serviceinstance";

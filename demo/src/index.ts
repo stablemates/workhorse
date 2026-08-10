@@ -14,6 +14,7 @@ import { createDemoDatabase } from "./database.js";
 import { createDashboardDevServer } from "@workhorse/dashboard/dev";
 import { resolveDemoDatabaseUrl } from "./environment.js";
 import { startDemoMetricsObserver } from "./telemetry.js";
+import { demoLogger } from "./logger.js";
 
 /**
  * The demo's web tier.
@@ -46,7 +47,10 @@ const database = createDemoDatabase(pool);
 await installSchema(pool);
 await installDemoSchema(database);
 await syncDemoSchedules(pool);
-console.log("Synchronized recurring demo schedules for worker-owned execution");
+demoLogger.info(
+  "workhorse.demo.schedules_synchronized",
+  "Synchronized recurring demo schedules for worker-owned execution",
+);
 
 // Development compiles the dashboard from source in this process. Production serves the packaged
 // bundle. Both render the page through the same host, so only module delivery differs.
@@ -60,15 +64,19 @@ const { app, workhorse } = createDemoApplication(database, {
   queueController: createLocalQueueController(database),
   scheduleController: createLocalScheduleController(database),
   close: () => pool.end(),
-  onWorkerError: (error) => console.error("Workhorse worker stopped", error),
+  onWorkerError: (error) =>
+    demoLogger.error("workhorse.demo.worker_stopped", "Workhorse worker stopped", error),
 });
 const metricsObserver = startDemoMetricsObserver(pool);
 if (process.env.SEED_DEMO_DATA !== "false") {
   const seed = await seedDemoData(database);
-  console.log(
-    seed.seeded
-      ? `Seeded ${seed.jobIds.length} live showcase and ${seed.historicalJobCount} historical demo jobs`
-      : "Live showcase and historical demo data already exist",
+  demoLogger.info(
+    seed.seeded ? "workhorse.demo.seeded" : "workhorse.demo.seed_reused",
+    seed.seeded ? "Seeded demo data" : "Live showcase and historical demo data already exist",
+    {
+      "workhorse.demo.live_job_count": seed.jobIds.length,
+      "workhorse.demo.historical_job_count": seed.historicalJobCount,
+    },
   );
 }
 const running = await serveWithWorkhorse({
@@ -79,27 +87,29 @@ const running = await serveWithWorkhorse({
   // everything they do not own.
   ...(dashboardDev ? { nodeMiddleware: dashboardDev.middlewares } : {}),
   onListen: ({ port: listeningPort }) => {
-    console.log(
-      process.env.PORTLESS_URL
-        ? `Workhorse demo available at ${process.env.PORTLESS_URL}`
-        : `Workhorse demo listening on http://localhost:${listeningPort}`,
-    );
+    demoLogger.info("workhorse.demo.listening", "Workhorse demo server listening", {
+      "server.address": process.env.PORTLESS_URL ?? `http://localhost:${listeningPort}`,
+      "server.port": listeningPort,
+    });
   },
 });
-console.log(
-  inProcessWorkers
-    ? "Workers are co-hosted in this process"
-    : "Workers run as a separate process; start them with the demo worker entry point",
+demoLogger.info(
+  "workhorse.demo.worker_topology",
+  inProcessWorkers ? "Workers are co-hosted in this process" : "Workers run as a separate process",
+  { "workhorse.demo.worker_topology": inProcessWorkers ? "in_process" : "dedicated_process" },
 );
 
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`Received ${signal}, shutting down`);
+  demoLogger.info("workhorse.demo.shutdown_started", "Demo shutdown started", {
+    "process.signal": signal,
+  });
   metricsObserver?.stop();
   await running.shutdown();
   await dashboardDev?.close();
+  demoLogger.info("workhorse.demo.shutdown_completed", "Demo shutdown completed");
 }
 
 process.once("SIGINT", () => void shutdown("SIGINT"));
