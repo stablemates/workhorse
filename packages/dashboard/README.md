@@ -51,38 +51,11 @@ reports declared concurrency, slot use, draining, and pause state for every live
 workers running in entirely separate processes or on other hosts. Operator pause is written to
 PostgreSQL and applied cooperatively by the worker when it next refreshes.
 
-## Staying live
+## Refresh behavior
 
-Auto refresh defaults to **Live**: the application subscribes to the host's SSE stream and re-reads
-whenever PostgreSQL says something changed, falling back to the timed intervals in the same menu
-when a host serves no stream. `createDashboardHost` serves the stream at `{basePath}/events` and
-hands its URL to the browser entry, so the packaged application needs no configuration.
-
-Nothing on screen is rendered from a notification payload. Every frame is a hint to re-read, and the
-page re-reads through the same queries a manual refresh uses, so a frame lost to a reconnect costs a
-slightly later refetch and never a gap in what is displayed. This is also why the Events page reads
-the durable `job_event` and `attempt_history` tables rather than the notification channels: those
-payloads carry only a queue name, are coalesced twice before arriving, and are dropped entirely
-while nothing is listening.
-
-The stream has a periodic fallback, so it is always eventually fresh. To make it react promptly to
-work happening elsewhere, bridge PostgreSQL notifications into its refresh hub:
-
-```ts
-import { listenForDashboardRefresh } from "@workhorse/dashboard/server";
-
-const client = new Client({ connectionString });
-await client.connect();
-const listener = await listenForDashboardRefresh({ client, refresh });
-```
-
-This listens on two channels. `workhorse_jobs` is the dispatch wake hint and means ready work may
-exist. `workhorse_activity` is the coalesced operator hint that workers publish when
-`WorkerOptions.activityNotifications` is enabled, and covers transitions such as completion that
-create no ready work at all. Both are liveness optimizations, never a source of truth.
-
-The client must be a dedicated connection rather than a pooled one, because `LISTEN` registers
-against a specific backend session.
+Auto refresh polls the active page every 15 seconds by default. The menu also has 5-second,
+30-second, 1-minute, 5-minute, and manual-only options. Job volume does not start extra browser
+refreshes, so the page has a stable update rate under load.
 
 ## Developing the dashboard itself
 
@@ -90,8 +63,8 @@ against a specific backend session.
 pnpm --filter @workhorse/dashboard dev
 ```
 
-Runs the browser entry from source with HMR, proxying `/rpc` and `/events` to a backend that already
-speaks them. Useful for working against a backend you do not control.
+Runs the browser entry from source with HMR and proxies `/rpc` to a backend that already speaks it.
+Useful for working against a backend you do not control.
 
 Hosts can instead embed the same thing in their own development server, which keeps everything on
 one origin:
@@ -132,7 +105,6 @@ in — pausing a queue, clearing one, releasing a scheduled task, cancelling a t
 the bottom-right corner. A custom integration that renders `Dashboard` without this provider gets no
 results at all, and `@workhorse/dashboard/styles.css` carries the styles the container needs.
 
-Set `eventsUrl={null}` when a custom host does not expose server-sent refresh events. The demo's
-job-seeding menu is not part of the required client contract. Opt into it with `demoTools` only when
-a host intentionally supplies demo fixtures. All sample and seed data remain owned by the demo
-project, never this package.
+The demo's job-seeding menu is not part of the required client contract. Opt into it with `demoTools`
+only when a host intentionally supplies demo fixtures. All sample and seed data remain owned by the
+demo project, never this package.

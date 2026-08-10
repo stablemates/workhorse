@@ -10,7 +10,6 @@ const template = `<html><head><script>${DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER}</s
 const runtime = {
   basePath: "/workhorse",
   rpcUrl: "/workhorse/rpc",
-  eventsUrl: "/workhorse/events",
   auditActor: "ops@example.com",
   demoTools: false,
 };
@@ -20,7 +19,7 @@ describe("renderDashboardHtml", () => {
     const html = renderDashboardHtml(template, { runtime });
 
     expect(html).toContain(
-      `window.workhorseDashboard={"basePath":"/workhorse","rpcUrl":"/workhorse/rpc","eventsUrl":"/workhorse/events","auditActor":"ops@example.com","demoTools":false}`,
+      `window.workhorseDashboard={"basePath":"/workhorse","rpcUrl":"/workhorse/rpc","auditActor":"ops@example.com","demoTools":false}`,
     );
     expect(html).not.toContain(DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER);
   });

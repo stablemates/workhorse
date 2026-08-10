@@ -1137,10 +1137,10 @@ export interface DashboardEventRow {
  *
  * Paged by offset and total, the same way the task listing is, so an operator moves through a busy
  * window with the control they already know rather than reading a warning that the feed was cut
- * short. It is not keyset-paginated: the page live-updates from the refresh stream, and a cursor
- * walking backwards through a list whose head keeps moving is a contradiction an operator has to
- * reason about. Deep history for a single task belongs to that task's timeline, which *is* keyset
- * paginated in the drawer; this page answers "what is happening across the fleet".
+ * short. It is not keyset-paginated: each polling refresh can move the window head, and a cursor
+ * walking backwards through that moving list is a contradiction an operator has to reason about.
+ * Deep history for a single task belongs to that task's timeline, which *is* keyset paginated in
+ * the drawer; this page answers "what is happening across the fleet".
  */
 export interface DashboardEventsPage {
   capturedAt: string;

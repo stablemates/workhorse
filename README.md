@@ -70,8 +70,6 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
 - a separately packaged `@workhorse/dashboard` React operator dashboard with a framework-neutral
   request host, a Connect-style Node bridge, an injected transport-neutral client boundary,
   package-owned styles/assets, and audited local controls;
-- optional coalesced `workhorse_activity` notifications and a listener that keeps an out-of-process
-  dashboard live without polling;
 - `workhorse init` project scaffolding, `workhorse schema install`/`status`, and a standalone
   `workhorse dashboard` console for any Workhorse database;
 - deterministic worker crash failpoints;
@@ -209,20 +207,6 @@ eventually dropped by `prune_worker_registry_v1`. Graceful shutdown deregisters 
 registry holds one row per live worker and is never consulted by the claim path, so it cannot affect
 dispatch cost.
 
-### Operator activity notifications
-
-`workhorse_jobs` is the dispatch wake channel and means only "ready work may exist". It deliberately
-does not fire on transitions such as completion that create no ready work, so it is not sufficient
-to keep an operator dashboard live.
-
-Setting `WorkerOptions.activityNotifications` makes a worker publish coalesced hints on a separate
-`workhorse_activity` channel. Coalescing is the point: a worker completing a thousand jobs a second
-still issues at most one notification per `activityNotificationIntervalMs` (250ms by default), so
-enabling it cannot turn job throughput into notification-queue pressure. It is off by default.
-
-Nothing in the protocol depends on delivery. A dropped hint only delays a refresh until the
-dashboard's own periodic fallback fires.
-
 ### Enqueue idempotency keys
 
 Schema version 11 accepts `options.idempotency` on `Queue.enqueue()` and each `Queue.enqueueMany()`
@@ -357,8 +341,8 @@ pnpm demo
 
 The demo deliberately runs its workers as their own process, which is the topology the documentation
 recommends for production. The server and the workers share nothing but PostgreSQL: the workers
-announce themselves in `workhorse.worker_registry`, the dashboard reads the fleet from there, and
-coalesced `workhorse_activity` notifications keep the views live without polling. Set
+announce themselves in `workhorse.worker_registry`, and the dashboard reads the fleet from there on
+a bounded polling interval. Set
 `WORKHORSE_DEMO_IN_PROCESS_WORKERS=true` to co-host workers in the server instead, which is the
 supported small-application topology.
 

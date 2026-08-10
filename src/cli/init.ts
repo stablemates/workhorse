@@ -106,8 +106,6 @@ ${adapterBody}
       options: {
         queue: QUEUE,
         concurrency: 1,
-        // Publish coalesced refresh hints so an out-of-process dashboard stays live.
-        activityNotifications: true,
       },
       configure(worker) {
         worker.handle("example.job", async (payload) => {
