@@ -17,7 +17,7 @@ export function WorkhorseMark({
 }) {
   return (
     <Image
-      src="/brand/workhorse-mark.png"
+      src="/brand/workhorse-mark.svg"
       alt=""
       aria-hidden
       width={size}
@@ -30,9 +30,9 @@ export function WorkhorseMark({
 
 /**
  * Lockup proportions are tuned against the artwork's own transparent padding.
- * The mark PNG is opaque only across a 360x307 region of its 512x512 canvas
+ * The mark artwork occupies a 360x307 region of its 512x512 view box
  * (70% wide, 60% tall), so its layout box must be far larger than the wordmark
- * before the horse reads as the dominant element. The wordmark PNG, by
+ * before the horse reads as the dominant element. The wordmark artwork, by
  * contrast, is full-bleed 895x53, so every pixel of its height is ink and its
  * width scales at ~16.9x that height.
  *
@@ -49,7 +49,7 @@ export function WorkhorseWordmark({ className = "" }: { className?: string }) {
     <span className={`flex items-center gap-0.5 ${className}`}>
       <WorkhorseMark size={40} className="size-[40px] shrink-0" />
       <Image
-        src="/brand/workhorse-wordmark.png"
+        src="/brand/workhorse-wordmark.svg"
         alt="Workhorse"
         width={895}
         height={53}
