@@ -4,9 +4,18 @@ import { hostname } from "node:os";
 import { CronExpressionParser } from "cron-parser";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { errorForTelemetry, Queue } from "./queue.js";
+import { recordJobExecution, recordMaintenanceMetrics } from "./metrics.js";
+import type { JobExecutionOutcome } from "./metrics.js";
 import type { MaintenancePhaseResult } from "./queue.js";
 import { extractTraceContext, jobSpanAttributes, telemetryMetrics, withSpan } from "./telemetry.js";
-import type { ClaimedJob, JobCheckpoint, JobProgress, JobWait, Json } from "./types.js";
+import type {
+  ClaimedJob,
+  ExpireOwnedStatus,
+  JobCheckpoint,
+  JobProgress,
+  JobWait,
+  Json,
+} from "./types.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
 
@@ -414,6 +423,25 @@ export class Worker {
   private async executeJobWithinSpan(job: ClaimedJob, span: Span): Promise<void> {
     // afterClaim is outside the committed claim transaction. Throwing here leaves the lease exactly
     // as a killed process would, which allows deterministic expiry-recovery testing.
+    const executionStartedAt = performance.now();
+    let executionRecorded = false;
+    const recordExecution = (outcome: JobExecutionOutcome): void => {
+      if (executionRecorded) return;
+      executionRecorded = true;
+      recordJobExecution(
+        this.queueName,
+        job.type,
+        outcome,
+        (performance.now() - executionStartedAt) / 1_000,
+      );
+    };
+    const recordFailure = (state: Awaited<ReturnType<Queue["fail"]>>): void => {
+      if (state === "ready" || state === "scheduled") recordExecution("retry");
+      else if (state === "failed") recordExecution("failed");
+      else if (state === "deadline_exceeded") recordExecution("deadline_exceeded");
+      else if (state === "timeout_exceeded") recordExecution("timeout");
+      else if (state === "stale") recordExecution("lease_lost");
+    };
     const controller = new AbortController();
     let leaseLost = false;
     let cancellationRequested = false;
@@ -424,7 +452,7 @@ export class Worker {
     // previous query settles, so a slow database call cannot overlap another heartbeat for this job.
     let heartbeatTimer: NodeJS.Timeout | undefined;
     let expirationTimer: NodeJS.Timeout | undefined;
-    let expirationPromise: Promise<void> | undefined;
+    let expirationPromise: Promise<ExpireOwnedStatus> | undefined;
     let heartbeatStopped = false;
     const stopHeartbeat = (): void => {
       heartbeatStopped = true;
@@ -441,6 +469,11 @@ export class Worker {
       cancellationRequested = true;
       stopHeartbeat();
       if (!controller.signal.aborted) controller.abort(new CancellationRequestedError(job.id));
+    };
+    const acknowledgeCancellation = async (): Promise<boolean> => {
+      const accepted = await this.queue.acknowledgeCancel(job, this.workerId);
+      if (accepted) recordExecution("canceled");
+      return accepted;
     };
     const refreshOwnership = async () => {
       const status = await this.queue.heartbeatStatus(job, this.workerId, this.leaseMs);
@@ -483,11 +516,11 @@ export class Worker {
               controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
           }
           stopHeartbeat();
-          expirationPromise = this.queue.expireOwned(job, this.workerId).then(async (status) => {
+          expirationPromise = this.queue.expireOwned(job, this.workerId).then((status) => {
             if (status === "cancel_requested") {
               markCancellationRequested();
-              await this.queue.acknowledgeCancel(job, this.workerId);
             }
+            return status;
           });
         },
         Math.max(0, expirationAt.getTime() - Date.now()),
@@ -530,8 +563,8 @@ export class Worker {
         span.setAttribute("workhorse.handler.outcome", failed);
         if (failed === "cancel_requested") {
           markCancellationRequested();
-          await this.queue.acknowledgeCancel(job, this.workerId);
-        }
+          await acknowledgeCancellation();
+        } else recordFailure(failed);
         return;
       }
       await this.inject("beforeHandler", job);
@@ -644,7 +677,7 @@ export class Worker {
       });
       await this.inject("afterHandler", job);
       if (cancellationRequested) {
-        await this.queue.acknowledgeCancel(job, this.workerId);
+        await acknowledgeCancellation();
         span.setAttribute("workhorse.handler.outcome", "canceled");
         return;
       }
@@ -653,13 +686,14 @@ export class Worker {
       await this.inject("beforeComplete", job);
       const accepted = await this.queue.complete(job, this.workerId, result);
       if (!accepted) {
-        if (await this.queue.acknowledgeCancel(job, this.workerId)) {
+        if (await acknowledgeCancellation()) {
           span.setAttribute("workhorse.handler.outcome", "canceled");
           return;
         }
         throw new Error("Completion rejected because the lease is stale or expired");
       }
       span.setAttribute("workhorse.handler.outcome", "succeeded");
+      recordExecution("succeeded");
       await this.inject("afterComplete", job);
     } catch (error) {
       if (
@@ -668,6 +702,7 @@ export class Worker {
         controller.signal.reason === DURABLE_WAIT_SUSPENSION
       ) {
         span.setAttribute("workhorse.handler.outcome", "suspended");
+        recordExecution("suspended");
         return;
       }
       // A crash failpoint models process disappearance, so converting it into fail_v1 would produce
@@ -678,7 +713,7 @@ export class Worker {
         error instanceof CancellationRequestedError ||
         controller.signal.reason instanceof CancellationRequestedError
       ) {
-        await this.queue.acknowledgeCancel(job, this.workerId);
+        await acknowledgeCancellation();
         span.setAttribute("workhorse.handler.outcome", "canceled");
         return;
       }
@@ -690,12 +725,26 @@ export class Worker {
         controller.signal.reason instanceof DeadlineExceededError ||
         controller.signal.reason instanceof ExecutionTimeoutError
       ) {
-        await expirationPromise;
+        const expirationStatus = await expirationPromise;
+        if (expirationStatus === "cancel_requested") {
+          await acknowledgeCancellation();
+          span.setAttribute("workhorse.handler.outcome", "canceled");
+          return;
+        }
+        if (expirationStatus === "stale") {
+          recordExecution("lease_lost");
+          span.setAttribute("workhorse.handler.outcome", "stale");
+          return;
+        }
+        const executionTimedOut =
+          expirationStatus === "timeout_exceeded" ||
+          (expirationStatus === undefined && timeoutExceeded) ||
+          error instanceof ExecutionTimeoutError ||
+          controller.signal.reason instanceof ExecutionTimeoutError;
+        recordExecution(executionTimedOut ? "timeout" : "deadline_exceeded");
         span.setAttribute(
           "workhorse.handler.outcome",
-          deadlineExceeded || error instanceof DeadlineExceededError
-            ? "deadline_exceeded"
-            : "timeout_exceeded",
+          executionTimedOut ? "timeout_exceeded" : "deadline_exceeded",
         );
         return;
       }
@@ -709,8 +758,8 @@ export class Worker {
       span.setAttribute("workhorse.handler.outcome", failed);
       if (failed === "cancel_requested") {
         markCancellationRequested();
-        await this.queue.acknowledgeCancel(job, this.workerId);
-      }
+        await acknowledgeCancellation();
+      } else recordFailure(failed);
     } finally {
       stopHeartbeat();
     }
@@ -856,6 +905,7 @@ export class Worker {
   ): void {
     const telemetry = { ...result, loop, observedAt: new Date().toISOString() };
     this.latestMaintenance.set(`${loop}:${result.phase}`, telemetry);
+    recordMaintenanceMetrics(telemetry);
     this.options.onMaintenance?.(telemetry);
   }
 

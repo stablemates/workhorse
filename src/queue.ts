@@ -1,5 +1,14 @@
 import { CronExpressionParser } from "cron-parser";
 import type { Span } from "@opentelemetry/api";
+import {
+  recordCancellation,
+  recordClaimedJob,
+  recordEnqueuedJobs,
+  recordHeartbeatFailure,
+  recordRecoveredLeases,
+  recordRedrive,
+  recordScheduleFired,
+} from "./metrics.js";
 import type {
   BulkRedrivePage,
   BulkRedriveOptions,
@@ -1177,6 +1186,7 @@ export class Queue {
             [JSON.stringify(input)],
           );
           const jobIds = result.rows.map((row) => row.job_id);
+          recordEnqueuedJobs(input);
           telemetryMetrics.enqueued.add(jobIds.length);
           if (jobIds.length === 1) span.setAttribute("workhorse.job.id", jobIds[0]!);
           return jobIds;
@@ -1557,7 +1567,9 @@ export class Queue {
       "SELECT workhorse.fire_schedule_v1($1, $2, $3, $4) AS job_id",
       [namespace, name, revision.toString(), occurrenceAt.toISOString()],
     );
-    return result.rows[0]!.job_id;
+    const jobId = result.rows[0]!.job_id;
+    if (jobId !== null) recordScheduleFired(namespace, name, occurrenceAt);
+    return jobId;
   }
 
   async runTaskNow(jobId: string): Promise<RunTaskNowResult> {
@@ -1584,6 +1596,7 @@ export class Queue {
       [jobId, request.requestedBy ?? null, request.reason ?? null],
     );
     const row = result.rows[0]!;
+    recordCancellation(row.status);
     return {
       status: row.status,
       jobId,
@@ -1846,6 +1859,7 @@ export class Queue {
       );
       const row = result.rows[0];
       if (!row) throw new Error("redrive_v1 returned no result");
+      recordRedrive(row.status);
       return redriveResult(row);
     } catch (error) {
       throw redriveConflict(error) ?? error;
@@ -1878,6 +1892,9 @@ export class Queue {
         ],
       );
       const last = result.rows.at(-1);
+      const statuses = new Map<RedriveResult["status"], number>();
+      for (const row of result.rows) statuses.set(row.status, (statuses.get(row.status) ?? 0) + 1);
+      for (const [status, count] of statuses) recordRedrive(status, count);
       return {
         results: result.rows.map(redriveResult),
         nextCursor:
@@ -1947,6 +1964,7 @@ export class Queue {
         "workhorse.job.attempt": row.attempt,
       });
       telemetryMetrics.claimed.add(1);
+      recordClaimedJob(queueName, row.job_type);
       return {
         id: row.job_id,
         type: row.job_type,
@@ -1986,6 +2004,7 @@ export class Queue {
       );
       const status = result.rows[0]!.status;
       span.setAttribute("workhorse.heartbeat.status", status);
+      if (status !== "accepted") recordHeartbeatFailure(status);
       return status;
     });
   }
@@ -2291,6 +2310,7 @@ export class Queue {
       ]);
       const recovery = result.rows[0]!;
       recordRecoveryTelemetry(span, recovery);
+      recordRecoveredLeases(recovery.expired_leases);
       return recovery.rows_affected;
     });
   }

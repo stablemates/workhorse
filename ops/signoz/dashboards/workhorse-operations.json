@@ -1,0 +1,130 @@
+{
+  "name": "workhorse-operations",
+  "title": "Workhorse Operations",
+  "description": "Queue flow, backlog pressure, and worker capacity for the Workhorse demo.",
+  "tags": {
+    "component": "workhorse",
+    "view": "operations"
+  },
+  "panels": [
+    {
+      "id": "queue-flow",
+      "title": "Queue flow",
+      "description": "Jobs accepted and claimed per second, split by queue.",
+      "unit": "ops/s",
+      "queries": [
+        {
+          "metric": "workhorse.job.enqueued",
+          "timeAggregation": "rate",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.queue.name"],
+          "legend": "enqueued {{workhorse.queue.name}}"
+        },
+        {
+          "metric": "workhorse.job.claimed",
+          "timeAggregation": "rate",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.queue.name"],
+          "legend": "claimed {{workhorse.queue.name}}"
+        }
+      ]
+    },
+    {
+      "id": "execution-throughput",
+      "title": "Execution throughput",
+      "description": "Handler executions per second, split by durable outcome.",
+      "unit": "ops/s",
+      "queries": [
+        {
+          "metric": "workhorse.job.execution",
+          "timeAggregation": "rate",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.job.outcome"],
+          "legend": "{{workhorse.job.outcome}}"
+        }
+      ]
+    },
+    {
+      "id": "live-jobs",
+      "title": "Live jobs",
+      "description": "Current scheduled, ready, and active jobs by queue.",
+      "unit": "{job}",
+      "queries": [
+        {
+          "metric": "workhorse.job.count",
+          "timeAggregation": "latest",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.queue.name", "workhorse.job.state"],
+          "legend": "{{workhorse.queue.name}} {{workhorse.job.state}}"
+        }
+      ]
+    },
+    {
+      "id": "oldest-ready-age",
+      "title": "Oldest ready job",
+      "description": "Age of the oldest ready job in each queue.",
+      "unit": "s",
+      "queries": [
+        {
+          "metric": "workhorse.queue.oldest_ready.age",
+          "timeAggregation": "latest",
+          "spaceAggregation": "max",
+          "groupBy": ["workhorse.queue.name"],
+          "legend": "{{workhorse.queue.name}}"
+        }
+      ]
+    },
+    {
+      "id": "worker-slots",
+      "title": "Worker slots",
+      "description": "Declared capacity and occupied slots by queue.",
+      "unit": "{slot}",
+      "queries": [
+        {
+          "metric": "workhorse.worker.capacity",
+          "timeAggregation": "latest",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.queue.name"],
+          "legend": "capacity {{workhorse.queue.name}}"
+        },
+        {
+          "metric": "workhorse.worker.active",
+          "timeAggregation": "latest",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.queue.name"],
+          "legend": "active {{workhorse.queue.name}}"
+        }
+      ]
+    },
+    {
+      "id": "worker-fleet",
+      "title": "Worker fleet",
+      "description": "Registered workers by queue and runtime state.",
+      "unit": "{worker}",
+      "queries": [
+        {
+          "metric": "workhorse.worker.count",
+          "timeAggregation": "latest",
+          "spaceAggregation": "sum",
+          "groupBy": ["workhorse.queue.name", "workhorse.worker.state"],
+          "legend": "{{workhorse.queue.name}} {{workhorse.worker.state}}"
+        }
+      ]
+    },
+    {
+      "id": "paused-queues",
+      "title": "Paused queues",
+      "description": "Queue dispatch pause state, where one means paused.",
+      "unit": "1",
+      "queries": [
+        {
+          "metric": "workhorse.queue.paused",
+          "timeAggregation": "latest",
+          "spaceAggregation": "max",
+          "groupBy": ["workhorse.queue.name"],
+          "legend": "{{workhorse.queue.name}}"
+        }
+      ]
+    }
+  ]
+}

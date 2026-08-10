@@ -1,0 +1,31 @@
+apiVersion: v1alpha1
+kind: Installation
+metadata:
+  name: signoz
+spec:
+  deployment:
+    flavor: compose
+    mode: docker
+  signoz:
+    spec:
+      env:
+        SIGNOZ_IDENTN_APIKEY_ENABLED: "false"
+        SIGNOZ_IDENTN_IMPERSONATION_ENABLED: "true"
+        SIGNOZ_IDENTN_TOKENIZER_ENABLED: "false"
+        SIGNOZ_TOKENIZER_JWT_SECRET: workhorse-local-signoz-jwt-secret
+        SIGNOZ_USER_ROOT_EMAIL: admin@workhorse.local
+        SIGNOZ_USER_ROOT_ENABLED: "true"
+        SIGNOZ_USER_ROOT_ORG_NAME: workhorse-local
+        SIGNOZ_USER_ROOT_PASSWORD: Workhorse-local-2026!
+  patches:
+    - target: deployment/compose.yaml
+      operations:
+        - op: replace
+          path: /services/ingester/ports/0
+          value: 127.0.0.1:4317:4317
+        - op: replace
+          path: /services/ingester/ports/1
+          value: 127.0.0.1:4318:4318
+        - op: replace
+          path: /services/signoz-signoz-0/ports/0
+          value: 127.0.0.1:3301:8080
