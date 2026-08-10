@@ -83,8 +83,8 @@ export async function readDashboardSettings(
   return {
     capturedAt: new Date().toISOString(),
     editable,
-    maintenance: { ...maintenance, updatedAt: maintenance.updatedAt.toISOString() },
-    retention: { ...retention, updatedAt: retention.updatedAt.toISOString() },
+    maintenance: { ...maintenance, updatedAt: toIso(maintenance.updatedAt) },
+    retention: { ...retention, updatedAt: toIso(retention.updatedAt) },
     workers: workers.rows.map((worker) => ({
       id: worker.worker_id,
       queue: worker.queue_name,
