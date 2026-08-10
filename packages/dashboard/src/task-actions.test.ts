@@ -74,7 +74,7 @@ describe("task row actions", () => {
   it("names the durable wait a scheduled task is suspended at", () => {
     expect(action(row({ state: "scheduled" }), "cancel").label).toBe("Cancel scheduled task…");
     expect(action(row({ state: "scheduled", waitName: "payment" }), "cancel").label).toBe(
-      "Cancel waiting task…",
+      "Cancel task at wait…",
     );
   });
 
@@ -82,7 +82,7 @@ describe("task row actions", () => {
     for (const state of ["succeeded", "failed", "canceled"]) {
       const cancel = action(row({ state }), "cancel");
       expect(cancel.unavailable).toContain(state);
-      expect(cancel.unavailable).toContain("immutable");
+      expect(cancel.unavailable).toContain("cannot change its outcome");
     }
   });
 
@@ -94,7 +94,7 @@ describe("task row actions", () => {
       }),
       "cancel",
     );
-    expect(cancel.unavailable).toContain("already requested");
+    expect(cancel.unavailable).toContain("already asked");
     expect(cancel.label).not.toContain("…");
   });
 
@@ -103,7 +103,7 @@ describe("task row actions", () => {
   });
 
   it("offers a worker filter only once a worker has claimed the task", () => {
-    expect(action(row(), "filter-worker").unavailable).toContain("No worker");
+    expect(action(row(), "filter-worker").unavailable).toContain("no claim record");
     expect(action(row({ workerId: "worker-a" }), "filter-worker")).toMatchObject({
       label: "Only worker worker-a",
       unavailable: null,
@@ -114,10 +114,10 @@ describe("task row actions", () => {
     ).toMatchObject({ label: "Only worker worker-b", unavailable: null });
   });
 
-  it("offers to copy args only when the task stored some", () => {
+  it("offers to copy input only when the task stored some", () => {
     expect(action(row(), "copy-args").unavailable).toBeNull();
-    expect(action(row({ payload: null }), "copy-args").unavailable).toContain("no args");
-    // Stored `false` and `0` are real args, not absence.
+    expect(action(row({ payload: null }), "copy-args").unavailable).toContain("no input");
+    // Stored `false` and `0` are real input, not absence.
     expect(action(row({ payload: false }), "copy-args").unavailable).toBeNull();
   });
 
@@ -139,7 +139,7 @@ describe("task row actions", () => {
       expect(waiting.unavailable).toContain("payment");
       expect(waiting.unavailable).toContain("durable wait");
       // The reason has to be about the boundary, not about the state being wrong.
-      expect(waiting.unavailable).toContain("running handler");
+      expect(waiting.unavailable).toContain("handler requested");
     });
 
     it("refuses a wait carried only on the structured wait field", () => {
@@ -155,8 +155,10 @@ describe("task row actions", () => {
     });
 
     it("refuses a task that is already queued or running, without calling it an error", () => {
-      expect(action(row({ state: "ready" }), "run-now").unavailable).toContain("already queued");
-      expect(action(row({ state: "active" }), "run-now").unavailable).toContain("already running");
+      expect(action(row({ state: "ready" }), "run-now").unavailable).toContain(
+        "ready for a worker",
+      );
+      expect(action(row({ state: "active" }), "run-now").unavailable).toContain("task is running");
     });
 
     it("refuses a terminal task and names the outcome it holds", () => {
@@ -177,7 +179,7 @@ describe("task row actions", () => {
         }),
         "run-now",
       );
-      expect(pending.unavailable).toContain("Cancellation was already requested");
+      expect(pending.unavailable).toContain("received a cancellation request");
     });
 
     it("states a host that cannot run tasks early rather than dropping the item", () => {
@@ -185,7 +187,8 @@ describe("task row actions", () => {
       const runNow = groups
         .flatMap((group) => group.actions)
         .find((candidate) => candidate.id === "run-now");
-      expect(runNow?.unavailable).toContain("does not allow changing when a task runs");
+      expect(runNow?.unavailable).toContain("does not allow the dashboard");
+      expect(runNow?.unavailable).toContain("start time");
       // The menu keeps exactly the same shape whether or not the host supports the action.
       expect(groups.map((group) => group.actions.map((a) => a.id))).toEqual(
         taskRowActionGroups(row({ state: "scheduled" })).map((group) =>

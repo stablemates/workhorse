@@ -5,7 +5,7 @@ describe("retry policy vocabulary", () => {
   it("never shows a raw stored kind and always keeps exact values available", () => {
     expect(describeRetryPolicy({ type: "fixed", delayMs: 300_000 })).toMatchObject({
       label: "Fixed",
-      summary: "Wait 5m before every retry",
+      summary: "PostgreSQL adds a 5m delay before every retry",
       exact: "Fixed delay 300000 ms",
     });
     expect(
@@ -47,7 +47,7 @@ describe("retry policy vocabulary", () => {
         baseDelayMs: 600_000,
         maxDelayMs: 600_000,
       }).summary,
-    ).toBe("Held at the 10m cap, so every retry waits the same");
+    ).toBe("Every retry has the maximum 10m delay");
     expect(
       describeRetryPolicy({
         type: "exponential",
@@ -55,7 +55,7 @@ describe("retry policy vocabulary", () => {
         multiplier: 3,
         maxDelayMs: 60_000,
       }).summary,
-    ).toBe("Held at the 1m cap from the first retry");
+    ).toBe("Every retry has the maximum 1m delay");
   });
 
   it("names a manual override separately from the persisted policy", () => {
