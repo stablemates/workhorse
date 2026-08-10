@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 20.
+The current clean-install protocol is schema version 21.
 
 This page is the precise reference. For the ideas it assumes — leases and fence tokens,
 at-least-once delivery, cooperative cancellation, the runtime/outcome split — start with
@@ -52,9 +52,11 @@ Framework co-hosting remains available but is not the default scaling boundary. 
 [ADR 0012](decisions/0012-dedicated-worker-processes.md).
 
 The operator dashboard is a separate boundary from the worker fleet. It is a framework-neutral
-request host that reads everything it shows from PostgreSQL, including worker identity and runtime
-state, so it can be mounted in a process that runs no workers at all. Mounting requires only a
-database connection.
+request host that reads everything it shows from PostgreSQL, including worker identity, runtime
+state, and policy provenance, so it can be mounted in a process that runs no workers at all.
+Mounting requires only a database connection. Policy mutation additionally requires `operator.mode
+=== "local"` and a `DashboardSettingsController`; every call carries actor, reason, request ID, and
+server-assigned occurrence time.
 
 ## Data model
 
@@ -290,7 +292,20 @@ Code after a wait resumes by replaying the handler from its entry point. Work be
 
 ### `retention_policy`
 
-One singleton row is the target database's authoritative retention policy. `sync_retention_policy_v1` and `Queue.syncRetentionPolicy` set explicit nullable minimum windows for job identity, terminal outcome, job events, attempt history, and schedule occurrences, plus bounded work limits. Every category defaults to 14 days and remains configurable; null disables automatic deletion for that category.
+One singleton row is the target database's authoritative retention policy. Its effective typed
+columns contain explicit nullable minimum windows for job identity, terminal outcome, job events,
+attempt history, schedule occurrences, and statistics, plus five bounded work limits. Matching
+`application_*` columns retain the latest deployment defaults, while `operator_overrides` contains
+only the names whose effective values an operator owns. Every category defaults to 14 days; null
+disables automatic deletion for that category.
+
+`sync_retention_policy_v1` and `Queue.syncRetentionPolicy` update the application columns and copy
+them into effective columns that are not operator-owned. Passing `{ force: true }` copies every
+supplied value and clears all overrides. `override_retention_policy_v1` and
+`Queue.overrideRetentionPolicy` atomically update selected effective values and add their names.
+`revert_retention_policy_v1` and `Queue.revertRetentionPolicy` copy selected application values back
+and remove their names. `Queue.previewRetentionPolicy` counts at most 10,001 eligible rows per
+category, reports 10,000 plus a capped flag, and performs no writes.
 
 Identity is the attribution anchor. Finite terminal-job retention requires both identity and outcome windows, finite event, attempt, and occurrence windows, and an identity minimum at least as long as every dependent minimum. PostgreSQL rejects configurations that could remove an identity before its retained provenance. Windows are minimums rather than deletion deadlines because bounded cleanup or retained dependent rows can safely extend actual retention.
 
@@ -324,7 +339,12 @@ Full reference in [`rolling-statistics.md`](rolling-statistics.md); the design t
 
 ### `worker_registry`
 
-One row per live worker process, keyed by the durable `worker_id` used for leases and attempt history. `register_worker_v1` is a single round trip that both publishes the runtime state the worker owns — `queue_name`, `concurrency`, `active_slots`, `draining` — and returns the operator-requested `paused` flag that PostgreSQL owns. Workers call it on `WorkerOptions.registryIntervalMs`, five seconds by default.
+One row per live worker process, keyed by the durable `worker_id` used for leases and attempt history.
+`register_worker_v1` is a single round trip that publishes `queue_name`, `concurrency`, `lease_ms`,
+`heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_task_poll_ms`,
+`registry_interval_ms`, `active_slots`, and `draining`, then returns the PostgreSQL-owned `paused`
+flag. Workers call it on `WorkerOptions.registryIntervalMs`, five seconds by default. The dashboard
+shows the reported process values read-only because changing them requires a deployment.
 
 The relation exists because process-local memory cannot answer "which workers exist" once workers are deployed independently of the web tier. It is what allows an operator surface to report and control a fleet it does not host. It is never read by the claim path and holds one row per worker, so it cannot affect dispatch cost.
 
@@ -336,7 +356,20 @@ Graceful shutdown calls `deregister_worker_v1`. A killed worker simply stops ref
 
 ### `maintenance_policy` and `maintenance_state`
 
-The singleton maintenance policy stores one validated IANA timezone, a six-hour partition-preparation interval, a five-minute terminal-cleanup interval, and local history-retention hour 03:00 by default. Maintenance state stores independent last-run timestamps, the last retained local date, and the history-retention watermark. Workers poll all three tasks every minute by default, while PostgreSQL performs the global due check and advisory-lock coordination.
+The singleton maintenance policy stores one validated IANA `timezone`, a
+`partition_preparation_interval_ms` from 60,000 through 604,800,000, a
+`terminal_cleanup_interval_ms` from 1,000 through 86,400,000, and a
+`history_retention_local_time` with second precision. Clean installation uses UTC, six hours, five
+minutes, and 03:00. Matching `application_*` columns and `operator_overrides` use the same ownership
+model as retention policy.
+
+`sync_maintenance_policy_v1` seeds unoverridden effective values and accepts `p_force` to clear all
+overrides. `override_maintenance_policy_v1` changes selected effective values.
+`revert_maintenance_policy_v1` restores selected application defaults. A timezone or local-time
+change clears `maintenance_state.last_completed_local_date`, so the new boundary may run on the
+current local date. Maintenance state also stores independent last-run timestamps and the
+history-retention watermark. Workers poll all three tasks every minute by default, while PostgreSQL
+performs the global due check and advisory-lock coordination.
 
 ### Declarative schedules
 
@@ -379,7 +412,7 @@ Production maintenance is worker-owned and split by cadence and failure domain.
 
 Each worker calls `tick_v1` at most once per configured `maintenanceIntervalMs` (default one second). Under the transaction-scoped `workhorse:tick` advisory lock it performs bounded promotion and bounded expired-lease recovery, the two dispatch-latency-critical phases. Concurrent callers return immediately with `skipped_lock = true`. The same cadence drives in-process schedule evaluation.
 
-Each worker polls `prepare_history_partitions_v1`, `retain_history_v1`, and `prune_terminal_storage_v1` at most once per configured `maintenanceTaskPollMs` (default 60 seconds). PostgreSQL checks persisted due state under a task-specific advisory lock. Partition preparation defaults to every six hours, terminal storage cleanup to every five minutes, and history retention to once per local date at or after 03:00 in the configured IANA timezone. None shares the promotion advisory lock. Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely behind dispatch. Every phase runs in its own exception subtransaction, so one cleanup failure is reported without rolling back successful sibling phases.
+Each worker polls `prepare_history_partitions_v1`, `retain_history_v1`, and `prune_terminal_storage_v1` at most once per configured `maintenanceTaskPollMs` (default 60 seconds). PostgreSQL checks persisted due state under a task-specific advisory lock. Partition preparation defaults to every six hours, terminal storage cleanup to every five minutes, and history retention to once per local date at or after `maintenance_policy.history_retention_local_time` in `maintenance_policy.timezone`. None shares the promotion advisory lock. Partition retirement abandons a DDL lock attempt after 250 ms rather than waiting indefinitely behind dispatch. Every phase runs in its own exception subtransaction, so one cleanup failure is reported without rolling back successful sibling phases.
 
 Terminal-job pruning selects a bounded candidate window of identities with outcomes, both minimum windows elapsed, no live runtime, no retained schedule occurrence, and history boundaries behind the global retained-through watermark. The bounded delete cascades outcome, checkpoints, and waits. History insert triggers serialize with parent deletion and move the watermark backward for late old history, while queue purge explicitly removes history before identity.
 

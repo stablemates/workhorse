@@ -42,6 +42,7 @@ import type {
   Json,
   MaintenancePolicy,
   MaintenancePolicyDefinition,
+  MaintenancePolicySetting,
   Queryable,
   QueueOptions,
   QueueHealth,
@@ -54,6 +55,8 @@ import type {
   RetryPolicy,
   RetentionPolicy,
   RetentionPolicyDefinition,
+  RetentionPolicyImpact,
+  RetentionPolicySetting,
   WorkerPauseResult,
   WorkerRegistration,
   WorkerRegistryEntry,
@@ -347,6 +350,18 @@ type RetentionPolicyRow = {
   default_partition_rows_per_pass: number;
   occurrence_rows_per_pass: number;
   statistics_rows_per_pass: number;
+  application_job_identity_retention_days: number | null;
+  application_terminal_outcome_retention_days: number | null;
+  application_job_event_retention_days: number | null;
+  application_attempt_history_retention_days: number | null;
+  application_schedule_occurrence_retention_days: number | null;
+  application_statistics_retention_days: number | null;
+  application_terminal_job_prune_limit: number;
+  application_history_partitions_per_pass: number;
+  application_default_partition_rows_per_pass: number;
+  application_occurrence_rows_per_pass: number;
+  application_statistics_rows_per_pass: number;
+  operator_overrides: string[];
   updated_at: Date;
 };
 
@@ -354,7 +369,12 @@ type MaintenancePolicyRow = {
   timezone: string;
   partition_preparation_interval_ms: number;
   terminal_cleanup_interval_ms: number;
-  history_retention_local_hour: number;
+  history_retention_local_time: string;
+  application_timezone: string;
+  application_partition_preparation_interval_ms: number;
+  application_terminal_cleanup_interval_ms: number;
+  application_history_retention_local_time: string;
+  operator_overrides: string[];
   updated_at: Date;
 };
 
@@ -564,6 +584,7 @@ function redriveLineageRecord(row: RedriveLineageRow): RedriveLineageRecord {
 }
 
 function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
+  const overrides = new Set(row.operator_overrides);
   return {
     jobIdentityRetentionDays: row.job_identity_retention_days,
     terminalOutcomeRetentionDays: row.terminal_outcome_retention_days,
@@ -576,16 +597,85 @@ function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
     defaultPartitionRowsPerPass: row.default_partition_rows_per_pass,
     occurrenceRowsPerPass: row.occurrence_rows_per_pass,
     statisticsRowsPerPass: row.statistics_rows_per_pass,
+    provenance: {
+      jobIdentityRetentionDays: {
+        source: overrides.has("job_identity_retention_days") ? "operator" : "application",
+        applicationDefault: row.application_job_identity_retention_days,
+      },
+      terminalOutcomeRetentionDays: {
+        source: overrides.has("terminal_outcome_retention_days") ? "operator" : "application",
+        applicationDefault: row.application_terminal_outcome_retention_days,
+      },
+      jobEventRetentionDays: {
+        source: overrides.has("job_event_retention_days") ? "operator" : "application",
+        applicationDefault: row.application_job_event_retention_days,
+      },
+      attemptHistoryRetentionDays: {
+        source: overrides.has("attempt_history_retention_days") ? "operator" : "application",
+        applicationDefault: row.application_attempt_history_retention_days,
+      },
+      scheduleOccurrenceRetentionDays: {
+        source: overrides.has("schedule_occurrence_retention_days") ? "operator" : "application",
+        applicationDefault: row.application_schedule_occurrence_retention_days,
+      },
+      statisticsRetentionDays: {
+        source: overrides.has("statistics_retention_days") ? "operator" : "application",
+        applicationDefault: row.application_statistics_retention_days,
+      },
+      terminalJobPruneLimit: {
+        source: overrides.has("terminal_job_prune_limit") ? "operator" : "application",
+        applicationDefault: row.application_terminal_job_prune_limit,
+      },
+      historyPartitionsPerPass: {
+        source: overrides.has("history_partitions_per_pass") ? "operator" : "application",
+        applicationDefault: row.application_history_partitions_per_pass,
+      },
+      defaultPartitionRowsPerPass: {
+        source: overrides.has("default_partition_rows_per_pass") ? "operator" : "application",
+        applicationDefault: row.application_default_partition_rows_per_pass,
+      },
+      occurrenceRowsPerPass: {
+        source: overrides.has("occurrence_rows_per_pass") ? "operator" : "application",
+        applicationDefault: row.application_occurrence_rows_per_pass,
+      },
+      statisticsRowsPerPass: {
+        source: overrides.has("statistics_rows_per_pass") ? "operator" : "application",
+        applicationDefault: row.application_statistics_rows_per_pass,
+      },
+    },
     updatedAt: row.updated_at,
   };
 }
 
+function localMaintenanceTime(value: string): string {
+  return value.slice(0, 5);
+}
+
 function maintenancePolicy(row: MaintenancePolicyRow): MaintenancePolicy {
+  const overrides = new Set(row.operator_overrides);
   return {
     timezone: row.timezone,
     partitionPreparationIntervalMs: row.partition_preparation_interval_ms,
     terminalCleanupIntervalMs: row.terminal_cleanup_interval_ms,
-    historyRetentionLocalHour: row.history_retention_local_hour,
+    historyRetentionLocalTime: localMaintenanceTime(row.history_retention_local_time),
+    provenance: {
+      timezone: {
+        source: overrides.has("timezone") ? "operator" : "application",
+        applicationDefault: row.application_timezone,
+      },
+      partitionPreparationIntervalMs: {
+        source: overrides.has("partition_preparation_interval_ms") ? "operator" : "application",
+        applicationDefault: row.application_partition_preparation_interval_ms,
+      },
+      terminalCleanupIntervalMs: {
+        source: overrides.has("terminal_cleanup_interval_ms") ? "operator" : "application",
+        applicationDefault: row.application_terminal_cleanup_interval_ms,
+      },
+      historyRetentionLocalTime: {
+        source: overrides.has("history_retention_local_time") ? "operator" : "application",
+        applicationDefault: localMaintenanceTime(row.application_history_retention_local_time),
+      },
+    },
     updatedAt: row.updated_at,
   };
 }
@@ -1301,7 +1391,9 @@ export class Queue {
    */
   async registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }> {
     const result = await this.database.query<{ paused: boolean }>(
-      "SELECT workhorse.register_worker_v1($1, $2, $3, $4, $5, $6, $7, $8) AS paused",
+      `SELECT workhorse.register_worker_v1(
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+       ) AS paused`,
       [
         registration.workerId,
         registration.instanceId,
@@ -1309,6 +1401,12 @@ export class Queue {
         registration.pid,
         registration.queue ?? this.defaultQueue,
         registration.concurrency,
+        registration.leaseMs ?? 30_000,
+        registration.heartbeatMs ?? 10_000,
+        registration.pollMs ?? 250,
+        registration.maintenanceIntervalMs ?? 1_000,
+        registration.maintenanceTaskPollMs ?? 60_000,
+        registration.registryIntervalMs ?? 5_000,
         registration.activeSlots,
         registration.draining,
       ],
@@ -1507,10 +1605,13 @@ export class Queue {
     );
   }
 
-  async syncRetentionPolicy(definition: RetentionPolicyDefinition): Promise<RetentionPolicy> {
+  async syncRetentionPolicy(
+    definition: RetentionPolicyDefinition,
+    options: { force?: boolean } = {},
+  ): Promise<RetentionPolicy> {
     const result = await this.database.query<RetentionPolicyRow>(
       `SELECT (policy).* FROM workhorse.sync_retention_policy_v1(
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
        ) policy`,
       [
         definition.jobIdentityRetentionDays,
@@ -1524,9 +1625,133 @@ export class Queue {
         definition.defaultPartitionRowsPerPass ?? null,
         definition.occurrenceRowsPerPass ?? null,
         definition.statisticsRowsPerPass ?? null,
+        options.force ?? false,
       ],
     );
     return retentionPolicy(result.rows[0]!);
+  }
+
+  async overrideRetentionPolicy(
+    definition: Partial<RetentionPolicyDefinition>,
+  ): Promise<RetentionPolicy> {
+    const databaseNames: Record<RetentionPolicySetting, string> = {
+      jobIdentityRetentionDays: "job_identity_retention_days",
+      terminalOutcomeRetentionDays: "terminal_outcome_retention_days",
+      jobEventRetentionDays: "job_event_retention_days",
+      attemptHistoryRetentionDays: "attempt_history_retention_days",
+      scheduleOccurrenceRetentionDays: "schedule_occurrence_retention_days",
+      statisticsRetentionDays: "statistics_retention_days",
+      terminalJobPruneLimit: "terminal_job_prune_limit",
+      historyPartitionsPerPass: "history_partitions_per_pass",
+      defaultPartitionRowsPerPass: "default_partition_rows_per_pass",
+      occurrenceRowsPerPass: "occurrence_rows_per_pass",
+      statisticsRowsPerPass: "statistics_rows_per_pass",
+    };
+    const overrides = Object.fromEntries(
+      Object.entries(definition)
+        .filter((entry): entry is [RetentionPolicySetting, number | null] => entry[1] !== undefined)
+        .map(([setting, value]) => [databaseNames[setting], value]),
+    );
+    const result = await this.database.query<RetentionPolicyRow>(
+      "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy",
+      [JSON.stringify(overrides)],
+    );
+    return retentionPolicy(result.rows[0]!);
+  }
+
+  async revertRetentionPolicy(
+    settings: readonly RetentionPolicySetting[],
+  ): Promise<RetentionPolicy> {
+    const databaseNames: Record<RetentionPolicySetting, string> = {
+      jobIdentityRetentionDays: "job_identity_retention_days",
+      terminalOutcomeRetentionDays: "terminal_outcome_retention_days",
+      jobEventRetentionDays: "job_event_retention_days",
+      attemptHistoryRetentionDays: "attempt_history_retention_days",
+      scheduleOccurrenceRetentionDays: "schedule_occurrence_retention_days",
+      statisticsRetentionDays: "statistics_retention_days",
+      terminalJobPruneLimit: "terminal_job_prune_limit",
+      historyPartitionsPerPass: "history_partitions_per_pass",
+      defaultPartitionRowsPerPass: "default_partition_rows_per_pass",
+      occurrenceRowsPerPass: "occurrence_rows_per_pass",
+      statisticsRowsPerPass: "statistics_rows_per_pass",
+    };
+    const result = await this.database.query<RetentionPolicyRow>(
+      "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1) policy",
+      [settings.map((setting) => databaseNames[setting])],
+    );
+    return retentionPolicy(result.rows[0]!);
+  }
+
+  async previewRetentionPolicy(
+    definition: Partial<RetentionPolicyDefinition>,
+  ): Promise<RetentionPolicyImpact> {
+    const current = await this.getRetentionPolicy();
+    const candidate = { ...current, ...definition };
+    const result = await this.database.query<{
+      terminal_jobs: number;
+      job_events: number;
+      attempt_history: number;
+      schedule_occurrences: number;
+      statistics: number;
+    }>(
+      `SELECT
+        (SELECT count(*)::integer FROM (
+          SELECT 1 FROM workhorse.job job
+          JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
+          WHERE $1::integer IS NOT NULL AND $2::integer IS NOT NULL
+            AND job.created_at < clock_timestamp() - make_interval(days => $1)
+            AND outcome.finished_at < clock_timestamp() - make_interval(days => $2)
+          LIMIT 10001
+        ) rows) AS terminal_jobs,
+        (SELECT count(*)::integer FROM (
+          SELECT 1 FROM workhorse.job_event
+          WHERE $3::integer IS NOT NULL
+            AND occurred_at < clock_timestamp() - make_interval(days => $3)
+          LIMIT 10001
+        ) rows) AS job_events,
+        (SELECT count(*)::integer FROM (
+          SELECT 1 FROM workhorse.attempt_history
+          WHERE $4::integer IS NOT NULL
+            AND occurred_at < clock_timestamp() - make_interval(days => $4)
+          LIMIT 10001
+        ) rows) AS attempt_history,
+        (SELECT count(*)::integer FROM (
+          SELECT 1 FROM workhorse.schedule_occurrence
+          WHERE $5::integer IS NOT NULL
+            AND occurrence_at < clock_timestamp() - make_interval(days => $5)
+          LIMIT 10001
+        ) rows) AS schedule_occurrences,
+        (SELECT count(*)::integer FROM (
+          SELECT 1 FROM workhorse.job_stat_bucket
+          WHERE $6::integer IS NOT NULL
+            AND bucket_start < clock_timestamp() - make_interval(days => $6)
+          LIMIT 10001
+        ) rows) AS statistics`,
+      [
+        candidate.jobIdentityRetentionDays,
+        candidate.terminalOutcomeRetentionDays,
+        candidate.jobEventRetentionDays,
+        candidate.attemptHistoryRetentionDays,
+        candidate.scheduleOccurrenceRetentionDays,
+        candidate.statisticsRetentionDays,
+      ],
+    );
+    const row = result.rows[0]!;
+    const sampled = {
+      terminalJobs: Number(row.terminal_jobs),
+      jobEvents: Number(row.job_events),
+      attemptHistory: Number(row.attempt_history),
+      scheduleOccurrences: Number(row.schedule_occurrences),
+      statistics: Number(row.statistics),
+    };
+    return {
+      eligible: Object.fromEntries(
+        Object.entries(sampled).map(([key, value]) => [key, Math.min(value, 10_000)]),
+      ) as RetentionPolicyImpact["eligible"],
+      capped: Object.fromEntries(
+        Object.entries(sampled).map(([key, value]) => [key, value > 10_000]),
+      ) as RetentionPolicyImpact["capped"],
+    };
   }
 
   async getRetentionPolicy(): Promise<RetentionPolicy> {
@@ -1536,15 +1761,66 @@ export class Queue {
     return retentionPolicy(result.rows[0]!);
   }
 
-  async syncMaintenancePolicy(definition: MaintenancePolicyDefinition): Promise<MaintenancePolicy> {
+  async syncMaintenancePolicy(
+    definition: MaintenancePolicyDefinition,
+    options: { force?: boolean } = {},
+  ): Promise<MaintenancePolicy> {
+    if (
+      definition.historyRetentionLocalTime !== undefined &&
+      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(definition.historyRetentionLocalTime)
+    ) {
+      throw new RangeError("historyRetentionLocalTime must use 24-hour HH:mm form");
+    }
     const result = await this.database.query<MaintenancePolicyRow>(
-      `SELECT (policy).* FROM workhorse.sync_maintenance_policy_v1($1, $2, $3, $4) policy`,
+      `SELECT (policy).* FROM workhorse.sync_maintenance_policy_v1(
+         $1, $2, $3, $4::time, $5
+       ) policy`,
       [
         definition.timezone,
         definition.partitionPreparationIntervalMs ?? null,
         definition.terminalCleanupIntervalMs ?? null,
-        definition.historyRetentionLocalHour ?? null,
+        definition.historyRetentionLocalTime ?? null,
+        options.force ?? false,
       ],
+    );
+    return maintenancePolicy(result.rows[0]!);
+  }
+
+  async overrideMaintenancePolicy(
+    definition: Partial<MaintenancePolicyDefinition>,
+  ): Promise<MaintenancePolicy> {
+    if (
+      definition.historyRetentionLocalTime !== undefined &&
+      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(definition.historyRetentionLocalTime)
+    ) {
+      throw new RangeError("historyRetentionLocalTime must use 24-hour HH:mm form");
+    }
+    const result = await this.database.query<MaintenancePolicyRow>(
+      `SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(
+         $1, $2, $3, $4::time
+       ) policy`,
+      [
+        definition.timezone ?? null,
+        definition.partitionPreparationIntervalMs ?? null,
+        definition.terminalCleanupIntervalMs ?? null,
+        definition.historyRetentionLocalTime ?? null,
+      ],
+    );
+    return maintenancePolicy(result.rows[0]!);
+  }
+
+  async revertMaintenancePolicy(
+    settings: readonly MaintenancePolicySetting[],
+  ): Promise<MaintenancePolicy> {
+    const databaseNames: Record<MaintenancePolicySetting, string> = {
+      timezone: "timezone",
+      partitionPreparationIntervalMs: "partition_preparation_interval_ms",
+      terminalCleanupIntervalMs: "terminal_cleanup_interval_ms",
+      historyRetentionLocalTime: "history_retention_local_time",
+    };
+    const result = await this.database.query<MaintenancePolicyRow>(
+      "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1) policy",
+      [settings.map((setting) => databaseNames[setting])],
     );
     return maintenancePolicy(result.rows[0]!);
   }

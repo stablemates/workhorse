@@ -263,6 +263,12 @@ CREATE TABLE IF NOT EXISTS workhorse.worker_registry (
   pid integer NOT NULL CHECK (pid > 0),
   queue_name text NOT NULL CHECK (queue_name <> ''),
   concurrency integer NOT NULL CHECK (concurrency BETWEEN 1 AND 100),
+  lease_ms integer NOT NULL CHECK (lease_ms > 0),
+  heartbeat_ms integer NOT NULL CHECK (heartbeat_ms > 0 AND heartbeat_ms < lease_ms),
+  poll_ms integer NOT NULL CHECK (poll_ms >= 0),
+  maintenance_interval_ms integer NOT NULL CHECK (maintenance_interval_ms >= 100),
+  maintenance_task_poll_ms integer NOT NULL CHECK (maintenance_task_poll_ms >= 100),
+  registry_interval_ms integer NOT NULL CHECK (registry_interval_ms >= 100),
   active_slots integer NOT NULL DEFAULT 0 CHECK (active_slots >= 0),
   draining boolean NOT NULL DEFAULT false,
   paused boolean NOT NULL DEFAULT false,
@@ -735,7 +741,7 @@ CREATE INDEX IF NOT EXISTS attempt_history_retention_idx
   ON workhorse.attempt_history (occurred_at, attempt_id);
 
 -- One database-owned schedule coordinates low-frequency maintenance across every worker process.
--- The IANA timezone controls the local 03:00 history-retention boundary; interval tasks remain
+-- The IANA timezone and local time control the daily history-retention boundary; interval tasks remain
 -- elapsed-time based so daylight-saving transitions cannot duplicate or suppress them.
 CREATE TABLE IF NOT EXISTS workhorse.maintenance_policy (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -746,15 +752,29 @@ CREATE TABLE IF NOT EXISTS workhorse.maintenance_policy (
   terminal_cleanup_interval_ms integer NOT NULL CHECK (
     terminal_cleanup_interval_ms BETWEEN 1000 AND 86400000
   ),
-  history_retention_local_hour integer NOT NULL CHECK (
-    history_retention_local_hour BETWEEN 0 AND 23
+  history_retention_local_time time(0) NOT NULL,
+  application_timezone text NOT NULL,
+  application_partition_preparation_interval_ms integer NOT NULL CHECK (
+    application_partition_preparation_interval_ms BETWEEN 60000 AND 604800000
+  ),
+  application_terminal_cleanup_interval_ms integer NOT NULL CHECK (
+    application_terminal_cleanup_interval_ms BETWEEN 1000 AND 86400000
+  ),
+  application_history_retention_local_time time(0) NOT NULL,
+  operator_overrides text[] NOT NULL DEFAULT '{}' CHECK (
+    operator_overrides <@ ARRAY[
+      'timezone', 'partition_preparation_interval_ms',
+      'terminal_cleanup_interval_ms', 'history_retention_local_time'
+    ]::text[]
   ),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 INSERT INTO workhorse.maintenance_policy(
   singleton, timezone, partition_preparation_interval_ms,
-  terminal_cleanup_interval_ms, history_retention_local_hour
-) VALUES (true, 'UTC', 21600000, 300000, 3)
+  terminal_cleanup_interval_ms, history_retention_local_time,
+  application_timezone, application_partition_preparation_interval_ms,
+  application_terminal_cleanup_interval_ms, application_history_retention_local_time
+) VALUES (true, 'UTC', 21600000, 300000, '03:00', 'UTC', 21600000, 300000, '03:00')
 ON CONFLICT (singleton) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
@@ -964,6 +984,55 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
   statistics_rows_per_pass integer NOT NULL CHECK (
     statistics_rows_per_pass BETWEEN 1 AND 1000000
   ),
+  application_job_identity_retention_days integer CHECK (
+    application_job_identity_retention_days IS NULL
+    OR application_job_identity_retention_days BETWEEN 1 AND 36500
+  ),
+  application_terminal_outcome_retention_days integer CHECK (
+    application_terminal_outcome_retention_days IS NULL
+    OR application_terminal_outcome_retention_days BETWEEN 1 AND 36500
+  ),
+  application_job_event_retention_days integer CHECK (
+    application_job_event_retention_days IS NULL
+    OR application_job_event_retention_days BETWEEN 1 AND 36500
+  ),
+  application_attempt_history_retention_days integer CHECK (
+    application_attempt_history_retention_days IS NULL
+    OR application_attempt_history_retention_days BETWEEN 1 AND 36500
+  ),
+  application_schedule_occurrence_retention_days integer CHECK (
+    application_schedule_occurrence_retention_days IS NULL
+    OR application_schedule_occurrence_retention_days BETWEEN 1 AND 36500
+  ),
+  application_statistics_retention_days integer CHECK (
+    application_statistics_retention_days IS NULL
+    OR application_statistics_retention_days BETWEEN 1 AND 36500
+  ),
+  application_terminal_job_prune_limit integer NOT NULL CHECK (
+    application_terminal_job_prune_limit BETWEEN 1 AND 100000
+  ),
+  application_history_partitions_per_pass integer NOT NULL CHECK (
+    application_history_partitions_per_pass BETWEEN 1 AND 52
+  ),
+  application_default_partition_rows_per_pass integer NOT NULL CHECK (
+    application_default_partition_rows_per_pass BETWEEN 1 AND 1000000
+  ),
+  application_occurrence_rows_per_pass integer NOT NULL CHECK (
+    application_occurrence_rows_per_pass BETWEEN 1 AND 1000000
+  ),
+  application_statistics_rows_per_pass integer NOT NULL CHECK (
+    application_statistics_rows_per_pass BETWEEN 1 AND 1000000
+  ),
+  operator_overrides text[] NOT NULL DEFAULT '{}' CHECK (
+    operator_overrides <@ ARRAY[
+      'job_identity_retention_days', 'terminal_outcome_retention_days',
+      'job_event_retention_days', 'attempt_history_retention_days',
+      'schedule_occurrence_retention_days', 'statistics_retention_days',
+      'terminal_job_prune_limit', 'history_partitions_per_pass',
+      'default_partition_rows_per_pass', 'occurrence_rows_per_pass',
+      'statistics_rows_per_pass'
+    ]::text[]
+  ),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (
     (terminal_outcome_retention_days IS NULL OR job_identity_retention_days IS NOT NULL)
@@ -980,6 +1049,23 @@ CREATE TABLE IF NOT EXISTS workhorse.retention_policy (
       AND job_identity_retention_days >= schedule_occurrence_retention_days
       )
     )
+  ),
+  CHECK (
+    (application_terminal_outcome_retention_days IS NULL
+      OR application_job_identity_retention_days IS NOT NULL)
+    AND (
+      application_job_identity_retention_days IS NULL
+      OR (
+        application_terminal_outcome_retention_days IS NOT NULL
+        AND application_job_event_retention_days IS NOT NULL
+        AND application_attempt_history_retention_days IS NOT NULL
+        AND application_schedule_occurrence_retention_days IS NOT NULL
+        AND application_job_identity_retention_days >= application_terminal_outcome_retention_days
+        AND application_job_identity_retention_days >= application_job_event_retention_days
+        AND application_job_identity_retention_days >= application_attempt_history_retention_days
+        AND application_job_identity_retention_days >= application_schedule_occurrence_retention_days
+      )
+    )
   )
 );
 INSERT INTO workhorse.retention_policy(
@@ -987,8 +1073,16 @@ INSERT INTO workhorse.retention_policy(
   job_event_retention_days, attempt_history_retention_days,
   schedule_occurrence_retention_days, statistics_retention_days, terminal_job_prune_limit,
   history_partitions_per_pass, default_partition_rows_per_pass, occurrence_rows_per_pass,
-  statistics_rows_per_pass
-) VALUES (true, 14, 14, 14, 14, 14, 14, 1000, 4, 10000, 10000, 10000)
+  statistics_rows_per_pass, application_job_identity_retention_days,
+  application_terminal_outcome_retention_days, application_job_event_retention_days,
+  application_attempt_history_retention_days, application_schedule_occurrence_retention_days,
+  application_statistics_retention_days, application_terminal_job_prune_limit,
+  application_history_partitions_per_pass, application_default_partition_rows_per_pass,
+  application_occurrence_rows_per_pass, application_statistics_rows_per_pass
+) VALUES (
+  true, 14, 14, 14, 14, 14, 14, 1000, 4, 10000, 10000, 10000,
+  14, 14, 14, 14, 14, 14, 1000, 4, 10000, 10000, 10000
+)
 ON CONFLICT (singleton) DO NOTHING;
 
 CREATE OR REPLACE FUNCTION workhorse.sync_retention_policy_v1(
@@ -1002,7 +1096,8 @@ CREATE OR REPLACE FUNCTION workhorse.sync_retention_policy_v1(
   p_history_partitions_per_pass integer DEFAULT NULL,
   p_default_partition_rows_per_pass integer DEFAULT NULL,
   p_occurrence_rows_per_pass integer DEFAULT NULL,
-  p_statistics_rows_per_pass integer DEFAULT NULL
+  p_statistics_rows_per_pass integer DEFAULT NULL,
+  p_force boolean DEFAULT false
 ) RETURNS workhorse.retention_policy
 LANGUAGE plpgsql
 AS $$
@@ -1014,26 +1109,178 @@ BEGIN
    WHERE singleton
    FOR UPDATE;
   UPDATE workhorse.retention_policy policy SET
-    job_identity_retention_days = p_job_identity_retention_days,
-    terminal_outcome_retention_days = p_terminal_outcome_retention_days,
-    job_event_retention_days = p_job_event_retention_days,
-    attempt_history_retention_days = p_attempt_history_retention_days,
-    schedule_occurrence_retention_days = p_schedule_occurrence_retention_days,
-    statistics_retention_days = p_statistics_retention_days,
-    terminal_job_prune_limit = COALESCE(
-      p_terminal_job_prune_limit, policy.terminal_job_prune_limit
+    application_job_identity_retention_days = p_job_identity_retention_days,
+    application_terminal_outcome_retention_days = p_terminal_outcome_retention_days,
+    application_job_event_retention_days = p_job_event_retention_days,
+    application_attempt_history_retention_days = p_attempt_history_retention_days,
+    application_schedule_occurrence_retention_days = p_schedule_occurrence_retention_days,
+    application_statistics_retention_days = p_statistics_retention_days,
+    application_terminal_job_prune_limit = COALESCE(
+      p_terminal_job_prune_limit, policy.application_terminal_job_prune_limit
     ),
-    history_partitions_per_pass = COALESCE(
-      p_history_partitions_per_pass, policy.history_partitions_per_pass
+    application_history_partitions_per_pass = COALESCE(
+      p_history_partitions_per_pass, policy.application_history_partitions_per_pass
     ),
-    default_partition_rows_per_pass = COALESCE(
-      p_default_partition_rows_per_pass, policy.default_partition_rows_per_pass
+    application_default_partition_rows_per_pass = COALESCE(
+      p_default_partition_rows_per_pass, policy.application_default_partition_rows_per_pass
     ),
-    occurrence_rows_per_pass = COALESCE(
-      p_occurrence_rows_per_pass, policy.occurrence_rows_per_pass
+    application_occurrence_rows_per_pass = COALESCE(
+      p_occurrence_rows_per_pass, policy.application_occurrence_rows_per_pass
     ),
-    statistics_rows_per_pass = COALESCE(
-      p_statistics_rows_per_pass, policy.statistics_rows_per_pass
+    application_statistics_rows_per_pass = COALESCE(
+      p_statistics_rows_per_pass, policy.application_statistics_rows_per_pass
+    ),
+    job_identity_retention_days = CASE
+      WHEN p_force OR NOT ('job_identity_retention_days' = ANY(policy.operator_overrides))
+        THEN p_job_identity_retention_days ELSE policy.job_identity_retention_days END,
+    terminal_outcome_retention_days = CASE
+      WHEN p_force OR NOT ('terminal_outcome_retention_days' = ANY(policy.operator_overrides))
+        THEN p_terminal_outcome_retention_days ELSE policy.terminal_outcome_retention_days END,
+    job_event_retention_days = CASE
+      WHEN p_force OR NOT ('job_event_retention_days' = ANY(policy.operator_overrides))
+        THEN p_job_event_retention_days ELSE policy.job_event_retention_days END,
+    attempt_history_retention_days = CASE
+      WHEN p_force OR NOT ('attempt_history_retention_days' = ANY(policy.operator_overrides))
+        THEN p_attempt_history_retention_days ELSE policy.attempt_history_retention_days END,
+    schedule_occurrence_retention_days = CASE
+      WHEN p_force OR NOT ('schedule_occurrence_retention_days' = ANY(policy.operator_overrides))
+        THEN p_schedule_occurrence_retention_days ELSE policy.schedule_occurrence_retention_days END,
+    statistics_retention_days = CASE
+      WHEN p_force OR NOT ('statistics_retention_days' = ANY(policy.operator_overrides))
+        THEN p_statistics_retention_days ELSE policy.statistics_retention_days END,
+    terminal_job_prune_limit = CASE
+      WHEN p_force THEN COALESCE(
+        p_terminal_job_prune_limit, policy.application_terminal_job_prune_limit
+      )
+      WHEN p_terminal_job_prune_limit IS NULL THEN policy.terminal_job_prune_limit
+      WHEN NOT ('terminal_job_prune_limit' = ANY(policy.operator_overrides))
+        THEN p_terminal_job_prune_limit ELSE policy.terminal_job_prune_limit END,
+    history_partitions_per_pass = CASE
+      WHEN p_force THEN COALESCE(
+        p_history_partitions_per_pass, policy.application_history_partitions_per_pass
+      )
+      WHEN p_history_partitions_per_pass IS NULL THEN policy.history_partitions_per_pass
+      WHEN NOT ('history_partitions_per_pass' = ANY(policy.operator_overrides))
+        THEN p_history_partitions_per_pass ELSE policy.history_partitions_per_pass END,
+    default_partition_rows_per_pass = CASE
+      WHEN p_force THEN COALESCE(
+        p_default_partition_rows_per_pass, policy.application_default_partition_rows_per_pass
+      )
+      WHEN p_default_partition_rows_per_pass IS NULL THEN policy.default_partition_rows_per_pass
+      WHEN NOT ('default_partition_rows_per_pass' = ANY(policy.operator_overrides))
+        THEN p_default_partition_rows_per_pass ELSE policy.default_partition_rows_per_pass END,
+    occurrence_rows_per_pass = CASE
+      WHEN p_force THEN COALESCE(
+        p_occurrence_rows_per_pass, policy.application_occurrence_rows_per_pass
+      )
+      WHEN p_occurrence_rows_per_pass IS NULL THEN policy.occurrence_rows_per_pass
+      WHEN NOT ('occurrence_rows_per_pass' = ANY(policy.operator_overrides))
+        THEN p_occurrence_rows_per_pass ELSE policy.occurrence_rows_per_pass END,
+    statistics_rows_per_pass = CASE
+      WHEN p_force THEN COALESCE(
+        p_statistics_rows_per_pass, policy.application_statistics_rows_per_pass
+      )
+      WHEN p_statistics_rows_per_pass IS NULL THEN policy.statistics_rows_per_pass
+      WHEN NOT ('statistics_rows_per_pass' = ANY(policy.operator_overrides))
+        THEN p_statistics_rows_per_pass ELSE policy.statistics_rows_per_pass END,
+    operator_overrides = CASE WHEN p_force THEN '{}'::text[] ELSE policy.operator_overrides END,
+    updated_at = clock_timestamp()
+  WHERE singleton
+  RETURNING * INTO v_policy;
+  IF (
+       v_previous.job_event_retention_days IS DISTINCT FROM v_policy.job_event_retention_days
+       OR v_previous.attempt_history_retention_days IS DISTINCT FROM
+            v_policy.attempt_history_retention_days
+       OR v_previous.schedule_occurrence_retention_days IS DISTINCT FROM
+            v_policy.schedule_occurrence_retention_days
+     ) THEN
+    UPDATE workhorse.maintenance_state state
+       SET history_retained_before = CASE
+             WHEN v_policy.job_event_retention_days IS NOT NULL
+              AND v_policy.attempt_history_retention_days IS NOT NULL THEN
+               LEAST(
+                 state.history_retained_before,
+                 LEAST(
+                   date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                     - make_interval(days => v_policy.job_event_retention_days),
+                   date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                     - make_interval(days => v_policy.attempt_history_retention_days)
+                 )
+               )
+             ELSE state.history_retained_before
+           END,
+           last_completed_local_date = NULL,
+           updated_at = clock_timestamp()
+     WHERE state.task_name = 'history_retention';
+  END IF;
+  RETURN v_policy;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.override_retention_policy_v1(
+  p_overrides jsonb
+) RETURNS workhorse.retention_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+DECLARE v_previous workhorse.retention_policy%ROWTYPE;
+DECLARE v_names text[];
+BEGIN
+  IF p_overrides IS NULL OR jsonb_typeof(p_overrides) <> 'object'
+     OR p_overrides = '{}'::jsonb THEN
+    RAISE EXCEPTION 'retention override must be a non-empty object';
+  END IF;
+  SELECT array_agg(name ORDER BY name) INTO v_names FROM jsonb_object_keys(p_overrides) name;
+  IF NOT v_names <@ ARRAY[
+    'job_identity_retention_days', 'terminal_outcome_retention_days',
+    'job_event_retention_days', 'attempt_history_retention_days',
+    'schedule_occurrence_retention_days', 'statistics_retention_days',
+    'terminal_job_prune_limit', 'history_partitions_per_pass',
+    'default_partition_rows_per_pass', 'occurrence_rows_per_pass',
+    'statistics_rows_per_pass'
+  ]::text[] THEN
+    RAISE EXCEPTION 'retention override contains unknown settings';
+  END IF;
+
+  SELECT * INTO STRICT v_previous FROM workhorse.retention_policy WHERE singleton FOR UPDATE;
+  UPDATE workhorse.retention_policy policy SET
+    job_identity_retention_days = CASE WHEN p_overrides ? 'job_identity_retention_days'
+      THEN (p_overrides->>'job_identity_retention_days')::integer
+      ELSE policy.job_identity_retention_days END,
+    terminal_outcome_retention_days = CASE WHEN p_overrides ? 'terminal_outcome_retention_days'
+      THEN (p_overrides->>'terminal_outcome_retention_days')::integer
+      ELSE policy.terminal_outcome_retention_days END,
+    job_event_retention_days = CASE WHEN p_overrides ? 'job_event_retention_days'
+      THEN (p_overrides->>'job_event_retention_days')::integer
+      ELSE policy.job_event_retention_days END,
+    attempt_history_retention_days = CASE WHEN p_overrides ? 'attempt_history_retention_days'
+      THEN (p_overrides->>'attempt_history_retention_days')::integer
+      ELSE policy.attempt_history_retention_days END,
+    schedule_occurrence_retention_days = CASE
+      WHEN p_overrides ? 'schedule_occurrence_retention_days'
+        THEN (p_overrides->>'schedule_occurrence_retention_days')::integer
+      ELSE policy.schedule_occurrence_retention_days END,
+    statistics_retention_days = CASE WHEN p_overrides ? 'statistics_retention_days'
+      THEN (p_overrides->>'statistics_retention_days')::integer
+      ELSE policy.statistics_retention_days END,
+    terminal_job_prune_limit = CASE WHEN p_overrides ? 'terminal_job_prune_limit'
+      THEN (p_overrides->>'terminal_job_prune_limit')::integer
+      ELSE policy.terminal_job_prune_limit END,
+    history_partitions_per_pass = CASE WHEN p_overrides ? 'history_partitions_per_pass'
+      THEN (p_overrides->>'history_partitions_per_pass')::integer
+      ELSE policy.history_partitions_per_pass END,
+    default_partition_rows_per_pass = CASE
+      WHEN p_overrides ? 'default_partition_rows_per_pass'
+        THEN (p_overrides->>'default_partition_rows_per_pass')::integer
+      ELSE policy.default_partition_rows_per_pass END,
+    occurrence_rows_per_pass = CASE WHEN p_overrides ? 'occurrence_rows_per_pass'
+      THEN (p_overrides->>'occurrence_rows_per_pass')::integer
+      ELSE policy.occurrence_rows_per_pass END,
+    statistics_rows_per_pass = CASE WHEN p_overrides ? 'statistics_rows_per_pass'
+      THEN (p_overrides->>'statistics_rows_per_pass')::integer
+      ELSE policy.statistics_rows_per_pass END,
+    operator_overrides = ARRAY(
+      SELECT DISTINCT name FROM unnest(policy.operator_overrides || v_names) name ORDER BY name
     ),
     updated_at = clock_timestamp()
   WHERE singleton
@@ -1068,6 +1315,70 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.revert_retention_policy_v1(
+  p_settings text[]
+) RETURNS workhorse.retention_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+BEGIN
+  IF p_settings IS NULL OR cardinality(p_settings) = 0 OR NOT p_settings <@ ARRAY[
+    'job_identity_retention_days', 'terminal_outcome_retention_days',
+    'job_event_retention_days', 'attempt_history_retention_days',
+    'schedule_occurrence_retention_days', 'statistics_retention_days',
+    'terminal_job_prune_limit', 'history_partitions_per_pass',
+    'default_partition_rows_per_pass', 'occurrence_rows_per_pass',
+    'statistics_rows_per_pass'
+  ]::text[] THEN
+    RAISE EXCEPTION 'retention revert must name known settings';
+  END IF;
+  UPDATE workhorse.retention_policy policy SET
+    job_identity_retention_days = CASE WHEN 'job_identity_retention_days' = ANY(p_settings)
+      THEN policy.application_job_identity_retention_days
+      ELSE policy.job_identity_retention_days END,
+    terminal_outcome_retention_days = CASE WHEN 'terminal_outcome_retention_days' = ANY(p_settings)
+      THEN policy.application_terminal_outcome_retention_days
+      ELSE policy.terminal_outcome_retention_days END,
+    job_event_retention_days = CASE WHEN 'job_event_retention_days' = ANY(p_settings)
+      THEN policy.application_job_event_retention_days ELSE policy.job_event_retention_days END,
+    attempt_history_retention_days = CASE WHEN 'attempt_history_retention_days' = ANY(p_settings)
+      THEN policy.application_attempt_history_retention_days
+      ELSE policy.attempt_history_retention_days END,
+    schedule_occurrence_retention_days = CASE
+      WHEN 'schedule_occurrence_retention_days' = ANY(p_settings)
+        THEN policy.application_schedule_occurrence_retention_days
+      ELSE policy.schedule_occurrence_retention_days END,
+    statistics_retention_days = CASE WHEN 'statistics_retention_days' = ANY(p_settings)
+      THEN policy.application_statistics_retention_days ELSE policy.statistics_retention_days END,
+    terminal_job_prune_limit = CASE WHEN 'terminal_job_prune_limit' = ANY(p_settings)
+      THEN policy.application_terminal_job_prune_limit ELSE policy.terminal_job_prune_limit END,
+    history_partitions_per_pass = CASE WHEN 'history_partitions_per_pass' = ANY(p_settings)
+      THEN policy.application_history_partitions_per_pass ELSE policy.history_partitions_per_pass END,
+    default_partition_rows_per_pass = CASE
+      WHEN 'default_partition_rows_per_pass' = ANY(p_settings)
+        THEN policy.application_default_partition_rows_per_pass
+      ELSE policy.default_partition_rows_per_pass END,
+    occurrence_rows_per_pass = CASE WHEN 'occurrence_rows_per_pass' = ANY(p_settings)
+      THEN policy.application_occurrence_rows_per_pass ELSE policy.occurrence_rows_per_pass END,
+    statistics_rows_per_pass = CASE WHEN 'statistics_rows_per_pass' = ANY(p_settings)
+      THEN policy.application_statistics_rows_per_pass ELSE policy.statistics_rows_per_pass END,
+    operator_overrides = ARRAY(
+      SELECT name FROM unnest(policy.operator_overrides) name WHERE NOT (name = ANY(p_settings))
+    ),
+    updated_at = clock_timestamp()
+  WHERE singleton
+  RETURNING * INTO v_policy;
+  UPDATE workhorse.maintenance_state
+     SET last_completed_local_date = NULL, updated_at = clock_timestamp()
+   WHERE task_name = 'history_retention'
+     AND p_settings && ARRAY[
+       'job_event_retention_days', 'attempt_history_retention_days',
+       'schedule_occurrence_retention_days'
+     ]::text[];
+  RETURN v_policy;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.get_retention_policy_v1()
 RETURNS workhorse.retention_policy
 LANGUAGE sql
@@ -1080,7 +1391,8 @@ CREATE OR REPLACE FUNCTION workhorse.sync_maintenance_policy_v1(
   p_timezone text,
   p_partition_preparation_interval_ms integer DEFAULT NULL,
   p_terminal_cleanup_interval_ms integer DEFAULT NULL,
-  p_history_retention_local_hour integer DEFAULT NULL
+  p_history_retention_local_time time DEFAULT NULL,
+  p_force boolean DEFAULT false
 ) RETURNS workhorse.maintenance_policy
 LANGUAGE plpgsql
 AS $$
@@ -1094,21 +1406,154 @@ BEGIN
   END IF;
   SELECT * INTO STRICT v_previous FROM workhorse.maintenance_policy WHERE singleton FOR UPDATE;
   UPDATE workhorse.maintenance_policy policy SET
-    timezone = p_timezone,
+    application_timezone = p_timezone,
+    application_partition_preparation_interval_ms = COALESCE(
+      p_partition_preparation_interval_ms, policy.application_partition_preparation_interval_ms
+    ),
+    application_terminal_cleanup_interval_ms = COALESCE(
+      p_terminal_cleanup_interval_ms, policy.application_terminal_cleanup_interval_ms
+    ),
+    application_history_retention_local_time = COALESCE(
+      p_history_retention_local_time, policy.application_history_retention_local_time
+    ),
+    timezone = CASE WHEN p_force OR NOT ('timezone' = ANY(policy.operator_overrides))
+      THEN p_timezone ELSE policy.timezone END,
+    partition_preparation_interval_ms = CASE
+      WHEN p_force THEN COALESCE(
+        p_partition_preparation_interval_ms, policy.application_partition_preparation_interval_ms
+      )
+      WHEN p_partition_preparation_interval_ms IS NULL THEN policy.partition_preparation_interval_ms
+      WHEN NOT ('partition_preparation_interval_ms' = ANY(policy.operator_overrides))
+        THEN p_partition_preparation_interval_ms
+      ELSE policy.partition_preparation_interval_ms END,
+    terminal_cleanup_interval_ms = CASE
+      WHEN p_force THEN COALESCE(
+        p_terminal_cleanup_interval_ms, policy.application_terminal_cleanup_interval_ms
+      )
+      WHEN p_terminal_cleanup_interval_ms IS NULL THEN policy.terminal_cleanup_interval_ms
+      WHEN NOT ('terminal_cleanup_interval_ms' = ANY(policy.operator_overrides))
+        THEN p_terminal_cleanup_interval_ms
+      ELSE policy.terminal_cleanup_interval_ms END,
+    history_retention_local_time = CASE
+      WHEN p_force THEN COALESCE(
+        p_history_retention_local_time, policy.application_history_retention_local_time
+      )
+      WHEN p_history_retention_local_time IS NULL THEN policy.history_retention_local_time
+      WHEN NOT ('history_retention_local_time' = ANY(policy.operator_overrides))
+        THEN p_history_retention_local_time
+      ELSE policy.history_retention_local_time END,
+    operator_overrides = CASE WHEN p_force THEN '{}'::text[] ELSE policy.operator_overrides END,
+    updated_at = clock_timestamp()
+  WHERE singleton
+  RETURNING * INTO v_policy;
+  IF v_previous.timezone IS DISTINCT FROM v_policy.timezone
+     OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
+    UPDATE workhorse.maintenance_state
+       SET last_completed_local_date = NULL, updated_at = clock_timestamp()
+     WHERE task_name = 'history_retention';
+  END IF;
+  RETURN v_policy;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.override_maintenance_policy_v1(
+  p_timezone text DEFAULT NULL,
+  p_partition_preparation_interval_ms integer DEFAULT NULL,
+  p_terminal_cleanup_interval_ms integer DEFAULT NULL,
+  p_history_retention_local_time time DEFAULT NULL
+) RETURNS workhorse.maintenance_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_policy workhorse.maintenance_policy%ROWTYPE;
+DECLARE v_previous workhorse.maintenance_policy%ROWTYPE;
+DECLARE v_overrides text[] := ARRAY[]::text[];
+BEGIN
+  IF p_timezone IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_timezone_names timezone WHERE timezone.name = p_timezone
+  ) THEN
+    RAISE EXCEPTION 'maintenance timezone must be a valid IANA timezone name';
+  END IF;
+  IF p_timezone IS NULL AND p_partition_preparation_interval_ms IS NULL
+     AND p_terminal_cleanup_interval_ms IS NULL AND p_history_retention_local_time IS NULL THEN
+    RAISE EXCEPTION 'maintenance override must include at least one setting';
+  END IF;
+  IF p_timezone IS NOT NULL THEN v_overrides := array_append(v_overrides, 'timezone'); END IF;
+  IF p_partition_preparation_interval_ms IS NOT NULL THEN
+    v_overrides := array_append(v_overrides, 'partition_preparation_interval_ms');
+  END IF;
+  IF p_terminal_cleanup_interval_ms IS NOT NULL THEN
+    v_overrides := array_append(v_overrides, 'terminal_cleanup_interval_ms');
+  END IF;
+  IF p_history_retention_local_time IS NOT NULL THEN
+    v_overrides := array_append(v_overrides, 'history_retention_local_time');
+  END IF;
+
+  SELECT * INTO STRICT v_previous FROM workhorse.maintenance_policy WHERE singleton FOR UPDATE;
+  UPDATE workhorse.maintenance_policy policy SET
+    timezone = COALESCE(p_timezone, policy.timezone),
     partition_preparation_interval_ms = COALESCE(
       p_partition_preparation_interval_ms, policy.partition_preparation_interval_ms
     ),
     terminal_cleanup_interval_ms = COALESCE(
       p_terminal_cleanup_interval_ms, policy.terminal_cleanup_interval_ms
     ),
-    history_retention_local_hour = COALESCE(
-      p_history_retention_local_hour, policy.history_retention_local_hour
+    history_retention_local_time = COALESCE(
+      p_history_retention_local_time, policy.history_retention_local_time
+    ),
+    operator_overrides = ARRAY(
+      SELECT DISTINCT name FROM unnest(policy.operator_overrides || v_overrides) name ORDER BY name
     ),
     updated_at = clock_timestamp()
   WHERE singleton
   RETURNING * INTO v_policy;
   IF v_previous.timezone IS DISTINCT FROM v_policy.timezone
-     OR v_previous.history_retention_local_hour IS DISTINCT FROM v_policy.history_retention_local_hour THEN
+     OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
+    UPDATE workhorse.maintenance_state
+       SET last_completed_local_date = NULL, updated_at = clock_timestamp()
+     WHERE task_name = 'history_retention';
+  END IF;
+  RETURN v_policy;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.revert_maintenance_policy_v1(
+  p_settings text[]
+) RETURNS workhorse.maintenance_policy
+LANGUAGE plpgsql
+AS $$
+DECLARE v_policy workhorse.maintenance_policy%ROWTYPE;
+DECLARE v_previous workhorse.maintenance_policy%ROWTYPE;
+BEGIN
+  IF p_settings IS NULL OR cardinality(p_settings) = 0 OR NOT p_settings <@ ARRAY[
+    'timezone', 'partition_preparation_interval_ms',
+    'terminal_cleanup_interval_ms', 'history_retention_local_time'
+  ]::text[] THEN
+    RAISE EXCEPTION 'maintenance revert must name known settings';
+  END IF;
+  SELECT * INTO STRICT v_previous FROM workhorse.maintenance_policy WHERE singleton FOR UPDATE;
+  UPDATE workhorse.maintenance_policy policy SET
+    timezone = CASE WHEN 'timezone' = ANY(p_settings)
+      THEN policy.application_timezone ELSE policy.timezone END,
+    partition_preparation_interval_ms = CASE
+      WHEN 'partition_preparation_interval_ms' = ANY(p_settings)
+        THEN policy.application_partition_preparation_interval_ms
+      ELSE policy.partition_preparation_interval_ms END,
+    terminal_cleanup_interval_ms = CASE
+      WHEN 'terminal_cleanup_interval_ms' = ANY(p_settings)
+        THEN policy.application_terminal_cleanup_interval_ms
+      ELSE policy.terminal_cleanup_interval_ms END,
+    history_retention_local_time = CASE
+      WHEN 'history_retention_local_time' = ANY(p_settings)
+        THEN policy.application_history_retention_local_time
+      ELSE policy.history_retention_local_time END,
+    operator_overrides = ARRAY(
+      SELECT name FROM unnest(policy.operator_overrides) name WHERE NOT (name = ANY(p_settings))
+    ),
+    updated_at = clock_timestamp()
+  WHERE singleton
+  RETURNING * INTO v_policy;
+  IF v_previous.timezone IS DISTINCT FROM v_policy.timezone
+     OR v_previous.history_retention_local_time IS DISTINCT FROM v_policy.history_retention_local_time THEN
     UPDATE workhorse.maintenance_state
        SET last_completed_local_date = NULL, updated_at = clock_timestamp()
      WHERE task_name = 'history_retention';
@@ -2165,6 +2610,12 @@ CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
   p_pid integer,
   p_queue_name text,
   p_concurrency integer,
+  p_lease_ms integer,
+  p_heartbeat_ms integer,
+  p_poll_ms integer,
+  p_maintenance_interval_ms integer,
+  p_maintenance_task_poll_ms integer,
+  p_registry_interval_ms integer,
   p_active_slots integer,
   p_draining boolean
 )
@@ -2191,8 +2642,12 @@ BEGIN
   END IF;
 
   INSERT INTO workhorse.worker_registry AS registry
-    (worker_id, instance_id, hostname, pid, queue_name, concurrency, active_slots, draining)
+    (worker_id, instance_id, hostname, pid, queue_name, concurrency, lease_ms, heartbeat_ms,
+     poll_ms, maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
+     active_slots, draining)
   VALUES (p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_name, p_concurrency,
+          p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
+          p_maintenance_task_poll_ms, p_registry_interval_ms,
           COALESCE(p_active_slots, 0), COALESCE(p_draining, false))
   ON CONFLICT (worker_id) DO UPDATE
     SET instance_id = EXCLUDED.instance_id,
@@ -2200,6 +2655,12 @@ BEGIN
         pid = EXCLUDED.pid,
         queue_name = EXCLUDED.queue_name,
         concurrency = EXCLUDED.concurrency,
+        lease_ms = EXCLUDED.lease_ms,
+        heartbeat_ms = EXCLUDED.heartbeat_ms,
+        poll_ms = EXCLUDED.poll_ms,
+        maintenance_interval_ms = EXCLUDED.maintenance_interval_ms,
+        maintenance_task_poll_ms = EXCLUDED.maintenance_task_poll_ms,
+        registry_interval_ms = EXCLUDED.registry_interval_ms,
         active_slots = EXCLUDED.active_slots,
         draining = EXCLUDED.draining,
         last_heartbeat_at = clock_timestamp(),
@@ -4532,7 +4993,7 @@ BEGIN
    WHERE task_name = 'history_retention' FOR UPDATE;
   v_local_now := p_now AT TIME ZONE v_maintenance.timezone;
   IF NOT p_force AND (
-    v_local_now::time < make_time(v_maintenance.history_retention_local_hour, 0, 0)
+    v_local_now::time(0) < v_maintenance.history_retention_local_time
     OR v_state.last_completed_local_date >= v_local_now::date
   ) THEN
     RETURN;
@@ -5182,7 +5643,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (20) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (21) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )
