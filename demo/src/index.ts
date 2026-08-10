@@ -1,6 +1,6 @@
 import { serveWithWorkhorse } from "@workhorse/hono";
 import { installSchema } from "@workhorse/core";
-import { Client, Pool } from "pg";
+import { Pool } from "pg";
 import {
   createDemoApplication,
   createLocalOperator,
@@ -11,7 +11,6 @@ import {
   syncDemoSchedules,
 } from "./app.js";
 import { createDemoDatabase } from "./database.js";
-import { DashboardRefreshHub, listenForDashboardRefresh } from "@workhorse/dashboard/server";
 import { createDashboardDevServer } from "@workhorse/dashboard/dev";
 import { resolveDemoDatabaseUrl } from "./environment.js";
 
@@ -20,8 +19,8 @@ import { resolveDemoDatabaseUrl } from "./environment.js";
  *
  * This process serves the application and mounts the dashboard. It deliberately runs **no**
  * workers: those live in `worker.ts` and are started as a dedicated process. Everything the
- * dashboard shows is therefore read from PostgreSQL, and everything that keeps it live arrives as
- * a PostgreSQL notification, which is exactly the constraint a real deployment operates under.
+ * dashboard shows is therefore read from PostgreSQL on a bounded polling interval, which is the
+ * same constraint a real deployment operates under.
  *
  * It serves the dashboard from `@workhorse/dashboard`, exactly as any consumer would. In
  * development it additionally runs that package's Vite middleware, so the same origin serves the
@@ -42,41 +41,24 @@ const inProcessWorkers = process.env.WORKHORSE_DEMO_IN_PROCESS_WORKERS === "true
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 
 const database = createDemoDatabase(pool);
-const dashboardRefresh = new DashboardRefreshHub();
-const notificationClient = new Client({ connectionString: databaseUrl });
 
 await installSchema(pool);
 await installDemoSchema(database);
 await syncDemoSchedules(pool);
 console.log("Synchronized recurring demo schedules for worker-owned execution");
 
-// A dedicated connection listens for both the dispatch wake channel and the coalesced operator
-// activity channel that out-of-process workers publish. Without it this tier would only refresh on
-// its own SSE fallback, because no handler runs here to report anything.
-await notificationClient.connect();
-await listenForDashboardRefresh({
-  client: notificationClient,
-  refresh: dashboardRefresh,
-  onError: (error) =>
-    console.error("Dashboard notification listener stopped; SSE fallback remains active", error),
-});
-
 // Development compiles the dashboard from source in this process. Production serves the packaged
 // bundle. Both render the page through the same host, so only module delivery differs.
 const dashboardDev = mode === "development" ? await createDashboardDevServer() : undefined;
 
 const { app, workhorse } = createDemoApplication(database, {
-  dashboardRefresh,
   dev: dashboardDev,
   environment,
   workers: inProcessWorkers,
   operator: createLocalOperator(database),
   queueController: createLocalQueueController(database),
   scheduleController: createLocalScheduleController(database),
-  close: async () => {
-    await notificationClient.end();
-    await pool.end();
-  },
+  close: () => pool.end(),
   onWorkerError: (error) => console.error("Workhorse worker stopped", error),
 });
 if (process.env.SEED_DEMO_DATA !== "false") {

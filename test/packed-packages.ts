@@ -179,7 +179,7 @@ void nodeMiddleware;
 void integration.context.queue;
 void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { ok: true }));
 declare const dashboardClient: DashboardClient;
-const dashboardProps: DashboardProps = { client: dashboardClient, eventsUrl: null };
+const dashboardProps: DashboardProps = { client: dashboardClient };
 const dashboardCountsPromise: Promise<DashboardTaskCounts> = dashboardClient.taskCounts();
 void dashboardProps;
 void dashboardCountsPromise;

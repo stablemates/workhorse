@@ -214,7 +214,6 @@ export default defineWorkerProcess({
         queue: "billing",
         concurrency: 8,
         registryIntervalMs: 5_000, // fleet heartbeat; 0 opts out
-        activityNotifications: true, // coalesced hints for a live dashboard
       },
       configure: (worker) => worker.handle("invoice.capture", captureInvoice),
     },

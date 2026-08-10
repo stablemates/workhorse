@@ -27,25 +27,23 @@ JSON-serializable and becomes the job's immutable terminal result.
 
 ## `WorkerOptions`
 
-| Option                           | Default                     | Meaning                                                            |
-| -------------------------------- | --------------------------- | ------------------------------------------------------------------ |
-| `queue`                          | `"default"`                 | Queue name used for claims                                         |
-| `workerId`                       | `<hostname>-<pid>-<random>` | Durable lease owner identity; must be unique among live workers    |
-| `concurrency`                    | `1`                         | Integer 1 to 100; concurrent handler executions in this instance   |
-| `leaseMs`                        | `30_000`                    | Ownership granted by claim and each accepted heartbeat             |
-| `heartbeatMs`                    | `leaseMs / 3`               | Local heartbeat interval; must be less than `leaseMs`              |
-| `pollMs`                         | `250`                       | Idle polling delay                                                 |
-| `maintenanceIntervalMs`          | `1_000`                     | Minimum delay between tick/schedule passes; at least 100           |
-| `maintenanceTaskPollMs`          | `60_000`                    | Minimum delay between background maintenance eligibility checks    |
-| `registryIntervalMs`             | `5_000`                     | Fleet registry refresh cadence; `0` opts out of registration       |
-| `activityNotifications`          | `false`                     | Publish coalesced hints on the `workhorse_activity` channel        |
-| `activityNotificationIntervalMs` | `250`                       | Minimum delay between coalesced activity notifications             |
-| `onRegistrationError`            | –                           | Receives registry refresh failures instead of throwing in the loop |
-| `onMaintenance`                  | –                           | Receives one telemetry event per SQL maintenance phase             |
-| `scheduleNamespaces`             | `[]`                        | Namespaces whose schedules this worker evaluates                   |
-| `scheduleCatchupLimit`           | `100`                       | Max missed occurrences fired per schedule per pass (1 to 10,000)   |
-| `retryDelayMs`                   | –                           | Number or `(attempt, job) => number \| undefined` backoff override |
-| `failpoint`                      | –                           | Test-only deterministic crash hook                                 |
+| Option                  | Default                     | Meaning                                                            |
+| ----------------------- | --------------------------- | ------------------------------------------------------------------ |
+| `queue`                 | `"default"`                 | Queue name used for claims                                         |
+| `workerId`              | `<hostname>-<pid>-<random>` | Durable lease owner identity; must be unique among live workers    |
+| `concurrency`           | `1`                         | Integer 1 to 100; concurrent handler executions in this instance   |
+| `leaseMs`               | `30_000`                    | Ownership granted by claim and each accepted heartbeat             |
+| `heartbeatMs`           | `leaseMs / 3`               | Local heartbeat interval; must be less than `leaseMs`              |
+| `pollMs`                | `250`                       | Idle polling delay                                                 |
+| `maintenanceIntervalMs` | `1_000`                     | Minimum delay between tick/schedule passes; at least 100           |
+| `maintenanceTaskPollMs` | `60_000`                    | Minimum delay between background maintenance eligibility checks    |
+| `registryIntervalMs`    | `5_000`                     | Fleet registry refresh cadence; `0` opts out of registration       |
+| `onRegistrationError`   | –                           | Receives registry refresh failures instead of throwing in the loop |
+| `onMaintenance`         | –                           | Receives one telemetry event per SQL maintenance phase             |
+| `scheduleNamespaces`    | `[]`                        | Namespaces whose schedules this worker evaluates                   |
+| `scheduleCatchupLimit`  | `100`                       | Max missed occurrences fired per schedule per pass (1 to 10,000)   |
+| `retryDelayMs`          | –                           | Number or `(attempt, job) => number \| undefined` backoff override |
+| `failpoint`             | –                           | Test-only deterministic crash hook                                 |
 
 Invalid combinations throw at construction: `heartbeatMs >= leaseMs`, out-of-range concurrency, and
 cadences below 100 ms are rejected immediately.
@@ -164,24 +162,6 @@ deregisters. The registry holds one row per live worker and is never read by the
 
 Reported slot use is only as fresh as the refresh cadence. Treat it as an operational indicator, not
 as a synchronous read of another process's event loop.
-
-## Keeping an out-of-process dashboard live
-
-`workhorse_jobs` is the dispatch wake channel and means only "ready work may exist", so it does not
-fire on transitions such as completion. Set `activityNotifications` to publish coalesced hints on a
-separate `workhorse_activity` channel instead:
-
-```ts
-const worker = new Worker(queue, {
-  activityNotifications: true, // off by default
-  activityNotificationIntervalMs: 250,
-});
-```
-
-Coalescing is the point: a worker completing a thousand jobs a second still issues at most one
-notification per interval, so enabling this cannot turn throughput into notification-queue pressure.
-Delivery is never part of the protocol. Consume it with `listenForDashboardRefresh` from
-[`@workhorse/dashboard/server`](/docs/dashboard).
 
 ## Maintenance telemetry
 

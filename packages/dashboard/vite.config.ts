@@ -7,8 +7,8 @@ import { renderDashboardHtml } from "./src/server/html.js";
  * Build and development configuration for the dashboard's own browser application.
  *
  * `vite build` produces the packaged bundle that `createDashboardHost` serves. `vite` (dev) runs
- * the same entry from source with HMR, proxying the private oRPC transport and refresh stream to a
- * backend that already speaks them — a running demo, or `workhorse dashboard`.
+ * the same entry from source with HMR and proxies the private oRPC transport to a backend that
+ * already speaks it — a running demo, or `workhorse dashboard`.
  *
  * The harness lives here rather than in an application because it points at this package's own
  * source. An application consuming the published package cannot reach `src/`, so a harness that
@@ -43,7 +43,6 @@ export default defineConfig({
             runtime: {
               basePath: "",
               rpcUrl: "/rpc",
-              eventsUrl: "/events",
               auditActor,
               demoTools,
             },
@@ -66,7 +65,6 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/rpc": apiOrigin,
-      "/events": apiOrigin,
     },
   },
 });

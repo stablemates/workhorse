@@ -50,10 +50,8 @@ The registry holds one row per live worker, is never consulted by the claim path
 dispatch cost. `registryIntervalMs: 0` opts out entirely, at the cost of the worker becoming
 invisible to operator surfaces.
 
-Because the dashboard no longer observes handlers directly, it also needs a reason to refresh.
-`WorkerOptions.activityNotifications` publishes coalesced hints on `workhorse_activity`, and
-`listenForDashboardRefresh` from `@workhorse/dashboard/server` bridges them into the dashboard's SSE
-stream. See the dashboard package README.
+The dashboard reads worker state from PostgreSQL on its bounded polling interval, so it does not
+observe handlers or depend on worker process notifications.
 
 ## Configuration and CLI
 
@@ -289,7 +287,7 @@ Restart=on-failure
 
 The dedicated process lifecycle does not implement:
 
-- notification-assisted dispatch (`workhorse_activity` is an operator refresh hint only; claims still poll);
+- notification-assisted dispatch (`workhorse_jobs` exists as a hint, but claims still poll);
 - OpenTelemetry spans or process metrics;
 - handler execution deadlines or forced handler cancellation;
 - global concurrency or rate limits across processes;

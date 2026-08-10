@@ -115,12 +115,10 @@ import { WorkhorseBrand } from "./brand.js";
 import {
   dashboardRefreshIntervalMs,
   dashboardRefreshIntervals,
-  dashboardRefreshIsLive,
   defaultDashboardRefreshInterval,
   startDashboardPolling,
   type DashboardRefreshIntervalValue,
 } from "./refresh-policy.js";
-import { subscribeDashboardRefresh, type DashboardLiveStatus } from "./live-refresh.js";
 import {
   parseTaskLocation,
   taskDetailNavigation,
@@ -3915,8 +3913,7 @@ function uniqueSorted(values: Array<string | null>): string[] {
  * Rows come from `job_event` and `attempt_history`, never from the PostgreSQL notification
  * channels. Those channels carry only a queue name, are coalesced by both the worker and the
  * dashboard's listener, and are dropped while nothing is listening — a feed built from them would
- * be both uninformative and quietly incomplete. They are still what makes this page live: a
- * notification tells the dashboard to re-read, and this table is what it re-reads.
+ * be both uninformative and quietly incomplete.
  *
  * The feed is a window, not a paginated log. It updates in place while an operator watches, and a
  * cursor walking backwards through a list whose head keeps moving is not something anyone should
@@ -3927,13 +3924,11 @@ function EventsPage({
   query,
   setQuery,
   inspectJob,
-  live,
 }: {
   data: DashboardEventsPage;
   query: EventsQueryState;
   setQuery: (next: EventsQueryState) => void;
   inspectJob: (id: string) => void;
-  live: DashboardLiveStatus | null;
 }) {
   const queueOptions = includeSelectedOption(
     uniqueSorted(data.events.map((event) => event.queue)),
@@ -4085,9 +4080,9 @@ function EventsPage({
           />
           {/* Pages are offsets into a list whose head keeps moving, so say so rather than let an
               operator wonder why a row they were reading moved down a page. */}
-          {data.page > 1 && live === "live" ? (
+          {data.page > 1 ? (
             <Text c="dimmed" size="xs">
-              Newer events push these boundaries down while the feed is live.
+              Newer events can push these boundaries down between refreshes.
             </Text>
           ) : null}
         </Group>
@@ -4454,7 +4449,6 @@ function useDashboardController(
   auditActor: string,
   demoTools: DashboardDemoTools | null,
   basePath: string,
-  eventsUrl: string | null,
 ) {
   const client = useDashboardClient();
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
@@ -4522,7 +4516,6 @@ function useDashboardController(
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<DashboardRefreshIntervalValue>(readStoredRefreshInterval);
-  const [liveStatus, setLiveStatus] = useState<DashboardLiveStatus>("offline");
   const [eventsQuery, setEventsQuery] = useState<EventsQueryState>(defaultEventsQuery);
   const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(() => {
     const initial = readLocation(basePath);
@@ -5033,28 +5026,6 @@ function useDashboardController(
     });
   }, [refreshInterval, loadPage, loadTaskCounts, location.route]);
 
-  /**
-   * Refresh from the host's event stream instead of a timer.
-   *
-   * The stream only says that something durable changed; the page re-reads through the same
-   * queries a manual refresh uses. Nothing rendered comes from a notification payload, so a frame
-   * lost to a reconnect costs a later refetch and never a gap in what is displayed.
-   */
-  useEffect(() => {
-    if (!eventsUrl || !dashboardRefreshIsLive(refreshInterval)) {
-      setLiveStatus("offline");
-      return;
-    }
-    return subscribeDashboardRefresh({
-      url: eventsUrl,
-      onStatus: setLiveStatus,
-      onRefresh: () => {
-        void loadPage();
-        if (location.route !== "/tasks") void loadTaskCounts();
-      },
-    });
-  }, [eventsUrl, refreshInterval, loadPage, loadTaskCounts, location.route]);
-
   const connected = loadState.status !== "error" && loadState.data !== null;
   const loading = loadState.status === "loading";
 
@@ -5105,7 +5076,6 @@ function useDashboardController(
         query={eventsQuery}
         setQuery={setEventsQuery}
         inspectJob={inspectJob}
-        live={dashboardRefreshIsLive(refreshInterval) ? liveStatus : null}
       />
     );
   } else if (loadState.data?.route === "/cron") {
@@ -5158,8 +5128,6 @@ function useDashboardController(
     loadPage,
     refreshInterval,
     changeRefreshInterval,
-    liveStatus,
-    liveAvailable: eventsUrl !== null,
     location,
     taskCounts,
     handleLink,
@@ -5181,13 +5149,11 @@ function DashboardContent({
   auditActor,
   demoTools,
   basePath,
-  eventsUrl,
 }: Required<Pick<DashboardProps, "auditActor">> & {
   demoTools: DashboardDemoTools | null;
   basePath: string;
-  eventsUrl: string | null;
 }) {
-  const controller = useDashboardController(auditActor, demoTools, basePath, eventsUrl);
+  const controller = useDashboardController(auditActor, demoTools, basePath);
   const {
     navbarOpened,
     toggleNavbar,
@@ -5198,8 +5164,6 @@ function DashboardContent({
     loadPage,
     refreshInterval,
     changeRefreshInterval,
-    liveStatus,
-    liveAvailable,
     location,
     taskCounts,
     handleLink,
@@ -5268,21 +5232,6 @@ function DashboardContent({
                   ? "Connected"
                   : "Connecting"}
             </Badge>
-            {dashboardRefreshIsLive(refreshInterval) && liveAvailable ? (
-              <Badge
-                color={liveStatus === "live" ? "teal" : "gray"}
-                variant={liveStatus === "live" ? "filled" : "light"}
-                leftSection={<Lightning size={12} weight="fill" />}
-                visibleFrom="xs"
-                title={
-                  liveStatus === "live"
-                    ? "Streaming refreshes from PostgreSQL notifications"
-                    : "The refresh stream is not connected; use Refresh to re-read now"
-                }
-              >
-                {liveStatus === "live" ? "Live" : "Reconnecting"}
-              </Badge>
-            ) : null}
             <Group gap={0} wrap="nowrap">
               <Button
                 variant="default"
@@ -5315,17 +5264,12 @@ function DashboardContent({
                   {dashboardRefreshIntervals.map((option) => (
                     <Menu.Item
                       key={option.value}
-                      // A host that serves no event stream cannot stream; the option stays visible
-                      // and disabled rather than vanishing, so the absence is explained.
-                      disabled={option.value === "live" && !liveAvailable}
                       onClick={() => changeRefreshInterval(option.value)}
                       rightSection={
                         refreshInterval === option.value ? <CheckCircle size={14} /> : null
                       }
                     >
-                      {option.value === "live" && !liveAvailable
-                        ? "Live (not served by this host)"
-                        : option.label}
+                      {option.label}
                     </Menu.Item>
                   ))}
                 </Menu.Dropdown>
@@ -5533,15 +5477,6 @@ function DashboardContent({
 
 export interface DashboardProps {
   client: DashboardClient;
-  /**
-   * Server-sent refresh stream to subscribe to while auto refresh is set to "Live".
-   *
-   * `createDashboardHost` serves one at `{basePath}/events` and supplies this through the runtime
-   * config, so the packaged application needs no configuration. Omit it in a host that does not
-   * serve the stream: the dashboard then offers only its timed refresh intervals rather than a
-   * "Live" setting that would sit permanently disconnected.
-   */
-  eventsUrl?: string | null;
   /** Actor stored in audit metadata for mutations initiated by this dashboard. */
   auditActor?: string;
   /** Optional demo job seeding controls. Omit this in normal application dashboards. */
@@ -5555,17 +5490,11 @@ export function Dashboard({
   auditActor = "dashboard",
   demoTools = undefined,
   basePath: basePathInput = "",
-  eventsUrl = null,
 }: DashboardProps) {
   const basePath = normalizeBasePath(basePathInput);
   return (
     <DashboardClientContext.Provider value={client}>
-      <DashboardContent
-        auditActor={auditActor}
-        demoTools={demoTools ?? null}
-        basePath={basePath}
-        eventsUrl={eventsUrl}
-      />
+      <DashboardContent auditActor={auditActor} demoTools={demoTools ?? null} basePath={basePath} />
     </DashboardClientContext.Provider>
   );
 }

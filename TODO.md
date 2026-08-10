@@ -179,19 +179,14 @@ forcing the dashboard and the workers into one process.
 
 **Depends on:** P0-03
 
-The operator-facing half of this is done. `workhorse_activity` carries coalesced refresh hints to a
-dashboard in another process, and `listenForDashboardRefresh` consumes both channels. The dispatch
-half — using `workhorse_jobs` to wake a claiming worker instead of polling — is still open.
+Use `workhorse_jobs` to wake a claiming worker instead of polling. The notification stays a wake
+hint, and polling stays the source of truth.
 
 - [ ] Listen to `workhorse_jobs` notifications as wake hints while retaining polling as the source
       of truth.
 - [ ] Coalesce wakeups and reconnect safely after PostgreSQL connection loss.
 - [ ] Bound idle polling so lost notifications cannot strand ready work.
 - [ ] Measure idle database load and enqueue-to-claim latency against polling-only behavior.
-- [x] Publish coalesced `workhorse_activity` hints from workers, rate limited by wall-clock time
-      rather than throughput, and off by default.
-- [x] Bridge both channels into the dashboard refresh hub behind a periodic fallback, so a dropped
-      notification only delays a refresh.
 
 ### [x] P0-05 Built-in retry policies
 

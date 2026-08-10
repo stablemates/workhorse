@@ -984,19 +984,6 @@ export class Queue {
   }
 
   /**
-   * Publish one coalesced operator-activity hint on the `workhorse_activity` channel.
-   *
-   * This is deliberately separate from the `workhorse_jobs` dispatch channel, which means "ready
-   * work may exist" and must stay cheap enough for the claim path. Activity hints instead mean
-   * "durable state an operator is watching has changed", including transitions such as completion
-   * that create no ready work at all. Callers are expected to coalesce; nothing in the protocol
-   * depends on delivery, so a dropped hint only delays a refresh until the next fallback.
-   */
-  async notifyActivity(queueName = this.defaultQueue): Promise<void> {
-    await this.database.query("SELECT pg_notify('workhorse_activity', $1)", [queueName]);
-  }
-
-  /**
    * Announce or refresh this worker's registration and read back the operator-requested pause flag.
    *
    * One round trip pushes the runtime state the worker owns and pulls the pause decision

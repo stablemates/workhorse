@@ -34,7 +34,6 @@ flowchart LR
   PG -->|operator pause flag| Worker
   Worker -->|handler outside SQL transaction| Effects[External effects]
   Worker -->|complete_v1 / fail_v1| PG
-  Worker -.->|coalesced workhorse_activity hint| Dashboard[Dashboard host in any process]
   Dashboard -->|read model + worker_registry| PG
   Dashboard -->|set_worker_paused_v1 with attribution| PG
   Health[Health and scenarios] -->|read runtime + outcome + statistics| PG

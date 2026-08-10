@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Client, Pool } from "pg";
+import { Pool } from "pg";
 import { installSchema, readSchemaVersion, WORKHORSE_SCHEMA_VERSION } from "../schema.js";
 import { MINIMUM_POSTGRES_MAJOR, readPostgresSupport } from "../support.js";
 import { runWorkerProcess } from "../worker-process.js";
@@ -176,14 +176,13 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
   }
 
   const pool = new Pool({ connectionString: databaseUrl });
-  const notificationClient = new Client({ connectionString: databaseUrl });
-  await notificationClient.connect();
-
-  const running = await startDashboardServer(
-    pool,
-    { databaseUrl, port, hostname, allowMutations, actor },
-    notificationClient as never,
-  );
+  const running = await startDashboardServer(pool, {
+    databaseUrl,
+    port,
+    hostname,
+    allowMutations,
+    actor,
+  });
   process.stdout.write(
     `Workhorse dashboard on ${running.url} (${allowMutations ? "mutations enabled" : "read-only"})\n`,
   );
@@ -192,10 +191,7 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
   const shutdown = (): void => {
     if (closing) return;
     closing = true;
-    void running
-      .close()
-      .then(() => Promise.all([notificationClient.end(), pool.end()]))
-      .then(() => undefined);
+    void running.close().then(() => pool.end());
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
