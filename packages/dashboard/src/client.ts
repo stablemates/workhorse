@@ -4,6 +4,7 @@ import type {
   DashboardActivityPeriod,
   DashboardCancelStatus,
   DashboardCronPage,
+  DashboardEventDetail,
   DashboardEventKind,
   DashboardEventsPage,
   DashboardEventsWindow,
@@ -92,6 +93,8 @@ export interface DashboardClient {
     types?: string[];
     jobId?: string | null;
   }): Promise<DashboardEventsPage>;
+  /** One durable history record, independent of its current position in the moving feed. */
+  eventDetail(input: { id: string }): Promise<DashboardEventDetail>;
   cron(): Promise<DashboardCronPage>;
   queues(): Promise<DashboardQueuesPage>;
   system(input: { window?: DashboardSystemWindow }): Promise<DashboardSystemPage>;

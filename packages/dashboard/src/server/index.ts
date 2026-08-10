@@ -9,7 +9,12 @@ export type { DashboardRuntimeConfig, RenderDashboardHtmlOptions } from "./html.
 export type { DashboardHost, DashboardHostOptions } from "./host.js";
 export { dashboardNodeMiddleware } from "./node.js";
 export type { DashboardNodeMiddleware } from "./node.js";
-export { readDashboardEvents, readDashboardSnapshot, readDashboardWorkers } from "./read-model.js";
+export {
+  readDashboardEventDetail,
+  readDashboardEvents,
+  readDashboardSnapshot,
+  readDashboardWorkers,
+} from "./read-model.js";
 export type { DashboardEventsQuery } from "./read-model.js";
 export { dashboardRouter } from "./router.js";
 export type { DashboardRouter, DashboardRpcContext } from "./router.js";
