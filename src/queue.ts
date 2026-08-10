@@ -1,4 +1,13 @@
 import { CronExpressionParser } from "cron-parser";
+import {
+  recordCancellation,
+  recordClaimedJob,
+  recordEnqueuedJobs,
+  recordHeartbeatFailure,
+  recordRecoveredLeases,
+  recordRedrive,
+  recordScheduleFired,
+} from "./metrics.js";
 import type {
   BulkRedrivePage,
   BulkRedriveOptions,
@@ -952,6 +961,7 @@ export class Queue {
         "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
         [JSON.stringify(input)],
       );
+      recordEnqueuedJobs(input);
       return result.rows.map((row) => row.job_id);
     } catch (error) {
       throw enqueueConflict(error) ?? error;
@@ -1285,7 +1295,9 @@ export class Queue {
       "SELECT workhorse.fire_schedule_v1($1, $2, $3, $4) AS job_id",
       [namespace, name, revision.toString(), occurrenceAt.toISOString()],
     );
-    return result.rows[0]!.job_id;
+    const jobId = result.rows[0]!.job_id;
+    if (jobId !== null) recordScheduleFired(namespace, name, occurrenceAt);
+    return jobId;
   }
 
   async runTaskNow(jobId: string): Promise<RunTaskNowResult> {
@@ -1312,6 +1324,7 @@ export class Queue {
       [jobId, request.requestedBy ?? null, request.reason ?? null],
     );
     const row = result.rows[0]!;
+    recordCancellation(row.status);
     return {
       status: row.status,
       jobId,
@@ -1574,6 +1587,7 @@ export class Queue {
       );
       const row = result.rows[0];
       if (!row) throw new Error("redrive_v1 returned no result");
+      recordRedrive(row.status);
       return redriveResult(row);
     } catch (error) {
       throw redriveConflict(error) ?? error;
@@ -1606,6 +1620,9 @@ export class Queue {
         ],
       );
       const last = result.rows.at(-1);
+      const statuses = new Map<RedriveResult["status"], number>();
+      for (const row of result.rows) statuses.set(row.status, (statuses.get(row.status) ?? 0) + 1);
+      for (const [status, count] of statuses) recordRedrive(status, count);
       return {
         results: result.rows.map(redriveResult),
         nextCursor:
@@ -1663,6 +1680,7 @@ export class Queue {
     );
     const row = result.rows[0];
     if (!row) return null;
+    recordClaimedJob(options.queue ?? this.defaultQueue, row.job_type);
     return {
       id: row.job_id,
       type: row.job_type,
@@ -1694,7 +1712,9 @@ export class Queue {
       "SELECT workhorse.heartbeat_v2($1, $2, $3, $4) AS status",
       [job.id, workerId, job.fenceToken.toString(), leaseMs],
     );
-    return result.rows[0]!.status;
+    const status = result.rows[0]!.status;
+    if (status !== "accepted") recordHeartbeatFailure(status);
+    return status;
   }
 
   async expireOwned(job: ClaimedJob<unknown>, workerId: string): Promise<ExpireOwnedStatus> {
@@ -1953,7 +1973,9 @@ export class Queue {
       "SELECT workhorse.recover_expired_v1($1, $2) AS count",
       [limit, retryDelayMs ?? null],
     );
-    return result.rows[0]!.count;
+    const count = result.rows[0]!.count;
+    recordRecoveredLeases(count);
+    return count;
   }
 
   async getJob<TResult = Json>(id: string): Promise<JobSnapshot<TResult> | null> {

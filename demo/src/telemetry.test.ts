@@ -28,4 +28,16 @@ describe("demo telemetry preload", () => {
     expect(manifest.scripts["signoz:up"]).toContain("scripts/signoz-portless.ts add");
     expect(manifest.scripts["signoz:down"]).toContain("scripts/signoz-portless.ts remove");
   });
+
+  it("runs one PostgreSQL metrics observer in the web process", async () => {
+    const [index, app, worker] = await Promise.all([
+      readFile(resolve("demo/src/index.ts"), "utf8"),
+      readFile(resolve("demo/src/app.ts"), "utf8"),
+      readFile(resolve("demo/src/worker.ts"), "utf8"),
+    ]);
+
+    expect(index).toContain("startDemoMetricsObserver(pool)");
+    expect(app).not.toContain("recordMaintenanceTelemetry");
+    expect(worker).not.toContain("recordMaintenanceTelemetry");
+  });
 });

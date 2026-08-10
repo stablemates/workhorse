@@ -27,7 +27,6 @@ import {
 } from "./feature-showcase.js";
 import { registerDemoHandlers } from "./handlers.js";
 import type { DemoDatabase } from "./database.js";
-import { recordMaintenanceTelemetry } from "./telemetry.js";
 
 import {
   DEMO_DURABLE_STEP_MS,
@@ -902,7 +901,6 @@ export function createDemoApplication(
         // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
         // Returning undefined omits the worker override and lets SQL select the stored policy.
         retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
-        onMaintenance: recordMaintenanceTelemetry,
       },
       configure(worker) {
         registerDemoHandlers(worker, {

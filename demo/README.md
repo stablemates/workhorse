@@ -52,7 +52,9 @@ pnpm demo:otel
 ```
 
 Open SigNoz at `http://signoz.localhost:43155`. The server and worker appear as separate services, while HTTP,
-PostgreSQL, Node.js runtime, and Workhorse maintenance telemetry share the same local OTLP endpoint. Run
+PostgreSQL, Node.js runtime, and Workhorse queue, execution, schedule, maintenance, and fleet telemetry share
+the same local OTLP endpoint. The server owns the single database-wide metrics observer, so queue and worker
+gauges are not duplicated by the worker process. Run
 `pnpm signoz:down` to stop the containers without deleting their volumes. Plain `pnpm demo` does not
 initialize OpenTelemetry or require SigNoz. The loopback-only local stack uses SigNoz impersonation mode,
 so any process on this machine has administrator access to it.
