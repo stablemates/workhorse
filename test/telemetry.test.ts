@@ -79,7 +79,9 @@ describe("OpenTelemetry", () => {
               {
                 job_id: "00000000-0000-4000-8000-000000000001",
                 job_type: "mail.send",
-                payload: { recipient: "reader@example.com" },
+                payload: { recipient: "reader@example.com", accessToken: "trace-secret" },
+                contract_version: "mail-current",
+                result_max_bytes: 1_048_576,
                 trace_context: acceptedRequest?.traceContext,
                 attempt: 1,
                 max_attempts: 25,
@@ -96,18 +98,36 @@ describe("OpenTelemetry", () => {
         throw new Error(`Unexpected query: ${sql}`);
       }),
     );
-    const queue = new Queue(database, "mail");
+    const queue = new Queue(database, "mail", {
+      contracts: {
+        "mail.send": {
+          currentVersion: "mail-current",
+          versions: {
+            "mail-current": {
+              validatePayload: () => true,
+              sensitivePayloadKeys: ["accessToken"],
+            },
+          },
+        },
+      },
+    });
     const caller = trace.getTracer("test").startSpan("caller");
     const callerContext: Context = trace.setSpan(context.active(), caller);
 
     const jobId = await context.with(callerContext, () =>
-      queue.enqueue("mail.send", { recipient: "reader@example.com" }),
+      queue.enqueue("mail.send", {
+        recipient: "reader@example.com",
+        accessToken: "trace-secret",
+      }),
     );
     caller.end();
     const claimed = await queue.claim("worker-a");
 
     expect(jobId).toBe("00000000-0000-4000-8000-000000000001");
-    expect(acceptedRequest?.payload).toEqual({ recipient: "reader@example.com" });
+    expect(acceptedRequest?.payload).toEqual({
+      recipient: "reader@example.com",
+      accessToken: "trace-secret",
+    });
     expect((acceptedRequest!.payload as Record<string, unknown>).traceContext).toBeUndefined();
     expect(acceptedRequest?.traceContext).toMatchObject({ traceparent: expect.any(String) });
     expect(claimed?.traceContext).toEqual(acceptedRequest?.traceContext);
@@ -121,6 +141,7 @@ describe("OpenTelemetry", () => {
       "workhorse.job.type": "mail.send",
       "workhorse.enqueue.count": 1,
     });
+    expect(JSON.stringify(enqueueSpan?.attributes)).not.toContain("trace-secret");
 
     const extracted = propagation.extract(context.active(), claimed!.traceContext, carrierGetter);
     expect(trace.getSpanContext(extracted)?.spanId).toBe(enqueueSpan?.spanContext().spanId);
@@ -151,6 +172,8 @@ describe("OpenTelemetry", () => {
                 job_id: "00000000-0000-4000-8000-000000000002",
                 job_type: "mail.send",
                 payload: { recipient: "reader@example.com" },
+                contract_version: null,
+                result_max_bytes: 1_048_576,
                 trace_context: traceContext,
                 attempt: 2,
                 max_attempts: 25,
@@ -260,6 +283,8 @@ describe("OpenTelemetry", () => {
       id: "00000000-0000-4000-8000-000000000003",
       type: "mail.send",
       payload: { recipient: "reader@example.com" },
+      contractVersion: null,
+      resultMaxBytes: 1_048_576,
       traceContext: null,
       attempt: 1,
       maxAttempts: 2,

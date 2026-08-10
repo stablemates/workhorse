@@ -12,14 +12,15 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v17**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v20**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
 - `@workhorse/core`: durable PostgreSQL job queue with at-least-once delivery, leases and fencing,
   cooperative cancellation, deadlines and execution timeouts, durable waits, progress and
   checkpoints, dead letters and redrive, enqueue idempotency keys, persisted retry policies,
-  declarative recurring schedules, automated history retention, and a durable worker registry.
+  declarative recurring schedules, versioned payload and result contracts, durable JSON size
+  limits, operator redaction, automated history retention, and a durable worker registry.
 - `@workhorse/core`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`, and
   `dashboard`.
 - `@workhorse/drizzle`: Drizzle ORM provider with caller-owned transactions.

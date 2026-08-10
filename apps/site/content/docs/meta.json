@@ -9,6 +9,7 @@
     "concepts",
     "---Producing work---",
     "enqueue",
+    "contracts",
     "idempotency",
     "schedules",
     "---Executing work---",

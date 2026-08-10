@@ -10,6 +10,34 @@ export interface Queryable {
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+/** Application validator for one versioned payload or result contract. */
+export type JobContractValidator = (value: Json) => boolean;
+
+/** One immutable application contract version for a job type. */
+export interface JobContractVersion {
+  validatePayload?: JobContractValidator;
+  validateResult?: JobContractValidator;
+  maxPayloadBytes?: number;
+  maxResultBytes?: number;
+  /** Top-level object keys removed from operator payload views. */
+  sensitivePayloadKeys?: readonly string[];
+  /** Top-level object keys removed from operator result views. */
+  sensitiveResultKeys?: readonly string[];
+}
+
+/** Available versions and the version assigned to newly accepted jobs of one type. */
+export interface JobTypeContracts {
+  currentVersion: string;
+  versions: Readonly<Record<string, JobContractVersion>>;
+}
+
+/** Queue-wide defaults and optional per-job-type contracts. */
+export interface QueueOptions {
+  contracts?: Readonly<Record<string, JobTypeContracts>>;
+  defaultMaxPayloadBytes?: number;
+  defaultMaxResultBytes?: number;
+}
+
 /** Bounded W3C trace metadata persisted separately from the application payload. */
 export interface TraceContext {
   traceparent?: string;
@@ -42,6 +70,11 @@ export type EnqueueIdempotencyConflictField =
   | "queue"
   | "type"
   | "payload"
+  | "contractVersion"
+  | "payloadMaxBytes"
+  | "resultMaxBytes"
+  | "sensitivePayloadKeys"
+  | "sensitiveResultKeys"
   | "tags"
   | "runAt"
   | "deadline"
@@ -126,6 +159,12 @@ export const DEFAULT_JOB_QUERY_PAYLOAD_BYTES = 16_384;
 export const MAX_JOB_QUERY_PAYLOAD_BYTES = 1_048_576;
 /** Maximum unique top-level payload keys redacted by one list projection. */
 export const MAX_JOB_QUERY_REDACT_KEYS = 50;
+/** Default PostgreSQL-canonical JSON size accepted for a job payload or result. */
+export const DEFAULT_JOB_VALUE_MAX_BYTES = 1_048_576;
+/** Largest configurable PostgreSQL-canonical JSON size accepted for a job payload or result. */
+export const MAX_JOB_VALUE_MAX_BYTES = 16_777_216;
+/** Maximum persisted top-level sensitive keys for one payload or result contract. */
+export const MAX_JOB_CONTRACT_SENSITIVE_KEYS = 50;
 
 /** Optional safe attribution attached to a cancellation request. PostgreSQL validates all bounds. */
 export interface CancellationRequest {
@@ -391,6 +430,10 @@ export interface ClaimedJob<TPayload = Json> {
   id: string;
   type: string;
   payload: TPayload;
+  /** Contract version captured when PostgreSQL accepted this job, or null for an uncontracted job. */
+  contractVersion: string | null;
+  /** Immutable PostgreSQL-canonical JSON size limit for the terminal result. */
+  resultMaxBytes: number;
   /** W3C parent context captured when PostgreSQL first accepted this stable job identity. */
   traceContext: TraceContext | null;
   /** One-based attempt number. Recovery and retry always create the next number. */
@@ -463,6 +506,7 @@ export interface JobSnapshot<TResult = Json> {
   queue: string;
   type: string;
   payload: Json;
+  contractVersion: string | null;
   tags: string[];
   state: JobState;
   currentAttempt: number;

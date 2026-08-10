@@ -22,6 +22,7 @@ import type {
   JobListQuery,
   JobCheckpoint,
   JobProgress,
+  JobContractVersion,
   JobSnapshot,
   JobState,
   JobTimelineEntry,
@@ -33,6 +34,7 @@ import type {
   MaintenancePolicy,
   MaintenancePolicyDefinition,
   Queryable,
+  QueueOptions,
   QueueHealth,
   RedriveIdempotencyConflictDetails,
   RedriveIdempotencyConflictField,
@@ -110,10 +112,13 @@ import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
   DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
+  DEFAULT_JOB_VALUE_MAX_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
   MAX_JOB_QUERY_PAGE_SIZE,
   MAX_JOB_QUERY_PAYLOAD_BYTES,
   MAX_JOB_QUERY_REDACT_KEYS,
+  MAX_JOB_CONTRACT_SENSITIVE_KEYS,
+  MAX_JOB_VALUE_MAX_BYTES,
   MAX_REDRIVE_BATCH_SIZE,
   MAX_WAIT_DURATION_MS,
 } from "./types.js";
@@ -122,6 +127,8 @@ type ClaimRow = {
   job_id: string;
   job_type: string;
   payload: Json;
+  contract_version: string | null;
+  result_max_bytes: number;
   trace_context: TraceContext | null;
   attempt: number;
   max_attempts: number;
@@ -658,6 +665,11 @@ const enqueueConflictFields = new Set<EnqueueIdempotencyConflictField>([
   "queue",
   "type",
   "payload",
+  "contractVersion",
+  "payloadMaxBytes",
+  "resultMaxBytes",
+  "sensitivePayloadKeys",
+  "sensitiveResultKeys",
   "tags",
   "runAt",
   "deadline",
@@ -907,6 +919,160 @@ export class WaitLimitExceededError extends Error {
   }
 }
 
+export class JobContractValidationError extends Error {
+  constructor(
+    readonly jobType: string,
+    readonly contractVersion: string,
+    readonly valueKind: "payload" | "result",
+  ) {
+    super(`${jobType} ${valueKind} does not satisfy contract version ${contractVersion}`);
+    this.name = "JobContractValidationError";
+  }
+}
+
+export class JobValueSizeLimitError extends RangeError {
+  constructor(
+    readonly jobType: string,
+    readonly valueKind: "payload" | "result",
+    readonly actualBytes: number,
+    readonly maxBytes: number,
+  ) {
+    super(`${jobType} ${valueKind} exceeds its configured size limit`);
+    this.name = "JobValueSizeLimitError";
+  }
+}
+
+export class JobContractUnavailableError extends Error {
+  constructor(
+    readonly jobType: string,
+    readonly contractVersion: string,
+  ) {
+    super(`${jobType} contract version ${contractVersion} is not configured in this process`);
+    this.name = "JobContractUnavailableError";
+  }
+}
+
+function validateValueLimit(value: number | undefined, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_JOB_VALUE_MAX_BYTES) {
+    throw new RangeError(`${field} must be an integer between 1 and ${MAX_JOB_VALUE_MAX_BYTES}`);
+  }
+  return value;
+}
+
+function validateSensitiveKeys(keys: readonly string[] | undefined, field: string): void {
+  if (keys === undefined) return;
+  if (keys.length > MAX_JOB_CONTRACT_SENSITIVE_KEYS) {
+    throw new RangeError(`${field} accepts at most ${MAX_JOB_CONTRACT_SENSITIVE_KEYS} keys`);
+  }
+  if (new Set(keys).size !== keys.length) throw new TypeError(`${field} must contain unique keys`);
+  for (const key of keys) {
+    if (typeof key !== "string" || key.length < 1 || key.length > 200) {
+      throw new TypeError(`${field} keys must contain 1 to 200 characters`);
+    }
+  }
+}
+
+function validateQueueOptions(options: QueueOptions): QueueOptions {
+  validateValueLimit(options.defaultMaxPayloadBytes, "defaultMaxPayloadBytes");
+  validateValueLimit(options.defaultMaxResultBytes, "defaultMaxResultBytes");
+  for (const [jobType, typeContracts] of Object.entries(options.contracts ?? {})) {
+    if (jobType.length === 0) throw new TypeError("contract job types must be non-empty");
+    if (
+      typeContracts.currentVersion.length < 1 ||
+      typeContracts.currentVersion.length > 100 ||
+      !(typeContracts.currentVersion in typeContracts.versions)
+    ) {
+      throw new TypeError(
+        `contract ${jobType} currentVersion must name a configured version of 1 to 100 characters`,
+      );
+    }
+    for (const [version, contract] of Object.entries(typeContracts.versions)) {
+      if (version.length < 1 || version.length > 100) {
+        throw new TypeError(`contract ${jobType} versions must contain 1 to 100 characters`);
+      }
+      validateValueLimit(contract.maxPayloadBytes, `${jobType}.${version}.maxPayloadBytes`);
+      validateValueLimit(contract.maxResultBytes, `${jobType}.${version}.maxResultBytes`);
+      validateSensitiveKeys(
+        contract.sensitivePayloadKeys,
+        `${jobType}.${version}.sensitivePayloadKeys`,
+      );
+      validateSensitiveKeys(
+        contract.sensitiveResultKeys,
+        `${jobType}.${version}.sensitiveResultKeys`,
+      );
+      if (
+        contract.validatePayload !== undefined &&
+        typeof contract.validatePayload !== "function"
+      ) {
+        throw new TypeError(`${jobType}.${version}.validatePayload must be a function`);
+      }
+      if (contract.validateResult !== undefined && typeof contract.validateResult !== "function") {
+        throw new TypeError(`${jobType}.${version}.validateResult must be a function`);
+      }
+    }
+  }
+  return options;
+}
+
+function validateContractValue(
+  jobType: string,
+  version: string,
+  kind: "payload" | "result",
+  value: Json,
+  contract: JobContractVersion,
+  maxBytes: number,
+): void {
+  const validator = kind === "payload" ? contract.validatePayload : contract.validateResult;
+  if (validator !== undefined) {
+    let accepted = false;
+    try {
+      accepted = validator(value);
+    } catch {
+      accepted = false;
+    }
+    if (!accepted) throw new JobContractValidationError(jobType, version, kind);
+  }
+  const encoded = JSON.stringify(value);
+  const actualBytes = Buffer.byteLength(encoded, "utf8");
+  if (actualBytes > maxBytes) {
+    throw new JobValueSizeLimitError(jobType, kind, actualBytes, maxBytes);
+  }
+}
+
+interface JobAcceptance {
+  contractVersion: string | null;
+  payloadMaxBytes: number;
+  resultMaxBytes: number;
+  sensitivePayloadKeys: readonly string[];
+  sensitiveResultKeys: readonly string[];
+}
+
+function jobAcceptance(options: QueueOptions, jobType: string, payload: Json): JobAcceptance {
+  const typeContracts = options.contracts?.[jobType];
+  const contractVersion = typeContracts?.currentVersion ?? null;
+  const contract = contractVersion === null ? undefined : typeContracts!.versions[contractVersion]!;
+  const payloadMaxBytes =
+    contract?.maxPayloadBytes ?? options.defaultMaxPayloadBytes ?? DEFAULT_JOB_VALUE_MAX_BYTES;
+  const resultMaxBytes =
+    contract?.maxResultBytes ?? options.defaultMaxResultBytes ?? DEFAULT_JOB_VALUE_MAX_BYTES;
+  if (contract !== undefined) {
+    validateContractValue(jobType, contractVersion!, "payload", payload, contract, payloadMaxBytes);
+  } else {
+    const actualBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
+    if (actualBytes > payloadMaxBytes) {
+      throw new JobValueSizeLimitError(jobType, "payload", actualBytes, payloadMaxBytes);
+    }
+  }
+  return {
+    contractVersion,
+    payloadMaxBytes,
+    resultMaxBytes,
+    sensitivePayloadKeys: contract?.sensitivePayloadKeys ?? [],
+    sensitiveResultKeys: contract?.sensitiveResultKeys ?? [],
+  };
+}
+
 /**
  * Thin TypeScript facade over the versioned PostgreSQL protocol.
  *
@@ -914,10 +1080,15 @@ export class WaitLimitExceededError extends Error {
  * inventing its own locking, fencing, or history behavior.
  */
 export class Queue {
+  private readonly options: QueueOptions;
+
   constructor(
     private readonly database: Queryable,
     readonly defaultQueue = "default",
-  ) {}
+    options: QueueOptions = {},
+  ) {
+    this.options = validateQueueOptions(options);
+  }
 
   async enqueue<TPayload extends Json>(
     type: string,
@@ -956,10 +1127,12 @@ export class Queue {
         // Supplying an active PoolClient makes the whole batch participate in the caller's transaction.
         const input = requests.map(({ type, payload, options = {}, tags }) => {
           const idempotency: EnqueueIdempotency | undefined = options.idempotency;
+          const acceptance = jobAcceptance(this.options, type, payload);
           return {
             queue: options.queue ?? this.defaultQueue,
             type,
             payload,
+            ...acceptance,
             ...(traceContext === null ? {} : { traceContext }),
             ...(options.runAt === undefined && idempotency !== undefined
               ? {}
@@ -1304,6 +1477,7 @@ export class Queue {
       }
     }
     const input = definitions.map((definition) => ({
+      ...jobAcceptance(this.options, definition.job.type, definition.job.payload),
       name: definition.name,
       schedule: definition.schedule,
       enabled: definition.enabled ?? true,
@@ -1759,6 +1933,8 @@ export class Queue {
         id: row.job_id,
         type: row.job_type,
         payload: row.payload as TPayload,
+        contractVersion: row.contract_version,
+        resultMaxBytes: row.result_max_bytes,
         traceContext: row.trace_context,
         attempt: row.attempt,
         maxAttempts: row.max_attempts,
@@ -2011,6 +2187,25 @@ export class Queue {
     result: TResult,
   ): Promise<boolean> {
     return withSpan("workhorse.complete", jobSpanAttributes(job), async (span) => {
+      if (job.contractVersion !== null) {
+        const contract = this.options.contracts?.[job.type]?.versions[job.contractVersion];
+        if (contract === undefined) {
+          throw new JobContractUnavailableError(job.type, job.contractVersion);
+        }
+        validateContractValue(
+          job.type,
+          job.contractVersion,
+          "result",
+          result,
+          contract,
+          job.resultMaxBytes,
+        );
+      } else {
+        const actualBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+        if (actualBytes > job.resultMaxBytes) {
+          throw new JobValueSizeLimitError(job.type, "result", actualBytes, job.resultMaxBytes);
+        }
+      }
       // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
       // rather than overwriting the result of a recovered attempt.
       const query = await this.database.query<{ accepted: boolean }>(
@@ -2091,6 +2286,7 @@ export class Queue {
       queue_name: string;
       job_type: string;
       payload: Json;
+      contract_version: string | null;
       tags: string[];
       state: JobSnapshot["state"];
       current_attempt: number;
@@ -2115,12 +2311,17 @@ export class Queue {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT j.id, j.queue_name, j.job_type, j.payload, j.tags, j.retry_policy,
+      `SELECT j.id, j.queue_name, j.job_type,
+              CASE WHEN jsonb_typeof(j.payload) = 'object'
+                THEN j.payload - j.payload_redact_keys ELSE j.payload END AS payload,
+              j.contract_version, j.tags, j.retry_policy,
               j.deadline_at, j.execution_timeout_ms::text,
               COALESCE(r.state, o.state) AS state,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
-              COALESCE(r.run_at, o.run_at) AS run_at, o.result,
+              COALESCE(r.run_at, o.run_at) AS run_at,
+              CASE WHEN jsonb_typeof(o.result) = 'object'
+                THEN o.result - j.result_redact_keys ELSE o.result END AS result,
               COALESCE(r.error, o.error) AS error, r.cancel_requested_at,
               r.cancel_requested_by, r.cancel_reason,
               p.progress_value, p.revision::text AS progress_revision,
@@ -2142,6 +2343,7 @@ export class Queue {
       queue: row.queue_name,
       type: row.job_type,
       payload: row.payload,
+      contractVersion: row.contract_version,
       tags: row.tags,
       state: row.state,
       currentAttempt: row.current_attempt,

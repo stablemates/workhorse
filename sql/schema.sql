@@ -22,6 +22,22 @@ AS $$
      );
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.valid_contract_redact_keys_v1(p_keys text[])
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT p_keys IS NOT NULL
+     AND cardinality(p_keys) <= 50
+     AND array_position(p_keys, NULL) IS NULL
+     AND cardinality(p_keys) = (SELECT count(DISTINCT key) FROM unnest(p_keys) key)
+     AND NOT EXISTS (
+       SELECT 1 FROM unnest(p_keys) key
+        WHERE char_length(key) NOT BETWEEN 1 AND 200
+     );
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.valid_trace_context_v1(p_context jsonb)
 RETURNS boolean
 LANGUAGE sql
@@ -246,6 +262,19 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
   queue_name text NOT NULL CHECK (queue_name <> ''),
   job_type text NOT NULL CHECK (job_type <> ''),
   payload jsonb NOT NULL,
+  contract_version text CHECK (
+    contract_version IS NULL OR char_length(contract_version) BETWEEN 1 AND 100
+  ),
+  payload_max_bytes integer NOT NULL DEFAULT 1048576 CHECK (
+    payload_max_bytes BETWEEN 1 AND 16777216
+  ),
+  result_max_bytes integer NOT NULL DEFAULT 1048576 CHECK (
+    result_max_bytes BETWEEN 1 AND 16777216
+  ),
+  payload_redact_keys text[] NOT NULL DEFAULT '{}'
+    CHECK (workhorse.valid_contract_redact_keys_v1(payload_redact_keys)),
+  result_redact_keys text[] NOT NULL DEFAULT '{}'
+    CHECK (workhorse.valid_contract_redact_keys_v1(result_redact_keys)),
   trace_context jsonb
     CONSTRAINT job_trace_context_valid CHECK (workhorse.valid_trace_context_v1(trace_context)),
   tags text[] NOT NULL DEFAULT '{}'
@@ -260,9 +289,15 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
     ),
   deadline_at timestamptz CHECK (deadline_at IS NULL OR isfinite(deadline_at)),
   execution_timeout_ms bigint CHECK (execution_timeout_ms BETWEEN 1 AND 31536000000),
+  CHECK (octet_length(payload::text) <= payload_max_bytes),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 ALTER TABLE workhorse.job ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
+ALTER TABLE workhorse.job ADD COLUMN IF NOT EXISTS contract_version text;
+ALTER TABLE workhorse.job ADD COLUMN IF NOT EXISTS payload_max_bytes integer NOT NULL DEFAULT 1048576;
+ALTER TABLE workhorse.job ADD COLUMN IF NOT EXISTS result_max_bytes integer NOT NULL DEFAULT 1048576;
+ALTER TABLE workhorse.job ADD COLUMN IF NOT EXISTS payload_redact_keys text[] NOT NULL DEFAULT '{}';
+ALTER TABLE workhorse.job ADD COLUMN IF NOT EXISTS result_redact_keys text[] NOT NULL DEFAULT '{}';
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -818,6 +853,20 @@ CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
   queue_name text NOT NULL CHECK (queue_name <> ''),
   job_type text NOT NULL CHECK (job_type <> ''),
   payload jsonb NOT NULL,
+  contract_version text CHECK (
+    contract_version IS NULL OR char_length(contract_version) BETWEEN 1 AND 100
+  ),
+  payload_max_bytes integer NOT NULL DEFAULT 1048576 CHECK (
+    payload_max_bytes BETWEEN 1 AND 16777216
+  ),
+  result_max_bytes integer NOT NULL DEFAULT 1048576 CHECK (
+    result_max_bytes BETWEEN 1 AND 16777216
+  ),
+  payload_redact_keys text[] NOT NULL DEFAULT '{}'
+    CHECK (workhorse.valid_contract_redact_keys_v1(payload_redact_keys)),
+  result_redact_keys text[] NOT NULL DEFAULT '{}'
+    CHECK (workhorse.valid_contract_redact_keys_v1(result_redact_keys)),
+  CHECK (octet_length(payload::text) <= payload_max_bytes),
   max_attempts integer NOT NULL CHECK (max_attempts BETWEEN 1 AND 100),
   retry_policy jsonb
     CONSTRAINT schedule_definition_retry_policy_normalized CHECK (
@@ -1086,10 +1135,21 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:schedules:' || p_namespace, 0));
 
   INSERT INTO workhorse.schedule_definition AS existing(
-    namespace, schedule_name, cron_expression, queue_name, job_type, payload, max_attempts, retry_policy, enabled
+    namespace, schedule_name, cron_expression, queue_name, job_type, payload,
+    contract_version, payload_max_bytes, result_max_bytes, payload_redact_keys, result_redact_keys,
+    max_attempts, retry_policy, enabled
   )
   SELECT p_namespace, definition->>'name', definition->>'schedule', definition->>'queue',
          definition->>'type', COALESCE(definition->'payload', 'null'::jsonb),
+         definition->>'contractVersion',
+         COALESCE((definition->>'payloadMaxBytes')::integer, 1048576),
+         COALESCE((definition->>'resultMaxBytes')::integer, 1048576),
+         ARRAY(SELECT key FROM jsonb_array_elements_text(
+           COALESCE(definition->'sensitivePayloadKeys', '[]'::jsonb)
+         ) key ORDER BY key COLLATE "C"),
+         ARRAY(SELECT key FROM jsonb_array_elements_text(
+           COALESCE(definition->'sensitiveResultKeys', '[]'::jsonb)
+         ) key ORDER BY key COLLATE "C"),
          COALESCE((definition->>'maxAttempts')::integer, 25),
          workhorse.normalize_retry_policy_v1(definition->'retryPolicy'),
          COALESCE((definition->>'enabled')::boolean, true)
@@ -1097,15 +1157,24 @@ BEGIN
   ON CONFLICT (namespace, schedule_name) DO UPDATE
     SET revision = existing.revision + CASE WHEN ROW(
           existing.cron_expression, existing.queue_name, existing.job_type, existing.payload,
+          existing.contract_version, existing.payload_max_bytes, existing.result_max_bytes,
+          existing.payload_redact_keys, existing.result_redact_keys,
           existing.max_attempts, existing.retry_policy, existing.enabled
         ) IS DISTINCT FROM ROW(
           EXCLUDED.cron_expression, EXCLUDED.queue_name, EXCLUDED.job_type, EXCLUDED.payload,
+          EXCLUDED.contract_version, EXCLUDED.payload_max_bytes, EXCLUDED.result_max_bytes,
+          EXCLUDED.payload_redact_keys, EXCLUDED.result_redact_keys,
           EXCLUDED.max_attempts, EXCLUDED.retry_policy, EXCLUDED.enabled
         ) THEN 1 ELSE 0 END,
         cron_expression = EXCLUDED.cron_expression,
         queue_name = EXCLUDED.queue_name,
         job_type = EXCLUDED.job_type,
         payload = EXCLUDED.payload,
+        contract_version = EXCLUDED.contract_version,
+        payload_max_bytes = EXCLUDED.payload_max_bytes,
+        result_max_bytes = EXCLUDED.result_max_bytes,
+        payload_redact_keys = EXCLUDED.payload_redact_keys,
+        result_redact_keys = EXCLUDED.result_redact_keys,
         max_attempts = EXCLUDED.max_attempts,
         retry_policy = EXCLUDED.retry_policy,
         enabled = EXCLUDED.enabled,
@@ -1175,7 +1244,12 @@ BEGIN
     clock_timestamp(),
     v_definition.max_attempts,
     '{}',
-    v_definition.retry_policy
+    v_definition.retry_policy,
+    v_definition.contract_version,
+    v_definition.payload_max_bytes,
+    v_definition.result_max_bytes,
+    v_definition.payload_redact_keys,
+    v_definition.result_redact_keys
   );
   UPDATE workhorse.schedule_occurrence occurrence
      SET job_id = v_job_id
@@ -1231,6 +1305,11 @@ DECLARE
   v_queue_name text;
   v_job_type text;
   v_payload jsonb;
+  v_contract_version text;
+  v_payload_max_bytes numeric;
+  v_result_max_bytes numeric;
+  v_payload_redact_keys text[];
+  v_result_redact_keys text[];
   v_trace_context jsonb;
   v_tags text[];
   v_run_at timestamptz;
@@ -1317,6 +1396,58 @@ BEGIN
     v_queue_name := v_request->>'queue';
     v_job_type := v_request->>'type';
     v_payload := COALESCE(v_request->'payload', 'null'::jsonb);
+    v_contract_version := v_request->>'contractVersion';
+    v_payload_max_bytes := COALESCE((v_request->>'payloadMaxBytes')::numeric, 1048576);
+    v_result_max_bytes := COALESCE((v_request->>'resultMaxBytes')::numeric, 1048576);
+    IF v_contract_version IS NOT NULL
+       AND char_length(v_contract_version) NOT BETWEEN 1 AND 100 THEN
+      RAISE EXCEPTION 'contractVersion must contain 1 to 100 characters';
+    END IF;
+    IF v_payload_max_bytes <> trunc(v_payload_max_bytes)
+       OR v_payload_max_bytes NOT BETWEEN 1 AND 16777216
+       OR v_result_max_bytes <> trunc(v_result_max_bytes)
+       OR v_result_max_bytes NOT BETWEEN 1 AND 16777216 THEN
+      RAISE EXCEPTION 'payloadMaxBytes and resultMaxBytes must be integers between 1 and 16777216';
+    END IF;
+    IF octet_length(v_payload::text) > v_payload_max_bytes THEN
+      RAISE EXCEPTION 'payload exceeds its configured size limit';
+    END IF;
+    IF jsonb_typeof(COALESCE(v_request->'sensitivePayloadKeys', '[]'::jsonb)) <> 'array'
+       OR jsonb_array_length(COALESCE(v_request->'sensitivePayloadKeys', '[]'::jsonb)) > 50
+       OR jsonb_typeof(COALESCE(v_request->'sensitiveResultKeys', '[]'::jsonb)) <> 'array'
+       OR jsonb_array_length(COALESCE(v_request->'sensitiveResultKeys', '[]'::jsonb)) > 50
+       OR EXISTS (
+         SELECT 1
+           FROM jsonb_array_elements(
+             COALESCE(v_request->'sensitivePayloadKeys', '[]'::jsonb) ||
+             COALESCE(v_request->'sensitiveResultKeys', '[]'::jsonb)
+           ) key
+          WHERE jsonb_typeof(key) <> 'string'
+             OR char_length(key #>> '{}') NOT BETWEEN 1 AND 200
+       ) THEN
+      RAISE EXCEPTION 'sensitive payload and result keys must contain at most 50 strings of 1 to 200 characters';
+    END IF;
+    v_payload_redact_keys := ARRAY(
+      SELECT key
+        FROM jsonb_array_elements_text(
+          COALESCE(v_request->'sensitivePayloadKeys', '[]'::jsonb)
+        ) key
+       ORDER BY key COLLATE "C"
+    );
+    v_result_redact_keys := ARRAY(
+      SELECT key
+        FROM jsonb_array_elements_text(
+          COALESCE(v_request->'sensitiveResultKeys', '[]'::jsonb)
+        ) key
+       ORDER BY key COLLATE "C"
+    );
+    IF cardinality(v_payload_redact_keys) <> (
+         SELECT count(DISTINCT key) FROM unnest(v_payload_redact_keys) key
+       ) OR cardinality(v_result_redact_keys) <> (
+         SELECT count(DISTINCT key) FROM unnest(v_result_redact_keys) key
+       ) THEN
+      RAISE EXCEPTION 'sensitive payload and result keys must contain unique values';
+    END IF;
     v_trace_context := v_request->'traceContext';
     IF COALESCE(v_queue_name, '') = '' OR COALESCE(v_job_type, '') = ''
        OR jsonb_typeof(COALESCE(v_request->'tags', '[]'::jsonb)) <> 'array'
@@ -1403,6 +1534,11 @@ BEGIN
         'queue', v_queue_name,
         'type', v_job_type,
         'payload', v_payload,
+        'contractVersion', to_jsonb(v_contract_version),
+        'payloadMaxBytes', v_payload_max_bytes,
+        'resultMaxBytes', v_result_max_bytes,
+        'sensitivePayloadKeys', to_jsonb(v_payload_redact_keys),
+        'sensitiveResultKeys', to_jsonb(v_result_redact_keys),
         'tags', to_jsonb(v_fingerprint_tags),
         'runAt', CASE
           WHEN v_request->>'runAt' IS NULL THEN 'null'::jsonb ELSE to_jsonb(v_run_at)
@@ -1467,10 +1603,13 @@ BEGIN
 
     IF v_is_new THEN
       INSERT INTO workhorse.job(
-        id, queue_name, job_type, payload, trace_context, tags, max_attempts, retry_policy,
+        id, queue_name, job_type, payload, contract_version, payload_max_bytes, result_max_bytes,
+        payload_redact_keys, result_redact_keys, trace_context, tags, max_attempts, retry_policy,
         deadline_at, execution_timeout_ms
       ) VALUES (
-        job_id, v_queue_name, v_job_type, v_payload, v_trace_context, v_tags,
+        job_id, v_queue_name, v_job_type, v_payload, v_contract_version,
+        v_payload_max_bytes::integer, v_result_max_bytes::integer,
+        v_payload_redact_keys, v_result_redact_keys, v_trace_context, v_tags,
         v_max_attempts, v_retry_policy,
         v_deadline_at, v_execution_timeout_ms::bigint
       );
@@ -1522,6 +1661,7 @@ $$;
 
 DROP FUNCTION IF EXISTS workhorse.enqueue_v1(text, text, jsonb, timestamptz, integer);
 DROP FUNCTION IF EXISTS workhorse.enqueue_v1(text, text, jsonb, timestamptz, integer, text[]);
+DROP FUNCTION IF EXISTS workhorse.enqueue_v1(text, text, jsonb, timestamptz, integer, text[], jsonb);
 CREATE OR REPLACE FUNCTION workhorse.enqueue_v1(
   p_queue_name text,
   p_job_type text,
@@ -1529,14 +1669,22 @@ CREATE OR REPLACE FUNCTION workhorse.enqueue_v1(
   p_run_at timestamptz DEFAULT clock_timestamp(),
   p_max_attempts integer DEFAULT 25,
   p_tags text[] DEFAULT '{}',
-  p_retry_policy jsonb DEFAULT NULL
+  p_retry_policy jsonb DEFAULT NULL,
+  p_contract_version text DEFAULT NULL,
+  p_payload_max_bytes integer DEFAULT 1048576,
+  p_result_max_bytes integer DEFAULT 1048576,
+  p_payload_redact_keys text[] DEFAULT '{}',
+  p_result_redact_keys text[] DEFAULT '{}'
 ) RETURNS uuid
 LANGUAGE sql
 AS $$
   SELECT job_id FROM workhorse.enqueue_many_v1(jsonb_build_array(jsonb_build_object(
     'queue', p_queue_name, 'type', p_job_type, 'payload', COALESCE(p_payload, 'null'::jsonb),
     'runAt', p_run_at, 'maxAttempts', p_max_attempts, 'tags', to_jsonb(COALESCE(p_tags, '{}')),
-    'retryPolicy', p_retry_policy
+    'retryPolicy', p_retry_policy, 'contractVersion', p_contract_version,
+    'payloadMaxBytes', p_payload_max_bytes, 'resultMaxBytes', p_result_max_bytes,
+    'sensitivePayloadKeys', to_jsonb(COALESCE(p_payload_redact_keys, '{}')),
+    'sensitiveResultKeys', to_jsonb(COALESCE(p_result_redact_keys, '{}'))
   ))) ORDER BY ordinal LIMIT 1;
 $$;
 
@@ -1616,7 +1764,10 @@ BEGIN
 
   RETURN QUERY
   WITH candidates AS MATERIALIZED (
-    SELECT job.id, job.queue_name, job.job_type, job.payload, job.tags,
+    SELECT job.id, job.queue_name, job.job_type,
+           CASE WHEN jsonb_typeof(job.payload) = 'object'
+             THEN job.payload - job.payload_redact_keys ELSE job.payload END AS payload,
+           job.tags,
            outcome.current_attempt, job.max_attempts, job.retry_policy,
            job.deadline_at, job.execution_timeout_ms, outcome.error,
            outcome.finished_at,
@@ -1748,10 +1899,13 @@ BEGIN
 
   target_job_id := gen_random_uuid();
   INSERT INTO workhorse.job(
-    id, queue_name, job_type, payload, tags, max_attempts, retry_policy,
+    id, queue_name, job_type, payload, contract_version, payload_max_bytes, result_max_bytes,
+    payload_redact_keys, result_redact_keys, tags, max_attempts, retry_policy,
     deadline_at, execution_timeout_ms
   ) VALUES (
-    target_job_id, v_job.queue_name, v_job.job_type, v_job.payload, v_job.tags,
+    target_job_id, v_job.queue_name, v_job.job_type, v_job.payload, v_job.contract_version,
+    v_job.payload_max_bytes, v_job.result_max_bytes,
+    v_job.payload_redact_keys, v_job.result_redact_keys, v_job.tags,
     v_job.max_attempts, v_job.retry_policy, NULL, v_job.execution_timeout_ms
   );
   INSERT INTO workhorse.job_runtime(
@@ -2283,7 +2437,8 @@ CREATE OR REPLACE FUNCTION workhorse.claim_v1(
   p_worker_id text,
   p_lease_ms integer DEFAULT 30000
 ) RETURNS TABLE (
-  job_id uuid, job_type text, payload jsonb, trace_context jsonb,
+  job_id uuid, job_type text, payload jsonb, contract_version text, result_max_bytes integer,
+  trace_context jsonb,
   attempt integer, max_attempts integer,
   retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
   attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz
@@ -2339,7 +2494,8 @@ BEGIN
     VALUES (v_runtime.job_id, v_runtime.current_attempt, 'claimed',
       jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
   RETURN QUERY
-    SELECT j.id, j.job_type, j.payload, j.trace_context, v_runtime.current_attempt, j.max_attempts,
+    SELECT j.id, j.job_type, j.payload, j.contract_version, j.result_max_bytes, j.trace_context,
+           v_runtime.current_attempt, j.max_attempts,
            j.retry_policy, j.deadline_at, j.execution_timeout_ms,
            v_runtime.attempt_timeout_at, v_fence, v_expires
       FROM workhorse.job j WHERE j.id = v_runtime.job_id;
@@ -3294,8 +3450,24 @@ CREATE OR REPLACE FUNCTION workhorse.complete_v1(
 ) RETURNS boolean
 LANGUAGE plpgsql
 AS $$
-DECLARE v_runtime workhorse.job_runtime%ROWTYPE;
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_result_max_bytes integer;
 BEGIN
+  SELECT job.result_max_bytes INTO v_result_max_bytes
+    FROM workhorse.job_runtime runtime
+    JOIN workhorse.job job ON job.id = runtime.job_id
+   WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id AND runtime.fence_token = p_fence_token
+     AND runtime.expires_at > clock_timestamp()
+     AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
+     AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > clock_timestamp())
+     AND runtime.cancel_requested_at IS NULL
+   FOR UPDATE OF runtime;
+  IF NOT FOUND THEN RETURN false; END IF;
+  IF octet_length(COALESCE(p_result, 'null'::jsonb)::text) > v_result_max_bytes THEN
+    RAISE EXCEPTION 'result exceeds its configured size limit';
+  END IF;
   DELETE FROM workhorse.job_runtime r
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
      AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
@@ -4822,7 +4994,7 @@ BEGIN
     SELECT redacted.payload, octet_length(redacted.payload::text)::integer AS payload_bytes
     FROM (
       SELECT CASE WHEN jsonb_typeof(job.payload) = 'object'
-        THEN job.payload - v_redact_keys
+        THEN job.payload - (job.payload_redact_keys || v_redact_keys)
         ELSE job.payload
       END AS payload
     ) redacted
@@ -4960,7 +5132,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (19) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (20) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

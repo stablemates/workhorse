@@ -19,6 +19,7 @@ import {
   MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
+  JobContractValidationError,
   Queue,
   RedriveIdempotencyConflictError,
   type Queryable,
@@ -137,16 +138,214 @@ beforeEach(async () => {
     updated_at = clock_timestamp()`);
 });
 
+describe("job contracts", () => {
+  it("rejects invalid and oversized payloads before accepting a durable job", async () => {
+    const contractedQueue = new Queue(pool, "default", {
+      contracts: {
+        "mail.send": {
+          currentVersion: "2026-08-10",
+          versions: {
+            "2026-08-10": {
+              validatePayload: (value) =>
+                typeof value === "object" &&
+                value !== null &&
+                !Array.isArray(value) &&
+                typeof value.recipient === "string",
+              maxPayloadBytes: 64,
+            },
+          },
+        },
+      },
+    });
+
+    await expect(contractedQueue.enqueue("mail.send", { recipient: 42 })).rejects.toBeInstanceOf(
+      JobContractValidationError,
+    );
+    await expect(
+      contractedQueue.enqueue("mail.send", { recipient: `${"a".repeat(80)}@example.test` }),
+    ).rejects.toThrow(/payload exceeds its configured size limit/);
+    await expect(
+      pool.query("SELECT count(*)::integer AS count FROM workhorse.job"),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    const id = await contractedQueue.enqueue("mail.send", { recipient: "a@example.test" });
+    await expect(contractedQueue.getJob(id)).resolves.toMatchObject({
+      id,
+      contractVersion: "2026-08-10",
+      payload: { recipient: "a@example.test" },
+    });
+  });
+
+  it("fails a handler attempt when its result violates the accepted contract", async () => {
+    const contractedQueue = new Queue(pool, "default", {
+      contracts: {
+        "invoice.total": {
+          currentVersion: "1",
+          versions: {
+            "1": {
+              validatePayload: (value) => typeof value === "object" && value !== null,
+              validateResult: (value) =>
+                typeof value === "object" &&
+                value !== null &&
+                !Array.isArray(value) &&
+                typeof value.total === "number",
+              maxResultBytes: 32,
+            },
+          },
+        },
+      },
+    });
+    const invalidId = await contractedQueue.enqueue("invoice.total", {}, { maxAttempts: 1 });
+    const oversizedId = await contractedQueue.enqueue("invoice.total", {}, { maxAttempts: 1 });
+    const worker = new Worker(contractedQueue, { workerId: "contract-result-worker" }).handle(
+      "invoice.total",
+      async (_payload, context): Promise<Json> => {
+        if (context.job.id === invalidId) return { amount: 10 };
+        return { total: 10, note: "x".repeat(40) };
+      },
+    );
+
+    await worker.runOnce();
+    await worker.runOnce();
+
+    await expect(contractedQueue.getJob(invalidId)).resolves.toMatchObject({
+      state: "failed",
+      error: { name: "JobContractValidationError" },
+      result: null,
+    });
+    await expect(contractedQueue.getJob(oversizedId)).resolves.toMatchObject({
+      state: "failed",
+      error: { name: "JobValueSizeLimitError" },
+      result: null,
+    });
+  });
+
+  it("uses the accepted version and redacts its sensitive fields from operator reads", async () => {
+    const versionOne = {
+      validatePayload: (value: Json) =>
+        typeof value === "object" &&
+        value !== null &&
+        !Array.isArray(value) &&
+        value.revision === 1,
+      validateResult: (value: Json) =>
+        typeof value === "object" && value !== null && !Array.isArray(value) && value.ok === true,
+      sensitivePayloadKeys: ["token"],
+      sensitiveResultKeys: ["receiptSecret"],
+    } as const;
+    const firstDeployment = new Queue(pool, "default", {
+      contracts: {
+        "contract.versioned": { currentVersion: "1", versions: { "1": versionOne } },
+      },
+    });
+    const id = await firstDeployment.enqueue("contract.versioned", {
+      revision: 1,
+      token: "payload-secret",
+      visible: "payload-visible",
+    });
+    const secondDeployment = new Queue(pool, "default", {
+      contracts: {
+        "contract.versioned": {
+          currentVersion: "2",
+          versions: {
+            "1": versionOne,
+            "2": {
+              validatePayload: (value) =>
+                typeof value === "object" &&
+                value !== null &&
+                !Array.isArray(value) &&
+                value.revision === 2,
+            },
+          },
+        },
+      },
+    });
+    const claimed = await secondDeployment.claim("contract-version-worker");
+    expect(claimed).toMatchObject({ id, contractVersion: "1", payload: { revision: 1 } });
+    expect(
+      await secondDeployment.complete(claimed!, "contract-version-worker", {
+        ok: true,
+        receiptSecret: "result-secret",
+        visible: "result-visible",
+      }),
+    ).toBe(true);
+
+    const snapshot = await secondDeployment.getJob(id);
+    expect(snapshot).toMatchObject({
+      contractVersion: "1",
+      payload: { revision: 1, visible: "payload-visible" },
+      result: { ok: true, visible: "result-visible" },
+    });
+    const listed = await secondDeployment.listJobs({
+      type: "contract.versioned",
+      payload: { include: true },
+    });
+    expect(listed.items[0]).toMatchObject({
+      id,
+      payload: { revision: 1, visible: "payload-visible" },
+    });
+    expect(snapshot?.payload).not.toHaveProperty("token");
+    expect(snapshot?.result).not.toHaveProperty("receiptSecret");
+    expect(listed.items[0]?.payload).not.toHaveProperty("token");
+  });
+
+  it("captures the current contract when synchronizing and firing a recurring job", async () => {
+    const contractedQueue = new Queue(pool, "default", {
+      contracts: {
+        "contract.scheduled": {
+          currentVersion: "schedule-current",
+          versions: {
+            "schedule-current": {
+              validatePayload: (value) =>
+                typeof value === "object" &&
+                value !== null &&
+                !Array.isArray(value) &&
+                value.kind === "scheduled",
+              sensitivePayloadKeys: ["token"],
+            },
+          },
+        },
+      },
+    });
+    await contractedQueue.syncSchedules("contract-tests", [
+      {
+        name: "scheduled-contract",
+        schedule: "0 * * * *",
+        job: {
+          type: "contract.scheduled",
+          payload: { kind: "scheduled", token: "schedule-secret" },
+        },
+      },
+    ]);
+    const schedule = (await contractedQueue.schedules(["contract-tests"]))[0]!;
+    const id = await contractedQueue.fireSchedule(
+      schedule.namespace,
+      schedule.name,
+      schedule.revision,
+      new Date("2026-08-10T12:00:00Z"),
+    );
+
+    await expect(contractedQueue.claim("scheduled-contract-worker")).resolves.toMatchObject({
+      id,
+      contractVersion: "schedule-current",
+      payload: { kind: "scheduled", token: "schedule-secret" },
+    });
+    await expect(contractedQueue.getJob(id!)).resolves.toMatchObject({
+      payload: { kind: "scheduled" },
+    });
+    expect((await contractedQueue.getJob(id!))?.payload).not.toHaveProperty("token");
+  });
+});
+
 afterAll(async () => {
   await pool.end();
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v19 with bounded trace metadata and fenced mutable progress storage", async () => {
+  it("installs schema v20 with job contracts, bounded trace metadata, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(19);
+    expect(version.rows[0]?.version).toBe(20);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -1916,7 +2115,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(19);
+    expect(health.schemaVersion).toBe(20);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2519,7 +2718,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v19 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v20 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -6161,7 +6360,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(19);
+    expect(health.schemaVersion).toBe(20);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
