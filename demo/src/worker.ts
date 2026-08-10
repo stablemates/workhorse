@@ -13,6 +13,7 @@ import {
 import { createDemoDatabase } from "./database.js";
 import { resolveDemoDatabaseUrl } from "./environment.js";
 import { registerDemoHandlers } from "./handlers.js";
+import { recordMaintenanceTelemetry } from "./telemetry.js";
 
 /**
  * The demo's dedicated worker process.
@@ -53,6 +54,7 @@ export default defineWorkerProcess({
       // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
       // Returning undefined omits the worker override and lets SQL select the stored policy.
       retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
+      onMaintenance: recordMaintenanceTelemetry,
       onRegistrationError: (error) =>
         console.error(
           "Worker registration failed; the fleet view will not show this worker",
