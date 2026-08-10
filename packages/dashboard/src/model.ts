@@ -1,4 +1,31 @@
-import type { Queue, RetryPolicy } from "@workhorse/core";
+import type { MaintenancePolicy, Queue, RetentionPolicy, RetryPolicy } from "@workhorse/core";
+
+export type DashboardMaintenancePolicy = Omit<MaintenancePolicy, "updatedAt"> & {
+  updatedAt: string;
+};
+
+export type DashboardRetentionPolicy = Omit<RetentionPolicy, "updatedAt"> & {
+  updatedAt: string;
+};
+
+export interface DashboardSettingsPage {
+  capturedAt: string;
+  editable: boolean;
+  maintenance: DashboardMaintenancePolicy;
+  retention: DashboardRetentionPolicy;
+  workers: Array<{
+    id: string;
+    queue: string;
+    concurrency: number;
+    leaseMs: number | null;
+    heartbeatMs: number | null;
+    pollMs: number | null;
+    maintenanceIntervalMs: number | null;
+    maintenanceTaskPollMs: number | null;
+    registryIntervalMs: number | null;
+    lastSeenAt: string;
+  }>;
+}
 
 export interface DashboardDurabilityPlan {
   source: string;
@@ -1276,6 +1303,10 @@ export interface DashboardSnapshot {
       | "purgeQueue"
       | "setWorkerPaused"
       | "cancelTask"
+      | "overrideMaintenancePolicy"
+      | "revertMaintenancePolicy"
+      | "overrideRetentionPolicy"
+      | "revertRetentionPolicy"
     >;
     requiredAuditContext: readonly ["actor", "reason", "requestId", "occurredAt"];
   };

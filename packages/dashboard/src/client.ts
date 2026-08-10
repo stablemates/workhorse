@@ -1,4 +1,11 @@
 import type {
+  MaintenancePolicyDefinition,
+  MaintenancePolicySetting,
+  RetentionPolicyDefinition,
+  RetentionPolicySetting,
+  RetentionPolicyImpact,
+} from "@workhorse/core";
+import type {
   DashboardActivityGroupBy,
   DashboardActivityPage,
   DashboardActivityPeriod,
@@ -18,6 +25,7 @@ import type {
   DashboardTaskFilter,
   DashboardTasksPage,
   DashboardWorkersPage,
+  DashboardSettingsPage,
 } from "./model.js";
 import type { TaskPageSize } from "./task-location.js";
 
@@ -99,6 +107,10 @@ export interface DashboardClient {
   queues(): Promise<DashboardQueuesPage>;
   system(input: { window?: DashboardSystemWindow }): Promise<DashboardSystemPage>;
   workers(): Promise<DashboardWorkersPage>;
+  settings(): Promise<DashboardSettingsPage>;
+  previewRetentionPolicy(input: {
+    definition: Partial<RetentionPolicyDefinition>;
+  }): Promise<RetentionPolicyImpact>;
   jobDetail(input: { id: string }): Promise<DashboardJobDetail>;
   setScheduleEnabled(input: {
     kind: "user";
@@ -121,6 +133,22 @@ export interface DashboardClient {
     paused: boolean;
     audit: DashboardAuditInput;
   }): Promise<unknown>;
+  overrideMaintenancePolicy(input: {
+    definition: Partial<MaintenancePolicyDefinition>;
+    audit: DashboardAuditInput;
+  }): Promise<void>;
+  revertMaintenancePolicy(input: {
+    settings: MaintenancePolicySetting[];
+    audit: DashboardAuditInput;
+  }): Promise<void>;
+  overrideRetentionPolicy(input: {
+    definition: Partial<RetentionPolicyDefinition>;
+    audit: DashboardAuditInput;
+  }): Promise<void>;
+  revertRetentionPolicy(input: {
+    settings: RetentionPolicySetting[];
+    audit: DashboardAuditInput;
+  }): Promise<void>;
   cancelTask(input: { id: string; audit: DashboardCancellationAuditInput }): Promise<{
     status: DashboardCancelStatus;
     state: string | null;

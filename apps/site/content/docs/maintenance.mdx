@@ -19,8 +19,12 @@ result names the phase, affected rows, duration, lock outcome, and error.
 
 ## Retain evidence in dependency order
 
-`Queue.syncRetentionPolicy` stores database-wide minimum windows and work bounds. PostgreSQL rejects
-a `RetentionPolicyDefinition` that could remove job identity before retained evidence or descendants.
+`Queue.syncRetentionPolicy` stores application defaults for database-wide minimum windows and work
+bounds. It updates values that an operator has not overridden and preserves every active override.
+
+`Queue.overrideRetentionPolicy` changes selected values without a deploy. `Queue.revertRetentionPolicy`
+clears selected overrides and restores the latest application defaults. PostgreSQL rejects a
+`RetentionPolicyDefinition` that could remove job identity before retained evidence or descendants.
 
 History uses time partitions, so `Queue.prepareHistoryPartitions` creates future storage before data
 arrives. `Queue.retainHistory` retires eligible history only after statistics no longer need it.
@@ -30,8 +34,11 @@ retained `job_redrive` descendant keeps its source identity available for lineag
 
 ## Decide when phases become due
 
-`Queue.syncMaintenancePolicy` stores one `MaintenancePolicyDefinition` for the database. PostgreSQL
-uses it to decide when partition work, history retention, and terminal cleanup become eligible.
+`Queue.syncMaintenancePolicy` stores one set of application defaults for the database. The policy
+includes an IANA timezone and local wall-clock time for daily history retention.
+
+`Queue.overrideMaintenancePolicy` changes selected values without a deploy. The settings page shows
+their source, while `Queue.revertMaintenancePolicy` restores the latest application defaults.
 
 Workers may invoke eligibility checks at different moments, but the database owns the shared due
 state. Extra replicas do not multiply destructive work.
@@ -43,6 +50,9 @@ timing pressure, retention lag, relation churn, long transactions, and lock wait
 
 Workhorse exposes these observations but does not export metrics. Connect `QueueHealth` and
 `WorkerMaintenanceTelemetry` to the monitoring system your operators already use.
+
+The dashboard previews currently eligible rows before it applies a retention change. Process-owned
+worker options remain read-only because changing them requires a deployment.
 
 ## Next
 
