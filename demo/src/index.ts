@@ -47,7 +47,6 @@ await installSchema(pool);
 await installDemoSchema(database);
 await syncDemoSchedules(pool);
 console.log("Synchronized recurring demo schedules for worker-owned execution");
-const metricsObserver = startDemoMetricsObserver(pool);
 
 // Development compiles the dashboard from source in this process. Production serves the packaged
 // bundle. Both render the page through the same host, so only module delivery differs.
@@ -63,6 +62,7 @@ const { app, workhorse } = createDemoApplication(database, {
   close: () => pool.end(),
   onWorkerError: (error) => console.error("Workhorse worker stopped", error),
 });
+const metricsObserver = startDemoMetricsObserver(pool, workhorse.context.queue);
 if (process.env.SEED_DEMO_DATA !== "false") {
   const seed = await seedDemoData(database);
   console.log(

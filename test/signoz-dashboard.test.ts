@@ -52,6 +52,25 @@ describe("SigNoz business dashboard", () => {
     ]) {
       expect(encoded).toContain(`"metricName":"${metric}"`);
     }
+    expect(encoded).not.toContain('"temporality":"cumulative"');
+    expect(encoded).toContain('"temporality":""');
+
+    const slowestTaskTypes = dashboard.spec.panels["77777777-7777-4777-8777-777777777777"] as {
+      spec: {
+        plugin: { spec: { formatting: { columnUnits: Record<string, string> } } };
+        queries: Array<{
+          spec: {
+            plugin: {
+              spec: { aggregations: Array<{ alias?: string }> };
+            };
+          };
+        }>;
+      };
+    };
+    expect(slowestTaskTypes.spec.plugin.spec.formatting.columnUnits).toEqual({ A: "ns" });
+    expect(slowestTaskTypes.spec.queries[0]?.spec.plugin.spec.aggregations[0]?.alias).toBe(
+      "P95 handler duration",
+    );
 
     const panelIds = new Set(Object.keys(dashboard.spec.panels));
     const referencedIds = new Set(

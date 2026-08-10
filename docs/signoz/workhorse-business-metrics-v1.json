@@ -127,7 +127,7 @@
                     "aggregations": [
                       {
                         "metricName": "workhorse.jobs.claimed",
-                        "temporality": "cumulative",
+                        "temporality": "",
                         "timeAggregation": "increase",
                         "spaceAggregation": "sum",
                         "reduceTo": "sum"
@@ -171,7 +171,7 @@
                     "aggregations": [
                       {
                         "metricName": "workhorse.jobs.completed",
-                        "temporality": "cumulative",
+                        "temporality": "",
                         "timeAggregation": "increase",
                         "spaceAggregation": "sum",
                         "reduceTo": "sum"
@@ -215,7 +215,7 @@
                     "aggregations": [
                       {
                         "metricName": "workhorse.jobs.failed",
-                        "temporality": "cumulative",
+                        "temporality": "",
                         "timeAggregation": "increase",
                         "spaceAggregation": "sum",
                         "reduceTo": "sum"
@@ -259,7 +259,7 @@
                     "aggregations": [
                       {
                         "metricName": "workhorse.jobs.retried",
-                        "temporality": "cumulative",
+                        "temporality": "",
                         "timeAggregation": "increase",
                         "spaceAggregation": "sum",
                         "reduceTo": "sum"
@@ -310,7 +310,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.jobs.claimed",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
                               "reduceTo": "sum"
@@ -337,7 +337,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.jobs.completed",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
                               "reduceTo": "sum"
@@ -399,7 +399,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.handler.duration",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "latest",
                               "spaceAggregation": "p50",
                               "reduceTo": "last"
@@ -426,7 +426,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.handler.duration",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "latest",
                               "spaceAggregation": "p95",
                               "reduceTo": "last"
@@ -453,7 +453,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.handler.duration",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "latest",
                               "spaceAggregation": "p99",
                               "reduceTo": "last"
@@ -492,7 +492,7 @@
             "spec": {
               "formatting": {
                 "columnUnits": {
-                  "p95(duration_nano)": "ns"
+                  "A": "ns"
                 },
                 "decimalPrecision": "1"
               }
@@ -509,7 +509,8 @@
                     "signal": "traces",
                     "aggregations": [
                       {
-                        "expression": "p95(duration_nano)"
+                        "expression": "p95(duration_nano)",
+                        "alias": "P95 handler duration"
                       }
                     ],
                     "filter": {
@@ -575,7 +576,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.handler.runtime",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
                               "reduceTo": "sum"
@@ -639,7 +640,7 @@
                     "aggregations": [
                       {
                         "metricName": "workhorse.queue.depth",
-                        "temporality": "cumulative",
+                        "temporality": "",
                         "timeAggregation": "latest",
                         "spaceAggregation": "max",
                         "reduceTo": "last"
@@ -699,7 +700,7 @@
                     "aggregations": [
                       {
                         "metricName": "workhorse.queue.oldest_ready_age",
-                        "temporality": "cumulative",
+                        "temporality": "",
                         "timeAggregation": "latest",
                         "spaceAggregation": "max",
                         "reduceTo": "last"
@@ -759,7 +760,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.queue.depth",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "latest",
                               "spaceAggregation": "max",
                               "reduceTo": "last"
@@ -786,7 +787,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.jobs.completed",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
                               "reduceTo": "sum"
@@ -852,7 +853,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.jobs.completed",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "increase",
                               "spaceAggregation": "sum",
                               "reduceTo": "sum"
@@ -872,7 +873,7 @@
                           "aggregations": [
                             {
                               "metricName": "workhorse.jobs.failed",
-                              "temporality": "cumulative",
+                              "temporality": "",
                               "timeAggregation": "increase",
                               "spaceAggregation": "sum",
                               "reduceTo": "sum"
