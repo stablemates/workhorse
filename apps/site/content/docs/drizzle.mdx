@@ -1,115 +1,84 @@
 ---
-title: Drizzle
-description: Enqueue inside caller-owned Drizzle transactions with @workhorse/drizzle.
+title: How do I use Workhorse with Drizzle?
+description: Adapt a node-postgres Drizzle database and enqueue jobs inside caller-owned transactions.
 ---
 
-`@workhorse/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
-adding Drizzle to `@workhorse/core`.
+`@workhorse/drizzle` converts Drizzle's database and transaction objects into the core `Queryable`
+protocol. Workhorse stays outside your Drizzle migration graph and keeps its own schema lifecycle.
+
+## Create the adapter
+
+Install the integration beside the Drizzle and node-postgres packages your application uses.
 
 ```bash
 pnpm add @workhorse/drizzle drizzle-orm pg
 ```
 
-## Create the adapter
+Pass the Drizzle database to `createDrizzleAdapter`.
 
 ```ts
-import { Pool } from "pg";
-import { drizzle } from "drizzle-orm/node-postgres";
 import { createDrizzleAdapter } from "@workhorse/drizzle";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const db = drizzle({ client: pool });
 
 const workhorse = createDrizzleAdapter(db, {
-  defaultQueue: "default",
-  // The adapter never closes caller-owned pools unless you ask it to.
   close: () => pool.end(),
 });
 ```
 
-`createDrizzleAdapter` returns a `WorkhorseAdapter`:
+The returned `WorkhorseAdapter` exposes `database`, `queue`, `forTransaction`, `createWorker`, and
+`close`. It gives framework integrations one stable surface without adding Drizzle to core.
 
-```ts
-interface WorkhorseAdapter<TTransaction = Queryable> {
-  readonly database: Queryable;
-  readonly queue: Queue;
-  forTransaction(transaction: TTransaction): Queue;
-  createWorker(options?: WorkerOptions): Worker;
-  close(): Promise<void>;
-}
-```
+## Enqueue inside a Drizzle transaction
 
-## Transactional enqueue
-
-Call `forTransaction(tx)` inside `db.transaction(...)` so enqueue commits or rolls back with your
-application writes.
+Call `forTransaction` with the transaction object. The returned `Queue` sends its SQL through that
+transaction, so the job follows the surrounding commit or rollback.
 
 ```ts
 await db.transaction(async (tx) => {
   await tx.insert(account).values({ id: accountId, email });
-  await workhorse.forTransaction(tx).enqueue("account.created", { accountId });
+  await workhorse.forTransaction(tx).enqueue("account.created", {
+    accountId,
+  });
 });
 ```
 
-If the transaction rolls back, the job never existed.
+If the callback throws, Drizzle rolls back both the account and the job. A queue created from the
+adapter's default `queue` property remains outside that caller transaction.
 
-## Workers
+## Create workers from the same adapter
+
+`workhorse.createWorker` uses the adapter's default queue and database connection.
 
 ```ts
-const worker = workhorse.createWorker({ concurrency: 4 });
-worker.handle("account.created", async (payload) => ({ ok: true }));
+const worker = workhorse.createWorker();
+worker.handle("account.created", handleAccountCreated);
 await worker.run();
 ```
 
-## Lower-level helper
+Use `drizzleQueryable` directly when you need a custom `Queue` but do not want the adapter lifecycle.
 
-`drizzleQueryable(executor)` converts any Drizzle database or transaction into the core `Queryable`
-protocol, if you want to construct a `Queue` yourself:
+Database execution failures become `DrizzleQueryError`, which retains the SQL statement, PostgreSQL
+code when available, and original cause. Typed Workhorse conflicts remain their core error classes.
 
-```ts
-import { drizzleQueryable } from "@workhorse/drizzle";
-import { Queue } from "@workhorse/core";
+## Keep resource ownership explicit
 
-const queue = new Queue(drizzleQueryable(db), "billing");
-```
+The adapter does not close caller-owned resources unless you supply `close`. Add that hook only when
+the adapter owns the pool, because `adapter.close` may run during process shutdown or failed startup.
 
-## Errors
+Install the Workhorse schema with the core deployment tools. Drizzle should not generate or migrate
+Workhorse's versioned SQL functions.
 
-Database failures are rethrown as `DrizzleQueryError`:
+## Next
 
-```ts
-import { DrizzleQueryError } from "@workhorse/drizzle";
+- [Enqueue and transactions](/docs/enqueue) — understand the transaction guarantee
+- [Hono](/docs/hono) — expose the adapter through typed middleware
+- [Installation](/docs/installation) — install the schema outside Drizzle migrations
 
-try {
-  await workhorse.queue.enqueue("email.send", payload);
-} catch (error) {
-  if (error instanceof DrizzleQueryError) {
-    error.statement; // the SQL text Workhorse issued
-    error.code; // PostgreSQL error code when available
-    error.cause; // the original error
-  }
-  throw error;
-}
-```
+---
 
-Typed Workhorse errors such as `EnqueueIdempotencyConflictError` are still raised as themselves, so
-your conflict handling keeps working through the adapter.
-
-## Resource ownership
-
-<Callout>
-The adapter does not close caller-owned pools by default. Pass `close: () => pool.end()` (or
-`() => db.$client.end()`) **only** when the adapter owns that pool. `adapter.close()` is idempotent.
-</Callout>
-
-## Schema installation
-
-Drizzle does not manage the Workhorse schema. Install it explicitly:
-
-```ts
-import { installSchema } from "@workhorse/core";
-
-await installSchema(workhorse.database);
-```
-
-Keep the Workhorse schema out of your Drizzle migration graph. It is versioned and clean-install only.
+Exact adapter boundary and transactional enqueue semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#system-context).

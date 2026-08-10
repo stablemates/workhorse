@@ -1,140 +1,71 @@
 ---
-title: Cancellation, deadlines, and timeouts
-description: Cooperative cancellation with fenced acknowledgement, absolute deadlines, and per-attempt execution timeouts.
+title: How do I cancel a job?
+description: Request a cooperative stop and let PostgreSQL preserve the winning terminal outcome.
 ---
 
-Three mechanisms stop work early. All three are **cooperative**: JavaScript is never forcibly
-preempted.
+JavaScript cannot be preempted safely, so Workhorse cancellation is cooperative. PostgreSQL can
+finish waiting work immediately, but an active handler must observe its `AbortSignal`.
 
-## Cancellation
+## Request cancellation
+
+Call `Queue.cancel` after your application authorizes the actor.
 
 ```ts
 const result = await queue.cancel(jobId, {
-  requestedBy: "operator@example.com",
+  requestedBy: actor.email,
   reason: "customer withdrew the order",
 });
 ```
 
-`CancelResult`:
+`requestedBy` and `reason` are audit attribution. Workhorse records them but does not decide whether
+the actor had permission.
 
-```ts
-{
-  status: "canceled" | "cancel_requested" | "already_terminal" | "not_found";
-  jobId: string;
-  state: JobState | null;
-  currentAttempt: number | null;
-  requestedAt: Date | null;
-  requestedBy: string | null;
-  reason: string | null;
-  finishedAt: Date | null;
-}
-```
+If the job is `ready`, `scheduled`, or in a durable wait, PostgreSQL writes the canceled outcome
+immediately. A job that never started receives no invented attempt history.
 
-### Behavior by state
+If the job is `active`, PostgreSQL records one durable request. The worker receives that request from
+`heartbeat_v2` and aborts the handler signal with `CancellationRequestedError`.
 
-| Job state                                 | Result                                                  |
-| ----------------------------------------- | ------------------------------------------------------- |
-| `ready`, future `scheduled`, durable wait | Terminal `canceled` immediately                         |
-| `active`                                  | One durable request recorded; status `cancel_requested` |
-| Already `succeeded` / `failed`            | `already_terminal`, nothing changes                     |
-| Already `canceled`                        | `canceled`, the retained evidence                       |
-| Unknown identity                          | `not_found`                                             |
+## Make the handler cooperate
 
-Active jobs keep their fenced lease. The request is delivered through heartbeat status and the
-handler's `AbortSignal`.
-
-### Handling cancellation in a handler
+Pass `context.signal` into APIs that accept an `AbortSignal`. Check it between units of work before
+starting another external effect.
 
 ```ts
 worker.handle("export.build", async (payload, context) => {
-  for (const chunk of chunks) {
-    if (context.signal.aborted) {
-      // Stop starting new effects and settle promptly.
-      throw context.signal.reason;
-    }
-    await processChunk(chunk, { signal: context.signal });
+  for (const part of payload.parts) {
+    if (context.signal.aborted) throw context.signal.reason;
+    await uploadPart(part, { signal: context.signal });
   }
-  return { done: true };
+
+  return { exported: true };
 });
 ```
 
-`context.signal.reason` is a `CancellationRequestedError`, `DeadlineExceededError`, or
-`ExecutionTimeoutError`. All three are exported from `@workhorse/core`.
+Cancellation does not undo effects that already happened. Use compensation when the domain requires
+reversal, and keep each effect safe for at-least-once execution.
 
-### Acknowledgement and fencing
+If a handler ignores the signal, its lease eventually expires. Recovery sees the durable request and
+materializes cancellation instead of creating another attempt.
 
-`heartbeat_v2` returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or
-`stale`. The worker converts `cancel_requested` into an abort and acknowledges **only** with the exact
-worker/fence generation. Boolean `heartbeat_v1` remains available and maps only `accepted` to `true`.
+## Which result wins a race?
 
-If a handler ignores the signal until its lease expires, bounded recovery materializes the requested
-cancellation instead of creating another attempt.
+Cancellation, completion, and failure lock the same runtime row. The first committed transition wins,
+and stale later writes cannot replace the terminal outcome.
 
-### Immutability and races
+Repeating a cancellation returns the existing request or outcome. PostgreSQL does not create
+duplicate terminal rows or events.
 
-- A canceled outcome is immutable. Stale completion, failure, checkpoint, wait, heartbeat, or
-  acknowledgement writes cannot replace it.
-- Cancellation racing with completion or failure uses first-committer-wins ordering.
-- Repeated requests return the existing request or outcome without duplicate terminal rows or events.
+Canceling a job created by a schedule affects that occurrence only. Its definition remains enabled
+until deployment synchronization changes it.
 
-### Attempt history
+## Next
 
-A never-started job has **no** attempt-history row: cancellation does not invent history. A canceled
-active or previously started durable-wait attempt has exactly one `canceled` attempt row.
+- [Deadlines and timeouts](/docs/deadlines) — stop work when a clock expires
+- [Workers](/docs/workers) — pause claims or drain a process instead
+- [Durable execution](/docs/durable-execution) — understand cancellation during a wait
 
-### Attribution is not authorization
+---
 
-<Callout type="warn">
-  `requestedBy` (max 200 characters) and `reason` (max 2,000 characters) are audit attribution only.
-  Workhorse does not check permissions. Your application or operator layer must enforce them.
-</Callout>
-
-### Recurring jobs
-
-Canceling a job created by a schedule affects only that occurrence. The definition remains enabled and
-later occurrences fire independently.
-
-## Absolute deadlines
-
-`EnqueueOptions.deadline` is an immutable wall-clock boundary. Reaching it is terminal even when retry
-budget remains.
-
-```ts
-await queue.enqueue("quote.price", { quoteId }, { deadline: new Date(Date.now() + 900_000) });
-```
-
-- Expired work cannot enter a new claim.
-- Active expiry is signaled cooperatively (`deadline_exceeded`, then `DeadlineExceededError`).
-- Deadline termination never retries.
-- Redrive clears the old deadline on the new target rather than copying an already-expired boundary.
-
-## Per-attempt execution timeouts
-
-`EnqueueOptions.executionTimeoutMs` bounds the active execution of one logical attempt. Durable waits
-**pause** the budget rather than consuming it.
-
-```ts
-await queue.enqueue("report.build", { month }, { executionTimeoutMs: 90_000, maxAttempts: 3 });
-```
-
-- Maximum 365 days (`MAX_EXECUTION_TIMEOUT_MS`).
-- Timeout evidence is distinct from ordinary failure.
-- Remaining retry budget schedules a later attempt.
-
-`ClaimedJob.attemptTimeoutAt` exposes the current attempt's computed target.
-
-## Late-write fencing
-
-Completion, failure, heartbeat, checkpoint, and wait writes cannot overwrite a committed deadline or
-execution-timeout transition. Whatever committed first is the truth.
-
-## Process shutdown is different
-
-A `SIGTERM` to a worker process does **not** abort handler `AbortSignal`s. Process shutdown asks active
-work to finish while preserving its lease. Handler cancellation stays a durable, job-level operation.
-See [Deployment and operations](/docs/operations).
-
-## Further reading
-
-[ADR 0010: cooperative job cancellation](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0010-cooperative-job-cancellation.md)
-records the delivery model, race ownership, and non-goals.
+Exact cancellation states, acknowledgement fencing, races, and attribution limits:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#cancellation).

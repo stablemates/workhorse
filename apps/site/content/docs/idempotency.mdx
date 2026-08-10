@@ -1,111 +1,73 @@
 ---
-title: Idempotency
-description: Scoped enqueue idempotency keys, request equivalence, conflicts, and what deduplication does not cover.
+title: How do I prevent duplicate jobs?
+description: Use scoped enqueue keys so repeated acceptance returns the original durable job.
 ---
 
-Enqueue idempotency deduplicates **durable acceptance**. Two identical requests with the same key
-produce one job instead of two.
+Enqueue idempotency prevents repeated requests from creating repeated job identities. It solves
+duplicate acceptance, while handler delivery remains at least once.
 
-## Basic usage
+## Choose a stable key
+
+Build the key from the business operation that should happen once, such as an order or webhook
+delivery. A timestamp or random value cannot identify a replay.
 
 ```ts
-await queue.enqueue(
+const jobId = await queue.enqueue(
   "invoice.capture",
-  { invoiceId: "inv-1" },
+  { invoiceId },
   {
     queue: "billing",
     idempotency: {
-      key: "capture:inv-1",
-      scope: "tenant-42", // defaults to "default"
-      ttlMs: 86_400_000, // defaults to 24 hours
+      key: `capture:${invoiceId}`,
+      scope: "invoice-capture",
     },
   },
 );
 ```
 
-An exact equivalent replay returns the **original job ID** without creating another job, event, FIFO
-placement, or notification. `enqueueMany` accepts `options.idempotency` on each request.
+If the same scope and key still exist, an equivalent request returns the original job ID. PostgreSQL
+does not add another job, event, queue placement, or notification.
 
-## Bounds and defaults
+Scopes keep unrelated features apart. An omitted scope uses `DEFAULT_IDEMPOTENCY_SCOPE`, which works
+well when every key already includes a feature prefix.
 
-| Field   | Default     | Bound                          |
-| ------- | ----------- | ------------------------------ |
-| `key`   | required    | 1 to 512 UTF-8 bytes           |
-| `scope` | `"default"` | 1 to 256 UTF-8 bytes           |
-| `ttlMs` | 24 hours    | integer, 1 ms through 365 days |
+## What counts as the same request?
 
-Keys are unique within their scope while retained. Expired bindings can be reused.
+PostgreSQL fingerprints the queue, type, payload, sorted tags, attempt budget, retry policy, key
+retention, and an explicit `runAt` value.
 
-## Request equivalence
+If those fields match, the call is a replay. If they differ, `Queue.enqueue` throws
+`EnqueueIdempotencyConflictError` and rolls back the statement.
 
-A replay is "exact" when all of the following match:
+An omitted `runAt` remains omitted in the fingerprint. A later replay of an immediate job therefore
+does not conflict with the original acceptance time.
 
-- queue
-- type
-- payload
-- sorted tags
-- `maxAttempts`
-- normalized `retryPolicy`
-- TTL
-- an explicitly supplied `runAt`
+## What is stored?
 
-For keyed immediate ingress, an **omitted** `runAt` stays omitted in the fingerprint rather than being
-replaced by the current time. That is what lets a later retry of the same request replay instead of
-conflicting.
+PostgreSQL stores the scope and a cryptographic hash of the key. Events, errors, and operator views
+show only a bounded preview and digest, so the raw key does not become audit data.
 
-A materially different replay raises `EnqueueIdempotencyConflictError` and rolls back the **entire**
-enqueue statement or batch.
+Bindings expire under the request policy. After expiry, the same key can own a new job, which makes
+enqueue idempotency a replay window rather than a permanent business registry.
 
-```ts
-import { EnqueueIdempotencyConflictError } from "@workhorse/core";
+Purging a waiting job releases its binding. Maintenance removes expired bindings before it removes
+terminal job identity.
 
-try {
-  await queue.enqueue(
-    "invoice.capture",
-    { invoiceId: "inv-2" },
-    { idempotency: { key: "capture:inv-1" } },
-  );
-} catch (error) {
-  if (error instanceof EnqueueIdempotencyConflictError) {
-    // error.details identifies the mismatching fields with safe diagnostics only
-    console.error(error.details);
-  }
-  throw error;
-}
-```
+## Why do handlers still need idempotency?
 
-## Safe diagnostics
+One accepted job can run again after a worker dies. Use the job ID or a domain ID as the provider's
+idempotency key when repeating an external effect would be harmful.
 
-<Callout type="warn">
-  Raw keys are **never persisted**. `workhorse.enqueue_idempotency` stores the scope plus a full
-  SHA-256 key hash. Events, UI projections, and errors expose only a bounded preview plus a 12-hex
-  key digest.
-</Callout>
+`HandlerContext.checkpoint` can reuse a completed stage, but a crash can still occur after the effect
+and before the checkpoint commit. The system performing the effect must close that final gap.
 
-The initial `enqueued` event records that safe metadata once. An exact replay emits no event at all.
+## Next
 
-## Expiry and cleanup
+- [Enqueue and transactions](/docs/enqueue) — place the key on accepted work
+- [Durable execution](/docs/durable-execution) — reuse completed stages inside one job
+- [Dead letters](/docs/dead-letters) — understand separate idempotency for redrive requests
 
-- Expired bindings permit key reuse.
-- Terminal-storage maintenance removes expired bindings **before** terminal identity pruning.
-- Purging queued or scheduled jobs releases their bindings.
+---
 
-## Unkeyed enqueue
-
-Omitting `idempotency` preserves the prior behavior: every accepted request creates a new job identity.
-
-## What this does not cover
-
-<Callout type="warn">
-  This deduplicates durable enqueue acceptance only. Handler delivery and external effects remain
-  **at least once** and still require provider idempotency keys, an outbox/inbox, or compensation.
-</Callout>
-
-Design rule of thumb: an enqueue idempotency key protects your queue from duplicate work items; a
-provider idempotency key protects your customer from duplicate charges. You usually need both.
-
-## Related
-
-- [Durable execution](/docs/durable-execution) for checkpointing completed external effects.
-- [Dead letters and redrive](/docs/dead-letters), which has its own separate request idempotency.
-- [ADR 0009: enqueue idempotency keys](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0009-enqueue-idempotency-keys.md).
+Exact key bounds, fingerprint fields, expiry, and conflict diagnostics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#enqueue_idempotency).

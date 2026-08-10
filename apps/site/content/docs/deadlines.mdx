@@ -1,0 +1,71 @@
+---
+title: When should I use a deadline or timeout?
+description: Choose an absolute job deadline or a per-attempt execution budget for time-bound work.
+---
+
+A deadline limits the whole job by wall-clock time. An execution timeout limits active work in one
+logical attempt, so each mechanism answers a different question.
+
+## Use a deadline for business validity
+
+`EnqueueOptions.deadline` records an immutable absolute boundary. Use it when the result becomes
+useless after a known time, even if attempts remain.
+
+```ts
+await queue.enqueue(
+  "price.quote",
+  { quoteId },
+  {
+    deadline: quoteExpiresAt,
+  },
+);
+```
+
+PostgreSQL refuses a new claim after the deadline. If a handler is active, `heartbeat_v2` reports the
+expired deadline and the worker aborts `context.signal` with `DeadlineExceededError`.
+
+A deadline ends the job without another retry. Redrive clears the old deadline because copying an
+expired business boundary would make the new job fail immediately.
+
+## Use an execution timeout for one attempt
+
+`EnqueueOptions.executionTimeoutMs` measures active execution in each logical attempt. Use it when
+one run must stop consuming resources but a later attempt may still succeed.
+
+```ts
+await queue.enqueue(
+  "report.build",
+  { reportId },
+  {
+    executionTimeoutMs: reportAttemptBudget,
+  },
+);
+```
+
+Durable waits pause this budget because the job holds no worker slot while it waits. If the budget
+expires during active work, the worker aborts with `ExecutionTimeoutError`.
+
+If attempts remain, PostgreSQL schedules another attempt. Timeline evidence distinguishes this path
+from an ordinary thrown error.
+
+## Both mechanisms remain cooperative
+
+Neither clock can interrupt JavaScript. Handlers must pass `context.signal` to cancellable APIs and
+stop starting new effects after it aborts.
+
+Completion, failure, heartbeat, checkpoint, and wait writes all preserve the current fence. A late
+write cannot replace a deadline or timeout transition that already committed.
+
+Process shutdown is separate. A termination signal drains handlers while maintaining their leases;
+it does not synthesize a job-level deadline, timeout, or cancellation.
+
+## Next
+
+- [Cancellation](/docs/cancellation) — stop work because an operator asked
+- [Retries](/docs/retries) — schedule another attempt after a timeout
+- [Deployment and operations](/docs/operations) — bound process drain without changing job policy
+
+---
+
+Exact clock calculations, limits, heartbeat statuses, and terminal behavior:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#deadlines-and-execution-timeouts).

@@ -1,222 +1,109 @@
 ---
-title: Examples
-description: Runnable patterns for transactional enqueue, durable pipelines, fan-out, scheduled reports, incident redrive, and testing.
+title: Which patterns should I copy first?
+description: Start from verified examples for transactional acceptance, durable stages, and safe operator recovery.
 ---
 
-Every snippet uses the current APIs. Adjust queue names, types, and payload shapes for your domain.
+The safest Workhorse patterns align one durable primitive with one failure boundary. These examples
+use current exported methods and leave domain policy in application code.
 
-## Transactional side effect
+## Accept work with business data
 
-Create a record and its follow-up work atomically.
+Use an adapter queue for the caller's transaction. If the callback rolls back, neither the account
+nor its follow-up job survives.
 
 ```ts
-import { Pool } from "pg";
-import { Queue } from "@workhorse/core";
+await db.transaction(async (transaction) => {
+  const account = await createAccount(transaction, input);
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const queue = new Queue(pool);
-
-export async function createOrder(input: { customerId: string; total: number }) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const { rows } = await client.query<{ id: string }>(
-      "INSERT INTO orders (customer_id, total) VALUES ($1, $2) RETURNING id",
-      [input.customerId, input.total],
+  await workhorse
+    .forTransaction(transaction)
+    .enqueue(
+      "account.created",
+      { accountId: account.id },
+      { idempotency: { key: `account-created:${account.id}` } },
     );
-    const orderId = rows[0]!.id;
-
-    await queue.enqueue(
-      "order.fulfill",
-      { orderId },
-      { queue: "orders", idempotency: { key: `fulfill:${orderId}` } },
-      client,
-    );
-
-    await client.query("COMMIT");
-    return orderId;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
+});
 ```
 
-## Durable multi-stage pipeline
+The enqueue key protects a repeated application request. It does not protect external effects when
+the accepted job runs again.
 
-Checkpoints replay completed stages; the wait releases the lease between them.
+## Preserve completed handler stages
+
+Wrap expensive or external stages in named checkpoints, and give the external provider its own
+stable idempotency key.
 
 ```ts
-worker.handle("order.fulfill", async (payload: { orderId: string }, context) => {
+worker.handle("order.fulfill", async (payload, context) => {
   const charge = await context.checkpoint("charge", () =>
-    payments.charge(payload.orderId, { idempotencyKey: `charge:${payload.orderId}` }),
+    payments.charge(payload.orderId, {
+      idempotencyKey: `charge:${payload.orderId}`,
+    }),
   );
 
-  const shipment = await context.checkpoint("ship", () =>
+  const shipment = await context.checkpoint("shipment", () =>
     logistics.createShipment(payload.orderId, charge.id),
   );
 
-  // Release the worker slot while the carrier scans the parcel.
-  await context.sleep("carrier-scan-window", 6 * 60 * 60_000);
+  await context.sleepUntil("carrier-window", new Date(payload.carrierReadyAt));
 
-  const tracking = await context.checkpoint("track", () => logistics.track(shipment.id));
-
-  return { chargeId: charge.id, shipmentId: shipment.id, tracking };
+  return context.checkpoint("tracking", () => logistics.readTracking(shipment.id));
 });
 ```
 
-## Cancellation-aware long job
+When the wait ends, the handler starts from the top. Saved checkpoints return their values, while
+the first boundary that has not completed performs its operation.
+
+## Make long loops cancellation-aware
+
+Check the signal before starting another unit and pass it into APIs that support cancellation.
 
 ```ts
-worker.handle("export.build", async (payload: { exportId: string }, context) => {
-  const rows = await context.checkpoint("query", () => warehouse.select(payload.exportId));
-
-  for (const [index, batch] of chunk(rows, 500).entries()) {
+worker.handle("export.build", async (payload, context) => {
+  for (const part of payload.parts) {
     if (context.signal.aborted) throw context.signal.reason;
-    await context.checkpoint(`upload-${index}`, () => storage.putBatch(payload.exportId, batch));
+
+    await context.checkpoint(`upload:${part.id}`, () =>
+      storage.upload(part, { signal: context.signal }),
+    );
   }
 
-  return { exportId: payload.exportId, batches: Math.ceil(rows.length / 500) };
+  return { exportId: payload.exportId };
 });
 ```
 
-Request cancellation from your operator layer after checking permissions:
+This stops new work promptly after cancellation. It cannot undo a completed upload, so each upload
+still needs domain idempotency or compensation.
+
+## Preview an incident redrive
+
+Use the same filter and request for preview and execution. Reusing the request ID makes a repeated
+operator command converge on existing targets.
 
 ```ts
-await queue.cancel(jobId, { requestedBy: actor.email, reason: "export superseded" });
-```
-
-## Fan-out with a bounded batch
-
-```ts
-const recipients = await loadRecipients(campaignId); // up to 1,000 per call
-
-for (const page of chunk(recipients, 1_000)) {
-  await queue.enqueueMany(
-    page.map((recipient) => ({
-      type: "campaign.send",
-      payload: { campaignId, recipientId: recipient.id },
-      options: {
-        queue: "bulk",
-        tags: [`campaign:${campaignId}`],
-        idempotency: { key: `campaign:${campaignId}:${recipient.id}`, ttlMs: 7 * 86_400_000 },
-        retryPolicy: {
-          type: "exponential",
-          initialDelayMs: 5_000,
-          multiplier: 2,
-          maxDelayMs: 600_000,
-        },
-      },
-    })),
-  );
-}
-```
-
-The idempotency keys make the whole fan-out safe to re-run after a partial failure.
-
-## Deploy-synchronized reports
-
-```ts
-// Run on every deployment with the complete namespace list.
-await queue.syncSchedules("reports-production", [
-  {
-    name: "nightly-revenue",
-    schedule: "0 2 * * *",
-    job: {
-      type: "report.revenue",
-      queue: "reports",
-      payload: { granularity: "day" },
-      maxAttempts: 5,
-      retryPolicy: { type: "fixed", delayMs: 300_000 },
-    },
-  },
-]);
-
-const worker = new Worker(queue, {
-  queue: "reports",
-  concurrency: 2,
-  scheduleNamespaces: ["reports-production"],
-});
-```
-
-## Incident redrive runbook
-
-```ts
-const filter = { queue: "billing", errorName: "ProviderTimeout", finishedAfter: incidentStart };
 const request = {
-  requestedBy: "oncall@example.com",
-  reason: "provider incident 2026-08-03 resolved",
-  requestId: "incident-2026-08-03:billing",
+  requestedBy: actor.email,
+  reason: "provider incident resolved",
+  requestId: incident.id,
 };
 
-// 1. Preview.
-const preview = await queue.redriveMany(filter, request, { dryRun: true, limit: 100 });
-console.log(`${preview.results.length} eligible`);
+const preview = await queue.redriveMany(filter, request, { dryRun: true });
 
-// 2. Drain the backlog page by page.
-let cursor;
-do {
-  const page = await queue.redriveMany(filter, request, { limit: 500, cursor });
-  cursor = page.nextCursor ?? undefined;
-} while (cursor);
-```
-
-## Operator listing with redaction
-
-```ts
-const page = await queue.listJobs({
-  queue: "billing",
-  states: ["active", "failed"],
-  createdAfter: new Date(Date.now() - 86_400_000),
-  limit: 50,
-  payload: { include: true, maxBytes: 8_192, redactKeys: ["cardNumber", "cvv", "accessToken"] },
-});
-
-for (const item of page.items) {
-  if (item.payloadStatus === "too_large") console.warn(`payload omitted for ${item.id}`);
+if (approve(preview)) {
+  await queue.redriveMany(filter, request);
 }
 ```
 
-## Testing handlers
+Authorize the actor before either call. Dry run proves eligibility, while your application remains
+responsible for deciding whether replaying the effects is safe.
 
-`runOnce()` executes a single claim pass, which makes integration tests deterministic.
+## Next
 
-```ts
-import { installSchema, Queue, Worker } from "@workhorse/core";
+- [Quickstart](/docs/quickstart) — see the smallest complete queue and worker
+- [Durable execution](/docs/durable-execution) — understand checkpoint and wait replay
+- [Dead letters](/docs/dead-letters) — page and redrive a larger incident safely
 
-const queue = new Queue(pool);
-await installSchema(pool);
+---
 
-const jobId = await queue.enqueue("greet", { name: "Ada" });
-
-const worker = new Worker(queue).handle("greet", async (payload: { name: string }) => ({
-  greeting: `Hello, ${payload.name}`,
-}));
-
-await worker.runOnce();
-
-const snapshot = await queue.getJob(jobId);
-expect(snapshot?.state).toBe("succeeded");
-```
-
-For crash-boundary tests, `WorkerOptions.failpoint` deterministically throws at `afterClaim`,
-`beforeHandler`, `afterHandler`, `beforeComplete`, or `afterComplete`:
-
-```ts
-const crashing = new Worker(queue, { failpoint: "beforeComplete" });
-```
-
-Injected crashes deliberately bypass normal fail/retry handling so you can exercise lease recovery.
-
-## Full demo application
-
-The repository contains an end-to-end Hono plus Drizzle demo with seeded success, retry, durable,
-deadline, timeout, and terminal-failure scenarios:
-
-```bash
-pnpm install && pnpm db:reset:all && pnpm demo
-```
-
-Source: [`demo/`](https://github.com/stablemates/workhorse/tree/main/demo).
+Exact transactional, delivery, checkpoint, wait, and redrive semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#delivery-semantics).

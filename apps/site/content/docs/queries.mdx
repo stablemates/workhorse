@@ -1,151 +1,88 @@
 ---
-title: Querying and timelines
-description: Cursor-based cross-state job listing with bounded payload projection, point lookup, merged lifecycle timelines, and queue health.
+title: How do I inspect jobs and timelines?
+description: Read point state, bounded listings, lifecycle evidence, and queue health without widening dispatch indexes.
 ---
 
-Operator reads use a dedicated `job_query` projection with its own indexes. They never broaden the
-ready, scheduled, active, deadline, timeout, or recovery indexes used by dispatch.
+Operator reads use `job_query` and append-only history instead of scanning the live dispatch paths.
+That separation keeps inspection cost from changing how workers find ready jobs.
 
-## Point lookup
+## Read one known job
+
+`Queue.getJob` joins immutable identity to its runtime or outcome row and returns a `JobSnapshot`.
 
 ```ts
 const snapshot = await queue.getJob(jobId);
-```
 
-`getJob` coalesces the sole live runtime row or the terminal outcome into one stable `JobSnapshot`:
-
-```ts
-{
-  id, queue, type, payload, tags, state,
-  currentAttempt, maxAttempts, retryPolicy,
-  deadlineAt, executionTimeoutMs,
-  fenceToken,      // bigint; zero before the first claim
-  runAt, result, error,
-  cancelRequestedAt, cancelRequestedBy, cancelReason,
-  createdAt, updatedAt,
+if (snapshot) {
+  console.log(snapshot.state, snapshot.currentAttempt, snapshot.result);
 }
 ```
 
-Returns `null` when the identity does not exist. Use this when existence matters.
+The method returns `null` for an unknown or retired identity. Use it when existence matters because a
+history query alone cannot distinguish those cases.
 
-## Cross-state listing
+## List jobs with a bounded projection
+
+`Queue.listJobs` filters by queue, type, state, tags, and creation time. It orders pages by immutable
+creation keys and returns a signed cursor for the next call.
 
 ```ts
 const page = await queue.listJobs({
   queue: "billing",
-  type: "invoice.capture",
   states: ["active", "failed"],
-  createdAfter: new Date("2026-08-01T00:00:00Z"),
-  createdBefore: new Date("2026-08-02T00:00:00Z"),
-  limit: 100,
   payload: {
     include: true,
-    maxBytes: 16_384,
     redactKeys: ["cardNumber", "accessToken"],
   },
 });
-
-for (const item of page.items) {
-  console.log(item.id, item.state, item.payloadStatus);
-}
-
-if (page.nextCursor) {
-  const next = await queue.listJobs({ /* same filter */ cursor: page.nextCursor });
-}
 ```
 
-### Ordering, cursors, and limits
+Payload is omitted by default because operator lists rarely need it. When requested, PostgreSQL
+applies bounded top-level redaction and a response ceiling, then marks each payload as included,
+omitted, or too large.
 
-- Pages are ordered newest-first by immutable `(createdAt, jobId)`.
-- The default limit is 100; the maximum page size is 1,000 (`MAX_JOB_QUERY_PAGE_SIZE`).
-- Cursors are signed and **bound to the filter and payload projection** that produced them. Reusing a
-  cursor with a different filter is rejected.
-- Unknown query fields throw `TypeError`, so typos fail loudly instead of silently widening a scan.
+A cursor belongs to the filters and payload projection that created it. Reusing it with a different
+query fails instead of silently changing page membership.
 
-### Payload projection
+Pages are weakly consistent across calls. New jobs and concurrent state changes can affect later
+pages, so use `Queue.getJob` for authoritative point lookup.
 
-Payload is **omitted by default**. When you opt in:
+## Reconstruct lifecycle evidence
 
-- PostgreSQL applies at most 50 unique top-level redaction keys (`MAX_JOB_QUERY_REDACT_KEYS`) before
-  checking the response ceiling.
-- The ceiling is caller-selected from 1 byte through 1 MiB (`MAX_JOB_QUERY_PAYLOAD_BYTES`), defaulting
-  to `DEFAULT_JOB_QUERY_PAYLOAD_BYTES`.
-- Each row reports `payloadStatus` as `omitted`, `included`, or `too_large`. An omitted or oversized
-  payload is returned as `null`.
-- Redaction applies to top-level object keys only. It is not a nested scrubber.
-
-Candidate identities are selected before payload rows are joined, so only the bounded page touches
-payload storage.
-
-### Consistency
-
-<Callout type="warn">
-  Listing is intentionally **weakly consistent across calls**. New jobs can appear before an
-  existing cursor, and concurrent state changes can alter membership in a later filtered page. Use
-  `getJob` when identity existence matters.
-</Callout>
-
-## Lifecycle timelines
+`Queue.getJobTimeline` merges retained `job_event` and `attempt_history` rows into one newest-first
+stream.
 
 ```ts
-const timeline = await queue.getJobTimeline(jobId, { limit: 100 });
+const timeline = await queue.getJobTimeline(jobId);
 
 for (const entry of timeline.items) {
-  if (entry.kind === "event") {
-    console.log(entry.occurredAt, entry.eventType, entry.details);
-  } else {
-    console.log(entry.occurredAt, entry.outcome, entry.attempt);
-  }
+  console.log(entry.kind, entry.occurredAt);
 }
 ```
 
-- Merges retained lifecycle events and closed attempts into one latest-first cursor stream.
-- Pages are capped at 1,000 entries.
-- Attempt outcomes are `succeeded`, `failed`, `retry`, `lease_expired`, `canceled`,
-  `deadline_exceeded`, or `timeout`.
+History categories retire independently. A known job can therefore have a partial or empty timeline,
+which is why timeline absence does not prove identity absence.
 
-Event and attempt retention are independent, so a known job may have a partial or empty timeline.
-Unknown identities and fully retired history both return an empty stream; use `getJob` to tell them
-apart.
+`Queue.getCheckpoint`, `listCheckpoints`, `getWait`, `listWaits`, and `getProgress` expose the other
+durable projections without interpreting them as lifecycle state.
 
-## Checkpoints and waits
+## Read queue health as an operational snapshot
 
-```ts
-await queue.getCheckpoint(jobId, "charge");
-await queue.listCheckpoints(jobId);
-await queue.getWait(jobId, "cooldown");
-await queue.listWaits(jobId);
-```
+`Queue.health` reports depth, lease expiry, overdue waits, deadline pressure, retention lag, relation
+statistics, and PostgreSQL pressure.
 
-These return immutable durable-execution evidence with attempt, fence, worker, and creation-time
-provenance. See [Durable checkpoints and waits](/docs/durable-execution).
+The method assembles independent read-only queries, and PostgreSQL statistics may lag. Treat the
+result as an operational signal rather than one transactionally consistent instant.
 
-## Queue health
+The `workhorse-health` CLI prints the same kind of snapshot for probes and scripts.
 
-```ts
-const health = await queue.health();
-```
+## Next
 
-`QueueHealth` reports:
+- [Dashboard](/docs/dashboard) — use the packaged operator interface
+- [Dead letters](/docs/dead-letters) — page terminal failures through their cold index
+- [Deployment and operations](/docs/operations) — act on health and retention signals
 
-| Group           | Fields                                                                        |
-| --------------- | ----------------------------------------------------------------------------- |
-| Protocol        | `schemaVersion`                                                               |
-| Depth           | `counts` per state, `readyDepth`, `scheduledDepth`, `oldestReadyAgeMs`        |
-| Durable waits   | `sleepingJobs`, `overdueWaits`, `nextWakeAt`                                  |
-| Ownership       | `activeLeases`, `expiredLeases`                                               |
-| Timing pressure | `deadlinePressure`, `activeExecutionTimeouts`, `overdueExecutionTimeouts`     |
-| Retention       | `retentionPolicy`, `retentionLagMs`, `oldestRetainedAt`                       |
-| History         | `eligibleHistoryPartitions`, `defaultHistoryRows`, `defaultHistoryRowsCapped` |
-| PostgreSQL      | `relations[]`, `oldestTransactionAgeMs`, `lockWaitCount`                      |
+---
 
-A JSON snapshot is also available from the CLI:
-
-```bash
-workhorse-health
-```
-
-<Callout>
-  Health is assembled from independent read-only queries and PostgreSQL statistics can lag, so it is
-  a useful operational signal rather than a transactionally consistent snapshot.
-</Callout>
+Exact query fields, cursor binding, payload controls, and health measures:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#read-models-and-health).

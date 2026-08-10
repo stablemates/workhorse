@@ -1,128 +1,65 @@
 ---
-title: Quickstart
-description: Enqueue a job inside a transaction and process it with a worker in a few minutes.
+title: How do I run my first job?
+description: Create a Queue, enqueue work, register a handler, and inspect the durable result.
 ---
 
-This walkthrough enqueues a job transactionally and processes it with a worker. It assumes you have
-completed [Installation](/docs/installation).
+A job needs a `Queue` to accept it and a `Worker` with a matching handler to run it. This example
+keeps both in one file so the lifecycle stays visible.
 
-## 1. Create the queue client
+## Create the queue
 
-```ts
-// src/workhorse.ts
-import { Pool } from "pg";
-import { Queue } from "@workhorse/core";
-
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-export const queue = new Queue(pool);
-```
-
-`new Queue(database, defaultQueue = "default")` accepts anything implementing the minimal `Queryable`
-protocol: a `pg` `Pool`, a `PoolClient`, or an adapter-provided executor.
-
-## 2. Enqueue with your application writes
-
-Pass an active `PoolClient` as the fourth argument so the job commits or rolls back with your data.
-
-```ts
-import { pool, queue } from "./workhorse.js";
-
-const client = await pool.connect();
-try {
-  await client.query("BEGIN");
-
-  const { rows } = await client.query<{ id: string }>(
-    "INSERT INTO account (email) VALUES ($1) RETURNING id",
-    ["person@example.com"],
-  );
-
-  await queue.enqueue(
-    "email.welcome",
-    { accountId: rows[0]!.id, to: "person@example.com" },
-    { queue: "email" },
-    client,
-  );
-
-  await client.query("COMMIT");
-} catch (error) {
-  await client.query("ROLLBACK");
-  throw error;
-} finally {
-  client.release();
-}
-```
-
-If the transaction rolls back, the job never existed. There is no outbox to reconcile.
-
-## 3. Register a handler and run a worker
-
-```ts
-// src/worker.ts
-import { Worker } from "@workhorse/core";
-import { queue } from "./workhorse.js";
-
-const worker = new Worker(queue, {
-  queue: "email",
-  concurrency: 4,
-}).handle("email.welcome", async (payload: { accountId: string; to: string }, context) => {
-  const delivery = await context.checkpoint("provider-delivery", async () => {
-    // Use a stable provider idempotency key: delivery is at least once.
-    return { deliveredTo: payload.to, at: new Date().toISOString() };
-  });
-
-  return delivery;
-});
-
-// run() loops until stop(). Keep the promise so shutdown can await the drain.
-const runPromise = worker.run();
-```
-
-The handler's return value must be JSON-serializable. It is persisted as the job's immutable terminal
-result.
-
-`worker.run()` loops until `stop()`. Use `worker.runOnce()` in tests and scripts to execute a single
-claim pass.
-
-## 4. Inspect what happened
-
-```ts
-const snapshot = await queue.getJob(jobId);
-// { state: "succeeded", currentAttempt: 1, result: { deliveredTo: "..." }, ... }
-
-const timeline = await queue.getJobTimeline(jobId, { limit: 50 });
-const health = await queue.health();
-```
-
-## 5. Shut down cleanly
-
-```ts
-worker.stop(); // stop new claims
-await runPromise; // resolves after active handlers drain
-await pool.end();
-```
-
-`runPromise` is the promise returned by `worker.run()` above.
-
-For production, run workers in a dedicated process rather than inside your web server. See
-[Workers](/docs/workers) and [Deployment and operations](/docs/operations).
-
-## Complete single-file example
+`Queue` accepts a `Queryable`, which a node-postgres `Pool` already implements.
 
 ```ts
 import { Pool } from "pg";
-import { installSchema, Queue, Worker } from "@workhorse/core";
+import { Queue, Worker } from "@workhorse/core";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-await installSchema(pool);
-
 const queue = new Queue(pool);
-const jobId = await queue.enqueue("greet", { name: "Ada" });
+```
 
-const worker = new Worker(queue).handle("greet", async (payload: { name: string }) => ({
-  greeting: `Hello, ${payload.name}`,
+Install the schema before this process starts. Runtime code should check compatibility instead of
+installing database objects.
+
+## Register the handler
+
+The string passed to `Worker.handle` must match the job type. The handler receives the payload and a
+`HandlerContext`, and its JSON result becomes the immutable outcome.
+
+```ts
+const worker = new Worker(queue).handle("email.welcome", async (payload: { to: string }) => ({
+  deliveredTo: payload.to,
 }));
+```
+
+## Enqueue and run the job
+
+`Queue.enqueue` returns the durable job ID. `Worker.runOnce` performs one claim pass, which makes it
+useful in a small example or a test.
+
+```ts
+const jobId = await queue.enqueue("email.welcome", {
+  to: "person@example.com",
+});
 
 await worker.runOnce();
 console.log(await queue.getJob(jobId));
 await pool.end();
 ```
+
+Production workers normally call `Worker.run` and keep its promise until shutdown. A dedicated
+worker process can then stop claims, drain active handlers, and close its own database pool.
+
+If enqueue belongs to an application transaction, pass that transaction to `Queue.enqueue`. The job
+then commits or rolls back with the surrounding business write.
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue) — accept work with your application writes
+- [Workers](/docs/workers) — register handlers and run them in production
+- [Core concepts](/docs/concepts) — understand what the first example leaves implicit
+
+---
+
+Exact enqueue, claim, and completion semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#atomic-lifecycle).
