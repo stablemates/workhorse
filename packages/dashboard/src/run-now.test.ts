@@ -45,8 +45,8 @@ describe("run-now vocabulary", () => {
 
   it("describes a release as queueing the task, not as running it", () => {
     const described = describeRunNowOutcome("released");
-    expect(described.summary).toContain("moved to now");
-    expect(described.exact).toContain("A worker claims");
+    expect(described.summary).toContain("start time to now");
+    expect(described.exact).toContain("after the next claim");
     // The distinction between releasing and executing is the whole point of the wording.
     expect(described.exact).toContain("rather than running the handler here");
   });
@@ -58,7 +58,8 @@ describe("run-now vocabulary", () => {
 
   it("reports an already-queued task as a no-op rather than a failure", () => {
     const described = describeRunNowOutcome("already_ready");
-    expect(described.summary).toContain("nothing needed to change");
+    expect(described.summary).toContain("already ready");
+    expect(described.summary).toContain("changed nothing");
     expect(described.exact).toContain("left exactly as it was");
     expect(described.label.toLowerCase()).not.toContain("error");
   });
@@ -80,8 +81,9 @@ describe("run-now vocabulary", () => {
 
   it("explains a missing task rather than reporting a silent success", () => {
     const described = describeRunNowOutcome("not_found");
-    expect(described.summary).toContain("nothing was released");
-    expect(described.exact).toContain("retention");
+    expect(described.summary).toContain("could not find this task");
+    expect(described.summary).toContain("released nothing");
+    expect(described.exact).toContain("Retention");
   });
 
   /**

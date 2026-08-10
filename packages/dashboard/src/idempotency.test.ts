@@ -114,7 +114,7 @@ describe("idempotency evidence", () => {
     const described = describeIdempotency(evidence);
     expect(described.label).toBe("Keyed");
     expect(described.summary).toBe(
-      "Repeating this exact request in scope workhorse-demo:orders returns this same task for 24 hours",
+      "If you repeat this request in workhorse-demo:orders within 24 hours, Workhorse returns this task again",
     );
     expect(described.exact).toContain(`key length ${rawKey.length} bytes`);
     expect(described.exact).toContain("retained for 86400000 ms");

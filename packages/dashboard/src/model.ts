@@ -30,13 +30,14 @@ export function describeRetryPolicy(policy: RetryPolicy | null): RetryPolicyDesc
   if (policy === null)
     return {
       label: "Default backoff",
-      summary: "Handler failures use legacy SQL backoff; lease recovery is immediate",
+      summary:
+        "PostgreSQL delays retries after handler failures but retries expired leases immediately",
       exact: "No persisted retry policy",
     };
   if (policy.type === "fixed")
     return {
       label: "Fixed",
-      summary: `Wait ${formatRetryDelay(policy.delayMs)} before every retry`,
+      summary: `PostgreSQL adds a ${formatRetryDelay(policy.delayMs)} delay before every retry`,
       exact: `Fixed delay ${policy.delayMs} ms`,
     };
   if (policy.type === "exponential")
@@ -45,7 +46,7 @@ export function describeRetryPolicy(policy: RetryPolicy | null): RetryPolicyDesc
       // A cap at or below the initial delay removes all growth, so say so rather than implying it.
       summary:
         policy.initialDelayMs >= policy.maxDelayMs
-          ? `Held at the ${formatRetryDelay(policy.maxDelayMs)} cap from the first retry`
+          ? `Every retry has the maximum ${formatRetryDelay(policy.maxDelayMs)} delay`
           : `${formatRetryDelay(policy.initialDelayMs)} × ${policy.multiplier}, capped at ${formatRetryDelay(policy.maxDelayMs)}`,
       exact: `Initial delay ${policy.initialDelayMs} ms; multiplier ${policy.multiplier}; maximum ${policy.maxDelayMs} ms`,
     };
@@ -54,7 +55,7 @@ export function describeRetryPolicy(policy: RetryPolicy | null): RetryPolicyDesc
     // A cap equal to the base leaves no range to randomize, which is a deliberate demo choice.
     summary:
       policy.baseDelayMs >= policy.maxDelayMs
-        ? `Held at the ${formatRetryDelay(policy.maxDelayMs)} cap, so every retry waits the same`
+        ? `Every retry has the maximum ${formatRetryDelay(policy.maxDelayMs)} delay`
         : `${formatRetryDelay(policy.baseDelayMs)} base, capped at ${formatRetryDelay(policy.maxDelayMs)}`,
     exact: `Base delay ${policy.baseDelayMs} ms; maximum ${policy.maxDelayMs} ms`,
   };
@@ -67,14 +68,14 @@ export function describeRetryEventSource(
   if (source === "override")
     return {
       label: "Manual override",
-      summary: "This selected delay took precedence over the persisted policy",
+      summary: "This retry uses a chosen delay instead of the saved policy",
       exact: "Manual retry delay override",
     };
   if (source === "legacy-handler") return describeRetryPolicy(null);
   if (source === "lease-recovery-immediate")
     return {
       label: "Immediate recovery",
-      summary: "No policy was persisted, so the expired lease requeued immediately",
+      summary: "Because Workhorse saved no policy, PostgreSQL requeued the task immediately",
       exact: "Immediate lease-recovery compatibility default",
     };
   return describeRetryPolicy(policy);
@@ -212,7 +213,7 @@ export function describeIdempotency(evidence: IdempotencyEvidence): IdempotencyD
   const window = formatIdempotencyWindow(evidence.ttlMs);
   return {
     label: "Keyed",
-    summary: `Repeating this exact request in scope ${evidence.scope} returns this same task for ${window}`,
+    summary: `If you repeat this request in ${evidence.scope} within ${window}, Workhorse returns this task again`,
     exact:
       `Scope ${evidence.scope}; key digest ${evidence.keyDigest}; ` +
       `key length ${evidence.keyLength} bytes; ` +
@@ -298,7 +299,7 @@ export function describeCancelOutcome(
   if (status === "canceled") {
     return {
       label: "Canceled",
-      summary: "This task was canceled before it started, so no handler ran",
+      summary: "Workhorse canceled this task before it started, so no handler ran",
       exact:
         "PostgreSQL removed the task from dispatch and recorded an immutable canceled outcome. " +
         "No handler ran for it, so there is no external effect to reconcile.",
@@ -307,8 +308,7 @@ export function describeCancelOutcome(
   if (status === "cancel_requested") {
     return {
       label: "Cancellation requested",
-      summary:
-        "Cooperative cancellation was requested; the running handler stops when it observes the signal",
+      summary: "Workhorse asked the running handler to stop when it next checks the signal",
       exact:
         "The task is still active. Cancellation is cooperative: the handler is signaled and stops " +
         "at its next check, so external effects it already started can continue until it observes " +
@@ -328,9 +328,8 @@ export function describeCancelOutcome(
   }
   return {
     label: "Task not found",
-    summary: "This task no longer exists, so nothing was canceled",
-    exact:
-      "No job identity matched this id. It may have been removed by retention after it finished.",
+    summary: "Workhorse could not find this task, so it canceled nothing",
+    exact: "No task matched this ID. Retention may have deleted it after it finished.",
   };
 }
 
@@ -413,10 +412,10 @@ export function describeRunNowOutcome(
   if (status === "released") {
     return {
       label: "Released to the queue",
-      summary: "This task's start time was moved to now, so a worker can claim it on its next poll",
+      summary: "Workhorse moved the start time to now, so the task is ready for a worker",
       exact:
-        "The scheduled start time was moved forward to now and the task is queued. A worker claims " +
-        "it on its next poll, so this releases the task rather than running the handler here. " +
+        "The scheduled start time was moved forward to now and the task is queued. Work begins " +
+        "after the next claim, so this releases the task rather than running the handler here. " +
         "Nothing else about the task changed, and a recurring schedule that created it keeps its " +
         "own next occurrence.",
     };
@@ -424,7 +423,7 @@ export function describeRunNowOutcome(
   if (status === "already_ready") {
     return {
       label: "Already queued",
-      summary: "This task was already waiting to be claimed, so nothing needed to change",
+      summary: "This task was already ready for a worker, so Workhorse changed nothing",
       exact:
         "The task was no longer holding a future start time when the request arrived, so it was " +
         "left exactly as it was. It is already queued or already running.",
@@ -433,7 +432,7 @@ export function describeRunNowOutcome(
   if (status === "waiting") {
     return {
       label: "Suspended at a wait",
-      summary: "This task is suspended at a durable wait, so its start time was left alone",
+      summary: "This task is at a durable wait, so Workhorse kept its requested wake time",
       exact:
         "The task is parked at a durable wait boundary its handler asked for. Moving that boundary " +
         "would resume the handler earlier than the code it is running asked to be resumed, so the " +
@@ -443,7 +442,7 @@ export function describeRunNowOutcome(
   if (status === "not_scheduled") {
     return {
       label: "Not scheduled",
-      summary: `This task is not waiting on a start time${
+      summary: `This task has no future start time${
         context.state ? ` because it is ${context.state}` : ""
       }, so nothing was released`,
       exact:
@@ -453,9 +452,8 @@ export function describeRunNowOutcome(
   }
   return {
     label: "Task not found",
-    summary: "This task no longer exists, so nothing was released",
-    exact:
-      "No job identity matched this id. It may have been removed by retention after it finished.",
+    summary: "Workhorse could not find this task, so it released nothing",
+    exact: "No task matched this ID. Retention may have deleted it after it finished.",
   };
 }
 
@@ -558,7 +556,7 @@ function cancelRowAction(job: DashboardJobRow): TaskRowAction {
     return {
       id: "cancel",
       label: "Cancel task",
-      unavailable: `This task already finished as ${job.state}, and a terminal outcome is immutable, so it cannot be canceled.`,
+      unavailable: `Because this task finished as ${job.state}, Workhorse cannot change its outcome.`,
       destructive,
     };
   }
@@ -567,8 +565,7 @@ function cancelRowAction(job: DashboardJobRow): TaskRowAction {
       id: "cancel",
       label: "Cancellation requested",
       unavailable:
-        "Cancellation was already requested. The running handler stops when it observes the signal, " +
-        "so requesting it again changes nothing.",
+        "Workhorse already asked the running handler to stop, so another request would change nothing.",
       destructive,
     };
   }
@@ -578,7 +575,7 @@ function cancelRowAction(job: DashboardJobRow): TaskRowAction {
   if (job.state === "scheduled") {
     return {
       id: "cancel",
-      label: job.waitName === null ? "Cancel scheduled task…" : "Cancel waiting task…",
+      label: job.waitName === null ? "Cancel scheduled task…" : "Cancel task at wait…",
       unavailable: null,
       destructive,
     };
@@ -610,8 +607,7 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
     return {
       id: "run-now",
       label: "Run now",
-      unavailable:
-        "This dashboard is connected to a host that does not allow changing when a task runs.",
+      unavailable: "This host does not allow the dashboard to change a task's start time.",
       destructive,
     };
   }
@@ -619,7 +615,7 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
     return {
       id: "run-now",
       label: "Run now",
-      unavailable: `This task already finished as ${job.state}, so there is no start time to bring forward.`,
+      unavailable: `Because this task finished as ${job.state}, it has no start time to move.`,
       destructive,
     };
   }
@@ -628,8 +624,7 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
       id: "run-now",
       label: "Run now",
       unavailable:
-        "Cancellation was already requested for this task, so releasing it early would start work " +
-        "that is meant to stop.",
+        "Because Workhorse received a cancellation request, it will not release this task early.",
       destructive,
     };
   }
@@ -637,7 +632,7 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
     return {
       id: "run-now",
       label: "Run now",
-      unavailable: "This task is already running, so it has no start time left to wait for.",
+      unavailable: "Because this task is running, it has no future start time to move.",
       destructive,
     };
   }
@@ -645,8 +640,7 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
     return {
       id: "run-now",
       label: "Run now",
-      unavailable:
-        "This task is already queued and waiting to be claimed, so it is running as soon as it can.",
+      unavailable: "This task is ready for a worker, so it cannot start any sooner.",
       destructive,
     };
   }
@@ -655,9 +649,7 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
       return {
         id: "run-now",
         label: "Run now",
-        unavailable:
-          `This task is suspended at the durable wait ${job.waitName ?? job.wait!.name}. That ` +
-          "boundary belongs to the running handler, so it cannot be brought forward from here.",
+        unavailable: `The handler requested the durable wait ${job.waitName ?? job.wait!.name}, so the dashboard cannot shorten it.`,
         destructive,
       };
     }
@@ -702,17 +694,17 @@ export function taskRowActionGroups(
         { id: "copy-id", label: "Copy task id", unavailable: null, destructive: false },
         {
           id: "copy-args",
-          label: "Copy args",
+          label: "Copy input",
           unavailable:
             job.payload === undefined || job.payload === null
-              ? "This task stored no args, so there is nothing to copy."
+              ? "This task stored no input, so there is nothing to copy."
               : null,
           destructive: false,
         },
       ],
     },
     {
-      label: "Filter this list",
+      label: "Filter tasks",
       actions: [
         { id: "filter-type", label: `Only ${job.type}`, unavailable: null, destructive: false },
         {
@@ -726,14 +718,14 @@ export function taskRowActionGroups(
           label: worker === null ? "Only this worker" : `Only worker ${worker}`,
           unavailable:
             worker === null
-              ? "No worker has claimed this task, so there is none to filter by."
+              ? "This task has no claim record, so there is no worker to filter by."
               : null,
           destructive: false,
         },
       ],
     },
     {
-      label: "State",
+      label: "Change task",
       actions: [runNowRowAction(job, capabilities.runNow), cancelRowAction(job)],
     },
   ];
@@ -1317,29 +1309,26 @@ export function describeDurableBoundary(input: {
       return {
         state: "blocked",
         label: "Intentionally blocked between stages",
-        summary:
-          "This checkpoint output is durable, but the seeded failure stops the task immediately after this stage, so nothing past it can run.",
+        summary: "Workhorse saved the checkpoint, but the seeded failure stops every later stage.",
       };
     }
     return {
       state: "saved",
       label: "Checkpoint saved",
-      summary:
-        "The checkpoint output for this stage is stored and is reused by every later attempt.",
+      summary: "Workhorse saved this output and reuses it in every later attempt.",
     };
   }
   if (blockedAfter !== null && input.stepIndex > blockedAfter) {
     return {
       state: "not-reached",
       label: "Not reached",
-      summary:
-        "This stage was never reached and no future attempt can reach it, because the task is blocked at an earlier stage.",
+      summary: "Because an earlier stage blocks the task, no attempt can reach this stage.",
     };
   }
   return {
     state: "pending",
     label: "No checkpoint yet",
-    summary: "No checkpoint output has been stored for this stage yet.",
+    summary: "Workhorse has not saved an output for this stage yet.",
   };
 }
 
@@ -1382,7 +1371,7 @@ export function describeTaskResult(input: {
     return {
       state: "succeeded",
       label: "Succeeded",
-      summary: "The task finished successfully and this is the stored final result.",
+      summary: "The task succeeded, and Workhorse saved this final result.",
       valueLabel: input.hasResultValue ? "Final result" : null,
       emptyLabel: input.hasResultValue
         ? null
@@ -1395,8 +1384,8 @@ export function describeTaskResult(input: {
       state: failed ? "failed" : "canceled",
       label: failed ? "Failed" : "Canceled",
       summary: failed
-        ? "The task exhausted its attempts and ended as failed, so no result was produced."
-        : "The task was canceled before it could produce a result, so nothing here reports success.",
+        ? "The task used every attempt and failed, so it produced no result."
+        : "The task was canceled before it produced a result.",
       valueLabel: input.hasErrorValue ? "Terminal error" : null,
       emptyLabel: input.hasErrorValue
         ? null
@@ -1409,7 +1398,7 @@ export function describeTaskResult(input: {
     state: "pending",
     label: "No final outcome yet",
     summary: input.blockedByPersistentFailure
-      ? "This task is seeded to fail on every attempt. It has no final outcome while retries remain; exhausting its attempt budget records a terminal failure."
+      ? "This demo fails every attempt. Workhorse records a final failure after the task uses its retry budget."
       : "This task has not finished, so no final result or terminal error exists yet.",
     valueLabel: input.hasErrorValue ? "Latest attempt error" : null,
     emptyLabel: input.hasErrorValue
