@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
+import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
 import { assertSchemaCompatible, Queue, type Queryable } from "@workhorse/core";
 import type { MaintenanceLoopCadences } from "../model.js";
@@ -81,6 +82,46 @@ const contentTypes: Readonly<Record<string, string>> = {
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
 };
+
+const SLOW_RPC_REQUEST_MS = 1_000;
+const rpcLogRecords = {
+  completed: {
+    severityNumber: SeverityNumber.DEBUG,
+    severityText: "DEBUG",
+    eventName: "workhorse.dashboard.rpc_completed",
+    body: "Dashboard RPC request completed",
+  },
+  slow: {
+    severityNumber: SeverityNumber.WARN,
+    severityText: "WARN",
+    eventName: "workhorse.dashboard.rpc_completed",
+    body: "Dashboard RPC request completed slowly",
+  },
+  failed: {
+    severityNumber: SeverityNumber.ERROR,
+    severityText: "ERROR",
+    eventName: "workhorse.dashboard.rpc_failed",
+    body: "Dashboard RPC request failed",
+  },
+} as const;
+
+function logRpcRequest(procedure: string, durationMs: number, statusCode: number): void {
+  const record =
+    statusCode >= 400
+      ? rpcLogRecords.failed
+      : durationMs >= SLOW_RPC_REQUEST_MS
+        ? rpcLogRecords.slow
+        : rpcLogRecords.completed;
+  logs.getLogger("@workhorse/dashboard").emit({
+    ...record,
+    attributes: {
+      "rpc.system": "orpc",
+      "rpc.method": procedure,
+      "http.response.status_code": statusCode,
+      "workhorse.dashboard.rpc.duration_ms": durationMs,
+    },
+  });
+}
 
 /**
  * Build a framework-neutral Workhorse dashboard request handler.
@@ -169,8 +210,10 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       }
 
       if (pathname === `${path}/rpc` || pathname.startsWith(`${path}/rpc/`)) {
+        const rpcPrefix = `${path}/rpc`;
+        const startedAt = performance.now();
         const { response } = await rpc.handle(request, {
-          prefix: `${path}/rpc` as `/${string}`,
+          prefix: rpcPrefix as `/${string}`,
           context: {
             database,
             queue,
@@ -186,6 +229,10 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
             projectDurability: options.projectDurability,
           },
         });
+        if (response) {
+          const procedure = pathname.slice(rpcPrefix.length).split("/").filter(Boolean).join(".");
+          logRpcRequest(procedure, performance.now() - startedAt, response.status);
+        }
         return response ?? null;
       }
 

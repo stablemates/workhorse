@@ -636,6 +636,15 @@ progress and checkpoint values. The active OpenTelemetry context remains attache
 an SDK can correlate handler logs with the current trace. If the host installs no Logs SDK, the API
 remains a no-op and queue behavior is unchanged.
 
+`createDashboardHost` emits one OpenTelemetry log after `RPCHandler` returns a matched dashboard
+RPC response. `workhorse.dashboard.rpc_completed` uses debug below 1,000 milliseconds and warning
+at or above 1,000 milliseconds. `workhorse.dashboard.rpc_failed` uses error for an HTTP status of
+400 or greater. Both events set `rpc.system = "orpc"`, the dot-separated procedure path in
+`rpc.method`, `http.response.status_code`, and `workhorse.dashboard.rpc.duration_ms`. They never
+include the request input, response output, error details, headers, or URL query. Dashboard assets,
+application pages, authorization failures, and schema compatibility failures do not produce these
+RPC records. Without a Logs SDK, the OpenTelemetry API discards them.
+
 The meter also exposes these baseline instruments:
 
 - `workhorse.queue.depth` is an observable gauge split by `workhorse.queue.name` and the

@@ -26,6 +26,15 @@ Logs carry stable event names and structured job, queue, worker, and schedule id
 not carry payloads, results, error messages, idempotency keys, or saved durable values. A shared
 backend therefore does not receive another copy of the application data with every record.
 
+The dashboard host also emits a structured log after each matched oRPC procedure returns.
+Successful requests use debug severity, slow requests use warning, and failed requests use error,
+so routine polling stays available without crowding higher-severity views.
+
+Each request record names the procedure, HTTP status, and duration. It omits inputs, outputs, error
+details, headers, and query values, so an operator action remains traceable without copying
+application data into the logging backend. Assets and application pages do not produce these
+records.
+
 ## Export queue pressure
 
 Lifecycle counters and latency histograms emit automatically after your application configures the

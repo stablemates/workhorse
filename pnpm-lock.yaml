@@ -194,6 +194,9 @@ importers:
       '@mantine/notifications':
         specifier: ^8.3.18
         version: 8.3.18(@mantine/core@8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@mantine/hooks@8.3.18(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@opentelemetry/api-logs':
+        specifier: 0.221.0
+        version: 0.221.0
       '@orpc/client':
         specifier: ^1.14.8
         version: 1.14.8(@opentelemetry/api@1.9.1)
