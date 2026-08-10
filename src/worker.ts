@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { CronExpressionParser } from "cron-parser";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { errorForTelemetry, Queue } from "./queue.js";
+import { jitterDuration } from "./notifications.js";
 import { recordJobExecution, recordMaintenanceMetrics } from "./metrics.js";
 import type { JobExecutionOutcome } from "./metrics.js";
 import type { MaintenancePhaseResult } from "./queue.js";
@@ -24,6 +25,8 @@ import type {
 } from "./types.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
+const DEFAULT_POLL_MS = 250;
+const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
 
 export type Failpoint =
   | "afterClaim"
@@ -122,7 +125,10 @@ export interface WorkerOptions {
   leaseMs?: number;
   /** Local heartbeat interval. It must remain shorter than leaseMs. */
   heartbeatMs?: number;
-  /** Idle polling delay. Polling is always the durable fallback even when NOTIFY is added later. */
+  /**
+   * Idle fallback polling delay. `run()` defaults to five seconds with notification support and
+   * 250 milliseconds without it; `runOnce()` retains the 250-millisecond compatibility default.
+   */
   pollMs?: number;
   /** Minimum delay between worker-owned maintenance and recurring schedule passes. */
   maintenanceIntervalMs?: number;
@@ -152,6 +158,8 @@ export interface WorkerOptions {
    * operator surface while continuing to run, which is indistinguishable from being dead.
    */
   onRegistrationError?: (error: unknown) => void;
+  /** Receives LISTEN connection failures while durable fallback polling continues. */
+  onNotificationError?: (error: unknown) => void;
   /** Receives one telemetry event for every SQL-owned maintenance phase. */
   onMaintenance?: (telemetry: WorkerMaintenanceTelemetry) => void;
   /** Namespaces whose enabled recurring schedules this worker should evaluate and fire. */
@@ -209,6 +217,8 @@ export class Worker {
   private readonly leaseMs: number;
   private readonly heartbeatMs: number;
   private readonly pollMs: number;
+  private readonly dispatchPollMs: number;
+  private readonly jitterDispatchPolling: boolean;
   private readonly maintenanceIntervalMs: number;
   private readonly maintenanceTaskPollMs: number;
   private readonly statisticsRollupIntervalMs: number;
@@ -241,6 +251,7 @@ export class Worker {
   private stopVersion = 0;
   private executionTail: Promise<void> = Promise.resolve();
   private wakeController = new AbortController();
+  private wakeVersion = 0;
 
   constructor(
     private readonly queue: Queue,
@@ -251,7 +262,13 @@ export class Worker {
     this.concurrency = options.concurrency ?? 1;
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
-    this.pollMs = options.pollMs ?? 250;
+    this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
+    const supportsJobNotifications = (queue as Partial<Queue>).supportsJobNotifications;
+    this.jitterDispatchPolling =
+      typeof supportsJobNotifications === "function" && supportsJobNotifications.call(queue);
+    this.dispatchPollMs =
+      options.pollMs ??
+      (this.jitterDispatchPolling ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1_000;
     this.maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? 60_000;
     this.statisticsRollupIntervalMs = options.statisticsRollupIntervalMs ?? 60_000;
@@ -943,10 +960,22 @@ export class Worker {
       this.wakeLoops();
     };
 
+    let notificationSubscription: Awaited<ReturnType<Queue["subscribeToJobNotifications"]>> = null;
     try {
       if (shouldStop()) return;
       await this.runMaintenance();
       if (shouldStop()) return;
+
+      const subscribeToJobNotifications = (this.queue as Partial<Queue>)
+        .subscribeToJobNotifications;
+      if (typeof subscribeToJobNotifications === "function") {
+        notificationSubscription = await subscribeToJobNotifications.call(
+          this.queue,
+          this.queueName,
+          () => this.wakeLoops(),
+          (error) => this.options.onNotificationError?.(error),
+        );
+      }
 
       const maintenance = this.maintenanceLoop(shouldStop, signal).catch(fail);
       const registration = this.registrationLoop(shouldStop, signal).catch(fail);
@@ -956,6 +985,7 @@ export class Worker {
     } finally {
       this.running = false;
       this.draining = this.activeSlots > 0;
+      await notificationSubscription?.close();
       await this.deregister();
     }
   }
@@ -1014,13 +1044,14 @@ export class Worker {
     const waitForOne = async (): Promise<void> => {
       observe(await Promise.race(active.values()));
     };
-    const waitThroughEmptyPoll = async (): Promise<void> => {
-      const deadline = Date.now() + Math.max(1, this.pollMs);
+    const waitThroughEmptyPoll = async (observedWakeVersion: number): Promise<void> => {
+      const deadline = Date.now() + this.nextDispatchPollMs();
       while (true) {
         if (shouldStop() || this.paused || firstFailure) return;
+        if (this.wakeVersion !== observedWakeVersion) return;
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) return;
-        const wake = this.waitForWake(remainingMs, signal).then(() => null);
+        const wake = this.waitForWake(remainingMs, signal, observedWakeVersion).then(() => null);
         const result = await Promise.race<DispatchSettlement | null>([...active.values(), wake]);
         if (result === null) return;
         observe(result);
@@ -1031,9 +1062,9 @@ export class Worker {
       if (shouldStop() || firstFailure || claimError !== undefined) break;
       if (this.paused) {
         if (active.size === 0) {
-          await this.waitForWake(Math.max(1, this.pollMs), signal);
+          await this.waitForWake(this.nextDispatchPollMs(), signal);
         } else {
-          const wake = this.waitForWake(Math.max(1, this.pollMs), signal).then(() => null);
+          const wake = this.waitForWake(this.nextDispatchPollMs(), signal).then(() => null);
           const result = await Promise.race<DispatchSettlement | null>([...active.values(), wake]);
           if (result) observe(result);
         }
@@ -1041,8 +1072,10 @@ export class Worker {
       }
 
       let empty = false;
+      let emptyWakeVersion = this.wakeVersion;
       while (active.size < this.concurrency && !shouldStop() && !this.paused) {
         this.lastClaimAt = Date.now();
+        const claimWakeVersion = this.wakeVersion;
         let job: ClaimedJob | null;
         try {
           job = await this.queue.claim(this.workerId, {
@@ -1056,6 +1089,7 @@ export class Worker {
         if (!job) {
           this.previousPassWorked = false;
           empty = true;
+          emptyWakeVersion = claimWakeVersion;
           break;
         }
         this.previousPassWorked = true;
@@ -1064,7 +1098,7 @@ export class Worker {
 
       if (shouldStop() || this.paused || firstFailure || claimError !== undefined) continue;
       if (empty) {
-        await waitThroughEmptyPoll();
+        await waitThroughEmptyPoll(emptyWakeVersion);
       } else if (active.size >= this.concurrency) {
         await waitForOne();
       }
@@ -1076,8 +1110,19 @@ export class Worker {
     if (claimError !== undefined) throw claimError;
   }
 
-  private async waitForWake(durationMs: number, signal?: AbortSignal): Promise<void> {
+  private nextDispatchPollMs(): number {
+    const durationMs = Math.max(1, this.dispatchPollMs);
+    if (!this.jitterDispatchPolling || durationMs === 1) return durationMs;
+    return jitterDuration(durationMs);
+  }
+
+  private async waitForWake(
+    durationMs: number,
+    signal?: AbortSignal,
+    observedWakeVersion = this.wakeVersion,
+  ): Promise<void> {
     const wakeSignal = this.wakeController.signal;
+    if (this.wakeVersion !== observedWakeVersion) return;
     const waitSignal = signal ? AbortSignal.any([wakeSignal, signal]) : wakeSignal;
     await sleep(durationMs, undefined, { signal: waitSignal }).catch(() => undefined);
   }
@@ -1085,6 +1130,7 @@ export class Worker {
   private wakeLoops(): void {
     const waiting = this.wakeController;
     this.wakeController = new AbortController();
+    this.wakeVersion += 1;
     waiting.abort();
   }
 

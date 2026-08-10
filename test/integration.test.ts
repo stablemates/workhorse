@@ -4812,6 +4812,289 @@ describe("live-runtime queue protocol", () => {
     }
   });
 
+  it("wakes idle dispatch when PostgreSQL notifies a matching queue", async () => {
+    const handled: string[] = [];
+    const claim = vi.spyOn(queue, "claim");
+    const worker = new Worker(queue, {
+      workerId: "notification-dispatch",
+      pollMs: 15_000,
+      registryIntervalMs: 0,
+    }).handle<{ message: string }>("notification-dispatch", ({ message }) => {
+      handled.push(message);
+      return null;
+    });
+
+    const running = worker.run();
+    try {
+      await vi.waitFor(() => expect(claim).toHaveBeenCalled());
+      await queue.enqueue("notification-dispatch", { message: "prompt" });
+
+      await vi.waitFor(() => expect(handled).toEqual(["prompt"]), { timeout: 1_000 });
+    } finally {
+      worker.stop();
+      await running;
+      claim.mockRestore();
+    }
+  });
+
+  it("latches a notification that arrives while an empty claim is in flight", async () => {
+    const claimStarted = deferred();
+    const releaseEmptyClaim = deferred();
+    const handled: string[] = [];
+    const claim = vi.spyOn(queue, "claim").mockImplementationOnce(async () => {
+      claimStarted.resolve();
+      await releaseEmptyClaim.promise;
+      return null;
+    });
+    const worker = new Worker(queue, {
+      workerId: "notification-during-claim",
+      pollMs: 15_000,
+      registryIntervalMs: 0,
+    }).handle<{ message: string }>("notification-during-claim", ({ message }) => {
+      handled.push(message);
+      return null;
+    });
+
+    const running = worker.run();
+    try {
+      await claimStarted.promise;
+      await vi.waitFor(async () => {
+        const listeners = await pool.query<{ count: number }>(
+          `SELECT count(*)::integer AS count
+             FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND state = 'idle'
+              AND query = 'LISTEN workhorse_jobs'`,
+        );
+        expect(listeners.rows[0]?.count).toBeGreaterThan(0);
+      });
+      await queue.enqueue("notification-during-claim", { message: "latched" });
+      releaseEmptyClaim.resolve();
+
+      await vi.waitFor(() => expect(handled).toEqual(["latched"]), { timeout: 1_000 });
+    } finally {
+      worker.stop();
+      releaseEmptyClaim.resolve();
+      await running;
+      claim.mockRestore();
+    }
+  });
+
+  it("reconnects notification dispatch after PostgreSQL terminates the listener", async () => {
+    const handled: string[] = [];
+    const notificationErrors: unknown[] = [];
+    const worker = new Worker(queue, {
+      workerId: "notification-reconnect",
+      pollMs: 15_000,
+      registryIntervalMs: 0,
+      onNotificationError: (error) => notificationErrors.push(error),
+    }).handle<{ message: string }>("notification-reconnect", ({ message }) => {
+      handled.push(message);
+      return null;
+    });
+
+    const running = worker.run();
+    try {
+      const listenerPid = await vi.waitFor(async () => {
+        const listeners = await pool.query<{ pid: number }>(
+          `SELECT pid
+             FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND pid <> pg_backend_pid()
+              AND state = 'idle'
+              AND query = 'LISTEN workhorse_jobs'
+            ORDER BY backend_start DESC
+            LIMIT 1`,
+        );
+        expect(listeners.rows[0]?.pid).toBeDefined();
+        return listeners.rows[0]!.pid;
+      });
+      await pool.query("SELECT pg_terminate_backend($1)", [listenerPid]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      await queue.enqueue("notification-reconnect", { message: "after reconnect" });
+
+      await vi.waitFor(() => expect(handled).toEqual(["after reconnect"]), { timeout: 1_000 });
+      expect(notificationErrors).toHaveLength(1);
+      expect(notificationErrors[0]).toBeInstanceOf(Error);
+    } finally {
+      worker.stop();
+      await running;
+    }
+  });
+
+  it("keeps bounded polling as the fallback when the database cannot LISTEN", async () => {
+    const pollingQueue = new Queue({ query: pool.query.bind(pool) });
+    const handled: string[] = [];
+    const claim = vi.spyOn(pollingQueue, "claim");
+    const worker = new Worker(pollingQueue, {
+      workerId: "notification-fallback",
+      pollMs: 100,
+      registryIntervalMs: 0,
+    }).handle<{ message: string }>("notification-fallback", ({ message }) => {
+      handled.push(message);
+      return null;
+    });
+
+    const running = worker.run();
+    try {
+      await vi.waitFor(() => expect(claim).toHaveBeenCalled());
+      await queue.enqueue("notification-fallback", { message: "polled" });
+
+      await vi.waitFor(() => expect(handled).toEqual(["polled"]), { timeout: 1_000 });
+    } finally {
+      worker.stop();
+      await running;
+      claim.mockRestore();
+    }
+  });
+
+  it("starts polling and stops while the initial LISTEN connection is still pending", async () => {
+    const pendingListenerDatabase = {
+      query: pool.query.bind(pool),
+      connect: () => new Promise<never>(() => undefined),
+    };
+    const pendingQueue = new Queue(pendingListenerDatabase);
+    const claim = vi.spyOn(pendingQueue, "claim");
+    const worker = new Worker(pendingQueue, {
+      workerId: "notification-pending-listener",
+      pollMs: 100,
+      registryIntervalMs: 0,
+    });
+
+    const running = worker.run();
+    await vi.waitFor(() => expect(claim).toHaveBeenCalled(), { timeout: 1_000 });
+    worker.stop();
+    await expect(running).resolves.toBeUndefined();
+    claim.mockRestore();
+  });
+
+  it("starts polling and stops while the initial LISTEN query is still pending", async () => {
+    const listener = {
+      query: vi.fn<() => Promise<never>>(() => new Promise<never>(() => undefined)),
+      on: vi.fn<() => void>(),
+      removeListener: vi.fn<() => void>(),
+      release: vi.fn<(error?: Error) => void>(),
+    };
+    const pendingListenerDatabase = {
+      query: pool.query.bind(pool),
+      connect: async () => listener,
+    };
+    const pendingQueue = new Queue(pendingListenerDatabase);
+    const claim = vi.spyOn(pendingQueue, "claim");
+    const worker = new Worker(pendingQueue, {
+      workerId: "notification-pending-listen",
+      pollMs: 100,
+      registryIntervalMs: 0,
+    });
+
+    const running = worker.run();
+    await vi.waitFor(() => expect(claim).toHaveBeenCalled(), { timeout: 1_000 });
+    worker.stop();
+    await expect(running).resolves.toBeUndefined();
+    expect(listener.release).toHaveBeenCalledWith(expect.any(Error));
+    claim.mockRestore();
+  });
+
+  it("keeps single-connection pools polling-only so LISTEN cannot block claims", async () => {
+    const singleConnectionPool = new Pool({ connectionString: databaseUrl, max: 1 });
+    try {
+      expect(new Queue(singleConnectionPool).supportsJobNotifications()).toBe(false);
+    } finally {
+      await singleConnectionPool.end();
+    }
+  });
+
+  it("ignores notifications for other queues and wakes for wildcard promotion", async () => {
+    const queueName = `notification-routing-${randomUUID()}`;
+    const handled: string[] = [];
+    const claim = vi.spyOn(queue, "claim");
+    const worker = new Worker(queue, {
+      queue: queueName,
+      workerId: "notification-routing",
+      pollMs: 15_000,
+      maintenanceIntervalMs: 100,
+      registryIntervalMs: 0,
+    }).handle<{ message: string }>("notification-routing", ({ message }) => {
+      handled.push(message);
+      return null;
+    });
+
+    const running = worker.run();
+    try {
+      await vi.waitFor(() => expect(claim).toHaveBeenCalled());
+      const initialClaimCount = claim.mock.calls.length;
+      await queue.enqueue("other-queue-notification", null, {
+        queue: `${queueName}-other`,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(claim).toHaveBeenCalledTimes(initialClaimCount);
+
+      await queue.enqueue(
+        "notification-routing",
+        { message: "promoted" },
+        { queue: queueName, runAt: new Date(Date.now() + 150) },
+      );
+      await vi.waitFor(() => expect(handled).toEqual(["promoted"]), { timeout: 1_000 });
+    } finally {
+      worker.stop();
+      await running;
+      claim.mockRestore();
+    }
+  });
+
+  it("shares one notification connection across workers backed by the same pool", async () => {
+    const firstQueue = new Queue(pool, `notification-shared-${randomUUID()}`);
+    const secondQueue = new Queue(pool, `notification-shared-${randomUUID()}`);
+    const firstClaim = vi.spyOn(firstQueue, "claim");
+    const secondClaim = vi.spyOn(secondQueue, "claim");
+    const first = new Worker(firstQueue, {
+      workerId: "notification-shared-first",
+      pollMs: 15_000,
+      registryIntervalMs: 0,
+    });
+    const second = new Worker(secondQueue, {
+      workerId: "notification-shared-second",
+      pollMs: 15_000,
+      registryIntervalMs: 0,
+    });
+
+    const firstRun = first.run();
+    const secondRun = second.run();
+    try {
+      await vi.waitFor(() => {
+        expect(firstClaim).toHaveBeenCalled();
+        expect(secondClaim).toHaveBeenCalled();
+      });
+      const listeners = await pool.query<{ count: number }>(
+        `SELECT count(*)::integer AS count
+           FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND pid <> pg_backend_pid()
+            AND state = 'idle'
+            AND query = 'LISTEN workhorse_jobs'`,
+      );
+
+      expect(listeners.rows).toEqual([{ count: 1 }]);
+    } finally {
+      first.stop();
+      second.stop();
+      await Promise.all([firstRun, secondRun]);
+      firstClaim.mockRestore();
+      secondClaim.mockRestore();
+    }
+
+    const listenersAfterStop = await pool.query<{ count: number }>(
+      `SELECT count(*)::integer AS count
+         FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid <> pg_backend_pid()
+          AND state = 'idle'
+          AND query = 'LISTEN workhorse_jobs'`,
+    );
+    expect(listenersAfterStop.rows).toEqual([{ count: 0 }]);
+  });
+
   it("does not scan recurring schedules when the tick advisory lock is skipped", async () => {
     const skippedTick: MaintenancePhaseResult[] = [
       { phase: "promote", rowsAffected: 0, durationMs: 0, skippedLock: true, error: null },

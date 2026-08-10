@@ -16,6 +16,17 @@ its own final write, so they don't interfere with each other.
 Concurrency here is per worker. Two workers with concurrency 5 give you ten slots. There's
 no global rate limit or fair-share budget across processes.
 
+## Waiting without constant polling
+
+An idle worker listens for `workhorse_jobs`, so a committed enqueue can wake it immediately.
+Workers that share a database pool also share the listener connection, while each worker receives
+only its queue's wake hints. Promotion and recovery can wake every worker because either may make
+work claimable across queues.
+
+The notification is only a hint. If PostgreSQL drops the listener or a message is missed, the
+worker reconnects and still checks through `pollMs`. This keeps the database state authoritative:
+a missing notification can delay a claim, but it cannot strand the job.
+
 ## Running workers in their own process
 
 The recommended deployment is a dedicated worker process, separate from your web app. The
