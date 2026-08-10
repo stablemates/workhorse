@@ -16,7 +16,7 @@ afterEach(async () => {
 
 describe("demo Portless launcher", () => {
   it.skipIf(process.platform === "win32")(
-    "wraps the reset-and-start command explicitly",
+    "wraps the reset-and-start command in worktree-aware run mode",
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "workhorse-portless-launcher-"));
       temporaryDirectories.push(directory);
@@ -44,6 +44,8 @@ describe("demo Portless launcher", () => {
 
       expect(exitCode).toBe(0);
       expect(JSON.parse(await readFile(argumentLog, "utf8"))).toEqual([
+        "run",
+        "--name",
         "workhorse",
         "pnpm",
         "run",
