@@ -168,6 +168,22 @@ function dashboardClient(
   );
 }
 
+it("loads the settings dashboard route and its read model", async () => {
+  const { app } = createTestApplication({
+    workers: false,
+    operator: createLocalOperator(database),
+  });
+
+  const page = await app.request("/settings");
+  expect(page.status).toBe(200);
+  expect(await page.text()).toContain('<div id="root"></div>');
+  await expect(dashboardClient(app).dashboard.settings()).resolves.toMatchObject({
+    editable: true,
+    maintenance: { timezone: "UTC" },
+    workers: [],
+  });
+});
+
 let demoTestRequest = 0;
 async function enqueueDemoTest(
   kind: "success" | "retry" | "durable" | "timer" | "failure" | "idempotent" | "long-running",
