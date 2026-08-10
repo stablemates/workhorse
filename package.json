@@ -76,10 +76,15 @@
     "demo:ui": "WORKHORSE_DEMO_DASHBOARD_DEV=true pnpm demo"
   },
   "dependencies": {
+    "@opentelemetry/api": "1.9.1",
     "cron-parser": "5.6.2",
     "pg": "^8.16.3"
   },
   "devDependencies": {
+    "@opentelemetry/context-async-hooks": "2.10.0",
+    "@opentelemetry/core": "2.10.0",
+    "@opentelemetry/sdk-metrics": "2.10.0",
+    "@opentelemetry/sdk-trace-base": "2.10.0",
     "@types/node": "^24.1.0",
     "@types/pg": "^8.15.5",
     "@workhorse/dashboard": "workspace:*",

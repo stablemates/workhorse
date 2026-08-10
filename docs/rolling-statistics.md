@@ -2,7 +2,7 @@
 
 Workhorse answers every operator time window — throughput charts, error rates, per-queue drain, wait percentiles, failing task types — from **per-minute aggregates derived from raw history**, rather than from scans over the history itself.
 
-This document records the problem, the design, the schema, the read path, the operational contract, and the limits of the implementation shipped in schema version 18.
+This document records the problem, the design, the schema, the read path, the operational contract, and the limits of the implementation retained in schema version 19.
 
 ## Why
 
@@ -262,4 +262,4 @@ Two defects surfaced only under this benchmark, both fixed:
 - **No worker or tag dimensions.** Both have cardinality bounded by data rather than by code, and tags are per-job arrays. The dashboard serves them from live queries; whether they belong in the rollup is tracked in TODO P2-10.
 - **One tier only.** Minute buckets, kept for a configurable window defaulting to 14 days. Hourly and daily tiers remain in TODO P2-10, and are what would let a long window stay cheap without keeping minute resolution for months.
 - **Window edges are minute-granular.** A 15-minute window is 15 whole minutes, not 15 minutes to the microsecond.
-- **Schema installation, not migration.** This is schema version 18 under the pre-release policy in [`schema-lifecycle.md`](schema-lifecycle.md): the canonical schema changed in place, and an existing database is reinstalled rather than upgraded.
+- **Schema installation, not migration.** This remains part of schema version 19 under the pre-release policy in [`schema-lifecycle.md`](schema-lifecycle.md): the canonical schema changed in place, and an existing database is reinstalled rather than upgraded.

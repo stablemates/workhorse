@@ -10,6 +10,12 @@ export interface Queryable {
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+/** Bounded W3C trace metadata persisted separately from the application payload. */
+export interface TraceContext {
+  traceparent?: string;
+  tracestate?: string;
+}
+
 /** PostgreSQL-validated retry scheduling persisted with the stable job identity. */
 export type RetryPolicy =
   | { type: "fixed"; delayMs: number }
@@ -385,6 +391,8 @@ export interface ClaimedJob<TPayload = Json> {
   id: string;
   type: string;
   payload: TPayload;
+  /** W3C parent context captured when PostgreSQL first accepted this stable job identity. */
+  traceContext: TraceContext | null;
   /** One-based attempt number. Recovery and retry always create the next number. */
   attempt: number;
   maxAttempts: number;

@@ -64,6 +64,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `retention-pruning`             | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                                                                                   |
 | `health-snapshot`               | health-query latency and internally consistent degraded-state counts                                                                                                                             |
 | `worker-concurrency`            | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants |
+| `telemetry-context`             | equal-cohort enqueue and claiming timings with the OpenTelemetry SDK disabled and enabled, plus export, payload, and index invariants                                                            |
 
 Scenario invariant failures abort the suite. This prevents a fast but semantically incorrect run from being treated as evidence.
 
@@ -136,6 +137,14 @@ an I/O-like delayed profile. It records complete-run throughput, handler-start p
 heartbeat pressure, maximum concurrent claims, and maximum handler overlap. Every topology uses the real
 `Worker` runtime. These measurements cover process-local topology overhead, not operating-system process
 isolation or global queue concurrency.
+
+`telemetry-context` records full enqueue and claiming durations for equal baseline and instrumented
+cohorts. The instrumented cohort uses in-memory span and metric exporters, so the timings include
+SDK recording and synchronous span export. Its hard invariants verify exports, payload isolation,
+context recovery, equal completion counts, and the absence of a trace-context dispatch index. The
+order is stable for reproducibility rather than counterbalanced for a publication claim, so cache
+effects remain part of the observation. No overhead claim is supported until a live artifact
+containing this scenario is recorded.
 
 ## Safety and prerequisites
 

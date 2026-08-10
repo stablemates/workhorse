@@ -2,8 +2,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { CronExpressionParser } from "cron-parser";
+import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { Queue } from "./queue.js";
 import type { MaintenancePhaseResult } from "./queue.js";
+import { extractTraceContext, jobSpanAttributes, telemetryMetrics, withSpan } from "./telemetry.js";
 import type { ClaimedJob, JobCheckpoint, JobProgress, JobWait, Json } from "./types.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
@@ -390,6 +392,26 @@ export class Worker {
   }
 
   private async executeJob(job: ClaimedJob): Promise<void> {
+    const startedAt = performance.now();
+    return withSpan(
+      "workhorse.handler",
+      {
+        "workhorse.queue.name": this.queueName,
+        ...jobSpanAttributes(job),
+      },
+      async (span) => {
+        try {
+          await this.executeJobWithinSpan(job, span);
+        } finally {
+          telemetryMetrics.handlerDuration.record(performance.now() - startedAt);
+        }
+      },
+      extractTraceContext(job.traceContext),
+      SpanKind.CONSUMER,
+    );
+  }
+
+  private async executeJobWithinSpan(job: ClaimedJob, span: Span): Promise<void> {
     // afterClaim is outside the committed claim transaction. Throwing here leaves the lease exactly
     // as a killed process would, which allows deterministic expiry-recovery testing.
     const controller = new AbortController();
@@ -501,11 +523,11 @@ export class Worker {
       await this.inject("afterClaim", job);
       const handler = this.handlers.get(job.type);
       if (!handler) {
-        const failed = await this.queue.fail(
-          job,
-          this.workerId,
-          new Error(`No handler registered for ${job.type}`),
-        );
+        const error = new Error(`No handler registered for ${job.type}`);
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        const failed = await this.queue.fail(job, this.workerId, error);
+        span.setAttribute("workhorse.handler.outcome", failed);
         if (failed === "cancel_requested") {
           markCancellationRequested();
           await this.queue.acknowledgeCancel(job, this.workerId);
@@ -623,6 +645,7 @@ export class Worker {
       await this.inject("afterHandler", job);
       if (cancellationRequested) {
         await this.queue.acknowledgeCancel(job, this.workerId);
+        span.setAttribute("workhorse.handler.outcome", "canceled");
         return;
       }
       if (leaseLost || controller.signal.aborted)
@@ -630,9 +653,13 @@ export class Worker {
       await this.inject("beforeComplete", job);
       const accepted = await this.queue.complete(job, this.workerId, result);
       if (!accepted) {
-        if (await this.queue.acknowledgeCancel(job, this.workerId)) return;
+        if (await this.queue.acknowledgeCancel(job, this.workerId)) {
+          span.setAttribute("workhorse.handler.outcome", "canceled");
+          return;
+        }
         throw new Error("Completion rejected because the lease is stale or expired");
       }
+      span.setAttribute("workhorse.handler.outcome", "succeeded");
       await this.inject("afterComplete", job);
     } catch (error) {
       if (
@@ -640,6 +667,7 @@ export class Worker {
         error === DURABLE_WAIT_SUSPENSION ||
         controller.signal.reason === DURABLE_WAIT_SUSPENSION
       ) {
+        span.setAttribute("workhorse.handler.outcome", "suspended");
         return;
       }
       // A crash failpoint models process disappearance, so converting it into fail_v1 would produce
@@ -651,6 +679,7 @@ export class Worker {
         controller.signal.reason instanceof CancellationRequestedError
       ) {
         await this.queue.acknowledgeCancel(job, this.workerId);
+        span.setAttribute("workhorse.handler.outcome", "canceled");
         return;
       }
       if (
@@ -662,13 +691,23 @@ export class Worker {
         controller.signal.reason instanceof ExecutionTimeoutError
       ) {
         await expirationPromise;
+        span.setAttribute(
+          "workhorse.handler.outcome",
+          deadlineExceeded || error instanceof DeadlineExceededError
+            ? "deadline_exceeded"
+            : "timeout_exceeded",
+        );
         return;
       }
+      if (error instanceof Error) span.recordException(error);
+      else span.recordException(String(error));
+      span.setStatus({ code: SpanStatusCode.ERROR });
       const delay =
         typeof this.options.retryDelayMs === "function"
           ? this.options.retryDelayMs(job.attempt, job)
           : this.options.retryDelayMs;
       const failed = await this.queue.fail(job, this.workerId, error, delay);
+      span.setAttribute("workhorse.handler.outcome", failed);
       if (failed === "cancel_requested") {
         markCancellationRequested();
         await this.queue.acknowledgeCancel(job, this.workerId);
@@ -734,6 +773,7 @@ export class Worker {
     await this.refreshRegistration();
     const nowMs = Date.now();
     if (nowMs - this.lastTickAt >= this.maintenanceIntervalMs) {
+      this.recordMaintenanceDrift(nowMs, this.lastTickAt, this.maintenanceIntervalMs, "tick");
       const tick = await this.queue.tick();
       for (const result of tick) this.recordMaintenance("tick", result);
       this.lastTickAt = nowMs;
@@ -766,12 +806,24 @@ export class Worker {
       this.statisticsRollupIntervalMs !== 0 &&
       nowMs - this.lastStatisticsRollupAt >= this.statisticsRollupIntervalMs
     ) {
+      this.recordMaintenanceDrift(
+        nowMs,
+        this.lastStatisticsRollupAt,
+        this.statisticsRollupIntervalMs,
+        "statistics_rollup",
+      );
       for (const result of await this.queue.rollupStatistics())
         this.recordMaintenance("statistics_rollup", result);
       this.lastStatisticsRollupAt = nowMs;
     }
 
     if (nowMs - this.lastMaintenanceTaskPollAt >= this.maintenanceTaskPollMs) {
+      this.recordMaintenanceDrift(
+        nowMs,
+        this.lastMaintenanceTaskPollAt,
+        this.maintenanceTaskPollMs,
+        "background_tasks",
+      );
       for (const result of await this.queue.prepareHistoryPartitions())
         this.recordMaintenance("history_partitions", result);
       for (const result of await this.queue.retainHistory())
@@ -785,6 +837,18 @@ export class Worker {
       }
       this.lastMaintenanceTaskPollAt = nowMs;
     }
+  }
+
+  private recordMaintenanceDrift(
+    nowMs: number,
+    lastRunAt: number,
+    cadenceMs: number,
+    loop: "tick" | "statistics_rollup" | "background_tasks",
+  ): void {
+    if (!Number.isFinite(lastRunAt)) return;
+    telemetryMetrics.maintenanceDrift.record(Math.max(0, nowMs - lastRunAt - cadenceMs), {
+      "workhorse.maintenance.loop": loop,
+    });
   }
 
   private recordMaintenance(
