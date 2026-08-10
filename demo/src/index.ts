@@ -13,6 +13,7 @@ import {
 import { createDemoDatabase } from "./database.js";
 import { createDashboardDevServer } from "@workhorse/dashboard/dev";
 import { resolveDemoDatabaseUrl } from "./environment.js";
+import { startDemoMetricsObserver } from "./telemetry.js";
 
 /**
  * The demo's web tier.
@@ -46,6 +47,7 @@ await installSchema(pool);
 await installDemoSchema(database);
 await syncDemoSchedules(pool);
 console.log("Synchronized recurring demo schedules for worker-owned execution");
+const metricsObserver = startDemoMetricsObserver(pool);
 
 // Development compiles the dashboard from source in this process. Production serves the packaged
 // bundle. Both render the page through the same host, so only module delivery differs.
@@ -95,6 +97,7 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`Received ${signal}, shutting down`);
+  metricsObserver?.stop();
   await running.shutdown();
   await dashboardDev?.close();
 }

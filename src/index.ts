@@ -1,4 +1,5 @@
 export { createWorkhorseAdapter } from "./adapter.js";
+export { WorkhorseMetricsObserver } from "./metrics.js";
 export type { WorkhorseAdapter, WorkhorseAdapterOptions } from "./adapter.js";
 export {
   assertSchemaCompatible,
