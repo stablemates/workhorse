@@ -2,7 +2,7 @@
 
 // OpenTelemetry must initialize before Hono, pg, or the worker runtime loads. Keeping this as a
 // CommonJS preload makes that ordering explicit for both the TypeScript watcher and compiled app.
-if (process.env.WORKHORSE_DEMO_TELEMETRY !== "false") {
+if (process.env.WORKHORSE_DEMO_TELEMETRY === "true") {
   process.env.OTEL_SERVICE_NAME ??= process.env.WORKHORSE_DEMO_SERVICE_NAME ?? "workhorse-demo";
   process.env.OTEL_EXPORTER_OTLP_ENDPOINT ??= "http://127.0.0.1:4318";
   process.env.OTEL_EXPORTER_OTLP_PROTOCOL ??= "http/protobuf";
