@@ -66,6 +66,8 @@ import {
   injectTraceContext,
   jobMetricAttributes,
   jobSpanAttributes,
+  logDebug,
+  logInfo,
   telemetryMetrics,
   type QueueMetricSnapshot,
   withSpan,
@@ -1336,9 +1338,21 @@ export class Queue {
           recordEnqueuedJobs(
             result.rows.filter((row) => row.accepted).map((row) => input[row.ordinal - 1]!),
           );
-          for (const row of result.rows) {
+          for (const [index, row] of result.rows.entries()) {
+            // Production SQL always returns ordinal. The index fallback keeps structural Queryable
+            // test doubles from making observability change the enqueue result path.
+            const request = requests[(row.ordinal ?? index + 1) - 1];
+            if (!request) continue;
+            logDebug(
+              row.accepted ? "workhorse.job.enqueued" : "workhorse.job.enqueue_replayed",
+              row.accepted ? "Job enqueued" : "Idempotent enqueue replayed",
+              {
+                "workhorse.job.id": row.job_id,
+                "workhorse.job.type": request.type,
+                "workhorse.queue.name": request.options?.queue ?? this.defaultQueue,
+              },
+            );
             if (!row.accepted) continue;
-            const request = requests[row.ordinal - 1]!;
             telemetryMetrics.enqueued.add(1, {
               "workhorse.queue.name": request.options?.queue ?? this.defaultQueue,
               "workhorse.job.type": request.type,
@@ -1359,15 +1373,23 @@ export class Queue {
       "SELECT workhorse.promote_v1($1) AS count",
       [limit],
     );
-    return result.rows[0]!.count;
+    const count = result.rows[0]!.count;
+    if (count > 0) {
+      logInfo("workhorse.jobs.promoted", "Scheduled jobs promoted", {
+        "workhorse.job.count": count,
+      });
+    }
+    return count;
   }
 
   async pauseQueue(queueName = this.defaultQueue): Promise<void> {
     await this.database.query("SELECT workhorse.pause_queue_v1($1)", [queueName]);
+    logInfo("workhorse.queue.paused", "Queue paused", { "workhorse.queue.name": queueName });
   }
 
   async resumeQueue(queueName = this.defaultQueue): Promise<void> {
     await this.database.query("SELECT workhorse.resume_queue_v1($1)", [queueName]);
+    logInfo("workhorse.queue.resumed", "Queue resumed", { "workhorse.queue.name": queueName });
   }
 
   async purgeQueue(queueName = this.defaultQueue): Promise<number> {
@@ -1375,7 +1397,12 @@ export class Queue {
       "SELECT workhorse.purge_queue_v1($1) AS count",
       [queueName],
     );
-    return result.rows[0]!.count;
+    const count = result.rows[0]!.count;
+    logInfo("workhorse.queue.purged", "Queue purged", {
+      "workhorse.queue.name": queueName,
+      "workhorse.job.count": count,
+    });
+    return count;
   }
 
   /**
@@ -1411,7 +1438,16 @@ export class Queue {
         registration.draining,
       ],
     );
-    return { paused: result.rows[0]!.paused };
+    const paused = result.rows[0]!.paused;
+    logDebug("workhorse.worker.registered", "Worker registration refreshed", {
+      "workhorse.queue.name": registration.queue ?? this.defaultQueue,
+      "workhorse.worker.id": registration.workerId,
+      "workhorse.worker.concurrency": registration.concurrency,
+      "workhorse.worker.active_slots": registration.activeSlots,
+      "workhorse.worker.draining": registration.draining,
+      "workhorse.worker.paused": paused,
+    });
+    return { paused };
   }
 
   /** Remove one worker registration. A killed worker instead ages out of the fleet view. */
@@ -1420,7 +1456,12 @@ export class Queue {
       "SELECT workhorse.deregister_worker_v1($1) AS deregistered",
       [workerId],
     );
-    return result.rows[0]!.deregistered;
+    const deregistered = result.rows[0]!.deregistered;
+    logDebug("workhorse.worker.deregistered", "Worker deregistered", {
+      "workhorse.worker.id": workerId,
+      "workhorse.worker.deregistered": deregistered,
+    });
+    return deregistered;
   }
 
   /**
@@ -1450,6 +1491,13 @@ export class Queue {
     ]);
     const row = result.rows[0];
     if (!row) return null;
+    logInfo(
+      paused ? "workhorse.worker.paused" : "workhorse.worker.resumed",
+      paused ? "Worker paused" : "Worker resumed",
+      {
+        "workhorse.worker.id": workerId,
+      },
+    );
     return {
       workerId: row.worker_id,
       paused: row.paused,
@@ -1507,7 +1555,18 @@ export class Queue {
       "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1)) AS count",
       [maxAgeMs / 1_000],
     );
-    return result.rows[0]!.count;
+    const count = result.rows[0]!.count;
+    const attributes = { "workhorse.worker.count": count };
+    if (count > 0) {
+      logInfo("workhorse.worker_registry.pruned", "Stale worker registrations pruned", attributes);
+    } else {
+      logDebug(
+        "workhorse.worker_registry.pruned",
+        "No stale worker registrations found",
+        attributes,
+      );
+    }
+    return count;
   }
 
   async tick(
@@ -1600,6 +1659,19 @@ export class Queue {
           "workhorse.maintenance.rows_affected",
           results.reduce((total, result) => total + result.rowsAffected, 0),
         );
+        for (const result of results) {
+          const attributes = {
+            "workhorse.maintenance.operation": operation,
+            "workhorse.maintenance.phase": result.phase,
+            "workhorse.maintenance.rows_affected": result.rowsAffected,
+            "workhorse.maintenance.skipped_lock": result.skippedLock,
+          };
+          if (result.rowsAffected > 0 || result.error !== null) {
+            logInfo("workhorse.maintenance.completed", "Maintenance phase completed", attributes);
+          } else {
+            logDebug("workhorse.maintenance.completed", "Maintenance phase completed", attributes);
+          }
+        }
         return results;
       },
     );
@@ -1628,7 +1700,9 @@ export class Queue {
         options.force ?? false,
       ],
     );
-    return retentionPolicy(result.rows[0]!);
+    const policy = retentionPolicy(result.rows[0]!);
+    logInfo("workhorse.retention_policy.synchronized", "Retention policy synchronized");
+    return policy;
   }
 
   async overrideRetentionPolicy(
@@ -1783,7 +1857,11 @@ export class Queue {
         options.force ?? false,
       ],
     );
-    return maintenancePolicy(result.rows[0]!);
+    const policy = maintenancePolicy(result.rows[0]!);
+    logInfo("workhorse.maintenance_policy.synchronized", "Maintenance policy synchronized", {
+      "workhorse.maintenance.timezone": policy.timezone,
+    });
+    return policy;
   }
 
   async overrideMaintenancePolicy(
@@ -1865,6 +1943,10 @@ export class Queue {
           "SELECT workhorse.sync_schedule_definitions_v1($1, $2::jsonb, $3)",
           [namespace, JSON.stringify(input), options.prune ?? true],
         );
+        logInfo("workhorse.schedules.synchronized", "Recurring schedules synchronized", {
+          "workhorse.schedule.namespace": namespace,
+          "workhorse.schedule.count": definitions.length,
+        });
       },
     );
   }
@@ -1910,7 +1992,19 @@ export class Queue {
       [namespace, name, revision.toString(), occurrenceAt.toISOString()],
     );
     const jobId = result.rows[0]!.job_id;
-    if (jobId !== null) recordScheduleFired(namespace, name, occurrenceAt);
+    if (jobId !== null) {
+      recordScheduleFired(namespace, name, occurrenceAt);
+      logInfo("workhorse.schedule.fired", "Recurring schedule fired", {
+        "workhorse.schedule.namespace": namespace,
+        "workhorse.schedule.name": name,
+        "workhorse.job.id": jobId,
+      });
+    } else {
+      logDebug("workhorse.schedule.fire_replayed", "Recurring schedule occurrence replayed", {
+        "workhorse.schedule.namespace": namespace,
+        "workhorse.schedule.name": name,
+      });
+    }
     return jobId;
   }
 
@@ -1921,6 +2015,11 @@ export class Queue {
       run_at: Date | string | null;
     }>("SELECT status, state, run_at FROM workhorse.run_task_now_v1($1)", [jobId]);
     const row = result.rows[0]!;
+    logInfo("workhorse.job.run_now_requested", "Immediate job run requested", {
+      "workhorse.job.id": jobId,
+      "workhorse.job.state": row.state ?? "not_found",
+      "workhorse.operation.status": row.status,
+    });
     return {
       status: row.status,
       jobId,
@@ -1939,6 +2038,11 @@ export class Queue {
     );
     const row = result.rows[0]!;
     recordCancellation(row.status);
+    logInfo("workhorse.job.cancellation_processed", "Job cancellation processed", {
+      "workhorse.job.id": jobId,
+      "workhorse.job.state": row.state ?? "not_found",
+      "workhorse.operation.status": row.status,
+    });
     return {
       status: row.status,
       jobId,
@@ -2202,6 +2306,11 @@ export class Queue {
       const row = result.rows[0];
       if (!row) throw new Error("redrive_v1 returned no result");
       recordRedrive(row.status);
+      logInfo("workhorse.job.redrive_processed", "Dead-letter job redrive processed", {
+        "workhorse.job.id": sourceJobId,
+        "workhorse.redrive.target_job_id": row.target_job_id ?? "none",
+        "workhorse.operation.status": row.status,
+      });
       return redriveResult(row);
     } catch (error) {
       throw redriveConflict(error) ?? error;
@@ -2237,6 +2346,10 @@ export class Queue {
       const statuses = new Map<RedriveResult["status"], number>();
       for (const row of result.rows) statuses.set(row.status, (statuses.get(row.status) ?? 0) + 1);
       for (const [status, count] of statuses) recordRedrive(status, count);
+      logInfo("workhorse.jobs.redrive_processed", "Dead-letter job redrive batch processed", {
+        "workhorse.job.count": result.rows.length,
+        "workhorse.redrive.dry_run": options.dryRun ?? false,
+      });
       return {
         results: result.rows.map(redriveResult),
         nextCursor:
@@ -2311,6 +2424,13 @@ export class Queue {
         "workhorse.queue.name": queueName,
         "workhorse.job.type": row.job_type,
       });
+      logDebug("workhorse.job.claimed", "Job claimed", {
+        "workhorse.job.id": row.job_id,
+        "workhorse.job.type": row.job_type,
+        "workhorse.job.attempt": row.attempt,
+        "workhorse.queue.name": queueName,
+        "workhorse.worker.id": workerId,
+      });
       return {
         id: row.job_id,
         queue: queueName,
@@ -2351,7 +2471,19 @@ export class Queue {
       );
       const status = result.rows[0]!.status;
       span.setAttribute("workhorse.heartbeat.status", status);
-      if (status !== "accepted") recordHeartbeatFailure(status);
+      if (status !== "accepted") {
+        recordHeartbeatFailure(status);
+        logInfo("workhorse.job.heartbeat_rejected", "Job heartbeat rejected", {
+          ...jobSpanAttributes(job),
+          "workhorse.heartbeat.status": status,
+          "workhorse.worker.id": workerId,
+        });
+      } else {
+        logDebug("workhorse.job.heartbeat_accepted", "Job heartbeat accepted", {
+          ...jobSpanAttributes(job),
+          "workhorse.worker.id": workerId,
+        });
+      }
       return status;
     });
   }
@@ -2372,6 +2504,11 @@ export class Queue {
         telemetryMetrics.retried.add(1, jobMetricAttributes(job));
       });
     }
+    logInfo("workhorse.job.ownership_expired", "Owned job lease expired", {
+      ...jobSpanAttributes(job),
+      "workhorse.expiration.status": expiration.status,
+      "workhorse.worker.id": workerId,
+    });
     return expiration.status;
   }
 
@@ -2380,7 +2517,13 @@ export class Queue {
       "SELECT workhorse.acknowledge_cancel_v1($1, $2, $3) AS accepted",
       [job.id, workerId, job.fenceToken.toString()],
     );
-    return result.rows[0]!.accepted;
+    const accepted = result.rows[0]!.accepted;
+    logInfo("workhorse.job.cancellation_acknowledged", "Job cancellation acknowledged", {
+      ...jobSpanAttributes(job),
+      "workhorse.cancel.accepted": accepted,
+      "workhorse.worker.id": workerId,
+    });
+    return accepted;
   }
 
   async getCheckpoint<TValue extends Json = Json>(
@@ -2433,6 +2576,12 @@ export class Queue {
     if (row.status !== "saved" && row.status !== "existing") {
       throw new Error(`Unexpected checkpoint status: ${String(row.status)}`);
     }
+    logDebug("workhorse.job.checkpoint_saved", "Job checkpoint persisted", {
+      ...jobSpanAttributes(job),
+      "workhorse.checkpoint.name": name,
+      "workhorse.checkpoint.status": row.status,
+      "workhorse.worker.id": workerId,
+    });
     return checkpointRecord<TValue>({
       ...row,
       job_id: job.id,
@@ -2477,6 +2626,11 @@ export class Queue {
     if (row.status !== "updated" && row.status !== "unchanged") {
       throw new Error(`Unexpected progress status: ${String(row.status)}`);
     }
+    logDebug("workhorse.job.progress_updated", "Job progress persisted", {
+      ...jobSpanAttributes(job),
+      "workhorse.progress.status": row.status,
+      "workhorse.worker.id": workerId,
+    });
     return progressRecord<TValue>({ ...row, job_id: job.id });
   }
 
@@ -2560,6 +2714,12 @@ export class Queue {
     if (row.status !== "scheduled" && row.status !== "elapsed") {
       throw new Error(`Unexpected wait status: ${String(row.status)}`);
     }
+    logInfo("workhorse.job.wait_processed", "Durable job wait processed", {
+      ...jobSpanAttributes(job),
+      "workhorse.wait.name": name,
+      "workhorse.wait.status": row.status,
+      "workhorse.worker.id": workerId,
+    });
     return {
       status: row.status,
       wait: waitRecord({ ...row, job_id: job.id }),
@@ -2597,6 +2757,15 @@ export class Queue {
       const accepted = query.rows[0]!.accepted;
       span.setAttribute("workhorse.complete.accepted", accepted);
       if (accepted) telemetryMetrics.completed.add(1, jobMetricAttributes(job));
+      logInfo(
+        accepted ? "workhorse.job.completed" : "workhorse.job.completion_rejected",
+        accepted ? "Job completed" : "Stale job completion rejected",
+        {
+          ...jobSpanAttributes(job),
+          "workhorse.complete.accepted": accepted,
+          "workhorse.worker.id": workerId,
+        },
+      );
       return accepted;
     });
   }
@@ -2644,6 +2813,11 @@ export class Queue {
       if (state === "ready" || state === "scheduled") {
         telemetryMetrics.retried.add(1, jobMetricAttributes(job));
       }
+      logInfo("workhorse.job.failure_processed", "Job attempt failure processed", {
+        ...jobSpanAttributes(job),
+        "workhorse.attempt.outcome": state,
+        "workhorse.worker.id": workerId,
+      });
       return state;
     });
   }
@@ -2664,6 +2838,13 @@ export class Queue {
       const recovery = result.rows[0]!;
       recordRecoveryTelemetry(span, recovery);
       recordRecoveredLeases(recovery.expired_leases);
+      if (recovery.rows_affected > 0) {
+        logInfo("workhorse.leases.recovered", "Expired leases recovered", {
+          "workhorse.recovery.rows_affected": recovery.rows_affected,
+          "workhorse.recovery.expired_leases": recovery.expired_leases,
+          "workhorse.recovery.retried": recovery.retried,
+        });
+      }
       return recovery.rows_affected;
     });
   }

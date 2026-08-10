@@ -558,7 +558,7 @@ PostgreSQL starts another attempt.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live jobs are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary day.
 
-## OpenTelemetry traces and baseline metrics
+## OpenTelemetry traces, logs, and baseline metrics
 
 The host application configures the OpenTelemetry context manager, propagator, readers, processors,
 exporters, and resource. Queue correctness is unchanged when no SDK is installed. The operational
@@ -580,6 +580,61 @@ The runtime emits `workhorse.enqueue`, `workhorse.claim`, `workhorse.handler`,
 `workhorse.queue.name`, because spans are sampled event records rather than metric dimensions.
 Workhorse emits at most eight attributes on one span and exports
 `TRACE_ATTRIBUTE_COUNT_LIMIT = 8` for matching SDK span limits.
+
+The runtime emits structured OpenTelemetry log records through `@opentelemetry/api-logs`. Debug
+records cover enqueue acceptance and replay, claims, accepted heartbeats, handler registration and
+execution boundaries, checkpoints, progress, maintenance no-ops, schedule replay, and worker
+deregistration. Info records cover queue and worker lifecycle, final execution outcomes, rejected
+heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule
+changes, redrive, and maintenance that changes rows or returns an error.
+
+Debug event names are `workhorse.job.enqueued`, `workhorse.job.enqueue_replayed`,
+`workhorse.job.claimed`, `workhorse.job.heartbeat_accepted`,
+`workhorse.job.checkpoint_saved`, `workhorse.job.progress_updated`,
+`workhorse.handler.registered`, `workhorse.handler.started`, `workhorse.handler.finished`,
+`workhorse.schedule.fire_replayed`, `workhorse.worker.registered`, and
+`workhorse.worker.deregistered`.
+`workhorse.maintenance.completed` uses debug when the phase changes no rows and returns no error.
+`workhorse.worker_registry.pruned` uses debug when no stale registrations exist.
+
+Info event names are `workhorse.jobs.promoted`, `workhorse.leases.recovered`,
+`workhorse.queue.paused`, `workhorse.queue.resumed`, `workhorse.queue.purged`,
+`workhorse.schedules.synchronized`, `workhorse.schedule.fired`,
+`workhorse.jobs.redrive_processed`, `workhorse.job.run_now_requested`,
+`workhorse.job.cancellation_processed`, `workhorse.job.cancellation_acknowledged`,
+`workhorse.job.redrive_processed`, `workhorse.job.wait_processed`, `workhorse.job.completed`,
+`workhorse.job.completion_rejected`, `workhorse.job.failure_processed`,
+`workhorse.job.heartbeat_rejected`, `workhorse.job.ownership_expired`,
+`workhorse.job.execution_finished`, `workhorse.worker.paused`, `workhorse.worker.resumed`,
+`workhorse.worker.registration_failed`, `workhorse.worker.started`,
+`workhorse.worker.stop_requested`, and `workhorse.worker.stopped`.
+`workhorse.maintenance.completed` uses info when the phase changes rows or returns an error.
+`workhorse.worker_registry.pruned` uses info when PostgreSQL removes registrations.
+`workhorse.retention_policy.synchronized` and `workhorse.maintenance_policy.synchronized` record
+successful configuration changes at info.
+
+The internal `logDebug` and `logInfo` functions accept the closed `WorkhorseLogEvent` union. They
+set `eventName`, `severityNumber`, `severityText`, and a stable text body. Job records may use
+`workhorse.job.id`, `workhorse.job.type`, `workhorse.job.attempt`, `workhorse.job.state`, and
+`workhorse.operation.status`. Owned transitions add `workhorse.worker.id`.
+
+Queue records use `workhorse.queue.name` and may add `workhorse.job.count`. Schedule records may
+use `workhorse.schedule.namespace`, `workhorse.schedule.name`, and `workhorse.schedule.count`.
+Recovery records use `workhorse.recovery.rows_affected`, `workhorse.recovery.expired_leases`, and
+`workhorse.recovery.retried`. Redrive records may use `workhorse.redrive.target_job_id` and
+`workhorse.redrive.dry_run`. Durable records use the bounded status plus
+`workhorse.checkpoint.name` or `workhorse.wait.name`; they never use the stored value.
+
+Maintenance records use `workhorse.maintenance.operation`, `workhorse.maintenance.phase`,
+`workhorse.maintenance.rows_affected`, and `workhorse.maintenance.skipped_lock`. Worker
+registration records may use concurrency, active slots, draining, and pause state. Handler
+completion adds `workhorse.handler.duration_ms`.
+
+Logs may include job, worker, schedule, and checkpoint identity because logs are event records.
+Workhorse never logs payloads, results, error messages, cancellation reasons, idempotency keys, or
+progress and checkpoint values. The active OpenTelemetry context remains attached at emission, so
+an SDK can correlate handler logs with the current trace. If the host installs no Logs SDK, the API
+remains a no-op and queue behavior is unchanged.
 
 The meter also exposes these baseline instruments:
 
