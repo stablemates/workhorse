@@ -2076,8 +2076,7 @@ export async function readDashboardJobDetail(
       progress_updated_at: Date | string | null;
     }>(sql`
       SELECT j.id, j.queue_name AS queue, j.job_type AS type,
-             CASE WHEN jsonb_typeof(j.payload) = 'object'
-               THEN j.payload - j.payload_redact_keys ELSE j.payload END AS payload,
+             workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
              j.max_attempts,
              j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.created_at,
              r.state AS runtime_state, r.current_attempt AS runtime_attempt, r.run_at, r.ready_at,
@@ -2086,8 +2085,7 @@ export async function readDashboardJobDetail(
              r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
              r.error AS runtime_error,
              o.state AS outcome_state, o.current_attempt AS outcome_attempt, o.finished_at,
-             CASE WHEN jsonb_typeof(o.result) = 'object'
-               THEN o.result - j.result_redact_keys ELSE o.result END AS result,
+             workhorse.redact_top_level_keys_v1(o.result, j.result_redact_keys) AS result,
              o.error AS outcome_error,
              p.progress_value, p.revision::text AS progress_revision,
              p.attempt AS progress_attempt, p.fence_token::text AS progress_fence_token,

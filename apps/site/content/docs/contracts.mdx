@@ -37,8 +37,9 @@ path instead of committing success.
 Size ceilings come from the queue defaults or a contract-version override. PostgreSQL checks its
 canonical JSON representation before writing, so clients cannot disagree about the accepted size.
 
-Sensitive key lists apply to top-level object fields. Claims return raw payloads to handlers, while
-job lookup, listing, dead letters, and dashboard detail remove persisted sensitive keys.
+Sensitive key lists apply to top-level object fields. When a worker claims a job, PostgreSQL returns
+the raw payload to its handler. Job lookup, listing, dead letters, and dashboard detail remove
+persisted sensitive keys. Workhorse also replaces handler error details before tracing or persistence.
 
 ## Deploy a new version
 

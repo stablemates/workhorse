@@ -304,6 +304,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "persisted retry policies record their PostgreSQL-selected delay and provenance",
       "decorrelated jitter replays deterministically from persisted inputs",
       "a job at its attempt budget enters failed",
+      "a versioned contract validates and completes while operator reads redact configured fields",
     ],
     metrics: [
       "immediateAttempts",
@@ -317,6 +318,9 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "jitterSelectionMs",
       "policySelectionTotalMs",
       "exhaustedAttempts",
+      "contractEnqueueMs",
+      "contractClaimMs",
+      "contractCompleteMs",
     ],
   },
   {
@@ -2094,6 +2098,58 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
     "failed",
   );
 
+  const contractQueue = new Queue(context.pool, context.queueName, {
+    contracts: {
+      "retry-contracted": {
+        currentVersion: "1",
+        versions: {
+          "1": {
+            validatePayload: (value) =>
+              typeof value === "object" && value !== null && !Array.isArray(value),
+            validateResult: (value) =>
+              typeof value === "object" && value !== null && !Array.isArray(value),
+            sensitivePayloadKeys: ["token"],
+            sensitiveResultKeys: ["receipt"],
+          },
+        },
+      },
+    },
+  });
+  const [contractId, contractEnqueueMs] = await measured(context.now, () =>
+    contractQueue.enqueue("retry-contracted", { token: "benchmark-secret", value: 1 }),
+  );
+  const [contractJob, contractClaimMs] = await measured(context.now, () =>
+    contractQueue.claim("retry-worker"),
+  );
+  const [contractCompleted, contractCompleteMs] = await measured(context.now, () =>
+    contractQueue.complete(contractJob!, "retry-worker", {
+      receipt: "benchmark-secret",
+      ok: true,
+    }),
+  );
+  const contractSnapshot = await contractQueue.getJob(contractId);
+  recordInvariant(assertions, "contracted completion is accepted", contractCompleted, true);
+  recordInvariant(
+    assertions,
+    "contract version is retained",
+    contractSnapshot?.contractVersion,
+    "1",
+  );
+  recordInvariant(
+    assertions,
+    "contracted operator payload is redacted",
+    contractSnapshot?.payload,
+    { value: 1 },
+    jsonEquivalent,
+  );
+  recordInvariant(
+    assertions,
+    "contracted operator result is redacted",
+    contractSnapshot?.result,
+    { ok: true },
+    jsonEquivalent,
+  );
+
   return {
     name: "retry-paths",
     durationMs: 0,
@@ -2109,6 +2165,9 @@ async function retryPaths(context: OperationalScenarioContext): Promise<Operatio
       jitterSelectionMs,
       policySelectionTotalMs: fixedSelectionMs + exponentialSelectionMs + jitterSelectionMs,
       exhaustedAttempts: (await queue.getJob(exhaustedId))?.currentAttempt ?? null,
+      contractEnqueueMs,
+      contractClaimMs,
+      contractCompleteMs,
     },
     assertions,
   };

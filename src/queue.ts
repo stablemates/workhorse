@@ -129,6 +129,7 @@ type ClaimRow = {
   payload: Json;
   contract_version: string | null;
   result_max_bytes: number;
+  redact_error_details: boolean;
   trace_context: TraceContext | null;
   attempt: number;
   max_attempts: number;
@@ -541,8 +542,19 @@ function maintenancePolicy(row: MaintenancePolicyRow): MaintenancePolicy {
   };
 }
 
-function errorEnvelope(error: unknown): Json {
+const REDACTED_ERROR_MESSAGE = "Job handler failed; details redacted";
+const REDACTED_ERROR_NAME = "RedactedJobError";
+
+export function errorForTelemetry(error: unknown, redactDetails: boolean): Error | string {
+  if (!redactDetails) return error instanceof Error ? error : String(error);
+  const redacted = new Error(REDACTED_ERROR_MESSAGE);
+  redacted.name = REDACTED_ERROR_NAME;
+  return redacted;
+}
+
+function errorEnvelope(error: unknown, redactDetails = false): Json {
   // Persist a bounded JSON representation instead of relying on Error's non-enumerable fields.
+  if (redactDetails) return { name: REDACTED_ERROR_NAME, message: REDACTED_ERROR_MESSAGE };
   if (error instanceof Error) {
     return { name: error.name, message: error.message, stack: error.stack ?? null };
   }
@@ -967,7 +979,8 @@ function validateSensitiveKeys(keys: readonly string[] | undefined, field: strin
   }
   if (new Set(keys).size !== keys.length) throw new TypeError(`${field} must contain unique keys`);
   for (const key of keys) {
-    if (typeof key !== "string" || key.length < 1 || key.length > 200) {
+    const characters = typeof key === "string" ? [...key].length : 0;
+    if (characters < 1 || characters > 200) {
       throw new TypeError(`${field} keys must contain 1 to 200 characters`);
     }
   }
@@ -977,10 +990,10 @@ function validateQueueOptions(options: QueueOptions): QueueOptions {
   validateValueLimit(options.defaultMaxPayloadBytes, "defaultMaxPayloadBytes");
   validateValueLimit(options.defaultMaxResultBytes, "defaultMaxResultBytes");
   for (const [jobType, typeContracts] of Object.entries(options.contracts ?? {})) {
-    if (jobType.length === 0) throw new TypeError("contract job types must be non-empty");
+    if ([...jobType].length === 0) throw new TypeError("contract job types must be non-empty");
     if (
-      typeContracts.currentVersion.length < 1 ||
-      typeContracts.currentVersion.length > 100 ||
+      [...typeContracts.currentVersion].length < 1 ||
+      [...typeContracts.currentVersion].length > 100 ||
       !(typeContracts.currentVersion in typeContracts.versions)
     ) {
       throw new TypeError(
@@ -988,7 +1001,7 @@ function validateQueueOptions(options: QueueOptions): QueueOptions {
       );
     }
     for (const [version, contract] of Object.entries(typeContracts.versions)) {
-      if (version.length < 1 || version.length > 100) {
+      if ([...version].length < 1 || [...version].length > 100) {
         throw new TypeError(`contract ${jobType} versions must contain 1 to 100 characters`);
       }
       validateValueLimit(contract.maxPayloadBytes, `${jobType}.${version}.maxPayloadBytes`);
@@ -1033,8 +1046,16 @@ function validateContractValue(
     }
     if (!accepted) throw new JobContractValidationError(jobType, version, kind);
   }
-  const encoded = JSON.stringify(value);
-  const actualBytes = Buffer.byteLength(encoded, "utf8");
+  enforceJsonSize(jobType, kind, value, maxBytes);
+}
+
+function enforceJsonSize(
+  jobType: string,
+  kind: "payload" | "result",
+  value: Json,
+  maxBytes: number,
+): void {
+  const actualBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
   if (actualBytes > maxBytes) {
     throw new JobValueSizeLimitError(jobType, kind, actualBytes, maxBytes);
   }
@@ -1059,10 +1080,7 @@ function jobAcceptance(options: QueueOptions, jobType: string, payload: Json): J
   if (contract !== undefined) {
     validateContractValue(jobType, contractVersion!, "payload", payload, contract, payloadMaxBytes);
   } else {
-    const actualBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
-    if (actualBytes > payloadMaxBytes) {
-      throw new JobValueSizeLimitError(jobType, "payload", actualBytes, payloadMaxBytes);
-    }
+    enforceJsonSize(jobType, "payload", payload, payloadMaxBytes);
   }
   return {
     contractVersion,
@@ -1935,6 +1953,7 @@ export class Queue {
         payload: row.payload as TPayload,
         contractVersion: row.contract_version,
         resultMaxBytes: row.result_max_bytes,
+        redactErrorDetails: row.redact_error_details === true,
         traceContext: row.trace_context,
         attempt: row.attempt,
         maxAttempts: row.max_attempts,
@@ -2201,10 +2220,7 @@ export class Queue {
           job.resultMaxBytes,
         );
       } else {
-        const actualBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
-        if (actualBytes > job.resultMaxBytes) {
-          throw new JobValueSizeLimitError(job.type, "result", actualBytes, job.resultMaxBytes);
-        }
+        enforceJsonSize(job.type, "result", result, job.resultMaxBytes);
       }
       // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
       // rather than overwriting the result of a recovered attempt.
@@ -2250,7 +2266,7 @@ export class Queue {
         job.id,
         workerId,
         job.fenceToken.toString(),
-        JSON.stringify(errorEnvelope(error)),
+        JSON.stringify(errorEnvelope(error, job.redactErrorDetails)),
         retryDelayMs ?? null,
       ]);
       const state = result.rows[0]!.state;
@@ -2312,16 +2328,14 @@ export class Queue {
       updated_at: Date;
     }>(
       `SELECT j.id, j.queue_name, j.job_type,
-              CASE WHEN jsonb_typeof(j.payload) = 'object'
-                THEN j.payload - j.payload_redact_keys ELSE j.payload END AS payload,
+              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
               j.contract_version, j.tags, j.retry_policy,
               j.deadline_at, j.execution_timeout_ms::text,
               COALESCE(r.state, o.state) AS state,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
               COALESCE(r.run_at, o.run_at) AS run_at,
-              CASE WHEN jsonb_typeof(o.result) = 'object'
-                THEN o.result - j.result_redact_keys ELSE o.result END AS result,
+              workhorse.redact_top_level_keys_v1(o.result, j.result_redact_keys) AS result,
               COALESCE(r.error, o.error) AS error, r.cancel_requested_at,
               r.cancel_requested_by, r.cancel_reason,
               p.progress_value, p.revision::text AS progress_revision,
