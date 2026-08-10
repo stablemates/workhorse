@@ -1,103 +1,68 @@
 ---
-title: Limitations
-description: What Workhorse 0.1 deliberately does not do, and what that means for adoption.
+title: When is Workhorse the wrong fit?
+description: Compare the current delivery, scheduling, orchestration, authorization, and migration boundaries with your requirements.
 ---
 
-Workhorse 0.1 is an **evidence-first validation release**, not a production-support promise. This page
-is the honest boundary of the current implementation. The authoritative, field-by-field matrix lives in
-[`docs/features.md`](https://github.com/stablemates/workhorse/blob/main/docs/features.md).
+Workhorse fits PostgreSQL-backed applications that accept at-least-once handlers and a clean-install
+schema. Choose another system when a missing capability is central to your workload.
 
-## Delivery and effects
+## External effects are at least once
 
-<Callout type="warn">
-  Handler execution is **at least once**. Enqueue idempotency deduplicates durable acceptance only.
-  PostgreSQL cannot make HTTP calls, emails, or payments exactly once. Use stable external
-  idempotency keys, an outbox/inbox, or compensation.
-</Callout>
+PostgreSQL cannot commit an HTTP call, email, or payment in the same transaction as job completion. A
+worker can finish the effect and die before it records success.
 
-Redrive is another at-least-once execution and can repeat external effects.
+Use provider idempotency keys, transactional inbox or outbox patterns, or compensation. Enqueue keys
+prevent duplicate job identities, but they cannot make one accepted handler execute exactly once.
 
-## Not supported
+Redrive creates another at-least-once execution. Operator tooling must confirm that repeating the
+effect is safe before it replays failures.
 
-| Capability                                    | Status                                                    |
-| --------------------------------------------- | --------------------------------------------------------- |
-| Job priorities                                | Ordering is FIFO only                                     |
-| Workflows, DAGs, dependencies, child jobs     | No workflow graph or dependency runtime                   |
-| Signals and operator early wake               | Durable waits are time-based only                         |
-| Forced handler interruption                   | Cancellation, deadlines, and timeouts are all cooperative |
-| Cross-queue concurrency policies, rate limits | Not implemented                                           |
-| Arbitrary scheduled SQL                       | Schedules contain typed Workhorse jobs only               |
-| Online schema migration                       | Clean-install only                                        |
-| Compatibility write views                     | Deliberately absent to avoid dual-write semantics         |
-| Built-in RBAC, auth, multi-tenancy            | Host applications must authorize                          |
-| OpenTelemetry, metrics endpoint               | Instrument externally                                     |
-| Additional ORM and framework adapters         | Only Drizzle and Hono today                               |
-| Exactly-once external effects                 | Impossible from the database alone                        |
+## Scheduling is durable rather than real time
 
-## Partial support
+Delayed jobs and durable waits store not-before boundaries. If someone pauses the queue, or workers
+or PostgreSQL become unavailable, a worker can claim the job later than its boundary.
 
-| Capability          | Caveat                                                                |
-| ------------------- | --------------------------------------------------------------------- |
-| `NOTIFY` wake hints | Polling remains authoritative; notifications are only an optimization |
-| Queue health        | Independent read-only queries; PostgreSQL statistics can lag          |
-| Operator dashboard  | No built-in RBAC or multi-tenancy                                     |
-| Schema              | Clean install only; no migration path between protocol versions       |
+Recurring schedules need a running worker with the matching namespace. Workhorse bounds catch-up
+after downtime and does not provide a hard real-time scheduler.
 
-## Timing is best-effort, not real-time
+## Stop is cooperative
 
-- Delayed jobs and durable waits store a **not-before** boundary. Promotion cadence, queue pause,
-  worker availability, and database downtime can delay the next claim.
-- The default one-second maintenance cadence makes sub-second durable waits inefficient.
-- Recurring schedules fire through worker evaluation, deduplicated per occurrence second. They are not
-  a hard real-time scheduler.
+Cancellation, deadlines, and execution timeouts abort a handler signal. JavaScript continues until
+the handler observes that signal or loses its lease.
 
-## Cooperative stop, not preemption
+Process shutdown also drains rather than preempts handlers. If your application requires immediate
+forced interruption, isolate that work in a process you can terminate and make its effects recoverable.
 
-Cancellation, deadlines, and execution timeouts all deliver a signal. A handler that ignores its
-`AbortSignal` runs until its lease expires, at which point bounded recovery materializes the requested
-outcome. JavaScript is never forcibly preempted.
+## Workhorse is a queue, not a workflow engine
 
-A process `SIGTERM` does not abort handler signals either; it drains within a bounded deadline and then
-hard-exits. Active leases remain durable state that another worker recovers.
+Workhorse has FIFO queues, but no priorities, dependency graph, child-job runtime, or cross-queue
+concurrency policy. Application code must model orchestration explicitly or use a workflow system.
 
-## Handler duration
+Durable waits are time-based. They do not accept arbitrary signals or operator early wake commands.
 
-Keep ordinary handlers at or below **110 seconds** for safer rolling deployments. Longer work should be
-split into idempotent stages with checkpoints and lease-releasing waits. This is guidance, not an
-enforced protocol limit.
+## The host owns security and telemetry
 
-## Bounds you will actually hit
+The dashboard and mutation APIs provide attribution, not authentication, authorization, role-based
+access, or tenant isolation. Every host must enforce its own operator boundary.
 
-| Limit                        | Value                           |
-| ---------------------------- | ------------------------------- |
-| Enqueue batch                | 1,000 requests                  |
-| Tags per job                 | 20, each at most 100 characters |
-| Checkpoint value             | 1 MiB canonical JSONB           |
-| Progress value               | 64 KiB canonical JSONB          |
-| Changed progress frequency   | 10 per second per active fence  |
-| Checkpoint and wait names    | 1 to 200 characters             |
-| Waits per job                | 1,000                           |
-| Wait horizon                 | 365 days                        |
-| Listing page                 | 1,000 rows                      |
-| Payload projection           | 1 byte to 1 MiB, 50 redact keys |
-| Dead-letter and redrive page | 1,000 rows                      |
-| Worker concurrency           | 1 to 100 per instance           |
+Workhorse exposes health and maintenance telemetry but no built-in metrics endpoint or tracing export.
+Connect handler and process signals to your observability system.
 
-## Planned, not implemented
+## Schema evolution needs a deliberate migration
 
-- Long-horizon statistics rollups with bounded dimensions and idempotent late-data recomputation
-- Cold history export after rollup safety is established
-- Notification-assisted dispatch and bounded batch claiming
-- OpenTelemetry spans and process metrics
-- Dynamic configuration reload and handler registry version negotiation
+The current schema installs cleanly and requires an exact runtime match. Workhorse does not ship
+online schema migration or compatibility write views between protocol versions.
 
-The prioritized roadmap lives in
-[`TODO.md`](https://github.com/stablemates/workhorse/blob/main/TODO.md).
+This boundary matters most for long-lived production data. Plan the drain, cutover, and evidence
+retention before adopting a release that changes the schema.
 
-## Should you adopt it?
+## Next
 
-Workhorse is a reasonable fit when you already run PostgreSQL, want transactional enqueue and durable
-execution boundaries, and can accept at-least-once handlers with a clean-install schema.
+- [Core concepts](/docs/concepts) — understand the guarantees behind these boundaries
+- [Compatibility](/docs/compatibility) — check the tested runtime and schema matrix
+- [Deployment and operations](/docs/operations) — design recovery around cooperative processes
 
-It is not a fit when you need priorities, workflow orchestration, forced interruption, cross-process
-rate limits, or a supported online migration story today.
+---
+
+Exact delivery guarantees, timing bounds, and unsupported protocol behavior:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#delivery-semantics).

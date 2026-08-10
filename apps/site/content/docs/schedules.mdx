@@ -1,118 +1,78 @@
 ---
-title: Recurring schedules
-description: Deploy-synchronized, namespaced recurring jobs evaluated by workers with revision fencing and SQL deduplication.
+title: How do I run recurring jobs?
+description: Synchronize named cron definitions during deployment and let any matching worker fire them safely.
 ---
 
-Workhorse recurring jobs are **declarative and deploy-synchronized**. You describe the desired state of
-a namespace during deployment; Workhorse reconciles the database to match it.
+Workhorse treats schedules as desired deployment state. Your application declares a complete
+namespace, and PostgreSQL reconciles stored definitions to match it.
 
-Definitions contain typed Workhorse jobs, never arbitrary SQL.
+## Synchronize the namespace
 
-## Synchronize during deployment
+Call `Queue.syncSchedules` during deployment with every definition the namespace should contain. If
+pruning is enabled, Workhorse disables omitted names.
 
 ```ts
 await queue.syncSchedules("billing-production", [
   {
-    name: "daily-invoices",
-    schedule: "0 6 * * *",
+    name: "invoice-run",
+    schedule: billingCron,
     job: {
-      type: "generate-invoices",
+      type: "invoice.generate",
       queue: "billing",
-      payload: { scope: "daily" },
-      maxAttempts: 5,
-      retryPolicy: {
-        type: "exponential",
-        initialDelayMs: 30_000,
-        multiplier: 2,
-        maxDelayMs: 900_000,
-      },
+      payload: { scope: "due" },
     },
-  },
-  {
-    name: "weekly-digest",
-    schedule: "0 9 * * 1",
-    enabled: true,
-    job: { type: "digest.send", payload: {} },
   },
 ]);
 ```
 
-<Callout type="warn">
-  Synchronization is **authoritative for its namespace**. Any name that exists in the database but
-  is omitted from the call is disabled atomically. Run this on every deployment with the complete
-  list.
-</Callout>
+The namespace prevents one service from changing another service's definitions. Cron validation
+happens before the write, so one invalid expression cannot leave a partial deployment.
 
-Cron expressions are validated in process before any write, so an invalid expression throws rather than
-half-applying a namespace. Pass `{ prune: false }` as the third argument when you deliberately want to
-add definitions without disabling omitted names; the default is `true`.
+Use non-pruning synchronization only when you deliberately want an additive update. The normal
+deployment path should supply the complete namespace so code remains the owner of intent.
 
-### Types
+## Let workers evaluate schedules
 
-```ts
-interface ScheduleDefinition {
-  name: string; // stable deployment identity
-  schedule: string; // cron expression, parsed in process
-  enabled?: boolean;
-  job: ScheduleJobDefinition;
-}
-
-interface ScheduleJobDefinition {
-  type: string;
-  payload: Json;
-  queue?: string;
-  maxAttempts?: number;
-  retryPolicy?: RetryPolicy;
-}
-```
-
-## Let workers fire them
-
-A worker only evaluates namespaces it was configured with:
+A `Worker` evaluates only the namespaces in `WorkerOptions.scheduleNamespaces`.
 
 ```ts
 const worker = new Worker(queue, {
   scheduleNamespaces: ["billing-production"],
-  scheduleCatchupLimit: 100, // max missed occurrences fired per schedule per pass
 });
 ```
 
-No extra infrastructure, cron container, or `pg_cron` extension is required. Workers parse cron
-expressions in process and call revision-fenced `workhorse.fire_schedule_v1` with the planned
-occurrence second.
+No separate scheduler service or PostgreSQL extension is required. Workers parse cron expressions
+and call `fire_schedule_v1` for each planned occurrence.
 
-## Revision fencing
+## Why do competing workers create one job?
 
-Changing a definition increments its revision. A worker still running old code holds a stale revision,
-and its fire command becomes a no-op instead of executing a newly committed payload at the old cadence.
+Each occurrence has a durable key made from its namespace, schedule name, and planned time. When
+several workers race, PostgreSQL makes every call converge on one job identity.
 
-## Occurrence deduplication
+A definition revision protects rolling deployments. If a worker fires an old revision after a
+deployment changes the definition, PostgreSQL turns that stale call into a no-op.
 
-A durable `(namespace, schedule, second)` key deduplicates in SQL. Many workers can evaluate the same
-schedule simultaneously; only one job is created per occurrence second. Duplicate fires return the
-existing job ID.
+If the worker fleet is unavailable, schedules do not fire on time. When workers return, Workhorse
+bounds catch-up. Schedules provide durable recurring work rather than hard real-time alarms.
 
-## Inspecting schedules
+## What happens after firing?
 
-```ts
-const stored = await queue.schedules(["billing-production"]);
-// [{ namespace, name, schedule, revision, lastOccurrenceAt }]
-```
+The occurrence creates an ordinary Workhorse job with the definition's queue, payload, attempt
+budget, and retry policy. Its execution still has at-least-once delivery.
 
-`StoredSchedule.revision` is a `bigint`.
+Canceling one occurrence does not disable its definition. Use the next synchronization to disable
+future occurrences.
 
-You can also fire an occurrence explicitly through `queue.fireSchedule(...)`, which is primarily useful
-for tests and operator tooling.
+`Queue.schedules` reads stored definitions for operator tools. `Queue.fireSchedule` exposes the
+revision-fenced operation for tests and controlled integrations.
 
-## Cancellation of an occurrence
+## Next
 
-Canceling a job that a schedule created affects **only that occurrence**. The definition stays enabled
-and later occurrences fire independently. See [Cancellation](/docs/cancellation).
+- [Workers](/docs/workers) — run the process that evaluates namespaces
+- [Retries](/docs/retries) — control failures of each fired job
+- [Cancellation](/docs/cancellation) — stop one occurrence without changing the schedule
 
-## Operational notes
+---
 
-- Fired jobs copy the definition's retry policy to every job identity.
-- Occurrence rows are retained under their own retention window
-  (`scheduleOccurrenceRetentionDays`, default 14 days).
-- Schedules should be authored in application code and synchronized at deploy time, not edited only in
-  a database console; workers execute what the database holds, but the deployment owns intent.
+Exact reconciliation, cron, revision, and occurrence semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#declarative-schedules).

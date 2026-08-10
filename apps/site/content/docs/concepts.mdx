@@ -1,126 +1,59 @@
 ---
-title: Core concepts
-description: The execution model, lifecycle states, ownership fencing, and correctness contract you are adopting.
+title: How does a job move through Workhorse?
+description: Understand the tables, states, ownership, and delivery contract behind every job.
 ---
 
-Workhorse's guarantees come from where state lives. Understanding that layout explains almost every
-behavior in the rest of these docs.
+A Workhorse job separates immutable identity from live state and terminal evidence. That split keeps
+dispatch fast because completed jobs leave the table workers search.
 
-## Storage layout
+## Where does a job live?
 
-A committed job has exactly **one** live runtime row or **one** terminal outcome row, never both.
+`job` stores the identity, queue, type, payload, attempt budget, and policy. PostgreSQL writes this
+row when it accepts the job and never changes its semantic fields.
 
-| Relation                       | Role                                                                  |
-| ------------------------------ | --------------------------------------------------------------------- |
-| `job`                          | Immutable identity, queue, type, payload, attempt budget, policy      |
-| `job_runtime`                  | The single mutable row that exists only while scheduled/ready/active  |
-| `job_outcome`                  | The single immutable row written at success, failure, or cancellation |
-| `job_checkpoint`, `job_wait`   | Immutable named durable execution boundaries                          |
-| `job_query`                    | Bounded operator projection used by listing                           |
-| `job_event`, `attempt_history` | Append-only, UTC-daily partitioned evidence                           |
+`job_runtime` exists while the job is `scheduled`, `ready`, or `active`. Workers and SQL functions
+change this row as the job becomes eligible, gains an owner, or returns for another attempt.
 
-Dispatch cost therefore scales with **live** work, not with lifetime completed work. Terminal jobs
-leave the dispatch indexes entirely.
+`job_outcome` appears when the job becomes `succeeded`, `failed`, or `canceled`. PostgreSQL removes
+the runtime row and writes the outcome in the same transaction.
 
-## Lifecycle states
+A committed job has one runtime row or one outcome row. It never has both, so readers cannot observe
+the job as live and terminal at the same time.
 
-`JobState` is `"scheduled" | "ready" | "active" | "succeeded" | "failed" | "canceled"`.
+## Who owns active work?
 
-| From                  | To          | Cause                                            |
-| --------------------- | ----------- | ------------------------------------------------ |
-| _(new)_               | `scheduled` | Enqueue with a future `runAt`                    |
-| _(new)_               | `ready`     | Enqueue that is already due                      |
-| `scheduled`           | `ready`     | Bounded promotion by `tick_v1`                   |
-| `ready`               | `active`    | Fenced claim by a worker                         |
-| `active`              | `succeeded` | Handler returned and completion committed        |
-| `active`              | `ready`     | Retry with no delay                              |
-| `active`              | `scheduled` | Delayed retry, or a named durable wait           |
-| `active`              | `failed`    | Attempt budget exhausted, deadline, or timeout   |
-| `ready` / `scheduled` | `canceled`  | Immediate cancellation                           |
-| `active`              | `canceled`  | Acknowledged cooperative cancellation, or expiry |
+A `Worker` calls `claim_v1` when it has a free slot. PostgreSQL records the worker ID, an expiry, and
+a fence token on `job_runtime`.
 
-## Ownership and fencing
+The worker calls `heartbeat_v2` while the handler runs. If heartbeats stop, recovery closes the old
+attempt and makes the job eligible again.
 
-A worker owns a job only while the active runtime row matches its worker ID and fence token and the
-lease has not expired.
+Every semantic write carries the worker ID and fence token. A stale worker cannot complete, fail, or
+change a job after a newer worker has claimed it.
 
-- Every claim allocates a **monotonically increasing fence token**.
-- Heartbeat, complete, fail, checkpoint save, wait scheduling, and cancel acknowledgement all require
-  the exact unexpired worker/fence pair.
-- After lease expiry, recovery closes the old attempt immutably and creates a new one. The old worker
-  can no longer write anything semantic.
+## Why can a handler run again?
 
-This is why a paused process, a long GC, or a network partition cannot corrupt a job that was already
-recovered elsewhere.
+The handler runs outside the transaction that grants ownership. A process can finish an external
+effect and die before PostgreSQL records success, so recovery must run the handler again.
 
-## Attempts and history
+That is at-least-once delivery. Use stable provider idempotency keys for external effects, and use
+`HandlerContext.checkpoint` to reuse completed stages inside a job.
 
-Every closed logical attempt appends exactly one immutable `attempt_history` row. A job that was never
-started has no attempt row at all. `started_at` spans durable-wait suspensions, while `claimed_at`
-identifies the activation that finally closed the attempt.
+## Where does history go?
 
-Every lifecycle boundary appends a `job_event`. Both relations use UTC-daily partitions and are subject
-to independent retention windows.
+`job_event` records lifecycle changes, while `attempt_history` records how each logical attempt
+closed. These append-only relations can grow and retire independently of the live dispatch path.
 
-## Execution model
+`job_query` gives operator reads their own bounded projection. Queries and the dashboard can inspect
+all states without adding broad indexes to `job_runtime`.
 
-Handlers run **outside** database transactions. Workhorse never holds a row lock across user code:
-`claim_v1` commits ownership before returning the payload.
+## Next
 
-That gives you the standard distributed-systems contract:
+- [Workers](/docs/workers) — see how a process claims and owns jobs
+- [Retries](/docs/retries) — see what happens after an attempt fails
+- [Durable execution](/docs/durable-execution) — preserve useful work across another run
 
-<Callout type="warn">
-  Handler execution is **at least once**. PostgreSQL cannot make an HTTP call, email, or payment
-  happen exactly once. Use stable external idempotency keys, an outbox/inbox, or compensation.
-</Callout>
+---
 
-## Correctness contract
-
-- Accepted jobs are durable in PostgreSQL.
-- Only the current unexpired worker/fence pair can heartbeat, complete, or fail an attempt.
-- Only that owner can save a checkpoint or schedule a durable wait. Both names are immutable and
-  survive handler restarts.
-- A durable wait clears active ownership, consumes no retry attempt, and restarts the handler from its
-  entry point after promotion.
-- Code before a wait can execute again. Put completed external or expensive work behind a checkpoint or
-  another idempotency boundary.
-- Recovery closes an expired attempt immutably and creates a new attempt.
-- A stale worker cannot commit completion after recovery.
-
-## Handler duration guidance
-
-Keep ordinary handlers at or below **110 seconds** for safer rolling deployments. Longer work should be
-modeled as durable execution: idempotent stages separated by named checkpoints and lease-releasing
-waits. This is deployment guidance, not a protocol limit. Configure per-attempt execution timeouts and
-process shutdown grace periods for your environment.
-
-## Dispatch and polling
-
-Claims use `FOR UPDATE SKIP LOCKED` against a selective ready index, ordered by a globally monotonic
-FIFO sequence. Commit-delivered `NOTIFY` hints coalesce one wake per distinct queue gaining ready work,
-but **polling remains authoritative**: notifications are an optimization, never the durability path.
-
-There are no priorities. Ordering is FIFO only.
-
-## Maintenance ownership
-
-Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on
-plain PostgreSQL:
-
-| Task                            | Default cadence      | Responsibility                                            |
-| ------------------------------- | -------------------- | --------------------------------------------------------- |
-| `tick_v1`                       | every second         | Promote due jobs, recover expired leases, drive schedules |
-| `prepare_history_partitions_v1` | every 6 hours        | Maintain UTC-daily history partitions                     |
-| `retain_history_v1`             | daily at/after 03:00 | Retire expired events, attempts, schedule occurrences     |
-| `prune_terminal_storage_v1`     | every 5 minutes      | Remove expired idempotency bindings and terminal bundles  |
-
-Each task has an independent advisory lock and persisted due state, so extra workers produce cheap
-no-ops rather than multiplying cleanup. Every phase returns `(phase, rowsAffected, durationMs,
-skippedLock, error)` telemetry through `worker.maintenanceTelemetry()` and `WorkerOptions.onMaintenance`.
-
-## Further reading
-
-The full field-by-field data dictionary, invariants, and crash semantics live in
-[`docs/architecture.md`](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md). The
-compact SQL transition table lives in
-[`docs/mvp-protocol.md`](https://github.com/stablemates/workhorse/blob/main/docs/mvp-protocol.md).
+Exact relations, constraints, states, and indexes:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#data-model).

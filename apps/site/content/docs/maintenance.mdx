@@ -1,0 +1,56 @@
+---
+title: How does Workhorse maintain its PostgreSQL data?
+description: Coordinate bounded background work, retain evidence safely, and detect cleanup lag.
+---
+
+Workers ask PostgreSQL to promote jobs, recover expired leases, maintain partitions, and retire old
+data. PostgreSQL coordinates those requests so adding workers does not duplicate maintenance.
+
+## Coordinate bounded maintenance
+
+`Queue.tick`, `prepareHistoryPartitions`, `retainHistory`, and `pruneTerminalStorage` expose the
+maintenance phases to controlled scripts and tests.
+
+Workers call the same versioned SQL functions in bounded passes. Advisory locks select one worker for
+each due phase, while other workers return cheap no-op results.
+
+`WorkerOptions.onMaintenance` receives a `WorkerMaintenanceTelemetry` result for each SQL phase. The
+result names the phase, affected rows, duration, lock outcome, and error.
+
+## Retain evidence in dependency order
+
+`Queue.syncRetentionPolicy` stores database-wide minimum windows and work bounds. PostgreSQL rejects
+a `RetentionPolicyDefinition` that could remove job identity before retained evidence or descendants.
+
+History uses time partitions, so `Queue.prepareHistoryPartitions` creates future storage before data
+arrives. `Queue.retainHistory` retires eligible history only after statistics no longer need it.
+
+`Queue.pruneTerminalStorage` removes expired idempotency bindings before terminal job bundles. A
+retained `job_redrive` descendant keeps its source identity available for lineage.
+
+## Decide when phases become due
+
+`Queue.syncMaintenancePolicy` stores one `MaintenancePolicyDefinition` for the database. PostgreSQL
+uses it to decide when partition work, history retention, and terminal cleanup become eligible.
+
+Workers may invoke eligibility checks at different moments, but the database owns the shared due
+state. Extra replicas do not multiply destructive work.
+
+## Detect lag through health
+
+`Queue.health` returns `QueueHealth`, including queue depth, lease expiry, overdue durable waits,
+timing pressure, retention lag, relation churn, long transactions, and lock waits.
+
+Workhorse exposes these observations but does not export metrics. Connect `QueueHealth` and
+`WorkerMaintenanceTelemetry` to the monitoring system your operators already use.
+
+## Next
+
+- [Worker processes](/docs/worker-processes) — own the runtime that invokes maintenance
+- [Queries and timelines](/docs/queries) — interpret the wider read model
+- [Dead letters](/docs/dead-letters) — understand lineage that can delay cleanup
+
+---
+
+Exact maintenance phases, retention constraints, work bounds, and health fields:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#retention_policy).
