@@ -27,7 +27,7 @@ your workers can — and in production should — run in their own processes. Th
 in PostgreSQL, and the dashboard reads the fleet from there.
 
 The mount owns the configured path, including the packaged React application, static assets, oRPC
-API, and SSE refresh stream. Use `/workhorse` to embed it beside host routes, or `/` when the
+API. Use `/workhorse` to embed it beside host routes, or `/` when the
 dashboard owns the whole application. Requests outside the mount path fall through to your own
 routes untouched. Authorization is required explicitly. The host checks that the installed schema
 is compatible and returns `503` when it is not, but it never installs or migrates database objects.

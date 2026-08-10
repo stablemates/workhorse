@@ -1,5 +1,4 @@
 import { createDashboardHost, type DashboardHostOptions } from "@workhorse/dashboard/server";
-import type { DashboardRefreshHub } from "@workhorse/dashboard/server";
 import type { Env, Hono, Schema } from "hono";
 
 export type MountWorkhorseDashboardOptions = DashboardHostOptions;
@@ -15,16 +14,11 @@ export function mountWorkhorseDashboard<
   TEnvironment extends Env,
   TSchema extends Schema,
   TBasePath extends string,
->(
-  app: Hono<TEnvironment, TSchema, TBasePath>,
-  options: MountWorkhorseDashboardOptions,
-): DashboardRefreshHub {
+>(app: Hono<TEnvironment, TSchema, TBasePath>, options: MountWorkhorseDashboardOptions): void {
   const host = createDashboardHost(options);
   const routes = host.basePath ? [host.basePath, `${host.basePath}/*`] : ["*"];
 
   for (const route of routes) {
     app.all(route, async (context) => (await host.handle(context.req.raw)) ?? context.notFound());
   }
-
-  return host.refresh;
 }

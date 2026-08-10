@@ -70,13 +70,12 @@ Selected options:
 | Option                                                                                    | Purpose                                                                                                                                            |
 | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`                                                                                    | Mount namespace. Defaults to `/workhorse`.                                                                                                         |
-| `authorize`                                                                               | **Required.** Authorizes every dashboard, RPC, asset, and stream request.                                                                          |
+| `authorize`                                                                               | **Required.** Authorizes every dashboard, RPC, and asset request.                                                                                  |
 | `environment`                                                                             | Label shown in the UI                                                                                                                              |
 | `configuredWorkers`                                                                       | Optional. Expected worker identities, so a declared worker that has never started is still visible. Live workers are discovered from the registry. |
 | `auditActor`                                                                              | Actor recorded for mutations initiated from the dashboard                                                                                          |
 | `browserModules`                                                                          | Trusted host-owned ES modules loaded before the dashboard entry                                                                                    |
 | `operator`, `queueController`, `taskController`, `workerController`, `scheduleController` | Host-owned control surfaces, used to wrap mutations in your own audit and authorization                                                            |
-| `refresh`                                                                                 | Refresh hub to publish into; pair with `listenForDashboardRefresh`                                                                                 |
 | `projectDurability`                                                                       | Host projection of durable-step progress                                                                                                           |
 
 ## Authorization
@@ -116,8 +115,8 @@ seeding menu is not part of the required client contract; opt in only when a hos
 supplies demo fixtures. All sample and seed data stay owned by the demo project, never the package.
 
 Server-side building blocks are exported from `@workhorse/dashboard/server`, including
-`createDashboardHost`, `dashboardNodeMiddleware`, `listenForDashboardRefresh`, `dashboardRouter`,
-`readDashboardSnapshot`, `dashboardDatabase`, `dashboardAssetsDirectory`, and `DashboardRefreshHub`.
+`createDashboardHost`, `dashboardNodeMiddleware`, `dashboardRouter`, `readDashboardSnapshot`,
+`dashboardDatabase`, and `dashboardAssetsDirectory`.
 
 ## Standalone console
 
@@ -144,27 +143,10 @@ authenticated proxy.
 ## Refresh behavior
 
 The browser refreshes only the active page through its dedicated reader on a bounded polling cadence.
-The default is 30 seconds, with 5-second, 15-second, 1-minute, 5-minute, and manual-only options.
+The default is 15 seconds, with 5-second, 30-second, 1-minute, 5-minute, and manual-only options.
 
-To react promptly to work happening in another process, bridge PostgreSQL notifications into the
-mount's refresh hub:
-
-```ts
-import { listenForDashboardRefresh } from "@workhorse/dashboard/server";
-
-const client = new Client({ connectionString });
-await client.connect();
-await listenForDashboardRefresh({ client, refresh });
-```
-
-This listens on `workhorse_jobs` (the dispatch wake hint, meaning ready work may exist) and
-`workhorse_activity` (coalesced operator hints that workers publish when
-`WorkerOptions.activityNotifications` is enabled, covering transitions such as completion that
-create no ready work). The client must be a dedicated connection, not a pooled one, because
-`LISTEN` registers against a specific backend session.
-
-Both channels are liveness optimizations, never a source of truth. A dropped notification only
-delays a refresh until the stream's periodic fallback fires.
+Job volume does not start extra browser refreshes, so the page keeps the selected update rate under
+load.
 
 ## Try it locally
 

@@ -8,15 +8,7 @@ export {
 export type { DashboardRuntimeConfig, RenderDashboardHtmlOptions } from "./html.js";
 export type { DashboardHost, DashboardHostOptions } from "./host.js";
 export { dashboardNodeMiddleware } from "./node.js";
-export { DASHBOARD_NOTIFICATION_CHANNELS, listenForDashboardRefresh } from "./notifications.js";
-export type {
-  DashboardNotificationClient,
-  DashboardNotificationListener,
-  DashboardNotificationOptions,
-} from "./notifications.js";
 export type { DashboardNodeMiddleware } from "./node.js";
-export { DashboardRefreshHub } from "./refresh.js";
-export type { DashboardRefreshEvent, DashboardRefreshReason } from "./refresh.js";
 export { readDashboardEvents, readDashboardSnapshot, readDashboardWorkers } from "./read-model.js";
 export type { DashboardEventsQuery } from "./read-model.js";
 export { dashboardRouter } from "./router.js";

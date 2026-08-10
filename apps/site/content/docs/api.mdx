@@ -30,14 +30,13 @@ new Queue(database: Queryable, defaultQueue = "default")
 
 ### Queue controls
 
-| Method           | Signature                                      |
-| ---------------- | ---------------------------------------------- |
-| `pauseQueue`     | `(queue?: string) => Promise<void>`            |
-| `resumeQueue`    | `(queue?: string) => Promise<void>`            |
-| `purgeQueue`     | `(queue?: string) => Promise<number>`          |
-| `promote`        | `(limit = 100) => Promise<number>`             |
-| `notifyActivity` | `(queue?: string) => Promise<void>`            |
-| `runTaskNow`     | `(jobId: string) => Promise<RunTaskNowResult>` |
+| Method        | Signature                                      |
+| ------------- | ---------------------------------------------- |
+| `pauseQueue`  | `(queue?: string) => Promise<void>`            |
+| `resumeQueue` | `(queue?: string) => Promise<void>`            |
+| `purgeQueue`  | `(queue?: string) => Promise<number>`          |
+| `promote`     | `(limit = 100) => Promise<number>`             |
+| `runTaskNow`  | `(jobId: string) => Promise<RunTaskNowResult>` |
 
 ### Worker registry
 

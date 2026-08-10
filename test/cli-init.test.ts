@@ -88,14 +88,14 @@ describe("workhorse init", () => {
     expect(result.configPath.endsWith("workhorse.config.js")).toBe(true);
   });
 
-  it("scaffolds a worker that publishes activity hints for an out-of-process dashboard", () => {
+  it("scaffolds a worker without live-refresh activity notifications", () => {
     const config = renderWorkerConfig({
       orm: "pg",
       framework: "none",
       typescript: true,
       packageManager: "pnpm",
     });
-    expect(config).toContain("activityNotifications: true");
+    expect(config).not.toContain("activityNotifications");
     expect(config).toContain("createWorkhorseAdapter");
   });
 
