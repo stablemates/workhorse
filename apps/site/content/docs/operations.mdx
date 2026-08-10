@@ -1,205 +1,75 @@
 ---
-title: Deployment and operations
-description: Process topology, graceful shutdown, probes, retention and maintenance policy, and health checks.
+title: How should I deploy and operate Workhorse?
+description: Supervise dedicated workers, drain them safely, and keep PostgreSQL maintenance visible.
 ---
 
-## Topology
+Run production workers in dedicated processes. That boundary lets you scale queue capacity, database
+connections, and deployment drains independently from HTTP servers.
 
-Run a **dedicated worker process** in production. Co-hosting workers inside a web process is supported
-by [`@workhorse/hono`](/docs/hono) for development, demos, and deliberately small deployments, but it is
-not the default production topology.
+## Start one owned runtime
 
-| Concern               | Dedicated worker process                     | Co-hosted with web                          |
-| --------------------- | -------------------------------------------- | ------------------------------------------- |
-| Scaling               | Scale job capacity independently             | Web replicas also multiply worker capacity  |
-| Deploy drain          | Drain jobs without coupling to request drain | Two unrelated drains must be coordinated    |
-| Failure isolation     | Handler failure does not kill HTTP ingress   | One process failure removes both            |
-| Resource tuning       | Dedicated pool, memory, CPU, and concurrency | Shared event loop and database pool         |
-| Scheduled maintenance | Worker replicas own scheduling ownership     | Replica count implicitly affects contenders |
+A worker process should create one adapter, configure its workers, start its optional probes, and
+then enter the run loops. If startup fails, it must close every resource it already created.
 
-Make worker scaling an explicit decision instead of deriving it from the number of HTTP replicas.
+`defineWorkerProcess` describes this topology. `runWorkerProcess` and the `workhorse worker` CLI add
+the standalone Node.js lifecycle.
 
-## Startup order
+An unexpected worker-loop exit is fatal to the process. Sibling workers stop and drain before the
+supervisor restarts the failed unit, which prevents a partially running configuration.
 
-1. Validate the definition, timeout, and probe configuration.
-2. Create one process-owned adapter.
-3. Create and configure every `Worker`.
-4. Start the optional probe-only HTTP server.
-5. Start every worker run loop.
-6. Report readiness only after workers have started.
+## Drain without canceling jobs
 
-A configuration or probe failure closes adapter-owned resources and rejects startup. An unexpected
-resolution or rejection from any worker loop is **fatal**: siblings stop, runs settle, resources close,
-and the CLI exits unsuccessfully.
+On the first termination signal, the process marks readiness false and calls `Worker.stop`. New claim
+requests stop, while active handlers keep their leases and finish normally.
 
-## Graceful shutdown
+A claim already in flight can still commit. The process treats that result as active work and drains
+it instead of abandoning a lease it now owns.
 
-The first `SIGTERM` or `SIGINT`:
+The process deadline bounds this drain. If it expires, hard termination leaves active leases in
+PostgreSQL for ordinary fenced recovery.
 
-1. Marks readiness false.
-2. Calls `stop()` on every worker.
-3. Stops issuing later claim requests.
-4. Continues per-job heartbeats and waits for active handlers to settle.
-5. Closes adapter-owned resources and the probe server.
-6. Exits normally.
+Process shutdown does not abort `HandlerContext.signal` and does not create cancellation evidence.
+Use `Queue.cancel` when the job itself must stop.
 
-<Callout type="warn">
-  A process signal does **not** abort handler `AbortSignal`s. Shutdown asks active work to finish
-  while preserving its lease. Handler cancellation stays a durable job-level operation through
-  `Queue.cancel()`.
-</Callout>
+## Expose narrow probes
 
-There is one unavoidable boundary: a claim query already in flight when shutdown begins may commit.
-That job is treated as active work and drained. The guarantee is "no new claim requests after shutdown
-is observed", not "no claim can commit after the signal timestamp".
+The optional probe listener reports liveness while the process exists and readiness while it accepts
+claims. It exposes no jobs, queues, metrics, or mutation APIs.
 
-### Deadline and second signals
+Keep the process drain shorter than the platform termination window. A later signal requests an
+immediate exit, so handlers must remain safe for recovery after a forced stop.
 
-The default shutdown deadline is **25 seconds**, configurable from 1 ms to 1 hour. Keep it below the
-platform's termination grace period.
+## Let PostgreSQL coordinate maintenance
 
-| Event                             | Exit code |
-| --------------------------------- | --------: |
-| Second `SIGINT`                   |       130 |
-| Second `SIGTERM`                  |       143 |
-| Missed graceful-shutdown deadline |         1 |
-| Fatal worker-loop failure         |         1 |
+Workers call bounded maintenance functions for promotion, expired-lease recovery, partitions,
+history retention, and terminal cleanup. Advisory locks make extra workers cheap contenders rather
+than duplicate cleaners.
 
-A hard exit does not invent a failure or retry transition. Active leases remain durable PostgreSQL
-state and another worker recovers them after lease expiry through fenced recovery.
+`Queue.syncRetentionPolicy` stores the database-wide minimum windows and work bounds. PostgreSQL
+rejects a policy that could remove job identity before retained evidence or redrive descendants.
 
-## Probes
+`Queue.syncMaintenancePolicy` stores when background work becomes eligible. Manual methods such as
+`Queue.tick`, `prepareHistoryPartitions`, `retainHistory`, and `pruneTerminalStorage` exist for tests
+and controlled scripts.
 
-Configure `probes` to start a status-only HTTP listener. It is **not** application ingress.
+## Watch pressure instead of guessing
 
-| Endpoint      | Running | Draining |
-| ------------- | ------: | -------: |
-| `GET /livez`  |     200 |      200 |
-| `GET /readyz` |     200 |      503 |
+Use `Queue.health` or `workhorse-health` to watch ready depth, oldest work, expired leases, overdue
+waits, timing pressure, retention lag, relation churn, long transactions, and lock waits.
 
-`HEAD` is supported; other paths and methods return 404. The default hostname is `127.0.0.1`. Bind
-`0.0.0.0` only when the orchestrator must reach the container network address. The server exposes no
-queues, jobs, metrics, or mutation APIs.
+`WorkerOptions.onMaintenance` receives one result per SQL phase. Workhorse does not export metrics for
+you, so connect these results and handler instrumentation to your monitoring system.
 
-## Kubernetes
+Give each process its own database pool and close it only after workers drain. Size total pool
+capacity across replicas because claims, heartbeats, maintenance, and handler queries share it.
 
-```yaml
-spec:
-  terminationGracePeriodSeconds: 35
-  containers:
-    - name: worker
-      command:
-        - workhorse
-        - worker
-        - --config
-        - ./dist/workhorse.worker.js
-      ports:
-        - name: probes
-          containerPort: 9090
-      readinessProbe:
-        httpGet:
-          path: /readyz
-          port: probes
-      livenessProbe:
-        httpGet:
-          path: /livez
-          port: probes
-```
+## Next
 
-If you rely on the 110-second handler recommendation, set `terminationGracePeriodSeconds` to at least 120. Kubernetes defaults it to 30 seconds. A `preStop` hook consumes the same budget, and an overrun
-receives only a one-off two-second extension. Force deletion, node failure, and some eviction paths can
-still bypass the graceful path.
+- [Workers](/docs/workers) — define handlers and local lifecycle controls
+- [Queries and timelines](/docs/queries) — read the health inputs used here
+- [Compatibility](/docs/compatibility) — enforce the schema boundary during deployment
 
-## systemd
+---
 
-```ini
-[Service]
-ExecStart=/app/node_modules/.bin/workhorse worker --config /app/dist/workhorse.worker.js
-KillSignal=SIGTERM
-TimeoutStopSec=35
-Restart=on-failure
-```
-
-## Retention policy
-
-Retention is persisted once for the database, so every worker applies the same policy. Destructive
-job, event, and attempt retention is **disabled by default**. These are minimum windows: retained
-attribution or bounded catch-up can keep data longer, never shorter.
-
-```ts
-await queue.syncRetentionPolicy({
-  jobIdentityRetentionDays: 180,
-  terminalOutcomeRetentionDays: 90,
-  jobEventRetentionDays: 90,
-  attemptHistoryRetentionDays: 90,
-  scheduleOccurrenceRetentionDays: 30,
-  terminalJobPruneLimit: 1_000,
-  historyPartitionsPerPass: 4,
-  defaultPartitionRowsPerPass: 10_000,
-  occurrenceRowsPerPass: 10_000,
-});
-
-const policy = await queue.getRetentionPolicy();
-```
-
-Each window is explicit; `null` disables that category. Work-limit fields may be omitted to retain
-their persisted values. PostgreSQL rejects policies that could delete identity before retained outcome,
-event, attempt, occurrence, or redrive-lineage attribution.
-
-Clean installation creates the current UTC day plus three future daily partitions. Defaults are 14 days
-for identity, outcomes, events, attempts, and occurrences.
-
-## Maintenance policy
-
-```ts
-await queue.syncMaintenancePolicy({
-  timezone: "America/New_York",
-  partitionPreparationIntervalMs: 6 * 60 * 60_000,
-  terminalCleanupIntervalMs: 5 * 60_000,
-  historyRetentionLocalHour: 3,
-});
-```
-
-`timezone` is an IANA identifier used to decide when daily history retirement runs. PostgreSQL decides
-globally whether a task is due, so additional workers produce cheap no-ops.
-
-Manual invocation is available for scripts and tests: `queue.tick()`, `queue.promote(limit)`,
-`queue.recoverExpired(limit, retryDelayMs?)`, `queue.prepareHistoryPartitions()`,
-`queue.retainHistory()`, and `queue.pruneTerminalStorage()`.
-
-## Monitoring
-
-Watch these signals from `queue.health()`:
-
-| Signal                                         | Interpretation                               |
-| ---------------------------------------------- | -------------------------------------------- |
-| `readyDepth`, `oldestReadyAgeMs`               | Backlog and starvation                       |
-| `expiredLeases`                                | Workers dying or leases too short            |
-| `overdueWaits`, `nextWakeAt`                   | Durable timers not being promoted            |
-| `deadlinePressure`, `overdueExecutionTimeouts` | Timing policy under stress                   |
-| `retentionLagMs`                               | Cleanup falling behind its configured window |
-| `relations[].deadTuples`, `lastAutovacuum`     | PostgreSQL bloat and vacuum health           |
-| `oldestTransactionAgeMs`, `lockWaitCount`      | Long transactions blocking cleanup           |
-
-CLI equivalent:
-
-```bash
-workhorse-health
-```
-
-Metrics export is your responsibility: there is no built-in OpenTelemetry or `/metrics` endpoint.
-Instrument `onMaintenance` telemetry and your own handler wrappers.
-
-## Pool sizing
-
-- Give every process its own database pool and close it only after workers drain.
-- Budget pool capacity across replicas. Claims, heartbeats, handler queries, and maintenance share the
-  pool; handler concurrency does not require one connection per handler, but it does add pressure.
-- Keep leases long enough for normal heartbeat jitter and short enough to meet recovery objectives.
-- Use at least two replicas when worker availability matters.
-
-## Schema changes
-
-The canonical schema is **clean-install only**. Online migration between protocol versions is not
-provided. Assert compatibility at startup with `assertSchemaCompatible(database)` and treat a version
-bump as a separately engineered operation.
+Exact process deadlines, probe behavior, maintenance cadence, and retention policy:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#worker-process-lifecycle).

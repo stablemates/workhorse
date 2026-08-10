@@ -17,6 +17,7 @@
     "durable-execution",
     "progress",
     "cancellation",
+    "deadlines",
     "---Operating---",
     "queries",
     "dead-letters",

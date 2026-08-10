@@ -1,229 +1,77 @@
 ---
-title: API overview
-description: The exported surface of @workhorse/core, its integration packages, error types, and constants.
+title: Where do I find the Workhorse API?
+description: Use the exported surface to choose an entry point, then rely on the published declarations for exact signatures.
 ---
 
-Everything below is exported from `@workhorse/core` unless noted. All packages are ESM with bundled
-type declarations.
+Most applications need `Queue`, `Worker`, and one schema check from `@workhorse/core`. The published
+type declarations are authoritative for signatures because they ship with the implementation.
 
-## Schema
+## Manage the schema
 
-| Export                     | Signature                                          |
-| -------------------------- | -------------------------------------------------- |
-| `installSchema`            | `(database: Queryable) => Promise<void>`           |
-| `readSchemaVersion`        | `(database: Queryable) => Promise<number \| null>` |
-| `assertSchemaCompatible`   | `(database: Queryable) => Promise<void>`           |
-| `WORKHORSE_SCHEMA_VERSION` | `number` (currently `17`)                          |
+`installSchema` installs a clean schema during deployment. `readSchemaVersion` inspects an existing
+database, while `assertSchemaCompatible` protects runtime startup.
 
-## `Queue`
+`WORKHORSE_SCHEMA_VERSION`, `describePostgresSupport`, and the exported support constants let tooling
+explain the runtime boundary without duplicating it.
 
-```ts
-new Queue(database: Queryable, defaultQueue = "default")
-```
+## Accept and inspect jobs with `Queue`
 
-### Producing work
+`Queue.enqueue` and `enqueueMany` accept work. Queue controls include `pauseQueue`, `resumeQueue`,
+`purgeQueue`, `promote`, and `runTaskNow`.
 
-| Method        | Signature                                                                               |
-| ------------- | --------------------------------------------------------------------------------------- |
-| `enqueue`     | `(type, payload, options?: EnqueueOptions, transaction?: Queryable) => Promise<string>` |
-| `enqueueMany` | `(requests: EnqueueRequest[], transaction?: Queryable) => Promise<string[]>`            |
+Operator reads include `getJob`, `listJobs`, `getJobTimeline`, `health`, `listWorkers`, and the durable
+boundary readers.
 
-### Queue controls
+Cancellation uses `cancel`. Failure recovery uses `listDeadLetters`, `redrive`, `redriveMany`, and
+`getRedriveLineage`.
 
-| Method        | Signature                                      |
-| ------------- | ---------------------------------------------- |
-| `pauseQueue`  | `(queue?: string) => Promise<void>`            |
-| `resumeQueue` | `(queue?: string) => Promise<void>`            |
-| `purgeQueue`  | `(queue?: string) => Promise<number>`          |
-| `promote`     | `(limit = 100) => Promise<number>`             |
-| `runTaskNow`  | `(jobId: string) => Promise<RunTaskNowResult>` |
+Schedule and policy methods include `syncSchedules`, `schedules`, `syncRetentionPolicy`,
+`syncMaintenancePolicy`, and their corresponding readers.
 
-### Worker registry
+Low-level protocol methods such as `claim`, `heartbeatStatus`, `complete`, `fail`, and
+`acknowledgeCancel` exist for custom runtimes and tests. Ordinary applications should let `Worker`
+drive them.
 
-Durable fleet visibility and cooperative remote pause. See
-[Fleet registration and remote pause](/docs/workers#fleet-registration-and-remote-pause).
+## Execute handlers with `Worker`
 
-| Method                | Signature                                                                                       |
-| --------------------- | ----------------------------------------------------------------------------------------------- |
-| `registerWorker`      | `(registration: WorkerRegistration) => Promise<{ paused: boolean }>`                            |
-| `deregisterWorker`    | `(workerId: string) => Promise<boolean>`                                                        |
-| `setWorkerPaused`     | `(workerId, paused, options?: { requestedBy?, reason? }) => Promise<WorkerPauseResult \| null>` |
-| `listWorkers`         | `() => Promise<WorkerRegistryEntry[]>`                                                          |
-| `pruneWorkerRegistry` | `(maxAgeMs = 86_400_000) => Promise<number>`                                                    |
+`Worker.handle` registers a `Handler`. `run` owns the continuous loop, while `runOnce` performs one
+claim pass for tests and scripts.
 
-### Protocol operations
+`pause`, `resume`, `stop`, `runtimeState`, and `maintenanceTelemetry` expose local lifecycle state.
+The worker ID is its lease-owner identity rather than a stable deployment name.
 
-Normally driven by `Worker`; exposed for custom runtimes and tests.
+`HandlerContext` provides `job`, `signal`, `checkpoint`, `getCheckpoint`, `sleep`, `sleepUntil`,
+`getWait`, `setProgress`, and `getProgress`.
 
-| Method              | Signature                                                         |
-| ------------------- | ----------------------------------------------------------------- |
-| `claim`             | `(workerId, { queue?, leaseMs? }) => Promise<ClaimedJob \| null>` |
-| `heartbeat`         | `(job, workerId, leaseMs = 30_000) => Promise<boolean>`           |
-| `heartbeatStatus`   | `(job, workerId, leaseMs = 30_000) => Promise<HeartbeatStatus>`   |
-| `complete`          | `(job, workerId, result) => Promise<boolean>`                     |
-| `fail`              | `(job, workerId, error, retryDelayMs?) => Promise<string>`        |
-| `recoverExpired`    | `(limit = 100, retryDelayMs?) => Promise<number>`                 |
-| `expireOwned`       | `(job, workerId) => Promise<ExpireOwnedStatus>`                   |
-| `acknowledgeCancel` | `(job, workerId) => Promise<boolean>`                             |
+## Build process and framework adapters
 
-### Durable execution
+`createWorkhorseAdapter` gives database providers a stable `WorkhorseAdapter`. Dedicated processes use
+`defineWorkerProcess`, `startWorkerProcess`, or `runWorkerProcess`.
 
-| Method            | Signature                                                                            |
-| ----------------- | ------------------------------------------------------------------------------------ |
-| `saveCheckpoint`  | `(job, workerId, name, value) => Promise<JobCheckpoint>`                             |
-| `getCheckpoint`   | `(jobId, name) => Promise<JobCheckpoint \| null>`                                    |
-| `listCheckpoints` | `(jobId) => Promise<JobCheckpoint[]>`                                                |
-| `scheduleWait`    | `(job, workerId, name, request: ScheduleWaitRequest) => Promise<ScheduleWaitResult>` |
-| `getWait`         | `(jobId, name) => Promise<JobWait \| null>`                                          |
-| `listWaits`       | `(jobId) => Promise<JobWait[]>`                                                      |
-| `updateProgress`  | `(job, workerId, value) => Promise<JobProgress>`                                     |
-| `getProgress`     | `(jobId) => Promise<JobProgress \| null>`                                            |
+`@workhorse/drizzle` exports `createDrizzleAdapter`, `drizzleQueryable`, and `DrizzleQueryError`.
+`@workhorse/hono` exports `HonoWorkhorse`, `serveWithWorkhorse`, and `mountWorkhorseDashboard`.
 
-### Reads
+`@workhorse/dashboard` exports the React surface, while `@workhorse/dashboard/server` exports the
+host, Node middleware, read models, router, SQL adapter, and packaged asset helpers.
 
-| Method           | Signature                                                       |
-| ---------------- | --------------------------------------------------------------- |
-| `getJob`         | `(id) => Promise<JobSnapshot \| null>`                          |
-| `listJobs`       | `(query?: JobListQuery) => Promise<JobListPage>`                |
-| `getJobTimeline` | `(jobId, query?: JobTimelineQuery) => Promise<JobTimelinePage>` |
-| `health`         | `() => Promise<QueueHealth>`                                    |
+## Handle typed failures narrowly
 
-### Cancellation
+Core exports distinct errors for enqueue and redrive conflicts. Other classes cover stale writes,
+boundary conflicts, rate or count limits, cancellation, deadlines, timeouts, and test failpoints.
 
-| Method   | Signature                                                         |
-| -------- | ----------------------------------------------------------------- |
-| `cancel` | `(jobId, request?: CancellationRequest) => Promise<CancelResult>` |
+Catch the narrow class whose recovery your application understands, then rethrow unknown errors.
+Avoid switching on message text because the classes and structured details are the stable contract.
 
-### Dead letters and redrive
-
-| Method              | Signature                                                                                                       |
-| ------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `listDeadLetters`   | `(query?: DeadLetterQuery) => Promise<DeadLetterPage>`                                                          |
-| `redrive`           | `(sourceJobId, request: RedriveRequest) => Promise<RedriveResult>`                                              |
-| `redriveMany`       | `(filter: DeadLetterFilter, request: RedriveRequest, options?: BulkRedriveOptions) => Promise<BulkRedrivePage>` |
-| `getRedriveLineage` | `(jobId, limit = 1_000) => Promise<RedriveLineage>`                                                             |
-
-### Schedules and policy
-
-| Method                  | Signature                                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------ |
-| `syncSchedules`         | `(namespace, definitions: ScheduleDefinition[], options?: { prune?: boolean }) => Promise<void>` |
-| `schedules`             | `(namespaces: string[]) => Promise<StoredSchedule[]>`                                            |
-| `fireSchedule`          | `(namespace, name, revision: bigint, occurrenceAt: Date) => Promise<string \| null>`             |
-| `syncRetentionPolicy`   | `(definition: RetentionPolicyDefinition) => Promise<RetentionPolicy>`                            |
-| `getRetentionPolicy`    | `() => Promise<RetentionPolicy>`                                                                 |
-| `syncMaintenancePolicy` | `(definition: MaintenancePolicyDefinition) => Promise<MaintenancePolicy>`                        |
-| `getMaintenancePolicy`  | `() => Promise<MaintenancePolicy>`                                                               |
-
-### Maintenance entry points
-
-`tick`, `prepareHistoryPartitions`, `retainHistory`, and `pruneTerminalStorage` each return
-`MaintenancePhaseResult[]` with `(phase, rowsAffected, durationMs, skippedLock, error)`.
-
-## `Worker`
-
-```ts
-new Worker(queue: Queue, options?: WorkerOptions)
-```
-
-| Member                 | Signature                                    |
-| ---------------------- | -------------------------------------------- |
-| `handle`               | `(type, handler: Handler) => this`           |
-| `run`                  | `(signal?: AbortSignal) => Promise<void>`    |
-| `runOnce`              | `() => Promise<boolean>`                     |
-| `pause` / `resume`     | `() => void`                                 |
-| `isPaused`             | `() => boolean`                              |
-| `stop`                 | `() => void`                                 |
-| `concurrency`          | readonly `number`                            |
-| `runtimeState`         | `() => WorkerRuntimeState`                   |
-| `maintenanceTelemetry` | `() => WorkerMaintenanceTelemetry[]`         |
-| `id`                   | readonly `string` (the lease owner identity) |
-
-## `HandlerContext`
-
-The second argument to every handler, and the only durable primitives available inside an attempt.
-
-| Member          | Signature                                                |
-| --------------- | -------------------------------------------------------- |
-| `job`           | `ClaimedJob<TPayload>`                                   |
-| `signal`        | `AbortSignal`                                            |
-| `checkpoint`    | `(name, operation: () => Promise<T> \| T) => Promise<T>` |
-| `getCheckpoint` | `(name) => Promise<JobCheckpoint<T> \| null>`            |
-| `sleep`         | `(name, durationMs: number) => Promise<void>`            |
-| `sleepUntil`    | `(name, wakeAt: Date) => Promise<void>`                  |
-| `getWait`       | `(name) => Promise<JobWait \| null>`                     |
-| `getProgress`   | `() => Promise<JobProgress<T> \| null>`                  |
-| `setProgress`   | `(value: T) => Promise<JobProgress<T>>`                  |
-
-## Adapters and worker processes
-
-| Export                   | Purpose                                                 |
-| ------------------------ | ------------------------------------------------------- |
-| `createWorkhorseAdapter` | Build a provider-neutral `WorkhorseAdapter`             |
-| `defineWorkerProcess`    | Type-check a dedicated worker process definition        |
-| `startWorkerProcess`     | Start workers without installing global signal handlers |
-| `runWorkerProcess`       | Install the standalone Node process lifecycle           |
-
-## Errors
-
-| Error                             | Raised when                                                    |
-| --------------------------------- | -------------------------------------------------------------- |
-| `EnqueueIdempotencyConflictError` | A retained enqueue key was reused with a different request     |
-| `RedriveIdempotencyConflictError` | A redrive request ID was reused with different attribution     |
-| `CheckpointConflictError`         | A checkpoint name was reused with a materially different value |
-| `CheckpointLeaseLostError`        | A checkpoint save came from a stale generation                 |
-| `ProgressLeaseLostError`          | A progress update came from a stale generation                 |
-| `ProgressRateLimitError`          | A changed progress update arrived before the 100 ms interval   |
-| `WaitConflictError`               | A wait name was reused with a different mode or target         |
-| `WaitLeaseLostError`              | A wait was scheduled from a stale generation                   |
-| `WaitLimitExceededError`          | A job exceeded 1,000 named waits                               |
-| `CancellationRequestedError`      | Abort reason for a requested cancellation                      |
-| `DeadlineExceededError`           | Abort reason for an absolute deadline                          |
-| `ExecutionTimeoutError`           | Abort reason for a per-attempt execution timeout               |
-| `InjectedCrashError`              | A test failpoint fired                                         |
-
-`@workhorse/drizzle` additionally exports `DrizzleQueryError`.
-
-## Constants
-
-| Constant                                   | Value                                     |
-| ------------------------------------------ | ----------------------------------------- |
-| `MAX_ENQUEUE_BATCH_SIZE`                   | 1,000                                     |
-| `DEFAULT_IDEMPOTENCY_SCOPE`                | `"default"`                               |
-| `DEFAULT_IDEMPOTENCY_TTL_MS`               | 86,400,000 (24 hours)                     |
-| `MAX_IDEMPOTENCY_KEY_BYTES`                | 512                                       |
-| `MAX_IDEMPOTENCY_SCOPE_BYTES`              | 256                                       |
-| `MAX_IDEMPOTENCY_TTL_MS`                   | 31,536,000,000 (365 days)                 |
-| `MAX_CHECKPOINT_VALUE_BYTES`               | 1,048,576 (1 MiB)                         |
-| `MAX_PROGRESS_VALUE_BYTES`                 | 65,536 (64 KiB)                           |
-| `MIN_PROGRESS_UPDATE_INTERVAL_MS`          | 100                                       |
-| `MAX_WAIT_DURATION_MS`                     | 31,536,000,000 (365 days)                 |
-| `MAX_EXECUTION_TIMEOUT_MS`                 | 31,536,000,000 (365 days)                 |
-| `MAX_CANCELLATION_REQUESTED_BY_CHARACTERS` | 200                                       |
-| `MAX_CANCELLATION_REASON_CHARACTERS`       | 2,000                                     |
-| `MAX_REDRIVE_BATCH_SIZE`                   | 1,000                                     |
-| `MAX_REDRIVE_REQUEST_ID_BYTES`             | 512                                       |
-| `MAX_JOB_QUERY_PAGE_SIZE`                  | 1,000                                     |
-| `MAX_JOB_QUERY_PAYLOAD_BYTES`              | 1,048,576 (1 MiB)                         |
-| `MAX_JOB_QUERY_REDACT_KEYS`                | 50                                        |
-| `DEFAULT_JOB_QUERY_PAYLOAD_BYTES`          | 16,384 (default payload response ceiling) |
-
-## CLI
-
-| Command                       | Purpose                               |
-| ----------------------------- | ------------------------------------- |
-| `workhorse worker --config …` | Run a dedicated worker process        |
-| `workhorse-health`            | JSON PostgreSQL queue-health snapshot |
-
-## Types
-
-Core exported types include `Queryable`, `Json`, `JobState`, `JobSnapshot`, `ClaimedJob`,
-`EnqueueOptions`, `EnqueueRequest`, `EnqueueIdempotency`, `RetryPolicy`, `HandlerContext`, `Handler`,
-`WorkerOptions`, `WorkerRuntimeState`, `WorkerMaintenanceTelemetry`, `JobCheckpoint`, `JobWait`,
-`JobListQuery`, `JobListPage`, `JobListItem`, `JobTimelineQuery`, `JobTimelinePage`, `DeadLetter`,
-`DeadLetterQuery`, `DeadLetterPage`, `RedriveRequest`, `RedriveResult`, `RedriveLineage`,
-`CancellationRequest`, `CancelResult`, `QueueHealth`, `RetentionPolicy`, `MaintenancePolicy`, and
-`ScheduleDefinition`.
-
-The published `.d.ts` files are the authoritative reference. Source:
+The current declaration entry point is
 [`src/index.ts`](https://github.com/stablemates/workhorse/blob/main/src/index.ts).
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue) — use the main producer methods
+- [Workers](/docs/workers) — use the main execution methods
+- [Examples](/docs/examples) — see the exports in working patterns
+
+---
+
+Exact protocol functions, fields, constants, and operational limits:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#atomic-lifecycle).

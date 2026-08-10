@@ -1,43 +1,56 @@
 ---
-title: Progress
-description: Report bounded latest-value progress from an active fenced handler.
+title: How do I report job progress?
+description: Publish a bounded latest-value projection for operators without changing durable control flow.
 ---
 
-Progress is a mutable operational projection for long-running handlers. It is deliberately separate from
-the immutable job payload, checkpoint outputs, and terminal result.
+Progress answers what an active handler is doing now. It is mutable operator data, so it cannot prove
+that a stage should be skipped after a retry.
+
+## Publish the latest value
+
+Call `HandlerContext.setProgress` with a JSON value that your operator surface understands.
 
 ```ts
-worker.handle("import", async (payload, context) => {
-  await context.setProgress({ phase: "reading", completed: 0, total: payload.rows.length });
-
-  // Changed values from one ownership generation are accepted at most once every 100 ms.
-  await processRows(payload.rows);
-  await context.setProgress({
-    phase: "complete",
-    completed: payload.rows.length,
-    total: payload.rows.length,
-  });
-
-  return { imported: payload.rows.length };
+worker.handle("catalog.import", async (payload, context) => {
+  await context.setProgress({ phase: "reading" });
+  const result = await importCatalog(payload);
+  await context.setProgress({ phase: "complete", imported: result.count });
+  return result;
 });
 ```
 
-`context.getProgress()` returns the latest value observed by that handler activation. Low-level runtimes
-can use `Queue.updateProgress(job, workerId, value)` and `Queue.getProgress(jobId)` directly.
+`HandlerContext.getProgress` returns the latest retained value. A custom runtime can use
+`Queue.updateProgress` and `Queue.getProgress` with the claimed job and worker identity.
 
-## Contract
+## Why is progress rate-limited?
 
-- Only the exact active, unexpired worker and fence may update progress.
-- Values are JSON and at most 64 KiB in PostgreSQL canonical JSONB text.
-- A changed value from the same fence is accepted at most once every 100 ms. A faster changed write throws
-  `ProgressRateLimitError` with `retryAfterMs`.
-- Repeating the identical value is a no-op and does not consume a revision or append telemetry.
-- Every accepted change increments a per-job revision and records attempt, fence, worker, and timestamps.
-- The latest value survives retry and terminal materialization until the job identity is pruned.
-- Accepted changes append `progress_updated` lifecycle events containing revision and byte size, not the
-  progress value itself.
+Every changed value updates one `job_progress` row and appends a small `progress_updated` event. A
+tight loop would create database churn without making the interface more useful.
 
-<Callout type="warn">
-  Progress is observability, not a durable restart boundary. Use checkpoints for immutable completed
-  work that must be reused after retry.
-</Callout>
+PostgreSQL therefore size-caps and rate-limits changed values. A caller that updates too quickly gets
+`ProgressRateLimitError`, including when it may retry.
+
+Repeating an identical value is a no-op. It does not advance the revision or append another event,
+which makes harmless retries cheap.
+
+## What survives?
+
+Each accepted update records the attempt, fence token, worker ID, revision, and timestamps. The
+latest value survives retries and terminal materialization until retention removes the job identity.
+
+Only the current unexpired owner can change progress. A stale generation receives
+`ProgressLeaseLostError`, so old handlers cannot overwrite a newer activation's status.
+
+Progress is not a checkpoint. Use `HandlerContext.checkpoint` when another activation must reuse a
+completed result instead of running the operation again.
+
+## Next
+
+- [Durable execution](/docs/durable-execution) — save immutable completion evidence
+- [Queries and timelines](/docs/queries) — read job and lifecycle state
+- [Dashboard](/docs/dashboard) — show progress to operators
+
+---
+
+Exact value limits, update cadence, revisions, and event fields:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#job_progress).

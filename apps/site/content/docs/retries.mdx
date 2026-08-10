@@ -1,113 +1,69 @@
 ---
-title: Retries and backoff
-description: Persisted retry policies, PostgreSQL-owned delay selection, manual overrides, and terminal failure.
+title: How does a failed job retry?
+description: Give jobs an attempt budget and a persisted backoff policy that PostgreSQL applies consistently.
 ---
 
-Retries are decided in PostgreSQL. `fail_v1` increments the attempt, selects the delay, performs the
-transition, and records provenance, so every client and language binding behaves identically.
+When a handler throws, PostgreSQL decides whether another attempt remains. It records failure
+evidence before moving the job back to `ready`, `scheduled`, or a terminal outcome.
 
-## Attempt budget
+## Set an attempt budget
 
-`maxAttempts` defaults to **25**. Exhaustion atomically removes the runtime row and creates an
-immutable failed outcome.
+`EnqueueOptions.maxAttempts` limits how many logical attempts the job can use. When the budget is
+gone, `fail_v1` removes the runtime row and writes an immutable failed outcome.
 
-## Persisted retry policies
+The database enforces this budget regardless of which client reported the failure. A worker override
+can change timing, but it cannot create extra attempts.
 
-Attach a policy at enqueue time or on a recurring schedule's job definition:
+## Persist the delay policy with the job
 
-```ts
-type RetryPolicy =
-  | { type: "fixed"; delayMs: number }
-  | { type: "exponential"; initialDelayMs: number; multiplier: number; maxDelayMs: number }
-  | { type: "decorrelated-jitter"; baseDelayMs: number; maxDelayMs: number };
-```
+`RetryPolicy` supports fixed, exponential, and decorrelated-jitter policies. PostgreSQL validates the
+chosen shape and stores it with the immutable job definition.
 
 ```ts
 await queue.enqueue(
   "provider.sync",
   { accountId },
   {
-    maxAttempts: 8,
-    retryPolicy: { type: "exponential", initialDelayMs: 1_000, multiplier: 2, maxDelayMs: 300_000 },
+    retryPolicy: providerRetryPolicy,
   },
 );
 ```
 
-PostgreSQL validates and normalizes the policy, selects each delay, performs the retry or recovery
-transition, and records policy provenance. Explicit policies apply equally to **handler failure** and
-**expired-lease recovery**.
+A fixed policy always uses the same delay. Exponential delay grows toward a ceiling, while
+decorrelated jitter spreads a group of failures across different wake times.
 
-### Bounds
+Workhorse derives jitter from stable job state. Recreating a `Queue` or replaying the same transition
+therefore cannot select a fresh random delay.
 
-| Constraint   | Rule                                            |
-| ------------ | ----------------------------------------------- |
-| Any delay    | Integer, 0 through 31,536,000,000 ms (365 days) |
-| `multiplier` | Integer, 1 through 100                          |
-| `maxDelayMs` | At least `initialDelayMs` / `baseDelayMs`       |
+## Keep failure and recovery consistent
 
-### Deterministic decorrelated jitter
+An explicit policy applies when a handler throws and when recovery finds an expired lease. That
+keeps a crashed process from changing the job's backoff behavior.
 
-Decorrelated jitter derives from the stable job identity, the attempt, and the persisted previous
-delay. Replay and `Queue` recreation cannot change the selected value.
+Jobs without a policy preserve compatibility behavior, which differs between handler failure and
+lease recovery. Set a persisted policy when consistent timing matters.
 
-## Default behavior without a policy
+`Queue.fail` and `WorkerOptions.retryDelayMs` can override the next delay. If a worker callback returns
+`undefined`, PostgreSQL falls back to the persisted policy or compatibility behavior.
 
-Omitting `retryPolicy` preserves compatibility:
+## What survives another attempt?
 
-- **Handler failure** uses the SQL-owned, Sidekiq-inspired random backoff. For zero-based retry count
-  `count` (the first failed attempt is `0`), the delay is
-  `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds. With the default 25-attempt budget
-  that spreads retries across roughly 20 days.
-- **Expired-lease recovery** is immediate.
+The job ID, payload, tags, policy, and saved checkpoints remain. PostgreSQL increments the attempt,
+and the next claim receives a new fence token.
 
-## Manual overrides
+A retry is another run of the same job. A redrive happens only after terminal failure and creates a
+new job identity.
 
-Precedence, highest first:
+`JobSnapshot.retryPolicy` shows the normalized policy. Timeline events record the selected delay and
+its source, which lets an operator explain why a job is waiting.
 
-1. A numeric `retryDelayMs` passed to `Queue.fail(...)`.
-2. `WorkerOptions.retryDelayMs`, either a number or `(attempt, job) => number | undefined`.
-3. The job's persisted `retryPolicy`.
-4. The compatibility default above.
+## Next
 
-```ts
-const worker = new Worker(queue, {
-  retryDelayMs: (attempt, job) => {
-    if (job.type === "provider.sync") return Math.min(60_000, 1_000 * 2 ** attempt);
-    return undefined; // defer to the persisted policy or SQL default
-  },
-});
-```
+- [Durable execution](/docs/durable-execution) — reuse completed work on another attempt
+- [Dead letters](/docs/dead-letters) — create a fresh job after retries end
+- [Deadlines and timeouts](/docs/deadlines) — end work before the attempt budget is gone
 
-Returning `undefined` defers to PostgreSQL. An omitted delay in `Queue.recoverExpired(limit)` is passed
-as SQL `NULL` so PostgreSQL selects the persisted policy.
+---
 
-<Callout>
-  Overrides change **timing** only. PostgreSQL still enforces the attempt budget, deadlines, and
-  execution timeouts.
-</Callout>
-
-## Observability
-
-Claims and `JobSnapshot` expose the normalized persisted policy. The `retry_scheduled` and
-`lease_expired` lifecycle events expose `retry_policy`, `retry_delay_ms`, and `retry_delay_source`, so
-you can always tell which layer selected a delay.
-
-```ts
-const snapshot = await queue.getJob(jobId);
-snapshot?.retryPolicy; // RetryPolicy | null
-snapshot?.currentAttempt;
-```
-
-## Failure paths
-
-| Path                        | Result                                                                |
-| --------------------------- | --------------------------------------------------------------------- |
-| Handler throws, budget left | Retry to `ready` or `scheduled` with the selected delay               |
-| Handler throws, budget gone | Immutable `failed` outcome plus closed attempt history                |
-| Lease expires               | Bounded recovery closes the attempt and requeues or fails             |
-| Deadline reached            | Terminal failure without retry                                        |
-| Execution timeout           | Distinct timeout evidence; remaining budget schedules a later attempt |
-| Cancellation requested      | Cancellation wins over retry; see [Cancellation](/docs/cancellation)  |
-
-Terminal failures land in the cold `job_outcome` relation and are queryable through
-[dead letters and redrive](/docs/dead-letters).
+Exact policy shapes, bounds, precedence, and retry transitions:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#retry-and-recovery).
