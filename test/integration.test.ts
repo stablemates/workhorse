@@ -168,6 +168,19 @@ describe("job contracts", () => {
       pool.query("SELECT count(*)::integer AS count FROM workhorse.job"),
     ).resolves.toMatchObject({ rows: [{ count: 0 }] });
 
+    await expect(
+      pool.query(
+        `SELECT workhorse.enqueue_v1(
+          'default', 'mail.send', $1::jsonb, clock_timestamp(), 1, '{}', NULL,
+          'sql-client', 16, 1048576, '{}', '{}'
+        )`,
+        [JSON.stringify({ recipient: "too-large-for-sql" })],
+      ),
+    ).rejects.toThrow(/payload exceeds its configured size limit/);
+    await expect(
+      pool.query("SELECT count(*)::integer AS count FROM workhorse.job"),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
     const id = await contractedQueue.enqueue("mail.send", { recipient: "a@example.test" });
     await expect(contractedQueue.getJob(id)).resolves.toMatchObject({
       id,
@@ -217,6 +230,58 @@ describe("job contracts", () => {
       state: "failed",
       error: { name: "JobValueSizeLimitError" },
       result: null,
+    });
+
+    const sqlLimitedId = await contractedQueue.enqueue("invoice.total", {}, { maxAttempts: 1 });
+    const sqlLimited = await contractedQueue.claim("contract-sql-result-worker");
+    await expect(
+      pool.query("SELECT workhorse.complete_v1($1, $2, $3, $4::jsonb)", [
+        sqlLimitedId,
+        "contract-sql-result-worker",
+        sqlLimited!.fenceToken.toString(),
+        JSON.stringify({ total: 10, note: "x".repeat(40) }),
+      ]),
+    ).rejects.toThrow(/result exceeds its configured size limit/);
+    await expect(contractedQueue.getJob(sqlLimitedId)).resolves.toMatchObject({
+      state: "active",
+      result: null,
+    });
+  });
+
+  it("removes sensitive handler details before durable operator views", async () => {
+    const secret = "operator-view-secret";
+    const contractedQueue = new Queue(pool, "default", {
+      contracts: {
+        "contract.failure": {
+          currentVersion: "1",
+          versions: { "1": { sensitivePayloadKeys: ["token"] } },
+        },
+      },
+    });
+    const id = await contractedQueue.enqueue(
+      "contract.failure",
+      { token: secret },
+      { maxAttempts: 1 },
+    );
+    const claimed = await contractedQueue.claim("contract-error-worker");
+    await pool.query("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb)", [
+      id,
+      "contract-error-worker",
+      claimed!.fenceToken.toString(),
+      JSON.stringify({ name: "Error", message: `could not use ${secret}`, stack: secret }),
+    ]);
+
+    const snapshot = await contractedQueue.getJob(id);
+    const timeline = await contractedQueue.getJobTimeline(id);
+    const deadLetters = await contractedQueue.listDeadLetters({ type: "contract.failure" });
+    expect(
+      JSON.stringify({ snapshot, timeline, deadLetters }, (_key, value) =>
+        typeof value === "bigint" ? value.toString() : value,
+      ),
+    ).not.toContain(secret);
+    expect(snapshot?.error).toEqual({
+      name: "RedactedJobError",
+      message: "Job handler failed; details redacted",
     });
   });
 

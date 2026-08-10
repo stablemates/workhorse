@@ -1,0 +1,364 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 4,
+        "sampleIntervalMs": 100,
+        "targetJobs": 20,
+        "targetRatePerSecond": 40,
+        "workerConcurrency": 2
+      },
+      "enqueueBatchSize": 4,
+      "jobsPerRun": 12,
+      "leaseMs": 5000,
+      "repetitions": 2,
+      "seed": 1,
+      "workerConcurrency": [1, 2]
+    },
+    "operational": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "retryDelayMs": 30,
+      "scenarios": ["retry-paths"],
+      "scheduleDelayMs": 30
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_new_feature_2_49e97eed",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-10T15:20:33.090Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "queuePrefix": "operational",
+      "retryDelayMs": 30,
+      "scenarios": ["retry-paths"],
+      "scheduleDelayMs": 30
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": "ready",
+            "expected": "ready",
+            "name": "immediate retry enters ready",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "immediate retry is attempt two",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "immediate retry completes",
+            "passed": true
+          },
+          {
+            "actual": "scheduled",
+            "expected": "scheduled",
+            "name": "delayed retry enters scheduled",
+            "passed": true
+          },
+          {
+            "actual": null,
+            "expected": null,
+            "name": "delayed retry is not immediately claimable",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "delayed retry promoted",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "delayed retry is attempt two",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "delayed retry completes",
+            "passed": true
+          },
+          {
+            "actual": "scheduled",
+            "expected": "scheduled",
+            "name": "fixed policy schedules retry",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "fixed policy delay selected",
+            "passed": true
+          },
+          {
+            "actual": "policy:fixed",
+            "expected": "policy:fixed",
+            "name": "fixed policy source recorded",
+            "passed": true
+          },
+          {
+            "actual": {
+              "delayMs": 1,
+              "type": "fixed"
+            },
+            "expected": {
+              "delayMs": 1,
+              "type": "fixed"
+            },
+            "name": "fixed policy provenance recorded",
+            "passed": true
+          },
+          {
+            "actual": "scheduled",
+            "expected": "scheduled",
+            "name": "exponential policy schedules retry",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "exponential policy delay selected",
+            "passed": true
+          },
+          {
+            "actual": "policy:exponential",
+            "expected": "policy:exponential",
+            "name": "exponential policy source recorded",
+            "passed": true
+          },
+          {
+            "actual": {
+              "initialDelayMs": 1,
+              "maxDelayMs": 4,
+              "multiplier": 2,
+              "type": "exponential"
+            },
+            "expected": {
+              "initialDelayMs": 1,
+              "maxDelayMs": 4,
+              "multiplier": 2,
+              "type": "exponential"
+            },
+            "name": "exponential policy provenance recorded",
+            "passed": true
+          },
+          {
+            "actual": "scheduled",
+            "expected": "scheduled",
+            "name": "jitter policy schedules retry",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "jitter policy delay is bounded",
+            "passed": true
+          },
+          {
+            "actual": "policy:decorrelated-jitter",
+            "expected": "policy:decorrelated-jitter",
+            "name": "jitter policy source recorded",
+            "passed": true
+          },
+          {
+            "actual": {
+              "baseDelayMs": 1,
+              "maxDelayMs": 3,
+              "type": "decorrelated-jitter"
+            },
+            "expected": {
+              "baseDelayMs": 1,
+              "maxDelayMs": 3,
+              "type": "decorrelated-jitter"
+            },
+            "name": "jitter policy provenance recorded",
+            "passed": true
+          },
+          {
+            "actual": 3,
+            "expected": 3,
+            "name": "jitter replay selects the same delay",
+            "passed": true
+          },
+          {
+            "actual": {
+              "baseDelayMs": 1,
+              "maxDelayMs": 3,
+              "type": "decorrelated-jitter"
+            },
+            "expected": {
+              "baseDelayMs": 1,
+              "maxDelayMs": 3,
+              "type": "decorrelated-jitter"
+            },
+            "name": "queue recreation preserves persisted jitter policy",
+            "passed": true
+          },
+          {
+            "actual": 3,
+            "expected": 3,
+            "name": "all policy retries promote",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "fixed retry is attempt two",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "fixed retry completes",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "exponential retry is attempt two",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "exponential retry completes",
+            "passed": true
+          },
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "jitter retry is attempt two",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "jitter retry completes",
+            "passed": true
+          },
+          {
+            "actual": "failed",
+            "expected": "failed",
+            "name": "attempt budget exhausts to failed",
+            "passed": true
+          },
+          {
+            "actual": "failed",
+            "expected": "failed",
+            "name": "exhausted job snapshot is failed",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "contracted completion is accepted",
+            "passed": true
+          },
+          {
+            "actual": "1",
+            "expected": "1",
+            "name": "contract version is retained",
+            "passed": true
+          },
+          {
+            "actual": {
+              "value": 1
+            },
+            "expected": {
+              "value": 1
+            },
+            "name": "contracted operator payload is redacted",
+            "passed": true
+          },
+          {
+            "actual": {
+              "ok": true
+            },
+            "expected": {
+              "ok": true
+            },
+            "name": "contracted operator result is redacted",
+            "passed": true
+          }
+        ],
+        "durationMs": 195.61049399999996,
+        "metrics": {
+          "contractClaimMs": 2.4644970000000512,
+          "contractCompleteMs": 2.327974999999924,
+          "contractEnqueueMs": 2.4593469999999797,
+          "delayedAttempts": 2,
+          "delayedPromoted": 1,
+          "exhaustedAttempts": 1,
+          "exponentialDelayMs": 1,
+          "exponentialSelectionMs": 2.1988759999999843,
+          "fixedDelayMs": 1,
+          "fixedSelectionMs": 2.0423059999999964,
+          "immediateAttempts": 2,
+          "jitterDelayMs": 3,
+          "jitterSelectionMs": 2.6957949999999755,
+          "policySelectionTotalMs": 6.936976999999956
+        },
+        "name": "retry-paths"
+      }
+    ],
+    "totalDurationMs": 195.622056
+  },
+  "profile": "smoke",
+  "provenance": {
+    "command": [
+      "/home/anton/.local/share/mise/installs/node/24.15.0/bin/node",
+      "/home/anton/orca/workspaces/workhorse/new-feature-2/src/cli/benchmark.ts",
+      "--",
+      "--suite",
+      "lifecycle",
+      "--profile",
+      "smoke",
+      "--scenario",
+      "retry-paths",
+      "--output",
+      "docs/benchmarks/results/2026-08-10-payload-contracts-smoke.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187801088
+    },
+    "source": {
+      "commit": "1ce4b5d7c804d0d5b2919bae90aa68574df6fad0",
+      "dirty": true
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}

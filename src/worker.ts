@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { CronExpressionParser } from "cron-parser";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
-import { Queue } from "./queue.js";
+import { errorForTelemetry, Queue } from "./queue.js";
 import type { MaintenancePhaseResult } from "./queue.js";
 import { extractTraceContext, jobSpanAttributes, telemetryMetrics, withSpan } from "./telemetry.js";
 import type { ClaimedJob, JobCheckpoint, JobProgress, JobWait, Json } from "./types.js";
@@ -699,8 +699,7 @@ export class Worker {
         );
         return;
       }
-      if (error instanceof Error) span.recordException(error);
-      else span.recordException(String(error));
+      span.recordException(errorForTelemetry(error, job.redactErrorDetails));
       span.setStatus({ code: SpanStatusCode.ERROR });
       const delay =
         typeof this.options.retryDelayMs === "function"

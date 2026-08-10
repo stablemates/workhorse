@@ -434,6 +434,8 @@ export interface ClaimedJob<TPayload = Json> {
   contractVersion: string | null;
   /** Immutable PostgreSQL-canonical JSON size limit for the terminal result. */
   resultMaxBytes: number;
+  /** Whether handler error details must be removed before telemetry or persistence. */
+  redactErrorDetails: boolean;
   /** W3C parent context captured when PostgreSQL first accepted this stable job identity. */
   traceContext: TraceContext | null;
   /** One-based attempt number. Recovery and retry always create the next number. */

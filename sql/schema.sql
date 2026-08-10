@@ -38,6 +38,29 @@ AS $$
      );
 $$;
 
+CREATE OR REPLACE FUNCTION workhorse.redact_top_level_keys_v1(p_value jsonb, p_keys text[])
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT CASE WHEN jsonb_typeof(p_value) = 'object'
+    THEN p_value - COALESCE(p_keys, '{}') ELSE p_value END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.redact_error_details_v1(p_error jsonb, p_redact boolean)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+  SELECT CASE WHEN NOT COALESCE(p_redact, false) OR p_error IS NULL THEN p_error
+    ELSE jsonb_build_object(
+      'name', 'RedactedJobError',
+      'message', 'Job handler failed; details redacted'
+    ) END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.valid_trace_context_v1(p_context jsonb)
 RETURNS boolean
 LANGUAGE sql
@@ -1765,8 +1788,7 @@ BEGIN
   RETURN QUERY
   WITH candidates AS MATERIALIZED (
     SELECT job.id, job.queue_name, job.job_type,
-           CASE WHEN jsonb_typeof(job.payload) = 'object'
-             THEN job.payload - job.payload_redact_keys ELSE job.payload END AS payload,
+           workhorse.redact_top_level_keys_v1(job.payload, job.payload_redact_keys) AS payload,
            job.tags,
            outcome.current_attempt, job.max_attempts, job.retry_policy,
            job.deadline_at, job.execution_timeout_ms, outcome.error,
@@ -2438,6 +2460,7 @@ CREATE OR REPLACE FUNCTION workhorse.claim_v1(
   p_lease_ms integer DEFAULT 30000
 ) RETURNS TABLE (
   job_id uuid, job_type text, payload jsonb, contract_version text, result_max_bytes integer,
+  redact_error_details boolean,
   trace_context jsonb,
   attempt integer, max_attempts integer,
   retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint,
@@ -2494,7 +2517,9 @@ BEGIN
     VALUES (v_runtime.job_id, v_runtime.current_attempt, 'claimed',
       jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
   RETURN QUERY
-    SELECT j.id, j.job_type, j.payload, j.contract_version, j.result_max_bytes, j.trace_context,
+    SELECT j.id, j.job_type, j.payload, j.contract_version, j.result_max_bytes,
+           cardinality(j.payload_redact_keys) > 0 OR cardinality(j.result_redact_keys) > 0,
+           j.trace_context,
            v_runtime.current_attempt, j.max_attempts,
            j.retry_policy, j.deadline_at, j.execution_timeout_ms,
            v_runtime.attempt_timeout_at, v_fence, v_expires
@@ -3505,6 +3530,7 @@ DECLARE
   v_started_at timestamptz;
   v_claimed_at timestamptz;
   v_retry record;
+  v_error jsonb;
 BEGIN
   SELECT * INTO v_runtime FROM workhorse.job_runtime r
    WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
@@ -3520,6 +3546,10 @@ BEGIN
     RETURN workhorse.expire_owned_v1(p_job_id, p_worker_id, p_fence_token);
   END IF;
   SELECT * INTO STRICT v_job FROM workhorse.job j WHERE j.id = p_job_id;
+  v_error := workhorse.redact_error_details_v1(
+    p_error,
+    cardinality(v_job.payload_redact_keys) > 0 OR cardinality(v_job.result_redact_keys) > 0
+  );
 
   IF v_runtime.current_attempt < v_job.max_attempts THEN
     v_started_at := v_runtime.attempt_started_at;
@@ -3539,7 +3569,7 @@ BEGIN
            wait_name = NULL, attempt_started_at = NULL, execution_used_ms = 0,
            attempt_timeout_at = NULL,
            previous_retry_delay_ms = v_retry.next_previous_retry_delay_ms,
-           error = p_error, updated_at = clock_timestamp()
+           error = v_error, updated_at = clock_timestamp()
      WHERE r.job_id = p_job_id AND r.state = 'active' AND r.worker_id = p_worker_id
        AND r.fence_token = p_fence_token AND r.expires_at > clock_timestamp()
        AND (r.deadline_at IS NULL OR r.deadline_at > clock_timestamp())
@@ -3551,11 +3581,11 @@ BEGIN
       job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
     )
       VALUES (p_job_id, v_runtime.current_attempt - 1, p_fence_token, p_worker_id, 'retry',
-        v_started_at, v_claimed_at, p_error);
+        v_started_at, v_claimed_at, v_error);
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
       VALUES (p_job_id, v_runtime.current_attempt - 1, 'retry_scheduled',
         jsonb_build_object('next_attempt', v_runtime.current_attempt, 'run_at', v_run_at,
-          'error', p_error, 'retry_policy', v_job.retry_policy,
+          'error', v_error, 'retry_policy', v_job.retry_policy,
           'retry_delay_ms', v_retry.delay_ms, 'retry_delay_source', v_retry.source));
   ELSE
     DELETE FROM workhorse.job_runtime r
@@ -3567,15 +3597,15 @@ BEGIN
     IF NOT FOUND THEN RETURN 'stale'; END IF;
     v_state := 'failed';
     INSERT INTO workhorse.job_outcome(job_id, state, current_attempt, fence_token, run_at, error)
-      VALUES (p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, p_error);
+      VALUES (p_job_id, 'failed', v_runtime.current_attempt, p_fence_token, v_runtime.run_at, v_error);
     INSERT INTO workhorse.attempt_history(
       job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
     ) VALUES (
       p_job_id, v_runtime.current_attempt, p_fence_token, p_worker_id, 'failed',
-      v_runtime.attempt_started_at, v_runtime.acquired_at, p_error
+      v_runtime.attempt_started_at, v_runtime.acquired_at, v_error
     );
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
-      VALUES (p_job_id, v_runtime.current_attempt, 'failed', jsonb_build_object('error', p_error));
+      VALUES (p_job_id, v_runtime.current_attempt, 'failed', jsonb_build_object('error', v_error));
   END IF;
   RETURN v_state;
 END;
@@ -4993,10 +5023,9 @@ BEGIN
   LEFT JOIN LATERAL (
     SELECT redacted.payload, octet_length(redacted.payload::text)::integer AS payload_bytes
     FROM (
-      SELECT CASE WHEN jsonb_typeof(job.payload) = 'object'
-        THEN job.payload - (job.payload_redact_keys || v_redact_keys)
-        ELSE job.payload
-      END AS payload
+      SELECT workhorse.redact_top_level_keys_v1(
+        job.payload, job.payload_redact_keys || v_redact_keys
+      ) AS payload
     ) redacted
     WHERE v_include
   ) payload_value ON true

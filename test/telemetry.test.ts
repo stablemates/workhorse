@@ -212,6 +212,71 @@ describe("OpenTelemetry", () => {
     expect(completionSpan?.parentSpanContext?.spanId).toBe(handlerSpan?.spanContext().spanId);
   });
 
+  it("redacts sensitive handler errors before traces and failure persistence", async () => {
+    spanExporter.reset();
+    const secret = "handler-trace-secret";
+    let claimed = false;
+    let persistedError: string | undefined;
+    const database = queryable(
+      vi.fn(async (sql: string, values?: readonly unknown[]) => {
+        if (
+          sql.includes("tick_v1") ||
+          sql.includes("prepare_history_partitions_v1") ||
+          sql.includes("retain_history_v1") ||
+          sql.includes("prune_terminal_storage_v1")
+        ) {
+          return { rows: [] };
+        }
+        if (sql.includes("claim_v1")) {
+          if (claimed) return { rows: [] };
+          claimed = true;
+          return {
+            rows: [
+              {
+                job_id: "00000000-0000-4000-8000-000000000004",
+                job_type: "mail.send",
+                payload: { accessToken: secret },
+                contract_version: "1",
+                result_max_bytes: 1_048_576,
+                redact_error_details: true,
+                trace_context: null,
+                attempt: 1,
+                max_attempts: 1,
+                retry_policy: null,
+                deadline_at: null,
+                execution_timeout_ms: null,
+                attempt_timeout_at: null,
+                fence_token: "4",
+                lease_expires_at: new Date(Date.now() + 30_000),
+              },
+            ] as never[],
+          };
+        }
+        if (sql.includes("fail_v1")) {
+          persistedError = values?.[3] as string;
+          return { rows: [{ state: "failed" }] as never[] };
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      }),
+    );
+    const worker = new Worker(new Queue(database, "mail"), {
+      workerId: "worker-redaction",
+      registryIntervalMs: 0,
+      statisticsRollupIntervalMs: 0,
+    }).handle("mail.send", async () => {
+      throw new Error(`provider rejected ${secret}`);
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+
+    expect(persistedError).not.toContain(secret);
+    const spans = spanExporter.getFinishedSpans();
+    expect(JSON.stringify(spans.map((span) => span.events))).not.toContain(secret);
+    expect(JSON.stringify(spans.map((span) => span.events))).toContain(
+      "Job handler failed; details redacted",
+    );
+  });
+
   it("emits recovery telemetry from the production tick path", async () => {
     spanExporter.reset();
     metricExporter.reset();
@@ -285,6 +350,7 @@ describe("OpenTelemetry", () => {
       payload: { recipient: "reader@example.com" },
       contractVersion: null,
       resultMaxBytes: 1_048_576,
+      redactErrorDetails: false,
       traceContext: null,
       attempt: 1,
       maxAttempts: 2,

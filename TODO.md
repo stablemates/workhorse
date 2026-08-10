@@ -356,6 +356,8 @@ hint, and polling stays the source of truth.
 - [x] Enforce configurable payload and result size limits before durable writes.
 - [x] Version contracts without making historical payloads unreadable.
 - [x] Redact configured sensitive fields from logs, traces, and operator views.
+- [x] Extend the `retry-paths` lifecycle benchmark with versioned validation, redaction invariants,
+      and full enqueue, claim, and completion timings without making an unrecorded overhead claim.
 
 ### [x] P1-09 Progress and job metadata
 

@@ -4,6 +4,8 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-08-10 payload-contract smoke analysis](benchmarks/2026-08-10-payload-contracts-smoke-analysis.md): contracted transition timings and redaction invariants without an overhead claim.
+- [`results/2026-08-10-payload-contracts-smoke.json`](benchmarks/results/2026-08-10-payload-contracts-smoke.json): schema-v20 lifecycle smoke artifact for the extended `retry-paths` scenario.
 - [2026-07-22 performance pivot and competitor analysis](benchmarks/2026-07-22-performance-pivot-competitor-analysis.md): architecture pivot result, controlled Graphile Worker/pg-boss baseline, pg-boss batching sensitivity, resource costs, and supported product claims.
 - [`results/2026-07-22-competitor-default.json`](benchmarks/results/2026-07-22-competitor-default.json): controlled per-job competitor baseline with six repetitions at 1/4/16 workers.
 - [`results/2026-07-22-competitor-pgboss-batched-default.json`](benchmarks/results/2026-07-22-competitor-pgboss-batched-default.json): explicitly non-equivalent pg-boss batch-size sensitivity.
@@ -59,7 +61,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `progress-lifecycle`            | fenced latest-value updates, identical-value no-op, frequency limit, stale-fence rejection, lookup provenance, terminal retention, and bounded event evidence                                    |
 | `crash-before-completion`       | durable state at all five worker crash boundaries                                                                                                                                                |
 | `lease-expiry-recovery`         | recovery latency, new attempt/fence, and stale completion rejection                                                                                                                              |
-| `retry-paths`                   | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion                                                                                     |
+| `retry-paths`                   | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion; versioned contract validation and redaction timings                                |
 | `idempotent-ingress`            | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants                                                                                     |
 | `retention-pruning`             | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                                                                                   |
 | `health-snapshot`               | health-query latency and internally consistent degraded-state counts                                                                                                                             |
@@ -80,10 +82,10 @@ stale-fence rejection, terminal retention, and one value-free lifecycle event pe
 small-run observations are diagnostics, not an update-latency or throughput claim.
 
 `retry-paths` records the selected fixed, exponential, and decorrelated-jitter delays plus the
-client-observed duration of each failure transition and their total. These timings include the full SQL
-transition and event append, not an isolated policy-function microbenchmark. Policy normalization and
-delay selection are expected to be negligible beside the existing row-lock, update, and history work,
-but no numerical overhead claim is supported until an actual benchmark artifact is recorded.
+client-observed duration of each failure transition and their total. It also records enqueue, claim,
+and completion timings for a versioned contract while proving that operator reads redact its configured
+fields. These timings cover the full transitions rather than isolated policy or validation functions.
+No numerical overhead claim is supported until an actual benchmark artifact is recorded.
 
 `idempotent-ingress` records client-observed durations for initial keyed acceptance, exact replay,
 conflict rollback, duplicate-key batch acceptance, first expiring acceptance, and reuse after expiry. Its
