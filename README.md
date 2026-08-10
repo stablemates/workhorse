@@ -487,6 +487,17 @@ claims immediately. `stop()` blocks new claims and resolves `run()` only after a
 These are process-local controls and observations, not a durable worker registry or a cross-worker rate
 limit.
 
+Long-running workers use PostgreSQL `LISTEN workhorse_jobs` as a wake hint. Workers backed by the
+same node-postgres pool share one dedicated listener connection, route queue-specific notifications
+only to matching workers, and all wake for the wildcard emitted by promotion and recovery. A lost
+listener reconnects with bounded backoff and prompts an immediate claim after reconnect. Polling
+remains authoritative: `run()` defaults to a jittered five-second fallback when listening is
+available and 250 milliseconds otherwise, while an explicit `pollMs` sets the fallback base.
+`runOnce()` retains its 250-millisecond compatibility cadence because it does not keep a listener
+open. `onNotificationError` observes listener failures without making a wake-hint failure fatal.
+A pool capped at one connection remains polling-only, because reserving its sole connection would
+prevent claims from running.
+
 To enqueue atomically with application writes, pass the active `PoolClient` as the fourth argument to `enqueue`.
 
 Durable waits are not exact-time alarms. The stored target is a not-before boundary; promotion cadence,

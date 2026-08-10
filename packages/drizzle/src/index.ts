@@ -7,6 +7,11 @@ import type { QueryResult, QueryResultRow } from "pg";
 /** Public subset shared by a node-postgres Drizzle database and its transaction object. */
 export interface DrizzleExecutor {
   execute(query: SQL): PromiseLike<unknown>;
+  /** node-postgres client or pool retained by Drizzle. Pools enable worker LISTEN connections. */
+  readonly $client?: Queryable & {
+    connect?: () => Promise<unknown>;
+    options?: { max?: number };
+  };
 }
 
 export interface DrizzleAdapterOptions {
@@ -65,7 +70,11 @@ function drizzleSql(text: string, values: readonly unknown[]): SQL {
 
 /** Convert a Drizzle database or transaction into Workhorse's minimal database protocol. */
 export function drizzleQueryable(executor: DrizzleExecutor): Queryable {
-  return {
+  const queryable: Queryable & {
+    connect?: () => Promise<unknown>;
+    notificationConnectionCapacity?: number;
+    notificationConnectionIdentity?: object;
+  } = {
     async query<R extends QueryResultRow = QueryResultRow>(text: string, values = []) {
       try {
         const result = await executor.execute(drizzleSql(text, values));
@@ -79,6 +88,13 @@ export function drizzleQueryable(executor: DrizzleExecutor): Queryable {
       }
     },
   };
+  const connect = executor.$client?.connect;
+  if (typeof connect === "function") {
+    queryable.connect = () => connect.call(executor.$client);
+    queryable.notificationConnectionCapacity = executor.$client?.options?.max;
+    queryable.notificationConnectionIdentity = executor.$client;
+  }
+  return queryable;
 }
 
 /**

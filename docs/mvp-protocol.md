@@ -192,7 +192,13 @@ Identity is the attribution anchor. History inserts lock and verify their parent
 - The schema file supports clean installation, not online migration from earlier schema versions.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` runs; drift is bounded by the worker tick cadence.
 - Schedule precision is one second and cron expressions are evaluated in the worker's configured timezone.
-- Polling remains authoritative; `NOTIFY` is only a wake hint.
+- `Worker.run()` shares one `LISTEN workhorse_jobs` connection per node-postgres pool. Queue payloads
+  wake matching workers and `*` wakes all subscribers. Reconnect starts at 100 ms, doubles through
+  5 seconds, and applies ±10% jitter. A successful initial connection or reconnect prompts a claim.
+- Polling remains authoritative. Notification-capable `run()` defaults to a 5-second fallback with
+  ±10% jitter; a database without `connect()` retains 250 ms. An explicit `pollMs` replaces the base
+  in either mode. A node-postgres pool with `max = 1` remains polling-only. `runOnce()` retains 250
+  ms by default and opens no listener.
 - Retention policy is configured through the Queue or SQL deployment API; the demo dashboard
   reports policy and cleanup health but does not mutate it.
 - Centralized runtime churn, partial-index maintenance, autovacuum behavior, and migration duration require production-scale measurement.

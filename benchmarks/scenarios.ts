@@ -48,6 +48,7 @@ export const operationalScenarioNames = [
   "retention-pruning",
   "health-snapshot",
   "worker-concurrency",
+  "notification-dispatch",
   "telemetry-context",
 ] as const;
 
@@ -402,6 +403,27 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     ],
   },
   {
+    name: "notification-dispatch",
+    purpose:
+      "Compare idle claim pressure and enqueue-to-claim latency between polling-only and notification-assisted workers.",
+    invariants: [
+      "both dispatch modes execute the committed job",
+      "notification-assisted idle dispatch issues fewer empty claims than polling-only dispatch",
+      "notification-assisted dispatch retains a bounded polling fallback",
+    ],
+    metrics: [
+      "idleWindowMs",
+      "pollingFallbackMs",
+      "notificationFallbackMs",
+      "pollingIdleClaimCalls",
+      "notificationIdleClaimCalls",
+      "pollingEnqueueToClaimMs",
+      "notificationEnqueueToClaimMs",
+      "pollingEnqueueToHandlerMs",
+      "notificationEnqueueToHandlerMs",
+    ],
+  },
+  {
     name: "telemetry-context",
     purpose:
       "Compare enqueue and claiming timings with the OpenTelemetry SDK disabled and enabled, without making a performance claim.",
@@ -589,6 +611,7 @@ interface QueryPressureSnapshot {
   maxConcurrentQueries: number;
   maxConcurrentClaims: number;
   claimsWithoutFreeSlot: number;
+  lastSuccessfulClaimAt: number | null;
 }
 
 class QueryPressureProbe implements Queryable {
@@ -600,6 +623,7 @@ class QueryPressureProbe implements Queryable {
   private maxConcurrentQueries = 0;
   private maxConcurrentClaims = 0;
   private claimsWithoutFreeSlot = 0;
+  private lastSuccessfulClaimAt: number | null = null;
 
   constructor(
     private readonly target: Queryable,
@@ -626,7 +650,9 @@ class QueryPressureProbe implements Queryable {
       this.heartbeatCalls += 1;
     }
     try {
-      return await this.target.query<R>(text, values);
+      const result = await this.target.query<R>(text, values);
+      if (claim && result.rows.length > 0) this.lastSuccessfulClaimAt = performance.now();
+      return result;
     } finally {
       this.activeQueries -= 1;
       if (claim) this.activeClaims -= 1;
@@ -641,6 +667,7 @@ class QueryPressureProbe implements Queryable {
       maxConcurrentQueries: this.maxConcurrentQueries,
       maxConcurrentClaims: this.maxConcurrentClaims,
       claimsWithoutFreeSlot: this.claimsWithoutFreeSlot,
+      lastSuccessfulClaimAt: this.lastSuccessfulClaimAt,
     };
   }
 }
@@ -3099,6 +3126,107 @@ async function workerConcurrency(
   return { name: "worker-concurrency", durationMs: 0, metrics, assertions };
 }
 
+async function notificationDispatch(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  const assertions: ScenarioAssertion[] = [];
+  const idleWindowMs = 400;
+  const pollingFallbackMs = 100;
+  const notificationFallbackMs = 5_000;
+
+  const runCohort = async (notifications: boolean) => {
+    await reset(context.pool);
+    const seedQueue = new Queue(context.pool, context.queueName);
+    const probe = new QueryPressureProbe(context.pool);
+    const pollingDatabase: Queryable = { query: probe.query.bind(probe) };
+    const connect = (context.pool as Queryable & { connect?: () => Promise<unknown> }).connect;
+    if (notifications && typeof connect !== "function") {
+      throw new TypeError("Notification dispatch benchmark requires a connect-capable pool");
+    }
+    const notificationDatabase: Queryable & { connect?: () => Promise<unknown> } = {
+      query: probe.query.bind(probe),
+      ...(connect === undefined ? {} : { connect: () => connect.call(context.pool) }),
+    };
+    const workerQueue = new Queue(
+      notifications ? notificationDatabase : pollingDatabase,
+      context.queueName,
+    );
+    let handled = false;
+    const worker = new Worker(workerQueue, {
+      workerId: `benchmark-notification-${notifications ? "assisted" : "polling"}`,
+      pollMs: notifications ? notificationFallbackMs : pollingFallbackMs,
+      registryIntervalMs: 0,
+    }).handle("notification-dispatch", () => {
+      handled = true;
+      return null;
+    });
+
+    const running = worker.run();
+    try {
+      await waitFor(() => probe.snapshot().claimCalls > 0, "initial empty notification claim");
+      await context.sleep(20);
+      const beforeIdle = probe.snapshot();
+      await context.sleep(idleWindowMs);
+      const afterIdle = probe.snapshot();
+      const enqueuedAt = context.now();
+      await seedQueue.enqueue("notification-dispatch", null);
+      await waitFor(() => handled, "notification benchmark handler");
+      const completed = probe.snapshot();
+      return {
+        handled,
+        idleClaimCalls: afterIdle.claimCalls - beforeIdle.claimCalls,
+        enqueueToClaimMs: Math.max(
+          0,
+          (completed.lastSuccessfulClaimAt ?? context.now()) - enqueuedAt,
+        ),
+        enqueueToHandlerMs: Math.max(0, context.now() - enqueuedAt),
+      };
+    } finally {
+      worker.stop();
+      await running;
+    }
+  };
+
+  const polling = await runCohort(false);
+  const notification = await runCohort(true);
+  recordInvariant(assertions, "polling-only dispatch executes the job", polling.handled, true);
+  recordInvariant(
+    assertions,
+    "notification-assisted dispatch executes the job",
+    notification.handled,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "notification assistance reduces idle empty claims",
+    notification.idleClaimCalls < polling.idleClaimCalls,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "notification fallback remains bounded",
+    notificationFallbackMs,
+    5_000,
+  );
+
+  return {
+    name: "notification-dispatch",
+    durationMs: 0,
+    metrics: {
+      idleWindowMs,
+      pollingFallbackMs,
+      notificationFallbackMs,
+      pollingIdleClaimCalls: polling.idleClaimCalls,
+      notificationIdleClaimCalls: notification.idleClaimCalls,
+      pollingEnqueueToClaimMs: polling.enqueueToClaimMs,
+      notificationEnqueueToClaimMs: notification.enqueueToClaimMs,
+      pollingEnqueueToHandlerMs: polling.enqueueToHandlerMs,
+      notificationEnqueueToHandlerMs: notification.enqueueToHandlerMs,
+    },
+    assertions,
+  };
+}
+
 async function drainTelemetryContextQueue(
   queue: Queue,
   workerId: string,
@@ -3253,6 +3381,7 @@ export const operationalScenarioImplementations: Readonly<
   "retention-pruning": retentionPruning,
   "health-snapshot": healthSnapshot,
   "worker-concurrency": workerConcurrency,
+  "notification-dispatch": notificationDispatch,
   "telemetry-context": telemetryContext,
 };
 
