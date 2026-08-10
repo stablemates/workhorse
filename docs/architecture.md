@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 18.
+The current clean-install protocol is schema version 19.
 
 This page is the precise reference. For the ideas it assumes — leases and fence tokens,
 at-least-once delivery, cooperative cancellation, the runtime/outcome split — start with
@@ -79,6 +79,7 @@ erDiagram
     text queue_name
     text job_type
     jsonb payload
+    jsonb trace_context
     int max_attempts
     jsonb retry_policy
     timestamptz created_at
@@ -442,6 +443,15 @@ deadline, timeout, and lease-expiry races remain row-lock ordered and first-comm
 
 `recover_expired_v1` cooperatively locks expired active rows in bounded batches. A row carrying a cancellation request becomes canceled and does not retry. Other rows perform policy selection and increment-and-requeue or delete-and-outcome transition using the observed fence and expiry as CAS guards. `Queue.recoverExpired(limit)` passes an omitted delay as SQL `NULL`, allowing persisted policy selection; an explicit number remains an override. `lease_expired` details include the policy, selected delay, and source. Old workers cannot later complete because their active generation no longer exists.
 
+`recover_expired_v1` also sets transaction-local counts for expired leases and jobs returned to live
+work. `recover_expired_telemetry_v1` returns those counts with total affected rows. `tick_v1` carries
+them on its `recover` phase, so the production worker path and direct `Queue.recoverExpired` calls
+emit the same recovery span and counters.
+
+`expire_owned_telemetry_v1` wraps prompt timeout settlement by a live worker. It returns the exact
+next state, so `Queue.expireOwned` emits a retry span and increments the retry counter only when
+PostgreSQL starts another attempt.
+
 ### Terminal transitions
 
 `complete_v1`, exhausted failure, and cancellation consume the matching runtime row. Runtime deletion, outcome insertion, any truthful attempt closure, and event append commit or roll back together. Completion and failure reject a runtime that already carries a cancellation request.
@@ -455,6 +465,60 @@ deadline, timeout, and lease-expiry races remain row-lock ordered and first-comm
 `Queue.getJob(id)` joins immutable `job` to both lifecycle relations and coalesces the one that exists, preserving `retryPolicy` plus cancellation-request metadata for active work. Health state counts union runtime and outcome, including canceled outcomes. Ready, scheduled, active, expired-active, and oldest-ready metrics come directly from `job_runtime`.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live jobs are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary day.
+
+## Production telemetry
+
+`@workhorse/core` uses only `@opentelemetry/api`; the host application installs and configures the
+OpenTelemetry SDK, context manager, propagator, readers, processors, and exporters before importing
+Workhorse. Without an SDK, every instrument is a no-op and queue correctness is unchanged.
+
+`Queue.enqueueMany` creates `workhorse.enqueue` and injects the active W3C context into the new
+job's `job.trace_context`. The column accepts only `traceparent` and optional `tracestate`, requires
+`traceparent`, and caps canonical JSONB text at 1,024 bytes. It is separate from `job.payload` and
+is excluded from operator projections. An idempotent replay keeps the first accepted context.
+`claim_v1` returns the stored value, and `Worker` extracts it before creating the
+`workhorse.handler` consumer span. Baggage is never persisted.
+
+The runtime emits `workhorse.enqueue`, `workhorse.claim`, `workhorse.handler`,
+`workhorse.heartbeat`, `workhorse.retry`, `workhorse.complete`, `workhorse.recovery`,
+`workhorse.maintenance`, and `workhorse.schedule.synchronize` spans. Span attributes may include
+`workhorse.job.id`, `workhorse.job.type`, `workhorse.job.attempt`, and
+`workhorse.queue.name`, because spans are sampled event records rather than metric dimensions.
+Workhorse emits at most eight attributes on one span and exports
+`TRACE_ATTRIBUTE_COUNT_LIMIT = 8` for matching SDK span limits.
+
+The meter exposes these instruments:
+
+- `workhorse.queue.depth` is an observable gauge split only by `workhorse.job.state` values
+  `ready`, `scheduled`, and `active`.
+- `workhorse.queue.oldest_ready_age` is an observable gauge in milliseconds.
+- `workhorse.jobs.enqueued`, `workhorse.jobs.claimed`, `workhorse.jobs.completed`,
+  `workhorse.jobs.failed`, `workhorse.jobs.retried`, and `workhorse.leases.expired` are counters.
+- `workhorse.claim.duration`, `workhorse.handler.duration`, and
+  `workhorse.maintenance.drift` are millisecond histograms.
+
+`registerQueueMetrics(queue)` registers the database-wide depth and age callbacks and returns a
+cleanup function. Register it once per database and telemetry resource; registering it for every
+worker duplicates observations. Metric attributes are limited to the fixed enums
+`workhorse.job.state`, `workhorse.claim.result`, and `workhorse.maintenance.loop`. Workhorse emits
+at most 32 attribute combinations per instrument and exports
+`METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 32` for matching SDK views. Queue names, job types, job IDs,
+worker IDs, schedule names, and namespaces are forbidden metric attributes.
+
+Start production dashboards with ready and scheduled depth, oldest-ready age, and claiming and handler
+latency percentiles. Add rates for enqueueing, claiming, and completing jobs, plus failure and retry
+rates, expired leases, and maintenance drift. Alert when ready depth stays above zero while both claiming and completion rates
+stay zero for 5 minutes; make that critical at 15 minutes. Warn when maintenance drift exceeds
+twice its configured cadence for three consecutive observations, and make it critical above five
+times the cadence. Warn when expired leases exceed 1% of jobs workers claim or failures exceed 5% of handler
+settlements over 10 minutes; make failures critical above 20%. Replace the age and latency
+thresholds with the application's queue-delay and handler-duration SLOs rather than using a
+library-wide guess.
+
+The `telemetry-context` operational scenario compares full enqueue and claiming durations for equal
+baseline and instrumented cohorts. The instrumented cohort activates in-memory span and metric
+exporters. The scenario verifies exports, payload isolation, context recovery, and the absence of a
+dispatch index. Its stable order makes the timings diagnostic rather than a performance claim.
 
 ## Delivery semantics
 

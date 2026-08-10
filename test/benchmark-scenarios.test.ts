@@ -141,6 +141,29 @@ describe("operational scenario contracts", () => {
     );
     expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|throughput|latency target|sla/);
   });
+
+  it("defines comparative trace-context overhead evidence without a performance claim", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "telemetry-context",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(
+      /separate from an unchanged application payload/,
+    );
+    expect(contract!.invariants.join("\n")).toMatch(/adds no dispatch index/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "baselineEnqueueMs",
+        "instrumentedEnqueueMs",
+        "baselineClaimMs",
+        "instrumentedClaimMs",
+        "exportedSpans",
+        "exportedMetrics",
+      ]),
+    );
+    expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|latency target|sla/);
+  });
 });
 
 describe("resolveOperationalScenarioOptions", () => {

@@ -1,4 +1,5 @@
 import { CronExpressionParser } from "cron-parser";
+import type { Span } from "@opentelemetry/api";
 import type {
   BulkRedrivePage,
   BulkRedriveOptions,
@@ -45,7 +46,9 @@ import type {
   WorkerPauseResult,
   WorkerRegistration,
   WorkerRegistryEntry,
+  TraceContext,
 } from "./types.js";
+import { injectTraceContext, jobSpanAttributes, telemetryMetrics, withSpan } from "./telemetry.js";
 
 export interface ScheduleJobDefinition {
   type: string;
@@ -119,6 +122,7 @@ type ClaimRow = {
   job_id: string;
   job_type: string;
   payload: Json;
+  trace_context: TraceContext | null;
   attempt: number;
   max_attempts: number;
   retry_policy: RetryPolicy | null;
@@ -292,7 +296,11 @@ type MaintenancePhaseRow = {
   duration_ms: number;
   skipped_lock: boolean;
   error: Json;
+  expired_leases: number;
+  retried: number;
 };
+
+type RecoveryTelemetry = Pick<MaintenancePhaseRow, "rows_affected" | "expired_leases" | "retried">;
 
 type RetentionPolicyRow = {
   job_identity_retention_days: number | null;
@@ -325,6 +333,16 @@ function maintenancePhaseResult(row: MaintenancePhaseRow): MaintenancePhaseResul
     skippedLock: row.skipped_lock,
     error: row.error,
   };
+}
+
+function recordRecoveryTelemetry(span: Span, recovery: RecoveryTelemetry): void {
+  span.setAttributes({
+    "workhorse.recovery.rows_affected": recovery.rows_affected,
+    "workhorse.recovery.expired_leases": recovery.expired_leases,
+    "workhorse.recovery.retried": recovery.retried,
+  });
+  telemetryMetrics.expiredLeases.add(recovery.expired_leases);
+  telemetryMetrics.retried.add(recovery.retried);
 }
 
 function claimedTimestamp(value: Date | string, field: string): Date {
@@ -921,41 +939,61 @@ export class Queue {
       throw new RangeError(`enqueueMany accepts at most ${MAX_ENQUEUE_BATCH_SIZE} requests`);
     }
 
-    // Supplying an active PoolClient makes the whole batch participate in the caller's transaction.
-    const input = requests.map(({ type, payload, options = {}, tags }) => {
-      const idempotency: EnqueueIdempotency | undefined = options.idempotency;
-      return {
-        queue: options.queue ?? this.defaultQueue,
-        type,
-        payload,
-        ...(options.runAt === undefined && idempotency !== undefined
-          ? {}
-          : { runAt: (options.runAt ?? new Date()).toISOString() }),
-        deadline: options.deadline?.toISOString() ?? null,
-        executionTimeoutMs: options.executionTimeoutMs ?? null,
-        maxAttempts: options.maxAttempts ?? 25,
-        retryPolicy: options.retryPolicy ?? null,
-        tags: tags ?? options.tags ?? [],
-        ...(idempotency === undefined
-          ? {}
-          : {
-              idempotency: {
-                key: idempotency.key,
-                scope: idempotency.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
-                ttlMs: idempotency.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
-              },
-            }),
-      };
-    });
-    try {
-      const result = await transaction.query<{ job_id: string }>(
-        "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
-        [JSON.stringify(input)],
-      );
-      return result.rows.map((row) => row.job_id);
-    } catch (error) {
-      throw enqueueConflict(error) ?? error;
-    }
+    const queueNames = new Set(
+      requests.map((request) => request.options?.queue ?? this.defaultQueue),
+    );
+    return withSpan(
+      "workhorse.enqueue",
+      {
+        ...(queueNames.size === 1
+          ? { "workhorse.queue.name": queueNames.values().next().value! }
+          : {}),
+        ...(requests.length === 1 ? { "workhorse.job.type": requests[0]!.type } : {}),
+        "workhorse.enqueue.count": requests.length,
+      },
+      async (span) => {
+        const traceContext = injectTraceContext();
+        // Supplying an active PoolClient makes the whole batch participate in the caller's transaction.
+        const input = requests.map(({ type, payload, options = {}, tags }) => {
+          const idempotency: EnqueueIdempotency | undefined = options.idempotency;
+          return {
+            queue: options.queue ?? this.defaultQueue,
+            type,
+            payload,
+            ...(traceContext === null ? {} : { traceContext }),
+            ...(options.runAt === undefined && idempotency !== undefined
+              ? {}
+              : { runAt: (options.runAt ?? new Date()).toISOString() }),
+            deadline: options.deadline?.toISOString() ?? null,
+            executionTimeoutMs: options.executionTimeoutMs ?? null,
+            maxAttempts: options.maxAttempts ?? 25,
+            retryPolicy: options.retryPolicy ?? null,
+            tags: tags ?? options.tags ?? [],
+            ...(idempotency === undefined
+              ? {}
+              : {
+                  idempotency: {
+                    key: idempotency.key,
+                    scope: idempotency.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+                    ttlMs: idempotency.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
+                  },
+                }),
+          };
+        });
+        try {
+          const result = await transaction.query<{ job_id: string }>(
+            "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+            [JSON.stringify(input)],
+          );
+          const jobIds = result.rows.map((row) => row.job_id);
+          telemetryMetrics.enqueued.add(jobIds.length);
+          if (jobIds.length === 1) span.setAttribute("workhorse.job.id", jobIds[0]!);
+          return jobIds;
+        } catch (error) {
+          throw enqueueConflict(error) ?? error;
+        }
+      },
+    );
   }
 
   async promote(limit = 100): Promise<number> {
@@ -1110,21 +1148,34 @@ export class Queue {
   async tick(
     options: { promoteLimit?: number; recoverLimit?: number } = {},
   ): Promise<MaintenancePhaseResult[]> {
-    const result = await this.database.query<MaintenancePhaseRow>(
-      "SELECT * FROM workhorse.tick_v1($1, $2)",
-      [options.promoteLimit ?? 1_000, options.recoverLimit ?? 1_000],
+    return this.maintenanceSpan("tick", () =>
+      withSpan("workhorse.recovery", {}, async (span) => {
+        const result = await this.database.query<MaintenancePhaseRow>(
+          "SELECT * FROM workhorse.tick_v1($1, $2)",
+          [options.promoteLimit ?? 1_000, options.recoverLimit ?? 1_000],
+        );
+        const recovery = result.rows.find((row) => row.phase === "recover");
+        if (recovery !== undefined) {
+          span.setAttribute("workhorse.recovery.skipped", recovery.skipped_lock);
+          if (!recovery.skipped_lock && recovery.error === null) {
+            recordRecoveryTelemetry(span, recovery);
+          }
+        }
+        return result.rows.map(maintenancePhaseResult);
+      }),
     );
-    return result.rows.map(maintenancePhaseResult);
   }
 
   async prepareHistoryPartitions(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
-    const result = await this.database.query<MaintenancePhaseRow>(
-      "SELECT * FROM workhorse.prepare_history_partitions_v1($1, $2)",
-      [options.force ?? false, options.now ?? new Date()],
-    );
-    return result.rows.map(maintenancePhaseResult);
+    return this.maintenanceSpan("history_partitions", async () => {
+      const result = await this.database.query<MaintenancePhaseRow>(
+        "SELECT * FROM workhorse.prepare_history_partitions_v1($1, $2)",
+        [options.force ?? false, options.now ?? new Date()],
+      );
+      return result.rows.map(maintenancePhaseResult);
+    });
   }
 
   /**
@@ -1138,31 +1189,55 @@ export class Queue {
   async rollupStatistics(
     options: { now?: Date; maxBuckets?: number; recomputeBuckets?: number } = {},
   ): Promise<MaintenancePhaseResult[]> {
-    const result = await this.database.query<MaintenancePhaseRow>(
-      "SELECT * FROM workhorse.rollup_stats_v1($1, $2, $3)",
-      [options.now ?? new Date(), options.maxBuckets ?? 240, options.recomputeBuckets ?? 2],
-    );
-    return result.rows.map(maintenancePhaseResult);
+    return this.maintenanceSpan("statistics_rollup", async () => {
+      const result = await this.database.query<MaintenancePhaseRow>(
+        "SELECT * FROM workhorse.rollup_stats_v1($1, $2, $3)",
+        [options.now ?? new Date(), options.maxBuckets ?? 240, options.recomputeBuckets ?? 2],
+      );
+      return result.rows.map(maintenancePhaseResult);
+    });
   }
 
   async retainHistory(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
-    const result = await this.database.query<MaintenancePhaseRow>(
-      "SELECT * FROM workhorse.retain_history_v1($1, $2)",
-      [options.force ?? false, options.now ?? new Date()],
-    );
-    return result.rows.map(maintenancePhaseResult);
+    return this.maintenanceSpan("history_retention", async () => {
+      const result = await this.database.query<MaintenancePhaseRow>(
+        "SELECT * FROM workhorse.retain_history_v1($1, $2)",
+        [options.force ?? false, options.now ?? new Date()],
+      );
+      return result.rows.map(maintenancePhaseResult);
+    });
   }
 
   async pruneTerminalStorage(
     options: { force?: boolean; now?: Date } = {},
   ): Promise<MaintenancePhaseResult[]> {
-    const result = await this.database.query<MaintenancePhaseRow>(
-      "SELECT * FROM workhorse.prune_terminal_storage_v1($1, $2)",
-      [options.force ?? false, options.now ?? new Date()],
+    return this.maintenanceSpan("terminal_storage", async () => {
+      const result = await this.database.query<MaintenancePhaseRow>(
+        "SELECT * FROM workhorse.prune_terminal_storage_v1($1, $2)",
+        [options.force ?? false, options.now ?? new Date()],
+      );
+      return result.rows.map(maintenancePhaseResult);
+    });
+  }
+
+  private maintenanceSpan(
+    operation: string,
+    run: () => Promise<MaintenancePhaseResult[]>,
+  ): Promise<MaintenancePhaseResult[]> {
+    return withSpan(
+      "workhorse.maintenance",
+      { "workhorse.maintenance.operation": operation },
+      async (span) => {
+        const results = await run();
+        span.setAttribute(
+          "workhorse.maintenance.rows_affected",
+          results.reduce((total, result) => total + result.rowsAffected, 0),
+        );
+        return results;
+      },
     );
-    return result.rows.map(maintenancePhaseResult);
   }
 
   async syncRetentionPolicy(definition: RetentionPolicyDefinition): Promise<RetentionPolicy> {
@@ -1238,11 +1313,16 @@ export class Queue {
       maxAttempts: definition.job.maxAttempts ?? 25,
       retryPolicy: definition.job.retryPolicy ?? null,
     }));
-    await this.database.query("SELECT workhorse.sync_schedule_definitions_v1($1, $2::jsonb, $3)", [
-      namespace,
-      JSON.stringify(input),
-      options.prune ?? true,
-    ]);
+    await withSpan(
+      "workhorse.schedule.synchronize",
+      { "workhorse.schedule.definition_count": definitions.length },
+      async () => {
+        await this.database.query(
+          "SELECT workhorse.sync_schedule_definitions_v1($1, $2::jsonb, $3)",
+          [namespace, JSON.stringify(input), options.prune ?? true],
+        );
+      },
+    );
   }
 
   async schedules(namespaces: readonly string[]): Promise<StoredSchedule[]> {
@@ -1655,28 +1735,42 @@ export class Queue {
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedJob<TPayload> | null> {
-    // claim_v1 commits ownership before returning the payload. Handler code must run only after
-    // this query resolves so no row lock or claim transaction spans user code.
-    const result = await this.database.query<ClaimRow>(
-      "SELECT * FROM workhorse.claim_v1($1, $2, $3)",
-      [options.queue ?? this.defaultQueue, workerId, options.leaseMs ?? 30_000],
-    );
-    const row = result.rows[0];
-    if (!row) return null;
-    return {
-      id: row.job_id,
-      type: row.job_type,
-      payload: row.payload as TPayload,
-      attempt: row.attempt,
-      maxAttempts: row.max_attempts,
-      retryPolicy: row.retry_policy,
-      deadlineAt: nullableClaimedTimestamp(row.deadline_at, "deadline_at"),
-      executionTimeoutMs:
-        row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
-      attemptTimeoutAt: nullableClaimedTimestamp(row.attempt_timeout_at, "attempt_timeout_at"),
-      fenceToken: BigInt(row.fence_token),
-      leaseExpiresAt: claimedTimestamp(row.lease_expires_at, "lease_expires_at"),
-    };
+    const queueName = options.queue ?? this.defaultQueue;
+    const startedAt = performance.now();
+    return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
+      // claim_v1 commits ownership before returning the payload. Handler code must run only after
+      // this query resolves so no row lock or claim transaction spans user code.
+      const result = await this.database.query<ClaimRow>(
+        "SELECT * FROM workhorse.claim_v1($1, $2, $3)",
+        [queueName, workerId, options.leaseMs ?? 30_000],
+      );
+      const row = result.rows[0];
+      telemetryMetrics.claimDuration.record(performance.now() - startedAt, {
+        "workhorse.claim.result": row === undefined ? "empty" : "claimed",
+      });
+      if (!row) return null;
+      span.setAttributes({
+        "workhorse.job.id": row.job_id,
+        "workhorse.job.type": row.job_type,
+        "workhorse.job.attempt": row.attempt,
+      });
+      telemetryMetrics.claimed.add(1);
+      return {
+        id: row.job_id,
+        type: row.job_type,
+        payload: row.payload as TPayload,
+        traceContext: row.trace_context,
+        attempt: row.attempt,
+        maxAttempts: row.max_attempts,
+        retryPolicy: row.retry_policy,
+        deadlineAt: nullableClaimedTimestamp(row.deadline_at, "deadline_at"),
+        executionTimeoutMs:
+          row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
+        attemptTimeoutAt: nullableClaimedTimestamp(row.attempt_timeout_at, "attempt_timeout_at"),
+        fenceToken: BigInt(row.fence_token),
+        leaseExpiresAt: claimedTimestamp(row.lease_expires_at, "lease_expires_at"),
+      };
+    });
   }
 
   async heartbeat(job: ClaimedJob<unknown>, workerId: string, leaseMs = 30_000): Promise<boolean> {
@@ -1688,21 +1782,36 @@ export class Queue {
     workerId: string,
     leaseMs = 30_000,
   ): Promise<HeartbeatStatus> {
-    // Cancellation and stale ownership both stop compatibility callers, while workers can use the
-    // status API to deliver a distinct cooperative cancellation signal.
-    const result = await this.database.query<{ status: HeartbeatStatus }>(
-      "SELECT workhorse.heartbeat_v2($1, $2, $3, $4) AS status",
-      [job.id, workerId, job.fenceToken.toString(), leaseMs],
-    );
-    return result.rows[0]!.status;
+    return withSpan("workhorse.heartbeat", jobSpanAttributes(job), async (span) => {
+      // Cancellation and stale ownership both stop compatibility callers, while workers can use the
+      // status API to deliver a distinct cooperative cancellation signal.
+      const result = await this.database.query<{ status: HeartbeatStatus }>(
+        "SELECT workhorse.heartbeat_v2($1, $2, $3, $4) AS status",
+        [job.id, workerId, job.fenceToken.toString(), leaseMs],
+      );
+      const status = result.rows[0]!.status;
+      span.setAttribute("workhorse.heartbeat.status", status);
+      return status;
+    });
   }
 
   async expireOwned(job: ClaimedJob<unknown>, workerId: string): Promise<ExpireOwnedStatus> {
-    const result = await this.database.query<{ status: ExpireOwnedStatus }>(
-      "SELECT workhorse.expire_owned_v1($1, $2, $3) AS status",
-      [job.id, workerId, job.fenceToken.toString()],
-    );
-    return result.rows[0]!.status;
+    const result = await this.database.query<{
+      status: ExpireOwnedStatus;
+      retry_state: "ready" | "scheduled" | null;
+    }>("SELECT * FROM workhorse.expire_owned_telemetry_v1($1, $2, $3)", [
+      job.id,
+      workerId,
+      job.fenceToken.toString(),
+    ]);
+    const expiration = result.rows[0]!;
+    if (expiration.retry_state !== null) {
+      await withSpan("workhorse.retry", jobSpanAttributes(job), async (span) => {
+        span.setAttribute("workhorse.retry.outcome", expiration.retry_state!);
+        telemetryMetrics.retried.add(1);
+      });
+    }
+    return expiration.status;
   }
 
   async acknowledgeCancel(job: ClaimedJob<unknown>, workerId: string): Promise<boolean> {
@@ -1901,13 +2010,18 @@ export class Queue {
     workerId: string,
     result: TResult,
   ): Promise<boolean> {
-    // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
-    // rather than overwriting the result of a recovered attempt.
-    const query = await this.database.query<{ accepted: boolean }>(
-      "SELECT workhorse.complete_v1($1, $2, $3, $4::jsonb) AS accepted",
-      [job.id, workerId, job.fenceToken.toString(), JSON.stringify(result)],
-    );
-    return query.rows[0]!.accepted;
+    return withSpan("workhorse.complete", jobSpanAttributes(job), async (span) => {
+      // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
+      // rather than overwriting the result of a recovered attempt.
+      const query = await this.database.query<{ accepted: boolean }>(
+        "SELECT workhorse.complete_v1($1, $2, $3, $4::jsonb) AS accepted",
+        [job.id, workerId, job.fenceToken.toString(), JSON.stringify(result)],
+      );
+      const accepted = query.rows[0]!.accepted;
+      span.setAttribute("workhorse.complete.accepted", accepted);
+      if (accepted) telemetryMetrics.completed.add(1);
+      return accepted;
+    });
   }
 
   async fail(
@@ -1924,36 +2038,50 @@ export class Queue {
     | "timeout_exceeded"
     | "stale"
   > {
-    // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
-    // creating the next projection. Undefined selects SQL-owned backoff; a number explicitly
-    // overrides it, including zero for an immediate retry.
-    const result = await this.database.query<{
-      state:
-        | "ready"
-        | "scheduled"
-        | "failed"
-        | "cancel_requested"
-        | "deadline_exceeded"
-        | "timeout_exceeded"
-        | "stale";
-    }>("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, $5) AS state", [
-      job.id,
-      workerId,
-      job.fenceToken.toString(),
-      JSON.stringify(errorEnvelope(error)),
-      retryDelayMs ?? null,
-    ]);
-    return result.rows[0]!.state;
+    return withSpan("workhorse.retry", jobSpanAttributes(job), async (span) => {
+      // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
+      // creating the next projection. Undefined selects SQL-owned backoff; a number explicitly
+      // overrides it, including zero for an immediate retry.
+      const result = await this.database.query<{
+        state:
+          | "ready"
+          | "scheduled"
+          | "failed"
+          | "cancel_requested"
+          | "deadline_exceeded"
+          | "timeout_exceeded"
+          | "stale";
+      }>("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, $5) AS state", [
+        job.id,
+        workerId,
+        job.fenceToken.toString(),
+        JSON.stringify(errorEnvelope(error)),
+        retryDelayMs ?? null,
+      ]);
+      const state = result.rows[0]!.state;
+      span.setAttribute("workhorse.retry.outcome", state);
+      telemetryMetrics.failed.add(1);
+      if (state === "ready" || state === "scheduled") telemetryMetrics.retried.add(1);
+      return state;
+    });
   }
 
   async recoverExpired(limit = 100, retryDelayMs?: number): Promise<number> {
-    // Recovery may be called by many workers. SKIP LOCKED inside the function partitions work
-    // between callers while fence checks prevent an old lease from recovering a newer attempt.
-    const result = await this.database.query<{ count: number }>(
-      "SELECT workhorse.recover_expired_v1($1, $2) AS count",
-      [limit, retryDelayMs ?? null],
-    );
-    return result.rows[0]!.count;
+    return withSpan("workhorse.recovery", {}, async (span) => {
+      // Recovery may be called by many workers. SKIP LOCKED inside the function partitions work
+      // between callers while fence checks prevent an old lease from recovering a newer attempt.
+      const result = await this.database.query<{
+        rows_affected: number;
+        expired_leases: number;
+        retried: number;
+      }>("SELECT * FROM workhorse.recover_expired_telemetry_v1($1, $2)", [
+        limit,
+        retryDelayMs ?? null,
+      ]);
+      const recovery = result.rows[0]!;
+      recordRecoveryTelemetry(span, recovery);
+      return recovery.rows_affected;
+    });
   }
 
   async getJob<TResult = Json>(id: string): Promise<JobSnapshot<TResult> | null> {

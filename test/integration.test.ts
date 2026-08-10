@@ -142,11 +142,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v18 with fenced mutable progress storage", async () => {
+  it("installs schema v19 with bounded trace metadata and fenced mutable progress storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(18);
+    expect(version.rows[0]?.version).toBe(19);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -259,6 +259,62 @@ describe("live-runtime queue protocol", () => {
        ORDER BY column_name`);
     expect(idempotencyColumns.rows.map((row) => row.column_name)).toContain("idempotency_key_hash");
     expect(idempotencyColumns.rows.map((row) => row.column_name)).not.toContain("idempotency_key");
+  });
+
+  it("persists bounded trace context separately from the payload and returns it on claim", async () => {
+    const traceContext = {
+      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      tracestate: "vendor=value",
+    };
+    const enqueued = await pool.query<{ job_id: string }>(
+      "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb)",
+      [JSON.stringify([{ queue: "default", type: "traced", payload: { value: 1 }, traceContext }])],
+    );
+
+    const stored = await pool.query<{ payload: Json; trace_context: Json }>(
+      "SELECT payload, trace_context FROM workhorse.job WHERE id = $1",
+      [enqueued.rows[0]!.job_id],
+    );
+    expect(stored.rows[0]).toEqual({ payload: { value: 1 }, trace_context: traceContext });
+    expect((await queue.claim("trace-worker"))?.traceContext).toEqual(traceContext);
+
+    await expect(
+      pool.query("SELECT * FROM workhorse.enqueue_many_v1($1::jsonb)", [
+        JSON.stringify([
+          {
+            queue: "default",
+            type: "invalid-trace",
+            payload: null,
+            traceContext: { traceparent: "valid-shape", baggage: "not accepted" },
+          },
+        ]),
+      ]),
+    ).rejects.toThrow(/traceContext/);
+  });
+
+  it("reports exact retry and expired-lease counts from the production tick recovery phase", async () => {
+    const retryId = await queue.enqueue("telemetry-retry", null, { maxAttempts: 2 });
+    const terminalId = await queue.enqueue("telemetry-terminal", null, { maxAttempts: 1 });
+    expect((await queue.claim("telemetry-retry-worker", { leaseMs: 100 }))?.id).toBe(retryId);
+    expect((await queue.claim("telemetry-terminal-worker", { leaseMs: 100 }))?.id).toBe(terminalId);
+    await pool.query(
+      `UPDATE workhorse.job_runtime
+          SET expires_at = clock_timestamp() - interval '1 second'
+        WHERE job_id = ANY($1::uuid[])`,
+      [[retryId, terminalId]],
+    );
+
+    const tick = await pool.query<{
+      phase: string;
+      rows_affected: number;
+      expired_leases: number;
+      retried: number;
+    }>("SELECT * FROM workhorse.tick_v1(100, 100)");
+    const recovery = tick.rows.find((row) => row.phase === "recover");
+
+    expect(recovery).toMatchObject({ rows_affected: 2, expired_leases: 2, retried: 1 });
+    expect((await queue.getJob(retryId))?.state).toBe("ready");
+    expect((await queue.getJob(terminalId))?.state).toBe("failed");
   });
 
   it("lists only failed outcomes with filters, a stable cursor, and a partial cold index", async () => {
@@ -1860,7 +1916,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(18);
+    expect(health.schemaVersion).toBe(19);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2463,7 +2519,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v18 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v19 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -6105,7 +6161,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(18);
+    expect(health.schemaVersion).toBe(19);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);

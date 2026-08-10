@@ -18,20 +18,17 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P0-02 Production telemetry**
-2. **P1-08 Payload contracts and limits**
-3. **P0-04 Notification-assisted dispatch**
-4. **P1-06 Queue concurrency policies**
+1. **P1-08 Payload contracts and limits**
+2. **P0-04 Notification-assisted dispatch**
+3. **P1-06 Queue concurrency policies**
 
 The demo, the initial integration packages, the operator query surface, progress, dead letters,
 deadlines, the durable worker registry, the framework-neutral dashboard host, and the release and
 compatibility matrix are complete.
 
-Full OpenTelemetry support is first because two later features (P0-06, P2-10) wait on it; each
-earlier feature must still ship the focused diagnostics and benchmark evidence needed to validate
-its own correctness. P1-05 and P1-06 are deliberately after P0-02 because both make claims about
-claim latency that should be instrumented before the hot path changes. P0-07 landed first because
-the published packages had no supported-version contract, and it unblocks P2-06 and P2-07.
+Full OpenTelemetry support is complete, so later claim-path work can measure latency before and
+after changing dispatch. P0-07 also established the published compatibility contract needed by
+P2-06 and P2-07.
 
 ## P0: demo vertical slice and production hardening
 
@@ -94,17 +91,17 @@ understandable, installable, and useful.
 - [x] Report retention lag, default-partition usage, and the oldest retained boundary in health
       output.
 
-### [ ] P0-02 Production telemetry
+### [x] P0-02 Production telemetry
 
 **Depends on:** none
 
-- [ ] Add OpenTelemetry spans for enqueue, claim, handler execution, heartbeat, retry, completion,
+- [x] Add OpenTelemetry spans for enqueue, claim, handler execution, heartbeat, retry, completion,
       recovery, maintenance, and schedule synchronization.
-- [ ] Expose low-cardinality metrics for queue depth, age, throughput, failures, retries, expired
+- [x] Expose low-cardinality metrics for queue depth, age, throughput, failures, retries, expired
       leases, claim latency, handler latency, and maintenance drift.
-- [ ] Define trace and metric attribute cardinality limits. Never use job IDs as metric labels.
-- [ ] Propagate caller trace context through job metadata without mutating the job payload.
-- [ ] Document dashboards and alert thresholds for stalled queues and degraded maintenance.
+- [x] Define trace and metric attribute cardinality limits. Never use job IDs as metric labels.
+- [x] Propagate caller trace context through job metadata without mutating the job payload.
+- [x] Document dashboards and alert thresholds for stalled queues and degraded maintenance.
 
 ### [x] P0-03 Configurable worker concurrency
 
