@@ -1,75 +1,131 @@
 ---
-title: Where do I find the Workhorse API?
-description: Use the exported surface to choose an entry point, then rely on the published declarations for exact signatures.
+title: Where do I find each Workhorse API?
+description: Find exported identifiers by responsibility, then use the published declarations for exact signatures.
 ---
 
-Most applications need `Queue`, `Worker`, and one schema check from `@workhorse/core`. The published
-type declarations are authoritative for signatures because they ship with the implementation.
+This page is an index of the public surface, not another explanation of its concepts. Follow the
+guide links for behavior and the published declarations for exact types.
 
-## Manage the schema
+## Schema and support
 
-`installSchema` installs a clean schema during deployment. `readSchemaVersion` inspects an existing
-database, while `assertSchemaCompatible` protects runtime startup.
+`installSchema`, `readSchemaVersion`, `assertSchemaCompatible`, `WORKHORSE_SCHEMA_VERSION`,
+`assertSupportedPostgres`, `describePostgresSupport`, `readPostgresSupport`, `MINIMUM_NODE_MAJOR`,
+`MINIMUM_POSTGRES_MAJOR`, `SUPPORTED_NODE_MAJORS`, `SUPPORTED_POSTGRES_MAJORS`, and `PostgresSupport`.
 
-`WORKHORSE_SCHEMA_VERSION`, `describePostgresSupport`, and the exported support constants let tooling
-explain the runtime boundary without duplicating it.
+## Queue production and control
 
-## Accept and inspect jobs with `Queue`
+`Queue`, `EnqueueOptions`, `EnqueueRequest`, `EnqueueIdempotency`, `RetryPolicy`, `RunTaskNowResult`,
+`RunTaskNowStatus`, `ScheduleWaitRequest`, `ScheduleWaitResult`, `ScheduleDefinition`,
+`ScheduleJobDefinition`, and `StoredSchedule`.
 
-`Queue.enqueue` and `enqueueMany` accept work. Queue controls include `pauseQueue`, `resumeQueue`,
-`purgeQueue`, `promote`, and `runTaskNow`.
+The exported constants are `MAX_ENQUEUE_BATCH_SIZE`, `DEFAULT_IDEMPOTENCY_SCOPE`,
+`DEFAULT_IDEMPOTENCY_TTL_MS`, `MAX_IDEMPOTENCY_KEY_BYTES`, `MAX_IDEMPOTENCY_SCOPE_BYTES`,
+`MAX_IDEMPOTENCY_TTL_MS`, and `MAX_EXECUTION_TIMEOUT_MS`.
 
-Operator reads include `getJob`, `listJobs`, `getJobTimeline`, `health`, `listWorkers`, and the durable
-boundary readers.
+## Job reads and durable evidence
 
-Cancellation uses `cancel`. Failure recovery uses `listDeadLetters`, `redrive`, `redriveMany`, and
-`getRedriveLineage`.
+`Json`, `JobState`, `JobSnapshot`, `ClaimedJob`, `JobCheckpoint`, `JobProgress`, `JobWait`,
+`JobListFilter`, `JobListQuery`, `JobListCursor`, `JobListItem`, `JobListPage`,
+`JobPayloadProjection`, `JobPayloadStatus`, `JobTimelineQuery`, `JobTimelineCursor`,
+`JobTimelineEntry`, `JobTimelineEvent`, `JobTimelineAttempt`, `JobTimelinePage`, and
+`JobAttemptOutcome`.
 
-Schedule and policy methods include `syncSchedules`, `schedules`, `syncRetentionPolicy`,
-`syncMaintenancePolicy`, and their corresponding readers.
+The related constants are `MAX_CHECKPOINT_VALUE_BYTES`, `MAX_PROGRESS_VALUE_BYTES`,
+`MIN_PROGRESS_UPDATE_INTERVAL_MS`, `MAX_WAIT_DURATION_MS`, `MAX_JOB_QUERY_PAGE_SIZE`,
+`DEFAULT_JOB_QUERY_PAYLOAD_BYTES`, `MAX_JOB_QUERY_PAYLOAD_BYTES`, and
+`MAX_JOB_QUERY_REDACT_KEYS`.
 
-Low-level protocol methods such as `claim`, `heartbeatStatus`, `complete`, `fail`, and
-`acknowledgeCancel` exist for custom runtimes and tests. Ordinary applications should let `Worker`
-drive them.
+## Cancellation and failure recovery
 
-## Execute handlers with `Worker`
+`CancellationRequest`, `CancelResult`, `CancelStatus`, `HeartbeatStatus`, `ExpireOwnedStatus`,
+`DeadLetterFilter`, `DeadLetterCursor`, `DeadLetterQuery`, `DeadLetter`, `DeadLetterPage`,
+`RedriveRequest`, `RedriveResult`, `RedriveStatus`, `RedriveLineage`, `RedriveLineageRecord`,
+`BulkRedriveOptions`, and `BulkRedrivePage`.
 
-`Worker.handle` registers a `Handler`. `run` owns the continuous loop, while `runOnce` performs one
-claim pass for tests and scripts.
+The related constants are `MAX_CANCELLATION_REQUESTED_BY_CHARACTERS`,
+`MAX_CANCELLATION_REASON_CHARACTERS`, `MAX_REDRIVE_BATCH_SIZE`, and
+`MAX_REDRIVE_REQUEST_ID_BYTES`.
 
-`pause`, `resume`, `stop`, `runtimeState`, and `maintenanceTelemetry` expose local lifecycle state.
-The worker ID is its lease-owner identity rather than a stable deployment name.
+## Workers and processes
 
-`HandlerContext` provides `job`, `signal`, `checkpoint`, `getCheckpoint`, `sleep`, `sleepUntil`,
-`getWait`, `setProgress`, and `getProgress`.
+`Worker`, `Handler`, `HandlerContext`, `WorkerOptions`, `WorkerRuntimeState`,
+`WorkerMaintenanceTelemetry`, `WorkerRegistration`, `WorkerPauseResult`, `WorkerRegistryEntry`,
+`MaintenancePhase`, and `MaintenancePhaseResult`.
 
-## Build process and framework adapters
+Process exports are `defineWorkerProcess`, `startWorkerProcess`, `runWorkerProcess`,
+`WorkerProcessDefinition`, `WorkerProcessWorkerDefinition`, `WorkerProcessLogger`,
+`WorkerProcessProbeOptions`, `WorkerProcessSignal`, `WorkerProcessSignalSource`,
+`RunWorkerProcessOptions`, and `StartedWorkerProcess`.
 
-`createWorkhorseAdapter` gives database providers a stable `WorkhorseAdapter`. Dedicated processes use
-`defineWorkerProcess`, `startWorkerProcess`, or `runWorkerProcess`.
+## Database and framework adapters
 
-`@workhorse/drizzle` exports `createDrizzleAdapter`, `drizzleQueryable`, and `DrizzleQueryError`.
-`@workhorse/hono` exports `HonoWorkhorse`, `serveWithWorkhorse`, and `mountWorkhorseDashboard`.
+Core exports `Queryable`, `createWorkhorseAdapter`, `WorkhorseAdapter`, and
+`WorkhorseAdapterOptions`.
 
-`@workhorse/dashboard` exports the React surface, while `@workhorse/dashboard/server` exports the
-host, Node middleware, read models, router, SQL adapter, and packaged asset helpers.
+`@workhorse/drizzle` exports `createDrizzleAdapter`, `drizzleQueryable`, `DrizzleExecutor`,
+`DrizzleAdapterOptions`, and `DrizzleQueryError`.
 
-## Handle typed failures narrowly
+`@workhorse/hono` exports `HonoWorkhorse`, `HonoWorkhorseContext`, `HonoWorkhorseEnv`,
+`HonoWorkerDefinition`, `HonoWorkhorseOptions`, `serveWithWorkhorse`,
+`ServeWithWorkhorseOptions`, `HonoWorkhorseServer`, `mountWorkhorseDashboard`, and
+`MountWorkhorseDashboardOptions`.
 
-Core exports distinct errors for enqueue and redrive conflicts. Other classes cover stale writes,
-boundary conflicts, rate or count limits, cancellation, deadlines, timeouts, and test failpoints.
+`@workhorse/dashboard` exports `Dashboard`, `DashboardProps`, `WorkhorseThemeProvider`,
+`DashboardColorScheme`, and `useWorkhorseTheme`.
 
-Catch the narrow class whose recovery your application understands, then rethrow unknown errors.
-Avoid switching on message text because the classes and structured details are the stable contract.
+Notification exports are `DashboardNotifications`, `DashboardNotification`,
+`dashboardNotificationPosition`, `notifyDashboard`, `notifyFailure`, and
+`clearDashboardNotifications`.
+
+Client types are `DashboardAuditInput`, `DashboardClient`, `DashboardDemoJobKind`,
+`DashboardDemoScenario`, and `DashboardDemoTools`.
+
+Location exports are `parseTaskLocation`, `taskDetailNavigation`, `taskListingKey`,
+`taskLocationHref`, `taskPageSizes`, `TaskActivityGroup`, `TaskActivityPeriod`,
+`TaskDetailNavigation`, `TaskLocationState`, and `TaskPageSize`.
+
+`@workhorse/dashboard/client` exports `createDashboardClient`.
+
+`@workhorse/dashboard/server` exports `createDashboardHost`, `DashboardHost`,
+`DashboardHostOptions`, `dashboardNodeMiddleware`, and `DashboardNodeMiddleware`.
+
+Its router and readers are `dashboardRouter`, `DashboardRouter`, `DashboardRpcContext`,
+`readDashboardEvents`, `readDashboardSnapshot`, and `readDashboardWorkers`.
+
+Its reader type is `DashboardEventsQuery`. Its database exports are `dashboardDatabase`,
+`DashboardDatabase`, `DashboardSql`, and `sql`.
+
+Host helpers are `dashboardAssetsDirectory`, `normalizeDashboardPath`, `renderDashboardHtml`,
+`DashboardRuntimeConfig`, `RenderDashboardHtmlOptions`, `DASHBOARD_BROWSER_MODULES_PLACEHOLDER`, and
+`DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER`.
+
+Its control types are `DashboardAuditContext`, `DashboardCancelTaskResult`,
+`DashboardDurabilityProjector`, `DashboardOperator`, `DashboardQueueController`,
+`DashboardScheduleController`, `DashboardTaskController`, and `DashboardWorkerController`.
+
+## Policy and health
+
+`RetentionPolicyDefinition`, `RetentionPolicy`, `MaintenancePolicyDefinition`, `MaintenancePolicy`,
+`RetentionCategoryValues`, and `QueueHealth`.
+
+## Errors
+
+`EnqueueIdempotencyConflictError`, `EnqueueIdempotencyConflictDetails`,
+`EnqueueIdempotencyConflictField`, `RedriveIdempotencyConflictError`,
+`RedriveIdempotencyConflictDetails`, `RedriveIdempotencyConflictField`,
+`CheckpointConflictError`, `CheckpointLeaseLostError`, `ProgressLeaseLostError`,
+`ProgressRateLimitError`, `WaitConflictError`, `WaitLeaseLostError`, `WaitLimitExceededError`,
+`CancellationRequestedError`, `DeadlineExceededError`, `ExecutionTimeoutError`, `InjectedCrashError`,
+and `Failpoint`.
 
 The current declaration entry point is
 [`src/index.ts`](https://github.com/stablemates/workhorse/blob/main/src/index.ts).
 
 ## Next
 
-- [Enqueue and transactions](/docs/enqueue) — use the main producer methods
-- [Workers](/docs/workers) — use the main execution methods
-- [Examples](/docs/examples) — see the exports in working patterns
+- [Enqueue and transactions](/docs/enqueue) — understand producer behavior
+- [Workers](/docs/workers) — understand handler behavior
+- [Queries and timelines](/docs/queries) — understand operator reads
 
 ---
 

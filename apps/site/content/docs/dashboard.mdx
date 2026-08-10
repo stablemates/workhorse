@@ -10,7 +10,7 @@ framework-neutral host. It does not need to run beside the workers it observes.
 
 The interface lists jobs, attempts, checkpoints, progress, schedules, queues, workers, failures, and
 system health. It can also expose host-authorized controls for cancellation, run-now actions, queue
-state, schedules, and worker pause.
+state, schedules, and requests that pause workers.
 
 Every view comes from PostgreSQL read models. A dashboard process can therefore report workers from
 separate machines without reading their process memory.
@@ -57,9 +57,9 @@ tokens and layout.
 `configuredWorkers` can describe expected processes before they first register. `projectDurability`
 can translate checkpoint evidence into domain-specific steps without changing stored queue data.
 
-The standalone `workhorse dashboard` command is useful for a local console. It is read-only unless
-the operator explicitly enables mutations, so an authenticated embedded mount remains the production
-choice.
+The standalone `workhorse dashboard` command is useful for a local console. Unless the operator
+explicitly enables mutations, the command remains read-only. An authenticated embedded mount remains
+the production choice.
 
 ## Read refreshes as bounded polling
 
@@ -73,7 +73,7 @@ worker registry data can lag their underlying processes.
 
 - [Queries and timelines](/docs/queries) — use the same read models from application code
 - [Hono](/docs/hono) — mount the host in a Hono application
-- [Workers](/docs/workers) — publish fleet state and receive operator pause
+- [Workers](/docs/workers) — publish fleet state and receive requests to stop work
 
 ---
 

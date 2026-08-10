@@ -3,8 +3,8 @@ title: How do I report job progress?
 description: Publish a bounded latest-value projection for operators without changing durable control flow.
 ---
 
-Progress answers what an active handler is doing now. It is mutable operator data, so it cannot prove
-that a stage should be skipped after a retry.
+Progress answers what an active handler is doing now. It is mutable operator data, so it cannot tell
+Workhorse to skip a stage after a retry.
 
 ## Publish the latest value
 

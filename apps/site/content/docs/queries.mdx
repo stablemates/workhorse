@@ -37,9 +37,9 @@ const page = await queue.listJobs({
 });
 ```
 
-Payload is omitted by default because operator lists rarely need it. When requested, PostgreSQL
-applies bounded top-level redaction and a response ceiling, then marks each payload as included,
-omitted, or too large.
+`Queue.listJobs` omits payload by default because operator lists rarely need it. When requested,
+PostgreSQL applies bounded top-level redaction and a response ceiling. It then marks each payload as
+included, omitted, or too large.
 
 A cursor belongs to the filters and payload projection that created it. Reusing it with a different
 query fails instead of silently changing page membership.

@@ -49,13 +49,13 @@ lease recovery. Set a persisted policy when consistent timing matters.
 ## What survives another attempt?
 
 The job ID, payload, tags, policy, and saved checkpoints remain. PostgreSQL increments the attempt,
-and the next claim receives a new fence token.
+and it assigns a new fence token when the next worker claims the job.
 
 A retry is another run of the same job. A redrive happens only after terminal failure and creates a
 new job identity.
 
 `JobSnapshot.retryPolicy` shows the normalized policy. Timeline events record the selected delay and
-its source, which lets an operator explain why a job is waiting.
+its source, which lets an operator explain why a job remains scheduled.
 
 ## Next
 

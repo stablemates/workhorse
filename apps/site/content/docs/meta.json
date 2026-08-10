@@ -22,6 +22,8 @@
     "queries",
     "dead-letters",
     "operations",
+    "worker-processes",
+    "maintenance",
     "---Integrations---",
     "drizzle",
     "hono",

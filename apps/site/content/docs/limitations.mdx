@@ -19,8 +19,8 @@ effect is safe before it replays failures.
 
 ## Scheduling is durable rather than real time
 
-Delayed jobs and durable waits store not-before boundaries. Promotion cadence, queue pause, worker
-availability, and database downtime can delay the next claim.
+Delayed jobs and durable waits store not-before boundaries. If someone pauses the queue, or workers
+or PostgreSQL become unavailable, a worker can claim the job later than its boundary.
 
 Recurring schedules need a running worker with the matching namespace. Workhorse bounds catch-up
 after downtime and does not provide a hard real-time scheduler.

@@ -1,75 +1,37 @@
 ---
-title: How should I deploy and operate Workhorse?
-description: Supervise dedicated workers, drain them safely, and keep PostgreSQL maintenance visible.
+title: Where do I start with Workhorse operations?
+description: Route each operational concern to the guide that owns its mechanism and evidence.
 ---
 
-Run production workers in dedicated processes. That boundary lets you scale queue capacity, database
-connections, and deployment drains independently from HTTP servers.
+Workhorse separates process supervision from database maintenance. Start with the boundary you need
+to change, because each guide keeps its own configuration and failure behavior.
 
-## Start one owned runtime
+## Process supervision
 
-A worker process should create one adapter, configure its workers, start its optional probes, and
-then enter the run loops. If startup fails, it must close every resource it already created.
+[Worker processes](/docs/worker-processes) owns startup, termination signals, drain behavior, probes,
+and database pool ownership.
 
-`defineWorkerProcess` describes this topology. `runWorkerProcess` and the `workhorse worker` CLI add
-the standalone Node.js lifecycle.
+## Database maintenance
 
-An unexpected worker-loop exit is fatal to the process. Sibling workers stop and drain before the
-supervisor restarts the failed unit, which prevents a partially running configuration.
+[Maintenance and retention](/docs/maintenance) owns promotion, recovery, partitions, cleanup,
+retention policy, and the health signals that show lag.
 
-## Drain without canceling jobs
+## Fleet and job controls
 
-On the first termination signal, the process marks readiness false and calls `Worker.stop`. New claim
-requests stop, while active handlers keep their leases and finish normally.
+[Workers](/docs/workers) owns local lifecycle controls and operator requests that stop workers from
+asking for jobs.
+[Cancellation](/docs/cancellation) owns durable requests to stop one job.
 
-A claim already in flight can still commit. The process treats that result as active work and drains
-it instead of abandoning a lease it now owns.
-
-The process deadline bounds this drain. If it expires, hard termination leaves active leases in
-PostgreSQL for ordinary fenced recovery.
-
-Process shutdown does not abort `HandlerContext.signal` and does not create cancellation evidence.
-Use `Queue.cancel` when the job itself must stop.
-
-## Expose narrow probes
-
-The optional probe listener reports liveness while the process exists and readiness while it accepts
-claims. It exposes no jobs, queues, metrics, or mutation APIs.
-
-Keep the process drain shorter than the platform termination window. A later signal requests an
-immediate exit, so handlers must remain safe for recovery after a forced stop.
-
-## Let PostgreSQL coordinate maintenance
-
-Workers call bounded maintenance functions for promotion, expired-lease recovery, partitions,
-history retention, and terminal cleanup. Advisory locks make extra workers cheap contenders rather
-than duplicate cleaners.
-
-`Queue.syncRetentionPolicy` stores the database-wide minimum windows and work bounds. PostgreSQL
-rejects a policy that could remove job identity before retained evidence or redrive descendants.
-
-`Queue.syncMaintenancePolicy` stores when background work becomes eligible. Manual methods such as
-`Queue.tick`, `prepareHistoryPartitions`, `retainHistory`, and `pruneTerminalStorage` exist for tests
-and controlled scripts.
-
-## Watch pressure instead of guessing
-
-Use `Queue.health` or `workhorse-health` to watch ready depth, oldest work, expired leases, overdue
-waits, timing pressure, retention lag, relation churn, long transactions, and lock waits.
-
-`WorkerOptions.onMaintenance` receives one result per SQL phase. Workhorse does not export metrics for
-you, so connect these results and handler instrumentation to your monitoring system.
-
-Give each process its own database pool and close it only after workers drain. Size total pool
-capacity across replicas because claims, heartbeats, maintenance, and handler queries share it.
+[Dashboard](/docs/dashboard) owns the authorization boundary for operator mutations, while
+[Queries and timelines](/docs/queries) owns read-only inspection.
 
 ## Next
 
-- [Workers](/docs/workers) — define handlers and local lifecycle controls
-- [Queries and timelines](/docs/queries) — read the health inputs used here
-- [Compatibility](/docs/compatibility) — enforce the schema boundary during deployment
+- [Worker processes](/docs/worker-processes) — deploy and drain runtime processes
+- [Maintenance and retention](/docs/maintenance) — keep PostgreSQL cleanup healthy
+- [Compatibility](/docs/compatibility) — reject a mismatched runtime before startup
 
 ---
 
-Exact process deadlines, probe behavior, maintenance cadence, and retention policy:
+Exact process and maintenance boundaries:
 [architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#worker-process-lifecycle).

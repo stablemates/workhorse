@@ -8,8 +8,8 @@ namespace, and PostgreSQL reconciles stored definitions to match it.
 
 ## Synchronize the namespace
 
-Call `Queue.syncSchedules` during deployment with every definition the namespace should contain.
-Omitted names become disabled when pruning is enabled.
+Call `Queue.syncSchedules` during deployment with every definition the namespace should contain. If
+pruning is enabled, Workhorse disables omitted names.
 
 ```ts
 await queue.syncSchedules("billing-production", [
@@ -52,8 +52,8 @@ several workers race, PostgreSQL makes every call converge on one job identity.
 A definition revision protects rolling deployments. If a worker fires an old revision after a
 deployment changes the definition, PostgreSQL turns that stale call into a no-op.
 
-If the worker fleet is unavailable, schedules do not fire on time. Catch-up is bounded when workers
-return, so schedules provide durable recurring work rather than hard real-time alarms.
+If the worker fleet is unavailable, schedules do not fire on time. When workers return, Workhorse
+bounds catch-up. Schedules provide durable recurring work rather than hard real-time alarms.
 
 ## What happens after firing?
 

@@ -33,8 +33,8 @@ change a job after a newer worker has claimed it.
 
 ## Why can a handler run again?
 
-The handler runs outside the claim transaction. A process can finish an external effect and die
-before PostgreSQL records success, so recovery must run the handler again.
+The handler runs outside the transaction that grants ownership. A process can finish an external
+effect and die before PostgreSQL records success, so recovery must run the handler again.
 
 That is at-least-once delivery. Use stable provider idempotency keys for external effects, and use
 `HandlerContext.checkpoint` to reuse completed stages inside a job.

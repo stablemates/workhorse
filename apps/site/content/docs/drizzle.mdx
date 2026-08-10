@@ -66,8 +66,8 @@ code when available, and original cause. Typed Workhorse conflicts remain their 
 
 ## Keep resource ownership explicit
 
-The adapter does not close caller-owned resources unless you supply `close`. Add that hook only when
-the adapter owns the pool, because `adapter.close` may run during process shutdown or failed startup.
+Unless you supply `close`, the adapter leaves caller-owned resources open. Add that hook only when the
+adapter owns the pool, because `adapter.close` may run during process shutdown or failed startup.
 
 Install the Workhorse schema with the core deployment tools. Drizzle should not generate or migrate
 Workhorse's versioned SQL functions.

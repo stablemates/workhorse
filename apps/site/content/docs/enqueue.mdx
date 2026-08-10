@@ -17,8 +17,8 @@ await queue.enqueue("email.send", { to: "person@example.com" });
 await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", runAt: reminderDate });
 ```
 
-`runAt` is a not-before boundary. Queue pauses, worker availability, and promotion cadence can delay
-the eventual claim.
+`runAt` is a not-before boundary. If someone pauses the queue, or workers become unavailable, a
+worker can claim the job later than the boundary.
 
 `EnqueueOptions` also carries tags, an attempt budget, a retry policy, a deadline, an execution
 timeout, and enqueue idempotency. The architecture reference owns their exact bounds and defaults.
@@ -63,14 +63,15 @@ job. A `Worker` claims from its configured queue.
 Workhorse orders ready jobs by FIFO sequence and has no priority layer. Use separate queue names when
 different work needs different capacity or worker policy.
 
-`Queue.pauseQueue` stops new claims without changing jobs. `Queue.resumeQueue` reopens claims, while
-`Queue.purgeQueue` removes waiting work and releases its enqueue keys.
+`Queue.pauseQueue` prevents workers from claiming new jobs without changing them. `Queue.resumeQueue`
+lets workers claim again, while `Queue.purgeQueue` removes scheduled work and releases its enqueue
+keys.
 
 ## Next
 
 - [Idempotency](/docs/idempotency) — make repeated acceptance converge on one job
 - [Schedules](/docs/schedules) — create recurring jobs from desired state
-- [Workers](/docs/workers) — claim the work you accepted
+- [Workers](/docs/workers) — let a process claim the work you accepted
 
 ---
 

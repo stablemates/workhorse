@@ -34,8 +34,8 @@ const worker = new Worker(queue).handle("email.welcome", async (payload: { to: s
 
 ## Enqueue and run the job
 
-`Queue.enqueue` returns the durable job ID. `Worker.runOnce` performs one claim pass, which makes it
-useful in a small example or a test.
+`Queue.enqueue` returns the durable job ID. `Worker.runOnce` performs one pass that claims available
+work, which makes it useful in a small example or a test.
 
 ```ts
 const jobId = await queue.enqueue("email.welcome", {
@@ -48,7 +48,7 @@ await pool.end();
 ```
 
 Production workers normally call `Worker.run` and keep its promise until shutdown. A dedicated
-worker process can then stop claims, drain active handlers, and close its own database pool.
+worker process can then stop asking for work, drain active handlers, and close its own database pool.
 
 If enqueue belongs to an application transaction, pass that transaction to `Queue.enqueue`. The job
 then commits or rolls back with the surrounding business write.
@@ -61,5 +61,5 @@ then commits or rolls back with the surrounding business write.
 
 ---
 
-Exact enqueue, claim, and completion semantics:
+Exact enqueue, ownership, and completion semantics:
 [architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#atomic-lifecycle).

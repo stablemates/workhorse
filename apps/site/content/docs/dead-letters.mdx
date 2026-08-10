@@ -1,6 +1,6 @@
 ---
 title: How do I run a failed job again?
-description: Inspect terminal failures and redrive selected work as fresh, auditable job identities.
+description: Inspect terminal failures and create fresh, auditable job identities from selected work.
 ---
 
 When a job exhausts its attempts, Workhorse keeps an immutable failed outcome. Redrive creates a new
@@ -23,9 +23,9 @@ for (const failure of page.items) {
 ```
 
 The cursor uses immutable finish time and job identity. Dead-letter listing stays separate from
-ready and active indexes, so a large failure backlog does not slow claims.
+ready and active indexes, so a large failure backlog does not slow workers as they claim jobs.
 
-## Redrive one failure
+## Create one redrive
 
 `Queue.redrive` requires the actor, reason, and a stable request ID. Your operator layer must
 authorize the actor before calling it.

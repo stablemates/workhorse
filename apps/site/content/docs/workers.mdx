@@ -1,6 +1,6 @@
 ---
 title: How should I run workers?
-description: Register handlers, choose process boundaries, control claims, and drain active work safely.
+description: Register handlers, choose process boundaries, control how workers take jobs, and drain active work safely.
 ---
 
 A `Worker` owns a bounded set of handler executions for one queue. Production deployments should
@@ -67,21 +67,21 @@ configuration before the CLI imports it because the CLI does not install a TypeS
 
 ## Pause and stop for different reasons
 
-`Worker.pause` stops local claims while active handlers continue. `Worker.resume` reopens local
-claims, and `Worker.stop` drains active work before `run` resolves.
+`Worker.pause` stops the local worker from asking for jobs while active handlers continue.
+`Worker.resume` lets it ask again, and `Worker.stop` drains active work before `run` resolves.
 
 `Queue.setWorkerPaused` stores an operator request in `worker_registry`. A worker receives it during
 registration refresh, so a dashboard can pause a process that runs elsewhere.
 
-An operator pause belongs to one process incarnation and does not survive replacement. Use
-`Queue.pauseQueue` when work must remain paused across worker restarts.
+When an operator asks a worker to pause, the request belongs to one process incarnation. Use
+`Queue.pauseQueue` when a replacement worker must also stop asking for work.
 
 ## Read fleet state carefully
 
 `Queue.listWorkers` reads the durable registry, while `Worker.runtimeState` reads the local process.
 Registry slot counts are recent observations rather than synchronous views of another event loop.
 
-Leave `workerId` generated unless a process manager guarantees uniqueness. Reusing one identity
+Unless a process manager guarantees uniqueness, leave `workerId` generated. Reusing one identity
 across live replicas creates an ownership collision.
 
 ## Next
