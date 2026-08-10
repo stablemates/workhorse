@@ -14,6 +14,7 @@ import type {
   DashboardScheduleController,
   DashboardTaskController,
   DashboardWorkerController,
+  DashboardSettingsController,
 } from "./types.js";
 import type { DashboardDatabase } from "./sql.js";
 import {
@@ -28,6 +29,7 @@ import {
   readDashboardTaskCounts,
   readDashboardTasks,
   readDashboardWorkers,
+  readDashboardSettings,
 } from "./read-model.js";
 
 export interface DashboardRpcContext {
@@ -41,6 +43,7 @@ export interface DashboardRpcContext {
   queueController?: DashboardQueueController;
   taskController?: DashboardTaskController;
   workerController?: DashboardWorkerController;
+  settingsController?: DashboardSettingsController;
   projectDurability?: DashboardDurabilityProjector;
 }
 
@@ -148,6 +151,68 @@ const setWorkerPausedInput = z.object({
   paused: z.boolean(),
   audit: auditSchema,
 });
+const maintenanceSetting = z.enum([
+  "timezone",
+  "partitionPreparationIntervalMs",
+  "terminalCleanupIntervalMs",
+  "historyRetentionLocalTime",
+]);
+const retentionSetting = z.enum([
+  "jobIdentityRetentionDays",
+  "terminalOutcomeRetentionDays",
+  "jobEventRetentionDays",
+  "attemptHistoryRetentionDays",
+  "scheduleOccurrenceRetentionDays",
+  "statisticsRetentionDays",
+  "terminalJobPruneLimit",
+  "historyPartitionsPerPass",
+  "defaultPartitionRowsPerPass",
+  "occurrenceRowsPerPass",
+  "statisticsRowsPerPass",
+]);
+const maintenanceDefinition = z
+  .object({
+    timezone: z.string().trim().min(1).optional(),
+    partitionPreparationIntervalMs: z.number().int().min(60_000).max(604_800_000).optional(),
+    terminalCleanupIntervalMs: z.number().int().min(1_000).max(86_400_000).optional(),
+    historyRetentionLocalTime: z
+      .string()
+      .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
+      .optional(),
+  })
+  .refine((definition) => Object.keys(definition).length > 0, "At least one setting is required");
+const retentionDays = z.number().int().min(1).max(36_500).nullable();
+const retentionDefinition = z
+  .object({
+    jobIdentityRetentionDays: retentionDays.optional(),
+    terminalOutcomeRetentionDays: retentionDays.optional(),
+    jobEventRetentionDays: retentionDays.optional(),
+    attemptHistoryRetentionDays: retentionDays.optional(),
+    scheduleOccurrenceRetentionDays: retentionDays.optional(),
+    statisticsRetentionDays: retentionDays.optional(),
+    terminalJobPruneLimit: z.number().int().min(1).max(100_000).optional(),
+    historyPartitionsPerPass: z.number().int().min(1).max(52).optional(),
+    defaultPartitionRowsPerPass: z.number().int().min(1).max(1_000_000).optional(),
+    occurrenceRowsPerPass: z.number().int().min(1).max(1_000_000).optional(),
+    statisticsRowsPerPass: z.number().int().min(1).max(1_000_000).optional(),
+  })
+  .refine((definition) => Object.keys(definition).length > 0, "At least one setting is required");
+const overrideMaintenancePolicyInput = z.object({
+  definition: maintenanceDefinition,
+  audit: auditSchema,
+});
+const revertMaintenancePolicyInput = z.object({
+  settings: z.array(maintenanceSetting).min(1),
+  audit: auditSchema,
+});
+const overrideRetentionPolicyInput = z.object({
+  definition: retentionDefinition,
+  audit: auditSchema,
+});
+const revertRetentionPolicyInput = z.object({
+  settings: z.array(retentionSetting).min(1),
+  audit: auditSchema,
+});
 /** One cancellation request. Attribution is required; the operator reason is optional. */
 const cancelTaskInput = z.object({
   id: z.uuid(),
@@ -222,6 +287,16 @@ export const dashboardRouter = {
         context.operator.mode === "local" && Boolean(context.workerController?.setWorkerPaused);
       return readDashboardWorkers(context.database, context.configuredWorkers, canManageWorkers);
     }),
+    settings: procedure.handler(({ context }) =>
+      readDashboardSettings(
+        context.database,
+        context.queue,
+        context.operator.mode === "local" && Boolean(context.settingsController),
+      ),
+    ),
+    previewRetentionPolicy: procedure
+      .input(z.object({ definition: retentionDefinition }))
+      .handler(({ context, input }) => context.queue.previewRetentionPolicy(input.definition)),
     jobDetail: procedure.input(jobDetailInput).handler(async ({ context, input }) => {
       const detail = await readDashboardJobDetail(
         context.database,
@@ -280,6 +355,50 @@ export const dashboardRouter = {
         auditWithOccurredAt(input.audit),
       );
     }),
+    overrideMaintenancePolicy: procedure
+      .input(overrideMaintenancePolicyInput)
+      .handler(async ({ context, input }) => {
+        if (context.operator.mode !== "local" || !context.settingsController) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        await context.settingsController.overrideMaintenancePolicy(
+          input.definition,
+          auditWithOccurredAt(input.audit),
+        );
+      }),
+    revertMaintenancePolicy: procedure
+      .input(revertMaintenancePolicyInput)
+      .handler(async ({ context, input }) => {
+        if (context.operator.mode !== "local" || !context.settingsController) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        await context.settingsController.revertMaintenancePolicy(
+          input.settings,
+          auditWithOccurredAt(input.audit),
+        );
+      }),
+    overrideRetentionPolicy: procedure
+      .input(overrideRetentionPolicyInput)
+      .handler(async ({ context, input }) => {
+        if (context.operator.mode !== "local" || !context.settingsController) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        await context.settingsController.overrideRetentionPolicy(
+          input.definition,
+          auditWithOccurredAt(input.audit),
+        );
+      }),
+    revertRetentionPolicy: procedure
+      .input(revertRetentionPolicyInput)
+      .handler(async ({ context, input }) => {
+        if (context.operator.mode !== "local" || !context.settingsController) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        await context.settingsController.revertRetentionPolicy(
+          input.settings,
+          auditWithOccurredAt(input.audit),
+        );
+      }),
     runTaskNow: procedure.input(runTaskNowInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.taskController?.runTaskNow) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });

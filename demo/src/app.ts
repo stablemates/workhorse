@@ -9,6 +9,10 @@ import {
   type CancelStatus,
   type Json,
   type JobState,
+  type MaintenancePolicyDefinition,
+  type MaintenancePolicySetting,
+  type RetentionPolicyDefinition,
+  type RetentionPolicySetting,
 } from "@workhorse/core";
 import type { Pool } from "pg";
 import {
@@ -107,6 +111,7 @@ export interface CreateDemoApplicationOptions {
   queueController?: QueueController;
   taskController?: TaskController;
   workerController?: WorkerController;
+  settingsController?: SettingsController;
   workerPollMs?: number;
   /**
    * How often in-process workers refresh their durable registration.
@@ -168,6 +173,25 @@ export interface QueueController {
     audit: AuditContext,
   ) => Promise<{ paused: boolean }>;
   purgeQueue?: (queueName: string, audit: AuditContext) => Promise<{ deletedCount: number }>;
+}
+
+export interface SettingsController {
+  overrideMaintenancePolicy(
+    definition: Partial<MaintenancePolicyDefinition>,
+    audit: AuditContext,
+  ): Promise<void>;
+  revertMaintenancePolicy(
+    settings: readonly MaintenancePolicySetting[],
+    audit: AuditContext,
+  ): Promise<void>;
+  overrideRetentionPolicy(
+    definition: Partial<RetentionPolicyDefinition>,
+    audit: AuditContext,
+  ): Promise<void>;
+  revertRetentionPolicy(
+    settings: readonly RetentionPolicySetting[],
+    audit: AuditContext,
+  ): Promise<void>;
 }
 
 /**
@@ -865,6 +889,54 @@ export function createLocalWorkerController(database: DemoDatabase): WorkerContr
   };
 }
 
+export function createLocalSettingsController(database: DemoDatabase): SettingsController {
+  async function mutate(
+    action: string,
+    target: string,
+    audit: AuditContext,
+    change: (queue: Queue) => Promise<unknown>,
+  ): Promise<void> {
+    await database.transaction(async (transaction) => {
+      const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+      const before = {
+        maintenance: await workhorse.queue.getMaintenancePolicy(),
+        retention: await workhorse.queue.getRetentionPolicy(),
+      };
+      await change(workhorse.queue);
+      const after = {
+        maintenance: await workhorse.queue.getMaintenancePolicy(),
+        retention: await workhorse.queue.getRetentionPolicy(),
+      };
+      await transaction.execute(sql`
+        INSERT INTO public.workhorse_demo_audit
+          (actor, reason, request_id, occurred_at, action, target, before, after, status)
+        VALUES
+          (${audit.actor}, ${audit.reason}, ${audit.requestId},
+           ${audit.occurredAt ?? new Date().toISOString()}, ${action}, ${target},
+           ${JSON.stringify(before)}::jsonb, ${JSON.stringify(after)}::jsonb, 'succeeded')
+      `);
+    });
+  }
+  return {
+    overrideMaintenancePolicy: (definition, audit) =>
+      mutate("overrideMaintenancePolicy", "maintenance-policy", audit, (queue) =>
+        queue.overrideMaintenancePolicy(definition),
+      ),
+    revertMaintenancePolicy: (settings, audit) =>
+      mutate("revertMaintenancePolicy", "maintenance-policy", audit, (queue) =>
+        queue.revertMaintenancePolicy(settings),
+      ),
+    overrideRetentionPolicy: (definition, audit) =>
+      mutate("overrideRetentionPolicy", "retention-policy", audit, (queue) =>
+        queue.overrideRetentionPolicy(definition),
+      ),
+    revertRetentionPolicy: (settings, audit) =>
+      mutate("revertRetentionPolicy", "retention-policy", audit, (queue) =>
+        queue.revertRetentionPolicy(settings),
+      ),
+  };
+}
+
 export function createDemoApplication(
   database: DemoDatabase,
   options: CreateDemoApplicationOptions = {},
@@ -881,6 +953,9 @@ export function createDemoApplication(
   const taskController =
     options.taskController ??
     (options.operator?.mode === "local" ? createLocalTaskController(database) : undefined);
+  const settingsController =
+    options.settingsController ??
+    (options.operator?.mode === "local" ? createLocalSettingsController(database) : undefined);
   const adapter = createDrizzleAdapter(database, {
     defaultQueue: DEMO_QUEUE,
     close: options.close,
@@ -932,6 +1007,7 @@ export function createDemoApplication(
       queueController: options.queueController,
       taskController,
       workerController,
+      settingsController,
       projectDurability: durableDemoPlanForJob,
       auditActor: "local-demo",
       dev: options.dev,

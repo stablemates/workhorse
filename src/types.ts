@@ -557,19 +557,65 @@ export interface RetentionPolicyDefinition {
 
 /** Persisted retention policy plus its PostgreSQL-owned update timestamp. */
 export interface RetentionPolicy extends Required<RetentionPolicyDefinition> {
+  provenance: {
+    jobIdentityRetentionDays: PolicyValueProvenance<number | null>;
+    terminalOutcomeRetentionDays: PolicyValueProvenance<number | null>;
+    jobEventRetentionDays: PolicyValueProvenance<number | null>;
+    attemptHistoryRetentionDays: PolicyValueProvenance<number | null>;
+    scheduleOccurrenceRetentionDays: PolicyValueProvenance<number | null>;
+    statisticsRetentionDays: PolicyValueProvenance<number | null>;
+    terminalJobPruneLimit: PolicyValueProvenance<number>;
+    historyPartitionsPerPass: PolicyValueProvenance<number>;
+    defaultPartitionRowsPerPass: PolicyValueProvenance<number>;
+    occurrenceRowsPerPass: PolicyValueProvenance<number>;
+    statisticsRowsPerPass: PolicyValueProvenance<number>;
+  };
   updatedAt: Date;
+}
+
+export type RetentionPolicySetting = keyof RetentionPolicyDefinition;
+
+export interface RetentionPolicyImpact {
+  eligible: {
+    terminalJobs: number;
+    jobEvents: number;
+    attemptHistory: number;
+    scheduleOccurrences: number;
+    statistics: number;
+  };
+  capped: {
+    terminalJobs: boolean;
+    jobEvents: boolean;
+    attemptHistory: boolean;
+    scheduleOccurrences: boolean;
+    statistics: boolean;
+  };
 }
 
 export interface MaintenancePolicyDefinition {
   timezone: string;
   partitionPreparationIntervalMs?: number;
   terminalCleanupIntervalMs?: number;
-  historyRetentionLocalHour?: number;
+  /** Local wall-clock time in `HH:mm` form. The IANA timezone supplies daylight-saving rules. */
+  historyRetentionLocalTime?: string;
 }
 
 export interface MaintenancePolicy extends Required<MaintenancePolicyDefinition> {
+  provenance: {
+    timezone: PolicyValueProvenance<string>;
+    partitionPreparationIntervalMs: PolicyValueProvenance<number>;
+    terminalCleanupIntervalMs: PolicyValueProvenance<number>;
+    historyRetentionLocalTime: PolicyValueProvenance<string>;
+  };
   updatedAt: Date;
 }
+
+export interface PolicyValueProvenance<T> {
+  source: "application" | "operator";
+  applicationDefault: T;
+}
+
+export type MaintenancePolicySetting = keyof MaintenancePolicyDefinition;
 
 export interface RetentionCategoryValues<T> {
   jobIdentity: T;
@@ -680,6 +726,12 @@ export interface WorkerRegistration {
   /** Queue this worker claims from. Defaults to the queue's own default. */
   queue?: string;
   concurrency: number;
+  leaseMs?: number;
+  heartbeatMs?: number;
+  pollMs?: number;
+  maintenanceIntervalMs?: number;
+  maintenanceTaskPollMs?: number;
+  registryIntervalMs?: number;
   activeSlots: number;
   draining: boolean;
 }

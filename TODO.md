@@ -556,14 +556,14 @@ would justify stabilizing the schema.
 Decide the ownership question before building any form field: it determines whether the page can be
 editable at all.
 
-- [ ] Make `syncRetentionPolicy` and `syncMaintenancePolicy` seed rather than overwrite, with an
+- [x] Make `syncRetentionPolicy` and `syncMaintenancePolicy` seed rather than overwrite, with an
       explicit opt-in that restores assert-on-deploy semantics for infrastructure-as-code callers.
-- [ ] Record provenance per policy value so sync can skip operator-set values, and expose an explicit
+- [x] Record provenance per policy value so sync can skip operator-set values, and expose an explicit
       revert-to-application-default that clears the override.
 - [ ] Move the rolling-statistics cadence out of `WorkerOptions` and into `maintenance_policy`
       alongside the other three maintenance cadences, and move the rollup group limit and recompute
       window into policy as well.
-- [ ] Build one settings page grouped by ownership — editable here, set at deploy, per-object toggles
+- [x] Build one settings page grouped by ownership — editable here, set at deploy, per-object toggles
       — rather than by topic. Process-owned options are shown read-only with provenance; omitting
       them silently would imply they do not exist.
 - [ ] Derive recommendations from measured state rather than restating defaults. The queue already
@@ -571,10 +571,10 @@ editable at all.
       ratios. The terminal-cleanup throughput ceiling — roughly 288k jobs/day at the default limit
       and cadence — is the worked example: it was found by benchmarking and should have been
       reported by the product.
-- [ ] Require an impact preview for destructive edits, computed from the same boundary queries health
+- [x] Require an impact preview for destructive edits, computed from the same boundary queries health
       already runs. Shortening a retention window deletes irreversibly on the next pass; pausing a
       queue does not, and the two must not look alike.
-- [ ] Reuse the existing operator-mutation contract and audit context rather than adding a second
+- [x] Reuse the existing operator-mutation contract and audit context rather than adding a second
       authorization path.
 
 ### [ ] P2-11 Cold history export

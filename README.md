@@ -447,11 +447,15 @@ await queue.syncRetentionPolicy({
   jobEventRetentionDays: 90,
   attemptHistoryRetentionDays: 90,
   scheduleOccurrenceRetentionDays: 30,
+  statisticsRetentionDays: 180,
   terminalJobPruneLimit: 1_000,
   historyPartitionsPerPass: 4,
   defaultPartitionRowsPerPass: 10_000,
   occurrenceRowsPerPass: 10_000,
 });
+
+// Sync updates application defaults without replacing operator overrides. Infrastructure-as-code
+// deployments that must own every value can pass { force: true } as the second argument.
 
 // Jobs default to 25 total attempts. Override only when this job needs a different budget.
 await queue.enqueue("email", { to: "person@example.com" });
@@ -529,9 +533,15 @@ Mounting requires only a database connection. It does not require a worker runti
 because worker identity and runtime state are read from `workhorse.worker_registry` rather than from
 process-local objects. This is what allows the dashboard and the workers to be separate deployments.
 
-Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs, recovers expired leases, and drives schedule evaluation. Three slower SQL-owned tasks have independent advisory locks and persisted due state: `prepare_history_partitions_v1` maintains UTC-daily history partitions every six hours, `retain_history_v1` retires event, attempt, and schedule-occurrence history once per local date at or after 03:00 in the configured IANA timezone, and `prune_terminal_storage_v1` removes expired idempotency bindings and safe terminal bundles every five minutes. Workers poll task eligibility every minute by default, but PostgreSQL decides whether work is due globally, so additional workers produce cheap no-ops rather than multiplying cleanup. Every task returns per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and `onMaintenance`.
+Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs, recovers expired leases, and drives schedule evaluation. Three slower SQL-owned tasks have independent advisory locks and persisted due state: `prepare_history_partitions_v1` maintains UTC-daily history partitions every six hours, `retain_history_v1` retires event, attempt, and schedule-occurrence history once per local date at or after the configured local time in the configured IANA timezone, and `prune_terminal_storage_v1` removes expired idempotency bindings and safe terminal bundles every five minutes. Clean installation uses 03:00 UTC, but `Queue.syncMaintenancePolicy`, operator overrides, and the dashboard settings page can change both parts of that boundary. Workers poll task eligibility every minute by default, but PostgreSQL decides whether work is due globally, so additional workers produce cheap no-ops rather than multiplying cleanup. Every task returns per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and `onMaintenance`.
 
 Clean installation creates the current UTC day plus three future daily partitions. Retention defaults to 14 days for identity, outcomes, events, attempts, and occurrences, and each window remains configurable through `Queue.syncRetentionPolicy`. Terminal identity deletion is interlocked with a persisted history-retention watermark, so frequent terminal cleanup cannot outrun daily history retirement or late history insertion.
+
+The settings page groups values by ownership. Database-wide maintenance and retention policy is
+editable when the host supplies `DashboardSettingsController`; the page records operator overrides,
+offers per-value reverts, and previews bounded deletion impact before applying retention changes.
+Worker concurrency, lease, heartbeat, and polling values are reported from live processes but remain
+read-only because changing them requires a deployment.
 
 Handler failures use SQL-owned, Sidekiq-inspired retry scheduling. For zero-based retry count `count` (the first failed attempt is `0`), the delay is `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds. The default 25-attempt budget spreads retries across roughly 20 days. Keeping the calculation in `fail_v1` gives every client the same durable protocol; `WorkerOptions.retryDelayMs` remains an explicit override, including `0` for an immediate retry or a callback `(attempt, job) => milliseconds | undefined`; returning `undefined` defers to PostgreSQL's persisted policy or compatibility default.
 

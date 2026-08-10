@@ -29,4 +29,5 @@ export type {
   DashboardScheduleController,
   DashboardTaskController,
   DashboardWorkerController,
+  DashboardSettingsController,
 } from "./types.js";

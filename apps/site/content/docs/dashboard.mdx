@@ -42,11 +42,15 @@ migrates database objects.
 The `authorize` callback protects the interface, assets, and RPC methods. Workhorse has no built-in
 authentication, role model, or tenant boundary.
 
-Use `operator`, `queueController`, `taskController`, `workerController`, and `scheduleController` when
-mutations must pass through your own authorization and audit services.
+Use `operator`, `queueController`, `taskController`, `workerController`, `scheduleController`, and
+`settingsController` when mutations must pass through your own authorization and audit services.
 
 `auditActor` and `requestedBy` provide attribution after authorization. They do not grant permission
 by themselves.
+
+The settings page keeps database policy separate from deployment configuration. It edits maintenance
+and retention through `DashboardSettingsController`, previews destructive retention changes, and
+shows process-owned worker values without offering runtime edits.
 
 ## Customize without forking the interface
 

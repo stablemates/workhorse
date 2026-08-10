@@ -168,7 +168,7 @@ changes only that occurrence, not the schedule or its next fire.
 Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, a one-minute lightweight
 long-running schedule, and one one-minute definition for each of the eight feature families through
 `Queue.syncSchedules`. The workers evaluate due schedules
-in-process with advisory-lock coordination and SQL-level occurrence deduplication. The Cron view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, six-hour partition preparation, daily local-03:00 history retention, and five-minute terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone and task due state. The heartbeat's
+in-process with advisory-lock coordination and SQL-level occurrence deduplication. The Cron view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and task due state. The heartbeat's
 audited control updates the durable schedule definition, and Jobs and Workers show each resulting
 execution.
 

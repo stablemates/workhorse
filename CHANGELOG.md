@@ -12,7 +12,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v20**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v21**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -21,12 +21,16 @@ First published line. Requires **schema v20**, Node.js **22 or 24**, PostgreSQL 
   checkpoints, dead letters and redrive, enqueue idempotency keys, persisted retry policies,
   declarative recurring schedules, versioned payload and result contracts, durable JSON size
   limits, operator redaction, automated history retention, and a durable worker registry.
+- `@workhorse/core`: database-authoritative maintenance and retention settings with application
+  defaults, operator overrides, per-setting provenance, revert operations, and bounded retention
+  impact previews.
 - `@workhorse/core`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`, and
   `dashboard`.
 - `@workhorse/drizzle`: Drizzle ORM provider with caller-owned transactions.
 - `@workhorse/hono`: Hono lifecycle integration and dashboard route registration.
 - `@workhorse/dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,
-  and a Connect-style Node bridge for Express, Connect, and Fastify.
+  a settings page with audited policy changes, and a Connect-style Node bridge for Express,
+  Connect, and Fastify.
 - A supported-version contract: `MINIMUM_POSTGRES_MAJOR`, `SUPPORTED_POSTGRES_MAJORS`,
   `MINIMUM_NODE_MAJOR`, `SUPPORTED_NODE_MAJORS`, and `readPostgresSupport` are exported from
   `@workhorse/core`, exercised by the CI matrix, and reported by `workhorse schema status`.

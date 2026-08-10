@@ -801,6 +801,12 @@ export class Worker {
         pid: process.pid,
         queue: this.queueName,
         concurrency: this.concurrency,
+        leaseMs: this.leaseMs,
+        heartbeatMs: this.heartbeatMs,
+        pollMs: this.pollMs,
+        maintenanceIntervalMs: this.maintenanceIntervalMs,
+        maintenanceTaskPollMs: this.maintenanceTaskPollMs,
+        registryIntervalMs: this.registryIntervalMs,
         activeSlots: this.activeSlots,
         draining: this.draining,
       }));
