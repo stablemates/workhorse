@@ -428,6 +428,8 @@ export interface RedriveLineage {
 export interface ClaimedJob<TPayload = Json> {
   /** Stable job identity across all attempts. */
   id: string;
+  /** Queue from which PostgreSQL granted this attempt. */
+  queue: string;
   type: string;
   payload: TPayload;
   /** Contract version captured when PostgreSQL accepted this job, or null for an uncontracted job. */

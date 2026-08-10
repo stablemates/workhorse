@@ -22,8 +22,8 @@ const INSTRUMENTATION_NAME = "@workhorse/core";
 export const MAX_TRACE_CONTEXT_BYTES = 1_024;
 /** Maximum span attributes Workhorse emits on any one span. */
 export const TRACE_ATTRIBUTE_COUNT_LIMIT = 8;
-/** Cardinality cap applications can configure for the baseline metric views. */
-export const METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 32;
+/** Upper bound applications should configure on each SDK metric stream. */
+export const METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 2_000;
 
 const tracer = trace.getTracer(INSTRUMENTATION_NAME);
 
@@ -104,6 +104,10 @@ export const telemetryMetrics = {
     description: "Handler execution latency",
     unit: "ms",
   }),
+  handlerRuntime: lazyCounter("workhorse.handler.runtime", {
+    description: "Cumulative handler execution time",
+    unit: "ms",
+  }),
   maintenanceDrift: lazyHistogram("workhorse.maintenance.drift", {
     description: "Delay beyond a worker maintenance loop's configured cadence",
     unit: "ms",
@@ -120,13 +124,23 @@ export function jobSpanAttributes(
   };
 }
 
+export function jobMetricAttributes(job: Pick<ClaimedJob<unknown>, "queue" | "type">): Attributes {
+  return {
+    "workhorse.queue.name": job.queue,
+    "workhorse.job.type": job.type,
+  };
+}
+
+export interface QueueMetricSnapshot {
+  queue: string;
+  readyDepth: number;
+  scheduledDepth: number;
+  activeLeases: number;
+  oldestReadyAgeMs: number | null;
+}
+
 export interface QueueMetricSource {
-  health(): Promise<{
-    readyDepth: number;
-    scheduledDepth: number;
-    activeLeases: number;
-    oldestReadyAgeMs: number | null;
-  }>;
+  queueMetricSnapshot(): Promise<QueueMetricSnapshot[]>;
 }
 
 /** Register one database-wide asynchronous queue observation and return its cleanup function. */
@@ -142,12 +156,23 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
   });
   const instruments = [queueDepth, oldestReadyAge];
   const callback: BatchObservableCallback = async (result) => {
-    const health = await source.health();
-    result.observe(queueDepth, health.readyDepth, { "workhorse.job.state": "ready" });
-    result.observe(queueDepth, health.scheduledDepth, { "workhorse.job.state": "scheduled" });
-    result.observe(queueDepth, health.activeLeases, { "workhorse.job.state": "active" });
-    if (health.oldestReadyAgeMs !== null) {
-      result.observe(oldestReadyAge, health.oldestReadyAgeMs);
+    for (const snapshot of await source.queueMetricSnapshot()) {
+      const queueAttribute = { "workhorse.queue.name": snapshot.queue };
+      result.observe(queueDepth, snapshot.readyDepth, {
+        ...queueAttribute,
+        "workhorse.job.state": "ready",
+      });
+      result.observe(queueDepth, snapshot.scheduledDepth, {
+        ...queueAttribute,
+        "workhorse.job.state": "scheduled",
+      });
+      result.observe(queueDepth, snapshot.activeLeases, {
+        ...queueAttribute,
+        "workhorse.job.state": "active",
+      });
+      if (snapshot.oldestReadyAgeMs !== null) {
+        result.observe(oldestReadyAge, snapshot.oldestReadyAgeMs, queueAttribute);
+      }
     }
   };
   activeMeter.addBatchObservableCallback(callback, instruments);

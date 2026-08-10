@@ -1315,8 +1315,9 @@ $$;
 -- Accept up to 1,000 jobs atomically. Scoped idempotency keys are resolved in ordinal order through
 -- their unique index before any durable job side effects. Exact replays return the original identity;
 -- material mismatches abort the whole statement with SQLSTATE P1001.
+DROP FUNCTION IF EXISTS workhorse.enqueue_many_v1(jsonb);
 CREATE OR REPLACE FUNCTION workhorse.enqueue_many_v1(p_requests jsonb)
-RETURNS TABLE (ordinal integer, job_id uuid)
+RETURNS TABLE (ordinal integer, job_id uuid, accepted boolean)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -1673,6 +1674,7 @@ BEGIN
       END IF;
     END IF;
     ordinal := v_ordinal;
+    accepted := v_is_new;
     RETURN NEXT;
   END LOOP;
 
@@ -3629,9 +3631,11 @@ DECLARE
   v_envelope jsonb;
   v_expired_leases integer := 0;
   v_retried integer := 0;
+  v_retry_dimensions jsonb := '[]'::jsonb;
 BEGIN
   PERFORM set_config('workhorse.recovery_expired_leases', '0', true);
   PERFORM set_config('workhorse.recovery_retried', '0', true);
+  PERFORM set_config('workhorse.recovery_retry_dimensions', '[]', true);
   FOR v_runtime IN
     SELECT runtime.* FROM workhorse.job_runtime runtime
      WHERE runtime.deadline_at IS NOT NULL AND runtime.deadline_at <= clock_timestamp()
@@ -3662,14 +3666,16 @@ BEGIN
        ORDER BY runtime.attempt_timeout_at, runtime.job_id FOR UPDATE SKIP LOCKED
        LIMIT GREATEST(0, LEAST(p_limit, 10000) - v_count)
     LOOP
+      SELECT * INTO STRICT v_job FROM workhorse.job job WHERE job.id = v_runtime.job_id;
       IF workhorse.timeout_owned_v1(
         v_runtime.job_id, v_runtime.worker_id, v_runtime.fence_token
       ) THEN
         v_count := v_count + 1;
-        IF v_runtime.current_attempt < (
-          SELECT job.max_attempts FROM workhorse.job job WHERE job.id = v_runtime.job_id
-        ) THEN
+        IF v_runtime.current_attempt < v_job.max_attempts THEN
           v_retried := v_retried + 1;
+          v_retry_dimensions := v_retry_dimensions || jsonb_build_array(jsonb_build_object(
+            'queue', v_job.queue_name, 'type', v_job.job_type
+          ));
         END IF;
       END IF;
     END LOOP;
@@ -3678,6 +3684,7 @@ BEGIN
   IF v_count >= GREATEST(1, LEAST(p_limit, 10000)) THEN
     PERFORM set_config('workhorse.recovery_expired_leases', v_expired_leases::text, true);
     PERFORM set_config('workhorse.recovery_retried', v_retried::text, true);
+    PERFORM set_config('workhorse.recovery_retry_dimensions', v_retry_dimensions::text, true);
     IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
     RETURN v_count;
   END IF;
@@ -3758,6 +3765,9 @@ BEGIN
          AND r.fence_token = v_runtime.fence_token AND r.expires_at <= clock_timestamp();
       IF NOT FOUND THEN CONTINUE; END IF;
       v_retried := v_retried + 1;
+      v_retry_dimensions := v_retry_dimensions || jsonb_build_array(jsonb_build_object(
+        'queue', v_job.queue_name, 'type', v_job.job_type
+      ));
     ELSE
       v_state := 'failed';
       v_retry_delay_ms := NULL;
@@ -3785,14 +3795,20 @@ BEGIN
   END LOOP;
   PERFORM set_config('workhorse.recovery_expired_leases', v_expired_leases::text, true);
   PERFORM set_config('workhorse.recovery_retried', v_retried::text, true);
+  PERFORM set_config('workhorse.recovery_retry_dimensions', v_retry_dimensions::text, true);
   IF v_count > 0 THEN PERFORM pg_notify('workhorse_jobs', '*'); END IF;
   RETURN v_count;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.recover_expired_telemetry_v1(
+DROP FUNCTION IF EXISTS workhorse.tick_v1(integer, integer);
+DROP FUNCTION IF EXISTS workhorse.recover_expired_telemetry_v1(integer, integer);
+
+CREATE FUNCTION workhorse.recover_expired_telemetry_v1(
   p_limit integer DEFAULT 100, p_retry_delay_ms integer DEFAULT NULL
-) RETURNS TABLE (rows_affected integer, expired_leases integer, retried integer)
+) RETURNS TABLE (
+  rows_affected integer, expired_leases integer, retried integer, retry_dimensions jsonb
+)
 LANGUAGE plpgsql
 AS $$
 BEGIN
@@ -3803,17 +3819,20 @@ BEGIN
   retried := COALESCE(
     NULLIF(current_setting('workhorse.recovery_retried', true), ''), '0'
   )::integer;
+  retry_dimensions := COALESCE(
+    NULLIF(current_setting('workhorse.recovery_retry_dimensions', true), ''), '[]'
+  )::jsonb;
   RETURN NEXT;
 END;
 $$;
 
 DROP FUNCTION IF EXISTS workhorse.maintain_v1(integer, integer, integer, integer);
 
-CREATE OR REPLACE FUNCTION workhorse.tick_v1(
+CREATE FUNCTION workhorse.tick_v1(
   p_promote_limit integer DEFAULT 1000, p_recover_limit integer DEFAULT 1000
 ) RETURNS TABLE (
   phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb,
-  expired_leases integer, retried integer
+  expired_leases integer, retried integer, retry_dimensions jsonb
 )
 LANGUAGE plpgsql
 AS $$
@@ -3822,8 +3841,8 @@ DECLARE
 BEGIN
   IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:tick', 0)) THEN
     RETURN QUERY VALUES
-      ('promote'::text, 0, 0, true, NULL::jsonb, 0, 0),
-      ('recover'::text, 0, 0, true, NULL::jsonb, 0, 0);
+      ('promote'::text, 0, 0, true, NULL::jsonb, 0, 0, '[]'::jsonb),
+      ('recover'::text, 0, 0, true, NULL::jsonb, 0, 0, '[]'::jsonb);
     RETURN;
   END IF;
 
@@ -3833,6 +3852,7 @@ BEGIN
   error := NULL;
   expired_leases := 0;
   retried := 0;
+  retry_dimensions := '[]'::jsonb;
   v_started_at := clock_timestamp();
   BEGIN
     rows_affected := workhorse.promote_v1(p_promote_limit);
@@ -3849,8 +3869,9 @@ BEGIN
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
-    SELECT recovery.rows_affected, recovery.expired_leases, recovery.retried
-      INTO rows_affected, expired_leases, retried
+    SELECT recovery.rows_affected, recovery.expired_leases, recovery.retried,
+           recovery.retry_dimensions
+      INTO rows_affected, expired_leases, retried, retry_dimensions
       FROM workhorse.recover_expired_telemetry_v1(p_recover_limit) recovery;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);

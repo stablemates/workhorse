@@ -48,7 +48,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { Queue } = await import("../src/queue.js");
     const database: Queryable = {
       query: async <R extends QueryResultRow>() =>
-        queryResult([{ job_id: "job-1" }, { job_id: "job-2" }] as unknown as R[]),
+        queryResult([
+          { ordinal: 1, job_id: "job-1", accepted: true },
+          { ordinal: 2, job_id: "job-2", accepted: true },
+        ] as unknown as R[]),
     };
     const queue = new Queue(database);
 
@@ -73,6 +76,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { Worker } = await import("../src/worker.js");
     const job: ClaimedJob = {
       id: "job-1",
+      queue: "mail",
       type: "email.send",
       payload: null,
       contractVersion: null,
@@ -131,6 +135,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { Worker } = await import("../src/worker.js");
     const job: ClaimedJob = {
       id: "job-2",
+      queue: "mail",
       type: "email.send",
       payload: null,
       contractVersion: null,
@@ -182,6 +187,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { Worker } = await import("../src/worker.js");
     const job: ClaimedJob = {
       id: "job-3",
+      queue: "mail",
       type: "email.send",
       payload: null,
       contractVersion: null,
@@ -233,6 +239,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { CancellationRequestedError, Worker } = await import("../src/worker.js");
     const job: ClaimedJob = {
       id: "job-4",
+      queue: "mail",
       type: "email.send",
       payload: null,
       contractVersion: null,
@@ -284,6 +291,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { Worker } = await import("../src/worker.js");
     const job: ClaimedJob = {
       id: "job-timeout-cancel-race",
+      queue: "mail",
       type: "email.send",
       payload: null,
       contractVersion: null,
@@ -671,6 +679,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     };
     const job: ClaimedJob = {
       id: "job-1",
+      queue: "mail",
       type: "email.send",
       payload: null,
       contractVersion: null,
@@ -706,6 +715,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { Worker } = await import("../src/worker.js");
     const job: ClaimedJob = {
       id: `job-${databaseState}`,
+      queue: "mail",
       type: "email.send",
       payload: null,
       contractVersion: null,
@@ -757,6 +767,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { Worker } = await import("../src/worker.js");
     const job: ClaimedJob = {
       id: "job-wait",
+      queue: "reports",
       type: "report.publish",
       payload: null,
       contractVersion: null,
@@ -823,6 +834,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const { Worker } = await import("../src/worker.js");
     const job: ClaimedJob = {
       id: "job-missing-handler",
+      queue: "default",
       type: "unknown.job",
       payload: null,
       contractVersion: null,

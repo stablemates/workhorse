@@ -7,7 +7,13 @@ import { errorForTelemetry, Queue } from "./queue.js";
 import { recordJobExecution, recordMaintenanceMetrics } from "./metrics.js";
 import type { JobExecutionOutcome } from "./metrics.js";
 import type { MaintenancePhaseResult } from "./queue.js";
-import { extractTraceContext, jobSpanAttributes, telemetryMetrics, withSpan } from "./telemetry.js";
+import {
+  extractTraceContext,
+  jobMetricAttributes,
+  jobSpanAttributes,
+  telemetryMetrics,
+  withSpan,
+} from "./telemetry.js";
 import type {
   ClaimedJob,
   ExpireOwnedStatus,
@@ -412,7 +418,10 @@ export class Worker {
         try {
           await this.executeJobWithinSpan(job, span);
         } finally {
-          telemetryMetrics.handlerDuration.record(performance.now() - startedAt);
+          const durationMs = performance.now() - startedAt;
+          const attributes = jobMetricAttributes(job);
+          telemetryMetrics.handlerDuration.record(durationMs, attributes);
+          telemetryMetrics.handlerRuntime.add(durationMs, attributes);
         }
       },
       extractTraceContext(job.traceContext),
@@ -475,6 +484,13 @@ export class Worker {
       if (accepted) recordExecution("canceled");
       return accepted;
     };
+    const expireOwnership = (): Promise<ExpireOwnedStatus> => {
+      expirationPromise ??= this.queue.expireOwned(job, this.workerId).then((status) => {
+        if (status === "cancel_requested") markCancellationRequested();
+        return status;
+      });
+      return expirationPromise;
+    };
     const refreshOwnership = async () => {
       const status = await this.queue.heartbeatStatus(job, this.workerId, this.leaseMs);
       if (status === "cancel_requested") {
@@ -482,10 +498,12 @@ export class Worker {
       } else if (status === "deadline_exceeded") {
         deadlineExceeded = true;
         stopHeartbeat();
+        void expireOwnership();
         if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(job.id));
       } else if (status === "timeout_exceeded") {
         timeoutExceeded = true;
         stopHeartbeat();
+        void expireOwnership();
         if (!controller.signal.aborted)
           controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
       } else if (status === "stale") {
@@ -516,12 +534,7 @@ export class Worker {
               controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
           }
           stopHeartbeat();
-          expirationPromise = this.queue.expireOwned(job, this.workerId).then((status) => {
-            if (status === "cancel_requested") {
-              markCancellationRequested();
-            }
-            return status;
-          });
+          void expireOwnership();
         },
         Math.max(0, expirationAt.getTime() - Date.now()),
       );
