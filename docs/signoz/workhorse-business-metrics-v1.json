@@ -103,21 +103,28 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "Attempts started",
-            "description": "Claims accepted for handler execution during the selected window."
+            "name": "Enqueued tasks",
+            "description": "Tasks accepted for durable execution per second, stacked by task type."
           },
           "plugin": {
-            "kind": "signoz/NumberPanel",
+            "kind": "signoz/BarChartPanel",
             "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "stackedBarChart": true
+              },
               "formatting": {
-                "unit": "none",
-                "decimalPrecision": "0"
+                "unit": "ops",
+                "decimalPrecision": "2"
+              },
+              "legend": {
+                "position": "bottom"
               }
             }
           },
           "queries": [
             {
-              "kind": "scalar",
+              "kind": "time_series",
               "spec": {
                 "plugin": {
                   "kind": "signoz/BuilderQuery",
@@ -126,16 +133,24 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.jobs.claimed",
+                        "metricName": "workhorse.job.enqueued",
                         "temporality": "",
-                        "timeAggregation": "increase",
+                        "timeAggregation": "rate",
                         "spaceAggregation": "sum",
                         "reduceTo": "sum"
                       }
                     ],
                     "filter": {
                       "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
-                    }
+                    },
+                    "groupBy": [
+                      {
+                        "name": "workhorse.job.type",
+                        "fieldDataType": "string",
+                        "fieldContext": "attribute"
+                      }
+                    ],
+                    "legend": "{{workhorse.job.type}}"
                   }
                 }
               }
@@ -147,21 +162,28 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "Jobs completed",
-            "description": "Jobs that committed a successful terminal result during the selected window."
+            "name": "Started tasks",
+            "description": "Tasks claimed for execution per second, stacked by task type."
           },
           "plugin": {
-            "kind": "signoz/NumberPanel",
+            "kind": "signoz/BarChartPanel",
             "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "stackedBarChart": true
+              },
               "formatting": {
-                "unit": "none",
-                "decimalPrecision": "0"
+                "unit": "ops",
+                "decimalPrecision": "2"
+              },
+              "legend": {
+                "position": "bottom"
               }
             }
           },
           "queries": [
             {
-              "kind": "scalar",
+              "kind": "time_series",
               "spec": {
                 "plugin": {
                   "kind": "signoz/BuilderQuery",
@@ -170,16 +192,24 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.jobs.completed",
+                        "metricName": "workhorse.job.claimed",
                         "temporality": "",
-                        "timeAggregation": "increase",
+                        "timeAggregation": "rate",
                         "spaceAggregation": "sum",
                         "reduceTo": "sum"
                       }
                     ],
                     "filter": {
                       "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
-                    }
+                    },
+                    "groupBy": [
+                      {
+                        "name": "workhorse.job.type",
+                        "fieldDataType": "string",
+                        "fieldContext": "attribute"
+                      }
+                    ],
+                    "legend": "{{workhorse.job.type}}"
                   }
                 }
               }
@@ -191,21 +221,28 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "Terminal failures",
-            "description": "Attempts whose failure exhausted the job's retry budget."
+            "name": "Running and waiting tasks",
+            "description": "Current scheduled, ready, and active work, stacked by queue and state."
           },
           "plugin": {
-            "kind": "signoz/NumberPanel",
+            "kind": "signoz/BarChartPanel",
             "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "stackedBarChart": true
+              },
               "formatting": {
                 "unit": "none",
                 "decimalPrecision": "0"
+              },
+              "legend": {
+                "position": "bottom"
               }
             }
           },
           "queries": [
             {
-              "kind": "scalar",
+              "kind": "time_series",
               "spec": {
                 "plugin": {
                   "kind": "signoz/BuilderQuery",
@@ -214,16 +251,29 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.jobs.failed",
+                        "metricName": "workhorse.job.count",
                         "temporality": "",
-                        "timeAggregation": "increase",
-                        "spaceAggregation": "sum",
-                        "reduceTo": "sum"
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max",
+                        "reduceTo": "last"
                       }
                     ],
                     "filter": {
-                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.attempt.outcome = 'failed'"
-                    }
+                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "workhorse.queue.name",
+                        "fieldDataType": "string",
+                        "fieldContext": "attribute"
+                      },
+                      {
+                        "name": "workhorse.job.state",
+                        "fieldDataType": "string",
+                        "fieldContext": "attribute"
+                      }
+                    ],
+                    "legend": "{{workhorse.queue.name}} {{workhorse.job.state}}"
                   }
                 }
               }
@@ -235,21 +285,28 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "Retries scheduled",
-            "description": "Failed or expired attempts returned to live work."
+            "name": "Completed tasks",
+            "description": "Terminal task executions per second, stacked by task type."
           },
           "plugin": {
-            "kind": "signoz/NumberPanel",
+            "kind": "signoz/BarChartPanel",
             "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "stackedBarChart": true
+              },
               "formatting": {
-                "unit": "none",
-                "decimalPrecision": "0"
+                "unit": "ops",
+                "decimalPrecision": "2"
+              },
+              "legend": {
+                "position": "bottom"
               }
             }
           },
           "queries": [
             {
-              "kind": "scalar",
+              "kind": "time_series",
               "spec": {
                 "plugin": {
                   "kind": "signoz/BuilderQuery",
@@ -258,16 +315,24 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.jobs.retried",
+                        "metricName": "workhorse.job.execution",
                         "temporality": "",
-                        "timeAggregation": "increase",
+                        "timeAggregation": "rate",
                         "spaceAggregation": "sum",
                         "reduceTo": "sum"
                       }
                     ],
                     "filter": {
-                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
-                    }
+                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.job.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'succeeded', 'timeout']"
+                    },
+                    "groupBy": [
+                      {
+                        "name": "workhorse.job.type",
+                        "fieldDataType": "string",
+                        "fieldContext": "attribute"
+                      }
+                    ],
+                    "legend": "{{workhorse.job.type}}"
                   }
                 }
               }
@@ -279,12 +344,16 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "Task throughput",
-            "description": "Started and completed jobs per second, grouped by task type."
+            "name": "Execution outcomes",
+            "description": "Handler outcomes per second, stacked by task type and outcome."
           },
           "plugin": {
-            "kind": "signoz/TimeSeriesPanel",
+            "kind": "signoz/BarChartPanel",
             "spec": {
+              "visualization": {
+                "timePreference": "global_time",
+                "stackedBarChart": true
+              },
               "formatting": {
                 "unit": "ops",
                 "decimalPrecision": "2"
@@ -309,7 +378,7 @@
                           "signal": "metrics",
                           "aggregations": [
                             {
-                              "metricName": "workhorse.jobs.claimed",
+                              "metricName": "workhorse.job.execution",
                               "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
@@ -324,36 +393,14 @@
                               "name": "workhorse.job.type",
                               "fieldDataType": "string",
                               "fieldContext": "attribute"
-                            }
-                          ],
-                          "legend": "started {{workhorse.job.type}}"
-                        }
-                      },
-                      {
-                        "type": "builder_query",
-                        "spec": {
-                          "name": "B",
-                          "signal": "metrics",
-                          "aggregations": [
+                            },
                             {
-                              "metricName": "workhorse.jobs.completed",
-                              "temporality": "",
-                              "timeAggregation": "rate",
-                              "spaceAggregation": "sum",
-                              "reduceTo": "sum"
-                            }
-                          ],
-                          "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
-                          },
-                          "groupBy": [
-                            {
-                              "name": "workhorse.job.type",
+                              "name": "workhorse.job.outcome",
                               "fieldDataType": "string",
                               "fieldContext": "attribute"
                             }
                           ],
-                          "legend": "completed {{workhorse.job.type}}"
+                          "legend": "{{workhorse.job.type}} {{workhorse.job.outcome}}"
                         }
                       }
                     ]
@@ -369,13 +416,13 @@
         "spec": {
           "display": {
             "name": "Handler runtime percentiles",
-            "description": "p50, p95, and p99 handler duration in milliseconds, grouped by task type."
+            "description": "p50, p95, and p99 handler duration in seconds, grouped by task type."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
             "spec": {
               "formatting": {
-                "unit": "ms",
+                "unit": "s",
                 "decimalPrecision": "1"
               },
               "legend": {
@@ -398,9 +445,9 @@
                           "signal": "metrics",
                           "aggregations": [
                             {
-                              "metricName": "workhorse.handler.duration",
+                              "metricName": "workhorse.job.execution.duration.bucket",
                               "temporality": "",
-                              "timeAggregation": "latest",
+                              "timeAggregation": "rate",
                               "spaceAggregation": "p50",
                               "reduceTo": "last"
                             }
@@ -425,9 +472,9 @@
                           "signal": "metrics",
                           "aggregations": [
                             {
-                              "metricName": "workhorse.handler.duration",
+                              "metricName": "workhorse.job.execution.duration.bucket",
                               "temporality": "",
-                              "timeAggregation": "latest",
+                              "timeAggregation": "rate",
                               "spaceAggregation": "p95",
                               "reduceTo": "last"
                             }
@@ -452,9 +499,9 @@
                           "signal": "metrics",
                           "aggregations": [
                             {
-                              "metricName": "workhorse.handler.duration",
+                              "metricName": "workhorse.job.execution.duration.bucket",
                               "temporality": "",
-                              "timeAggregation": "latest",
+                              "timeAggregation": "rate",
                               "spaceAggregation": "p99",
                               "reduceTo": "last"
                             }
@@ -544,8 +591,8 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "name": "Worker capacity consumed",
-            "description": "Equivalent continuously busy workers by task type. One means one worker-second consumed per second."
+            "name": "Worker slots",
+            "description": "Declared and occupied execution slots by queue."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
@@ -572,33 +619,55 @@
                         "spec": {
                           "name": "A",
                           "signal": "metrics",
-                          "disabled": true,
+                          "disabled": false,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.handler.runtime",
+                              "metricName": "workhorse.worker.capacity",
                               "temporality": "",
-                              "timeAggregation": "rate",
+                              "timeAggregation": "latest",
                               "spaceAggregation": "sum",
-                              "reduceTo": "sum"
+                              "reduceTo": "last"
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue"
                           },
                           "groupBy": [
                             {
-                              "name": "workhorse.job.type",
+                              "name": "workhorse.queue.name",
                               "fieldDataType": "string",
                               "fieldContext": "attribute"
                             }
-                          ]
+                          ],
+                          "legend": "capacity {{workhorse.queue.name}}"
                         }
                       },
                       {
-                        "type": "builder_formula",
+                        "type": "builder_query",
                         "spec": {
-                          "name": "F1",
-                          "expression": "A / 1000"
+                          "name": "B",
+                          "signal": "metrics",
+                          "disabled": false,
+                          "aggregations": [
+                            {
+                              "metricName": "workhorse.worker.active",
+                              "temporality": "",
+                              "timeAggregation": "latest",
+                              "spaceAggregation": "sum",
+                              "reduceTo": "last"
+                            }
+                          ],
+                          "filter": {
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue"
+                          },
+                          "groupBy": [
+                            {
+                              "name": "workhorse.queue.name",
+                              "fieldDataType": "string",
+                              "fieldContext": "attribute"
+                            }
+                          ],
+                          "legend": "active {{workhorse.queue.name}}"
                         }
                       }
                     ]
@@ -639,7 +708,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.queue.depth",
+                        "metricName": "workhorse.job.count",
                         "temporality": "",
                         "timeAggregation": "latest",
                         "spaceAggregation": "max",
@@ -674,13 +743,13 @@
         "spec": {
           "display": {
             "name": "Oldest ready job",
-            "description": "Age in milliseconds of the oldest ready job in each queue."
+            "description": "Age in seconds of the oldest ready job in each queue."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
             "spec": {
               "formatting": {
-                "unit": "ms",
+                "unit": "s",
                 "decimalPrecision": "0"
               },
               "legend": {
@@ -699,7 +768,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.queue.oldest_ready_age",
+                        "metricName": "workhorse.queue.oldest_ready.age",
                         "temporality": "",
                         "timeAggregation": "latest",
                         "spaceAggregation": "max",
@@ -759,7 +828,7 @@
                           "disabled": true,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.queue.depth",
+                              "metricName": "workhorse.job.count",
                               "temporality": "",
                               "timeAggregation": "latest",
                               "spaceAggregation": "max",
@@ -786,7 +855,7 @@
                           "disabled": true,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.jobs.completed",
+                              "metricName": "workhorse.job.execution",
                               "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
@@ -794,7 +863,7 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.outcome = 'succeeded'"
                           },
                           "groupBy": [
                             {
@@ -825,20 +894,23 @@
         "spec": {
           "display": {
             "name": "Terminal success rate",
-            "description": "Successful completions divided by successful completions plus handler-submitted terminal failures."
+            "description": "Successful terminal executions divided by all terminal executions."
           },
           "plugin": {
-            "kind": "signoz/NumberPanel",
+            "kind": "signoz/TimeSeriesPanel",
             "spec": {
               "formatting": {
                 "unit": "%",
                 "decimalPrecision": "1"
+              },
+              "legend": {
+                "position": "bottom"
               }
             }
           },
           "queries": [
             {
-              "kind": "scalar",
+              "kind": "time_series",
               "spec": {
                 "plugin": {
                   "kind": "signoz/CompositeQuery",
@@ -852,15 +924,15 @@
                           "disabled": true,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.jobs.completed",
+                              "metricName": "workhorse.job.execution",
                               "temporality": "",
-                              "timeAggregation": "increase",
+                              "timeAggregation": "rate",
                               "spaceAggregation": "sum",
                               "reduceTo": "sum"
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.job.outcome = 'succeeded'"
                           }
                         }
                       },
@@ -872,15 +944,15 @@
                           "disabled": true,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.jobs.failed",
+                              "metricName": "workhorse.job.execution",
                               "temporality": "",
-                              "timeAggregation": "increase",
+                              "timeAggregation": "rate",
                               "spaceAggregation": "sum",
                               "reduceTo": "sum"
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.attempt.outcome = 'failed'"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.job.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'timeout']"
                           }
                         }
                       },
@@ -988,42 +1060,42 @@
             {
               "x": 0,
               "y": 0,
-              "width": 3,
-              "height": 3,
+              "width": 6,
+              "height": 5,
               "content": {
                 "$ref": "#/spec/panels/11111111-1111-4111-8111-111111111111"
               }
             },
             {
-              "x": 3,
+              "x": 6,
               "y": 0,
-              "width": 3,
-              "height": 3,
+              "width": 6,
+              "height": 5,
               "content": {
                 "$ref": "#/spec/panels/22222222-2222-4222-8222-222222222222"
               }
             },
             {
-              "x": 6,
-              "y": 0,
-              "width": 3,
-              "height": 3,
+              "x": 0,
+              "y": 5,
+              "width": 6,
+              "height": 5,
               "content": {
                 "$ref": "#/spec/panels/33333333-3333-4333-8333-333333333333"
               }
             },
             {
-              "x": 9,
-              "y": 0,
-              "width": 3,
-              "height": 3,
+              "x": 6,
+              "y": 5,
+              "width": 6,
+              "height": 5,
               "content": {
                 "$ref": "#/spec/panels/44444444-4444-4444-8444-444444444444"
               }
             },
             {
               "x": 0,
-              "y": 3,
+              "y": 10,
               "width": 6,
               "height": 5,
               "content": {
@@ -1032,7 +1104,7 @@
             },
             {
               "x": 6,
-              "y": 3,
+              "y": 10,
               "width": 6,
               "height": 5,
               "content": {
@@ -1041,16 +1113,16 @@
             },
             {
               "x": 0,
-              "y": 8,
-              "width": 6,
-              "height": 5,
+              "y": 30,
+              "width": 12,
+              "height": 6,
               "content": {
                 "$ref": "#/spec/panels/77777777-7777-4777-8777-777777777777"
               }
             },
             {
-              "x": 6,
-              "y": 8,
+              "x": 0,
+              "y": 20,
               "width": 6,
               "height": 5,
               "content": {
@@ -1059,7 +1131,7 @@
             },
             {
               "x": 0,
-              "y": 13,
+              "y": 15,
               "width": 6,
               "height": 5,
               "content": {
@@ -1068,7 +1140,7 @@
             },
             {
               "x": 6,
-              "y": 13,
+              "y": 15,
               "width": 6,
               "height": 5,
               "content": {
@@ -1077,17 +1149,17 @@
             },
             {
               "x": 0,
-              "y": 18,
-              "width": 4,
+              "y": 25,
+              "width": 12,
               "height": 5,
               "content": {
                 "$ref": "#/spec/panels/cccccccc-cccc-4ccc-8ccc-cccccccccccc"
               }
             },
             {
-              "x": 4,
-              "y": 18,
-              "width": 8,
+              "x": 6,
+              "y": 20,
+              "width": 6,
               "height": 5,
               "content": {
                 "$ref": "#/spec/panels/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -1095,7 +1167,7 @@
             },
             {
               "x": 0,
-              "y": 23,
+              "y": 36,
               "width": 12,
               "height": 6,
               "content": {

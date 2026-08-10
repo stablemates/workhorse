@@ -62,7 +62,7 @@ const { app, workhorse } = createDemoApplication(database, {
   close: () => pool.end(),
   onWorkerError: (error) => console.error("Workhorse worker stopped", error),
 });
-const metricsObserver = startDemoMetricsObserver(pool, workhorse.context.queue);
+const metricsObserver = startDemoMetricsObserver(pool);
 if (process.env.SEED_DEMO_DATA !== "false") {
   const seed = await seedDemoData(database);
   console.log(

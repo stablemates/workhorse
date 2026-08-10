@@ -36,7 +36,8 @@ describe("demo telemetry preload", () => {
       readFile(resolve("demo/src/worker.ts"), "utf8"),
     ]);
 
-    expect(index).toContain("startDemoMetricsObserver(pool, workhorse.context.queue)");
+    expect(index).toContain("startDemoMetricsObserver(pool)");
+    expect(index).not.toContain("workhorse.context.queue");
     expect(app).not.toContain("recordMaintenanceTelemetry");
     expect(worker).not.toContain("recordMaintenanceTelemetry");
   });

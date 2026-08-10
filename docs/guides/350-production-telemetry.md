@@ -53,7 +53,7 @@ every recording site.
 `pnpm demo:otel` reconciles the Workhorse jobs dashboard into SigNoz. Run
 `pnpm signoz:dashboards` to apply dashboard changes without restarting SigNoz. Its variables filter
 by environment, service, queue, and job type. Its panels cover throughput, terminal failures,
-retries, runtime percentiles, worker capacity, queue pressure, and estimated drain time.
+runtime percentiles, worker slots, queue pressure, success rate, and estimated drain time.
 
 The slow-task table ranks task types from handler spans. Trace sampling can change that ranking, so
 use the handler histogram when you need unsampled percentiles for one task type.
