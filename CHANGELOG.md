@@ -23,6 +23,9 @@ First published line. Requires **schema v20**, Node.js **22 or 24**, PostgreSQL 
   limits, operator redaction, automated history retention, and a durable worker registry.
 - `@workhorse/core`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`, and
   `dashboard`.
+- `@workhorse/core`: notification-assisted worker dispatch through one process-local
+  `workhorse_jobs` listener per node-postgres pool, with queue routing, reconnect backoff, and
+  jittered bounded polling as the durable fallback.
 - `@workhorse/drizzle`: Drizzle ORM provider with caller-owned transactions.
 - `@workhorse/hono`: Hono lifecycle integration and dashboard route registration.
 - `@workhorse/dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,

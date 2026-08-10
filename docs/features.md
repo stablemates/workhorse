@@ -6,7 +6,7 @@ This is the authoritative implementation snapshot for schema version 20. “Supp
 
 | Supported core                                             | Partial today                                 | Not supported today                              |
 | ---------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------ |
-| Transactional idempotent immediate/delayed batch enqueue   | Polling despite `NOTIFY` hints                | Priorities                                       |
+| Transactional idempotent immediate/delayed batch enqueue   |                                               | Priorities                                       |
 | FIFO `SKIP LOCKED` claims                                  |                                               |                                                  |
 | Leases, heartbeats, fencing, recovery                      |                                               | Cross-queue concurrency policies and rate limits |
 | Deploy-synchronized worker-owned schedules                 | Point-in-time health snapshot                 | Arbitrary scheduled SQL                          |
@@ -29,6 +29,7 @@ This is the authoritative implementation snapshot for schema version 20. “Supp
 | Durable worker fleet registration and remote pause         |                                               |                                                  |
 | Framework-neutral dashboard host and Node bridge           |                                               |                                                  |
 | Project scaffolding and schema CLI commands                |                                               |                                                  |
+| Notification-assisted dispatch with polling fallback       |                                               |                                                  |
 
 ## Core job and dispatch
 
@@ -44,7 +45,7 @@ This is the authoritative implementation snapshot for schema version 20. “Supp
 | Atomic batch enqueue              | Supported     | Up to 1,000 mixed requests share one classification timestamp, return IDs in order, and roll back together.                                                                                                                     |
 | Transactional application enqueue | Supported     | An active `Queryable`/`PoolClient` controls the transaction.                                                                                                                                                                    |
 | Persisted enqueue retry policy    | Supported     | `retryPolicy` accepts fixed, exponential, or decorrelated-jitter configuration and is validated and normalized by PostgreSQL.                                                                                                   |
-| Coalesced wake notifications      | Supported     | One commit-delivered notification is emitted per distinct queue gaining ready work. Polling remains authoritative.                                                                                                              |
+| Notification-assisted dispatch    | Supported     | One process-local listener per node-postgres pool routes commit-delivered queue and wildcard wake hints to matching workers. Reconnects wake every subscriber; jittered bounded polling remains authoritative.                  |
 | Bounded promotion                 | Supported     | `promote_v1` uses the selective scheduled index and `FOR UPDATE SKIP LOCKED`.                                                                                                                                                   |
 | Multi-worker claim                | Supported     | `claim_v1` locks one FIFO ready runtime and changes it to active with one state update.                                                                                                                                         |
 | Single mutable live row           | Supported     | Scheduled, ready, and active state are mutually exclusive shapes in `job_runtime`.                                                                                                                                              |

@@ -1,8 +1,8 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { installSchema, RedriveIdempotencyConflictError } from "@workhorse/core";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { installSchema, Queue, RedriveIdempotencyConflictError, Worker } from "@workhorse/core";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../../src/local-database.js";
 import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "../src/index.js";
 
@@ -78,6 +78,73 @@ describe("Drizzle provider integration", () => {
     expect((await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows).toEqual(
       [{ count: 6 }],
     );
+  });
+
+  it("preserves notification-assisted dispatch through the Drizzle adapter", async () => {
+    const handled: string[] = [];
+    const claim = vi.spyOn(adapter.queue, "claim");
+    const worker = adapter
+      .createWorker({
+        workerId: "drizzle-notification-worker",
+        pollMs: 15_000,
+        registryIntervalMs: 0,
+      })
+      .handle<{ message: string }>("drizzle-notification", ({ message }) => {
+        handled.push(message);
+        return null;
+      });
+
+    const running = worker.run();
+    try {
+      await vi.waitFor(() => expect(claim).toHaveBeenCalled());
+      await adapter.queue.enqueue("drizzle-notification", { message: "prompt" });
+      await vi.waitFor(() => expect(handled).toEqual(["prompt"]), { timeout: 1_000 });
+    } finally {
+      worker.stop();
+      await running;
+      claim.mockRestore();
+    }
+  });
+
+  it("shares the listener identity between raw and Drizzle queues over one pool", async () => {
+    const rawQueue = new Queue(pool, "raw-shared-listener");
+    const drizzleQueue = adapter.queue;
+    const rawClaim = vi.spyOn(rawQueue, "claim");
+    const drizzleClaim = vi.spyOn(drizzleQueue, "claim");
+    const rawWorker = new Worker(rawQueue, {
+      workerId: "raw-shared-listener",
+      pollMs: 15_000,
+      registryIntervalMs: 0,
+    });
+    const drizzleWorker = adapter.createWorker({
+      queue: "drizzle-shared-listener",
+      workerId: "drizzle-shared-listener",
+      pollMs: 15_000,
+      registryIntervalMs: 0,
+    });
+
+    const rawRun = rawWorker.run();
+    const drizzleRun = drizzleWorker.run();
+    try {
+      await vi.waitFor(() => {
+        expect(rawClaim).toHaveBeenCalled();
+        expect(drizzleClaim).toHaveBeenCalled();
+      });
+      const listeners = await pool.query<{ count: number }>(
+        `SELECT count(*)::integer AS count
+           FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND state = 'idle'
+            AND query = 'LISTEN workhorse_jobs'`,
+      );
+      expect(listeners.rows).toEqual([{ count: 1 }]);
+    } finally {
+      rawWorker.stop();
+      drizzleWorker.stop();
+      await Promise.all([rawRun, drizzleRun]);
+      rawClaim.mockRestore();
+      drizzleClaim.mockRestore();
+    }
   });
 
   it("normalizes claimed deadline and timeout timestamps to Date values", async () => {
