@@ -82,7 +82,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Ingress and routing",
     description: "Immediate, delayed, tagged, and idempotent acceptance paths.",
     scheduleName: "showcase.ingress-routing",
-    schedule: "* * * * *",
+    schedule: "0-59/8 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -113,7 +113,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Retry policies",
     description: "Fixed, exponential, and decorrelated-jitter outcomes.",
     scheduleName: "showcase.retry-policies",
-    schedule: "* * * * *",
+    schedule: "1-59/8 * * * *",
     recurringMaxAttempts: 3,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -153,7 +153,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Durable checkpoints",
     description: "Single, replayed, and multi-stage restart boundaries.",
     scheduleName: "showcase.durable-checkpoints",
-    schedule: "* * * * *",
+    schedule: "2-59/8 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -187,7 +187,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Durable waits",
     description: "Lease-releasing waits with replay and retry variation.",
     scheduleName: "showcase.durable-waits",
-    schedule: "* * * * *",
+    schedule: "3-59/8 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -221,7 +221,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Mutable progress",
     description: "Latest-value progress across success, retry, and failure.",
     scheduleName: "showcase.progress",
-    schedule: "* * * * *",
+    schedule: "4-59/8 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -256,7 +256,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Deadlines and execution timeouts",
     description: "Expired, timed-out, and comfortably completed work.",
     scheduleName: "showcase.timing-controls",
-    schedule: "* * * * *",
+    schedule: "5-59/8 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -294,7 +294,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Cancellation",
     description: "Immediate ready, future scheduled, and cooperative active cancellation.",
     scheduleName: "showcase.cancellation",
-    schedule: "* * * * *",
+    schedule: "6-59/8 * * * *",
     recurringMaxAttempts: 1,
     examples: [
       {
@@ -326,7 +326,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Dead letters and redrive",
     description: "Unredriven failure, successful redrive, and idempotent redrive replay.",
     scheduleName: "showcase.dead-letters-redrive",
-    schedule: "* * * * *",
+    schedule: "7-59/8 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
