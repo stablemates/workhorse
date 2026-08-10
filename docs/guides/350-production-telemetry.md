@@ -1,6 +1,6 @@
 # How do I see what workers are doing in production?
 
-Workhorse emits OpenTelemetry traces and metrics through the standard JavaScript API. Your
+Workhorse emits OpenTelemetry traces, logs, and metrics through the standard JavaScript APIs. Your
 application chooses the SDK and backend, so telemetry does not affect queue correctness.
 
 ## Follow a job from enqueue to execution
@@ -15,6 +15,16 @@ remaining part of one trace.
 
 Workhorse does not persist baggage. Baggage often contains user-controlled or sensitive values,
 and durable storage would make those values difficult to bound and redact.
+
+## Read lifecycle logs without exposing job data
+
+Info logs describe operator-relevant state changes, including worker lifecycle, execution outcomes,
+cancellation, recovery, maintenance, and schedule changes. Debug logs describe high-volume details,
+including claims, heartbeats, handler boundaries, checkpoints, and progress.
+
+Logs carry stable event names and structured job, queue, worker, and schedule identifiers. They do
+not carry payloads, results, error messages, idempotency keys, or saved durable values. A shared
+backend therefore does not receive another copy of the application data with every record.
 
 ## Export queue pressure
 
@@ -47,8 +57,8 @@ a metric. Traces retain job identity because sampling and trace retention bound 
 ## Filter every signal by its deployment
 
 Set `deployment.environment.name` and `service.name` as OpenTelemetry resource attributes in the
-host application. The SDK attaches them to metrics and traces, so Workhorse does not repeat them at
-every recording site.
+host application. The SDK attaches them to logs, metrics, and traces, so Workhorse does not repeat
+them at every recording site.
 
 `pnpm demo:otel` reconciles the Workhorse jobs dashboard into SigNoz. Run
 `pnpm signoz:dashboards` to apply dashboard changes without restarting SigNoz. Its variables filter

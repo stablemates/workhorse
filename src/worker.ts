@@ -11,6 +11,8 @@ import {
   extractTraceContext,
   jobMetricAttributes,
   jobSpanAttributes,
+  logDebug,
+  logInfo,
   telemetryMetrics,
   withSpan,
 } from "./telemetry.js";
@@ -278,6 +280,10 @@ export class Worker {
     handler: Handler<TPayload, TResult>,
   ): this {
     this.handlers.set(type, handler as unknown as Handler);
+    logDebug("workhorse.handler.registered", "Job handler registered", {
+      "workhorse.job.type": type,
+      "workhorse.worker.id": this.workerId,
+    });
     return this;
   }
 
@@ -288,6 +294,11 @@ export class Worker {
     // The maintenance loop exits immediately on stop, so a draining worker would otherwise never
     // publish that state and would simply vanish from an operator's fleet view mid-drain.
     if (this.draining && this.registered) void this.refreshRegistration(true);
+    logInfo("workhorse.worker.stop_requested", "Worker stop requested", {
+      "workhorse.queue.name": this.queueName,
+      "workhorse.worker.id": this.workerId,
+      "workhorse.worker.active_slots": this.activeSlots,
+    });
     this.wakeLoops();
   }
 
@@ -304,6 +315,10 @@ export class Worker {
   /** Stop claiming new jobs while leaving maintenance and any in-flight handler running. */
   pause(): void {
     this.locallyPaused = true;
+    logInfo("workhorse.worker.paused", "Worker paused locally", {
+      "workhorse.queue.name": this.queueName,
+      "workhorse.worker.id": this.workerId,
+    });
     this.wakeLoops();
   }
 
@@ -312,6 +327,10 @@ export class Worker {
     this.locallyPaused = false;
     this.previousPassWorked = false;
     this.lastClaimAt = Number.NEGATIVE_INFINITY;
+    logInfo("workhorse.worker.resumed", "Worker resumed locally", {
+      "workhorse.queue.name": this.queueName,
+      "workhorse.worker.id": this.workerId,
+    });
     this.wakeLoops();
   }
 
@@ -415,6 +434,11 @@ export class Worker {
         ...jobSpanAttributes(job),
       },
       async (span) => {
+        logDebug("workhorse.handler.started", "Job handler started", {
+          ...jobSpanAttributes(job),
+          "workhorse.queue.name": this.queueName,
+          "workhorse.worker.id": this.workerId,
+        });
         try {
           await this.executeJobWithinSpan(job, span);
         } finally {
@@ -422,6 +446,12 @@ export class Worker {
           const attributes = jobMetricAttributes(job);
           telemetryMetrics.handlerDuration.record(durationMs, attributes);
           telemetryMetrics.handlerRuntime.add(durationMs, attributes);
+          logDebug("workhorse.handler.finished", "Job handler finished", {
+            ...jobSpanAttributes(job),
+            "workhorse.queue.name": this.queueName,
+            "workhorse.worker.id": this.workerId,
+            "workhorse.handler.duration_ms": durationMs,
+          });
         }
       },
       extractTraceContext(job.traceContext),
@@ -443,6 +473,12 @@ export class Worker {
         outcome,
         (performance.now() - executionStartedAt) / 1_000,
       );
+      logInfo("workhorse.job.execution_finished", "Job execution finished", {
+        ...jobSpanAttributes(job),
+        "workhorse.queue.name": this.queueName,
+        "workhorse.worker.id": this.workerId,
+        "workhorse.handler.outcome": outcome,
+      });
     };
     const recordFailure = (state: Awaited<ReturnType<Queue["fail"]>>): void => {
       if (state === "ready" || state === "scheduled") recordExecution("retry");
@@ -806,6 +842,10 @@ export class Worker {
       }));
     } catch (error) {
       // Keep the last known pause decision rather than silently resuming a paused worker.
+      logInfo("workhorse.worker.registration_failed", "Worker registration failed", {
+        "workhorse.queue.name": this.queueName,
+        "workhorse.worker.id": this.workerId,
+      });
       this.options.onRegistrationError?.(error);
       return;
     }
@@ -816,7 +856,17 @@ export class Worker {
       this.previousPassWorked = false;
       this.lastClaimAt = Number.NEGATIVE_INFINITY;
     }
-    if (wasRemotelyPaused !== paused) this.wakeLoops();
+    if (wasRemotelyPaused !== paused) {
+      logInfo(
+        paused ? "workhorse.worker.paused" : "workhorse.worker.resumed",
+        paused ? "Worker paused remotely" : "Worker resumed remotely",
+        {
+          "workhorse.queue.name": this.queueName,
+          "workhorse.worker.id": this.workerId,
+        },
+      );
+      this.wakeLoops();
+    }
   }
 
   /** Best-effort removal of this worker's registration once its loop has stopped. */
@@ -934,6 +984,11 @@ export class Worker {
     this.stopping = this.stopVersion !== requestedStopVersion;
     this.draining = false;
     this.running = true;
+    logInfo("workhorse.worker.started", "Worker started", {
+      "workhorse.queue.name": this.queueName,
+      "workhorse.worker.id": this.workerId,
+      "workhorse.worker.concurrency": this.concurrency,
+    });
     let firstError: unknown;
     const shouldStop = () => this.stopping || signal?.aborted === true;
     const fail = (error: unknown): void => {
@@ -957,6 +1012,11 @@ export class Worker {
       this.running = false;
       this.draining = this.activeSlots > 0;
       await this.deregister();
+      logInfo("workhorse.worker.stopped", "Worker stopped", {
+        "workhorse.queue.name": this.queueName,
+        "workhorse.worker.id": this.workerId,
+        "workhorse.worker.active_slots": this.activeSlots,
+      });
     }
   }
 

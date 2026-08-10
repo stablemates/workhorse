@@ -13,6 +13,7 @@ import {
 import { createDemoDatabase } from "./database.js";
 import { resolveDemoDatabaseUrl } from "./environment.js";
 import { registerDemoHandlers } from "./handlers.js";
+import { demoLogger } from "./logger.js";
 
 /**
  * The demo's dedicated worker process.
@@ -54,7 +55,8 @@ export default defineWorkerProcess({
       // Returning undefined omits the worker override and lets SQL select the stored policy.
       retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
       onRegistrationError: (error) =>
-        console.error(
+        demoLogger.error(
+          "workhorse.demo.worker_registration_failed",
           "Worker registration failed; the fleet view will not show this worker",
           error,
         ),
@@ -64,7 +66,8 @@ export default defineWorkerProcess({
     },
   })),
   logger: {
-    info: (message) => console.log(message),
-    error: (message, error) => console.error(message, error),
+    info: (message) => demoLogger.info("workhorse.demo.worker_process", message),
+    error: (message, error) =>
+      demoLogger.error("workhorse.demo.worker_process_error", message, error),
   },
 });
