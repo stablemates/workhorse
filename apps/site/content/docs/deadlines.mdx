@@ -21,8 +21,9 @@ await queue.enqueue(
 );
 ```
 
-PostgreSQL refuses a new claim after the deadline. If a handler is active, `heartbeat_v2` reports the
-expired deadline and the worker aborts `context.signal` with `DeadlineExceededError`.
+After the deadline, PostgreSQL refuses workers that try to take the job. If a handler is active,
+`heartbeat_v2` reports the expired deadline and the worker aborts `context.signal` with
+`DeadlineExceededError`.
 
 A deadline ends the job without another retry. Redrive clears the old deadline because copying an
 expired business boundary would make the new job fail immediately.
@@ -42,7 +43,7 @@ await queue.enqueue(
 );
 ```
 
-Durable waits pause this budget because the job holds no worker slot while it waits. If the budget
+Durable waits pause this budget because the job holds no worker slot during suspension. If the budget
 expires during active work, the worker aborts with `ExecutionTimeoutError`.
 
 If attempts remain, PostgreSQL schedules another attempt. Timeline evidence distinguishes this path

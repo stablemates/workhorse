@@ -4,7 +4,7 @@ description: Request a cooperative stop and let PostgreSQL preserve the winning 
 ---
 
 JavaScript cannot be preempted safely, so Workhorse cancellation is cooperative. PostgreSQL can
-finish waiting work immediately, but an active handler must observe its `AbortSignal`.
+finish work without an active owner immediately, but an active handler must observe its `AbortSignal`.
 
 ## Request cancellation
 
@@ -62,8 +62,8 @@ until deployment synchronization changes it.
 ## Next
 
 - [Deadlines and timeouts](/docs/deadlines) — stop work when a clock expires
-- [Workers](/docs/workers) — pause claims or drain a process instead
-- [Durable execution](/docs/durable-execution) — understand cancellation during a wait
+- [Workers](/docs/workers) — ask workers to stop taking jobs or drain a process instead
+- [Durable execution](/docs/durable-execution) — understand cancellation during a durable wait
 
 ---
 

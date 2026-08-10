@@ -53,8 +53,8 @@ inside the caller's commit boundary.
 `serveWithWorkhorse` starts the worker runtime and Hono server together. Its returned `shutdown`
 method stops new connections, quiesces workers, drains requests, and closes adapter resources.
 
-If server startup fails, the helper stops the runtime before it rethrows. `HonoWorkhorse.stop` is
-idempotent, while a stopped instance cannot restart because its owned resources may already be closed.
+If server startup fails, the helper stops the runtime before it rethrows. After
+`HonoWorkhorse.stop` closes owned resources, the instance cannot restart.
 
 ## Mount the dashboard behind authorization
 

@@ -1,0 +1,53 @@
+---
+title: How should I supervise a worker process?
+description: Start one owned runtime, expose narrow probes, and drain active handlers without changing job state.
+---
+
+A dedicated worker process isolates queue capacity from HTTP traffic. It should own its adapter,
+workers, signals, probes, and database pool for one predictable lifecycle.
+
+## Start one owned runtime
+
+`defineWorkerProcess` describes the adapter and worker configurations. `runWorkerProcess` and the
+`workhorse worker` CLI add the standalone Node.js lifecycle.
+
+If startup fails, the process closes every resource it already created. If a worker loop exits
+unexpectedly, the process stops sibling workers before its supervisor restarts the unit.
+
+## Drain without canceling jobs
+
+When the first termination signal arrives, the process marks readiness false and calls `Worker.stop`.
+Workers stop asking PostgreSQL for more jobs, while active handlers keep their leases and finish.
+
+If a request to acquire ownership is already in flight, it can still commit. The process drains that
+job because it now owns the active lease.
+
+The configured shutdown deadline bounds the drain. If the deadline expires, the process leaves active
+leases in PostgreSQL, where ordinary fenced recovery can handle them.
+
+Process shutdown does not abort `HandlerContext.signal` or create cancellation evidence. Call
+`Queue.cancel` when the job itself must stop.
+
+## Expose only process probes
+
+The optional listener reports liveness while the process exists and readiness while workers can ask
+for more jobs. It exposes no job data, queue data, metrics, or mutation APIs.
+
+Keep the process drain shorter than the platform termination window. A later signal requests an
+immediate exit, so handlers must remain safe for recovery after a forced stop.
+
+## Own the database pool
+
+Give each process its own pool and close it after every worker drains. Size total capacity across
+replicas because heartbeats, handler queries, and process operations share those connections.
+
+## Next
+
+- [Workers](/docs/workers) — configure handlers and local concurrency
+- [Maintenance and retention](/docs/maintenance) — operate database-owned background work
+- [Cancellation](/docs/cancellation) — stop one job instead of one process
+
+---
+
+Exact signal handling, shutdown deadlines, probes, and recovery behavior:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#worker-process-lifecycle).

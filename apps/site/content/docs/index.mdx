@@ -22,8 +22,8 @@ database connection, while versioned SQL functions own every lifecycle transitio
 Your application registers a handler with `Worker.handle`. A `Worker` claims ready jobs, runs their
 handlers, and records the result.
 
-PostgreSQL grants each claim a temporary lease and a fence token. If a worker disappears, another
-worker can recover the job, while the old worker loses permission to change it.
+Each time a worker claims a job, PostgreSQL grants a temporary lease and a fence token. If that
+worker disappears, another can recover the job, while the old worker loses permission to change it.
 
 Handlers run outside database transactions, so delivery is at least once. External effects need a
 stable provider key or another idempotency boundary.

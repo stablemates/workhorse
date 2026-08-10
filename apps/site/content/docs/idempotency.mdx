@@ -50,8 +50,8 @@ show only a bounded preview and digest, so the raw key does not become audit dat
 Bindings expire under the request policy. After expiry, the same key can own a new job, which makes
 enqueue idempotency a replay window rather than a permanent business registry.
 
-Purging a waiting job releases its binding. Maintenance removes expired bindings before it removes
-terminal job identity.
+Purging a ready or scheduled job releases its binding. Maintenance removes expired bindings before
+it removes terminal job identity.
 
 ## Why do handlers still need idempotency?
 

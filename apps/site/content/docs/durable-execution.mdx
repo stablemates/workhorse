@@ -33,13 +33,13 @@ with a different value raises `CheckpointConflictError` instead of changing dura
 A checkpoint commits after its operation finishes. If the process dies between an external effect
 and that commit, the effect can happen again, so provider calls still need stable idempotency keys.
 
-## Wait without occupying a worker slot
+## Release a worker slot with a durable wait
 
 `HandlerContext.sleep` stores a named relative timer. `HandlerContext.sleepUntil` stores a named
 absolute target.
 
-The wait removes active ownership and places the job in `scheduled`. The worker slot becomes free,
-while the current logical attempt remains open.
+The durable wait removes active ownership and places the job in `scheduled`. The worker slot becomes
+free, while the current logical attempt remains open.
 
 ```ts
 worker.handle("email.follow-up", async (payload: { to: string; followUpAt: string }, context) => {
@@ -68,7 +68,7 @@ keep its original target, while changing the mode or target raises `WaitConflict
 
 - [Progress](/docs/progress) — report mutable status without creating a restart boundary
 - [Retries](/docs/retries) — understand why the handler starts again
-- [Cancellation](/docs/cancellation) — stop a job while it runs or waits
+- [Cancellation](/docs/cancellation) — stop a job during execution or a durable wait
 
 ---
 
