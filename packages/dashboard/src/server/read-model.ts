@@ -6,6 +6,7 @@ import {
   DashboardActivityPeriod,
   DashboardCancellationRequest,
   DashboardCronPage,
+  DashboardEventDetail,
   DashboardEventKind,
   DashboardEventsPage,
   DashboardEventsWindow,
@@ -2487,5 +2488,101 @@ export async function readDashboardEvents(
       durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
       errorMessage: errorMessageOrNull(row.error),
     })),
+  };
+}
+
+/** Read one history record by the stable identity used in Events URLs. */
+export async function readDashboardEventDetail(
+  database: DashboardDatabase,
+  id: string,
+): Promise<DashboardEventDetail | null> {
+  const match = /^(event|attempt):(\d+)$/.exec(id);
+  if (!match) return null;
+  const kind = match[1] as DashboardEventKind;
+  const recordId = match[2]!;
+  const source =
+    kind === "event"
+      ? sql`
+        SELECT 'event'::text AS kind,
+               event.event_id::text AS record_id,
+               event.job_id::text AS job_id,
+               job.queue_name,
+               job.job_type,
+               event.occurred_at,
+               event.attempt,
+               event.event_type AS type,
+               event.details,
+               NULL::text AS worker_id,
+               NULL::text AS fence_token,
+               NULL::timestamptz AS started_at,
+               NULL::timestamptz AS claimed_at,
+               NULL::timestamptz AS finished_at,
+               NULL::text AS duration_ms,
+               NULL::jsonb AS error
+          FROM workhorse.job_event event
+          LEFT JOIN workhorse.job job ON job.id = event.job_id
+         WHERE event.event_id = ${recordId}::bigint
+      `
+      : sql`
+        SELECT 'attempt'::text AS kind,
+               history.attempt_id::text AS record_id,
+               history.job_id::text AS job_id,
+               job.queue_name,
+               job.job_type,
+               history.occurred_at,
+               history.attempt,
+               history.outcome AS type,
+               NULL::jsonb AS details,
+               history.worker_id,
+               history.fence_token::text,
+               history.started_at,
+               history.claimed_at,
+               history.finished_at,
+               round(extract(epoch FROM history.finished_at - history.started_at) * 1000)::text
+                 AS duration_ms,
+               history.error
+          FROM workhorse.attempt_history history
+          LEFT JOIN workhorse.job job ON job.id = history.job_id
+         WHERE history.attempt_id = ${recordId}::bigint
+      `;
+  const result = await database.execute<{
+    kind: DashboardEventKind;
+    record_id: string;
+    job_id: string;
+    queue_name: string | null;
+    job_type: string | null;
+    occurred_at: Date | string;
+    attempt: number | null;
+    type: string;
+    details: unknown;
+    worker_id: string | null;
+    fence_token: string | null;
+    started_at: Date | string | null;
+    claimed_at: Date | string | null;
+    finished_at: Date | string | null;
+    duration_ms: string | null;
+    error: unknown;
+  }>(source);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: `${row.kind}:${row.record_id}`,
+    kind: row.kind,
+    recordId: row.record_id,
+    jobId: row.job_id,
+    queue: row.queue_name,
+    jobType: row.job_type,
+    occurredAt: toIso(row.occurred_at),
+    attempt: row.attempt,
+    type: row.type,
+    details: row.details ?? null,
+    workerId: row.worker_id,
+    fenceToken: row.fence_token,
+    startedAt: row.started_at === null ? null : toIso(row.started_at),
+    claimedAt: row.claimed_at === null ? null : toIso(row.claimed_at),
+    finishedAt: row.finished_at === null ? null : toIso(row.finished_at),
+    durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
+    error: row.error ?? null,
+    errorMessage: errorMessageOrNull(row.error),
   };
 }

@@ -1132,6 +1132,16 @@ export interface DashboardEventRow {
   errorMessage: string | null;
 }
 
+/** Complete evidence for one event drawer, loaded independently of the paginated feed. */
+export interface DashboardEventDetail extends DashboardEventRow {
+  /** Attempt timing evidence. Always null for lifecycle event rows. */
+  startedAt: string | null;
+  claimedAt: string | null;
+  finishedAt: string | null;
+  /** Complete structured attempt error. Always null for lifecycle event rows. */
+  error: unknown;
+}
+
 /**
  * A page of the durable event history inside a time window, newest first.
  *

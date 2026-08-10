@@ -3213,6 +3213,13 @@ describe("Workhorse dashboard events feed", () => {
       expect(attempt.workerId).toEqual(expect.any(String));
       expect(attempt.durationMs).toBeGreaterThanOrEqual(0);
       expect(attempt.attempt).toBe(1);
+      // Drawer links address the history record itself, so they remain valid after a moving feed
+      // pushes the row onto another page.
+      const detail = await client.dashboard.eventDetail({ id: attempt.id });
+      expect(detail).toMatchObject(attempt);
+      expect(detail.startedAt).toEqual(expect.any(String));
+      expect(detail.claimedAt).toEqual(expect.any(String));
+      expect(detail.finishedAt).toEqual(expect.any(String));
 
       // Newest first, with lifecycle and attempt rows interleaved by time rather than by table.
       const timestamps = page.events.map((event) => Date.parse(event.occurredAt));
@@ -3269,6 +3276,35 @@ describe("Workhorse dashboard events feed", () => {
           (event) => event.jobId === jobId,
         ),
       ).toBe(true);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("loads complete structured attempt errors for the event drawer", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      const { jobId } = await enqueueDemoTest("retry");
+      const page = await waitFor(
+        () => client.dashboard.events({ window: "1h", pageSize: 100, jobId }),
+        (value) =>
+          value.events.some((event) => event.kind === "attempt" && event.errorMessage !== null),
+      );
+      const attempt = page.events.find(
+        (event) => event.kind === "attempt" && event.errorMessage !== null,
+      )!;
+      const detail = await client.dashboard.eventDetail({ id: attempt.id });
+      expect(detail.error).not.toBeNull();
+      expect(detail.errorMessage).toBe(attempt.errorMessage);
+      expect(detail.startedAt).toEqual(expect.any(String));
+      expect(detail.claimedAt).toEqual(expect.any(String));
+      expect(detail.finishedAt).toEqual(expect.any(String));
     } finally {
       await workhorse.stop();
     }
