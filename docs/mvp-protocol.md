@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 20 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 21 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency. It also supports retry policies,
 checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
@@ -23,8 +23,8 @@ and per-minute statistics complete the protocol.
 | `attempt_history`     | Closed attempt records                                                     | Append-only, UTC-daily range partitions                                               |
 | `schedule_definition` | Namespaced recurring-job desired state including contract and retry policy | Deploy upsert; omitted definitions are disabled                                       |
 | `schedule_occurrence` | Deduplicated schedule fire mapped to a job                                 | Insert once per schedule second; job ID populated atomically                          |
-| `retention_policy`    | Authoritative cleanup windows and bounded work limits                      | Singleton deploy synchronization                                                      |
-| `maintenance_policy`  | IANA timezone and database-global maintenance cadences                     | Singleton deploy synchronization                                                      |
+| `retention_policy`    | Authoritative cleanup windows, work limits, defaults, and provenance       | Application seed or operator override and revert                                      |
+| `maintenance_policy`  | IANA timezone, local retention time, cadences, defaults, and provenance    | Application seed or operator override and revert                                      |
 | `maintenance_state`   | Per-task due state and retained-history safety watermark                   | SQL-owned maintenance state                                                           |
 
 A committed job has exactly one live runtime or one terminal outcome, never both. Version 1 write tables and compatibility write views are absent.
@@ -181,11 +181,22 @@ Before scheduling concerns, the worker execution contract is:
 
 The default partitions keep history inserts available if maintenance is late. `create_history_day_v1(day)` normalizes its argument to a UTC date, serializes creation for that boundary, repairs either missing half of a partial event/attempt pair, and moves matching fallback rows into each newly created partition. `retire_history_day_v1(day)` remains an explicit paired primitive. Clean installation precreates the current day and three future days, while `prepare_history_partitions_v1` repairs that horizon every six hours by default.
 
-`Queue.syncRetentionPolicy` persists independent minimum windows for identity, outcome, events, attempts, and occurrences. Every category defaults to 14 days; null disables a category. Event and attempt phases independently drop only fully expired completed days and bounded-delete expired default rows.
+`Queue.syncRetentionPolicy` records application defaults for independent minimum windows and work
+limits. It updates effective values unless an operator owns them. `{ force: true }` clears every
+override and restores deployment authority. `Queue.overrideRetentionPolicy` changes selected
+effective values, while `Queue.revertRetentionPolicy` restores selected current application
+defaults. Every category defaults to 14 days; null disables a category. Event and attempt phases
+independently drop only fully expired completed days and bounded-delete expired default rows.
 
 Identity is the attribution anchor. History inserts lock and verify their parent and update its retained-history boundary. Daily retention advances a global watermark only after event and attempt cleanup is complete through their cutoffs. Terminal cleanup requires an outcome, elapsed identity and outcome windows, no live runtime or retained occurrence, and a terminal boundary behind that watermark. Only then does deleting `job` cascade its outcome, checkpoints, and waits. Retention windows are minimums: daily granularity, bounded catch-up, and retained provenance can extend actual storage. Queue health reports policy, cleanup lag, oldest retained boundaries, eligible history partitions, and cumulative default-partition rows.
 
-`Queue.syncMaintenancePolicy` persists one IANA timezone and task cadences. Partition preparation defaults to six-hour intervals, terminal/idempotency cleanup to five-minute intervals, and history retention to once per local date at or after 03:00. Workers poll task eligibility every minute by default; PostgreSQL owns the global due check and separate advisory lock for each task.
+`Queue.syncMaintenancePolicy` records application defaults for one IANA timezone, a local
+wall-clock retention time, and task cadences. `Queue.overrideMaintenancePolicy` changes selected
+effective values, and `Queue.revertMaintenancePolicy` restores selected application defaults.
+Partition preparation defaults to six-hour intervals, terminal/idempotency cleanup to five-minute
+intervals, and history retention to once per local date at or after 03:00 UTC. Workers poll task
+eligibility every minute by default; PostgreSQL owns the global due check and separate advisory lock
+for each task.
 
 ## Validation limits
 
@@ -199,6 +210,6 @@ Identity is the attribution anchor. History inserts lock and verify their parent
   ±10% jitter; a database without `connect()` retains 250 ms. An explicit `pollMs` replaces the base
   in either mode. A node-postgres pool with `max = 1` remains polling-only. `runOnce()` retains 250
   ms by default and opens no listener.
-- Retention policy is configured through the Queue or SQL deployment API; the demo dashboard
-  reports policy and cleanup health but does not mutate it.
+- Retention policy changes require a bounded impact preview in the dashboard. Process-owned worker
+  options remain read-only and change only through deployment configuration.
 - Centralized runtime churn, partial-index maintenance, autovacuum behavior, and migration duration require production-scale measurement.

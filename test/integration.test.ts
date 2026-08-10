@@ -120,13 +120,16 @@ beforeEach(async () => {
     rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
     last_run_at = NULL, updated_at = clock_timestamp()`);
   await pool.query("ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1");
-  await queue.syncRetentionPolicy(defaultRetentionPolicy);
-  await queue.syncMaintenancePolicy({
-    timezone: "UTC",
-    partitionPreparationIntervalMs: 21_600_000,
-    terminalCleanupIntervalMs: 300_000,
-    historyRetentionLocalHour: 3,
-  });
+  await queue.syncRetentionPolicy(defaultRetentionPolicy, { force: true });
+  await queue.syncMaintenancePolicy(
+    {
+      timezone: "UTC",
+      partitionPreparationIntervalMs: 21_600_000,
+      terminalCleanupIntervalMs: 300_000,
+      historyRetentionLocalTime: "03:00",
+    },
+    { force: true },
+  );
   await pool.query(`UPDATE workhorse.maintenance_state SET
     last_started_at = NULL,
     last_completed_at = NULL,
@@ -406,11 +409,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v20 with job contracts, bounded trace metadata, and fenced progress", async () => {
+  it("installs schema v21 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(20);
+    expect(version.rows[0]?.version).toBe(21);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -440,7 +443,7 @@ describe("live-runtime queue protocol", () => {
       timezone: "UTC",
       partitionPreparationIntervalMs: 21_600_000,
       terminalCleanupIntervalMs: 300_000,
-      historyRetentionLocalHour: 3,
+      historyRetentionLocalTime: "03:00",
       updatedAt: expect.any(Date),
     });
 
@@ -2182,7 +2185,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(20);
+    expect(health.schemaVersion).toBe(21);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2655,26 +2658,143 @@ describe("live-runtime queue protocol", () => {
     }
   });
 
-  it("persists one IANA maintenance timezone and runs daily retention once after local 03:00", async () => {
+  it("keeps an operator maintenance-time override until it is reverted", async () => {
+    await queue.syncMaintenancePolicy(
+      { timezone: "UTC", historyRetentionLocalTime: "03:00" },
+      { force: true },
+    );
+    await queue.overrideMaintenancePolicy({ historyRetentionLocalTime: "01:30" });
+
+    await queue.syncMaintenancePolicy({
+      timezone: "UTC",
+      historyRetentionLocalTime: "04:15",
+    });
+    await expect(queue.getMaintenancePolicy()).resolves.toMatchObject({
+      historyRetentionLocalTime: "01:30",
+      provenance: {
+        historyRetentionLocalTime: {
+          source: "operator",
+          applicationDefault: "04:15",
+        },
+      },
+    });
+
+    await queue.revertMaintenancePolicy(["historyRetentionLocalTime"]);
+    await expect(queue.getMaintenancePolicy()).resolves.toMatchObject({
+      historyRetentionLocalTime: "04:15",
+      provenance: {
+        historyRetentionLocalTime: {
+          source: "application",
+          applicationDefault: "04:15",
+        },
+      },
+    });
+  });
+
+  it("keeps operator retention overrides while application defaults continue to update", async () => {
+    await queue.syncRetentionPolicy(defaultRetentionPolicy, { force: true });
+    await queue.overrideRetentionPolicy({
+      jobIdentityRetentionDays: 30,
+      jobEventRetentionDays: 30,
+    });
+
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobIdentityRetentionDays: 21,
+      jobEventRetentionDays: 21,
+    });
+    await expect(queue.getRetentionPolicy()).resolves.toMatchObject({
+      jobEventRetentionDays: 30,
+      provenance: {
+        jobEventRetentionDays: { source: "operator", applicationDefault: 21 },
+      },
+    });
+
+    await queue.revertRetentionPolicy(["jobEventRetentionDays"]);
+    await expect(queue.getRetentionPolicy()).resolves.toMatchObject({
+      jobEventRetentionDays: 21,
+      provenance: {
+        jobEventRetentionDays: { source: "application", applicationDefault: 21 },
+      },
+    });
+  });
+
+  it("restores omitted optional settings to application defaults during a forced sync", async () => {
+    await queue.syncMaintenancePolicy(
+      { timezone: "UTC", partitionPreparationIntervalMs: 60_000 },
+      { force: true },
+    );
+    await queue.syncRetentionPolicy(
+      { ...defaultRetentionPolicy, terminalJobPruneLimit: 50 },
+      { force: true },
+    );
+    await queue.overrideMaintenancePolicy({ partitionPreparationIntervalMs: 120_000 });
+    await queue.overrideRetentionPolicy({ terminalJobPruneLimit: 75 });
+
+    await queue.syncMaintenancePolicy({ timezone: "UTC" }, { force: true });
+    await queue.syncRetentionPolicy(
+      {
+        jobIdentityRetentionDays: defaultRetentionPolicy.jobIdentityRetentionDays,
+        terminalOutcomeRetentionDays: defaultRetentionPolicy.terminalOutcomeRetentionDays,
+        jobEventRetentionDays: defaultRetentionPolicy.jobEventRetentionDays,
+        attemptHistoryRetentionDays: defaultRetentionPolicy.attemptHistoryRetentionDays,
+        scheduleOccurrenceRetentionDays: defaultRetentionPolicy.scheduleOccurrenceRetentionDays,
+        statisticsRetentionDays: defaultRetentionPolicy.statisticsRetentionDays,
+      },
+      { force: true },
+    );
+
+    await expect(queue.getMaintenancePolicy()).resolves.toMatchObject({
+      partitionPreparationIntervalMs: 60_000,
+      provenance: { partitionPreparationIntervalMs: { source: "application" } },
+    });
+    await expect(queue.getRetentionPolicy()).resolves.toMatchObject({
+      terminalJobPruneLimit: 50,
+      provenance: { terminalJobPruneLimit: { source: "application" } },
+    });
+  });
+
+  it("previews bounded rows that shorter retention would make eligible", async () => {
+    const id = await queue.enqueue("retention-preview", {});
+    const claimed = await queue.claim("retention-preview-worker");
+    await queue.complete(claimed!, "retention-preview-worker", { ok: true });
+    await pool.query("UPDATE workhorse.job SET created_at = '2020-01-01' WHERE id = $1", [id]);
+    await pool.query(
+      "UPDATE workhorse.job_outcome SET finished_at = '2020-01-02' WHERE job_id = $1",
+      [id],
+    );
+
+    await expect(
+      queue.previewRetentionPolicy({
+        jobIdentityRetentionDays: 1,
+        terminalOutcomeRetentionDays: 1,
+      }),
+    ).resolves.toMatchObject({
+      eligible: { terminalJobs: 1 },
+      capped: { terminalJobs: false },
+    });
+  });
+
+  it("persists one IANA maintenance timezone and runs daily retention once after local time", async () => {
     expect(
       await queue.syncMaintenancePolicy({
         timezone: "America/New_York",
         partitionPreparationIntervalMs: 3_600_000,
         terminalCleanupIntervalMs: 60_000,
-        historyRetentionLocalHour: 3,
+        historyRetentionLocalTime: "03:30",
       }),
     ).toMatchObject({
       timezone: "America/New_York",
       partitionPreparationIntervalMs: 3_600_000,
       terminalCleanupIntervalMs: 60_000,
-      historyRetentionLocalHour: 3,
+      historyRetentionLocalTime: "03:30",
     });
     await expect(queue.syncMaintenancePolicy({ timezone: "Mars/Olympus_Mons" })).rejects.toThrow(
       /valid IANA timezone/,
     );
 
     const beforeSpringForwardBoundary = new Date("2026-03-08T06:59:00.000Z");
-    const atSpringForwardBoundary = new Date("2026-03-08T07:00:00.000Z");
+    const atSpringForwardBoundary = new Date("2026-03-08T07:30:00.000Z");
     expect(await queue.retainHistory({ now: beforeSpringForwardBoundary })).toEqual([]);
     expect(await queue.retainHistory({ now: atSpringForwardBoundary })).toHaveLength(3);
     expect(await queue.retainHistory({ now: new Date("2026-03-08T08:00:00.000Z") })).toEqual([]);
@@ -2709,7 +2829,7 @@ describe("live-runtime queue protocol", () => {
       ...defaultRetentionPolicy,
       occurrenceRowsPerPass: 1,
     });
-    await queue.syncMaintenancePolicy({ timezone: "UTC", historyRetentionLocalHour: 3 });
+    await queue.syncMaintenancePolicy({ timezone: "UTC", historyRetentionLocalTime: "03:00" });
 
     const first = await queue.retainHistory({ now: new Date("2026-08-02T03:00:00.000Z") });
     const second = await queue.retainHistory({ now: new Date("2026-08-02T03:01:00.000Z") });
@@ -2785,7 +2905,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v20 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v21 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -4464,7 +4584,7 @@ describe("live-runtime queue protocol", () => {
       { runAt: new Date(Date.now() + 80) },
     );
     await sleep(100);
-    await queue.syncMaintenancePolicy({ timezone: "UTC", historyRetentionLocalHour: 0 });
+    await queue.syncMaintenancePolicy({ timezone: "UTC", historyRetentionLocalTime: "00:00" });
 
     const telemetry: ReturnType<Worker["maintenanceTelemetry"]> = [];
     const worker = new Worker(queue, {
@@ -6710,7 +6830,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(20);
+    expect(health.schemaVersion).toBe(21);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -6747,7 +6867,14 @@ describe("live-runtime queue protocol", () => {
       statisticsRowsPerPass: 31,
     };
     const persisted = await queue.syncRetentionPolicy(definition);
-    expect(persisted).toEqual({ ...definition, updatedAt: expect.any(Date) });
+    expect(persisted).toMatchObject({
+      ...definition,
+      provenance: {
+        jobIdentityRetentionDays: { source: "application", applicationDefault: 90 },
+        jobEventRetentionDays: { source: "application", applicationDefault: 30 },
+      },
+      updatedAt: expect.any(Date),
+    });
     await expect(queue.getRetentionPolicy()).resolves.toEqual(persisted);
 
     await expect(

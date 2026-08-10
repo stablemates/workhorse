@@ -1,4 +1,11 @@
-import type { CancelStatus, JobState } from "@workhorse/core";
+import type {
+  CancelStatus,
+  JobState,
+  MaintenancePolicyDefinition,
+  MaintenancePolicySetting,
+  RetentionPolicyDefinition,
+  RetentionPolicySetting,
+} from "@workhorse/core";
 import type { DashboardDemoJobKind, DashboardDemoScenario } from "../client.js";
 import type { DashboardDurabilityPlan, DashboardRunNowStatus } from "../model.js";
 
@@ -83,6 +90,25 @@ export interface DashboardWorkerController {
     paused: boolean,
     audit: DashboardAuditContext,
   ) => Promise<{ paused: boolean }>;
+}
+
+export interface DashboardSettingsController {
+  overrideMaintenancePolicy(
+    definition: Partial<MaintenancePolicyDefinition>,
+    audit: DashboardAuditContext,
+  ): Promise<void>;
+  revertMaintenancePolicy(
+    settings: readonly MaintenancePolicySetting[],
+    audit: DashboardAuditContext,
+  ): Promise<void>;
+  overrideRetentionPolicy(
+    definition: Partial<RetentionPolicyDefinition>,
+    audit: DashboardAuditContext,
+  ): Promise<void>;
+  revertRetentionPolicy(
+    settings: readonly RetentionPolicySetting[],
+    audit: DashboardAuditContext,
+  ): Promise<void>;
 }
 
 export type DashboardDurabilityProjector = (

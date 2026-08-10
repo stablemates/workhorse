@@ -14,6 +14,7 @@ import type {
   DashboardScheduleController,
   DashboardTaskController,
   DashboardWorkerController,
+  DashboardSettingsController,
 } from "./types.js";
 
 export interface DashboardHostOptions {
@@ -37,6 +38,7 @@ export interface DashboardHostOptions {
   queueController?: DashboardQueueController;
   taskController?: DashboardTaskController;
   workerController?: DashboardWorkerController;
+  settingsController?: DashboardSettingsController;
   projectDurability?: DashboardDurabilityProjector;
   auditActor?: string;
   /** Trusted host-owned ES modules loaded before the dashboard browser entry. */
@@ -180,6 +182,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
             queueController: options.queueController,
             taskController: options.taskController,
             workerController: options.workerController,
+            settingsController: options.settingsController,
             projectDurability: options.projectDurability,
           },
         });

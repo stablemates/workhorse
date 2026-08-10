@@ -16,6 +16,7 @@ import {
   Menu,
   MultiSelect,
   NavLink,
+  NumberInput,
   Pagination,
   Paper,
   ScrollArea,
@@ -71,7 +72,14 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import type { RetryPolicy } from "@workhorse/core";
+import type {
+  MaintenancePolicyDefinition,
+  MaintenancePolicySetting,
+  RetentionPolicyDefinition,
+  RetentionPolicyImpact,
+  RetentionPolicySetting,
+  RetryPolicy,
+} from "@workhorse/core";
 import {
   dashboardAttemptOutcomes,
   dashboardJobEventTypes,
@@ -108,6 +116,7 @@ import type {
   DashboardTaskFilter,
   DashboardTasksPage,
   DashboardWorkersPage,
+  DashboardSettingsPage,
   TaskRowActionCapabilities,
   TaskRowActionId,
 } from "./model.js";
@@ -282,7 +291,7 @@ type PageData =
   | { route: "/queues"; value: DashboardQueuesPage }
   | { route: "/system"; value: DashboardSystemPage }
   | { route: "/workers"; value: DashboardWorkersPage }
-  | { route: "/settings"; value: null };
+  | { route: "/settings"; value: DashboardSettingsPage };
 type LoadState =
   | { status: "loading"; data: PageData | null; error: null }
   | { status: "ready"; data: PageData; error: null }
@@ -4441,22 +4450,454 @@ const timeZoneOptions: Array<{ value: string; label: string }> = [
   { value: "Australia/Sydney", label: "Australia/Sydney" },
 ];
 
-function SettingsPage() {
+export interface SettingsPageProps {
+  data: DashboardSettingsPage;
+  retentionImpact: RetentionPolicyImpact | null;
+  saving: boolean;
+  onSaveMaintenance(definition: Partial<MaintenancePolicyDefinition>): Promise<void>;
+  onPreviewRetention(
+    definition: Partial<RetentionPolicyDefinition>,
+  ): Promise<RetentionPolicyImpact>;
+  onSaveRetention(definition: Partial<RetentionPolicyDefinition>): Promise<void>;
+  onRevertMaintenance(setting: MaintenancePolicySetting): Promise<void>;
+  onRevertRetention(setting: RetentionPolicySetting): Promise<void>;
+}
+
+function SettingSource({
+  source,
+  revert,
+}: {
+  source: "application" | "operator";
+  revert?: () => void;
+}) {
+  if (source === "application") return <Badge variant="light">Application default</Badge>;
+  return (
+    <Group gap="xs">
+      <Badge color="violet" variant="light">
+        Operator override
+      </Badge>
+      {revert ? (
+        <Button size="compact-xs" variant="subtle" onClick={revert}>
+          Revert
+        </Button>
+      ) : null}
+    </Group>
+  );
+}
+
+const retentionFields: Array<{
+  key: RetentionPolicySetting;
+  label: string;
+  nullable: boolean;
+  suffix: string;
+}> = [
+  { key: "jobIdentityRetentionDays", label: "Task identity", nullable: true, suffix: " days" },
+  {
+    key: "terminalOutcomeRetentionDays",
+    label: "Finished outcomes",
+    nullable: true,
+    suffix: " days",
+  },
+  { key: "jobEventRetentionDays", label: "Task events", nullable: true, suffix: " days" },
+  { key: "attemptHistoryRetentionDays", label: "Attempt history", nullable: true, suffix: " days" },
+  {
+    key: "scheduleOccurrenceRetentionDays",
+    label: "Schedule occurrences",
+    nullable: true,
+    suffix: " days",
+  },
+  { key: "statisticsRetentionDays", label: "Rolling statistics", nullable: true, suffix: " days" },
+  {
+    key: "terminalJobPruneLimit",
+    label: "Finished tasks per cleanup pass",
+    nullable: false,
+    suffix: " rows",
+  },
+  {
+    key: "historyPartitionsPerPass",
+    label: "History partitions per pass",
+    nullable: false,
+    suffix: " partitions",
+  },
+  {
+    key: "defaultPartitionRowsPerPass",
+    label: "Fallback history rows per pass",
+    nullable: false,
+    suffix: " rows",
+  },
+  {
+    key: "occurrenceRowsPerPass",
+    label: "Schedule occurrences per pass",
+    nullable: false,
+    suffix: " rows",
+  },
+  {
+    key: "statisticsRowsPerPass",
+    label: "Statistics rows per pass",
+    nullable: false,
+    suffix: " rows",
+  },
+];
+
+function impactSummary(impact: RetentionPolicyImpact): string {
+  const values = [
+    [impact.eligible.terminalJobs, "finished task", impact.capped.terminalJobs],
+    [impact.eligible.jobEvents, "event", impact.capped.jobEvents],
+    [impact.eligible.attemptHistory, "attempt", impact.capped.attemptHistory],
+    [impact.eligible.scheduleOccurrences, "schedule occurrence", impact.capped.scheduleOccurrences],
+    [impact.eligible.statistics, "statistics bucket", impact.capped.statistics],
+  ] as const;
+  const parts = values
+    .filter(([count]) => count > 0)
+    .map(
+      ([count, label, capped]) =>
+        `${capped ? "at least " : ""}${count} ${label}${count === 1 ? "" : "s"}`,
+    );
+  if (parts.length === 0) return "No currently stored rows would become eligible.";
+  if (parts.length === 1) return `${parts[0]} would become eligible.`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)} would become eligible.`;
+}
+
+export function SettingsPage({
+  data,
+  retentionImpact: initialRetentionImpact,
+  saving,
+  onSaveMaintenance,
+  onPreviewRetention,
+  onSaveRetention,
+  onRevertMaintenance,
+  onRevertRetention,
+}: SettingsPageProps) {
   const [timeZone, setTimeZone] = useState(currentTimeZoneValue);
+  const [maintenance, setMaintenance] = useState(() => ({
+    timezone: data.maintenance.timezone,
+    historyRetentionLocalTime: data.maintenance.historyRetentionLocalTime,
+    partitionPreparationIntervalMs: data.maintenance.partitionPreparationIntervalMs,
+    terminalCleanupIntervalMs: data.maintenance.terminalCleanupIntervalMs,
+  }));
+  const [retention, setRetention] = useState<Record<string, number | "">>(() =>
+    Object.fromEntries(retentionFields.map(({ key }) => [key, data.retention[key] ?? ""])),
+  );
+  const [retentionImpact, setRetentionImpact] = useState(initialRetentionImpact);
+  const retentionPreviewVersion = useRef(0);
+  useEffect(() => {
+    setMaintenance({
+      timezone: data.maintenance.timezone,
+      historyRetentionLocalTime: data.maintenance.historyRetentionLocalTime,
+      partitionPreparationIntervalMs: data.maintenance.partitionPreparationIntervalMs,
+      terminalCleanupIntervalMs: data.maintenance.terminalCleanupIntervalMs,
+    });
+    setRetention(
+      Object.fromEntries(retentionFields.map(({ key }) => [key, data.retention[key] ?? ""])),
+    );
+    retentionPreviewVersion.current += 1;
+    setRetentionImpact(null);
+  }, [data]);
   const changeTimeZone = (value: string | null) => {
     const next = value ?? "system";
     setDisplayTimeZone(next === "system" ? null : next);
     setTimeZone(next);
   };
+  const maintenanceChanges: Partial<MaintenancePolicyDefinition> = {};
+  if (maintenance.timezone !== data.maintenance.timezone)
+    maintenanceChanges.timezone = maintenance.timezone;
+  if (maintenance.historyRetentionLocalTime !== data.maintenance.historyRetentionLocalTime) {
+    maintenanceChanges.historyRetentionLocalTime = maintenance.historyRetentionLocalTime;
+  }
+  if (
+    maintenance.partitionPreparationIntervalMs !== data.maintenance.partitionPreparationIntervalMs
+  ) {
+    maintenanceChanges.partitionPreparationIntervalMs = maintenance.partitionPreparationIntervalMs;
+  }
+  if (maintenance.terminalCleanupIntervalMs !== data.maintenance.terminalCleanupIntervalMs) {
+    maintenanceChanges.terminalCleanupIntervalMs = maintenance.terminalCleanupIntervalMs;
+  }
+  const retentionChanges: Partial<RetentionPolicyDefinition> = {};
+  for (const { key, nullable } of retentionFields) {
+    if (!nullable && retention[key] === "") continue;
+    const value = retention[key] === "" ? null : Number(retention[key]);
+    if (value !== data.retention[key]) {
+      (retentionChanges as Record<string, number | null>)[key] = value;
+    }
+  }
+  const maintenanceChanged = Object.keys(maintenanceChanges).length > 0;
+  const retentionChanged = Object.keys(retentionChanges).length > 0;
   const now = new Date().toISOString();
   return (
     <Stack gap="xl">
-      <PageHeader title="Settings" description="Choose how this browser displays the dashboard." />
+      <PageHeader
+        title="Settings"
+        description="See where each value is owned and change database-wide policy."
+      />
+      <Paper withBorder p="lg">
+        <Stack gap="md">
+          <Box>
+            <Text fw={650}>Database-owned policy</Text>
+            <Text c="dimmed" size="sm">
+              These values apply to every worker. Operator overrides survive deployments until you
+              revert them.
+            </Text>
+          </Box>
+          {!data.editable ? (
+            <Alert color="yellow" title="Read-only dashboard">
+              The connected host did not authorize settings changes.
+            </Alert>
+          ) : null}
+          <Grid>
+            <Grid.Col span={{ base: 12, md: 6 }}>
+              <TextInput
+                label="Maintenance timezone"
+                description="Use an IANA name so daylight-saving changes follow local time."
+                value={maintenance.timezone}
+                disabled={!data.editable}
+                onChange={(event) =>
+                  setMaintenance((current) => ({ ...current, timezone: event.currentTarget.value }))
+                }
+                rightSection={
+                  <SettingSource
+                    source={data.maintenance.provenance.timezone.source}
+                    revert={
+                      data.editable && data.maintenance.provenance.timezone.source === "operator"
+                        ? () => void onRevertMaintenance("timezone")
+                        : undefined
+                    }
+                  />
+                }
+                rightSectionWidth={190}
+              />
+            </Grid.Col>
+            <Grid.Col span={{ base: 12, md: 6 }}>
+              <TextInput
+                type="time"
+                label="Daily retention time"
+                description={`Runs once per local date in ${maintenance.timezone || "the selected timezone"}.`}
+                value={maintenance.historyRetentionLocalTime}
+                disabled={!data.editable}
+                onChange={(event) =>
+                  setMaintenance((current) => ({
+                    ...current,
+                    historyRetentionLocalTime: event.currentTarget.value,
+                  }))
+                }
+                rightSection={
+                  <SettingSource
+                    source={data.maintenance.provenance.historyRetentionLocalTime.source}
+                    revert={
+                      data.editable &&
+                      data.maintenance.provenance.historyRetentionLocalTime.source === "operator"
+                        ? () => void onRevertMaintenance("historyRetentionLocalTime")
+                        : undefined
+                    }
+                  />
+                }
+                rightSectionWidth={190}
+              />
+            </Grid.Col>
+            <Grid.Col span={{ base: 12, md: 6 }}>
+              <NumberInput
+                label="Partition preparation interval"
+                suffix=" ms"
+                min={60_000}
+                value={maintenance.partitionPreparationIntervalMs}
+                disabled={!data.editable}
+                onChange={(value) =>
+                  typeof value === "number" &&
+                  setMaintenance((current) => ({
+                    ...current,
+                    partitionPreparationIntervalMs: value,
+                  }))
+                }
+                rightSection={
+                  <SettingSource
+                    source={data.maintenance.provenance.partitionPreparationIntervalMs.source}
+                    revert={
+                      data.editable &&
+                      data.maintenance.provenance.partitionPreparationIntervalMs.source ===
+                        "operator"
+                        ? () => void onRevertMaintenance("partitionPreparationIntervalMs")
+                        : undefined
+                    }
+                  />
+                }
+                rightSectionWidth={190}
+              />
+            </Grid.Col>
+            <Grid.Col span={{ base: 12, md: 6 }}>
+              <NumberInput
+                label="Terminal cleanup interval"
+                suffix=" ms"
+                min={1_000}
+                value={maintenance.terminalCleanupIntervalMs}
+                disabled={!data.editable}
+                onChange={(value) =>
+                  typeof value === "number" &&
+                  setMaintenance((current) => ({ ...current, terminalCleanupIntervalMs: value }))
+                }
+                rightSection={
+                  <SettingSource
+                    source={data.maintenance.provenance.terminalCleanupIntervalMs.source}
+                    revert={
+                      data.editable &&
+                      data.maintenance.provenance.terminalCleanupIntervalMs.source === "operator"
+                        ? () => void onRevertMaintenance("terminalCleanupIntervalMs")
+                        : undefined
+                    }
+                  />
+                }
+                rightSectionWidth={190}
+              />
+            </Grid.Col>
+          </Grid>
+          <Group justify="flex-end">
+            <Button
+              disabled={!data.editable || !maintenanceChanged}
+              loading={saving}
+              onClick={() => void onSaveMaintenance(maintenanceChanges)}
+            >
+              Save maintenance policy
+            </Button>
+          </Group>
+          <Divider />
+          <Box>
+            <Text fw={600}>Retention windows</Text>
+            <Text c="dimmed" size="xs">
+              Leave a value empty to retain that category indefinitely.
+            </Text>
+          </Box>
+          <Table verticalSpacing="sm">
+            <Table.Tbody>
+              {retentionFields.map(({ key, label, nullable, suffix }) => (
+                <Table.Tr key={key}>
+                  <Table.Td>
+                    <Text size="sm" fw={500}>
+                      {label}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td w={180}>
+                    <NumberInput
+                      aria-label={label}
+                      suffix={suffix}
+                      min={1}
+                      value={retention[key]}
+                      disabled={!data.editable}
+                      allowDecimal={false}
+                      allowNegative={false}
+                      onChange={(value) => {
+                        retentionPreviewVersion.current += 1;
+                        setRetentionImpact(null);
+                        setRetention((current) => ({
+                          ...current,
+                          [key]:
+                            typeof value === "number"
+                              ? value
+                              : nullable
+                                ? ""
+                                : (current[key] ?? ""),
+                        }));
+                      }}
+                    />
+                  </Table.Td>
+                  <Table.Td w={220}>
+                    <SettingSource
+                      source={data.retention.provenance[key].source}
+                      revert={
+                        data.editable && data.retention.provenance[key].source === "operator"
+                          ? () => void onRevertRetention(key)
+                          : undefined
+                      }
+                    />
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+          {retentionImpact ? (
+            <Alert color="red" title="Deletion impact">
+              {impactSummary(retentionImpact)} Workhorse may delete them during the next maintenance
+              pass, and deletion cannot be undone.
+            </Alert>
+          ) : null}
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              disabled={!data.editable || !retentionChanged}
+              onClick={() => {
+                const version = ++retentionPreviewVersion.current;
+                setRetentionImpact(null);
+                void onPreviewRetention(retentionChanges)
+                  .then((impact) => {
+                    if (retentionPreviewVersion.current === version) setRetentionImpact(impact);
+                  })
+                  .catch(() => undefined);
+              }}
+            >
+              Preview impact
+            </Button>
+            <Button
+              color="red"
+              disabled={!data.editable || !retentionChanged || retentionImpact === null}
+              loading={saving}
+              onClick={() => void onSaveRetention(retentionChanges)}
+            >
+              Apply retention policy
+            </Button>
+          </Group>
+        </Stack>
+      </Paper>
+      <Paper withBorder p="lg">
+        <Stack gap="md">
+          <Box>
+            <Text fw={650}>Set at deploy</Text>
+            <Text c="dimmed" size="sm">
+              Workers report these process-owned values. Change them in worker configuration and
+              deploy again.
+            </Text>
+          </Box>
+          {data.workers.length === 0 ? (
+            <Text c="dimmed" size="sm">
+              No live workers are reporting deployment settings.
+            </Text>
+          ) : (
+            <Table.ScrollContainer minWidth={900}>
+              <Table>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Worker</Table.Th>
+                    <Table.Th>Queue</Table.Th>
+                    <Table.Th>Concurrency</Table.Th>
+                    <Table.Th>Lease</Table.Th>
+                    <Table.Th>Heartbeat</Table.Th>
+                    <Table.Th>Poll</Table.Th>
+                    <Table.Th>Maintenance loop</Table.Th>
+                    <Table.Th>Maintenance checks</Table.Th>
+                    <Table.Th>Registry refresh</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {data.workers.map((worker) => (
+                    <Table.Tr key={worker.id}>
+                      <Table.Td>{worker.id}</Table.Td>
+                      <Table.Td>{worker.queue}</Table.Td>
+                      <Table.Td>{worker.concurrency}</Table.Td>
+                      <Table.Td>{formatDuration(worker.leaseMs)} lease</Table.Td>
+                      <Table.Td>{formatDuration(worker.heartbeatMs)}</Table.Td>
+                      <Table.Td>{formatDuration(worker.pollMs)}</Table.Td>
+                      <Table.Td>{formatDuration(worker.maintenanceIntervalMs)}</Table.Td>
+                      <Table.Td>{formatDuration(worker.maintenanceTaskPollMs)}</Table.Td>
+                      <Table.Td>{formatDuration(worker.registryIntervalMs)}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
+          )}
+        </Stack>
+      </Paper>
       <Paper withBorder p="lg" maw={480}>
         <Stack gap="sm">
           <Box>
             <Text fw={600} size="sm">
-              Time zone
+              Browser display timezone
             </Text>
             <Text c="dimmed" size="xs">
               This setting changes how timestamps appear and stays in this browser. Workhorse stores
@@ -4535,6 +4976,7 @@ function useDashboardController(
   const [purgingQueue, setPurgingQueue] = useState<string | null>(null);
   const [confirmingQueue, setConfirmingQueue] = useState<string | null>(null);
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
+  const [savingSettings, setSavingSettings] = useState(false);
   /**
    * The open task is read from the URL rather than held beside it, so a copied or reloaded link
    * restores the same list and the same open drawer, and Back/Forward can only ever agree with
@@ -4699,7 +5141,7 @@ function useDashboardController(
           value: await client.system({ window: systemWindow }),
         };
       } else if (route === "/settings") {
-        data = { route: "/settings", value: null };
+        data = { route: "/settings", value: await client.settings() };
       } else {
         data = {
           route: "/workers",
@@ -4874,6 +5316,126 @@ function useDashboardController(
         notifyFailure("Worker not updated", cause, "Workhorse could not update the worker");
       } finally {
         setTogglingWorker(null);
+      }
+    },
+    [auditActor, client, loadPage],
+  );
+
+  const saveMaintenanceSettings = useCallback(
+    async (definition: Partial<MaintenancePolicyDefinition>) => {
+      setSavingSettings(true);
+      try {
+        await client.overrideMaintenancePolicy({
+          definition,
+          audit: {
+            actor: auditActor,
+            reason: "Update maintenance policy from the dashboard",
+            requestId: crypto.randomUUID(),
+          },
+        });
+        notifyDashboard({
+          title: "Maintenance policy updated",
+          message: "Every worker now uses the database-owned policy.",
+          tone: "success",
+        });
+        await loadPage();
+      } catch (cause) {
+        notifyFailure(
+          "Maintenance policy not updated",
+          cause,
+          "Workhorse rejected the maintenance policy",
+        );
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [auditActor, client, loadPage],
+  );
+  const previewRetentionSettings = useCallback(
+    async (definition: Partial<RetentionPolicyDefinition>) => {
+      try {
+        return await client.previewRetentionPolicy({ definition });
+      } catch (cause) {
+        notifyFailure(
+          "Impact preview failed",
+          cause,
+          "Workhorse could not measure the retention change",
+        );
+        throw cause;
+      }
+    },
+    [client],
+  );
+  const saveRetentionSettings = useCallback(
+    async (definition: Partial<RetentionPolicyDefinition>) => {
+      setSavingSettings(true);
+      try {
+        await client.overrideRetentionPolicy({
+          definition,
+          audit: {
+            actor: auditActor,
+            reason: "Update retention policy after impact preview",
+            requestId: crypto.randomUUID(),
+          },
+        });
+        notifyDashboard({
+          title: "Retention policy updated",
+          message: "Eligible data may be removed during the next maintenance pass.",
+          tone: "success",
+        });
+        await loadPage();
+      } catch (cause) {
+        notifyFailure(
+          "Retention policy not updated",
+          cause,
+          "Workhorse rejected the retention policy",
+        );
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [auditActor, client, loadPage],
+  );
+  const revertMaintenanceSetting = useCallback(
+    async (setting: MaintenancePolicySetting) => {
+      try {
+        await client.revertMaintenancePolicy({
+          settings: [setting],
+          audit: {
+            actor: auditActor,
+            reason: `Revert ${setting} to the application default`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        await loadPage();
+      } catch (cause) {
+        notifyFailure(
+          "Setting not reverted",
+          cause,
+          "Workhorse could not restore the application default",
+        );
+      }
+    },
+    [auditActor, client, loadPage],
+  );
+  const revertRetentionSetting = useCallback(
+    async (setting: RetentionPolicySetting) => {
+      try {
+        await client.revertRetentionPolicy({
+          settings: [setting],
+          audit: {
+            actor: auditActor,
+            reason: `Revert ${setting} to the application default`,
+            requestId: crypto.randomUUID(),
+          },
+        });
+        await loadPage();
+      } catch (cause) {
+        notifyFailure(
+          "Setting not reverted",
+          cause,
+          "Workhorse could not restore the application default",
+        );
       }
     },
     [auditActor, client, loadPage],
@@ -5227,7 +5789,18 @@ function useDashboardController(
       />
     );
   } else if (loadState.data?.route === "/settings") {
-    content = <SettingsPage />;
+    content = (
+      <SettingsPage
+        data={loadState.data.value}
+        retentionImpact={null}
+        saving={savingSettings}
+        onSaveMaintenance={saveMaintenanceSettings}
+        onPreviewRetention={previewRetentionSettings}
+        onSaveRetention={saveRetentionSettings}
+        onRevertMaintenance={revertMaintenanceSetting}
+        onRevertRetention={revertRetentionSetting}
+      />
+    );
   } else {
     content = null;
   }

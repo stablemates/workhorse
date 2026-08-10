@@ -28,6 +28,7 @@ import {
   DashboardTasksPage,
   DashboardWorkerRow,
   DashboardWorkersPage,
+  DashboardSettingsPage,
   MaintenanceLoopCadences,
   readIdempotencyEvidence,
 } from "../model.js";
@@ -47,6 +48,56 @@ function toIso(value: Date | string): string {
 
 function toIsoOrNull(value: Date | string | null): string | null {
   return value ? toIso(value) : null;
+}
+
+export async function readDashboardSettings(
+  database: DashboardDatabase,
+  queue: Queue,
+  editable: boolean,
+): Promise<DashboardSettingsPage> {
+  const [maintenance, retention, workers] = await Promise.all([
+    queue.getMaintenancePolicy(),
+    queue.getRetentionPolicy(),
+    database.execute<{
+      worker_id: string;
+      queue_name: string;
+      concurrency: number;
+      lease_ms: number;
+      heartbeat_ms: number;
+      poll_ms: number;
+      maintenance_interval_ms: number;
+      maintenance_task_poll_ms: number;
+      registry_interval_ms: number;
+      last_heartbeat_at: Date | string;
+    }>(sql`
+      SELECT worker_id, queue_name, concurrency, lease_ms, heartbeat_ms, poll_ms,
+             maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
+             last_heartbeat_at
+        FROM workhorse.worker_registry
+       WHERE last_heartbeat_at >= clock_timestamp() - GREATEST(
+         interval '30 seconds', registry_interval_ms * 3 * interval '1 millisecond'
+       )
+       ORDER BY worker_id
+    `),
+  ]);
+  return {
+    capturedAt: new Date().toISOString(),
+    editable,
+    maintenance: { ...maintenance, updatedAt: maintenance.updatedAt.toISOString() },
+    retention: { ...retention, updatedAt: retention.updatedAt.toISOString() },
+    workers: workers.rows.map((worker) => ({
+      id: worker.worker_id,
+      queue: worker.queue_name,
+      concurrency: Number(worker.concurrency),
+      leaseMs: Number(worker.lease_ms),
+      heartbeatMs: Number(worker.heartbeat_ms),
+      pollMs: Number(worker.poll_ms),
+      maintenanceIntervalMs: Number(worker.maintenance_interval_ms),
+      maintenanceTaskPollMs: Number(worker.maintenance_task_poll_ms),
+      registryIntervalMs: Number(worker.registry_interval_ms),
+      lastSeenAt: toIso(worker.last_heartbeat_at),
+    })),
+  };
 }
 
 /**
@@ -79,6 +130,7 @@ function errorMessageOrNull(error: unknown): string | null {
 
 function operatorPolicy(
   operator: DashboardOperator | undefined,
+  canManageSettings: boolean,
 ): DashboardSnapshot["operatorPolicy"] {
   if (operator?.mode !== "local") {
     return {
@@ -96,6 +148,14 @@ function operatorPolicy(
       "purgeQueue",
       "setWorkerPaused",
       "cancelTask",
+      ...(canManageSettings
+        ? ([
+            "overrideMaintenancePolicy",
+            "revertMaintenancePolicy",
+            "overrideRetentionPolicy",
+            "revertRetentionPolicy",
+          ] as const)
+        : []),
     ],
     requiredAuditContext: ["actor", "reason", "requestId", "occurredAt"],
   };
@@ -752,7 +812,7 @@ function systemMaintenanceSchedules(
     timezone: string;
     partitionPreparationIntervalMs: number;
     terminalCleanupIntervalMs: number;
-    historyRetentionLocalHour: number;
+    historyRetentionLocalTime: string;
     updatedAt: string;
   },
   state: Map<
@@ -831,7 +891,7 @@ function systemMaintenanceSchedules(
       namespace: "workhorse",
       name: "history-retention",
       description: scheduleDescription("workhorse", "history-retention"),
-      cron: `daily at ${String(policy.historyRetentionLocalHour).padStart(2, "0")}:00 ${policy.timezone}`,
+      cron: `daily at ${policy.historyRetentionLocalTime} ${policy.timezone}`,
       queue: null,
       type: "workhorse.retain_history_v1",
       enabled: true,
@@ -905,11 +965,11 @@ export async function readDashboardCron(
       timezone: string;
       partition_preparation_interval_ms: number;
       terminal_cleanup_interval_ms: number;
-      history_retention_local_hour: number;
+      history_retention_local_time: string;
       updated_at: Date | string;
     }>(sql`
       SELECT timezone, partition_preparation_interval_ms, terminal_cleanup_interval_ms,
-             history_retention_local_hour, updated_at
+             history_retention_local_time::text, updated_at
         FROM workhorse.maintenance_policy WHERE singleton
     `),
     database.execute<{
@@ -929,7 +989,7 @@ export async function readDashboardCron(
                    - make_interval(secs => policy.terminal_cleanup_interval_ms / 1000.0)
                WHEN 'history_retention' THEN
                  (clock_timestamp() AT TIME ZONE policy.timezone)::time
-                   >= make_time(policy.history_retention_local_hour, 0, 0)
+                   >= policy.history_retention_local_time
                  AND (
                    state.last_completed_local_date IS NULL
                    OR state.last_completed_local_date
@@ -968,7 +1028,7 @@ export async function readDashboardCron(
           timezone: policy.timezone,
           partitionPreparationIntervalMs: Number(policy.partition_preparation_interval_ms),
           terminalCleanupIntervalMs: Number(policy.terminal_cleanup_interval_ms),
-          historyRetentionLocalHour: Number(policy.history_retention_local_hour),
+          historyRetentionLocalTime: policy.history_retention_local_time.slice(0, 5),
           updatedAt: toIso(policy.updated_at),
         },
         state,
@@ -1711,6 +1771,7 @@ export async function readDashboardSnapshot(
   queue: Queue,
   configuredWorkers: readonly string[],
   operator?: DashboardOperator,
+  canManageSettings = false,
 ): Promise<DashboardSnapshot> {
   const now = new Date();
   const [queueRows, jobRows, scheduleRows, workerRows, failureRows, metricRows, health] =
@@ -1914,7 +1975,7 @@ export async function readDashboardSnapshot(
 
   return {
     capturedAt: now.toISOString(),
-    operatorPolicy: operatorPolicy(operator),
+    operatorPolicy: operatorPolicy(operator, canManageSettings),
     queues: queueRows.rows.map((row) => ({
       queue: row.queue,
       state: row.state,
