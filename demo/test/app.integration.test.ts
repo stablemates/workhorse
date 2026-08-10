@@ -2530,7 +2530,7 @@ describe("Workhorse demo", () => {
 
     expect(system.status.level).toBe("degraded");
     expect(system.status.criticalChecks).toEqual([]);
-    expect(system.status.degradedChecks).toEqual(["History rows outside daily partitions (1)"]);
+    expect(system.status.degradedChecks).toEqual(["History rows use fallback storage (1)"]);
     expect(system.status.checks).toEqual(system.status.degradedChecks);
     expect(system.integrity.retention.defaultHistoryRows).toEqual({
       jobEvents: 1,
@@ -2577,7 +2577,7 @@ describe("Workhorse demo", () => {
 
     expect(system.status.level).toBe("degraded");
     expect(system.status.criticalChecks).toEqual([]);
-    expect(system.status.degradedChecks).toEqual(["Retention behind: schedule runs"]);
+    expect(system.status.degradedChecks).toEqual(["Retention cleanup is late for schedule runs"]);
     expect(system.status.checks).toEqual(system.status.degradedChecks);
 
     const scheduleRuns = system.integrity.retention.categories.find(

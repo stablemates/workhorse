@@ -57,7 +57,7 @@ export async function requestRunNow(
       jobId: id,
       status: null,
       described: null,
-      failure: cause instanceof Error ? cause.message : "Unable to run the task now",
+      failure: cause instanceof Error ? cause.message : "Workhorse could not release the task",
     };
   }
 }
