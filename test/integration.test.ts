@@ -142,11 +142,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v19 with bounded trace metadata and fenced mutable progress storage", async () => {
+  it("installs schema v20 with bounded trace metadata and fenced mutable progress storage", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(19);
+    expect(version.rows[0]?.version).toBe(20);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -309,10 +309,12 @@ describe("live-runtime queue protocol", () => {
       rows_affected: number;
       expired_leases: number;
       retried: number;
+      retry_dimensions: Array<{ queue: string; type: string }>;
     }>("SELECT * FROM workhorse.tick_v1(100, 100)");
     const recovery = tick.rows.find((row) => row.phase === "recover");
 
     expect(recovery).toMatchObject({ rows_affected: 2, expired_leases: 2, retried: 1 });
+    expect(recovery?.retry_dimensions).toEqual([{ queue: "default", type: "telemetry-retry" }]);
     expect((await queue.getJob(retryId))?.state).toBe("ready");
     expect((await queue.getJob(terminalId))?.state).toBe("failed");
   });
@@ -1916,7 +1918,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(19);
+    expect(health.schemaVersion).toBe(20);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2519,7 +2521,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v19 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v20 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -6161,7 +6163,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(19);
+    expect(health.schemaVersion).toBe(20);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -6170,6 +6172,15 @@ describe("live-runtime queue protocol", () => {
     expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
     expect(health.lockWaitCount).toBeGreaterThanOrEqual(0);
     expect(health.notificationQueueUsage).toBeGreaterThanOrEqual(0);
+    expect(await queue.queueMetricSnapshot()).toEqual([
+      {
+        queue: "default",
+        readyDepth: 1,
+        scheduledDepth: 2,
+        activeLeases: 0,
+        oldestReadyAgeMs: expect.any(Number),
+      },
+    ]);
   });
 
   it("round trips retention policy defaults and rejects unsafe or malformed policies in PostgreSQL", async () => {

@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 19 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 20 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency. It also supports retry policies,
 checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
@@ -42,7 +42,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 
 ## Atomic transitions
 
-1. `enqueue_many_v1` validates up to 1,000 JSONB requests against one timestamp. Keyed requests first acquire deterministic sorted scoped-ownership locks, while acceptance side effects remain in caller ordinal order. New requests insert `job`, `job_runtime`, and one `enqueued` event; exact replays return the retained job ID before durable, FIFO, or notification side effects; mismatches abort the whole statement with structured safe conflict details. `enqueue_v1` delegates to it.
+1. `enqueue_many_v1` validates up to 1,000 JSONB requests against one timestamp and returns `(ordinal, job_id, accepted)`. Keyed requests first acquire deterministic sorted scoped-ownership locks, while acceptance side effects remain in caller ordinal order. New requests set `accepted` and insert `job`, `job_runtime`, and one `enqueued` event; exact replays clear `accepted` and return the retained job ID before durable, FIFO, or notification side effects; mismatches abort the whole statement with structured safe conflict details. `enqueue_v1` delegates to it.
 2. `promote_v1` locks a bounded due set with `SKIP LOCKED`, updates scheduled runtime rows to ready, assigns sequences, and appends events.
 3. `claim_v1` locks one FIFO ready row whose absolute deadline has not expired and performs one runtime state update to active with worker, fence, heartbeat, lease expiry, and the current attempt's execution-timeout budget, then appends the claim event.
 4. `heartbeat_v2` returns `accepted`, `cancel_requested`, or `stale` for the exact unexpired active generation and extends only accepted leases. Additive compatibility `heartbeat_v1` returns true only for accepted.

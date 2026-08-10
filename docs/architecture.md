@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 19.
+The current clean-install protocol is schema version 20.
 
 This page is the precise reference. For the ideas it assumes — leases and fence tokens,
 at-least-once delivery, cooperative cancellation, the runtime/outcome split — start with
@@ -351,7 +351,7 @@ stateDiagram-v2
 
 ### Enqueue
 
-`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp, including optional persisted retry policies. One statement inserts `job`, `job_runtime`, and `enqueued` events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
+`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp, including optional persisted retry policies. It returns `(ordinal, job_id, accepted)` for each input; `accepted` is true only when the statement created the durable job. One statement inserts `job`, `job_runtime`, and `enqueued` events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
 
 ### Promotion
 
@@ -489,21 +489,40 @@ Workhorse emits at most eight attributes on one span and exports
 
 The meter exposes these instruments:
 
-- `workhorse.queue.depth` is an observable gauge split only by `workhorse.job.state` values
-  `ready`, `scheduled`, and `active`.
-- `workhorse.queue.oldest_ready_age` is an observable gauge in milliseconds.
+- `workhorse.queue.depth` is an observable gauge split by `workhorse.queue.name` and the
+  `workhorse.job.state` values `ready`, `scheduled`, and `active`.
+- `workhorse.queue.oldest_ready_age` is an observable gauge in milliseconds, split by
+  `workhorse.queue.name`.
 - `workhorse.jobs.enqueued`, `workhorse.jobs.claimed`, `workhorse.jobs.completed`,
   `workhorse.jobs.failed`, `workhorse.jobs.retried`, and `workhorse.leases.expired` are counters.
 - `workhorse.claim.duration`, `workhorse.handler.duration`, and
   `workhorse.maintenance.drift` are millisecond histograms.
+- `workhorse.handler.runtime` is a millisecond counter. Its per-second rate divided by 1,000 is the
+  equivalent number of continuously busy workers consumed by a dimension set.
 
 `registerQueueMetrics(queue)` registers the database-wide depth and age callbacks and returns a
 cleanup function. Register it once per database and telemetry resource; registering it for every
-worker duplicates observations. Metric attributes are limited to the fixed enums
-`workhorse.job.state`, `workhorse.claim.result`, and `workhorse.maintenance.loop`. Workhorse emits
-at most 32 attribute combinations per instrument and exports
-`METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 32` for matching SDK views. Queue names, job types, job IDs,
-worker IDs, schedule names, and namespaces are forbidden metric attributes.
+worker duplicates observations. `Queue.queueMetricSnapshot()` groups live pressure by every queue
+present in `job_runtime`, `queue_control`, or `worker_registry`, plus the `Queue.defaultQueue`.
+
+Lifecycle counters and handler instruments use `workhorse.queue.name` and `workhorse.job.type`.
+`workhorse.jobs.failed` also uses the bounded `workhorse.attempt.outcome` values `ready`,
+`scheduled`, `failed`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, and `stale`
+returned by `fail_v1`.
+Claim latency uses `workhorse.queue.name` and the bounded `workhorse.claim.result`. Maintenance
+instruments retain their bounded loop attribute. Job IDs, worker IDs, schedule names, namespaces,
+tags, payload values, and error messages remain forbidden metric attributes.
+
+Queue and job type multiply the number of time series. Applications must keep both as stable
+identifiers and must not embed customer or request identity in either value. Workhorse exports
+`METRIC_ATTRIBUTE_CARDINALITY_LIMIT = 2,000`, matching the OpenTelemetry JavaScript SDK default,
+for applications that configure explicit reader limits. Values beyond the configured SDK limit
+enter its overflow series.
+
+The host sets deployment-wide filters as OpenTelemetry resource attributes. Use
+`deployment.environment.name` for the environment and `service.name` for the emitting process.
+The SigNoz v6 import artifact at `docs/signoz/workhorse-business-metrics-v1.json` defines dynamic
+environment, service, queue, and job-type variables.
 
 Start production dashboards with ready and scheduled depth, oldest-ready age, and claiming and handler
 latency percentiles. Add rates for enqueueing, claiming, and completing jobs, plus failure and retry

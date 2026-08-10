@@ -5,7 +5,13 @@ import { CronExpressionParser } from "cron-parser";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { Queue } from "./queue.js";
 import type { MaintenancePhaseResult } from "./queue.js";
-import { extractTraceContext, jobSpanAttributes, telemetryMetrics, withSpan } from "./telemetry.js";
+import {
+  extractTraceContext,
+  jobMetricAttributes,
+  jobSpanAttributes,
+  telemetryMetrics,
+  withSpan,
+} from "./telemetry.js";
 import type { ClaimedJob, JobCheckpoint, JobProgress, JobWait, Json } from "./types.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
@@ -403,7 +409,10 @@ export class Worker {
         try {
           await this.executeJobWithinSpan(job, span);
         } finally {
-          telemetryMetrics.handlerDuration.record(performance.now() - startedAt);
+          const durationMs = performance.now() - startedAt;
+          const attributes = jobMetricAttributes(job);
+          telemetryMetrics.handlerDuration.record(durationMs, attributes);
+          telemetryMetrics.handlerRuntime.add(durationMs, attributes);
         }
       },
       extractTraceContext(job.traceContext),
