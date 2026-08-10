@@ -21,7 +21,7 @@ describe("durable boundary vocabulary", () => {
     });
     expect(notReached.state).toBe("not-reached");
     expect(notReached.label).toBe("Not reached");
-    expect(notReached.summary).toContain("no future attempt can reach it");
+    expect(notReached.summary).toContain("no attempt can reach this stage");
     expect(notReached.summary).not.toMatch(/waiting|pending|yet to run/i);
   });
 
@@ -43,7 +43,7 @@ describe("durable boundary vocabulary", () => {
     });
     expect(blocked.state).toBe("blocked");
     expect(blocked.label).toBe("Intentionally blocked between stages");
-    expect(blocked.summary).toContain("durable");
+    expect(blocked.summary).toContain("saved the checkpoint");
   });
 
   it("never claims a stage was unreached while its checkpoint output exists", () => {
@@ -55,7 +55,7 @@ describe("durable boundary vocabulary", () => {
       persistentFailureAfterStepIndex: 1,
     });
     expect(saved.state).toBe("saved");
-    expect(saved.summary).toContain("reused by every later attempt");
+    expect(saved.summary).toContain("reuses it in every later attempt");
   });
 
   it("gives every boundary state a label that stands without colour", () => {
@@ -148,7 +148,7 @@ describe("task result vocabulary", () => {
       label: "Failed",
       valueLabel: "Terminal error",
     });
-    expect(failed.summary).toContain("exhausted its attempts");
+    expect(failed.summary).toContain("used every attempt");
 
     const canceled = describeTaskResult({
       state: "canceled",
@@ -191,7 +191,7 @@ describe("task result vocabulary", () => {
     expect(described.state).toBe("pending");
     expect(described.valueLabel).toBe("Latest attempt error");
     expect(described.valueLabel).not.toBe("Terminal error");
-    expect(described.summary).toContain("no final outcome while retries remain");
+    expect(described.summary).toContain("records a final failure after");
     expect(described.summary).not.toMatch(/succeeded|final result/i);
   });
 });

@@ -47,8 +47,8 @@ describe("cancellation vocabulary", () => {
 
   it("describes an active cancellation as cooperative without promising force", () => {
     const described = describeCancelOutcome("cancel_requested");
-    expect(described.summary).toContain("Cooperative");
-    expect(described.summary).toContain("observes the signal");
+    expect(described.summary).toContain("running handler");
+    expect(described.summary).toContain("checks the signal");
     // The caveat that already-started external effects can continue must survive any rewording.
     expect(described.exact).toContain("external effects it already started can continue");
     const wording = `${described.label} ${described.summary} ${described.exact}`.toLowerCase();
@@ -68,8 +68,9 @@ describe("cancellation vocabulary", () => {
 
   it("explains a missing task rather than reporting a silent success", () => {
     const described = describeCancelOutcome("not_found");
-    expect(described.summary).toContain("nothing was canceled");
-    expect(described.exact).toContain("retention");
+    expect(described.summary).toContain("could not find this task");
+    expect(described.summary).toContain("canceled nothing");
+    expect(described.exact).toContain("Retention");
   });
 
   it("keeps a requested cancellation's exact attribution available for a title", () => {

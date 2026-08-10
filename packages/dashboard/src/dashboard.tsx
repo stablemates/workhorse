@@ -759,12 +759,14 @@ function plannedStepDescription(
   // A stage past a declared persistent failure can never run again, so it is reported as never
   // reached rather than as waiting its turn.
   if (boundary.state === "not-reached") return `${boundary.label}. ${boundary.summary}`;
-  if (stepIndex !== activeStep) return "Pending durable boundary";
-  if (job.identity.state === "active") return "Operation running; checkpoint not saved yet";
-  if (job.identity.state === "ready") return "Waiting for the next worker attempt";
-  if (job.identity.state === "scheduled") return "Scheduled; checkpoint not reached yet";
-  if (job.identity.state === "failed") return "Not reached before terminal failure";
-  return "No checkpoint was recorded";
+  if (stepIndex !== activeStep) return "An earlier stage must finish first";
+  if (job.identity.state === "active")
+    return "The stage is running, but Workhorse has not saved a checkpoint yet";
+  if (job.identity.state === "ready") return "The task is ready for a worker";
+  if (job.identity.state === "scheduled")
+    return "The task is scheduled, so this stage has not started";
+  if (job.identity.state === "failed") return "The task failed before it reached this stage";
+  return "Workhorse did not record a checkpoint";
 }
 
 function PlannedDurability({ job }: { job: DashboardJobDetail }) {
@@ -812,8 +814,8 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
           </Group>
           <Text c="dimmed" size="xs">
             {hasEvidencePastPersistentBoundary
-              ? "This task contains checkpoint outputs beyond its current configured failure boundary, recorded by an earlier demo version. Stored evidence wins and remains visible below. "
-              : "Interim results already recorded stay durable. "}
+              ? "An earlier demo saved checkpoints after the current failure boundary. Workhorse keeps that evidence below. "
+              : "Workhorse keeps the interim results that it already saved. "}
             {persistentFailure.reason}
           </Text>
         </Paper>
@@ -860,8 +862,8 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
         <Stepper.Completed>
           {persistentFailure && !hasEvidencePastPersistentBoundary ? (
             <Text c="dimmed" fw={600} size="sm" mt="xs">
-              Every declared boundary that can be reached is durable, but this task is intentionally
-              blocked, so it never records a final result.
+              Workhorse saved every reachable boundary. This demo blocks the task before it can
+              produce a final result.
             </Text>
           ) : (
             <Text
@@ -871,15 +873,15 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
               mt="xs"
             >
               {job.identity.state === "succeeded"
-                ? "All declared boundaries are durable and the pipeline completed."
-                : "All declared boundaries are durable; the current attempt has not completed yet."}
+                ? "Workhorse saved every declared boundary, and the task finished."
+                : "Workhorse saved every declared boundary, but the current attempt is still running."}
             </Text>
           )}
         </Stepper.Completed>
       </Stepper>
       <Text c="dimmed" size="xs" mt="sm">
-        The step plan belongs to this demo. Workhorse stores checkpoint and wait evidence, not a
-        workflow graph.
+        This demo defines the stage plan. Workhorse stores checkpoint and wait records, not the
+        plan.
       </Text>
       {unmatchedCheckpoints.length > 0 ? (
         <Box mt="md">
@@ -919,15 +921,14 @@ function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
       </Group>
       {/* Named once, here, so the rest of the section never has to re-explain what it is showing. */}
       <Text c="dimmed" size="xs" mb="sm">
-        Interim results are immutable checkpoint outputs. Each was stored once at a named restart
-        boundary and is replayed unchanged by every later attempt, so this is durable evidence of
-        completed work, not mutable progress.
+        Interim results show completed work rather than current progress. Workhorse saves each
+        result at a named restart boundary, and later attempts reuse it.
       </Text>
       {job.durability ? (
         <PlannedDurability job={job} />
       ) : job.checkpoints.length === 0 ? (
         <Text c="dimmed" size="sm">
-          This task has not completed a named restart boundary.
+          This task has not reached a named restart boundary.
         </Text>
       ) : (
         <Stack gap="sm">
@@ -1019,7 +1020,7 @@ const waitPhaseColor: Record<WaitPhase, string> = {
 
 /** Exact replay wording for a durable wait boundary; kept verbatim on purpose. */
 const waitReplayWording =
-  "When the target elapses, the next claim restarts the handler from its entry point within the same logical attempt.";
+  "After the target time, the next claim restarts the handler from its entry point in the same attempt.";
 
 /**
  * Phase of one stored wait. Only the runtime row currently marked with this wait
@@ -1180,7 +1181,7 @@ function retryEventDescription(event: JobEvent): { text: string; title: string }
   const delayMs = typeof details.retry_delay_ms === "number" ? details.retry_delay_ms : null;
   const described = describeRetryEventSource(source, policy);
   const text =
-    delayMs === null ? described.label : `${described.label} · waits ${formatRetryDelay(delayMs)}`;
+    delayMs === null ? described.label : `${described.label} · ${formatRetryDelay(delayMs)} delay`;
   const title =
     delayMs === null
       ? `${described.exact} ${described.summary}.`
@@ -1269,23 +1270,20 @@ function CancelTaskPanel({
           <Stack gap="xs">
             <Text size="xs" c="dimmed">
               {running
-                ? "Cancellation is cooperative. The running handler is signaled and stops when it " +
-                  "observes the signal, so external effects it already started can continue until " +
-                  "then. This is not a forced stop."
+                ? "Workhorse asks the handler to stop, but it cannot force the handler. Until the " +
+                  "handler checks the signal, external effects that it started can continue."
                 : waiting
-                  ? "This task is suspended at a durable wait. Canceling it closes the started " +
-                    "attempt without resuming the handler. External effects from before the wait " +
-                    "are not undone."
-                  : "This task has not started, so canceling it now is immediate and no handler " +
-                    "will run for it."}{" "}
-              A canceled outcome is immutable and cannot be undone.
+                  ? "This task is at a durable wait. Workhorse closes its attempt without resuming " +
+                    "the handler, but it cannot undo earlier external work."
+                  : "This task has not started. Workhorse can cancel it before any handler runs."}{" "}
+              You cannot undo a cancellation.
             </Text>
             <TextInput
               ref={reasonRef}
               size="xs"
               label="Reason (optional)"
-              description="When provided, it is recorded with the cancellation in the operator audit trail."
-              placeholder="Why is this task being canceled?"
+              description="Workhorse records this reason in the audit trail."
+              placeholder="Why are you canceling this task?"
               value={reason}
               disabled={pending}
               onChange={(event) => setReason(event.currentTarget.value)}
@@ -1328,8 +1326,8 @@ function CancelTaskPanel({
       ) : (
         <Text c="dimmed" size="xs">
           {isTerminalTaskState(job.identity.state)
-            ? `This task already finished as ${job.identity.state}, and a terminal outcome is immutable, so it cannot be canceled.`
-            : "This task has no live runtime, so there is nothing to cancel."}
+            ? `Because this task finished as ${job.identity.state}, Workhorse cannot change its outcome.`
+            : "Workhorse cannot cancel this task because it has no live runtime."}
         </Text>
       )}
     </Box>
@@ -1476,8 +1474,8 @@ function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
       {repeatedClaimAttempts.length > 0 ? (
         <Text c="dimmed" size="xs" mt={6}>
           {repeatedClaimAttempts.length === 1
-            ? `Attempt ${repeatedClaimAttempts[0]} was claimed ${claimsPerAttempt.get(repeatedClaimAttempts[0]!)} times.`
-            : `Attempts ${repeatedClaimAttempts.join(", ")} were each claimed more than once.`}{" "}
+            ? `Attempt ${repeatedClaimAttempts[0]} has ${claimsPerAttempt.get(repeatedClaimAttempts[0]!)} claims.`
+            : `Attempts ${repeatedClaimAttempts.join(", ")} each have more than one claim.`}{" "}
           A durable wait releases ownership without closing the logical attempt, so one attempt can
           hold several claims with different fence tokens.
         </Text>
@@ -1558,8 +1556,7 @@ function DurableWaitCard({
         </Stack>
       ) : (
         <Text c="dimmed" size="xs">
-          This wait is no longer the current runtime marker, so its release is recorded in the
-          events below rather than in live runtime columns.
+          This wait is no longer active. Its events below record how Workhorse released it.
         </Text>
       )}
       <Divider my="sm" />
@@ -1632,12 +1629,11 @@ function DurableWaits({ job }: { job: DashboardJobDetail }) {
         </Box>
       ) : null}
       <Text c="dimmed" size="xs" mt="sm">
-        A stored target is a not-before time. Promotion cadence, queue pause, worker availability,
-        and database availability can make the actual wake later, so the elapsed wall-clock time is
-        at least the requested duration. {waitReplayWording}
+        The target is the earliest wake time. If a queue is paused, or a worker or database is
+        unavailable, the task can wake later. {waitReplayWording}
       </Text>
       <Text c="dimmed" size="xs" mt={6}>
-        Workhorse stores checkpoint and wait evidence, not a workflow graph.
+        Workhorse stores checkpoint and wait records, not a workflow graph.
       </Text>
       <BoundaryTimeline job={job} />
     </Box>
@@ -1865,7 +1861,7 @@ function EmptyState({ children }: { children: ReactNode }) {
           <ThemeIcon variant="light" color="gray" size="xl" radius="xl">
             <CheckCircle size={22} />
           </ThemeIcon>
-          <Text fw={600}>Nothing to show</Text>
+          <Text fw={600}>No results</Text>
           <Text c="dimmed" size="sm">
             {children}
           </Text>
@@ -2066,7 +2062,7 @@ function useTaskFacets({
       })
       .catch(() => {
         if (generation.current === activeGeneration) {
-          setError("Unable to load filter options. Reopen to retry.");
+          setError("Workhorse could not load the filters. Reopen this menu to try again.");
         }
       })
       .finally(() => {
@@ -2111,7 +2107,7 @@ function TaskListingFilters({
         value={searchInput}
         onChange={(event) => setSearchInput(event.currentTarget.value)}
         leftSection={<MagnifyingGlass size={14} />}
-        placeholder="Search tasks (* wildcard)"
+        placeholder="Search tasks. Use * as a wildcard."
         aria-label="Search tasks"
         style={{ flex: "1 1 220px" }}
       />
@@ -2121,7 +2117,7 @@ function TaskListingFilters({
         value={data.tags}
         onChange={(tags) => updateLocation({ tags })}
         onDropdownOpen={taskFacets.load}
-        placeholder="Tags"
+        placeholder="Any tag"
         searchable
         clearable
         rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
@@ -2147,9 +2143,7 @@ function TaskListingFilters({
           searchable
           clearable
           rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
-          nothingFoundMessage={
-            nothingFoundMessage ?? `No ${placeholder.toLowerCase()} options found`
-          }
+          nothingFoundMessage={nothingFoundMessage ?? `No ${placeholder.toLowerCase()} found`}
           style={{ flex: "1 1 150px" }}
         />
       ))}
@@ -2317,7 +2311,7 @@ function TasksPage({
         if (worker !== null) updateLocation({ worker });
         return;
       }
-      const copying = id === "copy-id" ? "Task id" : "Args";
+      const copying = id === "copy-id" ? "Task ID" : "Input";
       void copyToClipboard(id === "copy-id" ? job.id : formatJson(job.payload)).then((failure) =>
         notifyDashboard({
           // One id for both clipboard actions: copying twice is one running answer, not a stack.
@@ -2368,7 +2362,7 @@ function TasksPage({
           <Group justify="space-between">
             <Switch
               size="xs"
-              label="Full args"
+              label="Show full input"
               checked={fullArgs}
               onChange={(event) => toggleFullArgs(event.currentTarget.checked)}
             />
@@ -2383,28 +2377,28 @@ function TasksPage({
                       leftSection={<PlayCircle size={16} />}
                       loading={runningDemoJob !== null}
                     >
-                      enqueue test job
+                      Enqueue test task
                     </Button>
                   </Menu.Target>
                   <Menu.Dropdown>
-                    <Menu.Label>Execution path</Menu.Label>
+                    <Menu.Label>Test outcome</Menu.Label>
                     <Menu.Item
                       leftSection={<CheckCircle size={16} />}
                       onClick={() => void runDemoJob("success")}
                     >
-                      Successful job
+                      Succeed
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ArrowCounterClockwise size={16} />}
                       onClick={() => void runDemoJob("retry")}
                     >
-                      Retry once
+                      Fail once, then retry
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<CheckCircle size={16} />}
                       onClick={() => void runDemoJob("idempotent")}
                     >
-                      Idempotent · repeating opens the same task
+                      Reuse one task for repeat requests
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ListChecks size={16} />}
@@ -2475,7 +2469,7 @@ function TasksPage({
                 <Table.Th>ID</Table.Th>
                 <Table.Th>Task</Table.Th>
                 <Table.Th>Queue</Table.Th>
-                <Table.Th>Args</Table.Th>
+                <Table.Th>Input</Table.Th>
                 <Table.Th miw={280}>Status</Table.Th>
                 <Table.Th ta="right">Steps</Table.Th>
                 <Table.Th ta="right">Attempt</Table.Th>
@@ -2524,7 +2518,7 @@ function TasksPage({
                             variant="light"
                             color="violet"
                             tt="none"
-                            title="This task was accepted with an idempotency key. Repeating the same request within its retained window returns this same task."
+                            title="Workhorse accepted this task with an idempotency key. If the same request repeats during retention, Workhorse returns this task again."
                           >
                             Keyed
                           </Badge>
@@ -2612,10 +2606,10 @@ function CronPage({
     <Stack gap="xl">
       <PageHeader
         title="Schedules"
-        description="Recurring application and system schedules registered with Workhorse."
+        description="See when recurring tasks run and where Workhorse sends them."
       />
       {data.schedules.length === 0 ? (
-        <EmptyState>No recurring schedules are registered.</EmptyState>
+        <EmptyState>Workhorse has no recurring schedules.</EmptyState>
       ) : (
         <Paper withBorder>
           <ScrollArea>
@@ -2723,10 +2717,10 @@ function QueuesPage({
     <Stack gap="xl">
       <PageHeader
         title="Queues"
-        description="Pause dispatch, inspect queue-level task counts, or clear waiting work."
+        description="Pause new claims, compare task counts, or clear tasks that have not started."
       />
       {data.queues.length === 0 ? (
-        <EmptyState>No queues have accepted work yet.</EmptyState>
+        <EmptyState>No queue has accepted a task yet.</EmptyState>
       ) : (
         <Paper withBorder>
           <ScrollArea>
@@ -2774,14 +2768,14 @@ function QueuesPage({
                       <Table.Td ta="right">{queue.active}</Table.Td>
                       <Table.Td
                         ta="right"
-                        title={queue.terminalCountsApproximate ? "Planner estimate" : undefined}
+                        title={queue.terminalCountsApproximate ? "PostgreSQL estimate" : undefined}
                       >
                         {approximatePrefix}
                         {queue.succeeded}
                       </Table.Td>
                       <Table.Td
                         ta="right"
-                        title={queue.terminalCountsApproximate ? "Planner estimate" : undefined}
+                        title={queue.terminalCountsApproximate ? "PostgreSQL estimate" : undefined}
                       >
                         {approximatePrefix}
                         {queue.failed}
@@ -2827,7 +2821,7 @@ function QueuesPage({
         </Paper>
       )}
       <Text c="dimmed" size="xs">
-        Clear removes scheduled and ready tasks only. Active tasks keep their current ownership.
+        Clear removes tasks that are scheduled or ready. It does not interrupt active tasks.
       </Text>
     </Stack>
   );
@@ -3022,14 +3016,14 @@ function QueuePressure({
       <Group justify="space-between" p="md">
         <Box>
           <Group gap={4} wrap="nowrap">
-            <Text fw={650}>Queue pressure</Text>
+            <Text fw={650}>Queue backlog</Text>
             <HelpButton
-              label="Queue pressure"
-              help="Current queue state ranked by backlog risk. Ready, oldest, due, active, and retrying are snapshots; enqueue and completion rates use the selected window. Select a row to inspect its tasks."
+              label="Queue backlog"
+              help="This table ranks queues by their current backlog. Rates cover the selected window. Select a row to see its tasks."
             />
           </Group>
           <Text c="dimmed" size="xs">
-            Worst queues first · select a row to inspect its tasks
+            Largest risk first · select a queue to see its tasks
           </Text>
         </Box>
         <Badge
@@ -3047,11 +3041,11 @@ function QueuePressure({
               <Table.Th>Status</Table.Th>
               <Table.Th ta="right">Ready</Table.Th>
               <Table.Th ta="right">Oldest</Table.Th>
-              <Table.Th ta="right">Due ≤5m</Table.Th>
+              <Table.Th ta="right">Due in 5m</Table.Th>
               <Table.Th ta="right">Active</Table.Th>
               <Table.Th ta="right">Retrying</Table.Th>
-              <Table.Th ta="right">Enq/min</Table.Th>
-              <Table.Th ta="right">Done/min</Table.Th>
+              <Table.Th ta="right">Added/min</Table.Th>
+              <Table.Th ta="right">Finished/min</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -3121,10 +3115,10 @@ function SystemKpiList({ data }: { data: DashboardSystemPage }) {
     // One panel of hairline-separated rows, sized to sit beside the queue table.
     <Paper withBorder h="100%">
       <HealthKpi
-        title="Drain balance"
+        title="Completion rate"
         value={`${formatRate(data.kpis.drain.completedPerMinute)}/min`}
-        detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} enqueued · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
-        help="Average completed jobs per minute compared with enqueued jobs per minute during the selected window. A negative net means work arrived faster than it completed."
+        detail={`${formatRate(data.kpis.drain.enqueuedPerMinute)} added · net ${data.kpis.drain.netPerMinute >= 0 ? "+" : ""}${formatRate(data.kpis.drain.netPerMinute)}/min`}
+        help="This rate compares finished tasks with new tasks during the selected window. A negative net means tasks arrived faster than workers finished them."
         scope={data.window}
         color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
         icon={<ArrowClockwise size={16} />}
@@ -3144,27 +3138,27 @@ function SystemKpiList({ data }: { data: DashboardSystemPage }) {
       </HealthKpi>
       <HealthKpi
         divided
-        title="Backlog risk"
+        title="Ready backlog"
         value={data.kpis.backlog.ready}
-        detail={`Oldest ready ${formatDuration(data.kpis.backlog.oldestReadyMs)}`}
-        help="A current snapshot of jobs ready to run. The age of the oldest ready job highlights queues that are not draining promptly; yellow begins after 60 seconds."
+        detail={`Oldest task ${formatDuration(data.kpis.backlog.oldestReadyMs)}`}
+        help="This count shows tasks that are ready for workers. An older task can mean that its queue is draining slowly."
         scope="now"
         color={backlogColor}
         icon={<ListChecks size={16} />}
       />
       <HealthKpi
         divided
-        title="Attempt error rate"
+        title="Failed attempts"
         value={formatPercent(data.kpis.errorRate.current)}
         detail={`${data.kpis.errorRate.delta >= 0 ? "+" : ""}${formatPercent(data.kpis.errorRate.delta)} vs prior ${data.window}`}
-        help="The share of attempts that did not succeed during the selected window, compared with the immediately preceding window of the same length. Caution starts at 1% and warning at 5%."
+        help="This is the share of attempts that did not succeed. The comparison uses the previous window of the same length."
         scope={data.window}
         color={errorColor}
         icon={<WarningCircle size={16} />}
       />
       <HealthKpi
         divided
-        title="First-attempt wait"
+        title="Wait for first claim"
         value={
           <Group gap={10} wrap="nowrap" style={{ flexShrink: 0 }}>
             {queueWaitPercentiles.map((percentile) => (
@@ -3179,38 +3173,38 @@ function SystemKpiList({ data }: { data: DashboardSystemPage }) {
             ))}
           </Group>
         }
-        detail="Enqueue to first claim"
-        help="The median, 95th, and 99th percentile delay from enqueue to the first claim for jobs first claimed during the selected window."
+        detail="From enqueue to first claim"
+        help="These percentiles measure the time between enqueue and first claim during the selected window."
         scope={data.window}
         color="indigo"
         icon={<Clock size={16} />}
       />
       <HealthKpi
         divided
-        title="Retry pressure"
+        title="Retries in backoff"
         value={data.kpis.retry.backoff}
         detail={`${data.kpis.retry.dueSoon} due in the next 5m`}
-        help="A current snapshot of jobs waiting for PostgreSQL-selected persisted-policy or compatibility backoff. The secondary count shows how many scheduled retries become due within the next five minutes."
+        help="This count shows tasks in backoff before another attempt. The second count shows how many become ready within five minutes."
         scope="now"
         color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
         icon={<ArrowCounterClockwise size={16} />}
       />
       <HealthKpi
         divided
-        title="Lease danger"
+        title="Expired leases"
         value={data.kpis.lease.expired}
         detail={`${data.kpis.lease.expiringSoon} expire in 30s · ${data.kpis.lease.recovered} recovered/${data.window}`}
-        help="A current snapshot of active jobs with expired leases. It also shows leases expiring within 30 seconds and lease expirations recorded during the selected window."
+        help="This count shows active tasks whose leases expired. It also shows leases nearing expiry and tasks recovered during the selected window."
         scope="now"
         color={data.kpis.lease.expired > 0 ? "red" : "teal"}
         icon={<Pulse size={16} />}
       />
       <HealthKpi
         divided
-        title="Deadline pressure"
+        title="Overdue tasks"
         value={deadline.overdue}
         detail={`${deadline.dueWithinMinute} due in 1m · ${deadline.overdueTimeouts} timed-out attempts awaiting reap`}
-        help="A current snapshot of live jobs past their absolute deadline, jobs due within one minute, and active execution timeouts whose PostgreSQL target has elapsed."
+        help="This count shows live tasks past their deadline. It also shows approaching deadlines and attempts whose execution time has expired."
         scope="now"
         color={
           deadline.overdue > 0 || deadline.overdueTimeouts > 0
@@ -3229,14 +3223,14 @@ function RetryStorm({ data }: { data: DashboardSystemPage }) {
   return (
     <Paper withBorder p="md" h="100%">
       <Group gap={4} wrap="nowrap">
-        <Text fw={650}>Retry storm</Text>
+        <Text fw={650}>Upcoming retries</Text>
         <HelpButton
-          label="Retry storm"
-          help="A current snapshot of jobs in retry backoff, grouped by when they become due: within 1 minute, 5 minutes, 15 minutes, 1 hour, or later. Contributors are the job types with the most pending retries now."
+          label="Upcoming retries"
+          help="These tasks are in backoff before another attempt. The bars group them by ready time, and the list shows the largest task types."
         />
       </Group>
       <Text c="dimmed" size="xs" mb="lg">
-        Scheduled retries arriving next
+        Tasks grouped by their next retry time
       </Text>
       <RetryBars buckets={data.retryStorm.buckets} />
       <Divider my="lg" />
@@ -3322,7 +3316,7 @@ function SystemPage({
   );
   // Only a lag check should tint the lag badge; spill and expired days have their own rows.
   const retentionBehind = data.status.degradedChecks.some((check) =>
-    check.startsWith("Retention behind"),
+    check.startsWith("Retention cleanup is late"),
   );
 
   return (
@@ -3330,10 +3324,10 @@ function SystemPage({
       <Group justify="space-between" align="flex-start">
         <Box>
           <Group gap="sm" mb={4}>
-            <Title order={1}>System Health</Title>
+            <Title order={1}>System health</Title>
             <HelpButton
-              label="System Health"
-              help="Operational health captured at the time shown on the right. Critical means work is stopping or being lost: expired leases, stalled promotion, or a missing future history partition. Degraded means retained history is growing beyond policy, which costs storage but does not stop work. The window selector controls rate, error, wait, recovery, and historical metrics; current-state counts and forward-looking deadlines are labeled separately."
+              label="System health"
+              help="Critical checks mean Workhorse may stop or lose work. Degraded checks mean retained history is using more storage than its policy allows."
             />
             <Badge color={systemStatusColor} variant="light" size="lg" tt="capitalize">
               {data.status.level}
@@ -3351,7 +3345,7 @@ function SystemPage({
             })}
             {data.status.checks.length === 0 ? (
               <Text c="dimmed" size="sm">
-                No operator checks need attention.
+                All checks pass.
               </Text>
             ) : null}
           </Group>
@@ -3401,14 +3395,14 @@ function SystemPage({
             <Group justify="space-between" mb="sm">
               <Box>
                 <Group gap={4} wrap="nowrap">
-                  <Text fw={650}>Outcome rate</Text>
+                  <Text fw={650}>Task activity</Text>
                   <HelpButton
-                    label="Outcome rate"
-                    help="One-minute buckets across the selected window. Bars show closed-attempt outcomes and the line shows jobs enqueued during each minute."
+                    label="Task activity"
+                    help="Each bar shows attempt outcomes for one minute. The line shows tasks added during that minute."
                   />
                 </Group>
                 <Text c="dimmed" size="xs">
-                  Minute buckets · enqueued line over closed-attempt outcomes
+                  Tasks added and attempts finished each minute
                 </Text>
               </Box>
               <Badge variant="light" color="gray">
@@ -3438,10 +3432,10 @@ function SystemPage({
           <Paper withBorder h="100%">
             <Box p="md">
               <Group gap={4} wrap="nowrap">
-                <Text fw={650}>Top failing job types</Text>
+                <Text fw={650}>Task types with failures</Text>
                 <HelpButton
-                  label="Top failing job types"
-                  help="Job types with non-successful attempts during the selected window, ranked by error count. Error rate and terminal failures use the same window; last error and last seen identify the latest matching attempt."
+                  label="Task types with failures"
+                  help="This table ranks task types by failed attempts in the selected window. The last columns describe the newest matching attempt."
                 />
               </Group>
               <Text c="dimmed" size="xs">
@@ -3459,7 +3453,7 @@ function SystemPage({
                 <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={760}>
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th>Queue / type</Table.Th>
+                      <Table.Th>Queue and task type</Table.Th>
                       <Table.Th ta="right">Attempts</Table.Th>
                       <Table.Th ta="right">Error %</Table.Th>
                       <Table.Th ta="right">Terminal</Table.Th>
@@ -3506,22 +3500,22 @@ function SystemPage({
         <Grid.Col span={{ base: 12, lg: 5 }}>
           <Paper withBorder p="md" h="100%">
             <Group gap={4} wrap="nowrap">
-              <Text fw={650}>Integrity</Text>
+              <Text fw={650}>Background maintenance</Text>
               <HelpButton
-                label="Integrity"
-                help="Checks whether scheduled work is being promoted now, whether history storage exists for the current UTC day plus three future days, and whether old history is being deleted on schedule. Promotion and missing future storage are critical. Retention findings are degraded: they cost storage but do not stop work. All counts here are current totals and ignore the window selector."
+                label="Background maintenance"
+                help="These checks cover due tasks, prepared history storage, and retention cleanup. The counts show the current database state and ignore the window selector."
               />
             </Group>
             <Text c="dimmed" size="xs" mb="lg">
-              Promotion, daily history coverage, and history cleanup
+              Checks that keep tasks moving and history bounded
             </Text>
             <Group justify="space-between" mb="lg">
               <Box>
                 <Text size="sm" fw={600}>
-                  Due but unpromoted
+                  Overdue scheduled tasks
                 </Text>
                 <Text c="dimmed" size="xs">
-                  Scheduled more than 10s overdue
+                  Still scheduled after their start time
                 </Text>
               </Box>
               <Badge
@@ -3534,7 +3528,7 @@ function SystemPage({
             </Group>
             <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top">
               <Table.Caption ta="left" c="dimmed" fz="xs" mt={0} mb={4}>
-                Storage prepared for upcoming history
+                Daily storage prepared for history
               </Table.Caption>
               <Table.Thead>
                 <Table.Tr>
@@ -3582,9 +3576,9 @@ function SystemPage({
                 <Box>
                   <Group gap={4} wrap="nowrap">
                     <Text size="sm" fw={600}>
-                      Retention lag
+                      Retention cleanup
                     </Text>
-                    <HelpButton label="Retention lag" help={retentionDetail} />
+                    <HelpButton label="Retention cleanup" help={retentionDetail} />
                   </Group>
                   <Text c="dimmed" size="xs">
                     {enabledRetention.length === 0
@@ -3633,11 +3627,11 @@ function SystemPage({
                 <Box>
                   <Group gap={4} wrap="nowrap">
                     <Text size="sm" fw={600}>
-                      Expired days awaiting cleanup
+                      History days awaiting deletion
                     </Text>
                     <HelpButton
-                      label="Expired days awaiting cleanup"
-                      help="Whole UTC days of history that are already past their keep-for window and are waiting for background cleanup to drop them. Cleanup removes a bounded number per pass, so this total shows the remaining backlog."
+                      label="History days awaiting deletion"
+                      help="These UTC days are older than their retention period. Cleanup deletes a limited number each time it runs."
                     />
                   </Group>
                   <Text c="dimmed" size="xs">
@@ -3657,11 +3651,11 @@ function SystemPage({
                 <Box>
                   <Group gap={4} wrap="nowrap">
                     <Text size="sm" fw={600}>
-                      Rows outside daily storage
+                      Rows in fallback storage
                     </Text>
                     <HelpButton
-                      label="Rows outside daily storage"
-                      help="Rows that landed in the catch-all area because no daily storage covered their timestamp. Counts are exact through 10,000 rows and display a plus sign when the bounded health scan reports a lower bound. Background cleanup clears expired rows when retention is enabled for that history category."
+                      label="Rows in fallback storage"
+                      help="These rows had no daily storage for their timestamp. If a plus sign appears, the bounded scan found at least this many rows."
                     />
                   </Group>
                   <Text c="dimmed" size="xs">
@@ -3719,11 +3713,11 @@ function StoragePanel({
         <Text fw={650}>Storage</Text>
         <HelpButton
           label="Storage"
-          help="Size and row counts for the tables Workhorse owns, with daily history partitions folded into their parent, alongside the rolling-statistics rollup that summarizes history into per-minute buckets. History cleanup will not delete anything the rollup has not summarized yet, so a rollup that falls behind holds history storage rather than losing data. All figures are current totals from PostgreSQL statistics and ignore the window selector."
+          help="These are current PostgreSQL estimates for tables that Workhorse owns. Cleanup keeps history until the statistics rollup has summarized it."
         />
       </Group>
       <Text c="dimmed" size="xs" mb="lg">
-        Table sizes and rolling-statistics progress
+        Current table sizes and progress of the statistics rollup
       </Text>
       <Grid gutter="lg">
         <Grid.Col span={{ base: 12, md: 5 }}>
@@ -3731,7 +3725,7 @@ function StoragePanel({
             <Group justify="space-between" wrap="nowrap" align="flex-start">
               <Box>
                 <Text size="sm" fw={600}>
-                  Statistics rollup
+                  Statistics summary
                 </Text>
                 <Text c="dimmed" size="xs">
                   {rollup.lastRunAt === null
@@ -3750,7 +3744,7 @@ function StoragePanel({
             <Group justify="space-between" wrap="nowrap" align="flex-start">
               <Box>
                 <Text size="sm" fw={600}>
-                  Buckets materialized
+                  Minutes summarized
                 </Text>
                 <Text c="dimmed" size="xs">
                   {coveredMs === null
@@ -3765,7 +3759,7 @@ function StoragePanel({
             <Group justify="space-between" wrap="nowrap" align="flex-start">
               <Box>
                 <Text size="sm" fw={600}>
-                  Statistics kept for
+                  Keep statistics for
                 </Text>
                 <Text c="dimmed" size="xs">
                   Independent of history retention
@@ -3781,7 +3775,7 @@ function StoragePanel({
             <Group justify="space-between" wrap="nowrap" align="flex-start">
               <Box>
                 <Text size="sm" fw={600}>
-                  Total owned storage
+                  Total Workhorse storage
                 </Text>
                 <Text c="dimmed" size="xs">
                   Tables and indexes together
@@ -3797,7 +3791,7 @@ function StoragePanel({
           <ScrollArea.Autosize mah={320} type="auto">
             <Table verticalSpacing={6} horizontalSpacing="xs" captionSide="top" stickyHeader>
               <Table.Caption ta="left" c="dimmed" fz="xs" mt={0} mb={4}>
-                Largest first. Row counts are PostgreSQL estimates.
+                Largest tables first. PostgreSQL estimates the row counts.
               </Table.Caption>
               <Table.Thead>
                 <Table.Tr>
@@ -3840,7 +3834,11 @@ function StoragePanel({
                     <Table.Td ta="right">
                       <Text size="xs">{formatRows(row.rows)}</Text>
                       {row.deadRows > 0 ? (
-                        <Text c="dimmed" fz={10} title="Deleted rows awaiting vacuum">
+                        <Text
+                          c="dimmed"
+                          fz={10}
+                          title="PostgreSQL has not reclaimed these deleted rows yet"
+                        >
                           {formatRows(row.deadRows)} dead
                         </Text>
                       ) : null}
@@ -3959,7 +3957,7 @@ function EventsPage({
     <Stack gap="xl">
       <PageHeader
         title="Events"
-        description="Everything the queue recorded across the fleet, newest first, read from the append-only lifecycle history."
+        description="See what happened across all tasks, with the newest records first."
       />
       <Paper withBorder p="md">
         <Group gap="md" align="flex-end" wrap="wrap">
@@ -4036,8 +4034,8 @@ function EventsPage({
           be reached with those filters cleared. */}
       {data.events.length === 0 ? (
         <EmptyState>
-          Nothing was recorded in the last {query.window}. History is bounded by retention:{" "}
-          {retentionNote}.
+          Workhorse recorded no matching events in the last {query.window}. Retention limits
+          available history: {retentionNote}.
         </EmptyState>
       ) : (
         <Paper withBorder>
@@ -4082,17 +4080,15 @@ function EventsPage({
               operator wonder why a row they were reading moved down a page. */}
           {data.page > 1 ? (
             <Text c="dimmed" size="xs">
-              Newer events can push these boundaries down between refreshes.
+              When the dashboard refreshes, new events can move rows between pages.
             </Text>
           ) : null}
         </Group>
       ) : null}
       <Text c="dimmed" size="xs">
-        Sourced from the durable lifecycle tables, not from PostgreSQL notifications: notification
-        payloads carry only a queue name and are dropped while nothing is listening, so a feed built
-        from them would have invisible gaps. Depth is bounded by retention — {retentionNote}. One
-        task&rsquo;s complete history, including every attempt, is in its own timeline in the task
-        drawer.
+        This feed stays complete when notifications are missed because Workhorse reads durable
+        history. Retention limits its depth: {retentionNote}. Open a task to see its complete
+        timeline.
       </Text>
     </Stack>
   );
@@ -4154,7 +4150,7 @@ function EventRow({
         <Text size="sm">
           {event.queue ?? (
             <Text component="span" c="dimmed" fz="xs">
-              retained away
+              Task deleted
             </Text>
           )}
         </Text>
@@ -4200,21 +4196,19 @@ function WorkersPage({
     <Stack gap="xl">
       <PageHeader
         title="Workers"
-        description="Declared concurrency, live claim state, and one-hour execution throughput for every registered worker."
+        description="See each worker's capacity, current claims, and recent attempt results."
       />
       {data.canManageWorkers ? (
         // Pause is easy to misread as a durable setting, so the surface that offers it says plainly
         // what it is scoped to. Operators should reach for queue pause when they mean "stop this
         // work" rather than "quiet this process".
-        <Alert color="blue" variant="light" title="Pausing a worker applies to its running process">
-          A paused worker stops claiming new work but finishes what it is already running. The pause
-          is cleared automatically if that worker process restarts or is replaced by a deployment,
-          so it will not silently idle a worker later. To stop work durably, pause its queue
-          instead.
+        <Alert color="blue" variant="light" title="Pausing a worker affects only this process">
+          A paused worker finishes active tasks but accepts no new ones. If the process restarts, it
+          resumes automatically. If work must stay paused, pause the queue instead.
         </Alert>
       ) : null}
       {data.workers.length === 0 ? (
-        <EmptyState>No workers have reported activity.</EmptyState>
+        <EmptyState>No worker has reported activity.</EmptyState>
       ) : (
         <Paper withBorder>
           <ScrollArea>
@@ -4224,8 +4218,8 @@ function WorkersPage({
                   <Table.Th>Worker</Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th>Claims</Table.Th>
-                  <Table.Th ta="right">Slots in use</Table.Th>
-                  <Table.Th ta="right">Current jobs</Table.Th>
+                  <Table.Th ta="right">Busy slots</Table.Th>
+                  <Table.Th ta="right">Active tasks</Table.Th>
                   <Table.Th ta="right">Attempts · 1h</Table.Th>
                   <Table.Th ta="right">Failures · 1h</Table.Th>
                   <Table.Th ta="right">Avg execution · 1h</Table.Th>
@@ -4306,7 +4300,7 @@ function WorkersPage({
                       ) : (
                         <Text
                           size="sm"
-                          title={`${worker.activeSlots ?? 0} of ${worker.concurrency} configured execution slots busy`}
+                          title={`${worker.id} uses ${worker.activeSlots ?? 0} of ${worker.concurrency} execution slots`}
                         >
                           {worker.activeSlots ?? 0} / {worker.concurrency}
                         </Text>
@@ -4333,16 +4327,11 @@ function WorkersPage({
         </Paper>
       )}
       <Text c="dimmed" size="xs">
-        Workers register themselves in PostgreSQL, so this list covers every live worker process,
-        not only workers sharing this server. Slots in use is what each worker reported at its last
-        registration refresh against the concurrency it declared at startup; current jobs is what
-        PostgreSQL reports as active, so the two can differ briefly. Concurrency is startup
-        configuration and is not changeable at runtime. Pause is cooperative and process-scoped: it
-        stops new claims once the worker next refreshes its registration, never interrupts a handler
-        already running, and is cleared when that worker process is restarted or replaced. Draining
-        means shutdown is waiting on in-flight handlers, and active jobs keep heartbeating until
-        they finish. A worker that stops refreshing is reported offline and is eventually dropped
-        from the fleet.
+        This page covers the whole fleet because workers register in PostgreSQL. A worker reports
+        busy slots, while PostgreSQL counts active tasks, so the values can differ briefly. Startup
+        sets capacity, and the dashboard cannot change it. A draining worker stops after its active
+        handlers finish. If a worker stops registering, Workhorse marks it offline and later removes
+        it from the fleet.
       </Text>
     </Stack>
   );
@@ -4376,16 +4365,16 @@ function SettingsPage() {
   const now = new Date().toISOString();
   return (
     <Stack gap="xl">
-      <PageHeader title="Settings" description="Dashboard display preferences for this browser." />
+      <PageHeader title="Settings" description="Choose how this browser displays the dashboard." />
       <Paper withBorder p="lg" maw={480}>
         <Stack gap="sm">
           <Box>
             <Text fw={600} size="sm">
-              Display timezone
+              Time zone
             </Text>
             <Text c="dimmed" size="xs">
-              All timestamps are stored in UTC; this only changes how they are shown. Saved in this
-              browser.
+              This setting changes how timestamps appear and stays in this browser. Workhorse stores
+              every timestamp in UTC.
             </Text>
           </Box>
           <Select
@@ -4394,7 +4383,7 @@ function SettingsPage() {
             data={timeZoneOptions}
             searchable
             allowDeselect={false}
-            aria-label="Display timezone"
+            aria-label="Time zone"
           />
           <Text c="dimmed" size="xs">
             Now: {formatExact(now)}
@@ -4652,7 +4641,7 @@ function useDashboardController(
         setLoadState((current) => ({
           status: "error",
           data: current.data,
-          error: cause instanceof Error ? cause.message : "Unable to load dashboard page",
+          error: cause instanceof Error ? cause.message : "Workhorse could not load this page",
         }));
       }
     }
@@ -4685,7 +4674,7 @@ function useDashboardController(
         if (location.filter !== "all" || location.page !== 1) navigate("/tasks");
         await loadPage();
       } catch (cause) {
-        notifyFailure("Demo task not enqueued", cause, "Unable to enqueue the demo job");
+        notifyFailure("Demo task not enqueued", cause, "Workhorse could not enqueue the demo task");
       } finally {
         setRunningDemoJob(null);
       }
@@ -4718,7 +4707,7 @@ function useDashboardController(
         });
         await loadPage();
       } catch (cause) {
-        notifyFailure("Schedule not updated", cause, "Unable to update the schedule");
+        notifyFailure("Schedule not updated", cause, "Workhorse could not update the schedule");
       } finally {
         setTogglingSchedule(null);
       }
@@ -4742,13 +4731,13 @@ function useDashboardController(
         notifyDashboard({
           title: paused ? "Queue paused" : "Queue resumed",
           message: paused
-            ? `${queue} stopped dispatching. Tasks already running finish; nothing new is claimed.`
+            ? `${queue} stopped accepting tasks. Active tasks can finish.`
             : `${queue} is dispatching again.`,
           tone: "success",
         });
         await loadPage();
       } catch (cause) {
-        notifyFailure("Queue not updated", cause, "Unable to update the queue");
+        notifyFailure("Queue not updated", cause, "Workhorse could not update the queue");
       } finally {
         setTogglingQueue(null);
       }
@@ -4764,21 +4753,21 @@ function useDashboardController(
           queue,
           audit: {
             actor: auditActor,
-            reason: `Clear waiting work from ${queue} from the dashboard`,
+            reason: `Clear queued work from ${queue} from the dashboard`,
             requestId: crypto.randomUUID(),
           },
         });
         setConfirmingQueue(null);
         notifyDashboard({
           title: "Queue cleared",
-          message: `Cleared ${result.deletedCount} waiting ${
+          message: `Cleared ${result.deletedCount} queued ${
             result.deletedCount === 1 ? "task" : "tasks"
           } from ${queue}.`,
           tone: result.deletedCount > 0 ? "success" : "neutral",
         });
         await loadPage();
       } catch (cause) {
-        notifyFailure("Queue not cleared", cause, "Unable to clear the queue");
+        notifyFailure("Queue not cleared", cause, "Workhorse could not clear the queue");
       } finally {
         setPurgingQueue(null);
       }
@@ -4802,13 +4791,13 @@ function useDashboardController(
         notifyDashboard({
           title: paused ? "Worker paused" : "Worker resumed",
           message: paused
-            ? `${workerId} stopped claiming new work and finishes what it is already running. The pause is cleared if that process restarts.`
-            : `${workerId} is claiming work again.`,
+            ? `${workerId} stopped accepting tasks but will finish active tasks. If the process restarts, it resumes automatically.`
+            : `${workerId} is accepting tasks again.`,
           tone: "success",
         });
         await loadPage();
       } catch (cause) {
-        notifyFailure("Worker not updated", cause, "Unable to update the worker");
+        notifyFailure("Worker not updated", cause, "Workhorse could not update the worker");
       } finally {
         setTogglingWorker(null);
       }
@@ -4846,7 +4835,9 @@ function useDashboardController(
         setSelectedJob(detail);
       } catch (cause) {
         if (!jobDetailRequests.current.current(ticket)) return;
-        setJobDetailError(cause instanceof Error ? cause.message : "Unable to load the task");
+        setJobDetailError(
+          cause instanceof Error ? cause.message : "Workhorse could not load the task",
+        );
       }
     },
     [client],
@@ -4962,7 +4953,7 @@ function useDashboardController(
         if (detail && jobDetailRequests.current.current(ticket)) setSelectedJob(detail);
         await loadPage();
       } catch (cause) {
-        notifyFailure("Task not canceled", cause, "Unable to cancel the task");
+        notifyFailure("Task not canceled", cause, "Workhorse could not cancel the task");
       } finally {
         // Clearing unconditionally would unstick a spinner this call never started, so only the
         // task whose cancellation is settling drops the pending flag.
@@ -5046,7 +5037,7 @@ function useDashboardController(
       <Center mih="60vh">
         <Stack align="center" gap="sm">
           <WarningCircle size={28} color="var(--mantine-color-red-6)" />
-          <Text fw={600}>This page could not connect.</Text>
+          <Text fw={600}>Workhorse could not load this page.</Text>
           <Text c="dimmed" size="sm">
             {loadState.error}
           </Text>
@@ -5198,7 +5189,7 @@ function DashboardContent({
               onClick={toggleNavbar}
               hiddenFrom="sm"
               size="sm"
-              aria-label="Toggle navigation"
+              aria-label="Open or close navigation"
             />
             <WorkhorseBrand />
           </Group>
@@ -5209,7 +5200,7 @@ function DashboardContent({
                 color={environmentColor(environment)}
                 variant="light"
                 visibleFrom="xs"
-                title="Deployment environment (WORKHORSE_ENV)"
+                title="Deployment environment from WORKHORSE_ENV"
               >
                 {environment}
               </Badge>
@@ -5346,7 +5337,7 @@ function DashboardContent({
               component="a"
               href={mountedHref(basePath, "/system")}
               active={location.route === "/system"}
-              label="System Health"
+              label="System health"
               leftSection={<Pulse size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/system")}
@@ -5408,10 +5399,10 @@ function DashboardContent({
             </Box>
             <Box>
               <JsonValue
-                label="Payload"
+                label="Input"
                 value={selectedJob.payload}
-                emptyLabel="This task was enqueued without a payload."
-                copyLabel="the task payload"
+                emptyLabel="This task was enqueued without input."
+                copyLabel="the task input"
               />
             </Box>
             <TaskOutcome job={selectedJob} />

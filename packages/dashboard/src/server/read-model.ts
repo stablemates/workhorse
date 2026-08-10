@@ -733,13 +733,12 @@ export async function readDashboardTaskFacets(
 
 /** Display-only schedule descriptions; the core schema deliberately has no description column. */
 const scheduleDescriptions: Record<string, string> = {
-  "workhorse:tick": "Promotes due jobs to ready and recovers expired leases.",
-  "workhorse:history-partitions":
-    "Maintains the current UTC day plus three future history partitions.",
+  "workhorse:tick": "Makes due tasks ready and recovers tasks with expired leases.",
+  "workhorse:history-partitions": "Prepares daily history storage before Workhorse needs it.",
   "workhorse:history-retention":
-    "Retires expired history and schedule occurrences after the daily local boundary.",
+    "Deletes history and schedule runs after their retention periods end.",
   "workhorse:terminal-storage":
-    "Prunes expired idempotency bindings and safely removable terminal jobs.",
+    "Deletes expired idempotency records and finished tasks that retention no longer protects.",
 };
 
 function scheduleDescription(namespace: string, name: string): string | null {
@@ -1086,12 +1085,12 @@ const dashboardStorageRelations: ReadonlyArray<{
 }> = [
   { relation: "job", label: "Task records", group: "tasks" },
   { relation: "job_outcome", label: "Finished results", group: "tasks" },
-  { relation: "job_runtime", label: "Live runtime", group: "tasks" },
-  { relation: "job_query", label: "Operator projection", group: "tasks" },
+  { relation: "job_runtime", label: "Active task state", group: "tasks" },
+  { relation: "job_query", label: "Dashboard task view", group: "tasks" },
   { relation: "job_event", label: "Task events", group: "history" },
   { relation: "attempt_history", label: "Attempt history", group: "history" },
   { relation: "schedule_occurrence", label: "Schedule runs", group: "history" },
-  { relation: "job_stat_bucket", label: "Statistics buckets", group: "statistics" },
+  { relation: "job_stat_bucket", label: "Minute summaries", group: "statistics" },
 ];
 
 function dashboardStorage(health: QueueHealthSnapshot): DashboardSystemStorage {
@@ -1204,17 +1203,19 @@ function retentionDegradedChecks(retention: DashboardSystemRetention): string[] 
       row.lagMs > (row.prunedByPartition ? partitionRetentionLagGraceMs : rowRetentionLagGraceMs),
   );
   if (behind.length > 0) {
-    checks.push(`Retention behind: ${behind.map((row) => row.label.toLowerCase()).join(", ")}`);
+    checks.push(
+      `Retention cleanup is late for ${behind.map((row) => row.label.toLowerCase()).join(", ")}`,
+    );
   }
   const eligible =
     retention.eligibleHistoryPartitions.jobEvents +
     retention.eligibleHistoryPartitions.attemptHistory;
   if (eligible > eligiblePartitionGrace) {
-    checks.push(`Expired history days awaiting cleanup (${eligible})`);
+    checks.push(`History days await deletion (${eligible})`);
   }
   const spill =
     retention.defaultHistoryRows.jobEvents + retention.defaultHistoryRows.attemptHistory;
-  if (spill > 0) checks.push(`History rows outside daily partitions (${spill})`);
+  if (spill > 0) checks.push(`History rows use fallback storage (${spill})`);
   return checks;
 }
 
@@ -1480,18 +1481,18 @@ export async function readDashboardSystem(
   }));
   const criticalChecks = [
     runtime.expired > 0 ? "Expired leases" : null,
-    health.deadlinePressure.overdue > 0 ? "Deadlines overdue" : null,
-    health.overdueExecutionTimeouts > 0 ? "Execution timeouts overdue" : null,
-    runtime.due_but_unpromoted > 0 ? "Promotion stalled" : null,
+    health.deadlinePressure.overdue > 0 ? "Tasks are past their deadlines" : null,
+    health.overdueExecutionTimeouts > 0 ? "Attempts are past their execution limits" : null,
+    runtime.due_but_unpromoted > 0 ? "Scheduled tasks are overdue" : null,
     partitions.some((partition) => !partition.eventExists || !partition.attemptExists)
-      ? "History partitions missing"
+      ? "Daily history storage is missing"
       : null,
   ].filter((check): check is string => check !== null);
   // Critical means work is stopping or being lost. Retention only costs storage, so it degrades.
   const degradedChecks = retentionDegradedChecks(retention);
   // A stalled rollup is a storage problem rather than a dispatch one: history retention holds at
   // the watermark rather than deleting the input to windows nobody has computed yet.
-  if (storage.rollup.stalled) degradedChecks.push("Statistics rollup behind");
+  if (storage.rollup.stalled) degradedChecks.push("The statistics summary is behind");
   const level =
     criticalChecks.length > 0 ? "critical" : degradedChecks.length > 0 ? "degraded" : "healthy";
   const status = {

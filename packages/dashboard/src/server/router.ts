@@ -221,12 +221,12 @@ export const dashboardRouter = {
         input.id,
         context.projectDurability,
       );
-      if (!detail) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+      if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       return detail;
     }),
     enqueueTest: procedure.input(enqueueTestInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.operator.enqueueTest) {
-        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       return context.operator.enqueueTest(
         input.kind,
@@ -238,7 +238,7 @@ export const dashboardRouter = {
       .input(setScheduleEnabledInput)
       .handler(async ({ context, input }) => {
         if (context.operator.mode !== "local" || !context.scheduleController?.setScheduleEnabled) {
-          throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         return context.scheduleController.setScheduleEnabled(
           input.namespace,
@@ -249,7 +249,7 @@ export const dashboardRouter = {
       }),
     setQueuePaused: procedure.input(setQueuePausedInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.queueController?.setQueuePaused) {
-        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       return context.queueController.setQueuePaused(
         input.queue,
@@ -259,13 +259,13 @@ export const dashboardRouter = {
     }),
     purgeQueue: procedure.input(purgeQueueInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.queueController?.purgeQueue) {
-        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       return context.queueController.purgeQueue(input.queue, auditWithOccurredAt(input.audit));
     }),
     setWorkerPaused: procedure.input(setWorkerPausedInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.workerController?.setWorkerPaused) {
-        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       return context.workerController.setWorkerPaused(
         input.workerId,
@@ -275,14 +275,14 @@ export const dashboardRouter = {
     }),
     runTaskNow: procedure.input(runTaskNowInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.taskController?.runTaskNow) {
-        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       const result = await context.taskController.runTaskNow(
         input.id,
         auditWithOccurredAt(input.audit),
       );
       if (result.status === "not_found") {
-        throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+        throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       }
       return result;
     }),
@@ -293,14 +293,14 @@ export const dashboardRouter = {
      */
     cancelTask: procedure.input(cancelTaskInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.taskController?.cancelTask) {
-        throw new ORPCError("FORBIDDEN", { message: "Operator is read-only" });
+        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
       const result = await context.taskController.cancelTask(
         input.id,
         auditWithOccurredAt(input.audit),
       );
       if (result.status === "not_found") {
-        throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+        throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       }
       return result;
     }),
