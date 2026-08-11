@@ -78,7 +78,7 @@ const data: DashboardSettingsPage = {
 };
 
 describe("settings page", () => {
-  it("shows retention windows read-only while keeping cleanup limits editable", async () => {
+  it("separates browser preferences from read-only Workhorse policy", async () => {
     const { SettingsPage } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
@@ -88,15 +88,17 @@ describe("settings page", () => {
           data,
           saving: false,
           onSaveMaintenance: async () => undefined,
-          onSaveCleanupLimits: async () => undefined,
           onRevertMaintenance: async () => undefined,
-          onRevertRetention: async () => undefined,
           onDirtyChange: () => undefined,
         }),
       ),
     );
 
-    expect(html).toContain("Database-owned policy");
+    expect(html).toContain("Your preferences");
+    expect(html).toContain("Browser display timezone");
+    expect(html).toContain("Workhorse settings");
+    expect(html.indexOf("Your preferences")).toBeLessThan(html.indexOf("Workhorse settings"));
+    expect(html).toContain("Database-wide settings");
     expect(html).toContain("Maintenance schedule");
     expect(html).toContain("Choose when database-wide cleanup runs");
     expect(html).toMatch(/mantine-Select-label[^>]*>Maintenance timezone/);
@@ -111,7 +113,9 @@ describe("settings page", () => {
       "These effective values are read-only here because shortening them can permanently delete stored history",
     );
     expect(html).toContain("Cleanup limits");
-    expect(html).toContain("Limit how much work each cleanup pass can perform");
+    expect(html).toContain(
+      "These read-only limits cap how much work each cleanup pass can perform",
+    );
     expect(html).toContain("Operator override");
     expect(html).not.toContain("Application default");
     expect(html).toContain("Default: UTC");
@@ -119,10 +123,10 @@ describe("settings page", () => {
     expect(html).toContain("Default: 14 days");
     expect(html).toContain("Effective: 7 days");
     expect(html).not.toContain('aria-label="Task events"');
-    expect(html).toContain('aria-label="Finished tasks per cleanup pass"');
+    expect(html).not.toContain('aria-label="Finished tasks per cleanup pass"');
     expect(html).not.toContain("Preview impact");
     expect(html).not.toContain("Deletion impact");
-    expect(html).toContain("Save cleanup limits");
+    expect(html).not.toContain("Save cleanup limits");
     expect(html).toContain("Set at deploy");
     expect(html).toContain("worker-1");
     expect(html).toContain("30.0 s lease");

@@ -17,7 +17,6 @@ import {
   Menu,
   MultiSelect,
   NavLink,
-  NumberInput,
   Pagination,
   Paper,
   ScrollArea,
@@ -76,7 +75,6 @@ import {
 import type {
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
-  RetentionPolicyDefinition,
   RetentionPolicySetting,
   RetryPolicy,
 } from "@workhorse/core";
@@ -4464,9 +4462,7 @@ export interface SettingsPageProps {
   data: DashboardSettingsPage;
   saving: boolean;
   onSaveMaintenance(definition: Partial<MaintenancePolicyDefinition>): Promise<void>;
-  onSaveCleanupLimits(definition: Partial<RetentionPolicyDefinition>): Promise<void>;
   onRevertMaintenance(setting: MaintenancePolicySetting): Promise<void>;
-  onRevertRetention(setting: RetentionPolicySetting): Promise<void>;
   onDirtyChange(dirty: boolean): void;
 }
 
@@ -4500,58 +4496,50 @@ function OperatorOverride({
 type RetentionField = {
   key: RetentionPolicySetting;
   label: string;
-  nullable: boolean;
   suffix: string;
 };
 
 const retentionWindowFields: RetentionField[] = [
-  { key: "jobIdentityRetentionDays", label: "Task identity", nullable: true, suffix: " days" },
+  { key: "jobIdentityRetentionDays", label: "Task identity", suffix: " days" },
   {
     key: "terminalOutcomeRetentionDays",
     label: "Finished outcomes",
-    nullable: true,
     suffix: " days",
   },
-  { key: "jobEventRetentionDays", label: "Task events", nullable: true, suffix: " days" },
-  { key: "attemptHistoryRetentionDays", label: "Attempt history", nullable: true, suffix: " days" },
+  { key: "jobEventRetentionDays", label: "Task events", suffix: " days" },
+  { key: "attemptHistoryRetentionDays", label: "Attempt history", suffix: " days" },
   {
     key: "scheduleOccurrenceRetentionDays",
     label: "Schedule occurrences",
-    nullable: true,
     suffix: " days",
   },
-  { key: "statisticsRetentionDays", label: "Rolling statistics", nullable: true, suffix: " days" },
+  { key: "statisticsRetentionDays", label: "Rolling statistics", suffix: " days" },
 ];
 
 const retentionCleanupFields: RetentionField[] = [
   {
     key: "terminalJobPruneLimit",
     label: "Finished tasks per cleanup pass",
-    nullable: false,
     suffix: " rows",
   },
   {
     key: "historyPartitionsPerPass",
     label: "History partitions per pass",
-    nullable: false,
     suffix: " partitions",
   },
   {
     key: "defaultPartitionRowsPerPass",
     label: "Fallback history rows per pass",
-    nullable: false,
     suffix: " rows",
   },
   {
     key: "occurrenceRowsPerPass",
     label: "Schedule occurrences per pass",
-    nullable: false,
     suffix: " rows",
   },
   {
     key: "statisticsRowsPerPass",
     label: "Statistics rows per pass",
-    nullable: false,
     suffix: " rows",
   },
 ];
@@ -4582,9 +4570,7 @@ export function SettingsPage({
   data,
   saving,
   onSaveMaintenance,
-  onSaveCleanupLimits,
   onRevertMaintenance,
-  onRevertRetention,
   onDirtyChange,
 }: SettingsPageProps) {
   const [timeZone, setTimeZone] = useState(currentTimeZoneValue);
@@ -4592,9 +4578,6 @@ export function SettingsPage({
     timezone: data.maintenance.timezone,
     historyRetentionLocalTime: data.maintenance.historyRetentionLocalTime,
   }));
-  const [cleanupLimits, setCleanupLimits] = useState<Record<string, number | "">>(() =>
-    Object.fromEntries(retentionCleanupFields.map(({ key }) => [key, data.retention[key] ?? ""])),
-  );
   const changeTimeZone = (value: string | null) => {
     const next = value ?? "system";
     setDisplayTimeZone(next === "system" ? null : next);
@@ -4606,27 +4589,14 @@ export function SettingsPage({
   if (maintenance.historyRetentionLocalTime !== data.maintenance.historyRetentionLocalTime) {
     maintenanceChanges.historyRetentionLocalTime = maintenance.historyRetentionLocalTime;
   }
-  const cleanupLimitChanges: Partial<RetentionPolicyDefinition> = {};
-  for (const { key, nullable } of retentionCleanupFields) {
-    if (!nullable && cleanupLimits[key] === "") continue;
-    const value = cleanupLimits[key] === "" ? null : Number(cleanupLimits[key]);
-    if (value !== data.retention[key]) {
-      (cleanupLimitChanges as Record<string, number | null>)[key] = value;
-    }
-  }
   const maintenanceChanged = Object.keys(maintenanceChanges).length > 0;
-  const cleanupLimitsChanged = Object.keys(cleanupLimitChanges).length > 0;
-  const settingsDirty = maintenanceChanged || cleanupLimitsChanged;
-  useLayoutEffect(() => onDirtyChange(settingsDirty), [onDirtyChange, settingsDirty]);
+  useLayoutEffect(() => onDirtyChange(maintenanceChanged), [maintenanceChanged, onDirtyChange]);
   useLayoutEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   useEffect(() => {
     setMaintenance({
       timezone: data.maintenance.timezone,
       historyRetentionLocalTime: data.maintenance.historyRetentionLocalTime,
     });
-    setCleanupLimits(
-      Object.fromEntries(retentionCleanupFields.map(({ key }) => [key, data.retention[key] ?? ""])),
-    );
   }, [data]);
   const maintenanceTimeZoneOptions = supportedMaintenanceTimeZoneOptions.concat(
     supportedMaintenanceTimeZoneOptions.some(({ value }) => value === maintenance.timezone)
@@ -4634,84 +4604,75 @@ export function SettingsPage({
       : [{ value: maintenance.timezone, label: maintenance.timezone }],
   );
   const now = new Date().toISOString();
-  const retentionWindowRows = retentionWindowFields.map(({ key, label, suffix }) => (
-    <Table.Tr key={key}>
-      <Table.Td>
-        <Text size="sm" fw={500}>
-          {label}
-        </Text>
-      </Table.Td>
-      <Table.Td w={180}>
-        <Text size="sm">Effective: {formatRetentionDefault(data.retention[key], suffix)}</Text>
-      </Table.Td>
-      <Table.Td w={220}>
-        <Stack gap={4} align="flex-start">
-          <Text c="dimmed" size="xs">
-            Default:{" "}
-            {formatRetentionDefault(data.retention.provenance[key].applicationDefault, suffix)}
+  const retentionPolicyRows = (fields: RetentionField[]) =>
+    fields.map(({ key, label, suffix }) => (
+      <Table.Tr key={key}>
+        <Table.Td>
+          <Text size="sm" fw={500}>
+            {label}
           </Text>
-          {data.retention.provenance[key].source === "operator" ? (
-            <Badge color="violet" variant="light">
-              Operator override
-            </Badge>
-          ) : null}
-        </Stack>
-      </Table.Td>
-    </Table.Tr>
-  ));
-  const cleanupLimitRows = retentionCleanupFields.map(({ key, label, nullable, suffix }) => (
-    <Table.Tr key={key}>
-      <Table.Td>
-        <Text size="sm" fw={500}>
-          {label}
-        </Text>
-      </Table.Td>
-      <Table.Td w={180}>
-        <NumberInput
-          aria-label={label}
-          suffix={suffix}
-          min={1}
-          value={cleanupLimits[key]}
-          disabled={!data.editable}
-          allowDecimal={false}
-          allowNegative={false}
-          onChange={(value) => {
-            setCleanupLimits((current) => ({
-              ...current,
-              [key]: typeof value === "number" ? value : nullable ? "" : (current[key] ?? ""),
-            }));
-          }}
-        />
-      </Table.Td>
-      <Table.Td w={220}>
-        <Stack gap={4} align="flex-start">
-          <Text c="dimmed" size="xs">
-            Default:{" "}
-            {formatRetentionDefault(data.retention.provenance[key].applicationDefault, suffix)}
-          </Text>
-          {data.retention.provenance[key].source === "operator" ? (
-            <OperatorOverride
-              disabled={cleanupLimitsChanged}
-              revert={data.editable ? () => void onRevertRetention(key) : undefined}
-            />
-          ) : null}
-        </Stack>
-      </Table.Td>
-    </Table.Tr>
-  ));
+        </Table.Td>
+        <Table.Td w={180}>
+          <Text size="sm">Effective: {formatRetentionDefault(data.retention[key], suffix)}</Text>
+        </Table.Td>
+        <Table.Td w={220}>
+          <Stack gap={4} align="flex-start">
+            <Text c="dimmed" size="xs">
+              Default:{" "}
+              {formatRetentionDefault(data.retention.provenance[key].applicationDefault, suffix)}
+            </Text>
+            {data.retention.provenance[key].source === "operator" ? (
+              <Badge color="violet" variant="light">
+                Operator override
+              </Badge>
+            ) : null}
+          </Stack>
+        </Table.Td>
+      </Table.Tr>
+    ));
   return (
     <Stack gap="xl">
       <PageHeader
         title="Settings"
-        description="See where each value is owned and change database-wide policy."
+        description="Manage this browser's display preferences and review Workhorse configuration."
       />
+      <Paper withBorder p="lg" maw={480}>
+        <Stack gap="sm">
+          <Box>
+            <Text fw={650}>Your preferences</Text>
+            <Text c="dimmed" size="sm">
+              These settings affect only this browser.
+            </Text>
+          </Box>
+          <Select
+            label="Browser display timezone"
+            description="Changes how timestamps appear. Workhorse stores every timestamp in UTC."
+            value={timeZone}
+            onChange={changeTimeZone}
+            data={timeZoneOptions}
+            searchable
+            allowDeselect={false}
+          />
+          <Text c="dimmed" size="xs">
+            Now: {formatExact(now)}
+          </Text>
+        </Stack>
+      </Paper>
+      <Box>
+        <Text fw={650} size="lg">
+          Workhorse settings
+        </Text>
+        <Text c="dimmed" size="sm">
+          These values control database-wide policy or report configuration from running workers.
+        </Text>
+      </Box>
       <Paper withBorder p="lg">
         <Stack gap="md">
           <Box>
-            <Text fw={650}>Database-owned policy</Text>
+            <Text fw={650}>Database-wide settings</Text>
             <Text c="dimmed" size="sm">
-              These values apply to every worker. Operator overrides survive deployments until you
-              revert them.
+              Maintenance schedule changes apply to every worker. Retention and cleanup policy
+              values are shown here for diagnosis.
             </Text>
           </Box>
           {!data.editable ? (
@@ -4854,33 +4815,23 @@ export function SettingsPage({
             <Text fw={600}>Retention windows</Text>
             <Text c="dimmed" size="xs">
               These effective values are read-only here because shortening them can permanently
-              delete stored history. Change the policy or remove an operator override outside this
-              dashboard.
+              delete stored history.
             </Text>
           </Box>
           <Table verticalSpacing="sm">
-            <Table.Tbody>{retentionWindowRows}</Table.Tbody>
+            <Table.Tbody>{retentionPolicyRows(retentionWindowFields)}</Table.Tbody>
           </Table>
           <Divider />
           <Box>
             <Text fw={600}>Cleanup limits</Text>
             <Text c="dimmed" size="xs">
-              Limit how much work each cleanup pass can perform. Lower limits reduce database load,
-              but large backlogs take longer to clear.
+              These read-only limits cap how much work each cleanup pass can perform. Lower limits
+              reduce database load, but large backlogs take longer to clear.
             </Text>
           </Box>
           <Table verticalSpacing="sm">
-            <Table.Tbody>{cleanupLimitRows}</Table.Tbody>
+            <Table.Tbody>{retentionPolicyRows(retentionCleanupFields)}</Table.Tbody>
           </Table>
-          <Group justify="flex-end">
-            <Button
-              disabled={!data.editable || !cleanupLimitsChanged}
-              loading={saving}
-              onClick={() => void onSaveCleanupLimits(cleanupLimitChanges)}
-            >
-              Save cleanup limits
-            </Button>
-          </Group>
         </Stack>
       </Paper>
       <Paper withBorder p="lg">
@@ -4930,30 +4881,6 @@ export function SettingsPage({
               </Table>
             </Table.ScrollContainer>
           )}
-        </Stack>
-      </Paper>
-      <Paper withBorder p="lg" maw={480}>
-        <Stack gap="sm">
-          <Box>
-            <Text fw={600} size="sm">
-              Browser display timezone
-            </Text>
-            <Text c="dimmed" size="xs">
-              This setting changes how timestamps appear and stays in this browser. Workhorse stores
-              every timestamp in UTC.
-            </Text>
-          </Box>
-          <Select
-            value={timeZone}
-            onChange={changeTimeZone}
-            data={timeZoneOptions}
-            searchable
-            allowDeselect={false}
-            aria-label="Time zone"
-          />
-          <Text c="dimmed" size="xs">
-            Now: {formatExact(now)}
-          </Text>
         </Stack>
       </Paper>
     </Stack>
@@ -5432,58 +5359,10 @@ function useDashboardController(
     },
     [auditActor, client, loadPage],
   );
-  const saveCleanupLimits = useCallback(
-    async (definition: Partial<RetentionPolicyDefinition>) => {
-      setSavingSettings(true);
-      try {
-        await client.overrideRetentionPolicy({
-          definition,
-          audit: {
-            actor: auditActor,
-            reason: "Update cleanup limits from the dashboard",
-            requestId: crypto.randomUUID(),
-          },
-        });
-        notifyDashboard({
-          title: "Cleanup limits updated",
-          message: "Future cleanup passes now use the new work limits.",
-          tone: "success",
-        });
-        await loadPage();
-      } catch (cause) {
-        notifyFailure("Cleanup limits not updated", cause, "Workhorse rejected the cleanup limits");
-      } finally {
-        setSavingSettings(false);
-      }
-    },
-    [auditActor, client, loadPage],
-  );
   const revertMaintenanceSetting = useCallback(
     async (setting: MaintenancePolicySetting) => {
       try {
         await client.revertMaintenancePolicy({
-          settings: [setting],
-          audit: {
-            actor: auditActor,
-            reason: `Revert ${setting} to the application default`,
-            requestId: crypto.randomUUID(),
-          },
-        });
-        await loadPage();
-      } catch (cause) {
-        notifyFailure(
-          "Setting not reverted",
-          cause,
-          "Workhorse could not restore the application default",
-        );
-      }
-    },
-    [auditActor, client, loadPage],
-  );
-  const revertRetentionSetting = useCallback(
-    async (setting: RetentionPolicySetting) => {
-      try {
-        await client.revertRetentionPolicy({
           settings: [setting],
           audit: {
             actor: auditActor,
@@ -5860,9 +5739,7 @@ function useDashboardController(
         data={loadState.data.value}
         saving={savingSettings}
         onSaveMaintenance={saveMaintenanceSettings}
-        onSaveCleanupLimits={saveCleanupLimits}
         onRevertMaintenance={revertMaintenanceSetting}
-        onRevertRetention={revertRetentionSetting}
         onDirtyChange={changeSettingsDirty}
       />
     );
