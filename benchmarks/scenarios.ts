@@ -364,16 +364,17 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     invariants: [
       "ready and scheduled depths match the seed",
       "one active lease is expired",
-      "the expired lease explicitly marks the snapshot as degraded",
+      "the expired lease marks the snapshot critical with the expired-leases reason",
       "state counts and protocol version remain internally consistent",
+      "bounded terminal and bucket scans stay uncapped at seed scale",
     ],
     metrics: [
       "readyDepth",
       "scheduledDepth",
       "activeLeases",
       "expiredLeases",
-      "degraded",
-      "degradationReason",
+      "statusLevel",
+      "reasonCodes",
       "schemaVersion",
       "snapshotMs",
     ],
@@ -2551,7 +2552,25 @@ function assertHealthSnapshot(
   recordInvariant(assertions, "health scheduled depth", health.scheduledDepth, scheduledCount);
   recordInvariant(assertions, "health active leases", health.activeLeases, 1);
   recordInvariant(assertions, "health expired leases", health.expiredLeases, 1);
-  recordInvariant(assertions, "health snapshot is degraded", health.expiredLeases > 0, true);
+  recordInvariant(assertions, "health snapshot is critical", health.status.level, "critical");
+  recordInvariant(
+    assertions,
+    "health snapshot names the expired lease",
+    health.status.reasons.some((reason) => reason.code === "expired-leases"),
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "health terminal counts uncapped",
+    health.terminalCountsCapped,
+    false,
+  );
+  recordInvariant(
+    assertions,
+    "health bucket count uncapped",
+    health.statistics.bucketsCapped,
+    false,
+  );
   recordInvariant(assertions, "health active state count", health.counts.active, 1);
   recordInvariant(
     assertions,
@@ -2585,8 +2604,6 @@ async function healthSnapshot(
   );
   const [health, snapshotMs] = await measured(context.now, () => queue.health());
   assertHealthSnapshot(assertions, health, readyCount, scheduledCount);
-  const degraded = health.expiredLeases > 0;
-  const degradationReason = degraded ? "expired-leases" : null;
 
   return {
     name: "health-snapshot",
@@ -2596,8 +2613,8 @@ async function healthSnapshot(
       scheduledDepth: health.scheduledDepth,
       activeLeases: health.activeLeases,
       expiredLeases: health.expiredLeases,
-      degraded,
-      degradationReason,
+      statusLevel: health.status.level,
+      reasonCodes: health.status.reasons.map((reason) => reason.code).join(","),
       schemaVersion: health.schemaVersion,
       snapshotMs,
     },

@@ -26,6 +26,11 @@ First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse/core`: database-authoritative maintenance and retention settings with application
   defaults, operator overrides, per-setting provenance, revert operations, and bounded retention
   impact previews.
+- `@workhorse/core`: transactionally consistent `Queue.health()` snapshots — one SQL statement
+  for every correctness-sensitive value, size-capped history scans with explicit lower-bound
+  flags, PostgreSQL estimates separated under `observations`, and caller-overridable health
+  budgets producing machine-readable `status.reasons` shared by the `workhorse-health` exit
+  code, the benchmark invariants, and the dashboard verdict.
 - `@workhorse/core`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`, and
   `dashboard`.
 - `@workhorse/core`: notification-assisted worker dispatch through one process-local

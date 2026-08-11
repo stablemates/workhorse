@@ -4877,11 +4877,15 @@ describe("live-runtime queue protocol", () => {
   it("reports history size with daily partitions folded into their parent", async () => {
     await queue.enqueue("stat-size", {});
     const health = await queue.health();
-    const events = health.relations.find((relation) => relation.relation === "job_event");
+    const events = health.observations.relations.find(
+      (relation) => relation.relation === "job_event",
+    );
     // The partitioned parent owns no storage itself, so an unaggregated reading is always zero.
     expect(events?.partitions).toBeGreaterThan(0);
     expect(events?.totalBytes).toBeGreaterThan(0);
-    const buckets = health.relations.find((relation) => relation.relation === "job_stat_bucket");
+    const buckets = health.observations.relations.find(
+      (relation) => relation.relation === "job_stat_bucket",
+    );
     expect(buckets?.partitions).toBe(0);
   });
 
@@ -7375,9 +7379,15 @@ describe("live-runtime queue protocol", () => {
     expect(health.sleepingJobs).toBe(1);
     expect(health.overdueWaits).toBe(0);
     expect(health.nextWakeAt).toEqual(scheduledWait.wait.wakeAt);
-    expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
-    expect(health.lockWaitCount).toBeGreaterThanOrEqual(0);
-    expect(health.notificationQueueUsage).toBeGreaterThanOrEqual(0);
+    expect(health.capturedAt.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(health.terminalCountsCapped).toBe(false);
+    expect(health.statistics.bucketsCapped).toBe(false);
+    expect(health.historyPartitionDays).toHaveLength(4);
+    expect(
+      health.observations.relations.some((relation) => relation.relation === "job_runtime"),
+    ).toBe(true);
+    expect(health.observations.lockWaitCount).toBeGreaterThanOrEqual(0);
+    expect(health.observations.notificationQueueUsage).toBeGreaterThanOrEqual(0);
     expect(await queue.queueMetricSnapshot()).toEqual([
       {
         queue: "default",
@@ -7394,6 +7404,45 @@ describe("live-runtime queue protocol", () => {
         rateLimitNextEligibleDelayMs: null,
       },
     ]);
+  });
+
+  it("evaluates caller-overridable health budgets into machine-readable status reasons", async () => {
+    await queue.prepareHistoryPartitions();
+    const baseline = await queue.health();
+    expect(
+      baseline.historyPartitionDays.every((day) => day.hasJobEvents && day.hasAttemptHistory),
+    ).toBe(true);
+    expect(baseline.status.reasons.map((reason) => reason.code)).not.toContain(
+      "missing-history-partitions",
+    );
+    for (const reason of baseline.status.reasons) {
+      expect(reason.observed).toBeGreaterThan(reason.budget);
+    }
+
+    // The same snapshot facts degrade under a tighter caller budget.
+    const strict = await queue.health({ budgets: { rollupStalledLagMs: -1 } });
+    expect(strict.status.level).not.toBe("healthy");
+    expect(strict.status.reasons).toContainEqual(
+      expect.objectContaining({ code: "rollup-stalled", severity: "degraded", budget: -1 }),
+    );
+
+    // An expired lease is critical, with the reason and the count read from one snapshot.
+    await queue.enqueue("health-budget", {});
+    const claimed = await queue.claim("health-budget-worker");
+    expect(claimed).not.toBeNull();
+    await pool.query(
+      `UPDATE workhorse.job_runtime
+          SET expires_at = clock_timestamp() - interval '1 second'
+        WHERE job_id = $1 AND state = 'active'`,
+      [claimed!.id],
+    );
+    const critical = await queue.health();
+    expect(critical.status.level).toBe("critical");
+    const expired = critical.status.reasons.find((reason) => reason.code === "expired-leases");
+    expect(expired).toMatchObject({ severity: "critical", budget: 0 });
+    expect(expired!.observed).toBe(critical.expiredLeases);
+    expect(critical.expiredLeases).toBeGreaterThanOrEqual(1);
+    await queue.recoverExpired();
   });
 
   it("round trips retention policy defaults and rejects unsafe or malformed policies in PostgreSQL", async () => {
@@ -7963,13 +8012,15 @@ describe("live-runtime queue protocol", () => {
       await zonedClient.query("SET TIME ZONE 'Pacific/Kiritimati'");
       const zonedHealth = await new Queue(zonedClient).health();
       expect(zonedHealth.eligibleHistoryPartitions).toEqual(health.eligibleHistoryPartitions);
+      // A broken session-timezone dependency would shift the day-boundary lag by hours; the
+      // tolerance only needs to absorb the wall-clock between two consecutive snapshots.
       expect(zonedHealth.retentionLagMs.jobEvents).toBeCloseTo(
         health.retentionLagMs.jobEvents!,
-        -3,
+        -4,
       );
       expect(zonedHealth.retentionLagMs.attemptHistory).toBeCloseTo(
         health.retentionLagMs.attemptHistory!,
-        -3,
+        -4,
       );
     } finally {
       await zonedClient.query("RESET TIME ZONE");
