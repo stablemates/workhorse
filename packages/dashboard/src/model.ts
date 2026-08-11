@@ -495,6 +495,16 @@ export interface DashboardQueueRow {
 export interface DashboardConcurrencyPolicySummary {
   namespace: string;
   maxActive: number;
+  /**
+   * Whether the counts below were measured, or are placeholders no view may render.
+   *
+   * Queue and system rows are built from `Queue.health()` and are always measured. Task detail
+   * reads its own queue's ceiling exactly and can still lack utilization for it: `health()` samples
+   * a bounded number of policies, and a settled task is not measured at all. An unmeasured queue is
+   * not an idle one, so when this is false `active`, `available`, `blockedReady`, `saturatedKeys`,
+   * and `highestKeyActive` carry no meaning.
+   */
+  utilizationKnown: boolean;
   active: number;
   available: number;
   blockedReady: number;
@@ -514,6 +524,7 @@ export function dashboardConcurrencyPolicySummary(
   return {
     namespace: policy.namespace,
     maxActive: Number(policy.maxActive),
+    utilizationKnown: true,
     active: Number(policy.active),
     available: Number(policy.available),
     blockedReady: Number(policy.blockedReady),
@@ -1250,10 +1261,17 @@ export interface DashboardJobDetail {
     maxAttempts: number;
     deadlineAt?: string | null;
     executionTimeoutMs?: number | null;
-    /** Raw admission key. Deliberately available only in task detail identity. */
+    /**
+     * Raw admission key this task was enqueued with. Immutable, so it stays true after the task
+     * finishes. Deliberately available only in task detail identity.
+     */
     concurrencyKey: string | null;
   };
-  /** Effective admission budget for this task's queue. Null unless the task is ready or active. */
+  /**
+   * The queue's admission budget as it stands now, not a snapshot of the policy this task ran
+   * under. Workhorse stores no per-task snapshot, so a finished task's line must be read as
+   * current queue context. Null when the queue has no policy.
+   */
   concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
   payload: unknown;
   progress: {

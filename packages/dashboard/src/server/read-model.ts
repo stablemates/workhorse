@@ -2133,7 +2133,7 @@ export async function readDashboardJobDetail(
   projectDurability: DashboardDurabilityProjector = () => null,
   queue?: Queue,
 ): Promise<DashboardJobDetail | null> {
-  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows, health] = await Promise.all([
+  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows] = await Promise.all([
     database.execute<{
       id: string;
       queue: string;
@@ -2256,15 +2256,41 @@ export async function readDashboardJobDetail(
        WHERE job_id = ${id}
       ORDER BY occurred_at, event_id
     `),
-    queue?.health() ?? null,
   ]);
 
   const job = jobRows.rows[0];
   if (!job) return null;
   const state = job.outcome_state ?? job.runtime_state ?? "unknown";
-  const policy = health?.concurrencyPolicies.policies.find(
+  const [currentPolicy, health] = queue
+    ? await Promise.all([
+        queue.concurrencyPolicies([job.queue]).then((policies) => policies[0] ?? null),
+        // Terminal detail drops live utilization entirely, so only tasks that can still become
+        // active need the bounded health aggregates beside their exact persisted policy.
+        job.runtime_state === null ? null : queue.health(),
+      ])
+    : [null, null];
+  const healthPolicy = health?.concurrencyPolicies.policies.find(
     (candidate) => candidate.queue === job.queue,
   );
+  // The ceiling comes from `concurrencyPolicies([queue])`, which reads this queue's row exactly.
+  // The counts beside it come from `health()`, which measures a bounded number of policies and
+  // skips this queue once a deployment has more. The two therefore disagree about what is known,
+  // and `utilizationKnown` records which half is trustworthy. When it is false the counts below
+  // are placeholders, zeroed rather than defaulted to the ceiling so that no view can present an
+  // unmeasured queue as an idle one with its whole budget free.
+  const concurrencyPolicy: DashboardConcurrencyPolicySummary | null = currentPolicy
+    ? {
+        namespace: currentPolicy.namespace,
+        maxActive: currentPolicy.maxActive,
+        utilizationKnown: healthPolicy !== undefined,
+        active: healthPolicy?.active ?? 0,
+        available: healthPolicy?.available ?? 0,
+        blockedReady: healthPolicy?.blockedReady ?? 0,
+        maxActivePerKey: currentPolicy.maxActivePerKey,
+        saturatedKeys: healthPolicy?.saturatedKeys ?? 0,
+        highestKeyActive: healthPolicy?.highestKeyActive ?? 0,
+      }
+    : null;
   return {
     identity: {
       id: job.id,
@@ -2279,10 +2305,10 @@ export async function readDashboardJobDetail(
         job.execution_timeout_ms === null ? null : Number(job.execution_timeout_ms),
       concurrencyKey: job.concurrency_key,
     },
-    concurrencyPolicy:
-      (job.runtime_state === "ready" || job.runtime_state === "active") && policy
-        ? dashboardConcurrencyPolicySummary(policy)
-        : null,
+    // The queue's policy as it stands now, sent for every task including finished ones. Workhorse
+    // stores no per-task policy snapshot, so the drawer labels this as current rather than
+    // historical; only `identity.concurrencyKey` is a fact about the run itself.
+    concurrencyPolicy,
     payload: job.payload,
     progress:
       job.progress_revision === null
