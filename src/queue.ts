@@ -1439,14 +1439,6 @@ export class Queue {
       ],
     );
     const paused = result.rows[0]!.paused;
-    logDebug("workhorse.worker.registered", "Worker registration refreshed", {
-      "workhorse.queue.name": registration.queue ?? this.defaultQueue,
-      "workhorse.worker.id": registration.workerId,
-      "workhorse.worker.concurrency": registration.concurrency,
-      "workhorse.worker.active_slots": registration.activeSlots,
-      "workhorse.worker.draining": registration.draining,
-      "workhorse.worker.paused": paused,
-    });
     return { paused };
   }
 
@@ -1666,11 +1658,8 @@ export class Queue {
             "workhorse.maintenance.rows_affected": result.rowsAffected,
             "workhorse.maintenance.skipped_lock": result.skippedLock,
           };
-          if (result.rowsAffected > 0 || result.error !== null) {
-            logInfo("workhorse.maintenance.completed", "Maintenance phase completed", attributes);
-          } else {
-            logDebug("workhorse.maintenance.completed", "Maintenance phase completed", attributes);
-          }
+          if (result.rowsAffected === 0 && result.error === null) continue;
+          logInfo("workhorse.maintenance.completed", "Maintenance phase completed", attributes);
         }
         return results;
       },

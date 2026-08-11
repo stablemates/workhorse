@@ -22,9 +22,27 @@ Info logs describe operator-relevant state changes, including worker lifecycle, 
 cancellation, recovery, maintenance, and schedule changes. Debug logs describe high-volume details,
 including claims, heartbeats, handler boundaries, checkpoints, and progress.
 
+Routine maintenance that finds nothing to change stays in metrics instead of logs. This includes
+expected lock contention between workers, so a maintenance log points to changed rows or a failed
+phase rather than an idle poll.
+
 Logs carry stable event names and structured job, queue, worker, and schedule identifiers. They do
 not carry payloads, results, error messages, idempotency keys, or saved durable values. A shared
 backend therefore does not receive another copy of the application data with every record.
+
+The dashboard host also emits a structured log after each matched oRPC procedure returns.
+Successful requests use debug severity, slow requests use warning, and failed requests use error,
+so routine polling stays available without crowding higher-severity views.
+
+Each request record names the procedure, HTTP status, and duration. It omits inputs, outputs, error
+details, headers, and query values, so an operator action remains traceable without copying
+application data into the logging backend. Assets and application pages do not produce these
+records.
+
+The demo writes the same structured records to separate rotating files for its server and worker.
+Plain demo mode keeps those local files without exporting traces or metrics. The telemetry demo
+adds OTLP export to the same pipeline, so comparing a local record with its backend copy does not
+require two logging formats.
 
 ## Export queue pressure
 

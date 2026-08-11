@@ -43,7 +43,13 @@ Prerequisites are Node.js 22+, pnpm 10+, workspace dependencies installed with `
 PostgreSQL 15+ with the local `workhorse` role described in the root README. No PostgreSQL extensions are
 required; recurring work runs through the workers themselves.
 
-The observability demo exports OpenTelemetry logs, traces, and metrics to a local SigNoz collector. Install the
+Every demo run writes structured OpenTelemetry logs to
+`logs/<environment>/workhorse-demo-server.ndjson` and
+`logs/<environment>/workhorse-demo-worker.ndjson`. Each file rotates at 10 MiB and retains five
+archives. Set `WORKHORSE_DEMO_LOG_MAX_BYTES`, `WORKHORSE_DEMO_LOG_ARCHIVES`, or
+`WORKHORSE_DEMO_LOG_DIRECTORY` to override those defaults.
+
+The observability demo additionally exports logs, traces, and metrics to a local SigNoz collector. Install the
 supported SigNoz Foundry CLI, then start SigNoz and the instrumented demo from the repository root:
 
 ```bash
@@ -58,9 +64,9 @@ handler activity with its trace. The server owns the database-wide metric observ
 gauges are not duplicated by the worker process. `signoz:up` also reconciles the version-controlled
 **Workhorse Operations**, **Workhorse Reliability**, and **Workhorse jobs** dashboards. Run
 `pnpm signoz:dashboards` to apply dashboard changes without restarting SigNoz. Run
-`pnpm signoz:down` to stop the containers without deleting their volumes. Plain `pnpm demo` does not
-initialize OpenTelemetry or require SigNoz. The loopback-only local stack uses SigNoz impersonation mode,
-so any process on this machine has administrator access to it.
+`pnpm signoz:down` to stop the containers without deleting their volumes. Plain `pnpm demo` installs only
+the local log pipeline and does not require SigNoz. The loopback-only local stack uses SigNoz impersonation
+mode, so any process on this machine has administrator access to it.
 
 From the repository root, run the complete demo with one command:
 

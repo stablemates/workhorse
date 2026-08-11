@@ -241,6 +241,9 @@ export class Worker {
   private readonly instanceId = randomUUID();
   private lastRegistryRefreshAt = Number.NEGATIVE_INFINITY;
   private registered = false;
+  private loggedRegistrationState:
+    | { activeSlots: number; draining: boolean; paused: boolean }
+    | undefined;
   private lastClaimAt = Number.NEGATIVE_INFINITY;
   private previousPassWorked = false;
   private readonly latestMaintenance = new Map<string, WorkerMaintenanceTelemetry>();
@@ -872,6 +875,23 @@ export class Worker {
       this.options.onRegistrationError?.(error);
       return;
     }
+    const registrationState = { activeSlots: this.activeSlots, draining: this.draining, paused };
+    if (
+      this.loggedRegistrationState === undefined ||
+      this.loggedRegistrationState.activeSlots !== registrationState.activeSlots ||
+      this.loggedRegistrationState.draining !== registrationState.draining ||
+      this.loggedRegistrationState.paused !== registrationState.paused
+    ) {
+      logDebug("workhorse.worker.registered", "Worker registration changed", {
+        "workhorse.queue.name": this.queueName,
+        "workhorse.worker.id": this.workerId,
+        "workhorse.worker.concurrency": this.concurrency,
+        "workhorse.worker.active_slots": registrationState.activeSlots,
+        "workhorse.worker.draining": registrationState.draining,
+        "workhorse.worker.paused": registrationState.paused,
+      });
+      this.loggedRegistrationState = registrationState;
+    }
     this.registered = true;
     this.remotelyPaused = paused;
     // Resuming must not wait for the next idle poll deadline, exactly like a local resume().
@@ -896,6 +916,7 @@ export class Worker {
   private async deregister(): Promise<void> {
     if (!this.registered) return;
     this.registered = false;
+    this.loggedRegistrationState = undefined;
     try {
       await this.queue.deregisterWorker(this.workerId);
     } catch {
