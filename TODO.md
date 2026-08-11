@@ -327,15 +327,15 @@ hint, and polling stays the source of truth.
 - [ ] Add starvation controls or document strict-priority starvation explicitly.
 - [ ] Benchmark index size and claim latency under mixed priorities.
 
-### [ ] P1-06 Queue concurrency policies
+### [x] P1-06 Queue concurrency policies
 
 **Depends on:** P0-03
 
-- [ ] Limit active jobs by queue and optionally by an application-defined concurrency key.
-- [ ] Make admission atomic across competing workers.
-- [ ] Recover capacity automatically after lease expiry or worker loss.
-- [ ] Expose blocked-ready depth and policy utilization.
-- [ ] Prove that policy checks do not turn claims into lifetime-table scans.
+- [x] Limit active jobs by queue and optionally by an application-defined concurrency key.
+- [x] Make admission atomic across competing workers.
+- [x] Recover capacity automatically after lease expiry or worker loss.
+- [x] Expose blocked-ready depth and policy utilization.
+- [x] Prove that policy checks do not turn claims into lifetime-table scans.
 
 ### [ ] P1-07 Rate limiting
 

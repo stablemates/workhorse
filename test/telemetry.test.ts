@@ -82,7 +82,7 @@ describe("OpenTelemetry", () => {
             ] as never[],
           };
         }
-        if (sql.includes("claim_v1")) {
+        if (sql.includes("claim_v2")) {
           return {
             rows: [
               {
@@ -188,7 +188,7 @@ describe("OpenTelemetry", () => {
         ) {
           return { rows: [] };
         }
-        if (sql.includes("claim_v1")) {
+        if (sql.includes("claim_v2")) {
           if (claimed) return { rows: [] };
           claimed = true;
           return {
@@ -312,7 +312,7 @@ describe("OpenTelemetry", () => {
         ) {
           return { rows: [] };
         }
-        if (sql.includes("claim_v1")) {
+        if (sql.includes("claim_v2")) {
           if (claimed) return { rows: [] };
           claimed = true;
           return {
@@ -496,6 +496,9 @@ describe("OpenTelemetry", () => {
           scheduledDepth: 3,
           activeLeases: 2,
           oldestReadyAgeMs: 1_250,
+          concurrencyLimit: 5,
+          concurrencyActive: 2,
+          blockedReadyDepth: 4,
         },
         {
           queue: "billing",
@@ -503,6 +506,9 @@ describe("OpenTelemetry", () => {
           scheduledDepth: 0,
           activeLeases: 4,
           oldestReadyAgeMs: 250,
+          concurrencyLimit: null,
+          concurrencyActive: 0,
+          blockedReadyDepth: 0,
         },
       ]),
     });
@@ -517,6 +523,15 @@ describe("OpenTelemetry", () => {
     const depth = metricsData.find((metric) => metric.descriptor.name === "workhorse.queue.depth");
     const age = metricsData.find(
       (metric) => metric.descriptor.name === "workhorse.queue.oldest_ready_age",
+    );
+    const concurrencyLimit = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.concurrency.limit",
+    );
+    const concurrencyActive = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.concurrency.active",
+    );
+    const concurrencyBlocked = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.concurrency.blocked_ready",
     );
     expect(metricsData.map((metric) => metric.descriptor.name)).toContain("workhorse.queue.depth");
     expect(depth?.dataPoints).toEqual(
@@ -538,6 +553,24 @@ describe("OpenTelemetry", () => {
     expect(age?.dataPoints).toContainEqual(
       expect.objectContaining({
         value: 1_250,
+        attributes: { "workhorse.queue.name": "mail" },
+      }),
+    );
+    expect(concurrencyLimit?.dataPoints).toContainEqual(
+      expect.objectContaining({
+        value: 5,
+        attributes: { "workhorse.queue.name": "mail" },
+      }),
+    );
+    expect(concurrencyActive?.dataPoints).toContainEqual(
+      expect.objectContaining({
+        value: 2,
+        attributes: { "workhorse.queue.name": "mail" },
+      }),
+    );
+    expect(concurrencyBlocked?.dataPoints).toContainEqual(
+      expect.objectContaining({
+        value: 4,
         attributes: { "workhorse.queue.name": "mail" },
       }),
     );

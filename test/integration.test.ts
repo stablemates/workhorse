@@ -122,7 +122,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
     workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.queue_control, workhorse.worker_registry, workhorse.job_wait, workhorse.job_checkpoint,
+    workhorse.concurrency_policy, workhorse.queue_control, workhorse.worker_registry,
+    workhorse.job_wait, workhorse.job_checkpoint,
     workhorse.enqueue_idempotency, workhorse.job_redrive, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job_stat_bucket, workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query(`UPDATE workhorse.job_stat_state SET
@@ -418,11 +419,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v21 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v22 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(21);
+    expect(version.rows[0]?.version).toBe(22);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -685,6 +686,36 @@ describe("live-runtime queue protocol", () => {
           AND indexdef ILIKE '%failed%'`,
     );
     expect(dispatchIndexes.rows).toEqual([]);
+  });
+
+  it("preserves concurrency keys through redrive and operator projections", async () => {
+    const queueName = `keyed-redrive-${randomUUID()}`;
+    const sourceId = await queue.enqueue(
+      "keyed-redrive",
+      { source: true },
+      { queue: queueName, concurrencyKey: "tenant-redrive", maxAttempts: 1 },
+    );
+    const claimed = await queue.claim("keyed-redrive-worker", { queue: queueName });
+    expect(claimed?.id).toBe(sourceId);
+    await queue.fail(claimed!, "keyed-redrive-worker", new Error("failed"));
+
+    const redrive = await queue.redrive(sourceId, {
+      requestedBy: "test",
+      reason: "verify concurrency key propagation",
+      requestId: `keyed-redrive-${randomUUID()}`,
+    });
+    await expect(queue.getJob(redrive.targetJobId!)).resolves.toMatchObject({
+      concurrencyKey: "tenant-redrive",
+    });
+    await expect(queue.listDeadLetters({ queue: queueName })).resolves.toMatchObject({
+      items: [{ jobId: sourceId, concurrencyKey: "tenant-redrive" }],
+    });
+    await expect(queue.listJobs({ queue: queueName })).resolves.toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: sourceId, concurrencyKey: "tenant-redrive" }),
+        expect.objectContaining({ id: redrive.targetJobId, concurrencyKey: "tenant-redrive" }),
+      ]),
+    });
   });
 
   it("redrives once with immutable source evidence, exact copy semantics, audit, replay, and safe conflict", async () => {
@@ -2194,7 +2225,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(21);
+    expect(health.schemaVersion).toBe(22);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2202,6 +2233,31 @@ describe("live-runtime queue protocol", () => {
       succeeded: 0,
       failed: 0,
       canceled: 1,
+    });
+  });
+
+  it("propagates concurrency keys from recurring schedules into fired jobs", async () => {
+    const namespace = `keyed-schedule-${randomUUID()}`;
+    await queue.syncSchedules(namespace, [
+      {
+        name: "keyed",
+        schedule: "0 * * * *",
+        job: {
+          type: "scheduled-keyed",
+          payload: { scheduled: true },
+          concurrencyKey: "tenant-scheduled",
+        },
+      },
+    ]);
+    const stored = (await queue.schedules([namespace]))[0]!;
+    const jobId = await queue.fireSchedule(
+      namespace,
+      stored.name,
+      stored.revision,
+      new Date("2026-08-11T03:00:00Z"),
+    );
+    await expect(queue.getJob(jobId!)).resolves.toMatchObject({
+      concurrencyKey: "tenant-scheduled",
     });
   });
 
@@ -2914,7 +2970,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v21 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v22 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -3149,6 +3205,23 @@ describe("live-runtime queue protocol", () => {
     expect(
       (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0],
     ).toEqual({ count: 1 });
+  });
+
+  it("treats the concurrency key as material enqueue identity", async () => {
+    const idempotency = { key: "keyed-concurrency", scope: "tenant", ttlMs: 60_000 };
+    const first = await queue.enqueue(
+      "keyed",
+      { version: 1 },
+      { concurrencyKey: "tenant-a", idempotency },
+    );
+
+    await expect(
+      queue.enqueue("keyed", { version: 1 }, { concurrencyKey: "tenant-a", idempotency }),
+    ).resolves.toBe(first);
+    await expect(
+      queue.enqueue("keyed", { version: 1 }, { concurrencyKey: "tenant-b", idempotency }),
+    ).rejects.toMatchObject({ conflictingFields: ["concurrencyKey"] });
+    await expect(queue.getJob(first)).resolves.toMatchObject({ concurrencyKey: "tenant-a" });
   });
 
   it("treats tags as a set for replay while preserving the first job's stored tag order", async () => {
@@ -4966,6 +5039,37 @@ describe("live-runtime queue protocol", () => {
     }
   });
 
+  it("wakes a policy-blocked worker when another process releases capacity", async () => {
+    const queueName = `capacity-wake-${randomUUID()}`;
+    const policyQueue = new Queue(pool, queueName);
+    await policyQueue.syncConcurrencyPolicies("test", [{ queue: queueName, maxActive: 1 }]);
+    const firstId = await policyQueue.enqueue("capacity-wake", { ordinal: 1 });
+    const secondId = await policyQueue.enqueue("capacity-wake", { ordinal: 2 });
+    const held = await policyQueue.claim("capacity-holder", { queue: queueName });
+    expect(held?.id).toBe(firstId);
+
+    const handled: string[] = [];
+    const worker = new Worker(policyQueue, {
+      workerId: "capacity-waiter",
+      pollMs: 15_000,
+      registryIntervalMs: 0,
+    }).handle("capacity-wake", (_payload, context) => {
+      handled.push(context.job.id);
+      return null;
+    });
+
+    const running = worker.run();
+    try {
+      await sleep(100);
+      expect(handled).toEqual([]);
+      await expect(policyQueue.complete(held!, "capacity-holder", null)).resolves.toBe(true);
+      await vi.waitFor(() => expect(handled).toEqual([secondId]), { timeout: 1_000 });
+    } finally {
+      worker.stop();
+      await running;
+    }
+  });
+
   it("latches a notification that arrives while an empty claim is in flight", async () => {
     const claimStarted = deferred();
     const releaseEmptyClaim = deferred();
@@ -5284,6 +5388,188 @@ describe("live-runtime queue protocol", () => {
     expect(await queue.complete(first!, "worker-a", { stale: true })).toBe(false);
     expect(await queue.complete(second!, "worker-b", { delivered: true })).toBe(true);
     expect((await queue.getJob<{ delivered: boolean }>(id))?.result).toEqual({ delivered: true });
+  });
+
+  it("enforces queue concurrency atomically across competing claims", async () => {
+    const queueName = `concurrency-total-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("test", [{ queue: queueName, maxActive: 1 }]);
+    const firstId = await queue.enqueue("limited", { ordinal: 1 }, { queue: queueName });
+    const secondId = await queue.enqueue("limited", { ordinal: 2 }, { queue: queueName });
+
+    const first = await queue.claim("total-worker-a", { queue: queueName });
+    expect(first?.id).toBe(firstId);
+    await expect(queue.claim("total-worker-b", { queue: queueName })).resolves.toBeNull();
+
+    await expect(queue.complete(first!, "total-worker-a", null)).resolves.toBe(true);
+    await expect(queue.claim("total-worker-b", { queue: queueName })).resolves.toMatchObject({
+      id: secondId,
+    });
+  });
+
+  it("serializes first policy activation against claims that already started", async () => {
+    const queueName = `concurrency-activation-${randomUUID()}`;
+    await queue.enqueue("limited", { ordinal: 1 }, { queue: queueName });
+    await queue.enqueue("limited", { ordinal: 2 }, { queue: queueName });
+    const deployment = await pool.connect();
+
+    try {
+      await deployment.query("BEGIN");
+      await deployment.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('workhorse:concurrency-policy:' || $1, 0))",
+        [queueName],
+      );
+      const claims = Promise.all([
+        queue.claim("activation-worker-a", { queue: queueName }),
+        queue.claim("activation-worker-b", { queue: queueName }),
+      ]);
+      await sleep(20);
+      await deployment.query(
+        "SELECT * FROM workhorse.sync_concurrency_policies_v1($1, $2::jsonb, true)",
+        ["activation-test", JSON.stringify([{ queue: queueName, maxActive: 1 }])],
+      );
+      await deployment.query("COMMIT");
+
+      const admitted = (await claims).filter((job) => job !== null);
+      expect(admitted).toHaveLength(1);
+      await expect(queue.claim("activation-worker-c", { queue: queueName })).resolves.toBeNull();
+    } finally {
+      await deployment.query("ROLLBACK").catch(() => undefined);
+      deployment.release();
+    }
+  });
+
+  it("serializes heartbeat lease renewal with policy admission", async () => {
+    const queueName = `concurrency-heartbeat-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("heartbeat-test", [{ queue: queueName, maxActive: 1 }]);
+    await queue.enqueue("limited", { ordinal: 1 }, { queue: queueName });
+    await queue.enqueue("limited", { ordinal: 2 }, { queue: queueName });
+    const held = await queue.claim("heartbeat-holder", { queue: queueName, leaseMs: 100 });
+    const heartbeat = await pool.connect();
+
+    try {
+      await heartbeat.query("BEGIN");
+      await expect(
+        heartbeat.query<{ status: string }>(
+          "SELECT workhorse.heartbeat_v2($1, $2, $3, 1000) AS status",
+          [held!.id, "heartbeat-holder", held!.fenceToken.toString()],
+        ),
+      ).resolves.toMatchObject({ rows: [{ status: "accepted" }] });
+      await sleep(120);
+
+      let settled = false;
+      const competing = queue
+        .claim("heartbeat-competitor", { queue: queueName })
+        .finally(() => (settled = true));
+      await sleep(20);
+      expect(settled).toBe(false);
+      await heartbeat.query("COMMIT");
+      await expect(competing).resolves.toBeNull();
+    } finally {
+      await heartbeat.query("ROLLBACK").catch(() => undefined);
+      heartbeat.release();
+    }
+  });
+
+  it("computes claim lease timestamps after waiting for policy locks", async () => {
+    const queueName = `concurrency-timestamp-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("timestamp-test", [{ queue: queueName, maxActive: 1 }]);
+    await queue.enqueue("limited", {}, { queue: queueName });
+    const blocker = await pool.connect();
+
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        "SELECT 1 FROM workhorse.concurrency_policy WHERE queue_name = $1 FOR UPDATE",
+        [queueName],
+      );
+      const claiming = queue.claim("timestamp-worker", { queue: queueName, leaseMs: 100 });
+      await sleep(120);
+      await blocker.query("COMMIT");
+
+      const claimed = await claiming;
+      expect(claimed).not.toBeNull();
+      expect(claimed!.leaseExpiresAt.getTime() - Date.now()).toBeGreaterThan(50);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
+  it("uses bounded work-conserving lookahead when the FIFO head key is saturated", async () => {
+    const queueName = `concurrency-key-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("test", [
+      { queue: queueName, maxActive: 3, maxActivePerKey: 1 },
+    ]);
+    const firstA = await queue.enqueue("keyed", {}, { queue: queueName, concurrencyKey: "a" });
+    await queue.enqueue("keyed", {}, { queue: queueName, concurrencyKey: "a" });
+    const firstB = await queue.enqueue("keyed", {}, { queue: queueName, concurrencyKey: "b" });
+
+    await expect(queue.claim("key-worker-a", { queue: queueName })).resolves.toMatchObject({
+      id: firstA,
+    });
+    await expect(queue.claim("key-worker-b", { queue: queueName })).resolves.toMatchObject({
+      id: firstB,
+    });
+    await expect(queue.claim("key-worker-c", { queue: queueName })).resolves.toBeNull();
+  });
+
+  it("restores dispatch capacity at lease expiry without promising mutual exclusion", async () => {
+    const queueName = `concurrency-expiry-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("test", [{ queue: queueName, maxActive: 1 }]);
+    await queue.enqueue("expiring", { ordinal: 1 }, { queue: queueName });
+    const secondId = await queue.enqueue("expiring", { ordinal: 2 }, { queue: queueName });
+
+    await expect(
+      queue.claim("expiry-worker-a", { queue: queueName, leaseMs: 100 }),
+    ).resolves.toMatchObject({ payload: { ordinal: 1 } });
+    await sleep(120);
+    await expect(queue.claim("expiry-worker-b", { queue: queueName })).resolves.toMatchObject({
+      id: secondId,
+    });
+  });
+
+  it("uses selective live-work indexes for concurrency admission checks", async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL enable_seqscan = off");
+
+      const activePlan = (
+        await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
+          SELECT count(*)
+            FROM workhorse.job_runtime active
+           WHERE active.state = 'active'
+             AND active.queue_name = 'concurrency-plan'
+             AND active.expires_at > clock_timestamp()`)
+      ).rows
+        .map((row) => row["QUERY PLAN"])
+        .join("\n");
+      expect(activePlan).toContain("job_runtime_active_queue_key_expiry_idx");
+
+      const readyPlan = (
+        await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
+          SELECT runtime.job_id, runtime.concurrency_key, runtime.sequence
+            FROM workhorse.job_runtime runtime
+            JOIN workhorse.job job ON job.id = runtime.job_id
+           WHERE runtime.state = 'ready'
+             AND runtime.queue_name = 'concurrency-plan'
+             AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
+             AND (job.execution_timeout_ms IS NULL
+               OR runtime.execution_used_ms < job.execution_timeout_ms)
+           ORDER BY runtime.sequence, runtime.job_id
+           LIMIT 100
+           FOR UPDATE OF runtime SKIP LOCKED`)
+      ).rows
+        .map((row) => row["QUERY PLAN"])
+        .join("\n");
+      expect(readyPlan).toContain("job_runtime_ready_idx");
+      expect(`${activePlan}\n${readyPlan}`).not.toMatch(
+        /job_outcome|job_event|attempt_history|job_query/,
+      );
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
   });
 
   it("terminally fails an exhausted expired attempt without retaining runtime", async () => {
@@ -6839,7 +7125,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(21);
+    expect(health.schemaVersion).toBe(22);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -6855,6 +7141,9 @@ describe("live-runtime queue protocol", () => {
         scheduledDepth: 2,
         activeLeases: 0,
         oldestReadyAgeMs: expect.any(Number),
+        concurrencyLimit: null,
+        concurrencyActive: 0,
+        blockedReadyDepth: 0,
       },
     ]);
   });
@@ -6933,6 +7222,100 @@ describe("live-runtime queue protocol", () => {
     await expect(
       pool.query("SELECT workhorse.prune_schedule_occurrences_v1(clock_timestamp(), 1000000)"),
     ).resolves.toMatchObject({ rows: [{ prune_schedule_occurrences_v1: 0 }] });
+  });
+
+  it("synchronizes queue-scoped concurrency policies as desired state", async () => {
+    const policies = await queue.syncConcurrencyPolicies("deployment-a", [
+      { queue: "mail", maxActive: 8, maxActivePerKey: 2 },
+      { queue: "reports", maxActive: 3 },
+    ]);
+    expect(policies).toEqual([
+      {
+        namespace: "deployment-a",
+        queue: "mail",
+        maxActive: 8,
+        maxActivePerKey: 2,
+        updatedAt: expect.any(Date),
+      },
+      {
+        namespace: "deployment-a",
+        queue: "reports",
+        maxActive: 3,
+        maxActivePerKey: null,
+        updatedAt: expect.any(Date),
+      },
+    ]);
+
+    await expect(
+      queue.syncConcurrencyPolicies("deployment-a", [
+        { queue: "mail", maxActive: 1, maxActivePerKey: 2 },
+      ]),
+    ).rejects.toThrow(/max_active_per_key/);
+    await expect(
+      queue.syncConcurrencyPolicies("deployment-b", [{ queue: "mail", maxActive: 4 }]),
+    ).rejects.toThrow(/owned by another namespace/);
+
+    await queue.syncConcurrencyPolicies("deployment-a", [{ queue: "mail", maxActive: 5 }]);
+    await expect(queue.concurrencyPolicies()).resolves.toMatchObject([
+      { queue: "mail", maxActive: 5, maxActivePerKey: null },
+    ]);
+  });
+
+  it("reports bounded concurrency utilization and blocked-ready depth through health", async () => {
+    const queueName = `health-concurrency-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("health-test", [
+      { queue: queueName, maxActive: 1, maxActivePerKey: 1 },
+    ]);
+    await queue.enqueue("health-concurrency", {}, { queue: queueName, concurrencyKey: "tenant" });
+    await queue.enqueue("health-concurrency", {}, { queue: queueName, concurrencyKey: "tenant" });
+    await queue.claim("health-concurrency-worker", { queue: queueName });
+
+    const health = await queue.health();
+    expect(health.concurrencyPolicies).toMatchObject({
+      capped: false,
+      policies: [
+        {
+          namespace: "health-test",
+          queue: queueName,
+          maxActive: 1,
+          active: 1,
+          available: 0,
+          blockedReady: 1,
+          maxActivePerKey: 1,
+          saturatedKeys: 1,
+          highestKeyActive: 1,
+        },
+      ],
+    });
+    await expect(queue.queueMetricSnapshot()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          queue: queueName,
+          concurrencyLimit: 1,
+          concurrencyActive: 1,
+          blockedReadyDepth: 1,
+        }),
+      ]),
+    );
+  });
+
+  it("excludes keyless capacity from the highest keyed utilization summary", async () => {
+    const queueName = `health-keyless-concurrency-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("health-keyless-test", [
+      { queue: queueName, maxActive: 3, maxActivePerKey: 2 },
+    ]);
+    await queue.enqueue("health-concurrency", {}, { queue: queueName });
+    await queue.enqueue("health-concurrency", {}, { queue: queueName });
+    await queue.enqueue("health-concurrency", {}, { queue: queueName, concurrencyKey: "tenant" });
+    await queue.claim("health-keyless-a", { queue: queueName });
+    await queue.claim("health-keyless-b", { queue: queueName });
+    await queue.claim("health-keyed", { queue: queueName });
+
+    expect((await queue.health()).concurrencyPolicies.policies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ queue: queueName, active: 3, highestKeyActive: 1 }),
+      ]),
+    );
   });
 
   it("preserves daily completion on identical retention policy sync and invalidates changed windows", async () => {

@@ -13,8 +13,8 @@ claim is its own database operation. Once the slots are full, or the queue has n
 it stops asking. Every running job gets its own heartbeat timer, its own abort signal, and
 its own final write, so they don't interfere with each other.
 
-Concurrency here is per worker. Two workers with concurrency 5 give you ten slots. There's
-no global rate limit or fair-share budget across processes.
+Concurrency here is per worker. More workers add more process slots. Use a
+[concurrency policy](240-concurrency-policies.md) when the fleet must share one durable budget.
 
 ## Waiting without constant polling
 
@@ -81,7 +81,7 @@ work to stop _durably_, pause the queue, not the worker.
 
 - [020-leases-and-fences.md](020-leases-and-fences.md) — what happens when a worker dies
 - [120-cancellation.md](120-cancellation.md) — the other cooperative stop
-- [220-schedules.md](220-schedules.md) — workers also evaluate cron
+- [240-concurrency-policies.md](240-concurrency-policies.md) — limit dispatch across workers
 
 ---
 

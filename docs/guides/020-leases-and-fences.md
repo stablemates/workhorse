@@ -1,11 +1,11 @@
 # Who owns a job right now: leases and fence tokens
 
-Two workers must never run the same job at the same time. This guide explains the mechanism
-that guarantees it, because almost every other rule in Workhorse depends on it.
+Only the current owner may commit a job transition. This guide explains the mechanism that
+guarantees it, because almost every other rule in Workhorse depends on it.
 
 ## Claiming a job
 
-When a worker is free, it calls `claim_v1`. That picks the oldest ready job in the queue and
+When a worker is free, it calls `claim_v2`. That picks an admissible ready job in the queue and
 stamps the `job_runtime` row with three things:
 
 - **the worker's id** — who owns it
