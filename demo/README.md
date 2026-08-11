@@ -33,11 +33,12 @@ packaged bundle through that same host, so the two differ only in where modules 
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
-The demo installs schema version 17, including daily retained history, split scheduled maintenance,
+The demo installs schema version 22, including daily retained history, split scheduled maintenance,
 a dedicated operator query projection with bounded payload controls and merged timelines,
 scoped enqueue idempotency, cooperative cancellation, absolute deadlines, and per-attempt execution
-timeouts. One deterministic keyed seed exposes deduplication evidence without persisting or displaying
-the raw key. The operator menu also retains an explicit idempotent enqueue path.
+timeouts. PostgreSQL also owns a fleet-wide demo dispatch budget with a queue cap and a per-key cap.
+One deterministic keyed seed exposes deduplication evidence without persisting or displaying the raw
+key. The operator menu also retains an explicit idempotent enqueue path.
 
 Prerequisites are Node.js 22+, pnpm 10+, workspace dependencies installed with `pnpm install`, and
 PostgreSQL 15+ with the local `workhorse` role described in the root README. No PostgreSQL extensions are
@@ -89,7 +90,9 @@ operational features intentionally represented outside task rows.
 The earlier representative layer still seeds one successful transactional order, one named durable timer, fixed, exponential, and
 decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step
 durable pipelines, three intentionally persistent durable pipelines, one terminal failure, one future
-scheduled job, and three timing examples. The timing examples include a materialized expired deadline,
+scheduled job, three timing examples, and three long-running concurrency examples. Two long-running
+jobs share one customer key and serialize. The third uses another key and can overlap within the queue
+budget. The timing examples include a materialized expired deadline,
 an active handler that cooperatively reaches a one-second execution timeout, and a future scheduled task
 with a later absolute deadline plus a 90-second per-attempt budget. The durable pipelines cover order
 fulfillment, customer onboarding, and report publication.

@@ -22,7 +22,7 @@ export const RECURRING_JOB_TYPE = "demo.recurring";
 export const REPORT_JOB_TYPE = "demo.report";
 export const DEMO_QUEUE = "demo";
 export const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
-export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v1";
+export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v2";
 export const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 export const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKER_POLL_MS = 15_000;
@@ -65,10 +65,19 @@ export const DEMO_LONG_RUNNING_SEED_DELAY_MS = 10_000;
 export const DEMO_TIMING_TIMEOUT_MS = 1_000;
 export const DEMO_TIMING_HANDLER_MS = 5_000;
 export const DEMO_TIMING_POLICY_TIMEOUT_MS = 90_000;
+export const DEMO_CONCURRENCY_POLICY_NAMESPACE = "workhorse-demo";
+export const DEMO_CONCURRENCY_MAX_ACTIVE = 3;
+export const DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY = 1;
+/**
+ * Three long-running jobs make both policy levels visible.
+ *
+ * The first two share a customer key, so PostgreSQL admits them one at a time. The third uses a
+ * different key and can overlap while every active demo job still consumes the shared queue budget.
+ */
 export const DEMO_LONG_RUNNING_SEED_JOBS = [
-  { label: "archive-validation" },
-  { label: "partner-catalog-sync" },
-  { label: "quarterly-report-export" },
+  { label: "archive-validation", concurrencyKey: "customer-acme" },
+  { label: "partner-catalog-sync", concurrencyKey: "customer-acme" },
+  { label: "quarterly-report-export", concurrencyKey: "customer-globex" },
 ] as const;
 export const DEMO_DURABLE_STEP_MS = 2_000;
 export const DEMO_DURABLE_TIMER_WAIT_MS = 10_000;
