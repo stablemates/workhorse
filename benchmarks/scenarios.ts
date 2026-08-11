@@ -48,6 +48,7 @@ export const operationalScenarioNames = [
   "retention-pruning",
   "health-snapshot",
   "worker-concurrency",
+  "rate-limiting",
   "notification-dispatch",
   "telemetry-context",
 ] as const;
@@ -403,6 +404,24 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     ],
   },
   {
+    name: "rate-limiting",
+    purpose:
+      "Exercise atomic queue bursts, bounded throttling visibility, and PostgreSQL-time refill.",
+    invariants: [
+      "the configured burst admits exactly its token count across competing workers",
+      "ready work remains unclaimed while the queue bucket is empty",
+      "status reports throttled depth and a future eligibility timestamp",
+      "elapsed PostgreSQL time restores one start without a completion refund",
+    ],
+    metrics: [
+      "burstClaims",
+      "throttledReady",
+      "nextEligibilityDelayMs",
+      "refillWaitMs",
+      "refilledClaimMs",
+    ],
+  },
+  {
     name: "notification-dispatch",
     purpose:
       "Compare idle claim pressure and enqueue-to-claim latency between polling-only and notification-assisted workers.",
@@ -449,6 +468,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
   workhorse.job_redrive, workhorse.job_query,
+  workhorse.rate_limit_bucket, workhorse.rate_limit_policy, workhorse.concurrency_policy,
   workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
 ALTER SEQUENCE workhorse.ready_sequence_seq RESTART WITH 1;
@@ -3126,6 +3146,66 @@ async function workerConcurrency(
   return { name: "worker-concurrency", durationMs: 0, metrics, assertions };
 }
 
+async function rateLimiting(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const assertions: ScenarioAssertion[] = [];
+  const queue = new Queue(context.pool, context.queueName);
+  const intervalMs = 100;
+  const burst = 2;
+  await queue.syncRateLimitPolicies("benchmark", [
+    {
+      queue: context.queueName,
+      rate: { limit: 1, intervalMs, burst },
+    },
+  ]);
+  for (let ordinal = 0; ordinal < burst + 1; ordinal += 1) {
+    await queue.enqueue("rate-limiting", { ordinal });
+  }
+
+  const competing = await Promise.all([
+    queue.claim("rate-burst-a"),
+    queue.claim("rate-burst-b"),
+    queue.claim("rate-burst-c"),
+  ]);
+  const burstClaims = competing.filter((claim) => claim !== null).length;
+  const status = (await queue.rateLimitStatuses([context.queueName]))[0]!;
+  const nextEligibilityDelayMs = Math.max(
+    0,
+    (status.nextEligibleAt?.getTime() ?? Date.now()) - Date.now(),
+  );
+  recordInvariant(assertions, "burst admits exactly its capacity", burstClaims, burst);
+  recordInvariant(assertions, "empty bucket leaves one ready job", status.throttledReady, 1);
+  recordInvariant(
+    assertions,
+    "throttling reports future eligibility",
+    status.nextEligibleAt !== null,
+    true,
+  );
+
+  const refillStarted = context.now();
+  await context.sleep(intervalMs + 10);
+  const refillWaitMs = Math.max(0, context.now() - refillStarted);
+  const [refilled, refilledClaimMs] = await measured(context.now, () =>
+    queue.claim("rate-refilled"),
+  );
+  recordInvariant(assertions, "elapsed database time restores one start", refilled !== null, true);
+
+  return {
+    name: "rate-limiting",
+    durationMs: 0,
+    metrics: {
+      burstClaims,
+      throttledReady: status.throttledReady,
+      nextEligibilityDelayMs,
+      refillWaitMs,
+      refilledClaimMs,
+    },
+    assertions,
+  };
+}
+
 async function notificationDispatch(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
@@ -3381,6 +3461,7 @@ export const operationalScenarioImplementations: Readonly<
   "retention-pruning": retentionPruning,
   "health-snapshot": healthSnapshot,
   "worker-concurrency": workerConcurrency,
+  "rate-limiting": rateLimiting,
   "notification-dispatch": notificationDispatch,
   "telemetry-context": telemetryContext,
 };

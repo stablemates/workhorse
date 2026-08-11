@@ -9,6 +9,7 @@ import {
   installDemoSchema,
   seedDemoData,
   syncDemoConcurrencyPolicies,
+  syncDemoRateLimitPolicies,
   syncDemoSchedules,
 } from "./app.js";
 import { createDemoDatabase } from "./database.js";
@@ -49,9 +50,14 @@ await installSchema(pool);
 await installDemoSchema(database);
 await syncDemoSchedules(pool);
 await syncDemoConcurrencyPolicies(pool);
+await syncDemoRateLimitPolicies(pool);
 demoLogger.info(
   "workhorse.demo.schedules_synchronized",
   "Synchronized recurring demo schedules for worker-owned execution",
+);
+demoLogger.info(
+  "workhorse.demo.rate_limit_policies_synchronized",
+  "Synchronized demo start-rate policies",
 );
 demoLogger.info(
   "workhorse.demo.concurrency_policies_synchronized",

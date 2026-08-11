@@ -160,6 +160,7 @@ import {
   describeConcurrencyLimit,
   describeTaskConcurrency,
 } from "./concurrency-policy.js";
+import { describeRateLimit, describeRateThrottle, rateLimitCappedFootnote } from "./rate-limit.js";
 import { ThemeSchemeSwitch } from "./theme.js";
 
 const DashboardClientContext = createContext<DashboardClient | null>(null);
@@ -2825,14 +2826,14 @@ export function QueuesPage({
     <Stack gap="xl">
       <PageHeader
         title="Queues"
-        description="Pause new claims, compare task counts and fleet-wide limits, or clear tasks that have not started."
+        description="Pause new claims, compare concurrency and start-rate budgets, or clear tasks that have not started."
       />
       {data.queues.length === 0 ? (
         <EmptyState>No queue has accepted a task yet.</EmptyState>
       ) : (
         <Paper withBorder>
           <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1140}>
+            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1380}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Queue</Table.Th>
@@ -2858,6 +2859,24 @@ export function QueuesPage({
                       />
                     </Group>
                   </Table.Th>
+                  <Table.Th ta="right">
+                    <Group gap={4} justify="flex-end" wrap="nowrap">
+                      <span>Start rate</span>
+                      <HelpButton
+                        label="Start rate"
+                        help="A token bucket limits how quickly tasks start across the fleet. The sustained rate refills tokens continuously, while burst is the most idle capacity PostgreSQL retains."
+                      />
+                    </Group>
+                  </Table.Th>
+                  <Table.Th ta="right">
+                    <Group gap={4} justify="flex-end" wrap="nowrap">
+                      <span>Throttled</span>
+                      <HelpButton
+                        label="Throttled"
+                        help="Ready tasks waiting for a queue or per-key token. This is a bounded lower bound, and the detail shows the earliest database-calculated eligibility time."
+                      />
+                    </Group>
+                  </Table.Th>
                   <Table.Th ta="right">Succeeded</Table.Th>
                   <Table.Th ta="right">Failed</Table.Th>
                   <Table.Th ta="right">Actions</Table.Th>
@@ -2870,6 +2889,9 @@ export function QueuesPage({
                   const limit = describeConcurrencyLimit(policy);
                   const keys = describeConcurrencyKeys(policy);
                   const blocked = describeConcurrencyBlocked(policy);
+                  const ratePolicy = queue.rateLimitPolicy ?? null;
+                  const rate = describeRateLimit(ratePolicy);
+                  const throttled = describeRateThrottle(ratePolicy);
                   return (
                     <Table.Tr key={queue.queue}>
                       <Table.Td>
@@ -2926,6 +2948,27 @@ export function QueuesPage({
                           aria-label={`Blocked: ${blocked.title}`}
                         >
                           {blocked.label}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td ta="right">
+                        <Text size="sm" title={rate.title} aria-label={`Start rate: ${rate.title}`}>
+                          {rate.label}
+                        </Text>
+                        {rate.keyedLabel === null ? null : (
+                          <Text c="dimmed" size="xs">
+                            {rate.keyedLabel}
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td ta="right">
+                        <Text
+                          size="sm"
+                          c={throttled.throttling ? "yellow.8" : undefined}
+                          fw={throttled.throttling ? 650 : undefined}
+                          title={throttled.title}
+                          aria-label={`Throttled: ${throttled.title}`}
+                        >
+                          {throttled.label}
                         </Text>
                       </Table.Td>
                       <Table.Td
@@ -2988,6 +3031,11 @@ export function QueuesPage({
       {data.concurrencyPoliciesCapped ? (
         <Text c="dimmed" size="xs">
           {concurrencyCappedFootnote}
+        </Text>
+      ) : null}
+      {data.rateLimitPoliciesCapped ? (
+        <Text c="dimmed" size="xs">
+          {rateLimitCappedFootnote}
         </Text>
       ) : null}
     </Stack>
@@ -3212,10 +3260,10 @@ export function QueuePressure({
               <Table.Th ta="right">Active</Table.Th>
               <Table.Th ta="right">
                 <Group gap={4} justify="flex-end" wrap="nowrap">
-                  <span>Limit</span>
+                  <span>Admission</span>
                   <HelpButton
-                    label="Limit"
-                    help="A limit is a fleet-wide budget: it caps how many of this queue's tasks run at once across every worker sharing this database. Blocked ready tasks are counted from a bounded window, so they are a lower bound."
+                    label="Admission"
+                    help="Concurrency caps simultaneous active work, while a token bucket caps how quickly work starts. Blocked and throttled counts are bounded lower bounds."
                   />
                 </Group>
               </Table.Th>
@@ -3228,6 +3276,9 @@ export function QueuePressure({
             {data.queues.map((queue) => {
               const limit = describeConcurrencyLimit(queue.concurrencyPolicy);
               const blocked = describeConcurrencyBlocked(queue.concurrencyPolicy);
+              const ratePolicy = queue.rateLimitPolicy ?? null;
+              const rate = describeRateLimit(ratePolicy);
+              const throttled = describeRateThrottle(ratePolicy);
               return (
                 <Table.Tr
                   key={queue.queue}
@@ -3269,6 +3320,17 @@ export function QueuePressure({
                         {blocked.label} blocked
                       </Text>
                     ) : null}
+                    {ratePolicy === null ? null : (
+                      <Text
+                        c={throttled.throttling ? "yellow.8" : "dimmed"}
+                        size="xs"
+                        fw={throttled.throttling ? 650 : undefined}
+                        title={throttled.title}
+                      >
+                        {rate.label}
+                        {throttled.throttling ? ` · ${throttled.label} throttled` : ""}
+                      </Text>
+                    )}
                   </Table.Td>
                   <Table.Td ta="right">{queue.retrying}</Table.Td>
                   <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
@@ -3282,6 +3344,11 @@ export function QueuePressure({
       {data.concurrencyPoliciesCapped ? (
         <Text c="dimmed" size="xs" px="md" pb="md">
           {concurrencyCappedFootnote}
+        </Text>
+      ) : null}
+      {data.rateLimitPoliciesCapped ? (
+        <Text c="dimmed" size="xs" px="md" pb="md">
+          {rateLimitCappedFootnote}
         </Text>
       ) : null}
     </Paper>

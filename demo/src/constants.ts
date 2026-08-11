@@ -68,6 +68,18 @@ export const DEMO_TIMING_POLICY_TIMEOUT_MS = 90_000;
 export const DEMO_CONCURRENCY_POLICY_NAMESPACE = "workhorse-demo";
 export const DEMO_CONCURRENCY_MAX_ACTIVE = 3;
 export const DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY = 1;
+export const DEMO_RATE_LIMIT_QUEUE = "partner-api";
+export const DEMO_RATE_LIMIT_POLICY_NAMESPACE = "workhorse-demo-rate-limits";
+export const DEMO_RATE_LIMIT_SEED_NAME = "rate-limit-dashboard-v1";
+export const DEMO_RATE_LIMIT = { limit: 2, intervalMs: 60 * 60_000, burst: 2 } as const;
+export const DEMO_RATE_LIMIT_PER_KEY = { limit: 1, intervalMs: 60 * 60_000, burst: 1 } as const;
+export const DEMO_RATE_LIMIT_SEED_JOBS = [
+  { label: "acme-catalog-page-1", concurrencyKey: "customer-acme" },
+  { label: "acme-catalog-page-2", concurrencyKey: "customer-acme" },
+  { label: "acme-catalog-page-3", concurrencyKey: "customer-acme" },
+  { label: "globex-catalog-page-1", concurrencyKey: "customer-globex" },
+  { label: "globex-catalog-page-2", concurrencyKey: "customer-globex" },
+] as const;
 /**
  * Three long-running jobs make both policy levels visible.
  *

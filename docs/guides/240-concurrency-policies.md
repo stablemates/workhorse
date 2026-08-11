@@ -53,7 +53,7 @@ Nothing records the policy a job ran under. A job keeps the `concurrencyKey` it 
 ## Next
 
 - [020-leases-and-fences.md](020-leases-and-fences.md) — why capacity can return safely after expiry
-- [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — how accepted job identity remains stable
+- [250-rate-limits.md](250-rate-limits.md) — how quickly new work may begin
 - [310-workers.md](310-workers.md) — how process-local slots differ from fleet-wide admission
 
 ---
