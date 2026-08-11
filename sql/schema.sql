@@ -281,6 +281,8 @@ CREATE TABLE IF NOT EXISTS workhorse.rate_limit_bucket (
     (bucket_scope = 'queue' AND bucket_key = '') OR bucket_scope = 'key'
   )
 );
+CREATE INDEX IF NOT EXISTS rate_limit_bucket_queue_refill_idx
+  ON workhorse.rate_limit_bucket(queue_name, bucket_scope, refilled_at);
 
 -- Durable worker fleet registration.
 --
@@ -2151,14 +2153,23 @@ BEGIN
   IF v_missing THEN
     allowed := true; tokens := NULL; next_eligible_at := NULL; RETURN NEXT; RETURN;
   END IF;
-  INSERT INTO workhorse.rate_limit_bucket(
-    queue_name, bucket_scope, bucket_key, tokens, refilled_at
-  ) VALUES (p_queue_name, p_scope, p_bucket_key, p_burst, p_now)
-  ON CONFLICT DO NOTHING;
-  SELECT * INTO STRICT v_bucket FROM workhorse.rate_limit_bucket bucket
+  SELECT * INTO v_bucket FROM workhorse.rate_limit_bucket bucket
    WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = p_scope
      AND bucket.bucket_key = p_bucket_key
    FOR UPDATE;
+  IF NOT FOUND THEN
+    IF NOT p_consume THEN
+      allowed := true; tokens := p_burst; next_eligible_at := NULL; RETURN NEXT; RETURN;
+    END IF;
+    INSERT INTO workhorse.rate_limit_bucket(
+      queue_name, bucket_scope, bucket_key, tokens, refilled_at
+    ) VALUES (p_queue_name, p_scope, p_bucket_key, p_burst, p_now)
+    ON CONFLICT DO NOTHING;
+    SELECT * INTO STRICT v_bucket FROM workhorse.rate_limit_bucket bucket
+     WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = p_scope
+       AND bucket.bucket_key = p_bucket_key
+     FOR UPDATE;
+  END IF;
   v_tokens := LEAST(
     p_burst::numeric,
     v_bucket.tokens + GREATEST(
@@ -2172,10 +2183,12 @@ BEGIN
   next_eligible_at := CASE WHEN allowed THEN p_now ELSE p_now + make_interval(
     secs => CEIL((1 - v_tokens) * p_interval_ms::numeric / p_limit::numeric)::double precision / 1000
   ) END;
-  UPDATE workhorse.rate_limit_bucket bucket
-     SET tokens = v_tokens, refilled_at = p_now
-   WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = p_scope
-     AND bucket.bucket_key = p_bucket_key;
+  IF p_consume THEN
+    UPDATE workhorse.rate_limit_bucket bucket
+       SET tokens = v_tokens, refilled_at = p_now
+     WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = p_scope
+       AND bucket.bucket_key = p_bucket_key;
+  END IF;
   RETURN NEXT;
 END;
 $$;
@@ -3483,6 +3496,28 @@ BEGIN
    FOR UPDATE;
   v_now := clock_timestamp();
   v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
+  WITH oldest_key_buckets AS MATERIALIZED (
+    SELECT bucket.bucket_key, bucket.tokens, bucket.refilled_at
+      FROM workhorse.rate_limit_bucket bucket
+     WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'key'
+     ORDER BY bucket.refilled_at, bucket.bucket_key
+     FOR UPDATE SKIP LOCKED
+     LIMIT 100
+  ), full_key_buckets AS (
+    SELECT oldest.bucket_key
+      FROM oldest_key_buckets oldest
+     WHERE v_rate_policy.per_key_limit IS NULL OR LEAST(
+       v_rate_policy.per_key_burst::numeric,
+       oldest.tokens + GREATEST(
+         0::numeric,
+         extract(epoch FROM v_now - oldest.refilled_at) * 1000
+       ) * v_rate_policy.per_key_limit::numeric / v_rate_policy.per_key_interval_ms::numeric
+     ) >= v_rate_policy.per_key_burst
+  )
+  DELETE FROM workhorse.rate_limit_bucket bucket
+   USING full_key_buckets refilled
+   WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = 'key'
+     AND bucket.bucket_key = refilled.bucket_key;
   IF v_policy.queue_name IS NOT NULL THEN
     SELECT count(*)::integer INTO v_active
       FROM workhorse.job_runtime active

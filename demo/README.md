@@ -121,22 +121,24 @@ application shell keeps the header and responsive sidebar in place while browser
 `/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
 the `filter` query parameter, with pagination persisted as `page`.
 
-The demo runs **one** worker process hosting **two** workers, one with three execution slots and one
-strictly serial. They therefore share a hostname and pid and differ only in their generated identity
-— which is exactly why the default id carries a random suffix as well as host and pid. A production
-deployment would more often run one worker per replica; the demo packs two into a process so the
-fleet view shows heterogeneous capacity without needing two deployments.
+The demo runs **one** worker process hosting **three** workers. Two serve the default queue, one with
+three execution slots and one strictly serial. A third serial worker serves `partner-api`, so its
+backlog drains only when PostgreSQL refills the displayed rate tokens. They share a hostname and pid
+and differ only in their generated identity. A production deployment would more often run one worker
+per replica; the demo packs them into one process so the fleet view shows both heterogeneous capacity
+and queue ownership without extra deployments.
 
-Neither worker is **named**. They take the same generated
+None of the workers is **named**. They take the same generated
 `<hostname>-<pid>-<random>` identity any deployment gets by default, so the dashboard has to
 discover the fleet from PostgreSQL rather than be told about it in advance. The mount passes no
 declared worker list at all. Worker status is explicit: `busy` owns an active lease,
 `idle` is a registered worker refreshing its registration with no current work, `recent` completed an
 attempt during the bounded five-minute observation window without a live registration, and `offline` is
 a declared worker that has stopped refreshing. The global header shows connection state and supports an
-explicit refresh. Both workers use a 15-second idle polling delay by default; set
+explicit refresh. All workers use a 15-second idle polling delay by default; set
 `WORKHORSE_WORKER_POLL_MS`, or pass `workerPollMs` to `createDemoApplication` for the in-process
-topology. Mantine follows the browser's preferred light or dark color scheme.
+topology. Pass `rateLimitWorker: true` with in-process workers to include the `partner-api` worker.
+Mantine follows the browser's preferred light or dark color scheme.
 
 Pausing a worker from the dashboard writes to `workhorse.worker_registry` rather than calling a method
 on a local object, so it reaches the worker process. Like cancellation it is cooperative: claiming stops

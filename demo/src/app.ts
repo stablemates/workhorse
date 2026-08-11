@@ -103,6 +103,8 @@ export interface CreateDemoApplicationOptions {
    * remain supported for small applications and are what the integration tests exercise.
    */
   workers?: boolean;
+  /** Add the serial partner queue worker that drains the rate-limit showcase as tokens refill. */
+  rateLimitWorker?: boolean;
   /**
    * Serve the dashboard from source with hot reload instead of the packaged bundle.
    *
@@ -994,34 +996,48 @@ export function createDemoApplication(
     close: options.close,
   });
   const runWorkersInProcess = options.workers !== false;
+  const workerDefinition = (
+    queue: string,
+    concurrency: number,
+    scheduleNamespaces: readonly string[],
+  ) => ({
+    options: {
+      queue,
+      // Unnamed, exactly like the dedicated worker process: identity is generated per instance.
+      scheduleNamespaces,
+      pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
+      // Declared once at startup. The demo deliberately offers no runtime concurrency control.
+      concurrency,
+      maintenanceIntervalMs,
+      maintenanceTaskPollMs,
+      registryIntervalMs: options.registryIntervalMs ?? DEMO_REGISTRY_INTERVAL_MS,
+      // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
+      // Returning undefined omits the worker override and lets SQL select the stored policy.
+      retryDelayMs: (attempt: number, job: { retryPolicy: unknown }) =>
+        job.retryPolicy === null ? attempt * 100 : undefined,
+    },
+    configure(worker: Parameters<typeof registerDemoHandlers>[0]) {
+      registerDemoHandlers(worker, {
+        database,
+        queue: adapter.queue,
+        durableStepMs,
+        durableTimerWaitMs,
+        longRunningJobMs: options.longRunningJobMs,
+        onDurableStepOperation: options.onDurableStepOperation,
+        onDurableTimerOperation: options.onDurableTimerOperation,
+      });
+    },
+  });
+  const workerDefinitions = runWorkersInProcess
+    ? [
+        ...DEMO_WORKER_CONCURRENCY.map((concurrency) =>
+          workerDefinition(DEMO_QUEUE, concurrency, [DEMO_SCHEDULE_NAMESPACE]),
+        ),
+        ...(options.rateLimitWorker ? [workerDefinition(DEMO_RATE_LIMIT_QUEUE, 1, [])] : []),
+      ]
+    : [];
   const workhorse = new HonoWorkhorse(adapter, {
-    workers: (runWorkersInProcess ? DEMO_WORKER_CONCURRENCY : []).map((concurrency) => ({
-      options: {
-        queue: DEMO_QUEUE,
-        // Unnamed, exactly like the dedicated worker process: identity is generated per instance.
-        scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
-        pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
-        // Declared once at startup. The demo deliberately offers no runtime concurrency control.
-        concurrency,
-        maintenanceIntervalMs,
-        maintenanceTaskPollMs,
-        registryIntervalMs: options.registryIntervalMs ?? DEMO_REGISTRY_INTERVAL_MS,
-        // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
-        // Returning undefined omits the worker override and lets SQL select the stored policy.
-        retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
-      },
-      configure(worker) {
-        registerDemoHandlers(worker, {
-          database,
-          queue: adapter.queue,
-          durableStepMs,
-          durableTimerWaitMs,
-          longRunningJobMs: options.longRunningJobMs,
-          onDurableStepOperation: options.onDurableStepOperation,
-          onDurableTimerOperation: options.onDurableTimerOperation,
-        });
-      },
-    })),
+    workers: workerDefinitions,
     onWorkerError(error) {
       options.onWorkerError?.(error);
     },

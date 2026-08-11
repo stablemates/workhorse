@@ -360,6 +360,7 @@ Policy capacity counts only active rows whose lease has not expired. The policy 
 One `rate_limit_policy` row per queue defines a PostgreSQL-owned token bucket. The queue bucket
 requires `rate_limit`, `rate_interval_ms`, and `rate_burst`. Each accepts bounded positive integers:
 limits and bursts from 1 through 1,000,000, and intervals from 1 through 86,400,000 milliseconds.
+`queue_name` and `namespace` each accept 1 through 256 UTF-8 bytes.
 Nullable `per_key_limit`, `per_key_interval_ms`, and `per_key_burst` either appear together or remain
 null. A keyed policy gives every non-null `job.concurrency_key` an independent bucket within its
 queue. Keyless jobs consume only the queue bucket.
@@ -376,14 +377,20 @@ returns persisted definitions without an implicit result cap.
 to zero, adds `elapsed_ms * limit / interval_ms`, and caps the result at `burst`. One admitted start
 consumes one token in the claim transaction. Completion, failure, cancellation, durable suspension,
 and lease expiry never refund a token. Process clock skew cannot create capacity because application
-time never enters refill arithmetic. Deleting a policy cascades its bucket state; recreating the
-policy therefore begins with a full burst.
+time never enters refill arithmetic. Admission probes do not create rows for keys that never start;
+the function inserts bucket state only when it consumes a token. Each claim inspects the oldest 100
+key buckets for its queue and removes those whose tokens have fully refilled. This bounds cleanup
+work while preventing inactive high-cardinality keys from accumulating forever. Deleting a policy
+cascades its remaining bucket state; recreating the policy therefore begins with a full burst.
 
-`Queue.rateLimitStatuses(queueNames)` reports refilled queue tokens, a bounded throttled-ready count,
-the number of sampled keys waiting for tokens, the earliest sampled eligibility timestamp, and
-whether the ready sample was capped. `QueueHealth.rateLimitPolicies` includes the same observations.
-OpenTelemetry exports configured starts per second, available queue tokens, throttled ready depth,
-and next-eligibility delay using queue name as the only policy dimension.
+`Queue.rateLimitStatuses(queueNames)` observes at most 100 policies and the oldest 100 ready rows per
+policy. It reads a 101st sentinel to set `policySetCapped` or `sampleCapped`, but never returns that
+sentinel. Each returned row reports refilled queue tokens, throttled-ready depth, distinct sampled
+keys waiting for tokens, and the earliest sampled `nextEligibleAt`. An omitted or empty `queueNames`
+array observes every policy subject to the cap; a non-empty array filters exact queue names before
+the cap. `QueueHealth.rateLimitPolicies` includes the same observations and sets `capped` when either
+limit applies. OpenTelemetry exports configured starts per second, available queue tokens, throttled
+ready depth, and next-eligibility delay using queue name as the only policy dimension.
 
 ### History
 
