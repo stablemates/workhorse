@@ -1250,10 +1250,17 @@ export interface DashboardJobDetail {
     maxAttempts: number;
     deadlineAt?: string | null;
     executionTimeoutMs?: number | null;
-    /** Raw admission key. Deliberately available only in task detail identity. */
+    /**
+     * Raw admission key this task was enqueued with. Immutable, so it stays true after the task
+     * finishes. Deliberately available only in task detail identity.
+     */
     concurrencyKey: string | null;
   };
-  /** Effective admission budget for this task's queue. Null unless the task is ready or active. */
+  /**
+   * The queue's admission budget as it stands now, not a snapshot of the policy this task ran
+   * under. Workhorse stores no per-task snapshot, so a finished task's line must be read as
+   * current queue context. Null when the queue has no policy.
+   */
   concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
   payload: unknown;
   progress: {

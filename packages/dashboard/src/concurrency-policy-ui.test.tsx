@@ -256,27 +256,65 @@ describe("task drawer concurrency line", () => {
     expect(described?.summary).toBe("6 of 8 active · per key 2 · 1 key full · 3+ ready blocked");
     expect(described?.title).toContain("Fleet-wide budget");
     expect(described?.title).toContain("competes for its key's capacity");
+    expect(described?.basis).toBe("live");
   });
 
-  it("stays silent for a terminal task so a finished outcome carries no policy noise", () => {
-    expect(
-      describeTaskConcurrency(
-        job({
-          runtimeState: null,
-          concurrencyKey: "tenant-a",
-          concurrencyPolicy: policy(),
-        }),
-      ),
-    ).toBeNull();
-    expect(
-      describeTaskConcurrency(
-        job({
-          runtimeState: "succeeded",
-          concurrencyKey: "tenant-a",
-          concurrencyPolicy: policy(),
-        }),
-      ),
-    ).toBeNull();
+  it("frames the queue limits as fleet-wide rather than per worker", () => {
+    const described = describeTaskConcurrency(
+      job({ runtimeState: "active", concurrencyPolicy: policy() }),
+    );
+    expect(described?.title).toContain("across every worker sharing this database");
+  });
+
+  it("keeps a terminal task's immutable key and marks the policy as the queue's current one", () => {
+    const described = describeTaskConcurrency(
+      job({
+        runtimeState: null,
+        concurrencyKey: "tenant-a",
+        concurrencyPolicy: policy({ maxActive: 8, active: 6, maxActivePerKey: 2 }),
+      }),
+    );
+    expect(described?.concurrencyKey).toBe("tenant-a");
+    expect(described?.basis).toBe("current");
+    // Live counts are dropped: a finished task holds no slot, so `6 of 8 active` would mislead.
+    expect(described?.summary).toBe("queue now allows 8 at once · 2 per key");
+    expect(described?.summary).not.toContain("active");
+    expect(described?.title).toContain("no longer competing");
+    expect(described?.title).toContain("currently admits at most 8");
+    expect(described?.title).toContain("may differ from the limits in force while this task ran");
+    // The key is the task's own fact and is described as such, never as queue state.
+    expect(described?.keyTitle).toContain("never changes");
+  });
+
+  it("gives a terminal task without a key the queue's current limits anyway", () => {
+    const described = describeTaskConcurrency(
+      job({ runtimeState: null, concurrencyPolicy: policy({ maxActive: 1 }) }),
+    );
+    expect(described?.concurrencyKey).toBeNull();
+    expect(described?.summary).toBe("queue now allows 1 at once");
+    expect(described?.title).toContain("currently admits at most 1 task");
+    expect(described?.title).toContain("does not limit tasks by concurrency key");
+  });
+
+  it("tells a terminal task with a key that its queue has no limit now", () => {
+    const described = describeTaskConcurrency(
+      job({ runtimeState: null, concurrencyKey: "tenant-a", concurrencyPolicy: null }),
+    );
+    expect(described?.summary).toBe("queue has no limit now");
+    expect(described?.title).toContain("no fleet-wide limit");
+    expect(described?.title).toContain("may differ from the limits in force while this task ran");
+  });
+
+  it("shows nothing for a terminal task with neither a key nor a current policy", () => {
+    expect(describeTaskConcurrency(job({ runtimeState: null }))).toBeNull();
+  });
+
+  it("reads a scheduled task as the budget it will enter rather than one it holds", () => {
+    const described = describeTaskConcurrency(
+      job({ runtimeState: "scheduled", concurrencyPolicy: policy() }),
+    );
+    expect(described?.basis).toBe("pending");
+    expect(described?.title).toContain("will enter this budget when it becomes ready");
   });
 
   it("says a keyless task consumes queue capacity only", () => {
@@ -322,9 +360,10 @@ describe("task drawer concurrency line", () => {
     expect(html).toContain("tenant-a");
     expect(html).toContain("4 of 10 active");
     expect(html).toContain('aria-label="Concurrency key tenant-a"');
+    expect(html).not.toContain("queue policy now");
   });
 
-  it("renders nothing for a finished task", async () => {
+  it("renders a finished task's key beside the queue's current limits", async () => {
     const { ConcurrencyPolicyLine } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
@@ -334,13 +373,31 @@ describe("task drawer concurrency line", () => {
           job: job({
             runtimeState: null,
             concurrencyKey: "tenant-a",
-            concurrencyPolicy: policy(),
+            concurrencyPolicy: policy({ maxActivePerKey: 2 }),
           }) as unknown as DashboardJobDetail,
         }),
       ),
     );
+    expect(html).toContain("Concurrency");
+    expect(html).toContain('aria-label="Concurrency key tenant-a"');
+    expect(html).toContain("queue policy now");
+    expect(html).toContain("queue now allows 10 at once · 2 per key");
+    expect(html).not.toContain("4 of 10 active");
+    expect(html).toContain("may differ from the limits in force while this task ran");
+  });
+
+  it("renders nothing when a finished task has neither a key nor a current policy", async () => {
+    const { ConcurrencyPolicyLine } = await import("./dashboard.js");
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(ConcurrencyPolicyLine, {
+          job: job({ runtimeState: null }) as unknown as DashboardJobDetail,
+        }),
+      ),
+    );
     expect(html).not.toContain("Concurrency");
-    expect(html).not.toContain("tenant-a");
   });
 });
 

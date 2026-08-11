@@ -2279,10 +2279,10 @@ export async function readDashboardJobDetail(
         job.execution_timeout_ms === null ? null : Number(job.execution_timeout_ms),
       concurrencyKey: job.concurrency_key,
     },
-    concurrencyPolicy:
-      (job.runtime_state === "ready" || job.runtime_state === "active") && policy
-        ? dashboardConcurrencyPolicySummary(policy)
-        : null,
+    // The queue's policy as it stands now, sent for every task including finished ones. Workhorse
+    // stores no per-task policy snapshot, so the drawer labels this as current rather than
+    // historical; only `identity.concurrencyKey` is a fact about the run itself.
+    concurrencyPolicy: policy ? dashboardConcurrencyPolicySummary(policy) : null,
     payload: job.payload,
     progress:
       job.progress_revision === null

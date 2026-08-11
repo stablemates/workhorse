@@ -2432,6 +2432,7 @@ describe("Workhorse demo", () => {
     await new Queue(pool).syncConcurrencyPolicies("dashboard-test", [
       { queue: queueName, maxActive: 1, maxActivePerKey: 1 },
       { queue: "policy-only-demo", maxActive: 3 },
+      { queue: "terminal-demo", maxActive: 2, maxActivePerKey: 1 },
     ]);
     const activeId = await workhorse.context.queue.enqueue(
       "active",
@@ -2527,6 +2528,39 @@ describe("Workhorse demo", () => {
         maxActivePerKey: 1,
       },
     });
+    // A finished task keeps the key it was enqueued with, and still reports its queue's policy as
+    // it stands now. Nothing snapshots the limits it ran under, so the drawer labels this current.
+    const terminalId = await workhorse.context.queue.enqueue(
+      "terminal",
+      {},
+      { queue: "terminal-demo", concurrencyKey: "tenant-finished" },
+    );
+    const terminalClaim = await workhorse.context.queue.claim("terminal-worker", {
+      queue: "terminal-demo",
+    });
+    expect(terminalClaim?.id).toBe(terminalId);
+    await workhorse.context.queue.complete(terminalClaim!, "terminal-worker", { done: true });
+    await expect(client.dashboard.jobDetail({ id: terminalId })).resolves.toMatchObject({
+      identity: { state: "succeeded", concurrencyKey: "tenant-finished" },
+      current: { runtime: null },
+      concurrencyPolicy: {
+        namespace: "dashboard-test",
+        maxActive: 2,
+        maxActivePerKey: 1,
+        active: 0,
+      },
+    });
+    // The raw key still never leaves task detail.
+    expect(
+      JSON.stringify(
+        await client.dashboard.tasks({
+          filter: "all",
+          page: 1,
+          pageSize: 25,
+          queue: "terminal-demo",
+        }),
+      ),
+    ).not.toContain("tenant-finished");
     const taskList = await client.dashboard.tasks({
       filter: "all",
       page: 1,
