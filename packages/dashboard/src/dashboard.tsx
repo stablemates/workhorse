@@ -2870,6 +2870,7 @@ export function QueuesPage({
                   const limit = describeConcurrencyLimit(policy);
                   const keys = describeConcurrencyKeys(policy);
                   const blocked = describeConcurrencyBlocked(policy);
+                  const rate = queue.rateLimitPolicy ?? null;
                   return (
                     <Table.Tr key={queue.queue}>
                       <Table.Td>
@@ -2916,6 +2917,12 @@ export function QueuesPage({
                             {keys.label}
                           </Text>
                         )}
+                        {rate === null ? null : (
+                          <Text size="xs" c="dimmed">
+                            {formatRate(rate.effectiveRatePerSecond)}/s · burst {rate.burst}
+                            {rate.scope === "key" ? " per key" : ""}
+                          </Text>
+                        )}
                       </Table.Td>
                       <Table.Td ta="right">
                         <Text
@@ -2927,6 +2934,11 @@ export function QueuesPage({
                         >
                           {blocked.label}
                         </Text>
+                        {rate !== null && rate.throttledReady > 0 ? (
+                          <Text c="yellow.8" size="xs" fw={650}>
+                            {rate.throttledReady} rate throttled
+                          </Text>
+                        ) : null}
                       </Table.Td>
                       <Table.Td
                         ta="right"
@@ -2988,6 +3000,11 @@ export function QueuesPage({
       {data.concurrencyPoliciesCapped ? (
         <Text c="dimmed" size="xs">
           {concurrencyCappedFootnote}
+        </Text>
+      ) : null}
+      {data.rateLimitPoliciesCapped ? (
+        <Text c="dimmed" size="xs">
+          Rate-limit diagnostics are capped, so throttled counts are lower bounds.
         </Text>
       ) : null}
     </Stack>
@@ -3228,6 +3245,7 @@ export function QueuePressure({
             {data.queues.map((queue) => {
               const limit = describeConcurrencyLimit(queue.concurrencyPolicy);
               const blocked = describeConcurrencyBlocked(queue.concurrencyPolicy);
+              const rate = queue.rateLimitPolicy ?? null;
               return (
                 <Table.Tr
                   key={queue.queue}
@@ -3269,6 +3287,16 @@ export function QueuePressure({
                         {blocked.label} blocked
                       </Text>
                     ) : null}
+                    {rate === null ? null : (
+                      <Text
+                        c={rate.throttledReady > 0 ? "yellow.8" : "dimmed"}
+                        size="xs"
+                        fw={rate.throttledReady > 0 ? 650 : undefined}
+                      >
+                        {formatRate(rate.effectiveRatePerSecond)}/s
+                        {rate.throttledReady > 0 ? ` · ${rate.throttledReady} throttled` : ""}
+                      </Text>
+                    )}
                   </Table.Td>
                   <Table.Td ta="right">{queue.retrying}</Table.Td>
                   <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
@@ -3282,6 +3310,11 @@ export function QueuePressure({
       {data.concurrencyPoliciesCapped ? (
         <Text c="dimmed" size="xs" px="md" pb="md">
           {concurrencyCappedFootnote}
+        </Text>
+      ) : null}
+      {data.rateLimitPoliciesCapped ? (
+        <Text c="dimmed" size="xs" px="md" pb="md">
+          Rate-limit diagnostics are capped, so throttled counts are lower bounds.
         </Text>
       ) : null}
     </Paper>

@@ -149,6 +149,29 @@ export interface ConcurrencyPolicy {
   updatedAt: Date;
 }
 
+/** One queue's deployment-synchronized token-bucket admission policy. */
+export interface RateLimitPolicyDefinition {
+  queue: string;
+  /** Tokens restored during each interval. Refill is continuous, not interval-boundary based. */
+  limit: number;
+  intervalMs: number;
+  /** Maximum stored tokens. Defaults to `limit`. */
+  burst?: number;
+  /** A queue bucket is shared by all jobs; key buckets use each job's queue-scoped concurrency key. */
+  scope?: "queue" | "key";
+}
+
+/** Persisted queue rate-limit policy. */
+export interface RateLimitPolicy {
+  namespace: string;
+  queue: string;
+  scope: "queue" | "key";
+  limit: number;
+  intervalMs: number;
+  burst: number;
+  updatedAt: Date;
+}
+
 /** One job accepted by {@link Queue.enqueueMany}, with the same semantics as `Queue.enqueue`. */
 export interface EnqueueRequest<TPayload extends Json = Json> {
   type: string;
@@ -706,6 +729,21 @@ export interface QueueHealth {
       maxActivePerKey: number | null;
       saturatedKeys: number;
       highestKeyActive: number;
+    }>;
+    capped: boolean;
+  };
+  /** Bounded token-bucket pressure. Key labels remain excluded from this aggregate. */
+  rateLimitPolicies: {
+    policies: Array<{
+      namespace: string;
+      queue: string;
+      scope: "queue" | "key";
+      limit: number;
+      intervalMs: number;
+      burst: number;
+      throttledReady: number;
+      effectiveRatePerSecond: number;
+      nextEligibleAt: Date | null;
     }>;
     capped: boolean;
   };

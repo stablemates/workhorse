@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 22.
+The current clean-install protocol is schema version 23.
 
 This page is the precise reference. For the ideas it assumes — leases and fence tokens,
 at-least-once delivery, cooperative cancellation, the runtime/outcome split — start with
@@ -334,6 +334,16 @@ One row per queue stores a deployment-owned dispatch budget. `queue_name` is the
 
 Policy capacity counts only active rows whose lease has not expired. The policy is therefore a dispatch budget, not mutual exclusion. A handler can still overlap a replacement after its stale lease expires. Fence validation prevents the stale generation from committing a lifecycle result.
 
+### `rate_limit_policy` and `rate_limit_bucket`
+
+`rate_limit_policy` stores one deployment-owned token-bucket definition per queue. `scope` is `queue` or `key`; key scope uses the job's queue-scoped `concurrency_key`, while keyless jobs share the empty internal bucket key. `refill_limit`, `refill_interval_ms`, and `burst` are integers from 1 through 1,000,000, except the interval is capped at 86,400,000 milliseconds. Tokens refill continuously at `refill_limit / refill_interval_ms`, use PostgreSQL's `clock_timestamp()`, and never exceed `burst`.
+
+`sync_rate_limit_policies_v1(namespace, definitions, prune)` and `Queue.syncRateLimitPolicies(namespace, definitions, { prune })` reconcile at most 10,000 unique queue definitions. Definitions contain `queue`, optional `scope`, `limit`, `intervalMs`, and optional `burst`; TypeScript defaults scope to `queue` and burst to limit. The namespace ownership, prune default, global reconciliation lock, and per-queue activation lock match concurrency policy synchronization. A material definition change deletes the old buckets because their tokens have no meaning under another rate or scope.
+
+`claim_v2` consumes one token in the same transaction that changes a runtime to active. Rollback returns the token; handler failure, retry, lease recovery, and redrive require a later admission and consume another token. Queue scope serializes consumption through one bucket. Key scope uses bounded FIFO lookahead, so an empty key bucket does not prevent a later candidate for another key from running. A missing bucket is full, and a stored refill timestamp ahead of PostgreSQL time earns no tokens until the clock catches up.
+
+`rate_limit_bucket.full_at` records when a bucket becomes equivalent to missing full state. `prune_rate_limit_buckets_v1` deletes at most the configured terminal prune limit with `FOR UPDATE SKIP LOCKED`; the `rate_limit_buckets` phase in `prune_terminal_storage_v1` runs this cleanup before idempotency and terminal identity cleanup.
+
 ### History
 
 `job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed logical attempt, including retry, lease expiry, success, terminal failure, and cancellation after an attempt actually started. Its `started_at` preserves the logical attempt start across timer suspensions, while `claimed_at` identifies the final activation that closed it. Timer suspension itself emits events but does not close attempt history. Both history relations use UTC-daily range partitions with default fallbacks. Clean installation creates the current day plus three future days, and `prepare_history_partitions_v1` continuously replenishes and repairs that horizon.
@@ -499,9 +509,9 @@ Suspension aborts the handler's cooperative signal and exits through private wor
 
 ### Claim
 
-`claim_v2` takes the shared queue advisory lock and locks the queue policy row before admission. It computes acquisition and lease timestamps after those potentially blocking locks. Without a policy, it selects the FIFO head through `job_runtime_ready_idx`. With a policy, it counts only unexpired active rows through `job_runtime_active_queue_key_expiry_idx` and stops when queue capacity is full.
+`claim_v2` takes shared activation locks for concurrency and rate policies, then locks any concurrency policy row before admission. It computes acquisition and lease timestamps after those potentially blocking locks. Without keyed admission it selects the FIFO head through `job_runtime_ready_idx`. A concurrency policy counts only unexpired active rows through `job_runtime_active_queue_key_expiry_idx` and stops when queue capacity is full.
 
-If key limits apply, `claim_v2` inspects at most the first 100 ready rows by FIFO sequence. It selects the earliest candidate whose queue-scoped key has capacity. Saturated candidates remain ready, so later admissible work can proceed without an unbounded saturated-prefix scan. Returning null after exhausting this window is observable through blocked-ready health and metric fields.
+If keyed concurrency or keyed rate limits apply, `claim_v2` inspects at most the first 100 ready rows by FIFO sequence. It selects the earliest candidate whose queue-scoped key has both capacity and a token. Saturated candidates remain ready, so later admissible work can proceed without an unbounded prefix scan. Returning null after exhausting this window is observable through bounded health and metric fields.
 
 One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `claim_v1` remains installed as a compatibility function, but `Queue.claim` and production benchmarks use `claim_v2`.
 
@@ -711,6 +721,9 @@ The meter also exposes these baseline instruments:
 - `workhorse.queue.concurrency.limit` is the queue's configured active-job limit.
 - `workhorse.queue.concurrency.active` counts active rows with unexpired leases in governed queues.
 - `workhorse.queue.concurrency.blocked_ready` reports bounded ready work that policy admission rejects.
+- `workhorse.queue.rate_limit` reports configured token refill throughput in jobs per second.
+- `workhorse.queue.rate_limit.throttled_ready` reports bounded ready work waiting for tokens.
+- `workhorse.queue.rate_limit.next_eligibility_delay` reports milliseconds until the next token.
 - `workhorse.jobs.enqueued`, `workhorse.jobs.claimed`, `workhorse.jobs.completed`,
   `workhorse.jobs.failed`, `workhorse.jobs.retried`, and `workhorse.leases.expired` are counters.
 - `workhorse.claim.duration`, `workhorse.handler.duration`, and
@@ -718,11 +731,11 @@ The meter also exposes these baseline instruments:
 - `workhorse.handler.runtime` is a millisecond counter. Its per-second rate divided by 1,000 is the
   equivalent number of continuously busy workers consumed by a dimension set.
 
-`registerQueueMetrics(queue)` registers the database-wide depth, age, and concurrency callbacks and returns a
+`registerQueueMetrics(queue)` registers the database-wide depth, age, concurrency, and rate callbacks and returns a
 cleanup function. Register it once per database and telemetry resource; registering it for every
 worker duplicates observations. `Queue.queueMetricSnapshot()` groups live pressure by every queue
-present in `job_runtime`, `queue_control`, `worker_registry`, or `concurrency_policy`, plus the
-`Queue.defaultQueue`. Concurrency metrics carry only `workhorse.queue.name`; raw key values never become
+present in `job_runtime`, `queue_control`, `worker_registry`, `concurrency_policy`, or `rate_limit_policy`, plus the
+`Queue.defaultQueue`. Admission metrics carry only `workhorse.queue.name`; raw key values never become
 metric attributes.
 
 Lifecycle counters and handler instruments use `workhorse.queue.name` and `workhorse.job.type`.

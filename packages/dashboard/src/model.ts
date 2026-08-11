@@ -534,6 +534,37 @@ export function dashboardConcurrencyPolicySummary(
   };
 }
 
+export interface DashboardRateLimitPolicySummary {
+  namespace: string;
+  scope: "queue" | "key";
+  limit: number;
+  intervalMs: number;
+  burst: number;
+  throttledReady: number;
+  effectiveRatePerSecond: number;
+  nextEligibleAt: string | null;
+}
+
+type QueueRateLimitPolicy = Awaited<
+  ReturnType<Queue["health"]>
+>["rateLimitPolicies"]["policies"][number];
+
+/** Remove the queue join key while retaining bounded token-bucket pressure for one row. */
+export function dashboardRateLimitPolicySummary(
+  policy: QueueRateLimitPolicy,
+): DashboardRateLimitPolicySummary {
+  return {
+    namespace: policy.namespace,
+    scope: policy.scope,
+    limit: Number(policy.limit),
+    intervalMs: Number(policy.intervalMs),
+    burst: Number(policy.burst),
+    throttledReady: Number(policy.throttledReady),
+    effectiveRatePerSecond: Number(policy.effectiveRatePerSecond),
+    nextEligibleAt: policy.nextEligibleAt?.toISOString() ?? null,
+  };
+}
+
 export interface DashboardManagedQueueRow {
   queue: string;
   paused: boolean;
@@ -546,6 +577,7 @@ export interface DashboardManagedQueueRow {
   canceled: number;
   terminalCountsApproximate: boolean;
   concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
+  rateLimitPolicy: DashboardRateLimitPolicySummary | null;
 }
 
 export interface DashboardJobRow extends Record<string, unknown> {
@@ -947,6 +979,7 @@ export interface DashboardQueuesPage {
   queues: DashboardManagedQueueRow[];
   /** True when `Queue.health()` capped its policy or blocked-ready scan. */
   concurrencyPoliciesCapped: boolean;
+  rateLimitPoliciesCapped: boolean;
 }
 
 export type DashboardSystemWindow = "15m" | "1h" | "24h";
@@ -978,6 +1011,7 @@ export interface DashboardSystemQueueRow {
   enqueuedPerMinute: number;
   completedPerMinute: number;
   concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
+  rateLimitPolicy: DashboardRateLimitPolicySummary | null;
 }
 
 export interface DashboardSystemFailingType {
@@ -1103,6 +1137,7 @@ export interface DashboardSystemPage {
   queues: DashboardSystemQueueRow[];
   /** True when `Queue.health()` capped its policy or blocked-ready scan. */
   concurrencyPoliciesCapped: boolean;
+  rateLimitPoliciesCapped: boolean;
   retryStorm: {
     buckets: DashboardSystemRetryBucket[];
     topTypes: Array<{ queue: string; type: string; count: number }>;

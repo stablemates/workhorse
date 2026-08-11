@@ -6,6 +6,7 @@ import {
   DashboardActivityPeriod,
   DashboardCancellationRequest,
   DashboardConcurrencyPolicySummary,
+  DashboardRateLimitPolicySummary,
   DashboardCronPage,
   DashboardEventDetail,
   DashboardEventKind,
@@ -32,6 +33,7 @@ import {
   DashboardSettingsPage,
   MaintenanceLoopCadences,
   dashboardConcurrencyPolicySummary,
+  dashboardRateLimitPolicySummary,
   readIdempotencyEvidence,
 } from "../model.js";
 import {
@@ -435,6 +437,12 @@ export async function readDashboardQueues(
       dashboardConcurrencyPolicySummary(policy),
     ]),
   );
+  const rateLimitPolicies = new Map<string, DashboardRateLimitPolicySummary>(
+    health.rateLimitPolicies.policies.map((policy) => [
+      policy.queue,
+      dashboardRateLimitPolicySummary(policy),
+    ]),
+  );
 
   return {
     capturedAt: new Date().toISOString(),
@@ -449,8 +457,10 @@ export async function readDashboardQueues(
       canceled: terminalCounts.get(row.queue)?.canceled ?? 0,
       terminalCountsApproximate: approximate,
       concurrencyPolicy: concurrencyPolicies.get(row.queue) ?? null,
+      rateLimitPolicy: rateLimitPolicies.get(row.queue) ?? null,
     })),
     concurrencyPoliciesCapped: health.concurrencyPolicies.capped,
+    rateLimitPoliciesCapped: health.rateLimitPolicies.capped,
   };
 }
 
@@ -939,6 +949,7 @@ function systemMaintenanceSchedules(
       lastFiredAt: state.get("terminal_storage")?.lastCompletedAt ?? null,
       lastRun: null,
       maintenance: maintenance("terminal_storage", policy.terminalCleanupIntervalMs, [
+        "rate_limit_buckets",
         "enqueue_idempotency",
         "terminal_jobs",
       ]),
@@ -1304,6 +1315,15 @@ export function concurrencyPolicyDegradedChecks(
     .map((policy) => `Concurrency policy blocks ready tasks on ${policy.queue}`);
 }
 
+/** Token starvation degrades dispatch while preserving every ready task. */
+export function rateLimitPolicyDegradedChecks(
+  health: Pick<QueueHealthSnapshot, "rateLimitPolicies">,
+): string[] {
+  return health.rateLimitPolicies.policies
+    .filter((policy) => policy.throttledReady > 0)
+    .map((policy) => `Rate limit throttles ready tasks on ${policy.queue}`);
+}
+
 export async function readDashboardSystem(
   database: DashboardDatabase,
   queue: Queue,
@@ -1578,6 +1598,7 @@ export async function readDashboardSystem(
   const degradedChecks = [
     ...retentionDegradedChecks(retention),
     ...concurrencyPolicyDegradedChecks(health),
+    ...rateLimitPolicyDegradedChecks(health),
   ];
   // A stalled rollup is a storage problem rather than a dispatch one: history retention holds at
   // the watermark rather than deleting the input to windows nobody has computed yet.
@@ -1597,6 +1618,12 @@ export async function readDashboardSystem(
       dashboardConcurrencyPolicySummary(policy),
     ]),
   );
+  const rateLimitPolicies = new Map<string, DashboardRateLimitPolicySummary>(
+    health.rateLimitPolicies.policies.map((policy) => [
+      policy.queue,
+      dashboardRateLimitPolicySummary(policy),
+    ]),
+  );
   const queues = queueRows.rows
     .map((row) => ({
       queue: row.queue,
@@ -1609,6 +1636,7 @@ export async function readDashboardSystem(
       enqueuedPerMinute: row.enqueued / minutes,
       completedPerMinute: row.completed / minutes,
       concurrencyPolicy: concurrencyPolicies.get(row.queue) ?? null,
+      rateLimitPolicy: rateLimitPolicies.get(row.queue) ?? null,
     }))
     // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
     .sort((left, right) => {
@@ -1671,6 +1699,7 @@ export async function readDashboardSystem(
     })),
     queues,
     concurrencyPoliciesCapped: health.concurrencyPolicies.capped,
+    rateLimitPoliciesCapped: health.rateLimitPolicies.capped,
     retryStorm: { buckets: retryBuckets, topTypes: retryTypeRows.rows },
     failingTypes: failingTypeRows.rows.map((row) => ({
       queue: row.queue,

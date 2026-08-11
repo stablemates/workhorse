@@ -122,6 +122,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
     workhorse.schedule_occurrence, workhorse.schedule_definition,
+    workhorse.rate_limit_bucket, workhorse.rate_limit_policy,
     workhorse.concurrency_policy, workhorse.queue_control, workhorse.worker_registry,
     workhorse.job_wait, workhorse.job_checkpoint,
     workhorse.enqueue_idempotency, workhorse.job_redrive, workhorse.job_outcome, workhorse.job_runtime,
@@ -419,11 +420,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v22 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v23 with rate limits, database-owned settings, and job contracts", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(22);
+    expect(version.rows[0]?.version).toBe(23);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -2225,7 +2226,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(22);
+    expect(health.schemaVersion).toBe(23);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2625,6 +2626,13 @@ describe("live-runtime queue protocol", () => {
         error: null,
       },
       {
+        phase: "rate_limit_buckets",
+        rowsAffected: 0,
+        durationMs: expect.any(Number),
+        skippedLock: false,
+        error: null,
+      },
+      {
         phase: "enqueue_idempotency",
         rowsAffected: 0,
         durationMs: expect.any(Number),
@@ -2702,6 +2710,13 @@ describe("live-runtime queue protocol", () => {
         "SELECT pg_advisory_lock(hashtextextended('workhorse:maintenance:terminal-storage', 0))",
       );
       expect(await queue.pruneTerminalStorage({ force: true })).toEqual([
+        {
+          phase: "rate_limit_buckets",
+          rowsAffected: 0,
+          durationMs: 0,
+          skippedLock: true,
+          error: null,
+        },
         {
           phase: "enqueue_idempotency",
           rowsAffected: 0,
@@ -2912,9 +2927,9 @@ describe("live-runtime queue protocol", () => {
     );
     expect(await queue.prepareHistoryPartitions({ force: true, now })).toHaveLength(1);
 
-    expect(await queue.pruneTerminalStorage({ now })).toHaveLength(2);
+    expect(await queue.pruneTerminalStorage({ now })).toHaveLength(3);
     expect(await queue.pruneTerminalStorage({ now: new Date(now.getTime() + 1_000) })).toEqual([]);
-    expect(await queue.pruneTerminalStorage({ force: true, now })).toHaveLength(2);
+    expect(await queue.pruneTerminalStorage({ force: true, now })).toHaveLength(3);
   });
 
   it("isolates housekeeping phases when partition replenishment fails", async () => {
@@ -2970,7 +2985,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v22 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v23 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -4687,6 +4702,7 @@ describe("live-runtime queue protocol", () => {
       "history_retention:event_retention",
       "history_retention:attempt_retention",
       "history_retention:schedule_occurrences",
+      "terminal_storage:rate_limit_buckets",
       "terminal_storage:enqueue_idempotency",
       "terminal_storage:terminal_jobs",
     ]);
@@ -4694,7 +4710,7 @@ describe("live-runtime queue protocol", () => {
 
     await sleep(110);
     expect(await worker.runOnce()).toBe(false);
-    expect(telemetry.slice(10).map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
+    expect(telemetry.slice(11).map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
       "tick:promote",
       "tick:recover",
     ]);
@@ -4956,6 +4972,13 @@ describe("live-runtime queue protocol", () => {
       },
     ];
     const terminalResults: MaintenancePhaseResult[] = [
+      {
+        phase: "rate_limit_buckets",
+        rowsAffected: 0,
+        durationMs: 0,
+        skippedLock: false,
+        error: null,
+      },
       {
         phase: "enqueue_idempotency",
         rowsAffected: 0,
@@ -5404,6 +5427,163 @@ describe("live-runtime queue protocol", () => {
     await expect(queue.claim("total-worker-b", { queue: queueName })).resolves.toMatchObject({
       id: secondId,
     });
+  });
+
+  it("enforces a queue-scoped token bucket across competing claims", async () => {
+    const queueName = `rate-total-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      { queue: queueName, limit: 1, intervalMs: 100, burst: 2 },
+    ]);
+    const ids = await Promise.all(
+      [1, 2, 3].map((ordinal) => queue.enqueue("rate-limited", { ordinal }, { queue: queueName })),
+    );
+
+    const claims = await Promise.all([
+      queue.claim("rate-worker-a", { queue: queueName }),
+      queue.claim("rate-worker-b", { queue: queueName }),
+      queue.claim("rate-worker-c", { queue: queueName }),
+    ]);
+    const claimedIds = claims.filter((claim) => claim !== null).map((claim) => claim!.id);
+    expect(claimedIds).toHaveLength(2);
+    expect(claims.filter((claim) => claim === null)).toHaveLength(1);
+
+    await sleep(120);
+    await expect(queue.claim("rate-worker-d", { queue: queueName })).resolves.toMatchObject({
+      id: ids.find((id) => !claimedIds.includes(id)),
+    });
+  });
+
+  it("lets another key proceed while one key-scoped bucket is empty", async () => {
+    const queueName = `rate-key-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      { queue: queueName, scope: "key", limit: 1, intervalMs: 1_000, burst: 1 },
+    ]);
+    const firstA = await queue.enqueue(
+      "keyed-rate",
+      {},
+      {
+        queue: queueName,
+        concurrencyKey: "a",
+      },
+    );
+    await queue.enqueue("keyed-rate", {}, { queue: queueName, concurrencyKey: "a" });
+    const firstB = await queue.enqueue(
+      "keyed-rate",
+      {},
+      {
+        queue: queueName,
+        concurrencyKey: "b",
+      },
+    );
+
+    await expect(queue.claim("key-rate-worker-a", { queue: queueName })).resolves.toMatchObject({
+      id: firstA,
+    });
+    await expect(queue.claim("key-rate-worker-b", { queue: queueName })).resolves.toMatchObject({
+      id: firstB,
+    });
+    await expect(queue.claim("key-rate-worker-c", { queue: queueName })).resolves.toBeNull();
+  });
+
+  it("uses PostgreSQL time conservatively when bucket state is ahead of the clock", async () => {
+    const queueName = `rate-clock-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      { queue: queueName, limit: 1, intervalMs: 1_000, burst: 1 },
+    ]);
+    await queue.enqueue("clock-rate", {}, { queue: queueName });
+    const first = await queue.claim("clock-rate-worker-a", { queue: queueName });
+    expect(first).not.toBeNull();
+    await queue.enqueue("clock-rate", {}, { queue: queueName });
+    const skewed = await pool.query<{ refilled_at: Date }>(
+      `UPDATE workhorse.rate_limit_bucket
+          SET tokens = 0, refilled_at = clock_timestamp() + interval '1 second'
+        WHERE queue_name = $1
+        RETURNING refilled_at`,
+      [queueName],
+    );
+
+    await expect(queue.claim("clock-rate-worker-b", { queue: queueName })).resolves.toBeNull();
+    await expect(queue.claim("clock-rate-worker-c", { queue: queueName })).resolves.toBeNull();
+    const preserved = await pool.query<{ refilled_at: Date; full_at: Date }>(
+      `SELECT refilled_at, full_at
+         FROM workhorse.rate_limit_bucket
+        WHERE queue_name = $1`,
+      [queueName],
+    );
+    expect(preserved.rows[0]?.refilled_at).toEqual(skewed.rows[0]?.refilled_at);
+    expect(preserved.rows[0]!.full_at.getTime()).toBeGreaterThan(
+      skewed.rows[0]!.refilled_at.getTime(),
+    );
+    await expect(
+      pool.query(`SELECT workhorse.prune_rate_limit_buckets_v1(clock_timestamp(), 100)`),
+    ).resolves.toMatchObject({ rows: [{ prune_rate_limit_buckets_v1: 0 }] });
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() - interval '1 second'
+        WHERE queue_name = $1`,
+      [queueName],
+    );
+    await expect(queue.claim("clock-rate-worker-d", { queue: queueName })).resolves.not.toBeNull();
+  });
+
+  it("charges retries and crash recovery as new rate-limited admissions", async () => {
+    const retryQueue = `rate-retry-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("retry-test", [
+      { queue: retryQueue, limit: 1, intervalMs: 10_000, burst: 1 },
+    ]);
+    await queue.enqueue("rate-retry", {}, { queue: retryQueue, maxAttempts: 2 });
+    const firstAttempt = await queue.claim("rate-retry-worker-a", { queue: retryQueue });
+    await expect(
+      queue.fail(firstAttempt!, "rate-retry-worker-a", new Error("retry"), 0),
+    ).resolves.toBe("ready");
+    await expect(queue.claim("rate-retry-worker-b", { queue: retryQueue })).resolves.toBeNull();
+
+    const recoveryQueue = `rate-recovery-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("recovery-test", [
+      { queue: recoveryQueue, limit: 1, intervalMs: 10_000, burst: 1 },
+    ]);
+    await queue.enqueue("rate-recovery", {}, { queue: recoveryQueue, maxAttempts: 2 });
+    await queue.claim("rate-recovery-worker-a", { queue: recoveryQueue, leaseMs: 100 });
+    await sleep(120);
+    await queue.recoverExpired();
+    await expect(
+      queue.claim("rate-recovery-worker-b", { queue: recoveryQueue }),
+    ).resolves.toBeNull();
+  });
+
+  it("serializes first rate-limit activation against claims already starting", async () => {
+    const queueName = `rate-activation-${randomUUID()}`;
+    await queue.enqueue("rate-activation", {}, { queue: queueName });
+    await queue.enqueue("rate-activation", {}, { queue: queueName });
+    const deployment = await pool.connect();
+
+    try {
+      await deployment.query("BEGIN");
+      await deployment.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('workhorse:rate-limit-policy:' || $1, 0))",
+        [queueName],
+      );
+      const claims = Promise.all([
+        queue.claim("rate-activation-a", { queue: queueName }),
+        queue.claim("rate-activation-b", { queue: queueName }),
+      ]);
+      await sleep(20);
+      await deployment.query(
+        "SELECT * FROM workhorse.sync_rate_limit_policies_v1($1, $2::jsonb, true)",
+        [
+          "activation-test",
+          JSON.stringify([
+            { queue: queueName, scope: "queue", limit: 1, intervalMs: 10_000, burst: 1 },
+          ]),
+        ],
+      );
+      await deployment.query("COMMIT");
+
+      expect((await claims).filter((claim) => claim !== null)).toHaveLength(1);
+    } finally {
+      await deployment.query("ROLLBACK").catch(() => undefined);
+      deployment.release();
+    }
   });
 
   it("serializes first policy activation against claims that already started", async () => {
@@ -7125,7 +7305,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(22);
+    expect(health.schemaVersion).toBe(23);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -7144,6 +7324,9 @@ describe("live-runtime queue protocol", () => {
         concurrencyLimit: null,
         concurrencyActive: 0,
         blockedReadyDepth: 0,
+        rateLimitPerSecond: null,
+        rateLimitThrottledReadyDepth: 0,
+        rateLimitNextEligibleDelayMs: null,
       },
     ]);
   });
@@ -7259,6 +7442,106 @@ describe("live-runtime queue protocol", () => {
     await expect(queue.concurrencyPolicies()).resolves.toMatchObject([
       { queue: "mail", maxActive: 5, maxActivePerKey: null },
     ]);
+  });
+
+  it("synchronizes rate-limit policies as deployment-owned desired state", async () => {
+    const policies = await queue.syncRateLimitPolicies("deployment-a", [
+      { queue: "mail", limit: 10, intervalMs: 1_000, burst: 20 },
+      { queue: "reports", scope: "key", limit: 1, intervalMs: 60_000 },
+    ]);
+    expect(policies).toEqual([
+      {
+        namespace: "deployment-a",
+        queue: "mail",
+        scope: "queue",
+        limit: 10,
+        intervalMs: 1_000,
+        burst: 20,
+        updatedAt: expect.any(Date),
+      },
+      {
+        namespace: "deployment-a",
+        queue: "reports",
+        scope: "key",
+        limit: 1,
+        intervalMs: 60_000,
+        burst: 1,
+        updatedAt: expect.any(Date),
+      },
+    ]);
+
+    await expect(
+      queue.syncRateLimitPolicies("deployment-b", [{ queue: "mail", limit: 1, intervalMs: 1_000 }]),
+    ).rejects.toThrow(/owned by another namespace/);
+    await expect(
+      queue.syncRateLimitPolicies("deployment-a", [{ queue: "mail", limit: 0, intervalMs: 1_000 }]),
+    ).rejects.toThrow(/rate limit/);
+
+    await queue.syncRateLimitPolicies("deployment-a", [
+      { queue: "mail", limit: 5, intervalMs: 2_000 },
+    ]);
+    await expect(queue.rateLimitPolicies()).resolves.toMatchObject([
+      { queue: "mail", scope: "queue", limit: 5, intervalMs: 2_000, burst: 5 },
+    ]);
+  });
+
+  it("reports throttled depth and next eligibility through health", async () => {
+    const queueName = `health-rate-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("health-test", [
+      { queue: queueName, limit: 1, intervalMs: 1_000, burst: 1 },
+    ]);
+    await queue.enqueue("health-rate", {}, { queue: queueName });
+    await queue.enqueue("health-rate", {}, { queue: queueName });
+    await queue.claim("health-rate-worker", { queue: queueName });
+
+    const health = await queue.health();
+    expect(health.rateLimitPolicies).toMatchObject({
+      capped: false,
+      policies: [
+        {
+          namespace: "health-test",
+          queue: queueName,
+          scope: "queue",
+          limit: 1,
+          intervalMs: 1_000,
+          burst: 1,
+          throttledReady: 1,
+          effectiveRatePerSecond: 1,
+          nextEligibleAt: expect.any(Date),
+        },
+      ],
+    });
+    await expect(queue.queueMetricSnapshot()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          queue: queueName,
+          rateLimitPerSecond: 1,
+          rateLimitThrottledReadyDepth: 1,
+          rateLimitNextEligibleDelayMs: expect.any(Number),
+        }),
+      ]),
+    );
+  });
+
+  it("prunes fully refilled rate buckets through bounded maintenance", async () => {
+    const queueName = `rate-prune-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("prune-test", [
+      { queue: queueName, limit: 1, intervalMs: 100, burst: 1 },
+    ]);
+    await queue.enqueue("rate-prune", {}, { queue: queueName });
+    await queue.claim("rate-prune-worker", { queue: queueName });
+
+    expect(
+      (
+        await pool.query<{ count: number }>(
+          "SELECT count(*)::integer AS count FROM workhorse.rate_limit_bucket WHERE queue_name = $1",
+          [queueName],
+        )
+      ).rows[0]?.count,
+    ).toBe(1);
+    await sleep(120);
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases[0]).toMatchObject({ phase: "rate_limit_buckets", rowsAffected: 1, error: null });
   });
 
   it("reports bounded concurrency utilization and blocked-ready depth through health", async () => {
@@ -7532,7 +7815,7 @@ describe("live-runtime queue protocol", () => {
     });
     expect(await queue.retainHistory({ force: true })).toHaveLength(3);
 
-    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
+    expect((await queue.pruneTerminalStorage({ force: true }))[2]).toMatchObject({
       phase: "terminal_jobs",
       rowsAffected: 1,
       error: null,
@@ -7547,7 +7830,7 @@ describe("live-runtime queue protocol", () => {
       ).rows[0]?.count,
     ).toBe(0);
     expect(await queue.getJob(secondDeletable)).not.toBeNull();
-    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
+    expect((await queue.pruneTerminalStorage({ force: true }))[2]).toMatchObject({
       phase: "terminal_jobs",
       rowsAffected: 1,
       error: null,
@@ -7600,12 +7883,12 @@ describe("live-runtime queue protocol", () => {
     });
 
     const phases = await queue.pruneTerminalStorage({ force: true });
-    expect(phases[0]).toMatchObject({
+    expect(phases[1]).toMatchObject({
       phase: "enqueue_idempotency",
       rowsAffected: 1,
       error: null,
     });
-    expect(phases[1]).toMatchObject({ phase: "terminal_jobs", rowsAffected: 1, error: null });
+    expect(phases[2]).toMatchObject({ phase: "terminal_jobs", rowsAffected: 1, error: null });
     expect(await queue.getJob(expired)).toBeNull();
     expect(await queue.getJob(retained)).not.toBeNull();
     expect(

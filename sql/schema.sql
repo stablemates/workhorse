@@ -246,6 +246,31 @@ CREATE TABLE IF NOT EXISTS workhorse.concurrency_policy (
   )
 );
 
+-- Deployment-synchronized token buckets. PostgreSQL owns both refill time and consumption, so all
+-- worker processes observe one admission rate. The empty bucket key represents either queue scope
+-- or key-scoped jobs without a concurrency key; accepted keys cannot themselves be empty.
+CREATE TABLE IF NOT EXISTS workhorse.rate_limit_policy (
+  queue_name text PRIMARY KEY CHECK (queue_name <> ''),
+  namespace text NOT NULL CHECK (namespace <> '' AND octet_length(namespace) <= 256),
+  scope text NOT NULL CHECK (scope IN ('queue', 'key')),
+  refill_limit integer NOT NULL CHECK (refill_limit BETWEEN 1 AND 1000000),
+  refill_interval_ms integer NOT NULL CHECK (refill_interval_ms BETWEEN 1 AND 86400000),
+  burst integer NOT NULL CHECK (burst BETWEEN 1 AND 1000000),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE TABLE IF NOT EXISTS workhorse.rate_limit_bucket (
+  queue_name text NOT NULL REFERENCES workhorse.rate_limit_policy(queue_name) ON DELETE CASCADE,
+  bucket_key text NOT NULL,
+  tokens numeric NOT NULL CHECK (tokens >= 0),
+  refilled_at timestamptz NOT NULL,
+  full_at timestamptz NOT NULL,
+  PRIMARY KEY (queue_name, bucket_key)
+);
+
+CREATE INDEX IF NOT EXISTS rate_limit_bucket_full_at_idx
+  ON workhorse.rate_limit_bucket (full_at, queue_name, bucket_key);
+
 -- Durable worker fleet registration.
 --
 -- Every worker process announces itself here and refreshes `last_heartbeat_at` on its maintenance
@@ -1935,6 +1960,140 @@ BEGIN
 END;
 $$;
 
+-- Synchronize deployment-owned rate limits. Policy changes discard old bucket state because tokens
+-- from a different rate, capacity, or scope have no valid interpretation under the new definition.
+CREATE OR REPLACE FUNCTION workhorse.sync_rate_limit_policies_v1(
+  p_namespace text,
+  p_definitions jsonb,
+  p_prune boolean DEFAULT true
+) RETURNS TABLE (
+  namespace text,
+  queue_name text,
+  scope text,
+  refill_limit integer,
+  refill_interval_ms integer,
+  burst integer,
+  updated_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_definition jsonb;
+  v_queue_name text;
+  v_scope text;
+  v_limit numeric;
+  v_interval_ms numeric;
+  v_burst numeric;
+  v_seen text[] := '{}';
+  v_changed boolean;
+BEGIN
+  IF p_namespace IS NULL OR p_namespace = '' OR octet_length(p_namespace) > 256 THEN
+    RAISE EXCEPTION 'rate limit policy namespace must contain between 1 and 256 UTF-8 bytes';
+  END IF;
+  IF p_definitions IS NULL OR jsonb_typeof(p_definitions) <> 'array' THEN
+    RAISE EXCEPTION 'rate limit policy definitions must be a JSON array';
+  END IF;
+  IF jsonb_array_length(p_definitions) > 10000 THEN
+    RAISE EXCEPTION 'rate limit policy definitions exceed maximum size of 10000';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:rate-limit-policies', 0));
+
+  FOR v_definition IN SELECT value FROM jsonb_array_elements(p_definitions)
+  LOOP
+    IF jsonb_typeof(v_definition) <> 'object'
+       OR v_definition - ARRAY['queue', 'scope', 'limit', 'intervalMs', 'burst'] <> '{}'::jsonb
+       OR NOT (v_definition ?& ARRAY['queue', 'scope', 'limit', 'intervalMs', 'burst'])
+       OR jsonb_typeof(v_definition->'queue') <> 'string'
+       OR jsonb_typeof(v_definition->'scope') <> 'string'
+       OR jsonb_typeof(v_definition->'limit') <> 'number'
+       OR jsonb_typeof(v_definition->'intervalMs') <> 'number'
+       OR jsonb_typeof(v_definition->'burst') <> 'number' THEN
+      RAISE EXCEPTION 'each rate limit policy requires queue, scope, limit, intervalMs, and burst';
+    END IF;
+    v_queue_name := v_definition->>'queue';
+    v_scope := v_definition->>'scope';
+    v_limit := (v_definition->>'limit')::numeric;
+    v_interval_ms := (v_definition->>'intervalMs')::numeric;
+    v_burst := (v_definition->>'burst')::numeric;
+    IF v_queue_name = '' OR octet_length(v_queue_name) > 256 THEN
+      RAISE EXCEPTION 'rate limit policy queue must contain between 1 and 256 UTF-8 bytes';
+    END IF;
+    IF v_queue_name = ANY(v_seen) THEN
+      RAISE EXCEPTION 'rate limit policy queue names must be unique';
+    END IF;
+    IF v_scope NOT IN ('queue', 'key') THEN
+      RAISE EXCEPTION 'rate limit policy scope must be queue or key';
+    END IF;
+    IF v_limit <> trunc(v_limit) OR v_limit NOT BETWEEN 1 AND 1000000
+       OR v_interval_ms <> trunc(v_interval_ms) OR v_interval_ms NOT BETWEEN 1 AND 86400000
+       OR v_burst <> trunc(v_burst) OR v_burst NOT BETWEEN 1 AND 1000000 THEN
+      RAISE EXCEPTION 'rate limit policy values must be bounded positive integers';
+    END IF;
+    v_seen := array_append(v_seen, v_queue_name);
+    PERFORM pg_advisory_xact_lock(
+      hashtextextended('workhorse:rate-limit-policy:' || v_queue_name, 0)
+    );
+    IF EXISTS (
+      SELECT 1 FROM workhorse.rate_limit_policy policy
+       WHERE policy.queue_name = v_queue_name AND policy.namespace <> p_namespace
+    ) THEN
+      RAISE EXCEPTION 'rate limit policy queue is owned by another namespace';
+    END IF;
+    SELECT policy.scope IS DISTINCT FROM v_scope
+        OR policy.refill_limit IS DISTINCT FROM v_limit::integer
+        OR policy.refill_interval_ms IS DISTINCT FROM v_interval_ms::integer
+        OR policy.burst IS DISTINCT FROM v_burst::integer
+      INTO v_changed
+      FROM workhorse.rate_limit_policy policy
+     WHERE policy.queue_name = v_queue_name;
+    INSERT INTO workhorse.rate_limit_policy AS policy(
+      queue_name, namespace, scope, refill_limit, refill_interval_ms, burst, updated_at
+    ) VALUES (
+      v_queue_name, p_namespace, v_scope, v_limit::integer, v_interval_ms::integer,
+      v_burst::integer, clock_timestamp()
+    )
+    ON CONFLICT ON CONSTRAINT rate_limit_policy_pkey DO UPDATE SET
+      scope = EXCLUDED.scope,
+      refill_limit = EXCLUDED.refill_limit,
+      refill_interval_ms = EXCLUDED.refill_interval_ms,
+      burst = EXCLUDED.burst,
+      updated_at = CASE
+        WHEN policy.scope IS DISTINCT FROM EXCLUDED.scope
+          OR policy.refill_limit IS DISTINCT FROM EXCLUDED.refill_limit
+          OR policy.refill_interval_ms IS DISTINCT FROM EXCLUDED.refill_interval_ms
+          OR policy.burst IS DISTINCT FROM EXCLUDED.burst
+        THEN EXCLUDED.updated_at ELSE policy.updated_at
+      END;
+    IF COALESCE(v_changed, false) THEN
+      DELETE FROM workhorse.rate_limit_bucket bucket WHERE bucket.queue_name = v_queue_name;
+    END IF;
+  END LOOP;
+
+  IF p_prune THEN
+    FOR v_queue_name IN
+      SELECT policy.queue_name
+        FROM workhorse.rate_limit_policy policy
+       WHERE policy.namespace = p_namespace AND NOT (policy.queue_name = ANY(v_seen))
+       ORDER BY policy.queue_name
+    LOOP
+      PERFORM pg_advisory_xact_lock(
+        hashtextextended('workhorse:rate-limit-policy:' || v_queue_name, 0)
+      );
+    END LOOP;
+    DELETE FROM workhorse.rate_limit_policy policy
+     WHERE policy.namespace = p_namespace AND NOT (policy.queue_name = ANY(v_seen));
+  END IF;
+
+  PERFORM pg_notify('workhorse_jobs', '*');
+  RETURN QUERY
+    SELECT policy.namespace, policy.queue_name, policy.scope, policy.refill_limit,
+           policy.refill_interval_ms, policy.burst, policy.updated_at
+      FROM workhorse.rate_limit_policy policy
+     WHERE policy.namespace = p_namespace
+     ORDER BY policy.queue_name;
+END;
+$$;
+
 -- Accept up to 1,000 jobs atomically. Scoped idempotency keys are resolved in ordinal order through
 -- their unique index before any durable job side effects. Exact replays return the original identity;
 -- material mismatches abort the whole statement with SQLSTATE P1001.
@@ -3208,6 +3367,17 @@ AS $$
 DECLARE
   v_runtime workhorse.job_runtime%ROWTYPE;
   v_policy workhorse.concurrency_policy%ROWTYPE;
+  v_rate_policy workhorse.rate_limit_policy%ROWTYPE;
+  v_candidate record;
+  v_candidate_job_id uuid;
+  v_bucket_key text;
+  v_bucket_tokens numeric;
+  v_bucket_refilled_at timestamptz;
+  v_refill_baseline timestamptz;
+  v_refilled_tokens numeric;
+  v_remaining_tokens numeric;
+  v_has_concurrency boolean;
+  v_has_rate_limit boolean;
   v_active integer;
   v_fence bigint;
   v_now timestamptz;
@@ -3226,9 +3396,17 @@ BEGIN
     FROM workhorse.concurrency_policy policy
    WHERE policy.queue_name = p_queue_name
    FOR UPDATE;
+  v_has_concurrency := FOUND;
+  PERFORM pg_advisory_xact_lock_shared(
+    hashtextextended('workhorse:rate-limit-policy:' || p_queue_name, 0)
+  );
+  SELECT policy.* INTO v_rate_policy
+    FROM workhorse.rate_limit_policy policy
+   WHERE policy.queue_name = p_queue_name;
+  v_has_rate_limit := FOUND;
   v_now := clock_timestamp();
   v_expires := v_now + make_interval(secs => p_lease_ms::double precision / 1000.0);
-  IF FOUND THEN
+  IF v_has_concurrency THEN
     SELECT count(*)::integer INTO v_active
       FROM workhorse.job_runtime active
      WHERE active.state = 'active'
@@ -3237,9 +3415,8 @@ BEGIN
     IF v_active >= v_policy.max_active THEN RETURN; END IF;
   END IF;
 
-  v_fence := nextval('workhorse.fence_token_seq');
-  WITH ready_window AS MATERIALIZED (
-    SELECT runtime.job_id, runtime.concurrency_key, runtime.sequence
+  FOR v_candidate IN
+    SELECT runtime.job_id, runtime.concurrency_key
       FROM workhorse.job_runtime runtime
       JOIN workhorse.job job ON job.id = runtime.job_id
      WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
@@ -3252,24 +3429,64 @@ BEGIN
        )
      ORDER BY runtime.sequence, runtime.job_id
      FOR UPDATE OF runtime SKIP LOCKED
-     LIMIT CASE WHEN v_policy.queue_name IS NULL THEN 1 ELSE 100 END
-  ), candidate AS (
-    SELECT ready.job_id
-      FROM ready_window ready
-     WHERE v_policy.queue_name IS NULL
-        OR v_policy.max_active_per_key IS NULL
-        OR ready.concurrency_key IS NULL
-        OR (
-          SELECT count(*)
-            FROM workhorse.job_runtime active
-           WHERE active.state = 'active'
-             AND active.queue_name = p_queue_name
-             AND active.concurrency_key = ready.concurrency_key
-             AND active.expires_at > v_now
-        ) < v_policy.max_active_per_key
-     ORDER BY ready.sequence, ready.job_id
-     LIMIT 1
-  )
+     LIMIT CASE
+       WHEN v_has_concurrency OR (v_has_rate_limit AND v_rate_policy.scope = 'key') THEN 100
+       ELSE 1
+     END
+  LOOP
+    IF v_has_concurrency
+       AND v_policy.max_active_per_key IS NOT NULL
+       AND v_candidate.concurrency_key IS NOT NULL THEN
+      SELECT count(*)::integer INTO v_active
+        FROM workhorse.job_runtime active
+       WHERE active.state = 'active'
+         AND active.queue_name = p_queue_name
+         AND active.concurrency_key = v_candidate.concurrency_key
+         AND active.expires_at > v_now;
+      CONTINUE WHEN v_active >= v_policy.max_active_per_key;
+    END IF;
+
+    IF v_has_rate_limit THEN
+      v_bucket_key := CASE
+        WHEN v_rate_policy.scope = 'queue' THEN ''
+        ELSE COALESCE(v_candidate.concurrency_key, '')
+      END;
+      INSERT INTO workhorse.rate_limit_bucket(queue_name, bucket_key, tokens, refilled_at, full_at)
+        VALUES (p_queue_name, v_bucket_key, v_rate_policy.burst, v_now, v_now)
+        ON CONFLICT DO NOTHING;
+      SELECT bucket.tokens, bucket.refilled_at
+        INTO v_bucket_tokens, v_bucket_refilled_at
+        FROM workhorse.rate_limit_bucket bucket
+       WHERE bucket.queue_name = p_queue_name AND bucket.bucket_key = v_bucket_key
+       FOR UPDATE;
+      v_refilled_tokens := LEAST(
+        v_rate_policy.burst::numeric,
+        v_bucket_tokens + GREATEST(0, extract(epoch FROM v_now - v_bucket_refilled_at) * 1000)
+          * v_rate_policy.refill_limit / v_rate_policy.refill_interval_ms
+      );
+      v_refill_baseline := GREATEST(v_now, v_bucket_refilled_at);
+      v_remaining_tokens := CASE WHEN v_refilled_tokens >= 1 THEN v_refilled_tokens - 1
+                                 ELSE v_refilled_tokens END;
+      UPDATE workhorse.rate_limit_bucket bucket
+         SET tokens = v_remaining_tokens,
+             refilled_at = v_refill_baseline,
+             full_at = v_refill_baseline + make_interval(secs =>
+               ((v_rate_policy.burst - v_remaining_tokens)
+                 * v_rate_policy.refill_interval_ms / v_rate_policy.refill_limit
+               )::double precision / 1000
+             )
+       WHERE bucket.queue_name = p_queue_name AND bucket.bucket_key = v_bucket_key;
+      IF v_refilled_tokens < 1 THEN
+        IF v_rate_policy.scope = 'queue' THEN RETURN; END IF;
+        CONTINUE;
+      END IF;
+    END IF;
+    v_candidate_job_id := v_candidate.job_id;
+    EXIT;
+  END LOOP;
+  IF v_candidate_job_id IS NULL THEN RETURN; END IF;
+
+  v_fence := nextval('workhorse.fence_token_seq');
   UPDATE workhorse.job_runtime runtime
      SET state = 'active', fence_token = v_fence, worker_id = p_worker_id,
          acquired_at = v_now, heartbeat_at = v_now, expires_at = v_expires,
@@ -3281,8 +3498,8 @@ BEGIN
              (job.execution_timeout_ms - runtime.execution_used_ms)::double precision / 1000.0)
          END,
          error = NULL, updated_at = v_now
-    FROM candidate, workhorse.job job
-   WHERE runtime.job_id = candidate.job_id AND runtime.state = 'ready' AND job.id = runtime.job_id
+    FROM workhorse.job job
+   WHERE runtime.job_id = v_candidate_job_id AND runtime.state = 'ready' AND job.id = runtime.job_id
      AND (runtime.deadline_at IS NULL OR runtime.deadline_at > v_now)
   RETURNING runtime.* INTO v_runtime;
   IF NOT FOUND THEN RETURN; END IF;
@@ -3298,6 +3515,36 @@ BEGIN
            job.retry_policy, job.deadline_at, job.execution_timeout_ms,
            v_runtime.attempt_timeout_at, v_fence, v_expires
       FROM workhorse.job job WHERE job.id = v_runtime.job_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.prune_rate_limit_buckets_v1(
+  p_before timestamptz,
+  p_limit integer
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE v_count integer;
+BEGIN
+  IF p_before IS NULL OR NOT isfinite(p_before) THEN
+    RAISE EXCEPTION 'rate limit bucket cutoff is required';
+  END IF;
+  IF p_limit NOT BETWEEN 1 AND 1000000 THEN
+    RAISE EXCEPTION 'rate limit bucket prune limit must be between 1 and 1000000';
+  END IF;
+  WITH victims AS MATERIALIZED (
+    SELECT bucket.queue_name, bucket.bucket_key
+      FROM workhorse.rate_limit_bucket bucket
+     WHERE bucket.full_at <= p_before
+     ORDER BY bucket.full_at, bucket.queue_name, bucket.bucket_key
+     LIMIT p_limit
+     FOR UPDATE SKIP LOCKED
+  )
+  DELETE FROM workhorse.rate_limit_bucket bucket
+   USING victims
+   WHERE bucket.queue_name = victims.queue_name AND bucket.bucket_key = victims.bucket_key;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
 END;
 $$;
 
@@ -5454,6 +5701,7 @@ BEGIN
     hashtextextended('workhorse:maintenance:terminal-storage', 0)
   ) THEN
     RETURN QUERY VALUES
+      ('rate_limit_buckets'::text, 0, 0, true, NULL::jsonb),
       ('enqueue_idempotency'::text, 0, 0, true, NULL::jsonb),
       ('terminal_jobs'::text, 0, 0, true, NULL::jsonb);
     RETURN;
@@ -5472,6 +5720,24 @@ BEGIN
     FROM workhorse.maintenance_state WHERE task_name = 'history_retention';
   UPDATE workhorse.maintenance_state SET last_started_at = p_now, updated_at = clock_timestamp()
    WHERE task_name = 'terminal_storage';
+
+  phase := 'rate_limit_buckets';
+  rows_affected := 0;
+  skipped_lock := false;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    rows_affected := workhorse.prune_rate_limit_buckets_v1(
+      p_now, v_policy.terminal_job_prune_limit
+    );
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+    v_success := false;
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
 
   phase := 'enqueue_idempotency';
   rows_affected := 0;
@@ -5979,7 +6245,7 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (22) ON CONFLICT DO NOTHING;
+  INSERT INTO workhorse.schema_version(version) VALUES (23) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

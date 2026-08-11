@@ -22,8 +22,9 @@ the job as live and terminal at the same time.
 
 ## Who owns active work?
 
-A `Worker` calls `claim_v2` when it has a free slot. PostgreSQL checks any durable queue policy, then records the worker ID, an expiry, and
-a fence token on `job_runtime`.
+A `Worker` calls `claim_v2` when it has a free slot. PostgreSQL checks concurrency capacity and
+consumes a rate-limit token when either policy applies. It then records the worker ID, an expiry,
+and a fence token on `job_runtime`.
 
 The worker calls `heartbeat_v2` while the handler runs. If heartbeats stop, recovery closes the old
 attempt and makes the job eligible again.

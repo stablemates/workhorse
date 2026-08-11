@@ -227,6 +227,9 @@ export interface QueueMetricSnapshot {
   concurrencyLimit: number | null;
   concurrencyActive: number;
   blockedReadyDepth: number;
+  rateLimitPerSecond: number | null;
+  rateLimitThrottledReadyDepth: number;
+  rateLimitNextEligibleDelayMs: number | null;
 }
 
 export interface QueueMetricSource {
@@ -259,12 +262,27 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
     "workhorse.queue.concurrency.blocked_ready",
     { description: "Bounded ready depth blocked by queue concurrency policy", unit: "{job}" },
   );
+  const rateLimit = activeMeter.createObservableGauge("workhorse.queue.rate_limit", {
+    description: "Configured token refill rate",
+    unit: "{job}/s",
+  });
+  const rateLimitThrottled = activeMeter.createObservableGauge(
+    "workhorse.queue.rate_limit.throttled_ready",
+    { description: "Bounded ready depth waiting for rate-limit tokens", unit: "{job}" },
+  );
+  const rateLimitDelay = activeMeter.createObservableGauge(
+    "workhorse.queue.rate_limit.next_eligibility_delay",
+    { description: "Delay until the next throttled job earns a token", unit: "ms" },
+  );
   const instruments = [
     queueDepth,
     oldestReadyAge,
     concurrencyLimit,
     concurrencyActive,
     concurrencyBlocked,
+    rateLimit,
+    rateLimitThrottled,
+    rateLimitDelay,
   ];
   const callback: BatchObservableCallback = async (result) => {
     for (const snapshot of await source.queueMetricSnapshot()) {
@@ -288,6 +306,13 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
         result.observe(concurrencyLimit, snapshot.concurrencyLimit, queueAttribute);
         result.observe(concurrencyActive, snapshot.concurrencyActive, queueAttribute);
         result.observe(concurrencyBlocked, snapshot.blockedReadyDepth, queueAttribute);
+      }
+      if (snapshot.rateLimitPerSecond !== null) {
+        result.observe(rateLimit, snapshot.rateLimitPerSecond, queueAttribute);
+        result.observe(rateLimitThrottled, snapshot.rateLimitThrottledReadyDepth, queueAttribute);
+        if (snapshot.rateLimitNextEligibleDelayMs !== null) {
+          result.observe(rateLimitDelay, snapshot.rateLimitNextEligibleDelayMs, queueAttribute);
+        }
       }
     }
   };

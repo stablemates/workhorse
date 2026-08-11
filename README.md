@@ -66,6 +66,7 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
   top-level redaction, byte bounds, and merged lifecycle timelines;
 - a durable worker registry that discovers the live fleet, reports declared concurrency, slot use,
   and draining, and carries cooperative operator pause to workers in any process;
+- deployment-synchronized queue and queue-scoped-key token buckets coordinated by PostgreSQL;
 - separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
 - a separately packaged `@workhorse/dashboard` React operator dashboard with a framework-neutral
   request host, a Connect-style Node bridge, an injected transport-neutral client boundary,
@@ -76,7 +77,7 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.
 
-Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
+Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
 
 Checkpoint outputs remain immutable restart evidence. Mutable progress is stored separately and never
 changes the accepted payload, checkpoint outputs, or terminal result.

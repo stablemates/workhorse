@@ -18,8 +18,8 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P1-06 Queue concurrency policies**
-2. **P1-07 Rate limiting**
+1. **P1-05 Priority queues**
+2. **P0-06 Consistent operational snapshots**
 
 The demo, the initial integration packages, the operator query surface, progress, dead letters,
 deadlines, the durable worker registry, the framework-neutral dashboard host, and the release and
@@ -337,15 +337,15 @@ hint, and polling stays the source of truth.
 - [x] Expose blocked-ready depth and policy utilization.
 - [x] Prove that policy checks do not turn claims into lifetime-table scans.
 
-### [ ] P1-07 Rate limiting
+### [x] P1-07 Rate limiting
 
 **Depends on:** P1-06
 
-- [ ] Add queue or key-scoped token-bucket limits with explicit time semantics.
-- [ ] Coordinate limits transactionally across worker processes.
-- [ ] Avoid busy loops when work is ready but rate-limited.
-- [ ] Report throttled depth, next eligibility, and effective throughput.
-- [ ] Test clock skew, bursts, retries, and crash recovery.
+- [x] Add queue or key-scoped token-bucket limits with explicit time semantics.
+- [x] Coordinate limits transactionally across worker processes.
+- [x] Avoid busy loops when work is ready but rate-limited.
+- [x] Report throttled depth, next eligibility, and effective throughput.
+- [x] Test clock skew, bursts, retries, and crash recovery.
 
 ### [x] P1-08 Payload contracts and limits
 

@@ -1,0 +1,43 @@
+---
+title: How do I control how quickly work starts?
+description: Coordinate queue or keyed token buckets across every worker process.
+---
+
+`WorkerOptions.concurrency` caps simultaneous handlers. `Queue.syncRateLimitPolicies` stores a
+PostgreSQL-owned token bucket that controls how quickly jobs enter those handlers across the fleet.
+
+## Synchronize desired policy
+
+```ts
+await queue.syncRateLimitPolicies("workers", [
+  {
+    queue: "mail",
+    limit: serviceRate.limit,
+    intervalMs: serviceRate.intervalMs,
+    burst: serviceRate.burst,
+  },
+]);
+```
+
+PostgreSQL refills continuously from its own clock and consumes a token in the claim transaction.
+Process restarts cannot reset the bucket, and a rolled-back claim does not spend a token.
+
+Set `scope: "key"` to give each queue-scoped `concurrencyKey` an independent bucket. If one key is
+empty, bounded lookahead can admit later work for another key.
+
+Retries and recovered jobs need another token when they become active again. Workers sleep between
+empty claims, and polling observes time-based refills without a tight claim loop.
+
+`Queue.health()` and OpenTelemetry report bounded throttled depth, effective refill throughput, and
+next eligibility without exporting raw key values.
+
+## Next
+
+- [Concurrency policies](/docs/concurrency-policies) — cap simultaneous work
+- [Workers](/docs/workers) — configure worker slots and polling
+- [Operations](/docs/operations) — inspect queue pressure
+
+---
+
+Exact SQL functions, limits, bucket columns, and cleanup semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#rate_limit_policy-and-rate_limit_bucket).

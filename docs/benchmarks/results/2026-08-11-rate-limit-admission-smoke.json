@@ -1,0 +1,149 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 4,
+        "sampleIntervalMs": 100,
+        "targetJobs": 20,
+        "targetRatePerSecond": 40,
+        "workerConcurrency": 2
+      },
+      "enqueueBatchSize": 4,
+      "jobsPerRun": 12,
+      "leaseMs": 5000,
+      "repetitions": 2,
+      "seed": 1,
+      "workerConcurrency": [1, 2]
+    },
+    "operational": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "retryDelayMs": 30,
+      "scenarios": ["rate-limit-admission"],
+      "scheduleDelayMs": 30
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_next_feature_5caa1c63",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-11T16:54:36.758Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 3,
+      "heartbeatCount": 3,
+      "jobCount": 6,
+      "leaseMs": 100,
+      "pruneLimit": 100,
+      "queuePrefix": "operational",
+      "retryDelayMs": 30,
+      "scenarios": ["rate-limit-admission"],
+      "scheduleDelayMs": 30
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": 2,
+            "expected": 2,
+            "name": "burst admits configured capacity",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "one claim is throttled",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "health reports throttled ready work",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "health reports a future eligibility time",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "refill admits the remaining job",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "refill preserves an accepted identity",
+            "passed": true
+          },
+          {
+            "actual": "fa873e01-8909-40f5-a2c4-2b30f18f16c1",
+            "expected": "fa873e01-8909-40f5-a2c4-2b30f18f16c1",
+            "name": "another key bypasses an empty bucket",
+            "passed": true
+          }
+        ],
+        "durationMs": 360.7310540000001,
+        "metrics": {
+          "burstClaims": 2,
+          "effectiveRatePerSecond": 4,
+          "keyBypassClaimed": true,
+          "refillClaimMs": 6.317771999999991,
+          "refillWaitMs": 250,
+          "throttledClaims": 1,
+          "throttledReady": 1
+        },
+        "name": "rate-limit-admission"
+      }
+    ],
+    "totalDurationMs": 360.74803499999996
+  },
+  "profile": "smoke",
+  "provenance": {
+    "command": [
+      "/home/anton/.local/share/mise/installs/node/24.15.0/bin/node",
+      "/home/anton/orca/workspaces/workhorse/next-feature/src/cli/benchmark.ts",
+      "--",
+      "--suite",
+      "lifecycle",
+      "--profile",
+      "smoke",
+      "--scenario",
+      "rate-limit-admission",
+      "--output",
+      "docs/benchmarks/results/2026-08-11-rate-limit-admission-smoke.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187801088
+    },
+    "source": {
+      "commit": "0a663564f0be6a67a294c6eaa3f61ff3b07e6f06",
+      "dirty": true
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}
