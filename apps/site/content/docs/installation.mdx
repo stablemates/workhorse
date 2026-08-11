@@ -14,8 +14,8 @@ Install `@workhorse/core` with the PostgreSQL client your application already us
 pnpm add @workhorse/core pg
 ```
 
-Add an ORM provider, `@workhorse/hono`, or `@workhorse/dashboard` only when that integration belongs
-in the same process. The supported ORM providers are Drizzle, Prisma, and TypeORM.
+Add a database provider, `@workhorse/hono`, or `@workhorse/dashboard` only when that integration belongs
+in the same process. The supported database providers are Drizzle, Prisma, TypeORM, and Kysely.
 
 The `workhorse init` command can inspect an existing project. It writes a worker configuration and
 prints a dashboard mount, but it leaves your routes and package manifest alone.
@@ -76,6 +76,7 @@ while TypeScript also checks payloads and configuration during development.
 - [Drizzle](/docs/drizzle) — adapt an existing Drizzle connection
 - [Prisma](/docs/prisma) — adapt a Prisma client and interactive transaction
 - [TypeORM](/docs/typeorm) — adapt a data source and transactional entity manager
+- [Kysely](/docs/kysely) — adapt a database and transaction executor
 
 ---
 

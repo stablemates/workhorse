@@ -8,7 +8,7 @@ import path from "node:path";
  * guess costs the user one edit to a generated file rather than a broken installation.
  */
 export interface DetectedProject {
-  orm: "drizzle" | "prisma" | "typeorm" | "pg";
+  orm: "drizzle" | "prisma" | "typeorm" | "kysely" | "pg";
   framework: "hono" | "express" | "fastify" | "next" | "none";
   typescript: boolean;
   packageManager: "pnpm" | "npm" | "yarn" | "bun";
@@ -49,7 +49,9 @@ export function detectProject(packageJson: PackageJson | null): DetectedProject 
         ? "prisma"
         : has("typeorm")
           ? "typeorm"
-          : "pg",
+          : has("kysely")
+            ? "kysely"
+            : "pg",
     framework: has("hono")
       ? "hono"
       : has("next")
@@ -107,6 +109,18 @@ export function renderWorkerConfig(project: DetectedProject): string {
         await database.destroy();
         await pool.end();
       },
+    });`;
+      break;
+    }
+    case "kysely": {
+      adapterImport =
+        'import { createKyselyAdapter } from "@workhorse/kysely";\nimport { Kysely, PostgresDialect } from "kysely";';
+      adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
+    const database = new Kysely({ dialect: new PostgresDialect({ pool }) });
+    return createKyselyAdapter(database, {
+      defaultQueue: QUEUE,
+      notificationPool: pool,
+      close: () => database.destroy(),
     });`;
       break;
     }

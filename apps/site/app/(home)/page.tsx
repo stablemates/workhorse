@@ -595,6 +595,11 @@ const integrations = [
     href: "/docs/typeorm",
   },
   {
+    name: "@workhorse/kysely",
+    body: "Adapts Kysely databases and transaction executors through compiled queries.",
+    href: "/docs/kysely",
+  },
+  {
     name: "@workhorse/hono",
     body: "Typed middleware, workers started once per process, and an idempotent draining shutdown.",
     href: "/docs/hono",
@@ -817,7 +822,7 @@ export default function HomePage() {
         <Rule label="04 / packages" />
         <div className="mt-10 grid gap-10 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-14">
           <SectionHeading
-            index="Six packages"
+            index="Seven packages"
             title="The core keeps one dependency."
             lede="Every integration is a separate package, so adopting an ORM, Hono, or the dashboard never adds that ecosystem dependency to the protocol itself. None of them hide the transaction."
           />

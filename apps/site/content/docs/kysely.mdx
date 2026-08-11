@@ -1,0 +1,76 @@
+---
+title: How do I use Workhorse with Kysely?
+description: Adapt a Kysely database and enqueue jobs inside caller-owned transactions.
+---
+
+`@workhorse/kysely` converts Kysely databases and transactions into the core `Queryable` protocol.
+Workhorse keeps its schema lifecycle outside Kysely migrations.
+
+## Create the adapter
+
+Install the integration beside Kysely and node-postgres.
+
+```bash
+pnpm add @workhorse/kysely kysely pg
+```
+
+Pass the database to `createKyselyAdapter`. If the same process runs workers, pass the pool from
+`PostgresDialect` so they can reserve a notification connection.
+
+```ts
+import { createKyselyAdapter } from "@workhorse/kysely";
+import { Kysely, PostgresDialect } from "kysely";
+import { Pool } from "pg";
+
+interface AppDatabase {
+  account: { id: string; email: string };
+}
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const database = new Kysely<AppDatabase>({ dialect: new PostgresDialect({ pool }) });
+const workhorse = createKyselyAdapter(database, {
+  notificationPool: pool,
+  close: () => database.destroy(),
+});
+```
+
+## Enqueue inside a transaction
+
+Call `forTransaction` with the transaction passed to the callback. The queue executes its compiled
+SQL through that transaction, so the job follows the surrounding commit or rollback.
+
+```ts
+await database.transaction().execute(async (transaction) => {
+  const account = await transaction
+    .insertInto("account")
+    .values({ email })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+
+  await workhorse.forTransaction(transaction).enqueue("account.created", {
+    accountId: account.id,
+  });
+});
+```
+
+If the callback throws, Kysely rolls back both writes. The adapter's default queue remains outside
+that transaction.
+
+## Keep resource ownership explicit
+
+The adapter does not destroy a caller-owned database unless `close` is configured. Without
+`notificationPool`, workers use bounded polling and keep the same durable behavior.
+
+`KyselyQueryError` retains the statement, original cause, and PostgreSQL error code. Install the
+Workhorse schema with the core deployment tools rather than a Kysely migration.
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue) — understand the transaction guarantee
+- [Workers](/docs/workers) — configure polling and handlers
+- [Installation](/docs/installation) — install the schema outside Kysely migrations
+
+---
+
+Exact adapter boundary and transaction ownership:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#system-context).

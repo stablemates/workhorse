@@ -36,7 +36,7 @@
     "dev": "pnpm demo",
     "build": "pnpm build:runtime && pnpm docs:build && pnpm --filter @workhorse/demo build",
     "build:runtime": "pnpm build:core && pnpm --filter './packages/*' build",
-    "build:runtime:dev": "pnpm build:core && pnpm --filter @workhorse/dashboard build:library && pnpm --filter @workhorse/drizzle build && pnpm --filter @workhorse/prisma build && pnpm --filter @workhorse/typeorm build && pnpm --filter @workhorse/hono build",
+    "build:runtime:dev": "pnpm build:core && pnpm --filter @workhorse/dashboard build:library && pnpm --filter @workhorse/drizzle build && pnpm --filter @workhorse/prisma build && pnpm --filter @workhorse/typeorm build && pnpm --filter @workhorse/kysely build && pnpm --filter @workhorse/hono build",
     "demo": "tsx scripts/with-env.ts tsx scripts/portless.ts",
     "demo:otel": "pnpm signoz:up && WORKHORSE_DEMO_TELEMETRY=true pnpm demo",
     "demo:app": "pnpm db:reset:demo && pnpm build:runtime:dev && tsx scripts/with-env.ts tsx scripts/dev.ts",
