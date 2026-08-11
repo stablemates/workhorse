@@ -4,8 +4,8 @@
  * A worker's slot count limits one process. A concurrency policy limits dispatch across every
  * worker sharing the database, so the operator question these helpers answer is "why is ready
  * work not starting even though workers are free?". The wording therefore always names the
- * budget rather than the process, and never shows a raw concurrency key: the read model reports
- * bounded aggregates only.
+ * budget rather than the process. Queue and system summaries use bounded aggregates only. The task
+ * drawer may show the selected task's own key while that task is ready or active.
  *
  * The text lives here rather than in the components so the phrasing can be asserted without a
  * renderer, and so the Queues page, system queue pressure, and the task drawer cannot drift into

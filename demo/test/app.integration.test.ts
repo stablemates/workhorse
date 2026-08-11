@@ -2429,8 +2429,9 @@ describe("Workhorse demo", () => {
       queueController: createLocalQueueController(database),
     });
     const client = dashboardClient(app);
-    await workhorse.context.queue.syncConcurrencyPolicies("dashboard-test", [
+    await new Queue(pool).syncConcurrencyPolicies("dashboard-test", [
       { queue: queueName, maxActive: 1, maxActivePerKey: 1 },
+      { queue: "policy-only-demo", maxActive: 3 },
     ]);
     const activeId = await workhorse.context.queue.enqueue(
       "active",
@@ -2460,9 +2461,10 @@ describe("Workhorse demo", () => {
       },
     );
 
-    await expect(client.dashboard.queues()).resolves.toMatchObject({
-      queues: [
-        {
+    const queuesPage = await client.dashboard.queues();
+    expect(queuesPage).toMatchObject({
+      queues: expect.arrayContaining([
+        expect.objectContaining({
           queue: queueName,
           paused: false,
           scheduled: 1,
@@ -2481,9 +2483,25 @@ describe("Workhorse demo", () => {
             saturatedKeys: 1,
             highestKeyActive: 1,
           },
-        },
-      ],
+        }),
+      ]),
       concurrencyPoliciesCapped: false,
+    });
+    expect(queuesPage.queues.find((row) => row.queue === "policy-only-demo")).toMatchObject({
+      paused: false,
+      scheduled: 0,
+      ready: 0,
+      active: 0,
+      succeeded: 0,
+      failed: 0,
+      canceled: 0,
+      concurrencyPolicy: {
+        namespace: "dashboard-test",
+        maxActive: 3,
+        active: 0,
+        available: 3,
+        blockedReady: 0,
+      },
     });
     await expect(client.dashboard.jobDetail({ id: readyId })).resolves.toMatchObject({
       identity: { concurrencyKey: "tenant-secret" },
@@ -2496,6 +2514,24 @@ describe("Workhorse demo", () => {
         maxActivePerKey: 1,
       },
     });
+    const taskList = await client.dashboard.tasks({
+      filter: "all",
+      page: 1,
+      pageSize: 25,
+      queue: queueName,
+    });
+    const eventList = await client.dashboard.events({
+      window: "1h",
+      pageSize: 100,
+      jobId: readyId,
+    });
+    expect(JSON.stringify(taskList)).not.toContain("tenant-secret");
+    expect(JSON.stringify(eventList)).not.toContain("tenant-secret");
+    const enqueuedEvent = eventList.events.find((event) => event.type === "enqueued");
+    expect(enqueuedEvent).toBeDefined();
+    expect(
+      JSON.stringify(await client.dashboard.eventDetail({ id: enqueuedEvent!.id })),
+    ).not.toContain("tenant-secret");
     const system = await client.dashboard.system({ window: "15m" });
     expect(system.status.degradedChecks).toContain(
       `Concurrency policy blocks ready tasks on ${queueName}`,
