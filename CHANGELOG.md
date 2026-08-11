@@ -1,7 +1,8 @@
 # Changelog
 
-All four published packages — `@workhorse/core`, `@workhorse/drizzle`, `@workhorse/hono`, and
-`@workhorse/dashboard` — are versioned in lockstep and released from one tag, so they share this
+All six published packages — `@workhorse/core`, `@workhorse/drizzle`, `@workhorse/hono`,
+`@workhorse/express`, `@workhorse/fastify`, and `@workhorse/dashboard` — are versioned in lockstep
+and released from one tag, so they share this
 file. Each entry states the schema version it requires and the steps needed to move to it.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
@@ -31,6 +32,8 @@ First published line. Requires **schema v21**, Node.js **22 or 24**, PostgreSQL 
   jittered bounded polling as the durable fallback.
 - `@workhorse/drizzle`: Drizzle ORM provider with caller-owned transactions.
 - `@workhorse/hono`: Hono lifecycle integration and dashboard route registration.
+- `@workhorse/express`: Express request context, worker lifecycle, and graceful server shutdown.
+- `@workhorse/fastify`: Fastify request context and lifecycle-hook integration.
 - `@workhorse/dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,
   a settings page with audited policy changes, and a Connect-style Node bridge for Express,
   Connect, and Fastify.

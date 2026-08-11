@@ -29,6 +29,8 @@
     "---Integrations---",
     "drizzle",
     "hono",
+    "express",
+    "fastify",
     "dashboard",
     "---Reference---",
     "examples",
