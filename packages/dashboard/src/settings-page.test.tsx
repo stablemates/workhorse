@@ -123,6 +123,7 @@ describe("settings page", () => {
           onSaveRetention: async () => undefined,
           onRevertMaintenance: async () => undefined,
           onRevertRetention: async () => undefined,
+          onDirtyChange: () => undefined,
         }),
       ),
     );
@@ -140,6 +141,10 @@ describe("settings page", () => {
     expect(html).toContain("Cleanup limits");
     expect(html).toContain("Limit how much work each cleanup pass can perform");
     expect(html).toContain("Operator override");
+    expect(html).not.toContain("Application default");
+    expect(html).toContain("Default: UTC");
+    expect(html).toContain("Default: 6 hours");
+    expect(html).toContain("Default: 14 days");
     expect(html).toContain("12 finished tasks, 40 events, and 7 attempts");
     expect(html).toContain("Set at deploy");
     expect(html).toContain("worker-1");

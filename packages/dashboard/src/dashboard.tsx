@@ -126,9 +126,10 @@ import { requestRunNow, type RunNowFeedback } from "./run-now.js";
 import { notifyCancel, notifyDashboard, notifyFailure, notifyRunNow } from "./notifications.js";
 import { WorkhorseBrand } from "./brand.js";
 import {
-  dashboardRefreshIntervalMs,
+  dashboardPollingIntervalMs,
   dashboardRefreshIntervals,
   defaultDashboardRefreshInterval,
+  discardBackgroundSettingsRefresh,
   startDashboardPolling,
   type DashboardRefreshIntervalValue,
 } from "./refresh-policy.js";
@@ -4471,23 +4472,29 @@ export interface SettingsPageProps {
   onSaveRetention(definition: Partial<RetentionPolicyDefinition>): Promise<void>;
   onRevertMaintenance(setting: MaintenancePolicySetting): Promise<void>;
   onRevertRetention(setting: RetentionPolicySetting): Promise<void>;
+  onDirtyChange(dirty: boolean): void;
 }
 
-function SettingSource({
-  source,
+function OperatorOverride({
   revert,
+  disabled = false,
 }: {
-  source: "application" | "operator";
   revert?: () => void;
+  disabled?: boolean;
 }) {
-  if (source === "application") return <Badge variant="light">Application default</Badge>;
   return (
     <Group gap="xs">
       <Badge color="violet" variant="light">
         Operator override
       </Badge>
       {revert ? (
-        <Button size="compact-xs" variant="subtle" onClick={revert}>
+        <Button
+          size="compact-xs"
+          variant="subtle"
+          disabled={disabled}
+          title={disabled ? "Save or discard this section's changes before reverting" : undefined}
+          onClick={revert}
+        >
           Revert
         </Button>
       ) : null}
@@ -4584,6 +4591,10 @@ function formatMaintenanceInterval(milliseconds: number): string {
   return formatDuration(milliseconds);
 }
 
+function formatRetentionDefault(value: number | null, suffix: string): string {
+  return value === null ? "indefinitely" : `${value.toLocaleString()}${suffix}`;
+}
+
 function impactSummary(impact: RetentionPolicyImpact): string {
   const values = [
     [impact.eligible.terminalJobs, "finished task", impact.capped.terminalJobs],
@@ -4612,6 +4623,7 @@ export function SettingsPage({
   onSaveRetention,
   onRevertMaintenance,
   onRevertRetention,
+  onDirtyChange,
 }: SettingsPageProps) {
   const [timeZone, setTimeZone] = useState(currentTimeZoneValue);
   const [maintenance, setMaintenance] = useState(() => ({
@@ -4628,22 +4640,6 @@ export function SettingsPage({
   );
   const [retentionImpact, setRetentionImpact] = useState(initialRetentionImpact);
   const retentionPreviewVersion = useRef(0);
-  useEffect(() => {
-    setMaintenance({
-      timezone: data.maintenance.timezone,
-      historyRetentionLocalTime: data.maintenance.historyRetentionLocalTime,
-      partitionPreparationIntervalMs: data.maintenance.partitionPreparationIntervalMs,
-      terminalCleanupIntervalMs: data.maintenance.terminalCleanupIntervalMs,
-    });
-    setCustomPartitionInterval(
-      !partitionPreparationIntervals.includes(data.maintenance.partitionPreparationIntervalMs),
-    );
-    setRetention(
-      Object.fromEntries(retentionFields.map(({ key }) => [key, data.retention[key] ?? ""])),
-    );
-    retentionPreviewVersion.current += 1;
-    setRetentionImpact(null);
-  }, [data]);
   const changeTimeZone = (value: string | null) => {
     const next = value ?? "system";
     setDisplayTimeZone(next === "system" ? null : next);
@@ -4673,6 +4669,25 @@ export function SettingsPage({
   }
   const maintenanceChanged = Object.keys(maintenanceChanges).length > 0;
   const retentionChanged = Object.keys(retentionChanges).length > 0;
+  const settingsDirty = maintenanceChanged || retentionChanged;
+  useLayoutEffect(() => onDirtyChange(settingsDirty), [onDirtyChange, settingsDirty]);
+  useLayoutEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  useEffect(() => {
+    setMaintenance({
+      timezone: data.maintenance.timezone,
+      historyRetentionLocalTime: data.maintenance.historyRetentionLocalTime,
+      partitionPreparationIntervalMs: data.maintenance.partitionPreparationIntervalMs,
+      terminalCleanupIntervalMs: data.maintenance.terminalCleanupIntervalMs,
+    });
+    setCustomPartitionInterval(
+      !partitionPreparationIntervals.includes(data.maintenance.partitionPreparationIntervalMs),
+    );
+    setRetention(
+      Object.fromEntries(retentionFields.map(({ key }) => [key, data.retention[key] ?? ""])),
+    );
+    retentionPreviewVersion.current += 1;
+    setRetentionImpact(null);
+  }, [data]);
   const maintenanceTimeZoneOptions = supportedMaintenanceTimeZoneOptions.concat(
     supportedMaintenanceTimeZoneOptions.some(({ value }) => value === maintenance.timezone)
       ? []
@@ -4710,14 +4725,18 @@ export function SettingsPage({
           />
         </Table.Td>
         <Table.Td w={220}>
-          <SettingSource
-            source={data.retention.provenance[key].source}
-            revert={
-              data.editable && data.retention.provenance[key].source === "operator"
-                ? () => void onRevertRetention(key)
-                : undefined
-            }
-          />
+          <Stack gap={4} align="flex-start">
+            <Text c="dimmed" size="xs">
+              Default:{" "}
+              {formatRetentionDefault(data.retention.provenance[key].applicationDefault, suffix)}
+            </Text>
+            {data.retention.provenance[key].source === "operator" ? (
+              <OperatorOverride
+                disabled={retentionChanged}
+                revert={data.editable ? () => void onRevertRetention(key) : undefined}
+              />
+            ) : null}
+          </Stack>
         </Table.Td>
       </Table.Tr>
     ));
@@ -4750,35 +4769,36 @@ export function SettingsPage({
           </Box>
           <Grid>
             <Grid.Col span={{ base: 12, md: 6 }}>
-              <Select
-                label="Maintenance timezone"
-                description="Controls the local date and daylight-saving rules used by daily retention."
-                value={maintenance.timezone}
-                data={maintenanceTimeZoneOptions}
-                searchable
-                allowDeselect={false}
-                disabled={!data.editable}
-                onChange={(value) =>
-                  value && setMaintenance((current) => ({ ...current, timezone: value }))
-                }
-                rightSection={
-                  <SettingSource
-                    source={data.maintenance.provenance.timezone.source}
-                    revert={
-                      data.editable && data.maintenance.provenance.timezone.source === "operator"
-                        ? () => void onRevertMaintenance("timezone")
-                        : undefined
-                    }
-                  />
-                }
-                rightSectionWidth={190}
-              />
+              <Stack gap={4} align="stretch">
+                <Select
+                  label="Maintenance timezone"
+                  description={`Controls the local date and daylight-saving rules used by daily retention. Default: ${data.maintenance.provenance.timezone.applicationDefault}.`}
+                  value={maintenance.timezone}
+                  data={maintenanceTimeZoneOptions}
+                  searchable
+                  allowDeselect={false}
+                  disabled={!data.editable}
+                  onChange={(value) =>
+                    value && setMaintenance((current) => ({ ...current, timezone: value }))
+                  }
+                />
+                {data.maintenance.provenance.timezone.source === "operator" ? (
+                  <Box>
+                    <OperatorOverride
+                      disabled={maintenanceChanged}
+                      revert={
+                        data.editable ? () => void onRevertMaintenance("timezone") : undefined
+                      }
+                    />
+                  </Box>
+                ) : null}
+              </Stack>
             </Grid.Col>
             <Grid.Col span={{ base: 12, md: 6 }}>
               <TextInput
                 type="time"
                 label="Daily retention time"
-                description={`Runs once per local date in ${maintenance.timezone || "the selected timezone"}.`}
+                description={`Runs once per local date in ${maintenance.timezone || "the selected timezone"}. Default: ${data.maintenance.provenance.historyRetentionLocalTime.applicationDefault}.`}
                 value={maintenance.historyRetentionLocalTime}
                 disabled={!data.editable}
                 onChange={(event) =>
@@ -4788,15 +4808,16 @@ export function SettingsPage({
                   }))
                 }
                 rightSection={
-                  <SettingSource
-                    source={data.maintenance.provenance.historyRetentionLocalTime.source}
-                    revert={
-                      data.editable &&
-                      data.maintenance.provenance.historyRetentionLocalTime.source === "operator"
-                        ? () => void onRevertMaintenance("historyRetentionLocalTime")
-                        : undefined
-                    }
-                  />
+                  data.maintenance.provenance.historyRetentionLocalTime.source === "operator" ? (
+                    <OperatorOverride
+                      disabled={maintenanceChanged}
+                      revert={
+                        data.editable
+                          ? () => void onRevertMaintenance("historyRetentionLocalTime")
+                          : undefined
+                      }
+                    />
+                  ) : undefined
                 }
                 rightSectionWidth={190}
               />
@@ -4804,7 +4825,7 @@ export function SettingsPage({
             <Grid.Col span={{ base: 12, md: 6 }}>
               <NumberInput
                 label="Terminal cleanup interval"
-                description="Controls how often Workhorse removes finished tasks whose retention windows have elapsed."
+                description={`Controls how often Workhorse removes finished tasks whose retention windows have elapsed. Default: ${formatMaintenanceInterval(data.maintenance.provenance.terminalCleanupIntervalMs.applicationDefault)}.`}
                 suffix=" ms"
                 min={1_000}
                 value={maintenance.terminalCleanupIntervalMs}
@@ -4814,15 +4835,16 @@ export function SettingsPage({
                   setMaintenance((current) => ({ ...current, terminalCleanupIntervalMs: value }))
                 }
                 rightSection={
-                  <SettingSource
-                    source={data.maintenance.provenance.terminalCleanupIntervalMs.source}
-                    revert={
-                      data.editable &&
-                      data.maintenance.provenance.terminalCleanupIntervalMs.source === "operator"
-                        ? () => void onRevertMaintenance("terminalCleanupIntervalMs")
-                        : undefined
-                    }
-                  />
+                  data.maintenance.provenance.terminalCleanupIntervalMs.source === "operator" ? (
+                    <OperatorOverride
+                      disabled={maintenanceChanged}
+                      revert={
+                        data.editable
+                          ? () => void onRevertMaintenance("terminalCleanupIntervalMs")
+                          : undefined
+                      }
+                    />
+                  ) : undefined
                 }
                 rightSectionWidth={190}
               />
@@ -4839,62 +4861,64 @@ export function SettingsPage({
                 </Text>
               </Accordion.Control>
               <Accordion.Panel>
-                <Select
-                  label="Partition preparation interval"
-                  description="How often Workhorse checks that upcoming history partitions exist."
-                  value={
-                    customPartitionInterval
-                      ? "custom"
-                      : String(maintenance.partitionPreparationIntervalMs)
-                  }
-                  data={partitionIntervalOptions}
-                  allowDeselect={false}
-                  disabled={!data.editable}
-                  onChange={(value) => {
-                    if (value === "custom") {
-                      setCustomPartitionInterval(true);
-                    } else if (value) {
-                      setCustomPartitionInterval(false);
-                      setMaintenance((current) => ({
-                        ...current,
-                        partitionPreparationIntervalMs: Number(value),
-                      }));
+                <Stack gap={4} align="stretch">
+                  <Select
+                    label="Partition preparation interval"
+                    description={`How often Workhorse checks that upcoming history partitions exist. Default: ${formatMaintenanceInterval(data.maintenance.provenance.partitionPreparationIntervalMs.applicationDefault)}.`}
+                    value={
+                      customPartitionInterval
+                        ? "custom"
+                        : String(maintenance.partitionPreparationIntervalMs)
                     }
-                  }}
-                  rightSection={
-                    <SettingSource
-                      source={data.maintenance.provenance.partitionPreparationIntervalMs.source}
-                      revert={
-                        data.editable &&
-                        data.maintenance.provenance.partitionPreparationIntervalMs.source ===
-                          "operator"
-                          ? () => void onRevertMaintenance("partitionPreparationIntervalMs")
-                          : undefined
+                    data={partitionIntervalOptions}
+                    allowDeselect={false}
+                    disabled={!data.editable}
+                    onChange={(value) => {
+                      if (value === "custom") {
+                        setCustomPartitionInterval(true);
+                      } else if (value) {
+                        setCustomPartitionInterval(false);
+                        setMaintenance((current) => ({
+                          ...current,
+                          partitionPreparationIntervalMs: Number(value),
+                        }));
+                      }
+                    }}
+                  />
+                  {data.maintenance.provenance.partitionPreparationIntervalMs.source ===
+                  "operator" ? (
+                    <Box>
+                      <OperatorOverride
+                        disabled={maintenanceChanged}
+                        revert={
+                          data.editable
+                            ? () => void onRevertMaintenance("partitionPreparationIntervalMs")
+                            : undefined
+                        }
+                      />
+                    </Box>
+                  ) : null}
+                  {customPartitionInterval ? (
+                    <NumberInput
+                      mt="sm"
+                      label="Custom partition preparation interval"
+                      description="Enter any cadence from one minute through seven days."
+                      suffix=" minutes"
+                      min={1}
+                      max={7 * 24 * 60}
+                      decimalScale={2}
+                      value={maintenance.partitionPreparationIntervalMs / 60_000}
+                      disabled={!data.editable}
+                      onChange={(value) =>
+                        typeof value === "number" &&
+                        setMaintenance((current) => ({
+                          ...current,
+                          partitionPreparationIntervalMs: Math.round(value * 60_000),
+                        }))
                       }
                     />
-                  }
-                  rightSectionWidth={190}
-                />
-                {customPartitionInterval ? (
-                  <NumberInput
-                    mt="sm"
-                    label="Custom partition preparation interval"
-                    description="Enter any cadence from one minute through seven days."
-                    suffix=" minutes"
-                    min={1}
-                    max={7 * 24 * 60}
-                    decimalScale={2}
-                    value={maintenance.partitionPreparationIntervalMs / 60_000}
-                    disabled={!data.editable}
-                    onChange={(value) =>
-                      typeof value === "number" &&
-                      setMaintenance((current) => ({
-                        ...current,
-                        partitionPreparationIntervalMs: Math.round(value * 60_000),
-                      }))
-                    }
-                  />
-                ) : null}
+                  ) : null}
+                </Stack>
               </Accordion.Panel>
             </Accordion.Item>
           </Accordion>
@@ -5095,6 +5119,12 @@ function useDashboardController(
   const [confirmingQueue, setConfirmingQueue] = useState<string | null>(null);
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const settingsDirtyRef = useRef(false);
+  const changeSettingsDirty = useCallback((dirty: boolean) => {
+    settingsDirtyRef.current = dirty;
+    setSettingsDirty(dirty);
+  }, []);
   /**
    * The open task is read from the URL rather than held beside it, so a copied or reloaded link
    * restores the same list and the same open drawer, and Back/Forward can only ever agree with
@@ -5211,77 +5241,113 @@ function useDashboardController(
   const eventsRef = useRef(eventsQuery);
   eventsRef.current = eventsQuery;
 
-  const loadPage = useCallback(async () => {
-    const activeRequest = ++requestId.current;
-    setLoadState((current) => ({
-      status: "loading",
-      data: current.data,
-      error: null,
-    }));
-    try {
-      let data: PageData;
-      if (route === "/tasks") {
-        const listing = listingRef.current;
-        data = {
-          route: "/tasks",
-          value: await client.tasks({
-            filter: listing.filter,
-            queue: listing.queue,
-            worker: listing.worker,
-            jobType: listing.jobType,
-            tags: listing.tags,
-            search: listing.search ?? undefined,
-            page: listing.page,
-            pageSize: listing.pageSize,
-          }),
-        };
-      } else if (route === "/events") {
-        const events = eventsRef.current;
-        data = {
-          route: "/events",
-          value: await client.events({
-            window: events.window,
-            page: events.page,
-            pageSize: events.pageSize,
-            kind: events.kind,
-            queue: events.queue,
-            jobType: events.jobType,
-            types: events.types,
-          }),
-        };
-      } else if (route === "/cron") {
-        data = { route: "/cron", value: await client.cron() };
-      } else if (route === "/queues") {
-        data = { route: "/queues", value: await client.queues() };
-      } else if (route === "/system") {
-        data = {
-          route: "/system",
-          value: await client.system({ window: systemWindow }),
-        };
-      } else if (route === "/settings") {
-        data = { route: "/settings", value: await client.settings() };
-      } else {
-        data = {
-          route: "/workers",
-          value: await client.workers(),
-        };
+  const loadPage = useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      if (
+        discardBackgroundSettingsRefresh(
+          background,
+          route === "/settings",
+          settingsDirtyRef.current,
+        )
+      ) {
+        return;
       }
-      if (activeRequest === requestId.current) {
-        if (data.route === "/tasks") setTaskCounts(data.value.counts);
-        setLoadState({ status: "ready", data, error: null });
+      const activeRequest = ++requestId.current;
+      setLoadState((current) => ({
+        status: "loading",
+        data: current.data,
+        error: null,
+      }));
+      try {
+        let data: PageData;
+        if (route === "/tasks") {
+          const listing = listingRef.current;
+          data = {
+            route: "/tasks",
+            value: await client.tasks({
+              filter: listing.filter,
+              queue: listing.queue,
+              worker: listing.worker,
+              jobType: listing.jobType,
+              tags: listing.tags,
+              search: listing.search ?? undefined,
+              page: listing.page,
+              pageSize: listing.pageSize,
+            }),
+          };
+        } else if (route === "/events") {
+          const events = eventsRef.current;
+          data = {
+            route: "/events",
+            value: await client.events({
+              window: events.window,
+              page: events.page,
+              pageSize: events.pageSize,
+              kind: events.kind,
+              queue: events.queue,
+              jobType: events.jobType,
+              types: events.types,
+            }),
+          };
+        } else if (route === "/cron") {
+          data = { route: "/cron", value: await client.cron() };
+        } else if (route === "/queues") {
+          data = { route: "/queues", value: await client.queues() };
+        } else if (route === "/system") {
+          data = {
+            route: "/system",
+            value: await client.system({ window: systemWindow }),
+          };
+        } else if (route === "/settings") {
+          data = { route: "/settings", value: await client.settings() };
+        } else {
+          data = {
+            route: "/workers",
+            value: await client.workers(),
+          };
+        }
+        if (activeRequest === requestId.current) {
+          if (
+            discardBackgroundSettingsRefresh(
+              background,
+              data.route === "/settings",
+              settingsDirtyRef.current,
+            )
+          ) {
+            setLoadState((current) =>
+              current.data ? { status: "ready", data: current.data, error: null } : current,
+            );
+          } else {
+            if (data.route === "/tasks") setTaskCounts(data.value.counts);
+            setLoadState({ status: "ready", data, error: null });
+          }
+        }
+      } catch (cause) {
+        if (activeRequest === requestId.current) {
+          if (
+            discardBackgroundSettingsRefresh(
+              background,
+              route === "/settings",
+              settingsDirtyRef.current,
+            )
+          ) {
+            setLoadState((current) =>
+              current.data ? { status: "ready", data: current.data, error: null } : current,
+            );
+          } else {
+            setLoadState((current) => ({
+              status: "error",
+              data: current.data,
+              error: cause instanceof Error ? cause.message : "Workhorse could not load this page",
+            }));
+          }
+        }
       }
-    } catch (cause) {
-      if (activeRequest === requestId.current) {
-        setLoadState((current) => ({
-          status: "error",
-          data: current.data,
-          error: cause instanceof Error ? cause.message : "Workhorse could not load this page",
-        }));
-      }
-    }
-    // `listingKey` is the dependency the task listing actually has; the values themselves are
-    // read from a ref so that a re-render for an unrelated reason cannot send a stale request.
-  }, [client, route, listingKey, systemWindow, eventsKey]);
+      // `listingKey` is the dependency the task listing actually has; the values themselves are
+      // read from a ref so that a re-render for an unrelated reason cannot send a stale request.
+    },
+    [client, route, listingKey, systemWindow, eventsKey],
+  );
 
   const loadTaskCounts = useCallback(async () => {
     try {
@@ -5812,12 +5878,16 @@ function useDashboardController(
     if (location.route !== "/tasks") void loadTaskCounts();
   }, [loadPage, loadTaskCounts, location.route]);
 
+  const autoRefreshPaused = location.route === "/settings" && settingsDirty;
   useEffect(() => {
-    return startDashboardPolling(dashboardRefreshIntervalMs(refreshInterval), () => {
-      void loadPage();
-      if (location.route !== "/tasks") void loadTaskCounts();
-    });
-  }, [refreshInterval, loadPage, loadTaskCounts, location.route]);
+    return startDashboardPolling(
+      dashboardPollingIntervalMs(refreshInterval, autoRefreshPaused),
+      () => {
+        void loadPage({ background: true });
+        if (location.route !== "/tasks") void loadTaskCounts();
+      },
+    );
+  }, [autoRefreshPaused, refreshInterval, loadPage, loadTaskCounts, location.route]);
 
   const connected = loadState.status !== "error" && loadState.data !== null;
   const loading = loadState.status === "loading";
@@ -5917,6 +5987,7 @@ function useDashboardController(
         onSaveRetention={saveRetentionSettings}
         onRevertMaintenance={revertMaintenanceSetting}
         onRevertRetention={revertRetentionSetting}
+        onDirtyChange={changeSettingsDirty}
       />
     );
   } else {
@@ -5932,6 +6003,7 @@ function useDashboardController(
     loading,
     loadPage,
     refreshInterval,
+    autoRefreshPaused,
     changeRefreshInterval,
     location,
     taskCounts,
@@ -5972,6 +6044,7 @@ function DashboardContent({
     loading,
     loadPage,
     refreshInterval,
+    autoRefreshPaused,
     changeRefreshInterval,
     location,
     taskCounts,
@@ -6067,9 +6140,17 @@ function DashboardContent({
                       borderBottomLeftRadius: 0,
                       borderLeft: "none",
                     }}
-                    aria-label="Auto refresh interval"
+                    aria-label={
+                      autoRefreshPaused
+                        ? "Auto refresh paused while settings have unsaved changes"
+                        : "Auto refresh interval"
+                    }
                   >
-                    {refreshInterval === "off" ? "manual" : refreshInterval}
+                    {autoRefreshPaused
+                      ? "paused"
+                      : refreshInterval === "off"
+                        ? "manual"
+                        : refreshInterval}
                   </Button>
                 </Menu.Target>
                 <Menu.Dropdown>
