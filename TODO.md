@@ -18,8 +18,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P1-06 Queue concurrency policies**
-2. **P1-07 Rate limiting**
+1. **P1-05 Priority queues**
 
 The demo, the initial integration packages, the operator query surface, progress, dead letters,
 deadlines, the durable worker registry, the framework-neutral dashboard host, and the release and
@@ -200,14 +199,14 @@ hint, and polling stays the source of truth.
       provenance events, manual overrides, queue recreation, and terminal exhaustion with deterministic
       integration tests and the extended `retry-paths` lifecycle benchmark.
 
-### [ ] P0-06 Consistent operational snapshots
+### [x] P0-06 Consistent operational snapshots
 
 **Depends on:** P0-02
 
-- [ ] Provide a transactionally consistent queue-health snapshot for correctness-sensitive counts.
-- [ ] Separate exact transactional values from lagging PostgreSQL statistics.
-- [ ] Add health budgets and machine-readable degraded reasons.
-- [ ] Keep snapshot latency bounded on large runtime and history relations.
+- [x] Provide a transactionally consistent queue-health snapshot for correctness-sensitive counts.
+- [x] Separate exact transactional values from lagging PostgreSQL statistics.
+- [x] Add health budgets and machine-readable degraded reasons.
+- [x] Keep snapshot latency bounded on large runtime and history relations.
 
 ### [x] P0-06B Installation path for existing applications
 

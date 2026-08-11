@@ -596,7 +596,39 @@ PostgreSQL starts another attempt.
 
 ## Read models and health
 
-`Queue.getJob(id)` joins immutable `job` to both lifecycle relations and coalesces the one that exists, preserving `retryPolicy` plus cancellation-request metadata for active work. Health state counts union runtime and outcome, including canceled outcomes. Ready, scheduled, active, expired-active, and oldest-ready metrics come directly from `job_runtime`.
+`Queue.getJob(id)` joins immutable `job` to both lifecycle relations and coalesces the one that exists, preserving `retryPolicy` plus cancellation-request metadata for active work. Health state counts read `job_query`, which lifecycle triggers update in the same transaction as runtime and outcome. Pressure and age metrics read `job_runtime` directly.
+
+`Queue.health(options)` captures `QueueHealth.snapshot` with one SQL statement. PostgreSQL gives the
+statement one MVCC snapshot, and a materialized `captured` CTE supplies the same `capturedAt` to lease,
+wait, deadline, timeout, and age comparisons. The lifecycle counts and live-depth aggregates therefore
+cannot straddle a concurrent claim, completion, retry, cancellation, or recovery transition. The former
+top-level fields remain compatibility aliases of the same `QueueHealthSnapshot` values.
+
+`QueueHealth.postgresql` separates observations that do not have the exact snapshot contract. Relation
+sizes are current function results, while tuple and vacuum fields come from `pg_stat_user_tables` and may
+lag until PostgreSQL flushes statistics. Transaction age, lock waits, and notification queue usage are
+session-wide observations. `postgresql.observedAt` records their independent database observation time.
+
+`QueueHealthOptions.budgets` sets maximum tolerated expired leases, overdue waits, overdue deadlines,
+overdue execution timeouts, and optional oldest-ready age. The first four default to zero; the ready-age
+budget defaults to disabled. Each supplied value must be a non-negative finite number; `null` is accepted
+only for the ready-age budget and disables that check. `Queue.health()` throws `RangeError` before querying
+PostgreSQL when a count budget exceeds 10,000 because the bounded snapshot cannot decide a higher threshold.
+A value above its budget appends one
+`QueueHealthDegradationReason` with the
+stable codes `expired_leases`, `overdue_waits`, `overdue_deadlines`,
+`overdue_execution_timeouts`, or `oldest_ready_age`. The CLI exits with status 2 whenever
+`QueueHealth.status.level` is `degraded`.
+
+The exact statement evaluates lifecycle counts and live pressure under one MVCC snapshot rather than
+issuing independently timed statements. Each lifecycle and pressure count is exact through 10,000 rows;
+at 10,001 it becomes a lower bound and its path appears in `QueueHealthSnapshot.cappedFields`. State,
+ready-age, wait, lease, deadline, and timeout indexes keep every exact subquery on a bounded index range.
+Retention fallback counts remain capped at 10,001 rows,
+concurrency policy health remains capped at 100 policies and 101 ready candidates per policy, and relation
+tuple counts come from PostgreSQL statistics. The `health-snapshot` operational scenario scales ready,
+scheduled, and retained event rows past the count ceiling, asserts both runtime and history lower-bound
+markers, and records the complete client-observed `snapshotMs`.
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live jobs are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary day.
 

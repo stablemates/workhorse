@@ -501,8 +501,13 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
 ALTER TABLE workhorse.job_runtime ADD COLUMN IF NOT EXISTS concurrency_key text;
 CREATE INDEX IF NOT EXISTS job_runtime_ready_idx
   ON workhorse.job_runtime (queue_name, sequence, job_id) WHERE state = 'ready';
+CREATE INDEX IF NOT EXISTS job_runtime_ready_age_idx
+  ON workhorse.job_runtime (ready_at, job_id) WHERE state = 'ready';
 CREATE INDEX IF NOT EXISTS job_runtime_scheduled_idx
   ON workhorse.job_runtime (run_at, job_id) WHERE state = 'scheduled';
+CREATE INDEX IF NOT EXISTS job_runtime_scheduled_wait_idx
+  ON workhorse.job_runtime (run_at, job_id)
+  WHERE state = 'scheduled' AND wait_name IS NOT NULL;
 CREATE INDEX IF NOT EXISTS job_runtime_expired_active_idx
   ON workhorse.job_runtime (expires_at, job_id) WHERE state = 'active';
 CREATE INDEX IF NOT EXISTS job_runtime_active_queue_key_expiry_idx
