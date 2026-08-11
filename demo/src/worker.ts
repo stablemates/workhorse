@@ -22,13 +22,18 @@ import { demoLogger } from "./logger.js";
  * their own connection pool, and their own lifecycle, and share nothing with the web tier except
  * PostgreSQL. Run it with `workhorse worker --config <compiled module>`.
  *
- * Two workers with deliberately different concurrency run here so the dashboard shows a
- * heterogeneous fleet. In a real deployment these would usually be separate processes or replicas.
+ * The launcher starts this definition twice with distinct profiles, so each worker gets a separate
+ * process and pool while the dashboard still shows a heterogeneous fleet.
  */
 const databaseUrl = resolveDemoDatabaseUrl();
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
   ? Number(process.env.WORKHORSE_WORKER_POLL_MS)
   : DEMO_WORKER_POLL_MS;
+const profile = Number(process.env.WORKHORSE_DEMO_WORKER_PROFILE);
+const concurrency = DEMO_WORKER_CONCURRENCY[profile];
+if (concurrency === undefined) {
+  throw new Error("WORKHORSE_DEMO_WORKER_PROFILE must select a configured worker profile");
+}
 
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 const database = createDemoDatabase(pool);
@@ -39,32 +44,34 @@ const adapter = createDrizzleAdapter(database, {
 
 export default defineWorkerProcess({
   adapter: () => adapter,
-  workers: DEMO_WORKER_CONCURRENCY.map((concurrency) => ({
-    options: {
-      queue: DEMO_QUEUE,
-      // No workerId: the demo takes the same generated `<hostname>-<pid>-<random>` identity any
-      // deployment gets by default, so the dashboard has to discover the fleet from PostgreSQL.
-      scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
-      pollMs: workerPollMs,
-      // Declared once at startup. The demo deliberately offers no runtime concurrency control.
-      concurrency,
-      maintenanceIntervalMs: DEMO_MAINTENANCE_INTERVAL_MS,
-      maintenanceTaskPollMs: DEMO_MAINTENANCE_TASK_POLL_MS,
-      registryIntervalMs: DEMO_REGISTRY_INTERVAL_MS,
-      // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
-      // Returning undefined omits the worker override and lets SQL select the stored policy.
-      retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
-      onRegistrationError: (error) =>
-        demoLogger.error(
-          "workhorse.demo.worker_registration_failed",
-          "Worker registration failed; the fleet view will not show this worker",
-          error,
-        ),
+  workers: [
+    {
+      options: {
+        queue: DEMO_QUEUE,
+        // No workerId: the demo takes the same generated `<hostname>-<pid>-<random>` identity any
+        // deployment gets by default, so the dashboard has to discover the fleet from PostgreSQL.
+        scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
+        pollMs: workerPollMs,
+        // Declared once at startup. The demo deliberately offers no runtime concurrency control.
+        concurrency,
+        maintenanceIntervalMs: DEMO_MAINTENANCE_INTERVAL_MS,
+        maintenanceTaskPollMs: DEMO_MAINTENANCE_TASK_POLL_MS,
+        registryIntervalMs: DEMO_REGISTRY_INTERVAL_MS,
+        // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
+        // Returning undefined omits the worker override and lets SQL select the stored policy.
+        retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
+        onRegistrationError: (error) =>
+          demoLogger.error(
+            "workhorse.demo.worker_registration_failed",
+            "Worker registration failed; the fleet view will not show this worker",
+            error,
+          ),
+      },
+      configure(worker) {
+        registerDemoHandlers(worker, { database, queue: adapter.queue });
+      },
     },
-    configure(worker) {
-      registerDemoHandlers(worker, { database, queue: adapter.queue });
-    },
-  })),
+  ],
   logger: {
     info: (message) => demoLogger.info("workhorse.demo.worker_process", message),
     error: (message, error) =>

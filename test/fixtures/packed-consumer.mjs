@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "@workhorse/drizzle";
-import { HonoWorkhorse, serveWithWorkhorse } from "@workhorse/hono";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
-import { Hono } from "hono";
-import { installSchema } from "@workhorse/core";
+import { installSchema, startWorkerProcess } from "@workhorse/core";
 import { Pool } from "pg";
 
 const databaseUrl =
@@ -73,7 +71,8 @@ let releaseHandler;
 const handlerRelease = new Promise((resolve) => {
   releaseHandler = resolve;
 });
-const workhorse = new HonoWorkhorse(adapter, {
+const running = await startWorkerProcess({
+  adapter: () => adapter,
   workers: [
     {
       options: { pollMs: 10, queue: "shutdown", workerId: "packed-consumer" },
@@ -87,9 +86,6 @@ const workhorse = new HonoWorkhorse(adapter, {
     },
   ],
 });
-const app = new Hono()
-  .use(workhorse.middleware())
-  .get("/health", (context) => context.json({ ready: Boolean(context.var.workhorse.queue) }));
 const shutdownJob = await adapter.queue.enqueue(
   "packed.shutdown",
   { value: true },
@@ -102,27 +98,6 @@ const unclaimedJob = await adapter.queue.enqueue(
   { value: true },
   {
     queue: "shutdown",
-  },
-);
-let port;
-let resolveListening;
-const listeningPort = new Promise((resolve) => {
-  resolveListening = resolve;
-});
-const running = await serveWithWorkhorse({
-  fetch: app.fetch,
-  workhorse,
-  port: 0,
-  onListen: (info) => {
-    port = info.port;
-    resolveListening();
-  },
-});
-await listeningPort;
-assert.deepEqual(
-  await fetch(`http://127.0.0.1:${port}/health`).then((response) => response.json()),
-  {
-    ready: true,
   },
 );
 await handlerStarted;

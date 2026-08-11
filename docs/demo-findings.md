@@ -76,15 +76,13 @@ internals, so a schema evolution can break an otherwise type-safe dashboard.
 status, worker observations, failures, and health. Keep payload inclusion bounded and support redaction.
 This is tracked primarily by **P2-01 Query and listing API** and **P0-06 Consistent operational snapshots**.
 
-### A3. Framework integrations do not own schedule deployment
+### A3. Worker processes own schedule deployment
 
-The Drizzle adapter can enqueue through a caller-owned transaction, but recurring schedules still need
-an explicit deploy-time schedule synchronization call against a raw `pg` pool. Hono has
-worker lifecycle hooks but no deploy-time schedule synchronization hook.
+The Drizzle adapter can enqueue through a caller-owned transaction, but recurring schedules still
+need an explicit deploy-time synchronization call against a raw `pg` pool.
 
-**Needed:** a framework-neutral deploy lifecycle abstraction, plus Drizzle and Hono helpers that retain
-clear pool ownership and still expose the full synchronization result. This does not block the current
-API, but should be designed before adding more framework integrations.
+**Needed:** a deploy lifecycle that retains clear pool ownership and exposes the full synchronization
+result without coupling schedule deployment to a web framework.
 
 ### A4. Worker identity is observational only
 

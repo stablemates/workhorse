@@ -7,9 +7,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev:server": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server tsx watch --require ./telemetry.cjs src/index.ts",
-    "dev:worker": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-worker tsx watch --require ./telemetry.cjs src/worker-main.ts",
+    "dev:worker": "tsx watch --require ./telemetry.cjs src/worker-main.ts",
     "start": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server node --require ./telemetry.cjs dist/index.js",
-    "start:worker": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-worker NODE_OPTIONS=--require=./telemetry.cjs workhorse worker --config dist/worker.js",
+    "start:worker": "NODE_OPTIONS=--require=./telemetry.cjs workhorse worker --config dist/worker.js",
+    "start:worker:one": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-worker-one WORKHORSE_DEMO_WORKER_PROFILE=0 pnpm start:worker",
+    "start:worker:two": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-worker-two WORKHORSE_DEMO_WORKER_PROFILE=1 pnpm start:worker",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -26,7 +28,6 @@
     "@workhorse/core": "workspace:*",
     "@workhorse/dashboard": "workspace:*",
     "@workhorse/drizzle": "workspace:*",
-    "@workhorse/hono": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.31",
     "pg": "^8.16.3",

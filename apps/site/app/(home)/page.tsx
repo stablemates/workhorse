@@ -585,21 +585,6 @@ const integrations = [
     href: "/docs/drizzle",
   },
   {
-    name: "@workhorse/hono",
-    body: "Typed middleware, workers started once per process, and an idempotent draining shutdown.",
-    href: "/docs/hono",
-  },
-  {
-    name: "@workhorse/express",
-    body: "Request context, workers started once per process, and an idempotent draining shutdown.",
-    href: "/docs/express",
-  },
-  {
-    name: "@workhorse/fastify",
-    body: "Request context and worker lifecycle bound to Fastify's ready and close hooks.",
-    href: "/docs/fastify",
-  },
-  {
     name: "@workhorse/dashboard",
     body: "An embeddable React operator UI with an injected, transport-neutral client boundary.",
     href: "/docs/dashboard",
