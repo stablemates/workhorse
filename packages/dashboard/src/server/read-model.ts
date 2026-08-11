@@ -5,6 +5,7 @@ import {
   DashboardActivityPage,
   DashboardActivityPeriod,
   DashboardCancellationRequest,
+  DashboardConcurrencyPolicySummary,
   DashboardCronPage,
   DashboardEventDetail,
   DashboardEventKind,
@@ -30,6 +31,7 @@ import {
   DashboardWorkersPage,
   DashboardSettingsPage,
   MaintenanceLoopCadences,
+  dashboardConcurrencyPolicySummary,
   readIdempotencyEvidence,
 } from "../model.js";
 import {
@@ -336,8 +338,9 @@ async function readDashboardTaskCountsExact(
 /** Queue management rows keep hot live-state counts exact and estimate cold outcomes at scale. */
 export async function readDashboardQueues(
   database: DashboardDatabase,
+  queue: Queue,
 ): Promise<DashboardQueuesPage> {
-  const [queueRows, relationRows] = await Promise.all([
+  const [queueRows, relationRows, health] = await Promise.all([
     database.execute<{
       queue: string;
       paused: boolean;
@@ -349,6 +352,8 @@ export async function readDashboardQueues(
         SELECT queue_name FROM workhorse.job
         UNION
         SELECT queue_name FROM workhorse.queue_control
+        UNION
+        SELECT queue_name FROM workhorse.concurrency_policy
       ), live_counts AS (
         SELECT queue_name,
                count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
@@ -369,6 +374,7 @@ export async function readDashboardQueues(
     database.execute<{ estimate: string | number }>(sql`
       SELECT reltuples::bigint AS estimate FROM pg_class WHERE oid = 'workhorse.job'::regclass
     `),
+    queue.health(),
   ]);
   const approximate = Number(relationRows.rows[0]?.estimate ?? -1) >= approximateCountThreshold;
 
@@ -423,6 +429,13 @@ export async function readDashboardQueues(
     );
   }
 
+  const concurrencyPolicies = new Map<string, DashboardConcurrencyPolicySummary>(
+    health.concurrencyPolicies.policies.map((policy) => [
+      policy.queue,
+      dashboardConcurrencyPolicySummary(policy),
+    ]),
+  );
+
   return {
     capturedAt: new Date().toISOString(),
     queues: queueRows.rows.map((row) => ({
@@ -435,7 +448,9 @@ export async function readDashboardQueues(
       failed: terminalCounts.get(row.queue)?.failed ?? 0,
       canceled: terminalCounts.get(row.queue)?.canceled ?? 0,
       terminalCountsApproximate: approximate,
+      concurrencyPolicy: concurrencyPolicies.get(row.queue) ?? null,
     })),
+    concurrencyPoliciesCapped: health.concurrencyPolicies.capped,
   };
 }
 
@@ -1280,6 +1295,15 @@ function retentionDegradedChecks(retention: DashboardSystemRetention): string[] 
   return checks;
 }
 
+/** Queue admission is degraded whenever a queue-wide or per-key budget blocks ready work. */
+export function concurrencyPolicyDegradedChecks(
+  health: Pick<QueueHealthSnapshot, "concurrencyPolicies">,
+): string[] {
+  return health.concurrencyPolicies.policies
+    .filter((policy) => policy.blockedReady > 0)
+    .map((policy) => `Concurrency policy blocks ready tasks on ${policy.queue}`);
+}
+
 export async function readDashboardSystem(
   database: DashboardDatabase,
   queue: Queue,
@@ -1443,6 +1467,7 @@ export async function readDashboardSystem(
       ), queue_names AS (
         SELECT queue_name FROM workhorse.job_runtime
         UNION SELECT queue_name FROM workhorse.queue_control
+        UNION SELECT queue_name FROM workhorse.concurrency_policy
         UNION SELECT queue_name FROM rolled
       ), runtime AS (
         SELECT queue_name,
@@ -1550,7 +1575,10 @@ export async function readDashboardSystem(
       : null,
   ].filter((check): check is string => check !== null);
   // Critical means work is stopping or being lost. Retention only costs storage, so it degrades.
-  const degradedChecks = retentionDegradedChecks(retention);
+  const degradedChecks = [
+    ...retentionDegradedChecks(retention),
+    ...concurrencyPolicyDegradedChecks(health),
+  ];
   // A stalled rollup is a storage problem rather than a dispatch one: history retention holds at
   // the watermark rather than deleting the input to windows nobody has computed yet.
   if (storage.rollup.stalled) degradedChecks.push("The statistics summary is behind");
@@ -1563,6 +1591,12 @@ export async function readDashboardSystem(
     degradedChecks,
   };
 
+  const concurrencyPolicies = new Map<string, DashboardConcurrencyPolicySummary>(
+    health.concurrencyPolicies.policies.map((policy) => [
+      policy.queue,
+      dashboardConcurrencyPolicySummary(policy),
+    ]),
+  );
   const queues = queueRows.rows
     .map((row) => ({
       queue: row.queue,
@@ -1574,6 +1608,7 @@ export async function readDashboardSystem(
       retrying: row.retrying,
       enqueuedPerMinute: row.enqueued / minutes,
       completedPerMinute: row.completed / minutes,
+      concurrencyPolicy: concurrencyPolicies.get(row.queue) ?? null,
     }))
     // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
     .sort((left, right) => {
@@ -1635,6 +1670,7 @@ export async function readDashboardSystem(
       canceled: row.canceled,
     })),
     queues,
+    concurrencyPoliciesCapped: health.concurrencyPolicies.capped,
     retryStorm: { buckets: retryBuckets, topTypes: retryTypeRows.rows },
     failingTypes: failingTypeRows.rows.map((row) => ({
       queue: row.queue,
@@ -2095,8 +2131,9 @@ export async function readDashboardJobDetail(
   database: DashboardDatabase,
   id: string,
   projectDurability: DashboardDurabilityProjector = () => null,
+  queue?: Queue,
 ): Promise<DashboardJobDetail | null> {
-  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows] = await Promise.all([
+  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows, health] = await Promise.all([
     database.execute<{
       id: string;
       queue: string;
@@ -2106,6 +2143,7 @@ export async function readDashboardJobDetail(
       retry_policy: RetryPolicy | null;
       deadline_at: Date | string | null;
       execution_timeout_ms: string | number | null;
+      concurrency_key: string | null;
       created_at: Date | string;
       runtime_state: string | null;
       runtime_attempt: number | null;
@@ -2139,7 +2177,7 @@ export async function readDashboardJobDetail(
       SELECT j.id, j.queue_name AS queue, j.job_type AS type,
              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
              j.max_attempts,
-             j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.created_at,
+             j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.concurrency_key, j.created_at,
              r.state AS runtime_state, r.current_attempt AS runtime_attempt, r.run_at, r.ready_at,
              r.worker_id, r.fence_token::text, r.acquired_at, r.heartbeat_at, r.expires_at,
              r.wait_name, r.attempt_started_at, r.attempt_timeout_at,
@@ -2216,13 +2254,17 @@ export async function readDashboardJobDetail(
       SELECT event_id::text, attempt, event_type, details, occurred_at
         FROM workhorse.job_event
        WHERE job_id = ${id}
-       ORDER BY occurred_at, event_id
+      ORDER BY occurred_at, event_id
     `),
+    queue?.health() ?? null,
   ]);
 
   const job = jobRows.rows[0];
   if (!job) return null;
   const state = job.outcome_state ?? job.runtime_state ?? "unknown";
+  const policy = health?.concurrencyPolicies.policies.find(
+    (candidate) => candidate.queue === job.queue,
+  );
   return {
     identity: {
       id: job.id,
@@ -2235,7 +2277,12 @@ export async function readDashboardJobDetail(
       deadlineAt: toIsoOrNull(job.deadline_at),
       executionTimeoutMs:
         job.execution_timeout_ms === null ? null : Number(job.execution_timeout_ms),
+      concurrencyKey: job.concurrency_key,
     },
+    concurrencyPolicy:
+      (job.runtime_state === "ready" || job.runtime_state === "active") && policy
+        ? dashboardConcurrencyPolicySummary(policy)
+        : null,
     payload: job.payload,
     progress:
       job.progress_revision === null

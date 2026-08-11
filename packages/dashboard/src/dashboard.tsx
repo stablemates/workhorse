@@ -153,6 +153,13 @@ import {
   taskDrawerOpened,
   taskDrawerSync,
 } from "./task-drawer.js";
+import {
+  concurrencyCappedFootnote,
+  describeConcurrencyBlocked,
+  describeConcurrencyKeys,
+  describeConcurrencyLimit,
+  describeTaskConcurrency,
+} from "./concurrency-policy.js";
 import { ThemeSchemeSwitch } from "./theme.js";
 
 const DashboardClientContext = createContext<DashboardClient | null>(null);
@@ -1387,6 +1394,39 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
   );
 }
 
+/**
+ * Fleet-wide admission context for a task that can still be admitted.
+ *
+ * Shown only while the task is ready or active, because a finished task no longer competes for
+ * the budget and repeating it under a terminal outcome would only add noise.
+ */
+export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
+  const described = describeTaskConcurrency(job);
+  if (described === null) return null;
+  return (
+    <Group gap="xs" mt="sm" align="baseline">
+      <Text c="dimmed" size="xs" fw={600}>
+        Concurrency
+      </Text>
+      {described.concurrencyKey === null ? null : (
+        <Badge
+          size="xs"
+          variant="light"
+          color="grape"
+          tt="none"
+          title={described.title}
+          aria-label={`Concurrency key ${described.concurrencyKey}`}
+        >
+          {described.concurrencyKey}
+        </Badge>
+      )}
+      <Text c="dimmed" size="xs" title={described.title} aria-label={described.title}>
+        {described.summary}
+      </Text>
+    </Group>
+  );
+}
+
 /** Absolute lifetime and per-attempt execution limits persisted with the job definition. */
 function TimingPolicyLine({ job }: { job: DashboardJobDetail }) {
   const deadlineAt = job.identity.deadlineAt ?? null;
@@ -1960,7 +2000,9 @@ function TasksActivityChart({
   };
   const groups = activity?.groups ?? [];
   const chartData = (activity?.buckets ?? []).map((bucket) => {
-    const point: Record<string, string | number> = { bucket: labelFormat(bucket.bucketStart) };
+    const point: Record<string, string | number> = {
+      bucket: labelFormat(bucket.bucketStart),
+    };
     for (const group of groups) point[activityChartKey(group)] = bucket.counts[group] ?? 0;
     return point;
   });
@@ -1990,7 +2032,10 @@ function TasksActivityChart({
             size="xs"
             value={groupBy}
             onChange={changeGroupBy}
-            data={activityGroupings.map(({ value, label }) => ({ value, label }))}
+            data={activityGroupings.map(({ value, label }) => ({
+              value,
+              label,
+            }))}
           />
           <SegmentedControl
             size="xs"
@@ -2463,9 +2508,14 @@ function TasksPage({
                 size="xs"
                 w={76}
                 value={String(data.pageSize)}
-                data={taskPageSizes.map((size) => ({ value: String(size), label: String(size) }))}
+                data={taskPageSizes.map((size) => ({
+                  value: String(size),
+                  label: String(size),
+                }))}
                 onChange={(value) =>
-                  updateLocation({ pageSize: Number(value ?? 50) as TaskPageSize })
+                  updateLocation({
+                    pageSize: Number(value ?? 50) as TaskPageSize,
+                  })
                 }
                 allowDeselect={false}
                 aria-label="Tasks per page"
@@ -2521,7 +2571,11 @@ function TasksPage({
                       <Code
                         fz="xs"
                         title={job.id}
-                        style={{ background: "transparent", paddingBlock: 0, paddingInline: 0 }}
+                        style={{
+                          background: "transparent",
+                          paddingBlock: 0,
+                          paddingInline: 0,
+                        }}
                       >
                         {job.id.slice(0, 8)}
                       </Code>
@@ -2666,7 +2720,11 @@ function CronPage({
                       <Table.Td>
                         <Code
                           fz="xs"
-                          style={{ background: "transparent", paddingBlock: 0, paddingInline: 0 }}
+                          style={{
+                            background: "transparent",
+                            paddingBlock: 0,
+                            paddingInline: 0,
+                          }}
                         >
                           {schedule.cron}
                         </Code>
@@ -2683,7 +2741,11 @@ function CronPage({
                             checked={schedule.enabled}
                             disabled={togglingSchedule === scheduleKey}
                             label={schedule.enabled ? "Enabled" : "Disabled"}
-                            styles={{ label: { fontSize: "var(--mantine-font-size-xs)" } }}
+                            styles={{
+                              label: {
+                                fontSize: "var(--mantine-font-size-xs)",
+                              },
+                            }}
                             aria-label={`${schedule.enabled ? "Disable" : "Enable"} ${schedule.name}`}
                             onChange={(event) =>
                               setScheduleEnabled(
@@ -2715,7 +2777,7 @@ function CronPage({
   );
 }
 
-function QueuesPage({
+export function QueuesPage({
   data,
   togglingQueue,
   purgingQueue,
@@ -2736,14 +2798,14 @@ function QueuesPage({
     <Stack gap="xl">
       <PageHeader
         title="Queues"
-        description="Pause new claims, compare task counts, or clear tasks that have not started."
+        description="Pause new claims, compare task counts and fleet-wide limits, or clear tasks that have not started."
       />
       {data.queues.length === 0 ? (
         <EmptyState>No queue has accepted a task yet.</EmptyState>
       ) : (
         <Paper withBorder>
           <ScrollArea>
-            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={980}>
+            <Table highlightOnHover verticalSpacing={6} horizontalSpacing="md" miw={1140}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Queue</Table.Th>
@@ -2751,6 +2813,24 @@ function QueuesPage({
                   <Table.Th ta="right">Scheduled</Table.Th>
                   <Table.Th ta="right">Ready</Table.Th>
                   <Table.Th ta="right">Active</Table.Th>
+                  <Table.Th ta="right">
+                    <Group gap={4} justify="flex-end" wrap="nowrap">
+                      <span>Limit</span>
+                      <HelpButton
+                        label="Limit"
+                        help="A limit is a fleet-wide budget: it caps how many of this queue's tasks run at once across every worker sharing this database. Worker slots limit one process instead, and pausing is separate."
+                      />
+                    </Group>
+                  </Table.Th>
+                  <Table.Th ta="right">
+                    <Group gap={4} justify="flex-end" wrap="nowrap">
+                      <span>Blocked</span>
+                      <HelpButton
+                        label="Blocked"
+                        help="Ready tasks that cannot start because the limit is full. Workhorse scans a bounded window of each queue, so this is a lower bound rather than the whole backlog."
+                      />
+                    </Group>
+                  </Table.Th>
                   <Table.Th ta="right">Succeeded</Table.Th>
                   <Table.Th ta="right">Failed</Table.Th>
                   <Table.Th ta="right">Actions</Table.Th>
@@ -2759,12 +2839,20 @@ function QueuesPage({
               <Table.Tbody>
                 {data.queues.map((queue) => {
                   const approximatePrefix = queue.terminalCountsApproximate ? "~" : "";
+                  const policy = queue.concurrencyPolicy;
+                  const limit = describeConcurrencyLimit(policy);
+                  const keys = describeConcurrencyKeys(policy);
+                  const blocked = describeConcurrencyBlocked(policy);
                   return (
                     <Table.Tr key={queue.queue}>
                       <Table.Td>
                         <Code
                           fz="xs"
-                          style={{ background: "transparent", paddingBlock: 0, paddingInline: 0 }}
+                          style={{
+                            background: "transparent",
+                            paddingBlock: 0,
+                            paddingInline: 0,
+                          }}
                         >
                           {queue.queue}
                         </Code>
@@ -2775,7 +2863,9 @@ function QueuesPage({
                           checked={!queue.paused}
                           disabled={togglingQueue === queue.queue}
                           label={queue.paused ? "Paused" : "Running"}
-                          styles={{ label: { fontSize: "var(--mantine-font-size-xs)" } }}
+                          styles={{
+                            label: { fontSize: "var(--mantine-font-size-xs)" },
+                          }}
                           aria-label={`${queue.paused ? "Resume" : "Pause"} ${queue.queue}`}
                           onChange={(event) =>
                             setQueuePaused(queue.queue, !event.currentTarget.checked)
@@ -2785,6 +2875,32 @@ function QueuesPage({
                       <Table.Td ta="right">{queue.scheduled}</Table.Td>
                       <Table.Td ta="right">{queue.ready}</Table.Td>
                       <Table.Td ta="right">{queue.active}</Table.Td>
+                      <Table.Td ta="right">
+                        <Text size="sm" title={limit.title} aria-label={`Limit: ${limit.title}`}>
+                          {limit.label}
+                        </Text>
+                        {keys.label === null ? null : (
+                          <Text
+                            c={keys.saturated ? "yellow.8" : "dimmed"}
+                            size="xs"
+                            title={keys.title}
+                            aria-label={`Per key: ${keys.title}`}
+                          >
+                            {keys.label}
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td ta="right">
+                        <Text
+                          size="sm"
+                          c={blocked.blocking ? "yellow.8" : undefined}
+                          fw={blocked.blocking ? 650 : undefined}
+                          title={blocked.title}
+                          aria-label={`Blocked: ${blocked.title}`}
+                        >
+                          {blocked.label}
+                        </Text>
+                      </Table.Td>
                       <Table.Td
                         ta="right"
                         title={queue.terminalCountsApproximate ? "PostgreSQL estimate" : undefined}
@@ -2842,6 +2958,11 @@ function QueuesPage({
       <Text c="dimmed" size="xs">
         Clear removes tasks that are scheduled or ready. It does not interrupt active tasks.
       </Text>
+      {data.concurrencyPoliciesCapped ? (
+        <Text c="dimmed" size="xs">
+          {concurrencyCappedFootnote}
+        </Text>
+      ) : null}
     </Stack>
   );
 }
@@ -3021,7 +3142,7 @@ function systemBucketLabel(value: string, window: DashboardSystemWindow): string
   }).format(date);
 }
 
-function QueuePressure({
+export function QueuePressure({
   data,
   navigate,
 }: {
@@ -3053,7 +3174,7 @@ function QueuePressure({
         </Badge>
       </Group>
       <ScrollArea>
-        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={920}>
+        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={1020}>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Queue</Table.Th>
@@ -3062,46 +3183,80 @@ function QueuePressure({
               <Table.Th ta="right">Oldest</Table.Th>
               <Table.Th ta="right">Due in 5m</Table.Th>
               <Table.Th ta="right">Active</Table.Th>
+              <Table.Th ta="right">
+                <Group gap={4} justify="flex-end" wrap="nowrap">
+                  <span>Limit</span>
+                  <HelpButton
+                    label="Limit"
+                    help="A limit is a fleet-wide budget: it caps how many of this queue's tasks run at once across every worker sharing this database. Blocked ready tasks are counted from a bounded window, so they are a lower bound."
+                  />
+                </Group>
+              </Table.Th>
               <Table.Th ta="right">Retrying</Table.Th>
               <Table.Th ta="right">Added/min</Table.Th>
               <Table.Th ta="right">Finished/min</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {data.queues.map((queue) => (
-              <Table.Tr
-                key={queue.queue}
-                tabIndex={0}
-                style={{ cursor: "pointer" }}
-                onClick={() => navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`);
-                  }
-                }}
-              >
-                <Table.Td>
-                  <Code fz="xs" style={{ background: "transparent", padding: 0 }}>
-                    {queue.queue}
-                  </Code>
-                </Table.Td>
-                <Table.Td>
-                  <Badge color={queue.paused ? "yellow" : "teal"} variant="light" size="sm">
-                    {queue.paused ? "Paused" : "Running"}
-                  </Badge>
-                </Table.Td>
-                <Table.Td ta="right">{queue.ready}</Table.Td>
-                <Table.Td ta="right">{formatDuration(queue.oldestReadyMs)}</Table.Td>
-                <Table.Td ta="right">{queue.dueSoon}</Table.Td>
-                <Table.Td ta="right">{queue.active}</Table.Td>
-                <Table.Td ta="right">{queue.retrying}</Table.Td>
-                <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
-                <Table.Td ta="right">{formatRate(queue.completedPerMinute)}</Table.Td>
-              </Table.Tr>
-            ))}
+            {data.queues.map((queue) => {
+              const limit = describeConcurrencyLimit(queue.concurrencyPolicy);
+              const blocked = describeConcurrencyBlocked(queue.concurrencyPolicy);
+              return (
+                <Table.Tr
+                  key={queue.queue}
+                  tabIndex={0}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      navigate(`/tasks?queue=${encodeURIComponent(queue.queue)}`);
+                    }
+                  }}
+                >
+                  <Table.Td>
+                    <Code fz="xs" style={{ background: "transparent", padding: 0 }}>
+                      {queue.queue}
+                    </Code>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge color={queue.paused ? "yellow" : "teal"} variant="light" size="sm">
+                      {queue.paused ? "Paused" : "Running"}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td ta="right">{queue.ready}</Table.Td>
+                  <Table.Td ta="right">{formatDuration(queue.oldestReadyMs)}</Table.Td>
+                  <Table.Td ta="right">{queue.dueSoon}</Table.Td>
+                  <Table.Td ta="right">{queue.active}</Table.Td>
+                  <Table.Td ta="right">
+                    <Text size="sm" title={limit.title} aria-label={`Limit: ${limit.title}`}>
+                      {limit.label}
+                    </Text>
+                    {blocked.blocking ? (
+                      <Text
+                        c="yellow.8"
+                        size="xs"
+                        fw={650}
+                        title={blocked.title}
+                        aria-label={`Blocked: ${blocked.title}`}
+                      >
+                        {blocked.label} blocked
+                      </Text>
+                    ) : null}
+                  </Table.Td>
+                  <Table.Td ta="right">{queue.retrying}</Table.Td>
+                  <Table.Td ta="right">{formatRate(queue.enqueuedPerMinute)}</Table.Td>
+                  <Table.Td ta="right">{formatRate(queue.completedPerMinute)}</Table.Td>
+                </Table.Tr>
+              );
+            })}
           </Table.Tbody>
         </Table>
       </ScrollArea>
+      {data.concurrencyPoliciesCapped ? (
+        <Text c="dimmed" size="xs" px="md" pb="md">
+          {concurrencyCappedFootnote}
+        </Text>
+      ) : null}
     </Paper>
   );
 }
@@ -3873,7 +4028,10 @@ function StoragePanel({
   );
 }
 
-const eventsWindowOptions: ReadonlyArray<{ value: DashboardEventsWindow; label: string }> = [
+const eventsWindowOptions: ReadonlyArray<{
+  value: DashboardEventsWindow;
+  label: string;
+}> = [
   { value: "15m", label: "15m" },
   { value: "1h", label: "1h" },
   { value: "6h", label: "6h" },
@@ -4051,7 +4209,9 @@ function EventsPage({
             data={["25", "50", "100"]}
             value={String(query.pageSize)}
             onChange={(value) =>
-              filter({ pageSize: Number(value ?? 50) as EventsLocationState["pageSize"] })
+              filter({
+                pageSize: Number(value ?? 50) as EventsLocationState["pageSize"],
+              })
             }
           />
         </Group>
@@ -4327,7 +4487,11 @@ function WorkersPage({
                       <Stack gap={2}>
                         <Code
                           fz="xs"
-                          style={{ background: "transparent", paddingBlock: 0, paddingInline: 0 }}
+                          style={{
+                            background: "transparent",
+                            paddingBlock: 0,
+                            paddingInline: 0,
+                          }}
                         >
                           {worker.id}
                         </Code>
@@ -4433,7 +4597,10 @@ function WorkersPage({
 
 /** Common timezones plus the browser default; stored values are IANA zone names. */
 const timeZoneOptions: Array<{ value: string; label: string }> = [
-  { value: "system", label: `System (${Intl.DateTimeFormat().resolvedOptions().timeZone})` },
+  {
+    value: "system",
+    label: `System (${Intl.DateTimeFormat().resolvedOptions().timeZone})`,
+  },
   { value: "UTC", label: "UTC" },
   { value: "America/New_York", label: "America/New_York" },
   { value: "America/Chicago", label: "America/Chicago" },
@@ -4507,13 +4674,21 @@ const retentionWindowFields: RetentionField[] = [
     suffix: " days",
   },
   { key: "jobEventRetentionDays", label: "Task events", suffix: " days" },
-  { key: "attemptHistoryRetentionDays", label: "Attempt history", suffix: " days" },
+  {
+    key: "attemptHistoryRetentionDays",
+    label: "Attempt history",
+    suffix: " days",
+  },
   {
     key: "scheduleOccurrenceRetentionDays",
     label: "Schedule occurrences",
     suffix: " days",
   },
-  { key: "statisticsRetentionDays", label: "Rolling statistics", suffix: " days" },
+  {
+    key: "statisticsRetentionDays",
+    label: "Rolling statistics",
+    suffix: " days",
+  },
 ];
 
 const retentionCleanupFields: RetentionField[] = [
@@ -4699,7 +4874,11 @@ export function SettingsPage({
                   allowDeselect={false}
                   disabled={!data.editable}
                   onChange={(value) =>
-                    value && setMaintenance((current) => ({ ...current, timezone: value }))
+                    value &&
+                    setMaintenance((current) => ({
+                      ...current,
+                      timezone: value,
+                    }))
                   }
                 />
                 {data.maintenance.provenance.timezone.source === "operator" ? (
@@ -5933,7 +6112,11 @@ function DashboardContent({
               Tasks
             </Text>
             {taskFilters.map((filter) => {
-              const href = taskHref({ ...location, filter: filter.value, page: 1 });
+              const href = taskHref({
+                ...location,
+                filter: filter.value,
+                page: 1,
+              });
               const count = taskCounts?.[filter.value];
               const Icon = filter.icon;
               return (
@@ -6052,6 +6235,7 @@ function DashboardContent({
               <Code fz="xs">{selectedJob.identity.id}</Code>
               <RetryPolicyLine job={selectedJob} />
               <TimingPolicyLine job={selectedJob} />
+              <ConcurrencyPolicyLine job={selectedJob} />
             </Box>
             <Box>
               <JsonValue
