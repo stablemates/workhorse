@@ -89,6 +89,7 @@ export type EnqueueIdempotencyConflictField =
   | "queue"
   | "type"
   | "payload"
+  | "concurrencyKey"
   | "contractVersion"
   | "payloadMaxBytes"
   | "resultMaxBytes"
@@ -118,6 +119,8 @@ export interface EnqueueIdempotencyConflictDetails {
 /** Options persisted as part of the accepted job definition or initial dispatch projection. */
 export interface EnqueueOptions {
   queue?: string;
+  /** Queue-scoped application group used by durable concurrency admission. */
+  concurrencyKey?: string;
   runAt?: Date;
   /** Absolute wall-clock deadline. Reaching it is terminal even when retry budget remains. */
   deadline?: Date;
@@ -127,6 +130,23 @@ export interface EnqueueOptions {
   retryPolicy?: RetryPolicy;
   tags?: string[];
   idempotency?: EnqueueIdempotency;
+}
+
+/** One queue's deployment-synchronized concurrency budget. */
+export interface ConcurrencyPolicyDefinition {
+  queue: string;
+  maxActive: number;
+  /** Uniform active-job budget for each non-null concurrency key. Null disables the keyed budget. */
+  maxActivePerKey?: number | null;
+}
+
+/** Persisted queue concurrency policy. */
+export interface ConcurrencyPolicy {
+  namespace: string;
+  queue: string;
+  maxActive: number;
+  maxActivePerKey: number | null;
+  updatedAt: Date;
 }
 
 /** One job accepted by {@link Queue.enqueueMany}, with the same semantics as `Queue.enqueue`. */
@@ -246,6 +266,7 @@ export interface DeadLetter {
   jobId: string;
   queue: string;
   type: string;
+  concurrencyKey: string | null;
   payload: Json;
   tags: string[];
   currentAttempt: number;
@@ -300,6 +321,7 @@ export interface JobListItem {
   id: string;
   queue: string;
   type: string;
+  concurrencyKey: string | null;
   tags: string[];
   state: JobState;
   currentAttempt: number;
@@ -528,6 +550,7 @@ export interface JobSnapshot<TResult = Json> {
   id: string;
   queue: string;
   type: string;
+  concurrencyKey: string | null;
   payload: Json;
   contractVersion: string | null;
   tags: string[];
@@ -671,6 +694,21 @@ export interface QueueHealth {
   activeExecutionTimeouts: number;
   /** Active attempts whose execution timeout target has elapsed but is not yet reaped. */
   overdueExecutionTimeouts: number;
+  /** Bounded queue concurrency utilization without raw concurrency-key labels. */
+  concurrencyPolicies: {
+    policies: Array<{
+      namespace: string;
+      queue: string;
+      maxActive: number;
+      active: number;
+      available: number;
+      blockedReady: number;
+      maxActivePerKey: number | null;
+      saturatedKeys: number;
+      highestKeyActive: number;
+    }>;
+    capped: boolean;
+  };
   /**
    * Rolling-statistics rollup progress.
    *

@@ -15,6 +15,8 @@ import type {
   CancellationRequest,
   CancelResult,
   ClaimedJob,
+  ConcurrencyPolicy,
+  ConcurrencyPolicyDefinition,
   DeadLetter,
   DeadLetterFilter,
   DeadLetterPage,
@@ -82,6 +84,7 @@ export interface ScheduleJobDefinition {
   type: string;
   payload: Json;
   queue?: string;
+  concurrencyKey?: string;
   maxAttempts?: number;
   retryPolicy?: RetryPolicy;
 }
@@ -181,6 +184,7 @@ type DeadLetterRow = {
   job_id: string;
   queue_name: string;
   job_type: string;
+  concurrency_key: string | null;
   payload: Json;
   tags: string[];
   current_attempt: number;
@@ -199,6 +203,7 @@ type JobListRow = {
   job_id: string;
   queue_name: string;
   job_type: string;
+  concurrency_key: string | null;
   tags: string[];
   state: JobState;
   current_attempt: number;
@@ -380,6 +385,14 @@ type MaintenancePolicyRow = {
   updated_at: Date;
 };
 
+type ConcurrencyPolicyRow = {
+  namespace: string;
+  queue_name: string;
+  max_active: number;
+  max_active_per_key: number | null;
+  updated_at: Date;
+};
+
 function maintenancePhaseResult(row: MaintenancePhaseRow): MaintenancePhaseResult {
   return {
     phase: row.phase,
@@ -455,6 +468,7 @@ function deadLetter(row: DeadLetterRow): DeadLetter {
     jobId: row.job_id,
     queue: row.queue_name,
     type: row.job_type,
+    concurrencyKey: row.concurrency_key,
     payload: row.payload,
     tags: row.tags,
     currentAttempt: row.current_attempt,
@@ -502,6 +516,7 @@ function jobListItem(row: JobListRow): JobListItem {
     id: row.job_id,
     queue: row.queue_name,
     type: row.job_type,
+    concurrencyKey: row.concurrency_key,
     tags: row.tags,
     state: row.state,
     currentAttempt: row.current_attempt,
@@ -645,6 +660,16 @@ function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
         applicationDefault: row.application_statistics_rows_per_pass,
       },
     },
+    updatedAt: row.updated_at,
+  };
+}
+
+function concurrencyPolicy(row: ConcurrencyPolicyRow): ConcurrencyPolicy {
+  return {
+    namespace: row.namespace,
+    queue: row.queue_name,
+    maxActive: row.max_active,
+    maxActivePerKey: row.max_active_per_key,
     updatedAt: row.updated_at,
   };
 }
@@ -817,6 +842,7 @@ const enqueueConflictFields = new Set<EnqueueIdempotencyConflictField>([
   "queue",
   "type",
   "payload",
+  "concurrencyKey",
   "contractVersion",
   "payloadMaxBytes",
   "resultMaxBytes",
@@ -1310,6 +1336,7 @@ export class Queue {
               ? {}
               : { runAt: (options.runAt ?? new Date()).toISOString() }),
             deadline: options.deadline?.toISOString() ?? null,
+            concurrencyKey: options.concurrencyKey ?? null,
             executionTimeoutMs: options.executionTimeoutMs ?? null,
             maxAttempts: options.maxAttempts ?? 25,
             retryPolicy: options.retryPolicy ?? null,
@@ -1694,6 +1721,34 @@ export class Queue {
     return policy;
   }
 
+  async syncConcurrencyPolicies(
+    namespace: string,
+    definitions: readonly ConcurrencyPolicyDefinition[],
+    options: { prune?: boolean } = {},
+  ): Promise<ConcurrencyPolicy[]> {
+    const input = definitions.map((definition) => ({
+      queue: definition.queue,
+      maxActive: definition.maxActive,
+      maxActivePerKey: definition.maxActivePerKey ?? null,
+    }));
+    const result = await this.database.query<ConcurrencyPolicyRow>(
+      "SELECT * FROM workhorse.sync_concurrency_policies_v1($1, $2::jsonb, $3)",
+      [namespace, JSON.stringify(input), options.prune ?? true],
+    );
+    return result.rows.map(concurrencyPolicy);
+  }
+
+  async concurrencyPolicies(queueNames: readonly string[] = []): Promise<ConcurrencyPolicy[]> {
+    const result = await this.database.query<ConcurrencyPolicyRow>(
+      `SELECT namespace, queue_name, max_active, max_active_per_key, updated_at
+         FROM workhorse.concurrency_policy
+        WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
+        ORDER BY queue_name`,
+      [queueNames],
+    );
+    return result.rows.map(concurrencyPolicy);
+  }
+
   async overrideRetentionPolicy(
     definition: Partial<RetentionPolicyDefinition>,
   ): Promise<RetentionPolicy> {
@@ -1919,6 +1974,7 @@ export class Queue {
       schedule: definition.schedule,
       enabled: definition.enabled ?? true,
       queue: definition.job.queue ?? this.defaultQueue,
+      concurrencyKey: definition.job.concurrencyKey ?? null,
       type: definition.job.type,
       payload: definition.job.payload,
       maxAttempts: definition.job.maxAttempts ?? 25,
@@ -2171,7 +2227,7 @@ export class Queue {
       redactKeys,
     };
     const result = await this.database.query<JobListRow>(
-      `SELECT job_id, queue_name, job_type, tags, state, current_attempt, max_attempts,
+      `SELECT job_id, queue_name, job_type, concurrency_key, tags, state, current_attempt, max_attempts,
               retry_policy, deadline_at, execution_timeout_ms::text AS execution_timeout_ms,
               run_at, cancel_requested_at, cancel_requested_by, cancel_reason, created_at,
               updated_at, payload, payload_status, payload_bytes, has_more,
@@ -2391,10 +2447,10 @@ export class Queue {
     const queueName = options.queue ?? this.defaultQueue;
     const startedAt = performance.now();
     return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
-      // claim_v1 commits ownership before returning the payload. Handler code must run only after
+      // claim_v2 commits ownership before returning the payload. Handler code must run only after
       // this query resolves so no row lock or claim transaction spans user code.
       const result = await this.database.query<ClaimRow>(
-        "SELECT * FROM workhorse.claim_v1($1, $2, $3)",
+        "SELECT * FROM workhorse.claim_v2($1, $2, $3)",
         [queueName, workerId, options.leaseMs ?? 30_000],
       );
       const row = result.rows[0];
@@ -2844,6 +2900,7 @@ export class Queue {
       id: string;
       queue_name: string;
       job_type: string;
+      concurrency_key: string | null;
       payload: Json;
       contract_version: string | null;
       tags: string[];
@@ -2870,7 +2927,7 @@ export class Queue {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT j.id, j.queue_name, j.job_type,
+      `SELECT j.id, j.queue_name, j.job_type, j.concurrency_key,
               workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
               j.contract_version, j.tags, j.retry_policy,
               j.deadline_at, j.execution_timeout_ms::text,
@@ -2899,6 +2956,7 @@ export class Queue {
       id: row.id,
       queue: row.queue_name,
       type: row.job_type,
+      concurrencyKey: row.concurrency_key,
       payload: row.payload,
       contractVersion: row.contract_version,
       tags: row.tags,
@@ -2937,10 +2995,19 @@ export class Queue {
   async health(): Promise<QueueHealth> {
     // Run independent read-only diagnostics concurrently. PostgreSQL statistics are observations,
     // not transactional facts, and can lag until the statistics collector flushes.
-    const [version, counts, depths, relations, activity, notification, retention, statistics] =
-      await Promise.all([
-        this.database.query<{ version: number }>(
-          `SELECT CASE
+    const [
+      version,
+      counts,
+      depths,
+      relations,
+      activity,
+      notification,
+      retention,
+      statistics,
+      concurrency,
+    ] = await Promise.all([
+      this.database.query<{ version: number }>(
+        `SELECT CASE
                   WHEN count(*) = 1
                    AND min(version) = max(version)
                    AND NOT EXISTS (
@@ -2953,29 +3020,29 @@ export class Queue {
                   ELSE NULL
                 END AS version
            FROM workhorse.schema_version`,
-        ),
-        this.database.query<{ state: JobSnapshot["state"]; count: string }>(
-          `SELECT state, count(*)::text AS count
+      ),
+      this.database.query<{ state: JobSnapshot["state"]; count: string }>(
+        `SELECT state, count(*)::text AS count
            FROM (SELECT state FROM workhorse.job_runtime UNION ALL
                  SELECT state FROM workhorse.job_outcome) lifecycle
           GROUP BY state`,
-        ),
-        this.database.query<{
-          ready: string;
-          scheduled: string;
-          sleeping: string;
-          overdue_waits: string;
-          next_wake_at: Date | null;
-          active: string;
-          expired: string;
-          oldest_ready_age_ms: number | null;
-          pending_deadlines: string;
-          overdue_deadlines: string;
-          deadlines_due_within_minute: string;
-          earliest_deadline_at: Date | null;
-          active_execution_timeouts: string;
-          overdue_execution_timeouts: string;
-        }>(`
+      ),
+      this.database.query<{
+        ready: string;
+        scheduled: string;
+        sleeping: string;
+        overdue_waits: string;
+        next_wake_at: Date | null;
+        active: string;
+        expired: string;
+        oldest_ready_age_ms: number | null;
+        pending_deadlines: string;
+        overdue_deadlines: string;
+        deadlines_due_within_minute: string;
+        earliest_deadline_at: Date | null;
+        active_execution_timeouts: string;
+        overdue_execution_timeouts: string;
+      }>(`
         SELECT count(*) FILTER (WHERE state = 'ready')::text AS ready,
                count(*) FILTER (WHERE state = 'scheduled')::text AS scheduled,
                count(*) FILTER (WHERE state = 'scheduled' AND wait_name IS NOT NULL)::text AS sleeping,
@@ -3006,19 +3073,19 @@ export class Queue {
                  WHERE state = 'active' AND attempt_timeout_at <= clock_timestamp()
                )::text AS overdue_execution_timeouts
           FROM workhorse.job_runtime`),
-        this.database.query<{
-          relation: string;
-          total_bytes: string;
-          table_bytes: string;
-          index_bytes: string;
-          live_tuples: string;
-          dead_tuples: string;
-          modifications_since_analyze: string;
-          hot_update_ratio: number | null;
-          last_vacuum: Date | null;
-          last_autovacuum: Date | null;
-          partitions: string;
-        }>(`
+      this.database.query<{
+        relation: string;
+        total_bytes: string;
+        table_bytes: string;
+        index_bytes: string;
+        live_tuples: string;
+        dead_tuples: string;
+        modifications_since_analyze: string;
+        hot_update_ratio: number | null;
+        last_vacuum: Date | null;
+        last_autovacuum: Date | null;
+        partitions: string;
+      }>(`
         -- Partitioned parents own no storage themselves, so a plain pg_class lookup reports the two
         -- largest relations as empty. Summing each partition tree is what makes history visible.
         SELECT parent.relname AS relation,
@@ -3045,33 +3112,33 @@ export class Queue {
            AND parent.relispartition = false
          GROUP BY parent.relname, parent.oid
          ORDER BY parent.relname`),
-        this.database.query<{ age_ms: number | null; lock_wait_count: string }>(`
+      this.database.query<{ age_ms: number | null; lock_wait_count: string }>(`
         SELECT extract(epoch FROM clock_timestamp() - min(xact_start)) * 1000 AS age_ms,
                count(*) FILTER (WHERE wait_event_type = 'Lock')::text AS lock_wait_count
           FROM pg_stat_activity WHERE pid <> pg_backend_pid()`),
-        this.database.query<{ usage: number }>("SELECT pg_notification_queue_usage() AS usage"),
-        this.database.query<
-          RetentionPolicyRow & {
-            oldest_job_identity_at: Date | null;
-            oldest_terminal_outcome_at: Date | null;
-            oldest_job_event_at: Date | null;
-            oldest_attempt_history_at: Date | null;
-            oldest_schedule_occurrence_at: Date | null;
-            oldest_statistics_at: Date | null;
-            job_identity_lag_ms: number | null;
-            terminal_outcome_lag_ms: number | null;
-            job_event_lag_ms: number | null;
-            attempt_history_lag_ms: number | null;
-            schedule_occurrence_lag_ms: number | null;
-            statistics_lag_ms: number | null;
-            eligible_event_partitions: string;
-            eligible_attempt_partitions: string;
-            default_event_rows: string;
-            default_attempt_rows: string;
-            default_event_rows_capped: boolean;
-            default_attempt_rows_capped: boolean;
-          }
-        >(`
+      this.database.query<{ usage: number }>("SELECT pg_notification_queue_usage() AS usage"),
+      this.database.query<
+        RetentionPolicyRow & {
+          oldest_job_identity_at: Date | null;
+          oldest_terminal_outcome_at: Date | null;
+          oldest_job_event_at: Date | null;
+          oldest_attempt_history_at: Date | null;
+          oldest_schedule_occurrence_at: Date | null;
+          oldest_statistics_at: Date | null;
+          job_identity_lag_ms: number | null;
+          terminal_outcome_lag_ms: number | null;
+          job_event_lag_ms: number | null;
+          attempt_history_lag_ms: number | null;
+          schedule_occurrence_lag_ms: number | null;
+          statistics_lag_ms: number | null;
+          eligible_event_partitions: string;
+          eligible_attempt_partitions: string;
+          default_event_rows: string;
+          default_attempt_rows: string;
+          default_event_rows_capped: boolean;
+          default_attempt_rows_capped: boolean;
+        }
+      >(`
         WITH policy AS (
           SELECT * FROM workhorse.retention_policy WHERE singleton
         ), boundaries AS (
@@ -3233,13 +3300,13 @@ export class Queue {
                  AS statistics_lag_ms,
                eligible.*, default_rows.*
           FROM policy CROSS JOIN boundaries CROSS JOIN eligible CROSS JOIN default_rows`),
-        this.database.query<{
-          rolled_up_through: Date;
-          lag_ms: number;
-          last_run_at: Date | null;
-          buckets: string;
-          newest_bucket_at: Date | null;
-        }>(`
+      this.database.query<{
+        rolled_up_through: Date;
+        lag_ms: number;
+        last_run_at: Date | null;
+        buckets: string;
+        newest_bucket_at: Date | null;
+      }>(`
         SELECT state.rolled_up_through,
                GREATEST(0, extract(epoch FROM clock_timestamp() - state.rolled_up_through) * 1000)
                  AS lag_ms,
@@ -3247,7 +3314,77 @@ export class Queue {
                (SELECT count(*) FROM workhorse.job_stat_bucket)::text AS buckets,
                (SELECT max(bucket_start) FROM workhorse.job_stat_bucket) AS newest_bucket_at
           FROM workhorse.job_stat_state state WHERE state.singleton`),
-      ]);
+      this.database.query<{
+        namespace: string;
+        queue_name: string;
+        max_active: number;
+        max_active_per_key: number | null;
+        active: string;
+        blocked_ready: string;
+        saturated_keys: string;
+        highest_key_active: string;
+        capped: boolean;
+      }>(`
+        WITH policies AS MATERIALIZED (
+          SELECT policy.*
+            FROM workhorse.concurrency_policy policy
+           ORDER BY policy.queue_name
+           LIMIT 101
+        )
+        SELECT policy.namespace, policy.queue_name, policy.max_active,
+               policy.max_active_per_key,
+               usage.active::text,
+               blocked.blocked_ready::text,
+               usage.saturated_keys::text,
+               usage.highest_key_active::text,
+               (SELECT count(*) FROM policies) > 100 OR blocked.sample_capped AS capped
+          FROM policies policy
+          CROSS JOIN LATERAL (
+            SELECT COALESCE(sum(keyed.key_active), 0)::integer AS active,
+                   count(*) FILTER (
+                     WHERE policy.max_active_per_key IS NOT NULL
+                       AND keyed.concurrency_key IS NOT NULL
+                       AND keyed.key_active >= policy.max_active_per_key
+                   )::integer AS saturated_keys,
+                   COALESCE(max(keyed.key_active) FILTER (
+                     WHERE keyed.concurrency_key IS NOT NULL
+                   ), 0)::integer AS highest_key_active
+              FROM (
+                SELECT active.concurrency_key, count(*)::integer AS key_active
+                  FROM workhorse.job_runtime active
+                 WHERE active.state = 'active'
+                   AND active.queue_name = policy.queue_name
+                   AND active.expires_at > clock_timestamp()
+                 GROUP BY active.concurrency_key
+              ) keyed
+          ) usage
+          CROSS JOIN LATERAL (
+            SELECT count(*) FILTER (
+                     WHERE usage.active >= policy.max_active
+                        OR (
+                          policy.max_active_per_key IS NOT NULL
+                          AND sample.concurrency_key IS NOT NULL
+                          AND COALESCE(sample.key_active, 0) >= policy.max_active_per_key
+                        )
+                   )::integer AS blocked_ready,
+                   count(*) > 100 AS sample_capped
+              FROM (
+                SELECT ready.concurrency_key,
+                       (SELECT count(*)::integer
+                          FROM workhorse.job_runtime active
+                         WHERE active.state = 'active'
+                           AND active.queue_name = policy.queue_name
+                           AND active.concurrency_key = ready.concurrency_key
+                           AND active.expires_at > clock_timestamp()) AS key_active
+                  FROM workhorse.job_runtime ready
+                 WHERE ready.state = 'ready' AND ready.queue_name = policy.queue_name
+                 ORDER BY ready.sequence, ready.job_id
+                 LIMIT 101
+              ) sample
+          ) blocked
+         ORDER BY policy.queue_name
+         LIMIT 100`),
+    ]);
 
     const stateCounts: QueueHealth["counts"] = {
       scheduled: 0,
@@ -3281,6 +3418,20 @@ export class Queue {
       },
       activeExecutionTimeouts: Number(depth.active_execution_timeouts),
       overdueExecutionTimeouts: Number(depth.overdue_execution_timeouts),
+      concurrencyPolicies: {
+        policies: concurrency.rows.map((row) => ({
+          namespace: row.namespace,
+          queue: row.queue_name,
+          maxActive: row.max_active,
+          active: Number(row.active),
+          available: Math.max(0, row.max_active - Number(row.active)),
+          blockedReady: Number(row.blocked_ready),
+          maxActivePerKey: row.max_active_per_key,
+          saturatedKeys: Number(row.saturated_keys),
+          highestKeyActive: Number(row.highest_key_active),
+        })),
+        capped: concurrency.rows.some((row) => row.capped),
+      },
       statistics: {
         rolledUpThrough: statisticsRow.rolled_up_through,
         lagMs: Number(statisticsRow.lag_ms),
@@ -3360,24 +3511,57 @@ export class Queue {
       scheduled: string;
       active: string;
       oldest_ready_age_ms: number | null;
+      max_active: number | null;
+      concurrency_active: string;
+      blocked_ready: string;
     }>(
       `WITH queue_names AS (
          SELECT $1::text AS queue_name
          UNION SELECT queue_name FROM workhorse.job_runtime
          UNION SELECT queue_name FROM workhorse.queue_control
+         UNION SELECT queue_name FROM workhorse.concurrency_policy
          UNION SELECT queue_name FROM workhorse.worker_registry
+       ), usage AS (
+         SELECT names.queue_name,
+                count(runtime.job_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
+                count(runtime.job_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
+                count(runtime.job_id) FILTER (WHERE runtime.state = 'active')::text AS active,
+                count(runtime.job_id) FILTER (
+                  WHERE runtime.state = 'active' AND runtime.expires_at > clock_timestamp()
+                )::text AS concurrency_active,
+                extract(epoch FROM clock_timestamp() - min(runtime.ready_at) FILTER (
+                  WHERE runtime.state = 'ready'
+                )) * 1000 AS oldest_ready_age_ms
+           FROM queue_names names
+           LEFT JOIN workhorse.job_runtime runtime ON runtime.queue_name = names.queue_name
+          GROUP BY names.queue_name
        )
-       SELECT names.queue_name,
-              count(runtime.job_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
-              count(runtime.job_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
-              count(runtime.job_id) FILTER (WHERE runtime.state = 'active')::text AS active,
-              extract(epoch FROM clock_timestamp() - min(runtime.ready_at) FILTER (
-                WHERE runtime.state = 'ready'
-              )) * 1000 AS oldest_ready_age_ms
-         FROM queue_names names
-         LEFT JOIN workhorse.job_runtime runtime ON runtime.queue_name = names.queue_name
-        GROUP BY names.queue_name
-        ORDER BY names.queue_name`,
+       SELECT usage.*, policy.max_active,
+              COALESCE(blocked.blocked_ready, 0)::text AS blocked_ready
+         FROM usage
+         LEFT JOIN workhorse.concurrency_policy policy ON policy.queue_name = usage.queue_name
+         LEFT JOIN LATERAL (
+           SELECT count(*) FILTER (
+                    WHERE usage.concurrency_active::integer >= policy.max_active
+                       OR (
+                         policy.max_active_per_key IS NOT NULL
+                         AND sample.concurrency_key IS NOT NULL
+                         AND sample.key_active >= policy.max_active_per_key
+                       )
+                  )::integer AS blocked_ready
+             FROM (
+               SELECT ready.concurrency_key,
+                      (SELECT count(*)::integer FROM workhorse.job_runtime active
+                        WHERE active.state = 'active'
+                          AND active.queue_name = usage.queue_name
+                          AND active.concurrency_key = ready.concurrency_key
+                          AND active.expires_at > clock_timestamp()) AS key_active
+                 FROM workhorse.job_runtime ready
+                WHERE ready.state = 'ready' AND ready.queue_name = usage.queue_name
+                ORDER BY ready.sequence, ready.job_id LIMIT 100
+             ) sample
+         ) blocked ON policy.queue_name IS NOT NULL
+        ORDER BY usage.queue_name`,
       [this.defaultQueue],
     );
     return result.rows.map((row) => ({
@@ -3386,6 +3570,9 @@ export class Queue {
       scheduledDepth: Number(row.scheduled),
       activeLeases: Number(row.active),
       oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
+      concurrencyLimit: row.max_active,
+      concurrencyActive: Number(row.concurrency_active),
+      blockedReadyDepth: Number(row.blocked_ready),
     }));
   }
 }

@@ -488,7 +488,7 @@ function createAdapters(pool: Pool, options: ComparativeBenchmarkOptions): Queue
       claim: (workerId) => queue.claim(workerId, { leaseMs: options.leaseMs }),
       complete: (job, workerId) =>
         queue.complete(job as ClaimedJob<unknown>, workerId, { ok: true }),
-      claimSql: "SELECT * FROM workhorse.claim_v1($1, $2, $3)",
+      claimSql: "SELECT * FROM workhorse.claim_v2($1, $2, $3)",
     },
   ];
 }

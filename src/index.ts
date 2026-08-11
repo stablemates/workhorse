@@ -83,6 +83,8 @@ export type {
   CancellationRequest,
   CancelResult,
   CancelStatus,
+  ConcurrencyPolicy,
+  ConcurrencyPolicyDefinition,
   DeadLetter,
   DeadLetterCursor,
   DeadLetterFilter,

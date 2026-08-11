@@ -1,0 +1,50 @@
+---
+title: How do I limit work across the worker fleet?
+description: Synchronize durable queue and keyed dispatch budgets that every worker shares.
+---
+
+`WorkerOptions.concurrency` limits one process. `Queue.syncConcurrencyPolicies` stores a fleet-wide
+dispatch budget in PostgreSQL, where every competing worker checks it atomically.
+
+## Synchronize desired policy
+
+```ts
+await queue.syncConcurrencyPolicies("workers", [
+  {
+    queue: "mail",
+    maxActive: queueBudget,
+    maxActivePerKey: tenantBudget,
+  },
+]);
+```
+
+A namespace owns each queue it synchronizes. Omitted policies are pruned by default. PostgreSQL
+rejects another namespace that tries to replace that ownership.
+
+## Attach a queue-scoped key
+
+```ts
+await queue.enqueue("mail.send", { messageId }, { queue: "mail", concurrencyKey: tenantId });
+```
+
+Keyless jobs consume queue capacity only. A keyed job also consumes capacity for its key. The same
+key text in another queue is independent.
+
+Capacity counts only active jobs with unexpired leases. The policy is a dispatch budget rather than
+a mutex, so handlers must retain the ordinary at-least-once and fence-token assumptions.
+
+## Observe pressure
+
+`Queue.health()` reports bounded policy utilization and blocked ready work. OpenTelemetry publishes
+queue-level limit, active, and blocked-ready gauges without raw key values.
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue) — attach a key during durable acceptance
+- [Workers](/docs/workers) — distinguish process slots from fleet-wide capacity
+- [Operations](/docs/operations) — monitor queue pressure
+
+---
+
+Exact SQL functions, limits, indexes, and admission semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#concurrency_policy).

@@ -634,7 +634,7 @@ class QueryPressureProbe implements Queryable {
     text: string,
     values?: readonly unknown[],
   ): Promise<QueryResult<R>> {
-    const claim = text.includes("workhorse.claim_v1");
+    const claim = text.includes("workhorse.claim_v2");
     this.queries += 1;
     this.activeQueries += 1;
     this.maxConcurrentQueries = Math.max(this.maxConcurrentQueries, this.activeQueries);

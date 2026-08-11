@@ -12,6 +12,7 @@
     "contracts",
     "idempotency",
     "schedules",
+    "concurrency-policies",
     "---Executing work---",
     "workers",
     "retries",

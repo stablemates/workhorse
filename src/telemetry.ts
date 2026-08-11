@@ -224,6 +224,9 @@ export interface QueueMetricSnapshot {
   scheduledDepth: number;
   activeLeases: number;
   oldestReadyAgeMs: number | null;
+  concurrencyLimit: number | null;
+  concurrencyActive: number;
+  blockedReadyDepth: number;
 }
 
 export interface QueueMetricSource {
@@ -241,7 +244,28 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
     description: "Age of the oldest ready job",
     unit: "ms",
   });
-  const instruments = [queueDepth, oldestReadyAge];
+  const concurrencyLimit = activeMeter.createObservableGauge("workhorse.queue.concurrency.limit", {
+    description: "Configured queue concurrency limit",
+    unit: "{job}",
+  });
+  const concurrencyActive = activeMeter.createObservableGauge(
+    "workhorse.queue.concurrency.active",
+    {
+      description: "Unexpired active jobs counted by queue concurrency admission",
+      unit: "{job}",
+    },
+  );
+  const concurrencyBlocked = activeMeter.createObservableGauge(
+    "workhorse.queue.concurrency.blocked_ready",
+    { description: "Bounded ready depth blocked by queue concurrency policy", unit: "{job}" },
+  );
+  const instruments = [
+    queueDepth,
+    oldestReadyAge,
+    concurrencyLimit,
+    concurrencyActive,
+    concurrencyBlocked,
+  ];
   const callback: BatchObservableCallback = async (result) => {
     for (const snapshot of await source.queueMetricSnapshot()) {
       const queueAttribute = { "workhorse.queue.name": snapshot.queue };
@@ -259,6 +283,11 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
       });
       if (snapshot.oldestReadyAgeMs !== null) {
         result.observe(oldestReadyAge, snapshot.oldestReadyAgeMs, queueAttribute);
+      }
+      if (snapshot.concurrencyLimit !== null) {
+        result.observe(concurrencyLimit, snapshot.concurrencyLimit, queueAttribute);
+        result.observe(concurrencyActive, snapshot.concurrencyActive, queueAttribute);
+        result.observe(concurrencyBlocked, snapshot.blockedReadyDepth, queueAttribute);
       }
     }
   };
