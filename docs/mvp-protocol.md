@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 22 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 23 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency. It also supports retry policies,
 checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
@@ -25,6 +25,8 @@ and per-minute statistics complete the protocol.
 | `schedule_occurrence` | Deduplicated schedule fire mapped to a job                                 | Insert once per schedule second; job ID populated atomically                          |
 | `retention_policy`    | Authoritative cleanup windows, work limits, defaults, and provenance       | Application seed or operator override and revert                                      |
 | `concurrency_policy`  | Deployment-owned queue and optional queue-scoped key dispatch budgets      | Namespaced desired-state synchronization                                              |
+| `rate_limit_policy`   | Deployment-owned queue and optional keyed token-bucket definitions         | Namespaced desired-state synchronization                                              |
+| `rate_limit_bucket`   | Durable queue and key token balances                                       | Refilled and consumed only during admission                                           |
 | `maintenance_policy`  | IANA timezone, local retention time, cadences, defaults, and provenance    | Application seed or operator override and revert                                      |
 | `maintenance_state`   | Per-task due state and retained-history safety watermark                   | SQL-owned maintenance state                                                           |
 
@@ -161,8 +163,9 @@ Before scheduling concerns, the worker execution contract is:
 - Every active job has its own heartbeat, abort signal, and fenced completion/failure lifecycle.
 - `pause()` blocks new claims but does not cancel active handlers; `resume()` reopens claims immediately.
 - `stop()` blocks new claims and drains active handlers before `run()` resolves.
-- Concurrency is local execution capacity, not a durable worker registry, cross-process rate limit, queue
-  weighting policy, or exactly-once guarantee.
+- Worker concurrency is local execution capacity. `concurrency_policy` and `rate_limit_policy`
+  separately coordinate active work and start rate across processes. None provides queue weighting
+  or an exactly-once guarantee.
 
 `Queue.syncSchedules(namespace, definitions, { prune })` runs against the target database only, normally during deployment.
 

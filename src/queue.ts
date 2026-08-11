@@ -17,6 +17,9 @@ import type {
   ClaimedJob,
   ConcurrencyPolicy,
   ConcurrencyPolicyDefinition,
+  RateLimitPolicy,
+  RateLimitPolicyDefinition,
+  RateLimitStatus,
   DeadLetter,
   DeadLetterFilter,
   DeadLetterPage,
@@ -393,6 +396,27 @@ type ConcurrencyPolicyRow = {
   updated_at: Date;
 };
 
+type RateLimitPolicyRow = {
+  namespace: string;
+  queue_name: string;
+  rate_limit: number;
+  rate_interval_ms: number;
+  rate_burst: number;
+  per_key_limit: number | null;
+  per_key_interval_ms: number | null;
+  per_key_burst: number | null;
+  updated_at: Date | string;
+};
+
+type RateLimitStatusRow = RateLimitPolicyRow & {
+  available_tokens: string;
+  throttled_ready: string;
+  throttled_keys: string;
+  next_eligible_at: Date | string | null;
+  sample_capped: boolean;
+  policy_set_capped: boolean;
+};
+
 function maintenancePhaseResult(row: MaintenancePhaseRow): MaintenancePhaseResult {
   return {
     phase: row.phase,
@@ -660,7 +684,7 @@ function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
         applicationDefault: row.application_statistics_rows_per_pass,
       },
     },
-    updatedAt: row.updated_at,
+    updatedAt: new Date(row.updated_at),
   };
 }
 
@@ -670,7 +694,40 @@ function concurrencyPolicy(row: ConcurrencyPolicyRow): ConcurrencyPolicy {
     queue: row.queue_name,
     maxActive: row.max_active,
     maxActivePerKey: row.max_active_per_key,
-    updatedAt: row.updated_at,
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+function rateLimitPolicy(row: RateLimitPolicyRow): RateLimitPolicy {
+  return {
+    namespace: row.namespace,
+    queue: row.queue_name,
+    rate: {
+      limit: row.rate_limit,
+      intervalMs: row.rate_interval_ms,
+      burst: row.rate_burst,
+    },
+    perKey:
+      row.per_key_limit === null
+        ? null
+        : {
+            limit: row.per_key_limit,
+            intervalMs: row.per_key_interval_ms!,
+            burst: row.per_key_burst!,
+          },
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+function rateLimitStatus(row: RateLimitStatusRow): RateLimitStatus {
+  return {
+    ...rateLimitPolicy(row),
+    availableTokens: Number(row.available_tokens),
+    throttledReady: Number(row.throttled_ready),
+    throttledKeys: Number(row.throttled_keys),
+    nextEligibleAt: row.next_eligible_at === null ? null : new Date(row.next_eligible_at),
+    sampleCapped: row.sample_capped,
+    policySetCapped: row.policy_set_capped,
   };
 }
 
@@ -1747,6 +1804,123 @@ export class Queue {
       [queueNames],
     );
     return result.rows.map(concurrencyPolicy);
+  }
+
+  async syncRateLimitPolicies(
+    namespace: string,
+    definitions: readonly RateLimitPolicyDefinition[],
+    options: { prune?: boolean } = {},
+  ): Promise<RateLimitPolicy[]> {
+    const input = definitions.map((definition) => ({
+      queue: definition.queue,
+      rate: definition.rate,
+      perKey: definition.perKey ?? null,
+    }));
+    const result = await this.database.query<RateLimitPolicyRow>(
+      "SELECT * FROM workhorse.sync_rate_limit_policies_v1($1, $2::jsonb, $3)",
+      [namespace, JSON.stringify(input), options.prune ?? true],
+    );
+    return result.rows.map(rateLimitPolicy);
+  }
+
+  async rateLimitPolicies(queueNames: readonly string[] = []): Promise<RateLimitPolicy[]> {
+    const result = await this.database.query<RateLimitPolicyRow>(
+      `SELECT namespace, queue_name, rate_limit, rate_interval_ms, rate_burst,
+              per_key_limit, per_key_interval_ms, per_key_burst, updated_at
+         FROM workhorse.rate_limit_policy
+        WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
+        ORDER BY queue_name`,
+      [queueNames],
+    );
+    return result.rows.map(rateLimitPolicy);
+  }
+
+  async rateLimitStatuses(queueNames: readonly string[] = []): Promise<RateLimitStatus[]> {
+    const result = await this.database.query<RateLimitStatusRow>(
+      `WITH observed AS (
+         SELECT clock_timestamp() AS now
+       ), policies AS MATERIALIZED (
+         SELECT policy.* FROM workhorse.rate_limit_policy policy
+          WHERE cardinality($1::text[]) = 0 OR policy.queue_name = ANY($1::text[])
+          ORDER BY policy.queue_name LIMIT 101
+       ), queue_status AS (
+         SELECT policy.*, observed.now,
+                LEAST(policy.rate_burst::numeric, COALESCE(
+                  bucket.tokens + GREATEST(
+                    0::numeric,
+                    extract(epoch FROM observed.now - bucket.refilled_at) * 1000
+                  ) * policy.rate_limit::numeric / policy.rate_interval_ms::numeric,
+                  policy.rate_burst::numeric
+                )) AS available_tokens
+           FROM policies policy CROSS JOIN observed
+           LEFT JOIN workhorse.rate_limit_bucket bucket
+             ON bucket.queue_name = policy.queue_name
+            AND bucket.bucket_scope = 'queue' AND bucket.bucket_key = ''
+       )
+       SELECT policy.namespace, policy.queue_name, policy.rate_limit,
+              policy.rate_interval_ms, policy.rate_burst, policy.per_key_limit,
+              policy.per_key_interval_ms, policy.per_key_burst, policy.updated_at,
+              policy.available_tokens::text,
+              pressure.throttled_ready::text, pressure.throttled_keys::text,
+              pressure.next_eligible_at, pressure.sample_capped
+              , (SELECT count(*) FROM policies) > 100 AS policy_set_capped
+         FROM queue_status policy
+         CROSS JOIN LATERAL (
+           SELECT count(*) FILTER (WHERE sample.throttled)::integer AS throttled_ready,
+                  count(DISTINCT sample.concurrency_key) FILTER (
+                    WHERE sample.key_throttled
+                  )::integer AS throttled_keys,
+                  min(sample.eligible_at) FILTER (WHERE sample.throttled) AS next_eligible_at,
+                  count(*) > 100 AS sample_capped
+             FROM (
+               SELECT ready.concurrency_key,
+                      policy.available_tokens < 1 OR keyed.available_tokens < 1 AS throttled,
+                      keyed.available_tokens < 1 AS key_throttled,
+                      CASE WHEN policy.available_tokens < 1 OR keyed.available_tokens < 1 THEN
+                        GREATEST(
+                          CASE WHEN policy.available_tokens < 1 THEN policy.now + make_interval(
+                            secs => CEIL(
+                              (1 - policy.available_tokens) * policy.rate_interval_ms::numeric
+                              / policy.rate_limit::numeric
+                            )::double precision / 1000
+                          ) END,
+                          CASE WHEN keyed.available_tokens < 1 THEN policy.now + make_interval(
+                            secs => CEIL(
+                              (1 - keyed.available_tokens) * policy.per_key_interval_ms::numeric
+                              / policy.per_key_limit::numeric
+                            )::double precision / 1000
+                          ) END
+                        )
+                      END AS eligible_at
+                 FROM (
+                   SELECT runtime.concurrency_key
+                     FROM workhorse.job_runtime runtime
+                    WHERE runtime.state = 'ready' AND runtime.queue_name = policy.queue_name
+                    ORDER BY runtime.sequence, runtime.job_id LIMIT 101
+                 ) ready
+                 CROSS JOIN LATERAL (
+                   SELECT CASE
+                     WHEN policy.per_key_limit IS NULL OR ready.concurrency_key IS NULL THEN 1
+                     ELSE LEAST(policy.per_key_burst::numeric, COALESCE(
+                       bucket.tokens + GREATEST(
+                         0::numeric,
+                         extract(epoch FROM policy.now - bucket.refilled_at) * 1000
+                       ) * policy.per_key_limit::numeric / policy.per_key_interval_ms::numeric,
+                       policy.per_key_burst::numeric
+                     ))
+                   END AS available_tokens
+                   FROM (SELECT true) present
+                   LEFT JOIN workhorse.rate_limit_bucket bucket
+                     ON bucket.queue_name = policy.queue_name
+                    AND bucket.bucket_scope = 'key'
+                    AND bucket.bucket_key = ready.concurrency_key
+                 ) keyed
+             ) sample
+         ) pressure
+        ORDER BY policy.queue_name LIMIT 100`,
+      [queueNames],
+    );
+    return result.rows.map(rateLimitStatus);
   }
 
   async overrideRetentionPolicy(
@@ -3005,6 +3179,7 @@ export class Queue {
       retention,
       statistics,
       concurrency,
+      rateLimits,
     ] = await Promise.all([
       this.database.query<{ version: number }>(
         `SELECT CASE
@@ -3384,6 +3559,7 @@ export class Queue {
           ) blocked
          ORDER BY policy.queue_name
          LIMIT 100`),
+      this.rateLimitStatuses(),
     ]);
 
     const stateCounts: QueueHealth["counts"] = {
@@ -3431,6 +3607,10 @@ export class Queue {
           highestKeyActive: Number(row.highest_key_active),
         })),
         capped: concurrency.rows.some((row) => row.capped),
+      },
+      rateLimitPolicies: {
+        policies: rateLimits,
+        capped: rateLimits.some((policy) => policy.policySetCapped || policy.sampleCapped),
       },
       statistics: {
         rolledUpThrough: statisticsRow.rolled_up_through,
@@ -3505,21 +3685,23 @@ export class Queue {
 
   /** Read the per-queue live pressure used by OpenTelemetry observable instruments. */
   async queueMetricSnapshot(): Promise<QueueMetricSnapshot[]> {
-    const result = await this.database.query<{
-      queue_name: string;
-      ready: string;
-      scheduled: string;
-      active: string;
-      oldest_ready_age_ms: number | null;
-      max_active: number | null;
-      concurrency_active: string;
-      blocked_ready: string;
-    }>(
-      `WITH queue_names AS (
+    const [result, rateLimitStatuses] = await Promise.all([
+      this.database.query<{
+        queue_name: string;
+        ready: string;
+        scheduled: string;
+        active: string;
+        oldest_ready_age_ms: number | null;
+        max_active: number | null;
+        concurrency_active: string;
+        blocked_ready: string;
+      }>(
+        `WITH queue_names AS (
          SELECT $1::text AS queue_name
          UNION SELECT queue_name FROM workhorse.job_runtime
          UNION SELECT queue_name FROM workhorse.queue_control
          UNION SELECT queue_name FROM workhorse.concurrency_policy
+         UNION SELECT queue_name FROM workhorse.rate_limit_policy
          UNION SELECT queue_name FROM workhorse.worker_registry
        ), usage AS (
          SELECT names.queue_name,
@@ -3562,8 +3744,11 @@ export class Queue {
              ) sample
          ) blocked ON policy.queue_name IS NOT NULL
         ORDER BY usage.queue_name`,
-      [this.defaultQueue],
-    );
+        [this.defaultQueue],
+      ),
+      this.rateLimitStatuses(),
+    ]);
+    const rateLimits = new Map(rateLimitStatuses.map((status) => [status.queue, status]));
     return result.rows.map((row) => ({
       queue: row.queue_name,
       readyDepth: Number(row.ready),
@@ -3573,6 +3758,18 @@ export class Queue {
       concurrencyLimit: row.max_active,
       concurrencyActive: Number(row.concurrency_active),
       blockedReadyDepth: Number(row.blocked_ready),
+      rateLimitPerSecond:
+        rateLimits.get(row.queue_name) === undefined
+          ? null
+          : (rateLimits.get(row.queue_name)!.rate.limit * 1_000) /
+            rateLimits.get(row.queue_name)!.rate.intervalMs,
+      rateLimitAvailableTokens: rateLimits.get(row.queue_name)?.availableTokens ?? 0,
+      rateLimitThrottledReadyDepth: rateLimits.get(row.queue_name)?.throttledReady ?? 0,
+      rateLimitNextEligibleDelayMs:
+        rateLimits.get(row.queue_name)?.nextEligibleAt === null ||
+        rateLimits.get(row.queue_name)?.nextEligibleAt === undefined
+          ? null
+          : Math.max(0, rateLimits.get(row.queue_name)!.nextEligibleAt!.getTime() - Date.now()),
     }));
   }
 }

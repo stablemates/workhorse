@@ -48,6 +48,12 @@ import {
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
   DEMO_QUEUE,
+  DEMO_RATE_LIMIT,
+  DEMO_RATE_LIMIT_PER_KEY,
+  DEMO_RATE_LIMIT_POLICY_NAMESPACE,
+  DEMO_RATE_LIMIT_QUEUE,
+  DEMO_RATE_LIMIT_SEED_JOBS,
+  DEMO_RATE_LIMIT_SEED_NAME,
   DEMO_RECOVERABLE_RETRY_POLICY,
   DEMO_REGISTRY_INTERVAL_MS,
   DEMO_SCHEDULE_NAMESPACE,
@@ -579,6 +585,18 @@ export async function syncDemoConcurrencyPolicies(database: Pool): Promise<void>
       queue: DEMO_QUEUE,
       maxActive: DEMO_CONCURRENCY_MAX_ACTIVE,
       maxActivePerKey: DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY,
+    },
+  ]);
+}
+
+/** Synchronize the token bucket shown by the dedicated partner API queue. */
+export async function syncDemoRateLimitPolicies(database: Pool): Promise<void> {
+  const queue = new Queue(database, DEMO_QUEUE);
+  await queue.syncRateLimitPolicies(DEMO_RATE_LIMIT_POLICY_NAMESPACE, [
+    {
+      queue: DEMO_RATE_LIMIT_QUEUE,
+      rate: DEMO_RATE_LIMIT,
+      perKey: DEMO_RATE_LIMIT_PER_KEY,
     },
   ]);
 }
@@ -1141,7 +1159,52 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
   });
 }
 
+async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> {
+  return database.transaction(async (transaction) => {
+    const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_RATE_LIMIT_QUEUE });
+    await workhorse.queue.syncRateLimitPolicies(DEMO_RATE_LIMIT_POLICY_NAMESPACE, [
+      {
+        queue: DEMO_RATE_LIMIT_QUEUE,
+        rate: DEMO_RATE_LIMIT,
+        perKey: DEMO_RATE_LIMIT_PER_KEY,
+      },
+    ]);
+    const marker = await transaction.execute<{ name: string }>(sql`
+      INSERT INTO public.workhorse_demo_seed (name)
+      VALUES (${DEMO_RATE_LIMIT_SEED_NAME})
+      ON CONFLICT (name) DO NOTHING
+      RETURNING name
+    `);
+    if (marker.rows.length === 0) return [];
+
+    const jobIds: string[] = [];
+    for (const job of DEMO_RATE_LIMIT_SEED_JOBS) {
+      jobIds.push(
+        await workhorse.queue.enqueue(
+          RECURRING_JOB_TYPE,
+          { source: "rate-limit-seed", label: job.label },
+          {
+            concurrencyKey: job.concurrencyKey,
+            maxAttempts: 1,
+            tags: ["demo-test", "rate-limit", "partner-api"],
+          },
+        ),
+      );
+    }
+
+    // Consume the initial burst through the public claim path. Two customers start immediately;
+    // the remaining tasks stay ready so the queue page visibly explains why they are throttled.
+    for (const workerId of ["rate-limit-seed-a", "rate-limit-seed-b"]) {
+      const claimed = await workhorse.queue.claim(workerId, { queue: DEMO_RATE_LIMIT_QUEUE });
+      if (!claimed) throw new Error("Expected the demo rate-limit burst to admit two tasks");
+      await workhorse.queue.complete(claimed, workerId, { seeded: true });
+    }
+    return jobIds;
+  });
+}
+
 export async function seedDemoData(database: DemoDatabase) {
+  const rateLimitJobIds = await seedRateLimitDemoData(database);
   // These jobs are inserted first but start after a short grace period, so startup work is never
   // starved. Their handler only awaits a Node timer, occupying slots without burning CPU or memory.
   const longRunningJobIds = await seedLongRunningDemoData(database);
@@ -1425,7 +1488,12 @@ export async function seedDemoData(database: DemoDatabase) {
   }
 
   const historicalJobCount = await seedHistoricalDemoData(database);
-  const jobIds = [...longRunningJobIds, ...featureShowcaseJobIds, ...representativeSeed.jobIds];
+  const jobIds = [
+    ...rateLimitJobIds,
+    ...longRunningJobIds,
+    ...featureShowcaseJobIds,
+    ...representativeSeed.jobIds,
+  ];
   return {
     seeded: jobIds.length > 0 || historicalJobCount > 0,
     jobIds,

@@ -289,7 +289,7 @@ The dedicated process lifecycle does not implement:
 
 - OpenTelemetry spans or process metrics;
 - handler execution deadlines or forced handler cancellation;
-- global concurrency or rate limits across processes;
+- cross-queue weighted scheduling;
 - dynamic configuration reload;
 - zero-downtime handler registry version negotiation.
 
