@@ -2432,6 +2432,7 @@ describe("Workhorse demo", () => {
     await new Queue(pool).syncConcurrencyPolicies("dashboard-test", [
       { queue: queueName, maxActive: 1, maxActivePerKey: 1 },
       { queue: "policy-only-demo", maxActive: 3 },
+      { queue: "terminal-demo", maxActive: 2, maxActivePerKey: 1 },
     ]);
     const activeId = await workhorse.context.queue.enqueue(
       "active",
@@ -2476,6 +2477,7 @@ describe("Workhorse demo", () => {
           concurrencyPolicy: {
             namespace: "dashboard-test",
             maxActive: 1,
+            utilizationKnown: true,
             active: 1,
             available: 0,
             blockedReady: 1,
@@ -2498,6 +2500,7 @@ describe("Workhorse demo", () => {
       concurrencyPolicy: {
         namespace: "dashboard-test",
         maxActive: 3,
+        utilizationKnown: true,
         active: 0,
         available: 3,
         blockedReady: 0,
@@ -2511,6 +2514,7 @@ describe("Workhorse demo", () => {
       concurrencyPolicy: {
         namespace: "dashboard-test",
         maxActive: 3,
+        utilizationKnown: true,
         active: 0,
         available: 3,
         blockedReady: 0,
@@ -2521,12 +2525,47 @@ describe("Workhorse demo", () => {
       concurrencyPolicy: {
         namespace: "dashboard-test",
         maxActive: 1,
+        utilizationKnown: true,
         active: 1,
         available: 0,
         blockedReady: 1,
         maxActivePerKey: 1,
       },
     });
+    // A finished task keeps the key it was enqueued with, and still reports its queue's policy as
+    // it stands now. Nothing snapshots the limits it ran under, so the drawer labels this current.
+    const terminalId = await workhorse.context.queue.enqueue(
+      "terminal",
+      {},
+      { queue: "terminal-demo", concurrencyKey: "tenant-finished" },
+    );
+    const terminalClaim = await workhorse.context.queue.claim("terminal-worker", {
+      queue: "terminal-demo",
+    });
+    expect(terminalClaim?.id).toBe(terminalId);
+    await workhorse.context.queue.complete(terminalClaim!, "terminal-worker", { done: true });
+    await expect(client.dashboard.jobDetail({ id: terminalId })).resolves.toMatchObject({
+      identity: { state: "succeeded", concurrencyKey: "tenant-finished" },
+      current: { runtime: null },
+      concurrencyPolicy: {
+        namespace: "dashboard-test",
+        maxActive: 2,
+        maxActivePerKey: 1,
+        utilizationKnown: false,
+        active: 0,
+      },
+    });
+    // The raw key still never leaves task detail.
+    expect(
+      JSON.stringify(
+        await client.dashboard.tasks({
+          filter: "all",
+          page: 1,
+          pageSize: 25,
+          queue: "terminal-demo",
+        }),
+      ),
+    ).not.toContain("tenant-finished");
     const taskList = await client.dashboard.tasks({
       filter: "all",
       page: 1,
@@ -2620,6 +2659,93 @@ describe("Workhorse demo", () => {
         status: "succeeded",
       },
     ]);
+  });
+
+  it("reads exact policy without inventing live utilization beyond the health summary cap", async () => {
+    const { app, workhorse } = createTestApplication();
+    const client = dashboardClient(app);
+    const queue = workhorse.context.queue;
+    const terminalQueue = "zz-terminal-policy";
+    await queue.syncConcurrencyPolicies("dashboard-cap-test", [
+      ...Array.from({ length: 101 }, (_, index) => ({
+        queue: `policy-${String(index).padStart(3, "0")}`,
+        maxActive: 1,
+      })),
+      { queue: terminalQueue, maxActive: 7, maxActivePerKey: 3 },
+    ]);
+
+    const health = await queue.health();
+    expect(health.concurrencyPolicies.capped).toBe(true);
+    expect(health.concurrencyPolicies.policies).toHaveLength(100);
+    expect(health.concurrencyPolicies.policies.map((policy) => policy.queue)).not.toContain(
+      terminalQueue,
+    );
+
+    const jobId = await queue.enqueue(
+      "terminal-beyond-policy-cap",
+      {},
+      { queue: terminalQueue, concurrencyKey: "tenant-private" },
+    );
+    // The ceiling is read from this queue's own policy row, so it is exact even past the cap. The
+    // counts beside it were never measured, and none of them may be defaulted into a claim: an
+    // `available` of 7 here would tell an operator the whole budget is free.
+    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+      identity: {
+        state: "ready",
+        concurrencyKey: "tenant-private",
+      },
+      current: { runtime: { state: "ready" } },
+      concurrencyPolicy: {
+        namespace: "dashboard-cap-test",
+        maxActive: 7,
+        maxActivePerKey: 3,
+        utilizationKnown: false,
+        active: 0,
+        available: 0,
+        blockedReady: 0,
+        saturatedKeys: 0,
+        highestKeyActive: 0,
+      },
+    });
+
+    // A finished task in the same queue keeps its exact ceiling and the same unmeasured signal.
+    const claim = await queue.claim("terminal-policy-worker", { queue: terminalQueue });
+    expect(claim?.id).toBe(jobId);
+    await queue.complete(claim!, "terminal-policy-worker", { done: true });
+    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+      identity: { state: "succeeded", concurrencyKey: "tenant-private" },
+      current: { runtime: null },
+      concurrencyPolicy: {
+        namespace: "dashboard-cap-test",
+        maxActive: 7,
+        maxActivePerKey: 3,
+        utilizationKnown: false,
+        available: 0,
+      },
+    });
+
+    // A queue inside the health sample still reports measured utilization, so the flag marks the
+    // capped read specifically rather than every task detail.
+    const measuredId = await queue.enqueue("inside-policy-cap", {}, { queue: "policy-000" });
+    await expect(client.dashboard.jobDetail({ id: measuredId })).resolves.toMatchObject({
+      concurrencyPolicy: {
+        namespace: "dashboard-cap-test",
+        maxActive: 1,
+        utilizationKnown: true,
+        active: 0,
+        available: 1,
+      },
+    });
+    expect(
+      JSON.stringify(
+        await client.dashboard.tasks({
+          filter: "all",
+          page: 1,
+          pageSize: 25,
+          queue: terminalQueue,
+        }),
+      ),
+    ).not.toContain("tenant-private");
   });
 
   it("reconciles local schedule toggles with worker-owned schedule definitions", async () => {
