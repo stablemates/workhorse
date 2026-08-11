@@ -254,7 +254,7 @@ describe("task drawer concurrency line", () => {
     );
     expect(described).not.toBeNull();
     expect(described?.concurrencyKey).toBe("tenant-a");
-    expect(described?.summary).toBe("6 of 8 active · per key 2 · 1 key full · 3+ ready blocked");
+    expect(described?.summary).toBe("in use 6 of 8 · per key 2 · 1 key full · 3+ ready blocked");
     expect(described?.title).toContain("Fleet-wide budget");
     expect(described?.title).toContain("competes for its key's capacity");
     expect(described?.basis).toBe("live");
@@ -288,7 +288,7 @@ describe("task drawer concurrency line", () => {
     );
     expect(described?.utilizationKnown).toBe(false);
     expect(described?.basis).toBe("live");
-    expect(described?.summary).toBe("queue allows 7 at once · 3 per key · usage unknown");
+    expect(described?.summary).toBe("queue limit 7 · per key 3");
     expect(described?.summary).not.toContain("active");
     expect(described?.summary).not.toContain("blocked");
     expect(described?.title).toContain("at most 7 tasks");
@@ -311,7 +311,7 @@ describe("task drawer concurrency line", () => {
     );
     expect(described?.utilizationKnown).toBe(false);
     expect(described?.basis).toBe("pending");
-    expect(described?.summary).toBe("queue allows 1 at once · usage unknown");
+    expect(described?.summary).toBe("queue limit 1");
     expect(described?.title).toContain("will enter this budget when it becomes ready");
     expect(described?.title).toContain("at most 1 task");
     expect(described?.title).toContain("will consume queue capacity only");
@@ -357,8 +357,9 @@ describe("task drawer concurrency line", () => {
     );
     expect(described?.concurrencyKey).toBe("tenant-a");
     expect(described?.basis).toBe("current");
-    // Live counts are dropped: a finished task holds no slot, so `6 of 8 active` would mislead.
-    expect(described?.summary).toBe("queue now allows 8 at once · 2 per key");
+    // Live counts are dropped: a finished task holds no slot, so `in use 6 of 8` would mislead.
+    expect(described?.summary).toBe("queue limit 8 · per key 2");
+    expect(described?.basisLabel).toBe("queue policy now");
     expect(described?.summary).not.toContain("active");
     expect(described?.title).toContain("no longer competing");
     expect(described?.title).toContain("currently admits at most 8");
@@ -372,7 +373,7 @@ describe("task drawer concurrency line", () => {
       job({ runtimeState: null, concurrencyPolicy: policy({ maxActive: 1 }) }),
     );
     expect(described?.concurrencyKey).toBeNull();
-    expect(described?.summary).toBe("queue now allows 1 at once");
+    expect(described?.summary).toBe("queue limit 1");
     expect(described?.title).toContain("currently admits at most 1 task");
     expect(described?.title).toContain("does not limit tasks by concurrency key");
   });
@@ -381,7 +382,8 @@ describe("task drawer concurrency line", () => {
     const described = describeTaskConcurrency(
       job({ runtimeState: null, concurrencyKey: "tenant-a", concurrencyPolicy: null }),
     );
-    expect(described?.summary).toBe("queue has no limit now");
+    expect(described?.summary).toBe("no queue limit");
+    expect(described?.basisLabel).toBe("queue policy now");
     expect(described?.title).toContain("no fleet-wide limit");
     expect(described?.title).toContain("may differ from the limits in force while this task ran");
   });
@@ -456,7 +458,7 @@ describe("task drawer concurrency line", () => {
     );
     expect(html).toContain("Concurrency");
     expect(html).toContain("tenant-a");
-    expect(html).toContain("4 of 10 active");
+    expect(html).toContain("in use 4 of 10");
     // The key badge carries its own explanation, so assistive technology hears why it never
     // changes rather than only hearing the raw key echoed back.
     expect(html).toContain("The key is part of the task and never changes");
@@ -505,11 +507,11 @@ describe("task drawer concurrency line", () => {
         }),
       ),
     );
-    expect(html).toContain("queue allows 7 at once · 3 per key · usage unknown");
+    expect(html).toContain("queue limit 7 · per key 3");
     expect(html).toContain("usage not measured");
     expect(html).toContain("this queue fell outside that sample");
     expect(html).not.toContain("0 of 7 active");
-    expect(html).not.toContain("4 of 10 active");
+    expect(html).not.toContain("in use 4 of 10");
   });
 
   it("renders a finished task's key beside the queue's current limits", async () => {
@@ -530,8 +532,8 @@ describe("task drawer concurrency line", () => {
     expect(html).toContain("Concurrency");
     expect(html).toContain("The key is part of the task and never changes");
     expect(html).toContain("queue policy now");
-    expect(html).toContain("queue now allows 10 at once · 2 per key");
-    expect(html).not.toContain("4 of 10 active");
+    expect(html).toContain("queue limit 10 · per key 2");
+    expect(html).not.toContain("in use 4 of 10");
     expect(html).toContain("may differ from the limits in force while this task ran");
   });
 

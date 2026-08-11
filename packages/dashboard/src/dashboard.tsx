@@ -1407,10 +1407,8 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
 export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
   const described = describeTaskConcurrency(job);
   if (described === null) return null;
-  const current = described.basis === "current";
-  const pending = described.basis === "pending";
   return (
-    <Group gap="xs" mt="sm" align="baseline">
+    <Group gap="xs" mt="sm" align="baseline" wrap="wrap">
       <Text c="dimmed" size="xs" fw={600}>
         Concurrency
       </Text>
@@ -1426,15 +1424,14 @@ export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
           {described.concurrencyKey}
         </Badge>
       )}
-      {current ? (
-        <Text c="dimmed" size="xs" fs="italic" title={described.title}>
-          queue policy now
-        </Text>
-      ) : pending ? (
-        <Text c="dimmed" size="xs" fs="italic" title={described.title}>
-          budget when ready
-        </Text>
-      ) : null}
+      {/* The numbers below state no tense of their own, so this marker is what keeps a finished
+          task's ceilings from reading as the ones it ran under. It is a badge rather than italic
+          prose because it qualifies the numbers instead of continuing the sentence. */}
+      {described.basisLabel === null ? null : (
+        <Badge size="xs" variant="outline" color="gray" tt="none" title={described.title}>
+          {described.basisLabel}
+        </Badge>
+      )}
       <Text c="dimmed" size="xs" title={described.title} aria-label={described.title}>
         {described.summary}
       </Text>

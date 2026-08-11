@@ -128,7 +128,13 @@ export interface TaskConcurrencyDisplay {
   concurrencyKey: string | null;
   /** Hover text for the key badge. Says plainly that the key belongs to the task, not the queue. */
   keyTitle: string;
-  /** The short line beside the key. Live counts while running, current policy once finished. */
+  /**
+   * The facts beside the key, as `label value` fragments rather than a sentence.
+   *
+   * Live counts while the task competes, configured ceilings once it stops. The fragments state no
+   * tense of their own: `basisLabel` carries that claim, and a component must render it, so the
+   * same number is never qualified twice in one line.
+   */
   summary: string;
   /** Hover text for the summary. Carries the "current, not historical" caveat when finished. */
   title: string;
@@ -150,7 +156,21 @@ export interface TaskConcurrencyDisplay {
    * line rather than to hide it.
    */
   basis: "live" | "pending" | "current";
+  /**
+   * The visible marker for a summary that is not live, or null when it is.
+   *
+   * The summary states numbers and nothing about when they were true, so this is the one place the
+   * tense is written. A component renders it beside the summary; without it a finished task's
+   * ceilings would read as the ones it ran under.
+   */
+  basisLabel: string | null;
 }
+
+const basisLabels = {
+  live: null,
+  pending: "budget when ready",
+  current: "queue policy now",
+} as const;
 
 const noSnapshotCaveat =
   "Workhorse does not record the limits a task ran under, so these are the queue's limits now and may differ from the limits in force while this task ran.";
@@ -174,17 +194,18 @@ export function describeTaskConcurrency(job: {
     return {
       concurrencyKey,
       keyTitle,
-      summary: "no queue-wide limit",
+      summary: "no queue limit",
       title: noPolicyTitle,
       utilizationKnown: true,
       basis,
+      basisLabel: basisLabels[basis],
     };
   }
   if (!policy.utilizationKnown) {
     return unmeasuredTaskConcurrency(concurrencyKey, keyTitle, policy, basis);
   }
   const keys = describeConcurrencyKeys(policy);
-  const parts = [`${policy.active} of ${policy.maxActive} active`];
+  const parts = [`in use ${policy.active} of ${policy.maxActive}`];
   if (keys.label !== null) parts.push(keys.label.toLowerCase());
   if (policy.blockedReady > 0) {
     parts.push(`${policy.blockedReady}+ ready blocked`);
@@ -208,6 +229,7 @@ export function describeTaskConcurrency(job: {
     title: `${basis === "pending" ? "This task is scheduled, so it will enter this budget when it becomes ready. " : ""}${describeConcurrencyLimit(policy).title} ${capacityRole}`,
     utilizationKnown: true,
     basis,
+    basisLabel: basisLabels[basis],
   };
 }
 
@@ -218,7 +240,7 @@ export function describeTaskConcurrency(job: {
  * this task's own policy exactly. Past that bound the ceiling is a fact and every count beside it
  * is absent. Printing the absent counts as `0 of 7 active` would tell an operator the queue is
  * idle, which is the opposite of what a large deployment usually means, so the counts are dropped
- * and the line says so.
+ * and `utilizationKnown` tells the component to mark the line instead.
  */
 function unmeasuredTaskConcurrency(
   concurrencyKey: string | null,
@@ -226,9 +248,8 @@ function unmeasuredTaskConcurrency(
   policy: DashboardConcurrencyPolicySummary,
   basis: "live" | "pending",
 ): TaskConcurrencyDisplay {
-  const parts = [`queue allows ${policy.maxActive} at once`];
-  if (policy.maxActivePerKey !== null) parts.push(`${policy.maxActivePerKey} per key`);
-  parts.push("usage unknown");
+  const parts = [`queue limit ${policy.maxActive}`];
+  if (policy.maxActivePerKey !== null) parts.push(`per key ${policy.maxActivePerKey}`);
   const keyed =
     concurrencyKey === null
       ? basis === "pending"
@@ -252,6 +273,7 @@ function unmeasuredTaskConcurrency(
     }. ${keyed} How much of that budget is in use now is unknown: Workhorse measures utilization for a bounded number of queues and this queue fell outside that sample, so no count is shown rather than a count of zero.`,
     utilizationKnown: false,
     basis,
+    basisLabel: basisLabels[basis],
   };
 }
 
@@ -273,15 +295,16 @@ function settledTaskConcurrency(
     return {
       concurrencyKey,
       keyTitle,
-      summary: "queue has no limit now",
+      summary: "no queue limit",
       title: `${settled} ${noPolicyTitle} ${noSnapshotCaveat}`,
       // A settled line states no utilization at all, so nothing about it is unknown.
       utilizationKnown: true,
       basis: "current",
+      basisLabel: basisLabels.current,
     };
   }
-  const parts = [`queue now allows ${policy.maxActive} at once`];
-  if (policy.maxActivePerKey !== null) parts.push(`${policy.maxActivePerKey} per key`);
+  const parts = [`queue limit ${policy.maxActive}`];
+  if (policy.maxActivePerKey !== null) parts.push(`per key ${policy.maxActivePerKey}`);
   return {
     concurrencyKey,
     keyTitle,
@@ -293,6 +316,7 @@ function settledTaskConcurrency(
     }. ${noSnapshotCaveat}`,
     utilizationKnown: true,
     basis: "current",
+    basisLabel: basisLabels.current,
   };
 }
 
