@@ -38,21 +38,20 @@ no install scripts, so nothing in them is package-manager specific.
 
 ## Packages and versioning
 
-Seven packages ship from this repository. `@workhorse/core` is the durable queue; the rest are
+Six packages ship from this repository. `@workhorse/core` is the durable queue; the rest are
 optional.
 
-| Package                | Purpose                                           | Peer requirements                                                                   |
-| ---------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `@workhorse/core`      | Queue, worker, schema, CLI                        | `pg` >= 8.13                                                                        |
-| `@workhorse/drizzle`   | Drizzle ORM provider                              | `@workhorse/core`, `drizzle-orm` >= 0.45, `pg`                                      |
-| `@workhorse/prisma`    | Prisma ORM provider                               | `@workhorse/core`, `@prisma/client` >= 6 and < 7                                    |
-| `@workhorse/typeorm`   | TypeORM provider                                  | `@workhorse/core`, `typeorm` >= 0.3 and < 2                                         |
-| `@workhorse/kysely`    | Kysely provider                                   | `@workhorse/core`, `kysely` >= 0.29 and < 0.30                                      |
-| `@workhorse/hono`      | Hono lifecycle and dashboard route registration   | `@workhorse/core`, `@workhorse/dashboard`, `hono` >= 4.10, `@hono/node-server` >= 2 |
-| `@workhorse/dashboard` | Operator dashboard and its framework-neutral host | `@workhorse/core`, `react` 19, `react-dom` 19                                       |
+| Package                | Purpose                                           | Peer requirements                                |
+| ---------------------- | ------------------------------------------------- | ------------------------------------------------ |
+| `@workhorse/core`      | Queue, worker, schema, CLI                        | `pg` >= 8.13                                     |
+| `@workhorse/drizzle`   | Drizzle ORM provider                              | `@workhorse/core`, `drizzle-orm` >= 0.45, `pg`   |
+| `@workhorse/prisma`    | Prisma ORM provider                               | `@workhorse/core`, `@prisma/client` >= 6 and < 7 |
+| `@workhorse/typeorm`   | TypeORM provider                                  | `@workhorse/core`, `typeorm` >= 0.3 and < 2      |
+| `@workhorse/kysely`    | Kysely provider                                   | `@workhorse/core`, `kysely` >= 0.29 and < 0.30   |
+| `@workhorse/dashboard` | Operator dashboard and its framework-neutral host | `@workhorse/core`, `react` 19, `react-dom` 19    |
 
-The seven published packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
-integration package always declares the core version it was released with as a peer range. Mixing
+The six published packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
+optional package always declares the core version it was released with as a peer range. Mixing
 versions across the set is not supported.
 
 While the line is `0.x`, any minor release may make a breaking change, including a schema version
@@ -84,14 +83,14 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
 
 Every release is a tag, and every tag runs the full check suite before anything is published.
 
-1. Update the four package versions in lockstep and add the `CHANGELOG.md` entry for the release,
+1. Update all six package versions in lockstep and add the `CHANGELOG.md` entry for the release,
    including upgrade notes for any breaking change.
 2. Tag `vX.Y.Z`. The release workflow refuses to continue if the tag disagrees with any manifest or
    if `CHANGELOG.md` has no entry for it.
 3. `pnpm check` runs — format, lint, types, unit and integration tests, the packed-package install
    test, the site smoke test, and the demo smoke test.
 4. Each package is packed and published with `npm publish --provenance`. `@workhorse/core` is
-   published first, because the other six declare it as a peer.
+   published first, because the other five declare it as a peer.
 
 **Provenance.** Every published tarball carries an npm provenance attestation linking it to this
 repository, the commit it was built from, and the workflow that built it. Verify a downloaded

@@ -68,7 +68,7 @@ describe("demo development supervisor", () => {
       });
 
       try {
-        const processIds = await waitForProcessIds(processIdLog, 1);
+        const processIds = await waitForProcessIds(processIdLog, 4);
         for (const processId of processIds) spawnedProcessIds.add(processId);
 
         supervisor.kill("SIGINT");

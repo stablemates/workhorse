@@ -128,7 +128,7 @@ describe("workhorse init", () => {
       typescript: true,
       packageManager: "pnpm",
     } as const;
-    expect(renderMountSnippet(base)).toContain("mountWorkhorseDashboard");
+    expect(renderMountSnippet(base)).toContain("host.handle(context.req.raw)");
     expect(renderMountSnippet({ ...base, framework: "express" })).toContain(
       "dashboardNodeMiddleware",
     );

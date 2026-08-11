@@ -7,7 +7,7 @@ import { demoUrl } from "@/lib/site";
 export const metadata: Metadata = {
   title: "Integrations",
   description:
-    "Workhorse integration packages for Drizzle, Prisma, TypeORM, Kysely, Hono, and the transport-neutral operator dashboard.",
+    "Workhorse integration packages for Drizzle, Prisma, TypeORM, Kysely, and the transport-neutral operator dashboard.",
   alternates: { canonical: "/integrations" },
 };
 
@@ -58,22 +58,6 @@ await dataSource.transaction(async (manager) => {
   await workhorse.forTransaction(manager).enqueue("account.created", {
     accountId: account.id,
   });
-});`;
-
-const honoSample = `import { createWorkhorseAdapter } from "@workhorse/core";
-import { HonoWorkhorse, type HonoWorkhorseEnv } from "@workhorse/hono";
-import { Hono } from "hono";
-import type { PoolClient } from "pg";
-
-const runtime = new HonoWorkhorse<PoolClient>(
-  createWorkhorseAdapter({ database: pool, adaptTransaction: (client) => client }),
-);
-const app = new Hono<HonoWorkhorseEnv<PoolClient>>().use(runtime.middleware());
-
-app.post("/invoices", async (c) => {
-  // Typed queue access from the request context.
-  await c.var.workhorse.queue.enqueue("invoice.capture", await c.req.json());
-  return c.body(null, 202);
 });`;
 
 const dashboardSample = `import { Dashboard, WorkhorseThemeProvider } from "@workhorse/dashboard";
@@ -135,18 +119,6 @@ const packages = [
     ],
   },
   {
-    name: "@workhorse/hono",
-    tag: "Framework middleware",
-    lede: "Exposes the queue through typed middleware, starts configured workers exactly once, and returns a Node server handle whose idempotent shutdown drains handlers and requests before closing provider-owned resources.",
-    sample: honoSample,
-    file: "server.ts",
-    notes: [
-      "Workers start once per process, not once per request.",
-      "Shutdown is idempotent: stop claims, drain handlers, then drain requests.",
-      "Resources you did not hand over are never closed for you.",
-    ],
-  },
-  {
     name: "@workhorse/dashboard",
     tag: "Operator UI",
     lede: "A separately packaged React operator dashboard with an injected, transport-neutral client boundary, package-owned styles and assets, and audited local controls.",
@@ -205,9 +177,10 @@ export default function IntegrationsPage() {
       <section className="wh-panel mt-16 rounded-xl p-6 sm:p-8">
         <p className="wh-mono-label">Not yet supported</p>
         <p className="mt-3 max-w-3xl text-[14.5px] leading-relaxed text-fd-muted-foreground">
-          Additional framework adapters are out of scope for this release, as are production
-          authentication and RBAC, rate limits, and cross-queue concurrency policies. The protocol
-          is plain SQL, so another ORM can implement the same provider boundary independently.
+          Framework packages are intentionally absent: web routes use their application's dependency
+          injection, and the dashboard host supports Fetch-native and Connect-style servers.
+          Production authentication, RBAC, and cross-queue concurrency policies remain application
+          responsibilities.
         </p>
         <div className="mt-6 flex flex-wrap gap-6">
           <Link href="/reference" className="wh-link-underline text-[14px] font-medium">

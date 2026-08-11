@@ -5,6 +5,9 @@ const forceKillAfterMs = 5_000;
 
 const publicPort = Number(process.env.PORT ?? 3000);
 const dashboardDevPort = Number(process.env.WORKHORSE_DASHBOARD_DEV_PORT ?? 4173);
+const mode = process.env.WORKHORSE_DEMO_MODE ?? "development";
+const serverScript = mode === "production" ? "start" : "dev:server";
+const workerScript = mode === "production" ? "start:worker" : "dev:worker";
 const commands: Array<{
   command: string;
   arguments: string[];
@@ -12,21 +15,42 @@ const commands: Array<{
 }> = [
   {
     command: "pnpm",
-    arguments: ["--filter", "@workhorse/demo", "dev:server"],
+    arguments: ["--filter", "@workhorse/demo", serverScript],
     env: {
       ...process.env,
       PORT: String(publicPort),
-      WORKHORSE_DEMO_MODE: "development",
+      WORKHORSE_DEMO_MODE: mode,
     },
   },
   {
-    // The demo's workers deliberately run as their own process, exactly as the documented
-    // production topology recommends. Nothing but PostgreSQL connects them to the server above.
+    // Each demo worker owns a process and pool. Nothing but PostgreSQL connects it to the server.
     command: "pnpm",
-    arguments: ["--filter", "@workhorse/demo", "dev:worker"],
+    arguments: ["--filter", "@workhorse/demo", workerScript],
     env: {
       ...process.env,
-      WORKHORSE_DEMO_MODE: "development",
+      WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-one",
+      WORKHORSE_DEMO_WORKER_PROFILE: "0",
+    },
+  },
+  {
+    command: "pnpm",
+    arguments: ["--filter", "@workhorse/demo", workerScript],
+    env: {
+      ...process.env,
+      WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-two",
+      WORKHORSE_DEMO_WORKER_PROFILE: "1",
+    },
+  },
+  {
+    command: "pnpm",
+    arguments: ["--filter", "@workhorse/demo", workerScript],
+    env: {
+      ...process.env,
+      WORKHORSE_DEMO_MODE: mode,
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-partner-api",
+      WORKHORSE_DEMO_WORKER_PROFILE: "2",
     },
   },
 ];
@@ -39,7 +63,7 @@ const commands: Array<{
  * should not pay for a Vite dev server, and because two URLs for the same dashboard is a cost worth
  * choosing deliberately.
  */
-if (process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true") {
+if (mode === "development" && process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true") {
   commands.push({
     command: "pnpm",
     arguments: ["--filter", "@workhorse/dashboard", "dev"],

@@ -2,7 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-02
-- **Related:** [ADR 0003](0003-worker-owned-scheduler.md), [native worker concurrency analysis](../benchmarks/2026-08-02-native-worker-concurrency-analysis.md)
+- **Related:** [ADR 0003](0003-worker-owned-scheduler.md), [ADR 0021](0021-no-framework-integration-packages.md), [native worker concurrency analysis](../benchmarks/2026-08-02-native-worker-concurrency-analysis.md)
+- **Superseded in part by:** [ADR 0021](0021-no-framework-integration-packages.md)
 
 ## Context
 

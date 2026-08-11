@@ -67,7 +67,6 @@ try {
     "--pack-destination",
     tarballs,
   ]);
-  await run("pnpm", ["--silent", "--dir", "packages/hono", "pack", "--pack-destination", tarballs]);
   await run("pnpm", [
     "--silent",
     "--dir",
@@ -82,7 +81,6 @@ try {
   const prismaTarball = path.join(tarballs, "workhorse-prisma-0.1.0.tgz");
   const typeormTarball = path.join(tarballs, "workhorse-typeorm-0.1.0.tgz");
   const kyselyTarball = path.join(tarballs, "workhorse-kysely-0.1.0.tgz");
-  const honoTarball = path.join(tarballs, "workhorse-hono-0.1.0.tgz");
   const dashboardTarball = path.join(tarballs, "workhorse-dashboard-0.1.0.tgz");
   const extracted = path.join(scratch, "core");
   await mkdir(extracted);
@@ -149,15 +147,12 @@ try {
           "@workhorse/prisma": `file:${prismaTarball}`,
           "@workhorse/typeorm": `file:${typeormTarball}`,
           "@workhorse/kysely": `file:${kyselyTarball}`,
-          "@workhorse/hono": `file:${honoTarball}`,
           "@workhorse/dashboard": `file:${dashboardTarball}`,
-          "@hono/node-server": "2.0.11",
           "drizzle-orm": "0.45.2",
           "@prisma/client": "6.19.3",
           prisma: "6.19.3",
           typeorm: "0.3.31",
           kysely: "0.29.5",
-          hono: "4.12.31",
           pg: "8.16.3",
           typescript: "5.8.3",
           "@types/node": "24.1.0",
@@ -197,14 +192,12 @@ import { createPrismaAdapter } from "@workhorse/prisma";
 import { createTypeOrmAdapter } from "@workhorse/typeorm";
 import { createKyselyAdapter } from "@workhorse/kysely";
 import { defineWorkerProcess } from "@workhorse/core";
-import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
 import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";\nimport { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboard/server";\nimport type { DashboardNodeMiddleware } from "@workhorse/dashboard/server";
 import type { DashboardTaskCounts } from "@workhorse/dashboard/model";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import type { DataSource, EntityManager } from "typeorm";
 import type { Kysely, Transaction } from "kysely";
-import { Hono } from "hono";
 import { Pool } from "pg";
 
 const pool = new Pool();
@@ -224,15 +217,9 @@ const workerProcess = defineWorkerProcess({
   workers: [{ configure: (worker) => void worker.handle("typed", async () => ({ ok: true })) }],
   probes: { port: 9090 },
 });
-const integration = new HonoWorkhorse(adapter);
-const app = new Hono();
-// Mounting takes a database and a Queue, never a worker runtime, so a packed consumer can host the
-// dashboard in a process that runs no workers at all.
-mountWorkhorseDashboard(app, { database: pool, authorize: () => true });
 const dashboardHost = createDashboardHost({ database: pool, authorize: () => true });
 const nodeMiddleware: DashboardNodeMiddleware = dashboardNodeMiddleware(dashboardHost);
 void nodeMiddleware;
-void integration.context.queue;
 void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { ok: true }));
 void prismaAdapter.forTransaction(prismaTransaction).enqueue("typed", { ok: true });
 void typeOrmAdapter.forTransaction(entityManager).enqueue("typed", { ok: true });
@@ -276,7 +263,7 @@ datasource db {
     throw new Error("The packed Workhorse CLI did not expose worker command help");
   }
   await run("node", ["integration.mjs"], consumer);
-  process.stdout.write("Packed core, ORM providers, Hono, and dashboard consumer tests passed.\n");
+  process.stdout.write("Packed core, ORM providers, and dashboard consumer tests passed.\n");
 } finally {
   await rm(scratch, { recursive: true, force: true });
 }

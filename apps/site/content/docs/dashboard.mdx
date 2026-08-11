@@ -32,7 +32,7 @@ const host = createDashboardHost({
 ```
 
 Fetch-native frameworks call `host.handle(request)`. Connect-style frameworks wrap the same host
-with `dashboardNodeMiddleware`, while Hono can use `mountWorkhorseDashboard`.
+with `dashboardNodeMiddleware`.
 
 The host checks schema compatibility and refuses incompatible requests. It never installs or
 migrates database objects.
@@ -76,7 +76,7 @@ worker registry data can lag their underlying processes.
 ## Next
 
 - [Queries and timelines](/docs/queries) — use the same read models from application code
-- [Hono](/docs/hono) — mount the host in a Hono application
+- [Installation](/docs/installation) — add only the optional packages your deployment uses
 - [Workers](/docs/workers) — publish fleet state and receive requests to stop work
 
 ---

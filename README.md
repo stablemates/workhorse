@@ -66,7 +66,7 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
   top-level redaction, byte bounds, and merged lifecycle timelines;
 - a durable worker registry that discovers the live fleet, reports declared concurrency, slot use,
   and draining, and carries cooperative operator pause to workers in any process;
-- separate Drizzle, Prisma, TypeORM, Kysely, and Hono integration packages;
+- separate Drizzle, Prisma, TypeORM, and Kysely integration packages;
 - a separately packaged `@workhorse/dashboard` React operator dashboard with a framework-neutral
   request host, a Connect-style Node bridge, an injected transport-neutral client boundary,
   package-owned styles/assets, and audited local controls;
@@ -76,7 +76,7 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.
 
-Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
+Explicitly excluded: workflows, additional ORM adapters, framework integration packages, production authentication and RBAC, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
 
 Checkpoint outputs remain immutable restart evidence. Mutable progress is stored separately and never
 changes the accepted payload, checkpoint outputs, or terminal result.
@@ -361,23 +361,21 @@ drop its databases without removing the checkout.
 
 After `pnpm install`, the demo needs only PostgreSQL 15+ and the local `workhorse` role described above.
 One command safely recreates the purpose-guarded `workhorse_demo` database, installs the application
-schema, builds the development runtime artifacts, starts the Hono server, starts a **separate worker
-process**, and serves `@workhorse/dashboard` from source through Vite:
+schema, builds the development runtime artifacts, starts the Hono server, starts **three dedicated
+worker processes**, and serves `@workhorse/dashboard` from source through Vite:
 
 ```bash
 pnpm demo
 ```
 
-The demo deliberately runs its workers as their own process, which is the topology the documentation
-recommends for production. The server and the workers share nothing but PostgreSQL: the workers
+The demo deliberately runs each worker in its own process. The server and workers share nothing but
+PostgreSQL: the workers
 announce themselves in `workhorse.worker_registry`, and the dashboard reads the fleet from there on
-a bounded polling interval. Set
-`WORKHORSE_DEMO_IN_PROCESS_WORKERS=true` to co-host workers in the server instead, which is the
-supported small-application topology.
+a bounded polling interval.
 
 Open `http://workhorse.localhost:43155/tasks` for the operator dashboard. The standalone demo mounts the
 packaged dashboard at `/`; host applications may instead mount the same dashboard below a namespace such
-as `/workhorse` through `@workhorse/hono`. The default startup seeds successful, retried, and failed jobs so
+as `/workhorse` through the framework-neutral dashboard host. The default startup seeds successful, retried, and failed jobs so
 the operational views are populated. Three durable seeds persistently fail at
 configured stage boundaries, never execute later stages, and retry at about 5, 7, and 10 minutes. Their
 checkpoint-backed interim artifacts, attempt failures, and eventual terminal result or failure evidence are
@@ -509,7 +507,7 @@ queue pause, worker availability, and database downtime can delay the next claim
 one-second maintenance cadence makes sub-second durable waits inefficient. Use
 `context.sleepUntil(name, date)` for an immutable absolute target.
 
-### Database provider and Hono packages
+### Database provider packages
 
 `@workhorse/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
 adding Drizzle to the core package:
@@ -531,18 +529,12 @@ await db.transaction(async (tx) => {
 boundary through each provider's transaction object. Their workers can use an explicitly supplied
 node-postgres pool for notification-assisted dispatch, or poll when no pool is available.
 
-`@workhorse/hono` exposes the queue through typed middleware, optionally starts co-hosted workers,
-and provides a Node server handle whose idempotent shutdown stops new claims, drains in-flight
-handlers and requests, then closes explicitly provider-owned resources. See the package READMEs for
-complete configuration and ownership behavior.
-
 ### Mounting the dashboard on any framework
 
 Dashboard behavior lives in a framework-neutral host in `@workhorse/dashboard/server` that takes a
 `Request` and returns a `Response`, or `null` when the request is not its own. Fetch-native hosts
 (Hono, Next.js route handlers, SvelteKit, Nitro) call `host.handle(request)` directly;
 Connect-style hosts (Express, Connect, Fastify via `@fastify/middie`) use `dashboardNodeMiddleware`.
-`mountWorkhorseDashboard` in `@workhorse/hono` is a thin binding over the same host.
 
 Mounting requires only a database connection. It does not require a worker runtime,
 because worker identity and runtime state are read from `workhorse.worker_registry` rather than from

@@ -181,13 +181,18 @@ ${adapterBody}
 /** The mount snippet printed for the detected framework. Nothing is written into user routes. */
 export function renderMountSnippet(project: DetectedProject): string {
   if (project.framework === "hono") {
-    return `import { mountWorkhorseDashboard } from "@workhorse/hono";
+    return `import { createDashboardHost } from "@workhorse/dashboard/server";
 
-mountWorkhorseDashboard(app, {
+const host = createDashboardHost({
   path: "/workhorse",
   database: pool,
   authorize: (request) => isOperator(request),
-});`;
+});
+for (const route of ["/workhorse", "/workhorse/*"]) {
+  app.all(route, async (context) =>
+    (await host.handle(context.req.raw)) ?? context.notFound(),
+  );
+}`;
   }
   if (project.framework === "express" || project.framework === "fastify") {
     const mount =

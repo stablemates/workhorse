@@ -21,7 +21,6 @@ const publishedManifests = [
   "packages/kysely/package.json",
   "packages/prisma/package.json",
   "packages/typeorm/package.json",
-  "packages/hono/package.json",
 ];
 
 async function read(relativePath: string): Promise<string> {

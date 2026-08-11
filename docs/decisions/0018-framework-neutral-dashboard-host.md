@@ -2,7 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-04
-- **Related:** [ADR 0017](0017-durable-worker-registry.md), [ADR 0012](0012-dedicated-worker-processes.md)
+- **Related:** [ADR 0017](0017-durable-worker-registry.md), [ADR 0012](0012-dedicated-worker-processes.md), [ADR 0021](0021-no-framework-integration-packages.md)
+- **Superseded in part by:** [ADR 0021](0021-no-framework-integration-packages.md)
 
 ## Context
 

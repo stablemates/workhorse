@@ -47,7 +47,7 @@ try {
     ["/", ["Workhorse", "/docs"]],
     ["/docs", ["Workhorse", "TypeScript"]],
     ["/reference", ["Reference", "@workhorse/core"]],
-    ["/integrations", ["Drizzle", "Hono"]],
+    ["/integrations", ["Drizzle", "Dashboard"]],
     ["/examples", ["Examples", "enqueue"]],
     ["/demo", ["demo.workhorse.run", "live demo"]],
     ["/robots.txt", ["Sitemap"]],

@@ -600,11 +600,6 @@ const integrations = [
     href: "/docs/kysely",
   },
   {
-    name: "@workhorse/hono",
-    body: "Typed middleware, workers started once per process, and an idempotent draining shutdown.",
-    href: "/docs/hono",
-  },
-  {
     name: "@workhorse/dashboard",
     body: "An embeddable React operator UI with an injected, transport-neutral client boundary.",
     href: "/docs/dashboard",
@@ -822,9 +817,9 @@ export default function HomePage() {
         <Rule label="04 / packages" />
         <div className="mt-10 grid gap-10 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-14">
           <SectionHeading
-            index="Seven packages"
+            index="Six packages"
             title="The core keeps one dependency."
-            lede="Every integration is a separate package, so adopting an ORM, Hono, or the dashboard never adds that ecosystem dependency to the protocol itself. None of them hide the transaction."
+            lede="Every integration is a separate package, so adopting an ORM or the dashboard never adds that ecosystem dependency to the protocol itself. None of them hide the transaction."
           />
           <dl className="wh-panel overflow-hidden rounded-xl">
             {integrations.map((pkg) => (
