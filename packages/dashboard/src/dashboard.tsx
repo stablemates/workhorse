@@ -1395,14 +1395,17 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
 }
 
 /**
- * Fleet-wide admission context for a task that can still be admitted.
+ * Queue admission context for the selected task.
  *
- * Shown only while the task is ready or active, because a finished task no longer competes for
- * the budget and repeating it under a terminal outcome would only add noise.
+ * A running task gets live utilisation of the budget it is competing in. A finished task keeps its
+ * key, which never changes, beside the queue's limits as they stand now. The two are labelled
+ * differently on purpose: no snapshot of the old policy exists, so the second must never be read
+ * as the configuration this task ran under.
  */
 export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
   const described = describeTaskConcurrency(job);
   if (described === null) return null;
+  const current = described.basis === "current";
   return (
     <Group gap="xs" mt="sm" align="baseline">
       <Text c="dimmed" size="xs" fw={600}>
@@ -1414,12 +1417,17 @@ export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
           variant="light"
           color="grape"
           tt="none"
-          title={described.title}
+          title={described.keyTitle}
           aria-label={`Concurrency key ${described.concurrencyKey}`}
         >
           {described.concurrencyKey}
         </Badge>
       )}
+      {current ? (
+        <Text c="dimmed" size="xs" fs="italic" title={described.title}>
+          queue policy now
+        </Text>
+      ) : null}
       <Text c="dimmed" size="xs" title={described.title} aria-label={described.title}>
         {described.summary}
       </Text>

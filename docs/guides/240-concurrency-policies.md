@@ -48,6 +48,8 @@ If one key is full, `claim_v2` can admit later ready work for another key. It se
 
 `Queue.health()` reports bounded policy summaries, including active capacity, blocked ready work, and saturated-key counts. OpenTelemetry exports queue-level policy gauges without raw key values.
 
+Nothing records the policy a job ran under. A job keeps the `concurrencyKey` it was enqueued with, so that key stays true forever. Its queue's limits can change at any time. The dashboard therefore labels the limits beside a finished task as the queue's current policy rather than as history.
+
 ## Next
 
 - [020-leases-and-fences.md](020-leases-and-fences.md) — why capacity can return safely after expiry
