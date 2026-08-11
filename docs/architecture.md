@@ -51,6 +51,24 @@ Framework co-hosting remains available but is not the default scaling boundary. 
 [`worker-processes.md`](worker-processes.md) and
 [ADR 0012](decisions/0012-dedicated-worker-processes.md).
 
+`@workhorse/drizzle`, `@workhorse/prisma`, and `@workhorse/typeorm` convert provider database and
+transaction objects into `Queryable`. `createDrizzleAdapter` discovers the retained node-postgres
+client through `$client`. `createPrismaAdapter` and `createTypeOrmAdapter` accept
+`notificationPool` because those ORMs do not expose a stable node-postgres pool API. If that option
+is absent, workers use bounded polling. `forTransaction` never commits, rolls back, disconnects, or
+destroys the caller's transaction. Each adapter closes resources only through its configured
+`close` callback, and `WorkhorseAdapter.close()` invokes that callback once.
+
+`prismaQueryable` sends the statement and positional values through `$queryRawUnsafe`.
+`typeOrmQueryable` sends them through `query`. Both require a row array and synthesize the
+`QueryResult` metadata that core does not inspect: an empty `command`, the row-array length as
+`rowCount`, zero as `oid`, and an empty `fields` array. `PrismaQueryError` and `TypeOrmQueryError`
+retain the statement and original `cause` without copying parameter values into the message. Their
+error-code searches process at most 16 queued entries and accept only five-character uppercase
+alphanumeric codes. `PrismaQueryError` prefers `meta.code` over Prisma's outer raw-query code.
+`TypeOrmQueryError` follows `driverError` and `cause`. Each adapter copies the discovered code to
+its wrapper's `code` property so core can preserve typed SQL conflicts.
+
 The operator dashboard is a separate boundary from the worker fleet. It is a framework-neutral
 request host that reads everything it shows from PostgreSQL, including worker identity, runtime
 state, and policy provenance, so it can be mounted in a process that runs no workers at all.

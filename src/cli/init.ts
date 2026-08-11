@@ -8,7 +8,7 @@ import path from "node:path";
  * guess costs the user one edit to a generated file rather than a broken installation.
  */
 export interface DetectedProject {
-  orm: "drizzle" | "pg";
+  orm: "drizzle" | "prisma" | "typeorm" | "pg";
   framework: "hono" | "express" | "fastify" | "next" | "none";
   typescript: boolean;
   packageManager: "pnpm" | "npm" | "yarn" | "bun";
@@ -43,7 +43,13 @@ export function detectProject(packageJson: PackageJson | null): DetectedProject 
         : "pnpm";
 
   return {
-    orm: has("drizzle-orm") ? "drizzle" : "pg",
+    orm: has("drizzle-orm")
+      ? "drizzle"
+      : has("@prisma/client")
+        ? "prisma"
+        : has("typeorm")
+          ? "typeorm"
+          : "pg",
     framework: has("hono")
       ? "hono"
       : has("next")
@@ -60,23 +66,62 @@ export function detectProject(packageJson: PackageJson | null): DetectedProject 
 
 /** The worker process configuration. This is the only file `init` writes. */
 export function renderWorkerConfig(project: DetectedProject): string {
-  const drizzle = project.orm === "drizzle";
-  const adapterImport = drizzle
-    ? 'import { createDrizzleAdapter } from "@workhorse/drizzle";\nimport { drizzle as createDrizzle } from "drizzle-orm/node-postgres";'
-    : 'import { createWorkhorseAdapter } from "@workhorse/core";';
-  const adapterBody = drizzle
-    ? `    const pool = new Pool({ connectionString: databaseUrl });
+  let adapterImport: string;
+  let adapterBody: string;
+  switch (project.orm) {
+    case "drizzle": {
+      adapterImport =
+        'import { createDrizzleAdapter } from "@workhorse/drizzle";\nimport { drizzle as createDrizzle } from "drizzle-orm/node-postgres";';
+      adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     return createDrizzleAdapter(createDrizzle({ client: pool }), {
       defaultQueue: QUEUE,
       close: () => pool.end(),
-    });`
-    : `    const pool = new Pool({ connectionString: databaseUrl });
+    });`;
+      break;
+    }
+    case "prisma": {
+      adapterImport =
+        'import { PrismaClient } from "@prisma/client";\nimport { createPrismaAdapter } from "@workhorse/prisma";';
+      adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
+    const database = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    return createPrismaAdapter(database, {
+      defaultQueue: QUEUE,
+      notificationPool: pool,
+      close: async () => {
+        await database.$disconnect();
+        await pool.end();
+      },
+    });`;
+      break;
+    }
+    case "typeorm": {
+      adapterImport =
+        'import { createTypeOrmAdapter } from "@workhorse/typeorm";\nimport { DataSource } from "typeorm";';
+      adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
+    const database = new DataSource({ type: "postgres", url: databaseUrl });
+    await database.initialize();
+    return createTypeOrmAdapter(database, {
+      defaultQueue: QUEUE,
+      notificationPool: pool,
+      close: async () => {
+        await database.destroy();
+        await pool.end();
+      },
+    });`;
+      break;
+    }
+    case "pg": {
+      adapterImport = 'import { createWorkhorseAdapter } from "@workhorse/core";';
+      adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     return createWorkhorseAdapter({
       database: pool,
       defaultQueue: QUEUE,
       adaptTransaction: (transaction) => transaction,
       close: () => pool.end(),
     });`;
+      break;
+    }
+  }
 
   return `import { defineWorkerProcess } from "@workhorse/core";
 ${adapterImport}
@@ -98,7 +143,7 @@ const databaseUrl = process.env.WORKHORSE_DATABASE_URL ?? process.env.DATABASE_U
 if (!databaseUrl) throw new Error("Set DATABASE_URL or WORKHORSE_DATABASE_URL");
 
 export default defineWorkerProcess({
-  adapter() {
+  async adapter() {
 ${adapterBody}
   },
   workers: [

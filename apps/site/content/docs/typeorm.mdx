@@ -1,0 +1,63 @@
+---
+title: How do I use Workhorse with TypeORM?
+description: Adapt a TypeORM data source and enqueue jobs through transactional entity managers.
+---
+
+`@workhorse/typeorm` converts TypeORM data sources and transactional entity managers into the core
+`Queryable` protocol. Workhorse keeps its schema lifecycle outside TypeORM migrations.
+
+## Create the adapter
+
+Install the integration beside TypeORM.
+
+```bash
+pnpm add @workhorse/typeorm typeorm
+```
+
+Pass an initialized data source to `createTypeOrmAdapter`. The close callback is optional because
+the adapter does not destroy caller-owned data sources by default.
+
+```ts
+import { createTypeOrmAdapter } from "@workhorse/typeorm";
+
+const workhorse = createTypeOrmAdapter(dataSource, {
+  close: () => dataSource.destroy(),
+});
+```
+
+## Enqueue inside a transaction
+
+Call `forTransaction` with the callback's entity manager. The queue sends its SQL through that
+manager, so the job follows the surrounding commit or rollback.
+
+```ts
+await dataSource.transaction(async (manager) => {
+  const account = await manager.save(Account, { email });
+  await workhorse.forTransaction(manager).enqueue("account.created", {
+    accountId: account.id,
+  });
+});
+```
+
+If the callback throws, TypeORM rolls back both writes. The adapter's default queue remains outside
+that transaction.
+
+## Enable notification-assisted workers
+
+TypeORM does not expose its internal node-postgres pool as a stable API. Supply a separate
+caller-owned pool as `notificationPool` when workers should reserve a connection for
+`LISTEN/NOTIFY`. Without it, workers use bounded polling and keep the same durable behavior.
+
+`TypeOrmQueryError` retains the statement, original cause, and PostgreSQL driver code. Install the
+Workhorse schema with the core deployment tools.
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue) — understand the transaction guarantee
+- [Workers](/docs/workers) — configure polling and handlers
+- [Installation](/docs/installation) — install the schema outside TypeORM migrations
+
+---
+
+Exact adapter boundary and transaction ownership:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#system-context).

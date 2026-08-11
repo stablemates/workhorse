@@ -39,6 +39,9 @@ describe("workhorse init", () => {
     expect(
       detectProject({ dependencies: { express: "^4.0.0" }, packageManager: "yarn@4.0.0" }),
     ).toEqual({ orm: "pg", framework: "express", typescript: false, packageManager: "yarn" });
+
+    expect(detectProject({ dependencies: { "@prisma/client": "^6.0.0" } }).orm).toBe("prisma");
+    expect(detectProject({ dependencies: { typeorm: "^0.3.0" } }).orm).toBe("typeorm");
   });
 
   it("falls back to a plain pg project when nothing is recognized", () => {
@@ -97,6 +100,21 @@ describe("workhorse init", () => {
     });
     expect(config).not.toContain("activityNotifications");
     expect(config).toContain("createWorkhorseAdapter");
+  });
+
+  it("scaffolds Prisma and TypeORM workers with explicit notification pools", () => {
+    const base = {
+      framework: "none",
+      typescript: true,
+      packageManager: "pnpm",
+    } as const;
+    const prisma = renderWorkerConfig({ ...base, orm: "prisma" });
+    const typeorm = renderWorkerConfig({ ...base, orm: "typeorm" });
+
+    expect(prisma).toContain("createPrismaAdapter");
+    expect(prisma).toContain("notificationPool: pool");
+    expect(typeorm).toContain("createTypeOrmAdapter");
+    expect(typeorm).toContain("await database.initialize()");
   });
 
   it("prints a framework-appropriate dashboard mount", () => {
