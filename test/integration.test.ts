@@ -4877,11 +4877,15 @@ describe("live-runtime queue protocol", () => {
   it("reports history size with daily partitions folded into their parent", async () => {
     await queue.enqueue("stat-size", {});
     const health = await queue.health();
-    const events = health.relations.find((relation) => relation.relation === "job_event");
+    const events = health.observations.relations.find(
+      (relation) => relation.relation === "job_event",
+    );
     // The partitioned parent owns no storage itself, so an unaggregated reading is always zero.
     expect(events?.partitions).toBeGreaterThan(0);
     expect(events?.totalBytes).toBeGreaterThan(0);
-    const buckets = health.relations.find((relation) => relation.relation === "job_stat_bucket");
+    const buckets = health.observations.relations.find(
+      (relation) => relation.relation === "job_stat_bucket",
+    );
     expect(buckets?.partitions).toBe(0);
   });
 
@@ -7369,21 +7373,21 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.snapshot).toMatchObject({
-      capturedAt: expect.any(Date),
-      schemaVersion: 23,
-      readyDepth: 1,
-      scheduledDepth: 2,
-      sleepingJobs: 1,
-      overdueWaits: 0,
-      nextWakeAt: scheduledWait.wait.wakeAt,
-    });
+    expect(health.schemaVersion).toBe(23);
+    expect(health.readyDepth).toBe(1);
+    expect(health.scheduledDepth).toBe(2);
+    expect(health.sleepingJobs).toBe(1);
+    expect(health.overdueWaits).toBe(0);
+    expect(health.nextWakeAt).toEqual(scheduledWait.wait.wakeAt);
+    expect(health.capturedAt.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(health.terminalCountsCapped).toBe(false);
+    expect(health.statistics.bucketsCapped).toBe(false);
+    expect(health.historyPartitionDays).toHaveLength(4);
     expect(
-      health.postgresql.relations.some((relation) => relation.relation === "job_runtime"),
+      health.observations.relations.some((relation) => relation.relation === "job_runtime"),
     ).toBe(true);
-    expect(health.postgresql.observedAt).toEqual(expect.any(Date));
-    expect(health.postgresql.lockWaitCount).toBeGreaterThanOrEqual(0);
-    expect(health.postgresql.notificationQueueUsage).toBeGreaterThanOrEqual(0);
+    expect(health.observations.lockWaitCount).toBeGreaterThanOrEqual(0);
+    expect(health.observations.notificationQueueUsage).toBeGreaterThanOrEqual(0);
     expect(await queue.queueMetricSnapshot()).toEqual([
       {
         queue: "default",
@@ -7402,82 +7406,43 @@ describe("live-runtime queue protocol", () => {
     ]);
   });
 
-  it("evaluates exact queue health against explicit budgets with machine-readable reasons", async () => {
-    const jobId = await queue.enqueue("health-budget", {});
-    expect((await queue.claim("health-budget-worker", { leaseMs: 10_000 }))?.id).toBe(jobId);
+  it("evaluates caller-overridable health budgets into machine-readable status reasons", async () => {
+    await queue.prepareHistoryPartitions();
+    const baseline = await queue.health();
+    expect(
+      baseline.historyPartitionDays.every((day) => day.hasJobEvents && day.hasAttemptHistory),
+    ).toBe(true);
+    expect(baseline.status.reasons.map((reason) => reason.code)).not.toContain(
+      "missing-history-partitions",
+    );
+    for (const reason of baseline.status.reasons) {
+      expect(reason.observed).toBeGreaterThan(reason.budget);
+    }
+
+    // The same snapshot facts degrade under a tighter caller budget.
+    const strict = await queue.health({ budgets: { rollupStalledLagMs: -1 } });
+    expect(strict.status.level).not.toBe("healthy");
+    expect(strict.status.reasons).toContainEqual(
+      expect.objectContaining({ code: "rollup-stalled", severity: "degraded", budget: -1 }),
+    );
+
+    // An expired lease is critical, with the reason and the count read from one snapshot.
+    await queue.enqueue("health-budget", {});
+    const claimed = await queue.claim("health-budget-worker");
+    expect(claimed).not.toBeNull();
     await pool.query(
       `UPDATE workhorse.job_runtime
-          SET expires_at = clock_timestamp() - interval '1 millisecond'
-        WHERE job_id = $1`,
-      [jobId],
+          SET expires_at = clock_timestamp() - interval '1 second'
+        WHERE job_id = $1 AND state = 'active'`,
+      [claimed!.id],
     );
-
-    const degraded = await queue.health();
-    expect(degraded.status).toEqual({
-      level: "degraded",
-      reasons: [{ code: "expired_leases", observed: 1, budget: 0 }],
-    });
-
-    const tolerated = await queue.health({ budgets: { expiredLeases: 1 } });
-    expect(tolerated.status).toEqual({ level: "healthy", reasons: [] });
-    await expect(queue.health({ budgets: { expiredLeases: -1 } })).rejects.toThrow(
-      /expiredLeases must be a non-negative finite number/,
-    );
-    await expect(queue.health({ budgets: { expiredLeases: 10_001 } })).rejects.toThrow(
-      /expiredLeases must be .*no greater than 10000/,
-    );
-  });
-
-  it("caps exact health counts before large runtime and history relations make reads unbounded", async () => {
-    await pool.query(`
-      WITH jobs AS (
-        INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts)
-        SELECT 'health-scale', 'health-scale', '{}'::jsonb, 1
-          FROM generate_series(1, 10001)
-        RETURNING id, queue_name
-      )
-      INSERT INTO workhorse.job_runtime(
-        job_id, queue_name, state, run_at, ready_at, sequence
-      )
-      SELECT id, queue_name, 'ready', clock_timestamp(), clock_timestamp(),
-             nextval('workhorse.ready_sequence_seq')
-        FROM jobs`);
-    await pool.query(`
-      INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
-      SELECT job_id, 'health_scale', '2000-01-01 00:00:00+00'::timestamptz
-        FROM (SELECT job_id FROM workhorse.job_runtime LIMIT 1) seed
-        CROSS JOIN generate_series(1, 10001)`);
-
-    const health = await queue.health();
-    expect(health.snapshot.counts.ready).toBe(10_001);
-    expect(health.snapshot.readyDepth).toBe(10_001);
-    expect(health.snapshot.cappedFields).toEqual(
-      expect.arrayContaining(["counts.ready", "readyDepth"]),
-    );
-    expect(health.defaultHistoryRows.jobEvents).toBe(10_001);
-    expect(health.defaultHistoryRowsCapped.jobEvents).toBe(true);
-  });
-
-  it("keeps exact lifecycle counts consistent while jobs transition", async () => {
-    for (let index = 0; index < 40; index += 1) {
-      await queue.enqueue("health-transition", { index });
-    }
-
-    const transition = (async () => {
-      for (;;) {
-        const job = await queue.claim("health-transition-worker");
-        if (!job) return;
-        await queue.complete(job, "health-transition-worker", null);
-      }
-    })();
-    const snapshots = await Promise.all(Array.from({ length: 20 }, () => queue.health()));
-    await transition;
-
-    for (const health of snapshots) {
-      expect(health.snapshot.counts.ready).toBe(health.snapshot.readyDepth);
-      expect(health.snapshot.counts.scheduled).toBe(health.snapshot.scheduledDepth);
-      expect(health.snapshot.counts.active).toBe(health.snapshot.activeLeases);
-    }
+    const critical = await queue.health();
+    expect(critical.status.level).toBe("critical");
+    const expired = critical.status.reasons.find((reason) => reason.code === "expired-leases");
+    expect(expired).toMatchObject({ severity: "critical", budget: 0 });
+    expect(expired!.observed).toBe(critical.expiredLeases);
+    expect(critical.expiredLeases).toBeGreaterThanOrEqual(1);
+    await queue.recoverExpired();
   });
 
   it("round trips retention policy defaults and rejects unsafe or malformed policies in PostgreSQL", async () => {
@@ -8047,13 +8012,15 @@ describe("live-runtime queue protocol", () => {
       await zonedClient.query("SET TIME ZONE 'Pacific/Kiritimati'");
       const zonedHealth = await new Queue(zonedClient).health();
       expect(zonedHealth.eligibleHistoryPartitions).toEqual(health.eligibleHistoryPartitions);
+      // A broken session-timezone dependency would shift the day-boundary lag by hours; the
+      // tolerance only needs to absorb the wall-clock between two consecutive snapshots.
       expect(zonedHealth.retentionLagMs.jobEvents).toBeCloseTo(
         health.retentionLagMs.jobEvents!,
-        -3,
+        -4,
       );
       expect(zonedHealth.retentionLagMs.attemptHistory).toBeCloseTo(
         health.retentionLagMs.attemptHistory!,
-        -3,
+        -4,
       );
     } finally {
       await zonedClient.query("RESET TIME ZONE");

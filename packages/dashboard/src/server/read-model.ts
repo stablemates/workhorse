@@ -1145,15 +1145,6 @@ const dashboardRetentionCategories: ReadonlyArray<{
   },
 ];
 
-/**
- * A rollup this far behind is treated as stalled.
- *
- * History retention refuses to delete past the watermark, so a stalled rollup turns into unbounded
- * history growth. The threshold is generous against the one-minute pass cadence: several missed
- * passes are a busy database, half an hour is something being wrong.
- */
-const rollupStalledLagMs = 30 * 60 * 1_000;
-
 /** Relations worth showing an operator, grouped by what they are for. */
 const dashboardStorageRelations: ReadonlyArray<{
   relation: string;
@@ -1171,7 +1162,7 @@ const dashboardStorageRelations: ReadonlyArray<{
 ];
 
 function dashboardStorage(health: QueueHealthSnapshot): DashboardSystemStorage {
-  const byRelation = new Map(health.postgresql.relations.map((row) => [row.relation, row]));
+  const byRelation = new Map(health.observations.relations.map((row) => [row.relation, row]));
   const relations = dashboardStorageRelations
     .map((definition) => {
       const row = byRelation.get(definition.relation);
@@ -1198,18 +1189,13 @@ function dashboardStorage(health: QueueHealthSnapshot): DashboardSystemStorage {
       buckets: Number(health.statistics.buckets),
       oldestBucketAt: toIsoOrNull(health.statistics.oldestBucketAt),
       newestBucketAt: toIsoOrNull(health.statistics.newestBucketAt),
-      stalled: Number(health.statistics.lagMs) > rollupStalledLagMs,
+      // The stall budget lives in core with the other health budgets.
+      stalled: health.status.reasons.some((reason) => reason.code === "rollup-stalled"),
     },
     relations,
     totalBytes: relations.reduce((total, row) => total + row.totalBytes, 0),
   };
 }
-
-// Row cleanup runs every five minutes, while daily partition cleanup is bounded per pass. Grace
-// avoids turning normal maintenance cadence and a partial boundary day into an alert.
-const rowRetentionLagGraceMs = 6 * 60 * 60 * 1_000;
-const partitionRetentionLagGraceMs = 2 * 24 * 60 * 60 * 1_000;
-const eligiblePartitionGrace = 2;
 
 /**
  * Flatten `Queue.health()` retention fields into an operator-ready projection. Numeric policy
@@ -1268,52 +1254,67 @@ function dashboardRetention(health: QueueHealthSnapshot): DashboardSystemRetenti
 }
 
 /**
- * Retention problems degrade the page but never make it critical: history falling behind costs
- * storage, while expired leases, stalled promotion, and missing future partitions stop or lose
- * work outright.
+ * Project core health reasons into operator-facing English.
+ *
+ * Which conditions degrade and which are critical is decided by `evaluateQueueHealth` in
+ * `@workhorse/core`, with its budgets; this function only words the result. Retention-lag reasons
+ * arrive one per late category and are folded into a single sentence.
  */
-function retentionDegradedChecks(retention: DashboardSystemRetention): string[] {
-  const checks: string[] = [];
-  const behind = retention.categories.filter(
-    (row) =>
-      row.lagMs !== null &&
-      row.lagMs > (row.prunedByPartition ? partitionRetentionLagGraceMs : rowRetentionLagGraceMs),
+export function healthCheckMessages(health: Pick<QueueHealthSnapshot, "status">): {
+  criticalChecks: string[];
+  degradedChecks: string[];
+} {
+  const criticalChecks: string[] = [];
+  const degradedChecks: string[] = [];
+  const lateRetentionLabels: string[] = [];
+  const labelByCategory = new Map(
+    dashboardRetentionCategories.map((definition) => [definition.category, definition.label]),
   );
-  if (behind.length > 0) {
-    checks.push(
-      `Retention cleanup is late for ${behind.map((row) => row.label.toLowerCase()).join(", ")}`,
-    );
+  for (const reason of health.status.reasons) {
+    switch (reason.code) {
+      case "expired-leases":
+        criticalChecks.push("Expired leases");
+        break;
+      case "overdue-deadlines":
+        criticalChecks.push("Tasks are past their deadlines");
+        break;
+      case "overdue-execution-timeouts":
+        criticalChecks.push("Attempts are past their execution limits");
+        break;
+      case "stalled-promotion":
+        criticalChecks.push("Scheduled tasks are overdue");
+        break;
+      case "missing-history-partitions":
+        criticalChecks.push("Daily history storage is missing");
+        break;
+      case "rollup-stalled":
+        degradedChecks.push("The statistics summary is behind");
+        break;
+      case "retention-lag": {
+        const label = reason.category ? labelByCategory.get(reason.category) : undefined;
+        if (label) lateRetentionLabels.push(label.toLowerCase());
+        break;
+      }
+      case "eligible-history-partitions":
+        degradedChecks.push(`History days await deletion (${reason.observed})`);
+        break;
+      case "default-history-rows":
+        degradedChecks.push(`History rows use fallback storage (${reason.observed})`);
+        break;
+      case "concurrency-blocked":
+        degradedChecks.push(`Concurrency policy blocks ready tasks on ${reason.queue}`);
+        break;
+      case "rate-limit-throttled":
+        degradedChecks.push(
+          `Queue ${reason.queue} has ${reason.observed}+ ready tasks waiting for rate-limit tokens`,
+        );
+        break;
+    }
   }
-  const eligible =
-    retention.eligibleHistoryPartitions.jobEvents +
-    retention.eligibleHistoryPartitions.attemptHistory;
-  if (eligible > eligiblePartitionGrace) {
-    checks.push(`History days await deletion (${eligible})`);
+  if (lateRetentionLabels.length > 0) {
+    degradedChecks.push(`Retention cleanup is late for ${lateRetentionLabels.join(", ")}`);
   }
-  const spill =
-    retention.defaultHistoryRows.jobEvents + retention.defaultHistoryRows.attemptHistory;
-  if (spill > 0) checks.push(`History rows use fallback storage (${spill})`);
-  return checks;
-}
-
-/** Queue admission is degraded whenever a queue-wide or per-key budget blocks ready work. */
-export function concurrencyPolicyDegradedChecks(
-  health: Pick<QueueHealthSnapshot, "concurrencyPolicies">,
-): string[] {
-  return health.concurrencyPolicies.policies
-    .filter((policy) => policy.blockedReady > 0)
-    .map((policy) => `Concurrency policy blocks ready tasks on ${policy.queue}`);
-}
-
-export function rateLimitPolicyDegradedChecks(
-  health: Pick<QueueHealthSnapshot, "rateLimitPolicies">,
-): string[] {
-  return health.rateLimitPolicies.policies
-    .filter((policy) => policy.throttledReady > 0)
-    .map(
-      (policy) =>
-        `Queue ${policy.queue} has ${policy.throttledReady}+ ready tasks waiting for rate-limit tokens`,
-    );
+  return { criticalChecks, degradedChecks };
 }
 
 function dashboardAdmissionPolicies(health: QueueHealthSnapshot) {
@@ -1348,7 +1349,6 @@ export async function readDashboardSystem(
     queueRows,
     retryTypeRows,
     failingTypeRows,
-    partitionRows,
     health,
   ] = await Promise.all([
     database.execute<{
@@ -1552,25 +1552,8 @@ export async function readDashboardSystem(
        ORDER BY errors DESC, last_seen_at DESC
        LIMIT 8
     `),
-    database.execute<{
-      day: string;
-      starts_at: Date | string;
-      event_exists: boolean;
-      attempt_exists: boolean;
-    }>(sql`
-      SELECT to_char(day_start, 'YYYYMMDD') AS day, day_start AS starts_at,
-             to_regclass(format('workhorse.%I', 'job_event_' || to_char(day_start, 'YYYYMMDD')))
-               IS NOT NULL AS event_exists,
-             to_regclass(format('workhorse.%I', 'attempt_history_' || to_char(day_start, 'YYYYMMDD')))
-               IS NOT NULL AS attempt_exists
-        FROM generate_series(
-          date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC'),
-          date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') + interval '3 days',
-          interval '1 day'
-        ) day_start
-       ORDER BY day_start
-    `),
-    // Retention facts come from the canonical queue read model rather than duplicated SQL here.
+    // Retention facts, partition existence, and the status verdict come from the canonical queue
+    // read model rather than duplicated SQL here.
     queue.health(),
   ]);
 
@@ -1589,46 +1572,17 @@ export async function readDashboardSystem(
     label,
     count: retryByLabel.get(label) ?? 0,
   }));
-  const partitions = partitionRows.rows.map((row) => ({
+  const partitions = health.historyPartitionDays.map((row) => ({
     day: row.day,
-    startsAt: toIso(row.starts_at),
-    eventExists: row.event_exists,
-    attemptExists: row.attempt_exists,
+    startsAt: toIso(row.startsAt),
+    eventExists: row.hasJobEvents,
+    attemptExists: row.hasAttemptHistory,
   }));
-  const exactHealthChecks = health.status.reasons.map((reason) => {
-    switch (reason.code) {
-      case "expired_leases":
-        return "Expired leases";
-      case "overdue_waits":
-        return "Durable waits are overdue";
-      case "overdue_deadlines":
-        return "Tasks are past their deadlines";
-      case "overdue_execution_timeouts":
-        return "Attempts are past their execution limits";
-      case "oldest_ready_age":
-        return "Ready work exceeds its age budget";
-    }
-  });
-  const criticalChecks = [
-    ...exactHealthChecks,
-    runtime.due_but_unpromoted > 0 ? "Scheduled tasks are overdue" : null,
-    partitions.some((partition) => !partition.eventExists || !partition.attemptExists)
-      ? "Daily history storage is missing"
-      : null,
-  ].filter((check): check is string => check !== null);
-  // Critical means work is stopping or being lost. Retention only costs storage, so it degrades.
-  const degradedChecks = [
-    ...retentionDegradedChecks(retention),
-    ...concurrencyPolicyDegradedChecks(health),
-    ...rateLimitPolicyDegradedChecks(health),
-  ];
-  // A stalled rollup is a storage problem rather than a dispatch one: history retention holds at
-  // the watermark rather than deleting the input to windows nobody has computed yet.
-  if (storage.rollup.stalled) degradedChecks.push("The statistics summary is behind");
-  const level =
-    criticalChecks.length > 0 ? "critical" : degradedChecks.length > 0 ? "degraded" : "healthy";
+  // The verdict and every threshold behind it come from the consistent core snapshot; this page
+  // only words the reasons for operators.
+  const { criticalChecks, degradedChecks } = healthCheckMessages(health);
   const status = {
-    level: level as DashboardSystemPage["status"]["level"],
+    level: health.status.level as DashboardSystemPage["status"]["level"],
     checks: [...criticalChecks, ...degradedChecks],
     criticalChecks,
     degradedChecks,
@@ -1661,7 +1615,7 @@ export async function readDashboardSystem(
   }
 
   return {
-    capturedAt: health.snapshot.capturedAt.toISOString(),
+    capturedAt: new Date().toISOString(),
     window,
     windowSeconds,
     status,
@@ -1691,12 +1645,12 @@ export async function readDashboardSystem(
         recovered: summary.recovered,
       },
       deadline: {
-        pending: health.snapshot.deadlinePressure.pending,
-        overdue: health.snapshot.deadlinePressure.overdue,
-        dueWithinMinute: health.snapshot.deadlinePressure.dueWithinMinute,
-        earliestAt: toIsoOrNull(health.snapshot.deadlinePressure.earliestAt),
-        activeTimeouts: health.snapshot.activeExecutionTimeouts,
-        overdueTimeouts: health.snapshot.overdueExecutionTimeouts,
+        pending: health.deadlinePressure.pending,
+        overdue: health.deadlinePressure.overdue,
+        dueWithinMinute: health.deadlinePressure.dueWithinMinute,
+        earliestAt: toIsoOrNull(health.deadlinePressure.earliestAt),
+        activeTimeouts: health.activeExecutionTimeouts,
+        overdueTimeouts: health.overdueExecutionTimeouts,
       },
     },
     outcomes: outcomeRows.rows.map((row) => ({

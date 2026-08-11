@@ -169,8 +169,8 @@ describe("Drizzle provider integration", () => {
 
     const health = await adapter.queue.health();
 
-    expect(health.snapshot.capturedAt).toBeInstanceOf(Date);
-    expect(health.postgresql.observedAt).toBeInstanceOf(Date);
+    expect(health.capturedAt).toBeInstanceOf(Date);
+    expect(health.statistics.rolledUpThrough).toBeInstanceOf(Date);
   });
 
   it("maps dead-letter redrive and conflicts through the Drizzle adapter", async () => {

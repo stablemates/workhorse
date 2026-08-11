@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dashboardConcurrencyPolicySummary } from "./model.js";
-import { concurrencyPolicyDegradedChecks } from "./server/read-model.js";
+import { healthCheckMessages } from "./server/read-model.js";
 
 describe("dashboard concurrency policy read model", () => {
   const policy = {
@@ -31,27 +31,55 @@ describe("dashboard concurrency policy read model", () => {
     expect(dashboardConcurrencyPolicySummary(policy)).not.toHaveProperty("concurrencyKey");
   });
 
-  it("degrades whenever a queue-wide or per-key budget blocks ready work", () => {
+  it("words core health reasons for operators, splitting critical from degraded", () => {
     expect(
-      concurrencyPolicyDegradedChecks({
-        concurrencyPolicies: { policies: [policy], capped: false },
-      }),
-    ).toEqual(["Concurrency policy blocks ready tasks on payments"]);
-    expect(
-      concurrencyPolicyDegradedChecks({
-        concurrencyPolicies: {
-          policies: [{ ...policy, available: 1 }],
-          capped: false,
+      healthCheckMessages({
+        status: {
+          level: "critical",
+          reasons: [
+            { code: "expired-leases", severity: "critical", observed: 1, budget: 0 },
+            {
+              code: "concurrency-blocked",
+              severity: "degraded",
+              observed: 3,
+              budget: 0,
+              queue: "payments",
+            },
+            {
+              code: "rate-limit-throttled",
+              severity: "degraded",
+              observed: 2,
+              budget: 0,
+              queue: "emails",
+            },
+            {
+              code: "retention-lag",
+              severity: "degraded",
+              observed: 90_000_000,
+              budget: 21_600_000,
+              category: "jobEvents",
+            },
+            {
+              code: "retention-lag",
+              severity: "degraded",
+              observed: 90_000_000,
+              budget: 21_600_000,
+              category: "statistics",
+            },
+          ],
         },
       }),
-    ).toEqual(["Concurrency policy blocks ready tasks on payments"]);
-    expect(
-      concurrencyPolicyDegradedChecks({
-        concurrencyPolicies: {
-          policies: [{ ...policy, blockedReady: 0 }],
-          capped: false,
-        },
-      }),
-    ).toEqual([]);
+    ).toEqual({
+      criticalChecks: ["Expired leases"],
+      degradedChecks: [
+        "Concurrency policy blocks ready tasks on payments",
+        "Queue emails has 2+ ready tasks waiting for rate-limit tokens",
+        "Retention cleanup is late for task events, rolled-up statistics",
+      ],
+    });
+    expect(healthCheckMessages({ status: { level: "healthy", reasons: [] } })).toEqual({
+      criticalChecks: [],
+      degradedChecks: [],
+    });
   });
 });
