@@ -155,7 +155,7 @@ export function describeTaskConcurrency(job: {
   if (concurrencyKey === null && policy === null) return null;
   const keyTitle =
     concurrencyKey === null
-      ? "This task was enqueued without a concurrency key, so it competes for queue capacity only."
+      ? "This task was enqueued without a concurrency key. That fact is part of the task and never changes."
       : `This task was enqueued with concurrency key ${concurrencyKey}. The key is part of the task and never changes.`;
   if (runtimeState === null) return settledTaskConcurrency(concurrencyKey, keyTitle, policy);
   const basis = runtimeState === "scheduled" ? "pending" : "live";
@@ -174,17 +174,23 @@ export function describeTaskConcurrency(job: {
   if (policy.blockedReady > 0) {
     parts.push(`${policy.blockedReady}+ ready blocked`);
   }
+  const capacityRole =
+    basis === "pending"
+      ? concurrencyKey === null
+        ? "When it becomes ready, this task will consume queue capacity only."
+        : policy.maxActivePerKey === null
+          ? "When it becomes ready, this task will consume queue capacity only because this queue does not limit tasks by key."
+          : `When it becomes ready, this task will compete for its key's capacity as well. ${keys.title}`
+      : concurrencyKey === null
+        ? "This task has no concurrency key, so it consumes queue capacity only."
+        : policy.maxActivePerKey === null
+          ? "This task has a concurrency key, but this queue does not limit tasks by key. It consumes queue capacity only."
+          : `This task competes for its key's capacity as well. ${keys.title}`;
   return {
     concurrencyKey,
     keyTitle,
     summary: parts.join(" · "),
-    title: `${basis === "pending" ? "This task is scheduled, so it will enter this budget when it becomes ready. " : ""}${describeConcurrencyLimit(policy).title} ${
-      concurrencyKey === null
-        ? "This task has no concurrency key, so it consumes queue capacity only."
-        : policy.maxActivePerKey === null
-          ? "This task has a concurrency key, but this queue does not limit tasks by key. It consumes queue capacity only."
-          : `This task competes for its key's capacity as well. ${keys.title}`
-    }`,
+    title: `${basis === "pending" ? "This task is scheduled, so it will enter this budget when it becomes ready. " : ""}${describeConcurrencyLimit(policy).title} ${capacityRole}`,
     basis,
   };
 }
