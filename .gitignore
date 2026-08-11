@@ -2,6 +2,7 @@ docs/research
 node_modules/
 dist/
 .next/
+apps/site/next-env.d.ts
 .source/
 .env
 .env.*
