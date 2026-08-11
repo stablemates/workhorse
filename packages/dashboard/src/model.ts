@@ -491,6 +491,38 @@ export interface DashboardQueueRow {
   oldestMs: number | null;
 }
 
+/** Bounded queue admission facts from `Queue.health()`. Raw concurrency keys are never included. */
+export interface DashboardConcurrencyPolicySummary {
+  namespace: string;
+  maxActive: number;
+  active: number;
+  available: number;
+  blockedReady: number;
+  maxActivePerKey: number | null;
+  saturatedKeys: number;
+  highestKeyActive: number;
+}
+
+type QueueConcurrencyPolicy = Awaited<
+  ReturnType<Queue["health"]>
+>["concurrencyPolicies"]["policies"][number];
+
+/** Remove the queue join key while retaining only bounded aggregate policy facts for one row. */
+export function dashboardConcurrencyPolicySummary(
+  policy: QueueConcurrencyPolicy,
+): DashboardConcurrencyPolicySummary {
+  return {
+    namespace: policy.namespace,
+    maxActive: Number(policy.maxActive),
+    active: Number(policy.active),
+    available: Number(policy.available),
+    blockedReady: Number(policy.blockedReady),
+    maxActivePerKey: policy.maxActivePerKey === null ? null : Number(policy.maxActivePerKey),
+    saturatedKeys: Number(policy.saturatedKeys),
+    highestKeyActive: Number(policy.highestKeyActive),
+  };
+}
+
 export interface DashboardManagedQueueRow {
   queue: string;
   paused: boolean;
@@ -502,6 +534,7 @@ export interface DashboardManagedQueueRow {
   /** Operator-canceled tasks. Kept separate from `failed` so a cancellation never reads as a bug. */
   canceled: number;
   terminalCountsApproximate: boolean;
+  concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
 }
 
 export interface DashboardJobRow extends Record<string, unknown> {
@@ -901,6 +934,8 @@ export interface DashboardCronPage {
 export interface DashboardQueuesPage {
   capturedAt: string;
   queues: DashboardManagedQueueRow[];
+  /** True when `Queue.health()` capped its policy or blocked-ready scan. */
+  concurrencyPoliciesCapped: boolean;
 }
 
 export type DashboardSystemWindow = "15m" | "1h" | "24h";
@@ -931,6 +966,7 @@ export interface DashboardSystemQueueRow {
   retrying: number;
   enqueuedPerMinute: number;
   completedPerMinute: number;
+  concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
 }
 
 export interface DashboardSystemFailingType {
@@ -1054,6 +1090,8 @@ export interface DashboardSystemPage {
   };
   outcomes: DashboardSystemOutcomeBucket[];
   queues: DashboardSystemQueueRow[];
+  /** True when `Queue.health()` capped its policy or blocked-ready scan. */
+  concurrencyPoliciesCapped: boolean;
   retryStorm: {
     buckets: DashboardSystemRetryBucket[];
     topTypes: Array<{ queue: string; type: string; count: number }>;
@@ -1212,7 +1250,11 @@ export interface DashboardJobDetail {
     maxAttempts: number;
     deadlineAt?: string | null;
     executionTimeoutMs?: number | null;
+    /** Raw admission key. Deliberately available only in task detail identity. */
+    concurrencyKey: string | null;
   };
+  /** Effective admission budget for this task's queue. Null unless the task is ready or active. */
+  concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
   payload: unknown;
   progress: {
     value: unknown;

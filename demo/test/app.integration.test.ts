@@ -2429,11 +2429,28 @@ describe("Workhorse demo", () => {
       queueController: createLocalQueueController(database),
     });
     const client = dashboardClient(app);
-    const activeId = await workhorse.context.queue.enqueue("active", {}, { queue: queueName });
+    await workhorse.context.queue.syncConcurrencyPolicies("dashboard-test", [
+      { queue: queueName, maxActive: 1, maxActivePerKey: 1 },
+    ]);
+    const activeId = await workhorse.context.queue.enqueue(
+      "active",
+      {},
+      {
+        queue: queueName,
+        concurrencyKey: "tenant-secret",
+      },
+    );
     expect((await workhorse.context.queue.claim("demo-worker", { queue: queueName }))?.id).toBe(
       activeId,
     );
-    await workhorse.context.queue.enqueue("ready", {}, { queue: queueName });
+    const readyId = await workhorse.context.queue.enqueue(
+      "ready",
+      {},
+      {
+        queue: queueName,
+        concurrencyKey: "tenant-secret",
+      },
+    );
     await workhorse.context.queue.enqueue(
       "scheduled",
       {},
@@ -2454,9 +2471,40 @@ describe("Workhorse demo", () => {
           succeeded: 0,
           failed: 0,
           terminalCountsApproximate: false,
+          concurrencyPolicy: {
+            namespace: "dashboard-test",
+            maxActive: 1,
+            active: 1,
+            available: 0,
+            blockedReady: 1,
+            maxActivePerKey: 1,
+            saturatedKeys: 1,
+            highestKeyActive: 1,
+          },
         },
       ],
+      concurrencyPoliciesCapped: false,
     });
+    await expect(client.dashboard.jobDetail({ id: readyId })).resolves.toMatchObject({
+      identity: { concurrencyKey: "tenant-secret" },
+      concurrencyPolicy: {
+        namespace: "dashboard-test",
+        maxActive: 1,
+        active: 1,
+        available: 0,
+        blockedReady: 1,
+        maxActivePerKey: 1,
+      },
+    });
+    const system = await client.dashboard.system({ window: "15m" });
+    expect(system.status.degradedChecks).toContain(
+      `Concurrency policy blocks ready tasks on ${queueName}`,
+    );
+    expect(system.queues.find((row) => row.queue === queueName)?.concurrencyPolicy).toMatchObject({
+      available: 0,
+      blockedReady: 1,
+    });
+    expect(system.concurrencyPoliciesCapped).toBe(false);
     await expect(
       client.dashboard.setQueuePaused({
         queue: queueName,
