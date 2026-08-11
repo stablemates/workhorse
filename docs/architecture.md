@@ -51,6 +51,31 @@ Framework co-hosting remains available but is not the default scaling boundary. 
 [`worker-processes.md`](worker-processes.md) and
 [ADR 0012](decisions/0012-dedicated-worker-processes.md).
 
+`@workhorse/drizzle`, `@workhorse/prisma`, `@workhorse/typeorm`, and `@workhorse/kysely` convert
+provider database and transaction objects into `Queryable`. `createDrizzleAdapter` discovers the
+retained node-postgres client through `$client`. `createPrismaAdapter`, `createTypeOrmAdapter`, and
+`createKyselyAdapter` accept `notificationPool`; Kysely callers can pass the pool used by
+`PostgresDialect`. If that option is absent, workers use bounded polling. `forTransaction` never
+commits, rolls back, disconnects, or destroys the caller's transaction. Each adapter closes
+resources only through its configured `close` callback, and `WorkhorseAdapter.close()` invokes that
+callback once.
+
+`prismaQueryable` sends the statement and positional values through `$queryRawUnsafe`.
+`typeOrmQueryable` sends them through `query`. Both require a row array and synthesize the
+`QueryResult` metadata that core does not inspect: an empty `command`, the row-array length as
+`rowCount`, zero as `oid`, and an empty `fields` array. `PrismaQueryError` and `TypeOrmQueryError`
+retain the statement and original `cause` without copying parameter values into the message. Their
+error-code searches process at most 16 queued entries and accept only five-character uppercase
+alphanumeric codes. `PrismaQueryError` prefers `meta.code` over Prisma's outer raw-query code.
+`TypeOrmQueryError` follows `driverError` and `cause`. Each adapter copies the discovered code to
+its wrapper's `code` property so core can preserve typed SQL conflicts.
+
+`kyselyQueryable` builds a `CompiledQuery.raw` from the statement and positional values, then calls
+`executeQuery` on either a `Kysely` database or `Transaction`. It maps `QueryResult.rows` into the
+same synthetic node-postgres metadata described above. `KyselyQueryError` retains the statement and
+original `cause`, follows at most 16 nested causes, accepts only five-character uppercase
+alphanumeric codes, and copies the discovered code to its wrapper.
+
 The operator dashboard is a separate boundary from the worker fleet. It is a framework-neutral
 request host that reads everything it shows from PostgreSQL, including worker identity, runtime
 state, and policy provenance, so it can be mounted in a process that runs no workers at all.
@@ -817,10 +842,13 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
   removes that worker and closes the hub after the final subscriber. A node-postgres pool therefore
   reserves one shared connection for `LISTEN workhorse_jobs` regardless of the number of subscribing
   `Queue` or `Worker` objects. The Drizzle adapter forwards its node-postgres `$client.connect()`
-  capability and uses `$client` as `notificationConnectionIdentity`; query-only adapters do not
-  listen. A pool whose `options.max` is 1 also remains polling-only, which prevents its sole
-  connection from being held away from claims. Queue-name payloads wake matching subscribers and
-  `*` wakes all subscribers. Repeated
+  capability, uses `$client` as `notificationConnectionIdentity`, and reads capacity from
+  `$client.options.max`. The Prisma, TypeORM, and Kysely adapters forward `connect()` from their
+  optional `notificationPool`, use that pool as `notificationConnectionIdentity`, and read capacity
+  from `notificationPool.options.max`. Without those capabilities, an adapter remains polling-only.
+  A pool whose capacity is 1 also remains polling-only, which prevents its sole connection from being
+  held away from claims. Queue-name payloads wake matching subscribers and `*` wakes all subscribers.
+  Repeated
   notifications collapse through the worker's replace-on-wake `AbortController` rather than
   creating concurrent claim loops.
 - Listener error or end events release the failed client, wake all subscribers, and reconnect after

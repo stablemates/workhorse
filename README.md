@@ -66,7 +66,7 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
   top-level redaction, byte bounds, and merged lifecycle timelines;
 - a durable worker registry that discovers the live fleet, reports declared concurrency, slot use,
   and draining, and carries cooperative operator pause to workers in any process;
-- separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
+- separate Drizzle, Prisma, TypeORM, Kysely, and Hono integration packages;
 - a separately packaged `@workhorse/dashboard` React operator dashboard with a framework-neutral
   request host, a Connect-style Node bridge, an injected transport-neutral client boundary,
   package-owned styles/assets, and audited local controls;
@@ -76,7 +76,7 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.
 
-Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
+Explicitly excluded: workflows, additional framework adapters, production authentication and RBAC, rate limits, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
 
 Checkpoint outputs remain immutable restart evidence. Mutable progress is stored separately and never
 changes the accepted payload, checkpoint outputs, or terminal result.
@@ -509,7 +509,7 @@ queue pause, worker availability, and database downtime can delay the next claim
 one-second maintenance cadence makes sub-second durable waits inefficient. Use
 `context.sleepUntil(name, date)` for an immutable absolute target.
 
-### Drizzle and Hono packages
+### Database provider and Hono packages
 
 `@workhorse/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
 adding Drizzle to the core package:
@@ -526,6 +526,10 @@ await db.transaction(async (tx) => {
   await workhorse.forTransaction(tx).enqueue("account.created", { accountId });
 });
 ```
+
+`@workhorse/prisma`, `@workhorse/typeorm`, and `@workhorse/kysely` expose the same transaction
+boundary through each provider's transaction object. Their workers can use an explicitly supplied
+node-postgres pool for notification-assisted dispatch, or poll when no pool is available.
 
 `@workhorse/hono` exposes the queue through typed middleware, optionally starts co-hosted workers,
 and provides a Node server handle whose idempotent shutdown stops new claims, drains in-flight

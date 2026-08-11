@@ -1,0 +1,65 @@
+---
+title: How do I use Workhorse with Prisma?
+description: Adapt a Prisma client and enqueue jobs inside caller-owned interactive transactions.
+---
+
+`@workhorse/prisma` converts Prisma clients and interactive transaction clients into the core
+`Queryable` protocol. Workhorse keeps its schema lifecycle outside Prisma migrations.
+
+## Create the adapter
+
+Install the integration beside Prisma Client.
+
+```bash
+pnpm add @workhorse/prisma @prisma/client
+```
+
+Pass the client to `createPrismaAdapter`. The close callback is optional because the adapter does
+not disconnect caller-owned clients by default.
+
+```ts
+import { PrismaClient } from "@prisma/client";
+import { createPrismaAdapter } from "@workhorse/prisma";
+
+const prisma = new PrismaClient();
+const workhorse = createPrismaAdapter(prisma, {
+  close: () => prisma.$disconnect(),
+});
+```
+
+## Enqueue inside an interactive transaction
+
+Call `forTransaction` with the callback's transaction client. The queue sends its SQL through that
+client, so the job follows the surrounding commit or rollback.
+
+```ts
+await prisma.$transaction(async (tx) => {
+  const account = await tx.account.create({ data: { email } });
+  await workhorse.forTransaction(tx).enqueue("account.created", {
+    accountId: account.id,
+  });
+});
+```
+
+If the callback throws, Prisma rolls back both writes. The adapter's default queue remains outside
+that transaction.
+
+## Enable notification-assisted workers
+
+Prisma does not expose a stable node-postgres pool. Supply a separate caller-owned pool as
+`notificationPool` when workers should reserve a connection for `LISTEN/NOTIFY`. Without it,
+workers use bounded polling and keep the same durable behavior.
+
+`PrismaQueryError` retains the statement, original cause, and nested PostgreSQL code when Prisma
+provides one. Install the Workhorse schema with the core deployment tools.
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue) — understand the transaction guarantee
+- [Workers](/docs/workers) — configure polling and handlers
+- [Installation](/docs/installation) — install the schema outside Prisma migrations
+
+---
+
+Exact adapter boundary and transaction ownership:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#system-context).

@@ -458,10 +458,9 @@ which genuinely differs per framework.
 
 - [ ] Evolve the adapter interface validated by Drizzle and Hono without moving lifecycle
       correctness out of SQL.
-- [ ] Expand beyond Drizzle to a small set of popular TypeScript ORM providers, with transactional
+- [x] Expand beyond Drizzle to a small set of popular TypeScript ORM providers, with transactional
       enqueue support and provider-specific integration tests.
-- [ ] Select and document the next ORM support matrix before implementation. Prisma and TypeORM are
-      candidates rather than commitments until the initial adapter contract is validated.
+- [x] Select and document Prisma, TypeORM, and Kysely as the next ORM support matrix.
 - [ ] Ship each ORM provider and framework integration as a separate optional package rather than
       adding ecosystem dependencies to the core package.
 - [ ] Expand beyond Hono to a small framework matrix and validate lifecycle, dependency injection,
