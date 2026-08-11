@@ -2272,12 +2272,19 @@ export async function readDashboardJobDetail(
   const healthPolicy = health?.concurrencyPolicies.policies.find(
     (candidate) => candidate.queue === job.queue,
   );
+  // The ceiling comes from `concurrencyPolicies([queue])`, which reads this queue's row exactly.
+  // The counts beside it come from `health()`, which measures a bounded number of policies and
+  // skips this queue once a deployment has more. The two therefore disagree about what is known,
+  // and `utilizationKnown` records which half is trustworthy. When it is false the counts below
+  // are placeholders, zeroed rather than defaulted to the ceiling so that no view can present an
+  // unmeasured queue as an idle one with its whole budget free.
   const concurrencyPolicy: DashboardConcurrencyPolicySummary | null = currentPolicy
     ? {
         namespace: currentPolicy.namespace,
         maxActive: currentPolicy.maxActive,
+        utilizationKnown: healthPolicy !== undefined,
         active: healthPolicy?.active ?? 0,
-        available: healthPolicy?.available ?? currentPolicy.maxActive,
+        available: healthPolicy?.available ?? 0,
         blockedReady: healthPolicy?.blockedReady ?? 0,
         maxActivePerKey: currentPolicy.maxActivePerKey,
         saturatedKeys: healthPolicy?.saturatedKeys ?? 0,

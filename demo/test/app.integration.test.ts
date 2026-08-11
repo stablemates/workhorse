@@ -2477,6 +2477,7 @@ describe("Workhorse demo", () => {
           concurrencyPolicy: {
             namespace: "dashboard-test",
             maxActive: 1,
+            utilizationKnown: true,
             active: 1,
             available: 0,
             blockedReady: 1,
@@ -2499,6 +2500,7 @@ describe("Workhorse demo", () => {
       concurrencyPolicy: {
         namespace: "dashboard-test",
         maxActive: 3,
+        utilizationKnown: true,
         active: 0,
         available: 3,
         blockedReady: 0,
@@ -2512,6 +2514,7 @@ describe("Workhorse demo", () => {
       concurrencyPolicy: {
         namespace: "dashboard-test",
         maxActive: 3,
+        utilizationKnown: true,
         active: 0,
         available: 3,
         blockedReady: 0,
@@ -2522,6 +2525,7 @@ describe("Workhorse demo", () => {
       concurrencyPolicy: {
         namespace: "dashboard-test",
         maxActive: 1,
+        utilizationKnown: true,
         active: 1,
         available: 0,
         blockedReady: 1,
@@ -2547,6 +2551,7 @@ describe("Workhorse demo", () => {
         namespace: "dashboard-test",
         maxActive: 2,
         maxActivePerKey: 1,
+        utilizationKnown: false,
         active: 0,
       },
     });
@@ -2656,7 +2661,7 @@ describe("Workhorse demo", () => {
     ]);
   });
 
-  it("reads a terminal task's exact current policy beyond the health summary cap", async () => {
+  it("reads exact policy without inventing live utilization beyond the health summary cap", async () => {
     const { app, workhorse } = createTestApplication();
     const client = dashboardClient(app);
     const queue = workhorse.context.queue;
@@ -2681,21 +2686,54 @@ describe("Workhorse demo", () => {
       {},
       { queue: terminalQueue, concurrencyKey: "tenant-private" },
     );
+    // The ceiling is read from this queue's own policy row, so it is exact even past the cap. The
+    // counts beside it were never measured, and none of them may be defaulted into a claim: an
+    // `available` of 7 here would tell an operator the whole budget is free.
+    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+      identity: {
+        state: "ready",
+        concurrencyKey: "tenant-private",
+      },
+      current: { runtime: { state: "ready" } },
+      concurrencyPolicy: {
+        namespace: "dashboard-cap-test",
+        maxActive: 7,
+        maxActivePerKey: 3,
+        utilizationKnown: false,
+        active: 0,
+        available: 7,
+        blockedReady: 0,
+        saturatedKeys: 0,
+        highestKeyActive: 0,
+      },
+    });
+
+    // A finished task in the same queue keeps its exact ceiling and the same unmeasured signal.
     const claim = await queue.claim("terminal-policy-worker", { queue: terminalQueue });
     expect(claim?.id).toBe(jobId);
     await queue.complete(claim!, "terminal-policy-worker", { done: true });
-
     await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
-      identity: {
-        state: "succeeded",
-        concurrencyKey: "tenant-private",
-      },
+      identity: { state: "succeeded", concurrencyKey: "tenant-private" },
       current: { runtime: null },
       concurrencyPolicy: {
         namespace: "dashboard-cap-test",
         maxActive: 7,
         maxActivePerKey: 3,
+        utilizationKnown: false,
+        available: 0,
+      },
+    });
+
+    // A queue inside the health sample still reports measured utilization, so the flag marks the
+    // capped read specifically rather than every task detail.
+    const measuredId = await queue.enqueue("inside-policy-cap", {}, { queue: "policy-000" });
+    await expect(client.dashboard.jobDetail({ id: measuredId })).resolves.toMatchObject({
+      concurrencyPolicy: {
+        namespace: "dashboard-cap-test",
+        maxActive: 1,
+        utilizationKnown: true,
         active: 0,
+        available: 1,
       },
     });
     expect(

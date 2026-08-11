@@ -1400,12 +1400,15 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
  * A running task gets live utilisation of the budget it is competing in. A finished task keeps its
  * key, which never changes, beside the queue's limits as they stand now. The two are labelled
  * differently on purpose: no snapshot of the old policy exists, so the second must never be read
- * as the configuration this task ran under.
+ * as the configuration this task ran under. A third case is marked separately again: when the
+ * queue's ceiling is known but its utilisation was never measured, the line shows the ceiling and
+ * says the usage is unknown, rather than showing zeroes that would read as an idle queue.
  */
 export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
   const described = describeTaskConcurrency(job);
   if (described === null) return null;
   const current = described.basis === "current";
+  const pending = described.basis === "pending";
   return (
     <Group gap="xs" mt="sm" align="baseline">
       <Text c="dimmed" size="xs" fw={600}>
@@ -1418,7 +1421,7 @@ export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
           color="grape"
           tt="none"
           title={described.keyTitle}
-          aria-label={`Concurrency key ${described.concurrencyKey}`}
+          aria-label={described.keyTitle}
         >
           {described.concurrencyKey}
         </Badge>
@@ -1427,10 +1430,26 @@ export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
         <Text c="dimmed" size="xs" fs="italic" title={described.title}>
           queue policy now
         </Text>
+      ) : pending ? (
+        <Text c="dimmed" size="xs" fs="italic" title={described.title}>
+          budget when ready
+        </Text>
       ) : null}
       <Text c="dimmed" size="xs" title={described.title} aria-label={described.title}>
         {described.summary}
       </Text>
+      {described.utilizationKnown ? null : (
+        <Badge
+          size="xs"
+          variant="light"
+          color="gray"
+          tt="none"
+          title={described.title}
+          aria-label={described.title}
+        >
+          usage not measured
+        </Badge>
+      )}
     </Group>
   );
 }

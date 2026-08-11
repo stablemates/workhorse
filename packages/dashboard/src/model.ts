@@ -495,6 +495,8 @@ export interface DashboardQueueRow {
 export interface DashboardConcurrencyPolicySummary {
   namespace: string;
   maxActive: number;
+  /** Whether this projection includes live utilization from the bounded health summary. */
+  utilizationKnown: boolean;
   active: number;
   available: number;
   blockedReady: number;
@@ -514,6 +516,7 @@ export function dashboardConcurrencyPolicySummary(
   return {
     namespace: policy.namespace,
     maxActive: Number(policy.maxActive),
+    utilizationKnown: true,
     active: Number(policy.active),
     available: Number(policy.available),
     blockedReady: Number(policy.blockedReady),

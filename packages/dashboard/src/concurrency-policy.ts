@@ -133,6 +133,17 @@ export interface TaskConcurrencyDisplay {
   /** Hover text for the summary. Carries the "current, not historical" caveat when finished. */
   title: string;
   /**
+   * Whether the line could say how much of the budget is in use.
+   *
+   * False only for a task that is still competing, or about to, whose queue has an exactly known
+   * ceiling but no utilization row in `Queue.health()`. That happens once a deployment holds more
+   * policies than the health summary counts. The summary then states the ceiling alone, because
+   * an unmeasured queue is not an idle one and zeroes would read as one. True everywhere else,
+   * including a settled task, whose line claims no utilization in the first place. Components use
+   * this to mark the line as bounded, never to hide it.
+   */
+  utilizationKnown: boolean;
+  /**
    * Which claim the summary makes. `live` is this task's own competition for the budget right now;
    * `pending` is the budget it will enter when it becomes ready; `current` is the queue's present
    * configuration shown beside a task that has stopped competing. Components use it to label the
@@ -165,8 +176,12 @@ export function describeTaskConcurrency(job: {
       keyTitle,
       summary: "no queue-wide limit",
       title: noPolicyTitle,
+      utilizationKnown: true,
       basis,
     };
+  }
+  if (!policy.utilizationKnown) {
+    return unmeasuredTaskConcurrency(concurrencyKey, keyTitle, policy, basis);
   }
   const keys = describeConcurrencyKeys(policy);
   const parts = [`${policy.active} of ${policy.maxActive} active`];
@@ -191,6 +206,51 @@ export function describeTaskConcurrency(job: {
     keyTitle,
     summary: parts.join(" · "),
     title: `${basis === "pending" ? "This task is scheduled, so it will enter this budget when it becomes ready. " : ""}${describeConcurrencyLimit(policy).title} ${capacityRole}`,
+    utilizationKnown: true,
+    basis,
+  };
+}
+
+/**
+ * The ceiling-only line for a task competing in a queue the health summary did not measure.
+ *
+ * `Queue.health()` returns utilization for a bounded number of policies, while task detail reads
+ * this task's own policy exactly. Past that bound the ceiling is a fact and every count beside it
+ * is absent. Printing the absent counts as `0 of 7 active` would tell an operator the queue is
+ * idle, which is the opposite of what a large deployment usually means, so the counts are dropped
+ * and the line says so.
+ */
+function unmeasuredTaskConcurrency(
+  concurrencyKey: string | null,
+  keyTitle: string,
+  policy: DashboardConcurrencyPolicySummary,
+  basis: "live" | "pending",
+): TaskConcurrencyDisplay {
+  const parts = [`queue allows ${policy.maxActive} at once`];
+  if (policy.maxActivePerKey !== null) parts.push(`${policy.maxActivePerKey} per key`);
+  parts.push("usage unknown");
+  const keyed =
+    concurrencyKey === null
+      ? basis === "pending"
+        ? "When it becomes ready, this task will consume queue capacity only."
+        : "This task has no concurrency key, so it consumes queue capacity only."
+      : policy.maxActivePerKey === null
+        ? basis === "pending"
+          ? "When it becomes ready, this task will consume queue capacity only because this queue does not limit tasks by key."
+          : "This task has a concurrency key, but this queue does not limit tasks by key. It consumes queue capacity only."
+        : basis === "pending"
+          ? "When it becomes ready, this task will compete for its key's capacity as well."
+          : "This task competes for its key's capacity as well.";
+  return {
+    concurrencyKey,
+    keyTitle,
+    summary: parts.join(" · "),
+    title: `${basis === "pending" ? "This task is scheduled, so it will enter this budget when it becomes ready. " : ""}Fleet-wide budget: at most ${policy.maxActive} ${plural(policy.maxActive, "task")} from this queue may run at once across every worker sharing this database${
+      policy.maxActivePerKey === null
+        ? ", and the queue does not limit tasks by concurrency key"
+        : `, and at most ${policy.maxActivePerKey} ${plural(policy.maxActivePerKey, "task")} per concurrency key`
+    }. ${keyed} How much of that budget is in use now is unknown: Workhorse measures utilization for a bounded number of queues and this queue fell outside that sample, so no count is shown rather than a count of zero.`,
+    utilizationKnown: false,
     basis,
   };
 }
@@ -215,6 +275,8 @@ function settledTaskConcurrency(
       keyTitle,
       summary: "queue has no limit now",
       title: `${settled} ${noPolicyTitle} ${noSnapshotCaveat}`,
+      // A settled line states no utilization at all, so nothing about it is unknown.
+      utilizationKnown: true,
       basis: "current",
     };
   }
@@ -229,6 +291,7 @@ function settledTaskConcurrency(
         ? ", and does not limit tasks by concurrency key"
         : `, and at most ${policy.maxActivePerKey} ${plural(policy.maxActivePerKey, "task")} per concurrency key`
     }. ${noSnapshotCaveat}`,
+    utilizationKnown: true,
     basis: "current",
   };
 }
