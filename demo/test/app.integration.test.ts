@@ -916,6 +916,45 @@ describe("Workhorse demo", () => {
     );
   });
 
+  it("drains the partner API backlog only as rate tokens refill", async () => {
+    const { workhorse } = createTestApplication({ rateLimitWorker: true });
+    await syncDemoRateLimitPolicies(pool);
+    await seedDemoData(database);
+    workhorse.start();
+
+    try {
+      await pool.query(
+        `UPDATE workhorse.rate_limit_bucket
+            SET refilled_at = clock_timestamp() - interval '1 hour'
+          WHERE queue_name = $1`,
+        [DEMO_RATE_LIMIT_QUEUE],
+      );
+      await waitFor(
+        async () => {
+          const result = await pool.query<{ count: number }>(
+            `SELECT count(*)::integer AS count
+               FROM workhorse.job job
+               JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
+              WHERE job.payload->>'source' = 'rate-limit-seed'
+                AND outcome.state = 'succeeded'`,
+          );
+          return result.rows[0]!.count;
+        },
+        (count) => count === 4,
+      );
+      await expect(
+        pool.query(
+          `SELECT count(*)::integer AS count
+             FROM workhorse.job job
+             JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
+            WHERE job.payload->>'source' = 'rate-limit-seed' AND runtime.state = 'ready'`,
+        ),
+      ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
   it("materializes the representative execution-timeout example", async () => {
     const { workhorse } = createTestApplication({ maintenanceIntervalMs: 100 });
     await seedDemoData(database);

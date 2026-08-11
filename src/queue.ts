@@ -3749,27 +3749,28 @@ export class Queue {
       this.rateLimitStatuses(),
     ]);
     const rateLimits = new Map(rateLimitStatuses.map((status) => [status.queue, status]));
-    return result.rows.map((row) => ({
-      queue: row.queue_name,
-      readyDepth: Number(row.ready),
-      scheduledDepth: Number(row.scheduled),
-      activeLeases: Number(row.active),
-      oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
-      concurrencyLimit: row.max_active,
-      concurrencyActive: Number(row.concurrency_active),
-      blockedReadyDepth: Number(row.blocked_ready),
-      rateLimitPerSecond:
-        rateLimits.get(row.queue_name) === undefined
-          ? null
-          : (rateLimits.get(row.queue_name)!.rate.limit * 1_000) /
-            rateLimits.get(row.queue_name)!.rate.intervalMs,
-      rateLimitAvailableTokens: rateLimits.get(row.queue_name)?.availableTokens ?? 0,
-      rateLimitThrottledReadyDepth: rateLimits.get(row.queue_name)?.throttledReady ?? 0,
-      rateLimitNextEligibleDelayMs:
-        rateLimits.get(row.queue_name)?.nextEligibleAt === null ||
-        rateLimits.get(row.queue_name)?.nextEligibleAt === undefined
-          ? null
-          : Math.max(0, rateLimits.get(row.queue_name)!.nextEligibleAt!.getTime() - Date.now()),
-    }));
+    return result.rows.map((row) => {
+      const rateLimit = rateLimits.get(row.queue_name);
+      return {
+        queue: row.queue_name,
+        readyDepth: Number(row.ready),
+        scheduledDepth: Number(row.scheduled),
+        activeLeases: Number(row.active),
+        oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
+        concurrencyLimit: row.max_active,
+        concurrencyActive: Number(row.concurrency_active),
+        blockedReadyDepth: Number(row.blocked_ready),
+        rateLimitPerSecond:
+          rateLimit === undefined
+            ? null
+            : (rateLimit.rate.limit * 1_000) / rateLimit.rate.intervalMs,
+        rateLimitAvailableTokens: rateLimit?.availableTokens ?? 0,
+        rateLimitThrottledReadyDepth: rateLimit?.throttledReady ?? 0,
+        rateLimitNextEligibleDelayMs:
+          rateLimit?.nextEligibleAt == null
+            ? null
+            : Math.max(0, rateLimit.nextEligibleAt.getTime() - Date.now()),
+      };
+    });
   }
 }

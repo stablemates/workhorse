@@ -433,18 +433,7 @@ export async function readDashboardQueues(
     );
   }
 
-  const concurrencyPolicies = new Map<string, DashboardConcurrencyPolicySummary>(
-    health.concurrencyPolicies.policies.map((policy) => [
-      policy.queue,
-      dashboardConcurrencyPolicySummary(policy),
-    ]),
-  );
-  const rateLimitPolicies = new Map<string, DashboardRateLimitPolicySummary>(
-    health.rateLimitPolicies.policies.map((policy) => [
-      policy.queue,
-      dashboardRateLimitPolicySummary(policy),
-    ]),
-  );
+  const admissionPolicies = dashboardAdmissionPolicies(health);
 
   return {
     capturedAt: new Date().toISOString(),
@@ -458,8 +447,8 @@ export async function readDashboardQueues(
       failed: terminalCounts.get(row.queue)?.failed ?? 0,
       canceled: terminalCounts.get(row.queue)?.canceled ?? 0,
       terminalCountsApproximate: approximate,
-      concurrencyPolicy: concurrencyPolicies.get(row.queue) ?? null,
-      rateLimitPolicy: rateLimitPolicies.get(row.queue) ?? null,
+      concurrencyPolicy: admissionPolicies.concurrency.get(row.queue) ?? null,
+      rateLimitPolicy: admissionPolicies.rateLimits.get(row.queue) ?? null,
     })),
     concurrencyPoliciesCapped: health.concurrencyPolicies.capped,
     rateLimitPoliciesCapped: health.rateLimitPolicies.capped,
@@ -1327,6 +1316,23 @@ export function rateLimitPolicyDegradedChecks(
     );
 }
 
+function dashboardAdmissionPolicies(health: QueueHealthSnapshot) {
+  return {
+    concurrency: new Map<string, DashboardConcurrencyPolicySummary>(
+      health.concurrencyPolicies.policies.map((policy) => [
+        policy.queue,
+        dashboardConcurrencyPolicySummary(policy),
+      ]),
+    ),
+    rateLimits: new Map<string, DashboardRateLimitPolicySummary>(
+      health.rateLimitPolicies.policies.map((policy) => [
+        policy.queue,
+        dashboardRateLimitPolicySummary(policy),
+      ]),
+    ),
+  };
+}
+
 export async function readDashboardSystem(
   database: DashboardDatabase,
   queue: Queue,
@@ -1616,18 +1622,7 @@ export async function readDashboardSystem(
     degradedChecks,
   };
 
-  const concurrencyPolicies = new Map<string, DashboardConcurrencyPolicySummary>(
-    health.concurrencyPolicies.policies.map((policy) => [
-      policy.queue,
-      dashboardConcurrencyPolicySummary(policy),
-    ]),
-  );
-  const rateLimitPolicies = new Map<string, DashboardRateLimitPolicySummary>(
-    health.rateLimitPolicies.policies.map((policy) => [
-      policy.queue,
-      dashboardRateLimitPolicySummary(policy),
-    ]),
-  );
+  const admissionPolicies = dashboardAdmissionPolicies(health);
   const queues = queueRows.rows
     .map((row) => ({
       queue: row.queue,
@@ -1639,8 +1634,8 @@ export async function readDashboardSystem(
       retrying: row.retrying,
       enqueuedPerMinute: row.enqueued / minutes,
       completedPerMinute: row.completed / minutes,
-      concurrencyPolicy: concurrencyPolicies.get(row.queue) ?? null,
-      rateLimitPolicy: rateLimitPolicies.get(row.queue) ?? null,
+      concurrencyPolicy: admissionPolicies.concurrency.get(row.queue) ?? null,
+      rateLimitPolicy: admissionPolicies.rateLimits.get(row.queue) ?? null,
     }))
     // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
     .sort((left, right) => {

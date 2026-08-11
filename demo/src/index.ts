@@ -72,6 +72,7 @@ const { app, workhorse } = createDemoApplication(database, {
   dev: dashboardDev,
   environment,
   workers: inProcessWorkers,
+  rateLimitWorker: inProcessWorkers,
   operator: createLocalOperator(database),
   queueController: createLocalQueueController(database),
   scheduleController: createLocalScheduleController(database),

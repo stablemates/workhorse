@@ -5617,6 +5617,102 @@ describe("live-runtime queue protocol", () => {
     await expect(queue.claim("atomic-rate-worker-c", { queue: queueName })).resolves.not.toBeNull();
   });
 
+  it("refills continuously between interval boundaries", async () => {
+    const queueName = `rate-limit-continuous-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      { queue: queueName, rate: { limit: 2, intervalMs: 1_000, burst: 2 } },
+    ]);
+    await queue.enqueueMany([
+      { type: "continuous-rate", payload: 1, options: { queue: queueName } },
+      { type: "continuous-rate", payload: 2, options: { queue: queueName } },
+      { type: "continuous-rate", payload: 3, options: { queue: queueName } },
+    ]);
+    await expect(queue.claim("continuous-rate-a", { queue: queueName })).resolves.not.toBeNull();
+    await expect(queue.claim("continuous-rate-b", { queue: queueName })).resolves.not.toBeNull();
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() - interval '250 milliseconds'
+        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+      [queueName],
+    );
+
+    const partial = (await queue.rateLimitStatuses([queueName]))[0]!.availableTokens;
+    expect(partial).toBeGreaterThan(0.4);
+    expect(partial).toBeLessThan(1);
+    await expect(queue.claim("continuous-rate-c", { queue: queueName })).resolves.toBeNull();
+
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() - interval '550 milliseconds'
+        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+      [queueName],
+    );
+    await expect(queue.claim("continuous-rate-c", { queue: queueName })).resolves.not.toBeNull();
+  });
+
+  it("rolls token consumption back with a crashed claim transaction", async () => {
+    const queueName = `rate-limit-rollback-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      { queue: queueName, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
+    ]);
+    await queue.enqueueMany([
+      { type: "rollback-rate", payload: 1, options: { queue: queueName } },
+      { type: "rollback-rate", payload: 2, options: { queue: queueName } },
+    ]);
+
+    const transaction = await pool.connect();
+    try {
+      await transaction.query("BEGIN");
+      await expect(
+        new Queue(transaction).claim("rollback-rate-crashed", { queue: queueName }),
+      ).resolves.not.toBeNull();
+      await transaction.query("ROLLBACK");
+    } finally {
+      transaction.release();
+    }
+
+    await expect(
+      queue.claim("rollback-rate-survivor", { queue: queueName }),
+    ).resolves.not.toBeNull();
+    await expect(queue.claim("rollback-rate-blocked", { queue: queueName })).resolves.toBeNull();
+  });
+
+  it("bounds durable state by pruning fully refilled key buckets during claims", async () => {
+    const queueName = `rate-limit-key-pruning-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      {
+        queue: queueName,
+        rate: { limit: 100, intervalMs: 1_000, burst: 100 },
+        perKey: { limit: 1, intervalMs: 100, burst: 1 },
+      },
+    ]);
+    for (const key of ["a", "b", "c"]) {
+      await queue.enqueue("pruned-key-rate", null, { queue: queueName, concurrencyKey: key });
+      const claimed = await queue.claim(`pruned-key-${key}`, { queue: queueName });
+      await queue.complete(claimed!, `pruned-key-${key}`, null);
+    }
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() - interval '1 second'
+        WHERE queue_name = $1 AND bucket_scope = 'key'`,
+      [queueName],
+    );
+    await queue.enqueue("pruned-key-rate", null, {
+      queue: queueName,
+      concurrencyKey: "replacement",
+    });
+    await expect(
+      queue.claim("pruned-key-replacement", { queue: queueName }),
+    ).resolves.not.toBeNull();
+    await expect(
+      pool.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM workhorse.rate_limit_bucket
+          WHERE queue_name = $1 AND bucket_scope = 'key'`,
+        [queueName],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: "1" }] });
+  });
+
   it("charges retries as new starts and validates deployment ownership", async () => {
     const queueName = `rate-limit-retry-${randomUUID()}`;
     await queue.syncRateLimitPolicies("deployment-a", [
