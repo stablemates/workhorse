@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  dashboardPollingIntervalMs,
   dashboardRefreshIntervalMs,
   defaultDashboardRefreshInterval,
+  discardBackgroundSettingsRefresh,
   startDashboardPolling,
 } from "./refresh-policy.js";
 
@@ -36,5 +38,17 @@ describe("dashboard refresh policy", () => {
     vi.advanceTimersByTime(10 * 60_000);
     expect(refresh).not.toHaveBeenCalled();
     stop();
+  });
+
+  it("pauses a configured interval while a form has unsaved changes", () => {
+    expect(dashboardPollingIntervalMs("15s", true)).toBeNull();
+    expect(dashboardPollingIntervalMs("15s", false)).toBe(15_000);
+  });
+
+  it("discards only background settings refreshes that resolve against a dirty form", () => {
+    expect(discardBackgroundSettingsRefresh(true, true, true)).toBe(true);
+    expect(discardBackgroundSettingsRefresh(false, true, true)).toBe(false);
+    expect(discardBackgroundSettingsRefresh(true, false, true)).toBe(false);
+    expect(discardBackgroundSettingsRefresh(true, true, false)).toBe(false);
   });
 });
