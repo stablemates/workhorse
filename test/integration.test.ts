@@ -5751,15 +5751,25 @@ describe("live-runtime queue protocol", () => {
       { type: "clock-rate", payload: 2, options: { queue: queueName } },
     ]);
     await expect(queue.claim("clock-rate-worker", { queue: queueName })).resolves.not.toBeNull();
-    await pool.query(
+    const skewed = await pool.query<{ refilled_at: Date }>(
       `UPDATE workhorse.rate_limit_bucket
           SET refilled_at = clock_timestamp() + interval '1 hour'
-        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+        WHERE queue_name = $1 AND bucket_scope = 'queue'
+        RETURNING refilled_at`,
       [queueName],
     );
 
     await sleep(110);
     await expect(queue.claim("clock-rate-worker", { queue: queueName })).resolves.toBeNull();
+    await sleep(110);
+    await expect(queue.claim("clock-rate-worker", { queue: queueName })).resolves.toBeNull();
+    await expect(
+      pool.query<{ refilled_at: Date }>(
+        `SELECT refilled_at FROM workhorse.rate_limit_bucket
+          WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+        [queueName],
+      ),
+    ).resolves.toMatchObject({ rows: [{ refilled_at: skewed.rows[0]!.refilled_at }] });
   });
 
   it("uses selective live-work indexes for concurrency admission checks", async () => {

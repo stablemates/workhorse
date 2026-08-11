@@ -1849,6 +1849,8 @@ export class Queue {
           ORDER BY policy.queue_name LIMIT 101
        ), queue_status AS (
          SELECT policy.*, observed.now,
+                GREATEST(observed.now, COALESCE(bucket.refilled_at, observed.now))
+                  AS refill_baseline,
                 LEAST(policy.rate_burst::numeric, COALESCE(
                   bucket.tokens + GREATEST(
                     0::numeric,
@@ -1882,13 +1884,15 @@ export class Queue {
                       keyed.available_tokens < 1 AS key_throttled,
                       CASE WHEN policy.available_tokens < 1 OR keyed.available_tokens < 1 THEN
                         GREATEST(
-                          CASE WHEN policy.available_tokens < 1 THEN policy.now + make_interval(
+                          CASE WHEN policy.available_tokens < 1 THEN
+                            policy.refill_baseline + make_interval(
                             secs => CEIL(
                               (1 - policy.available_tokens) * policy.rate_interval_ms::numeric
                               / policy.rate_limit::numeric
                             )::double precision / 1000
                           ) END,
-                          CASE WHEN keyed.available_tokens < 1 THEN policy.now + make_interval(
+                          CASE WHEN keyed.available_tokens < 1 THEN
+                            keyed.refill_baseline + make_interval(
                             secs => CEIL(
                               (1 - keyed.available_tokens) * policy.per_key_interval_ms::numeric
                               / policy.per_key_limit::numeric
@@ -1912,7 +1916,12 @@ export class Queue {
                        ) * policy.per_key_limit::numeric / policy.per_key_interval_ms::numeric,
                        policy.per_key_burst::numeric
                      ))
-                   END AS available_tokens
+                   END AS available_tokens,
+                   CASE
+                     WHEN policy.per_key_limit IS NULL OR ready.concurrency_key IS NULL
+                       THEN policy.now
+                     ELSE GREATEST(policy.now, COALESCE(bucket.refilled_at, policy.now))
+                   END AS refill_baseline
                    FROM (SELECT true) present
                    LEFT JOIN workhorse.rate_limit_bucket bucket
                      ON bucket.queue_name = policy.queue_name

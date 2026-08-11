@@ -2148,6 +2148,7 @@ AS $$
 DECLARE
   v_bucket workhorse.rate_limit_bucket%ROWTYPE;
   v_tokens numeric;
+  v_refill_baseline timestamptz;
   v_missing boolean := p_limit IS NULL OR (p_scope = 'key' AND p_bucket_key IS NULL);
 BEGIN
   IF v_missing THEN
@@ -2177,15 +2178,16 @@ BEGIN
       extract(epoch FROM p_now - v_bucket.refilled_at) * 1000
     ) * p_limit::numeric / p_interval_ms::numeric
   );
+  v_refill_baseline := GREATEST(p_now, v_bucket.refilled_at);
   allowed := v_tokens >= 1;
   IF allowed AND p_consume THEN v_tokens := v_tokens - 1; END IF;
   tokens := v_tokens;
-  next_eligible_at := CASE WHEN allowed THEN p_now ELSE p_now + make_interval(
+  next_eligible_at := CASE WHEN allowed THEN p_now ELSE v_refill_baseline + make_interval(
     secs => CEIL((1 - v_tokens) * p_interval_ms::numeric / p_limit::numeric)::double precision / 1000
   ) END;
   IF p_consume THEN
     UPDATE workhorse.rate_limit_bucket bucket
-       SET tokens = v_tokens, refilled_at = p_now
+       SET tokens = v_tokens, refilled_at = v_refill_baseline
      WHERE bucket.queue_name = p_queue_name AND bucket.bucket_scope = p_scope
        AND bucket.bucket_key = p_bucket_key;
   END IF;
