@@ -317,6 +317,13 @@ Identity is the attribution anchor. Finite terminal-job retention requires both 
 
 Event and attempt retention are independent phases inside `retain_history_v1`. Each drops only fully expired completed daily partitions, retires at most the configured number per pass, skips busy day locks, caps DDL lock waits at 250 ms, and bounded-deletes expired rows from its own default partition. Explicit day creation and paired retirement functions remain available for controlled operator work. Default partitions preserve insert availability when partition maintenance is late, while health reports exact counts through 10,000 rows and explicit capped lower bounds beyond that so fallback spill cannot remain invisible or make health unbounded.
 
+`create_history_day_v1` and `retire_history_day_v1` acquire `ACCESS EXCLUSIVE` on the
+`attempt_history` parent before the `job_event` parent. Lifecycle transitions insert attempt history
+before job events, so this shared parent-lock order prevents paired partition DDL from deadlocking a
+transition between its two history inserts. Creation then locks `attempt_history_default` before
+`job_event_default`, stages matching fallback rows, attaches each missing partition, and restores the
+staged rows.
+
 History tables intentionally do not carry reverse foreign keys to `job`, because dropping a daily partition must not probe every retained partition during parent deletion. Instead, an insert trigger locks and verifies the parent identity and advances its history boundary. A global retained-through watermark advances only after both history categories are completely cleared before their cutoffs. `prune_terminal_storage_v1` may delete a terminal identity only behind that watermark; `purge_queue_v1` explicitly deletes associated history before deleting queued identities. Direct application SQL that deletes package-owned `job` rows is unsupported because it can bypass these guards.
 
 ### `job_stat_bucket` and `job_stat_state`

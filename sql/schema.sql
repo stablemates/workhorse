@@ -5215,7 +5215,13 @@ BEGIN
   v_attempt_exists := to_regclass(format('workhorse.%I', v_attempt_partition)) IS NOT NULL;
   IF v_event_exists AND v_attempt_exists THEN RETURN; END IF;
 
-  LOCK TABLE workhorse.job_event_default, workhorse.attempt_history_default IN ACCESS EXCLUSIVE MODE;
+  -- Lifecycle transitions insert attempt history before job events. Take the partitioned-parent
+  -- locks in that order before either CREATE TABLE can acquire them implicitly, otherwise a
+  -- transition and paired partition creation can each hold the relation the other needs.
+  LOCK TABLE ONLY workhorse.attempt_history IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE ONLY workhorse.job_event IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE workhorse.attempt_history_default IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE workhorse.job_event_default IN ACCESS EXCLUSIVE MODE;
   IF NOT v_event_exists THEN
     EXECUTE format(
       'CREATE TEMP TABLE %I ON COMMIT DROP AS SELECT * FROM workhorse.job_event_default WHERE occurred_at >= %L AND occurred_at < %L',
@@ -5258,6 +5264,8 @@ BEGIN
     RAISE EXCEPTION 'only completed history days can be retired';
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:history-day:' || v_start, 0));
+  LOCK TABLE ONLY workhorse.attempt_history IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE ONLY workhorse.job_event IN ACCESS EXCLUSIVE MODE;
   EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', 'job_event_' || v_suffix);
   EXECUTE format('DROP TABLE IF EXISTS workhorse.%I', 'attempt_history_' || v_suffix);
 END;

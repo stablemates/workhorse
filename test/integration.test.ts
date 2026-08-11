@@ -56,6 +56,15 @@ function deferred<T = void>(): {
   });
   return { promise, resolve, reject };
 }
+
+async function waitForDatabaseCondition(predicate: () => Promise<boolean>): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await predicate()) return;
+    await sleep(10);
+  }
+  throw new Error("Timed out waiting for the expected database state");
+}
+
 const defaultRetentionPolicy: RetentionPolicyDefinition = {
   jobIdentityRetentionDays: 14,
   terminalOutcomeRetentionDays: 14,
@@ -7491,6 +7500,79 @@ describe("live-runtime queue protocol", () => {
         "SELECT workhorse.retire_history_day_v1((clock_timestamp() AT TIME ZONE 'UTC')::date)",
       ),
     ).rejects.toThrow(/only completed history days can be retired/);
+  });
+
+  it("creates a history partition without deadlocking a concurrent retry transition", async () => {
+    const gate = await pool.connect();
+    const observer = await pool.connect();
+    const futureDay = "2098-08-10";
+    const lockKey = "workhorse:test:history-partition-transition";
+    const id = await queue.enqueue("partition-transition", {}, { maxAttempts: 2 });
+    const job = await queue.claim("partition-transition-worker");
+    expect(job?.id).toBe(id);
+
+    try {
+      await pool.query(`
+        CREATE OR REPLACE FUNCTION workhorse.test_pause_attempt_history_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          PERFORM pg_advisory_xact_lock(
+            hashtextextended('workhorse:test:history-partition-transition', 0)
+          );
+          RETURN NEW;
+        END;
+        $$;
+        CREATE TRIGGER test_pause_attempt_history_insert
+        BEFORE INSERT ON workhorse.attempt_history
+        FOR EACH ROW EXECUTE FUNCTION workhorse.test_pause_attempt_history_insert();
+      `);
+      await gate.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [lockKey]);
+
+      const failing = queue.fail(
+        job!,
+        "partition-transition-worker",
+        new Error("expected retry"),
+        0,
+      );
+      await waitForDatabaseCondition(async () => {
+        const result = await observer.query<{ waiting: boolean }>(`
+          SELECT EXISTS (
+            SELECT 1 FROM pg_stat_activity
+             WHERE datid = (SELECT oid FROM pg_database WHERE datname = current_database())
+               AND wait_event_type = 'Lock'
+               AND query LIKE 'SELECT workhorse.fail_v1%'
+          ) AS waiting`);
+        return result.rows[0]!.waiting;
+      });
+
+      const partitioning = pool.query("SELECT workhorse.create_history_day_v1($1)", [futureDay]);
+      await waitForDatabaseCondition(async () => {
+        const result = await observer.query<{ waiting: boolean }>(`
+          SELECT EXISTS (
+            SELECT 1 FROM pg_locks
+             WHERE relation = 'workhorse.attempt_history'::regclass
+               AND mode = 'AccessExclusiveLock'
+               AND NOT granted
+          ) AS waiting`);
+        return result.rows[0]!.waiting;
+      });
+
+      await gate.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockKey]);
+      expect(await Promise.allSettled([failing, partitioning])).toEqual([
+        expect.objectContaining({ status: "fulfilled", value: "ready" }),
+        expect.objectContaining({ status: "fulfilled" }),
+      ]);
+    } finally {
+      await gate.query("SELECT pg_advisory_unlock_all()").catch(() => undefined);
+      gate.release();
+      observer.release();
+      await pool.query(
+        "DROP TRIGGER IF EXISTS test_pause_attempt_history_insert ON workhorse.attempt_history",
+      );
+      await pool.query("DROP FUNCTION IF EXISTS workhorse.test_pause_attempt_history_insert()");
+      await pool.query("DROP TABLE IF EXISTS workhorse.job_event_20980810");
+      await pool.query("DROP TABLE IF EXISTS workhorse.attempt_history_20980810");
+    }
   });
 
   it("replenishes the three-day history partition horizon during partition preparation", async () => {
