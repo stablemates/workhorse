@@ -55,6 +55,7 @@
     "@mantine/core": "^8.3.14",
     "@mantine/hooks": "^8.3.14",
     "@mantine/notifications": "^8.3.18",
+    "@opentelemetry/api-logs": "0.221.0",
     "@orpc/client": "^1.14.8",
     "@orpc/server": "^1.14.8",
     "@phosphor-icons/react": "^2.1.10",
