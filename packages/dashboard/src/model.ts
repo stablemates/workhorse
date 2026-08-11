@@ -495,7 +495,15 @@ export interface DashboardQueueRow {
 export interface DashboardConcurrencyPolicySummary {
   namespace: string;
   maxActive: number;
-  /** Whether this projection includes live utilization from the bounded health summary. */
+  /**
+   * Whether the counts below were measured, or are placeholders no view may render.
+   *
+   * Queue and system rows are built from `Queue.health()` and are always measured. Task detail
+   * reads its own queue's ceiling exactly and can still lack utilization for it: `health()` samples
+   * a bounded number of policies, and a settled task is not measured at all. An unmeasured queue is
+   * not an idle one, so when this is false `active`, `available`, `blockedReady`, `saturatedKeys`,
+   * and `highestKeyActive` carry no meaning.
+   */
   utilizationKnown: boolean;
   active: number;
   available: number;

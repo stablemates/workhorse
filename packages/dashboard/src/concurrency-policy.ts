@@ -135,10 +135,10 @@ export interface TaskConcurrencyDisplay {
   /**
    * Whether the line could say how much of the budget is in use.
    *
-   * False only for a task that is still competing, or about to, whose queue has an exactly known
-   * ceiling but no utilization row in `Queue.health()`. That happens once a deployment holds more
-   * policies than the health summary counts. The summary then states the ceiling alone, because
-   * an unmeasured queue is not an idle one and zeroes would read as one. True everywhere else,
+   * False for a task that is still competing, or about to, whose queue has an exactly known ceiling
+   * but no utilization row in `Queue.health()`. That happens once a deployment holds more policies
+   * than the health summary measures. The summary then states the ceiling alone, because an
+   * unmeasured queue is not an idle one and zeroes would read as one. True everywhere else,
    * including a settled task, whose line claims no utilization in the first place. Components use
    * this to mark the line as bounded, never to hide it.
    */

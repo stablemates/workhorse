@@ -2701,7 +2701,7 @@ describe("Workhorse demo", () => {
         maxActivePerKey: 3,
         utilizationKnown: false,
         active: 0,
-        available: 7,
+        available: 0,
         blockedReady: 0,
         saturatedKeys: 0,
         highestKeyActive: 0,
