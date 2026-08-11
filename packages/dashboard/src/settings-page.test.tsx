@@ -78,7 +78,7 @@ const data: DashboardSettingsPage = {
 };
 
 describe("settings page", () => {
-  it("separates editable policy from deployment settings and shows destructive impact", async () => {
+  it("shows retention windows read-only while keeping cleanup limits editable", async () => {
     const { SettingsPage } = await import("./dashboard.js");
     const html = renderToStaticMarkup(
       createElement(
@@ -86,41 +86,9 @@ describe("settings page", () => {
         null,
         createElement(SettingsPage, {
           data,
-          retentionImpact: {
-            eligible: {
-              terminalJobs: 12,
-              jobEvents: 40,
-              attemptHistory: 7,
-              scheduleOccurrences: 0,
-              statistics: 0,
-            },
-            capped: {
-              terminalJobs: false,
-              jobEvents: false,
-              attemptHistory: false,
-              scheduleOccurrences: false,
-              statistics: false,
-            },
-          },
           saving: false,
           onSaveMaintenance: async () => undefined,
-          onPreviewRetention: async () => ({
-            eligible: {
-              terminalJobs: 12,
-              jobEvents: 40,
-              attemptHistory: 7,
-              scheduleOccurrences: 0,
-              statistics: 0,
-            },
-            capped: {
-              terminalJobs: false,
-              jobEvents: false,
-              attemptHistory: false,
-              scheduleOccurrences: false,
-              statistics: false,
-            },
-          }),
-          onSaveRetention: async () => undefined,
+          onSaveCleanupLimits: async () => undefined,
           onRevertMaintenance: async () => undefined,
           onRevertRetention: async () => undefined,
           onDirtyChange: () => undefined,
@@ -134,10 +102,14 @@ describe("settings page", () => {
     expect(html).toMatch(/mantine-Select-label[^>]*>Maintenance timezone/);
     expect(html).toContain("Advanced maintenance");
     expect(html).toContain("How often Workhorse checks that upcoming history partitions exist");
-    expect(html).toMatch(/mantine-Select-label[^>]*>Partition preparation interval/);
-    expect(html).toContain("Enter any cadence from one minute through seven days");
+    expect(html).not.toMatch(/mantine-Select-label[^>]*>Partition preparation interval/);
+    expect(html).toContain("Effective: 5 hours");
+    expect(html).toContain("Effective: 5 minutes");
+    expect(html).not.toContain("Custom partition preparation interval");
     expect(html).toContain("Retention windows");
-    expect(html).toContain("Control how long Workhorse keeps each kind of stored history");
+    expect(html).toContain(
+      "These effective values are read-only here because shortening them can permanently delete stored history",
+    );
     expect(html).toContain("Cleanup limits");
     expect(html).toContain("Limit how much work each cleanup pass can perform");
     expect(html).toContain("Operator override");
@@ -145,7 +117,12 @@ describe("settings page", () => {
     expect(html).toContain("Default: UTC");
     expect(html).toContain("Default: 6 hours");
     expect(html).toContain("Default: 14 days");
-    expect(html).toContain("12 finished tasks, 40 events, and 7 attempts");
+    expect(html).toContain("Effective: 7 days");
+    expect(html).not.toContain('aria-label="Task events"');
+    expect(html).toContain('aria-label="Finished tasks per cleanup pass"');
+    expect(html).not.toContain("Preview impact");
+    expect(html).not.toContain("Deletion impact");
+    expect(html).toContain("Save cleanup limits");
     expect(html).toContain("Set at deploy");
     expect(html).toContain("worker-1");
     expect(html).toContain("30.0 s lease");

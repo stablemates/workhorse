@@ -77,7 +77,6 @@ import type {
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
   RetentionPolicyDefinition,
-  RetentionPolicyImpact,
   RetentionPolicySetting,
   RetryPolicy,
 } from "@workhorse/core";
@@ -4463,13 +4462,9 @@ const supportedMaintenanceTimeZoneOptions = Array.from(
 
 export interface SettingsPageProps {
   data: DashboardSettingsPage;
-  retentionImpact: RetentionPolicyImpact | null;
   saving: boolean;
   onSaveMaintenance(definition: Partial<MaintenancePolicyDefinition>): Promise<void>;
-  onPreviewRetention(
-    definition: Partial<RetentionPolicyDefinition>,
-  ): Promise<RetentionPolicyImpact>;
-  onSaveRetention(definition: Partial<RetentionPolicyDefinition>): Promise<void>;
+  onSaveCleanupLimits(definition: Partial<RetentionPolicyDefinition>): Promise<void>;
   onRevertMaintenance(setting: MaintenancePolicySetting): Promise<void>;
   onRevertRetention(setting: RetentionPolicySetting): Promise<void>;
   onDirtyChange(dirty: boolean): void;
@@ -4561,18 +4556,6 @@ const retentionCleanupFields: RetentionField[] = [
   },
 ];
 
-const retentionFields = [...retentionWindowFields, ...retentionCleanupFields];
-
-const partitionPreparationIntervals = [
-  60 * 60_000,
-  3 * 60 * 60_000,
-  6 * 60 * 60_000,
-  12 * 60 * 60_000,
-  24 * 60 * 60_000,
-  3 * 24 * 60 * 60_000,
-  7 * 24 * 60 * 60_000,
-];
-
 function formatMaintenanceInterval(milliseconds: number): string {
   const day = 24 * 60 * 60_000;
   const hour = 60 * 60_000;
@@ -4595,32 +4578,11 @@ function formatRetentionDefault(value: number | null, suffix: string): string {
   return value === null ? "indefinitely" : `${value.toLocaleString()}${suffix}`;
 }
 
-function impactSummary(impact: RetentionPolicyImpact): string {
-  const values = [
-    [impact.eligible.terminalJobs, "finished task", impact.capped.terminalJobs],
-    [impact.eligible.jobEvents, "event", impact.capped.jobEvents],
-    [impact.eligible.attemptHistory, "attempt", impact.capped.attemptHistory],
-    [impact.eligible.scheduleOccurrences, "schedule occurrence", impact.capped.scheduleOccurrences],
-    [impact.eligible.statistics, "statistics bucket", impact.capped.statistics],
-  ] as const;
-  const parts = values
-    .filter(([count]) => count > 0)
-    .map(
-      ([count, label, capped]) =>
-        `${capped ? "at least " : ""}${count} ${label}${count === 1 ? "" : "s"}`,
-    );
-  if (parts.length === 0) return "No currently stored rows would become eligible.";
-  if (parts.length === 1) return `${parts[0]} would become eligible.`;
-  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)} would become eligible.`;
-}
-
 export function SettingsPage({
   data,
-  retentionImpact: initialRetentionImpact,
   saving,
   onSaveMaintenance,
-  onPreviewRetention,
-  onSaveRetention,
+  onSaveCleanupLimits,
   onRevertMaintenance,
   onRevertRetention,
   onDirtyChange,
@@ -4629,17 +4591,10 @@ export function SettingsPage({
   const [maintenance, setMaintenance] = useState(() => ({
     timezone: data.maintenance.timezone,
     historyRetentionLocalTime: data.maintenance.historyRetentionLocalTime,
-    partitionPreparationIntervalMs: data.maintenance.partitionPreparationIntervalMs,
-    terminalCleanupIntervalMs: data.maintenance.terminalCleanupIntervalMs,
   }));
-  const [customPartitionInterval, setCustomPartitionInterval] = useState(
-    () => !partitionPreparationIntervals.includes(data.maintenance.partitionPreparationIntervalMs),
+  const [cleanupLimits, setCleanupLimits] = useState<Record<string, number | "">>(() =>
+    Object.fromEntries(retentionCleanupFields.map(({ key }) => [key, data.retention[key] ?? ""])),
   );
-  const [retention, setRetention] = useState<Record<string, number | "">>(() =>
-    Object.fromEntries(retentionFields.map(({ key }) => [key, data.retention[key] ?? ""])),
-  );
-  const [retentionImpact, setRetentionImpact] = useState(initialRetentionImpact);
-  const retentionPreviewVersion = useRef(0);
   const changeTimeZone = (value: string | null) => {
     const next = value ?? "system";
     setDisplayTimeZone(next === "system" ? null : next);
@@ -4651,95 +4606,99 @@ export function SettingsPage({
   if (maintenance.historyRetentionLocalTime !== data.maintenance.historyRetentionLocalTime) {
     maintenanceChanges.historyRetentionLocalTime = maintenance.historyRetentionLocalTime;
   }
-  if (
-    maintenance.partitionPreparationIntervalMs !== data.maintenance.partitionPreparationIntervalMs
-  ) {
-    maintenanceChanges.partitionPreparationIntervalMs = maintenance.partitionPreparationIntervalMs;
-  }
-  if (maintenance.terminalCleanupIntervalMs !== data.maintenance.terminalCleanupIntervalMs) {
-    maintenanceChanges.terminalCleanupIntervalMs = maintenance.terminalCleanupIntervalMs;
-  }
-  const retentionChanges: Partial<RetentionPolicyDefinition> = {};
-  for (const { key, nullable } of retentionFields) {
-    if (!nullable && retention[key] === "") continue;
-    const value = retention[key] === "" ? null : Number(retention[key]);
+  const cleanupLimitChanges: Partial<RetentionPolicyDefinition> = {};
+  for (const { key, nullable } of retentionCleanupFields) {
+    if (!nullable && cleanupLimits[key] === "") continue;
+    const value = cleanupLimits[key] === "" ? null : Number(cleanupLimits[key]);
     if (value !== data.retention[key]) {
-      (retentionChanges as Record<string, number | null>)[key] = value;
+      (cleanupLimitChanges as Record<string, number | null>)[key] = value;
     }
   }
   const maintenanceChanged = Object.keys(maintenanceChanges).length > 0;
-  const retentionChanged = Object.keys(retentionChanges).length > 0;
-  const settingsDirty = maintenanceChanged || retentionChanged;
+  const cleanupLimitsChanged = Object.keys(cleanupLimitChanges).length > 0;
+  const settingsDirty = maintenanceChanged || cleanupLimitsChanged;
   useLayoutEffect(() => onDirtyChange(settingsDirty), [onDirtyChange, settingsDirty]);
   useLayoutEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   useEffect(() => {
     setMaintenance({
       timezone: data.maintenance.timezone,
       historyRetentionLocalTime: data.maintenance.historyRetentionLocalTime,
-      partitionPreparationIntervalMs: data.maintenance.partitionPreparationIntervalMs,
-      terminalCleanupIntervalMs: data.maintenance.terminalCleanupIntervalMs,
     });
-    setCustomPartitionInterval(
-      !partitionPreparationIntervals.includes(data.maintenance.partitionPreparationIntervalMs),
+    setCleanupLimits(
+      Object.fromEntries(retentionCleanupFields.map(({ key }) => [key, data.retention[key] ?? ""])),
     );
-    setRetention(
-      Object.fromEntries(retentionFields.map(({ key }) => [key, data.retention[key] ?? ""])),
-    );
-    retentionPreviewVersion.current += 1;
-    setRetentionImpact(null);
   }, [data]);
   const maintenanceTimeZoneOptions = supportedMaintenanceTimeZoneOptions.concat(
     supportedMaintenanceTimeZoneOptions.some(({ value }) => value === maintenance.timezone)
       ? []
       : [{ value: maintenance.timezone, label: maintenance.timezone }],
   );
-  const partitionIntervalOptions = partitionPreparationIntervals
-    .map((value) => ({ value: String(value), label: formatMaintenanceInterval(value) }))
-    .concat({ value: "custom", label: "Custom interval" });
   const now = new Date().toISOString();
-  const retentionRows = (fields: RetentionField[]) =>
-    fields.map(({ key, label, nullable, suffix }) => (
-      <Table.Tr key={key}>
-        <Table.Td>
-          <Text size="sm" fw={500}>
-            {label}
+  const retentionWindowRows = retentionWindowFields.map(({ key, label, suffix }) => (
+    <Table.Tr key={key}>
+      <Table.Td>
+        <Text size="sm" fw={500}>
+          {label}
+        </Text>
+      </Table.Td>
+      <Table.Td w={180}>
+        <Text size="sm">Effective: {formatRetentionDefault(data.retention[key], suffix)}</Text>
+      </Table.Td>
+      <Table.Td w={220}>
+        <Stack gap={4} align="flex-start">
+          <Text c="dimmed" size="xs">
+            Default:{" "}
+            {formatRetentionDefault(data.retention.provenance[key].applicationDefault, suffix)}
           </Text>
-        </Table.Td>
-        <Table.Td w={180}>
-          <NumberInput
-            aria-label={label}
-            suffix={suffix}
-            min={1}
-            value={retention[key]}
-            disabled={!data.editable}
-            allowDecimal={false}
-            allowNegative={false}
-            onChange={(value) => {
-              retentionPreviewVersion.current += 1;
-              setRetentionImpact(null);
-              setRetention((current) => ({
-                ...current,
-                [key]: typeof value === "number" ? value : nullable ? "" : (current[key] ?? ""),
-              }));
-            }}
-          />
-        </Table.Td>
-        <Table.Td w={220}>
-          <Stack gap={4} align="flex-start">
-            <Text c="dimmed" size="xs">
-              Default:{" "}
-              {formatRetentionDefault(data.retention.provenance[key].applicationDefault, suffix)}
-            </Text>
-            {data.retention.provenance[key].source === "operator" ? (
-              <OperatorOverride
-                disabled={retentionChanged}
-                revert={data.editable ? () => void onRevertRetention(key) : undefined}
-              />
-            ) : null}
-          </Stack>
-        </Table.Td>
-      </Table.Tr>
-    ));
+          {data.retention.provenance[key].source === "operator" ? (
+            <Badge color="violet" variant="light">
+              Operator override
+            </Badge>
+          ) : null}
+        </Stack>
+      </Table.Td>
+    </Table.Tr>
+  ));
+  const cleanupLimitRows = retentionCleanupFields.map(({ key, label, nullable, suffix }) => (
+    <Table.Tr key={key}>
+      <Table.Td>
+        <Text size="sm" fw={500}>
+          {label}
+        </Text>
+      </Table.Td>
+      <Table.Td w={180}>
+        <NumberInput
+          aria-label={label}
+          suffix={suffix}
+          min={1}
+          value={cleanupLimits[key]}
+          disabled={!data.editable}
+          allowDecimal={false}
+          allowNegative={false}
+          onChange={(value) => {
+            setCleanupLimits((current) => ({
+              ...current,
+              [key]: typeof value === "number" ? value : nullable ? "" : (current[key] ?? ""),
+            }));
+          }}
+        />
+      </Table.Td>
+      <Table.Td w={220}>
+        <Stack gap={4} align="flex-start">
+          <Text c="dimmed" size="xs">
+            Default:{" "}
+            {formatRetentionDefault(data.retention.provenance[key].applicationDefault, suffix)}
+          </Text>
+          {data.retention.provenance[key].source === "operator" ? (
+            <OperatorOverride
+              disabled={cleanupLimitsChanged}
+              revert={data.editable ? () => void onRevertRetention(key) : undefined}
+            />
+          ) : null}
+        </Stack>
+      </Table.Td>
+    </Table.Tr>
+  ));
   return (
     <Stack gap="xl">
       <PageHeader
@@ -4822,33 +4781,6 @@ export function SettingsPage({
                 rightSectionWidth={190}
               />
             </Grid.Col>
-            <Grid.Col span={{ base: 12, md: 6 }}>
-              <NumberInput
-                label="Terminal cleanup interval"
-                description={`Controls how often Workhorse removes finished tasks whose retention windows have elapsed. Default: ${formatMaintenanceInterval(data.maintenance.provenance.terminalCleanupIntervalMs.applicationDefault)}.`}
-                suffix=" ms"
-                min={1_000}
-                value={maintenance.terminalCleanupIntervalMs}
-                disabled={!data.editable}
-                onChange={(value) =>
-                  typeof value === "number" &&
-                  setMaintenance((current) => ({ ...current, terminalCleanupIntervalMs: value }))
-                }
-                rightSection={
-                  data.maintenance.provenance.terminalCleanupIntervalMs.source === "operator" ? (
-                    <OperatorOverride
-                      disabled={maintenanceChanged}
-                      revert={
-                        data.editable
-                          ? () => void onRevertMaintenance("terminalCleanupIntervalMs")
-                          : undefined
-                      }
-                    />
-                  ) : undefined
-                }
-                rightSectionWidth={190}
-              />
-            </Grid.Col>
           </Grid>
           <Accordion variant="contained">
             <Accordion.Item value="advanced-maintenance">
@@ -4857,68 +4789,54 @@ export function SettingsPage({
                   Advanced maintenance
                 </Text>
                 <Text c="dimmed" size="xs">
-                  Tune storage preparation only when the default cadence does not fit the database.
+                  Review the internal cadences Workhorse uses to prepare storage and remove finished
+                  tasks.
                 </Text>
               </Accordion.Control>
               <Accordion.Panel>
-                <Stack gap={4} align="stretch">
-                  <Select
-                    label="Partition preparation interval"
-                    description={`How often Workhorse checks that upcoming history partitions exist. Default: ${formatMaintenanceInterval(data.maintenance.provenance.partitionPreparationIntervalMs.applicationDefault)}.`}
-                    value={
-                      customPartitionInterval
-                        ? "custom"
-                        : String(maintenance.partitionPreparationIntervalMs)
-                    }
-                    data={partitionIntervalOptions}
-                    allowDeselect={false}
-                    disabled={!data.editable}
-                    onChange={(value) => {
-                      if (value === "custom") {
-                        setCustomPartitionInterval(true);
-                      } else if (value) {
-                        setCustomPartitionInterval(false);
-                        setMaintenance((current) => ({
-                          ...current,
-                          partitionPreparationIntervalMs: Number(value),
-                        }));
-                      }
-                    }}
-                  />
-                  {data.maintenance.provenance.partitionPreparationIntervalMs.source ===
-                  "operator" ? (
-                    <Box>
-                      <OperatorOverride
-                        disabled={maintenanceChanged}
-                        revert={
-                          data.editable
-                            ? () => void onRevertMaintenance("partitionPreparationIntervalMs")
-                            : undefined
-                        }
-                      />
-                    </Box>
-                  ) : null}
-                  {customPartitionInterval ? (
-                    <NumberInput
-                      mt="sm"
-                      label="Custom partition preparation interval"
-                      description="Enter any cadence from one minute through seven days."
-                      suffix=" minutes"
-                      min={1}
-                      max={7 * 24 * 60}
-                      decimalScale={2}
-                      value={maintenance.partitionPreparationIntervalMs / 60_000}
-                      disabled={!data.editable}
-                      onChange={(value) =>
-                        typeof value === "number" &&
-                        setMaintenance((current) => ({
-                          ...current,
-                          partitionPreparationIntervalMs: Math.round(value * 60_000),
-                        }))
-                      }
-                    />
-                  ) : null}
-                </Stack>
+                <Grid>
+                  {[
+                    {
+                      label: "Partition preparation interval",
+                      description:
+                        "How often Workhorse checks that upcoming history partitions exist.",
+                      effective: data.maintenance.partitionPreparationIntervalMs,
+                      provenance: data.maintenance.provenance.partitionPreparationIntervalMs,
+                    },
+                    {
+                      label: "Terminal cleanup interval",
+                      description:
+                        "How often Workhorse removes finished tasks after their retention windows elapse.",
+                      effective: data.maintenance.terminalCleanupIntervalMs,
+                      provenance: data.maintenance.provenance.terminalCleanupIntervalMs,
+                    },
+                  ].map((setting) => (
+                    <Grid.Col key={setting.label} span={{ base: 12, md: 6 }}>
+                      <Stack gap={4}>
+                        <Text fw={500} size="sm">
+                          {setting.label}
+                        </Text>
+                        <Text c="dimmed" size="xs">
+                          {setting.description}
+                        </Text>
+                        <Text size="sm">
+                          Effective: {formatMaintenanceInterval(setting.effective)}
+                        </Text>
+                        <Text c="dimmed" size="xs">
+                          Default:{" "}
+                          {formatMaintenanceInterval(setting.provenance.applicationDefault)}
+                        </Text>
+                        {setting.provenance.source === "operator" ? (
+                          <Box>
+                            <Badge color="violet" variant="light">
+                              Operator override
+                            </Badge>
+                          </Box>
+                        ) : null}
+                      </Stack>
+                    </Grid.Col>
+                  ))}
+                </Grid>
               </Accordion.Panel>
             </Accordion.Item>
           </Accordion>
@@ -4935,12 +4853,13 @@ export function SettingsPage({
           <Box>
             <Text fw={600}>Retention windows</Text>
             <Text c="dimmed" size="xs">
-              Control how long Workhorse keeps each kind of stored history. Leave a value empty to
-              retain that category indefinitely; shortening a window requires an impact preview.
+              These effective values are read-only here because shortening them can permanently
+              delete stored history. Change the policy or remove an operator override outside this
+              dashboard.
             </Text>
           </Box>
           <Table verticalSpacing="sm">
-            <Table.Tbody>{retentionRows(retentionWindowFields)}</Table.Tbody>
+            <Table.Tbody>{retentionWindowRows}</Table.Tbody>
           </Table>
           <Divider />
           <Box>
@@ -4951,37 +4870,15 @@ export function SettingsPage({
             </Text>
           </Box>
           <Table verticalSpacing="sm">
-            <Table.Tbody>{retentionRows(retentionCleanupFields)}</Table.Tbody>
+            <Table.Tbody>{cleanupLimitRows}</Table.Tbody>
           </Table>
-          {retentionImpact ? (
-            <Alert color="red" title="Deletion impact">
-              {impactSummary(retentionImpact)} Workhorse may delete them during the next maintenance
-              pass, and deletion cannot be undone.
-            </Alert>
-          ) : null}
           <Group justify="flex-end">
             <Button
-              variant="default"
-              disabled={!data.editable || !retentionChanged}
-              onClick={() => {
-                const version = ++retentionPreviewVersion.current;
-                setRetentionImpact(null);
-                void onPreviewRetention(retentionChanges)
-                  .then((impact) => {
-                    if (retentionPreviewVersion.current === version) setRetentionImpact(impact);
-                  })
-                  .catch(() => undefined);
-              }}
-            >
-              Preview impact
-            </Button>
-            <Button
-              color="red"
-              disabled={!data.editable || !retentionChanged || retentionImpact === null}
+              disabled={!data.editable || !cleanupLimitsChanged}
               loading={saving}
-              onClick={() => void onSaveRetention(retentionChanges)}
+              onClick={() => void onSaveCleanupLimits(cleanupLimitChanges)}
             >
-              Apply retention policy
+              Save cleanup limits
             </Button>
           </Group>
         </Stack>
@@ -5535,22 +5432,7 @@ function useDashboardController(
     },
     [auditActor, client, loadPage],
   );
-  const previewRetentionSettings = useCallback(
-    async (definition: Partial<RetentionPolicyDefinition>) => {
-      try {
-        return await client.previewRetentionPolicy({ definition });
-      } catch (cause) {
-        notifyFailure(
-          "Impact preview failed",
-          cause,
-          "Workhorse could not measure the retention change",
-        );
-        throw cause;
-      }
-    },
-    [client],
-  );
-  const saveRetentionSettings = useCallback(
+  const saveCleanupLimits = useCallback(
     async (definition: Partial<RetentionPolicyDefinition>) => {
       setSavingSettings(true);
       try {
@@ -5558,22 +5440,18 @@ function useDashboardController(
           definition,
           audit: {
             actor: auditActor,
-            reason: "Update retention policy after impact preview",
+            reason: "Update cleanup limits from the dashboard",
             requestId: crypto.randomUUID(),
           },
         });
         notifyDashboard({
-          title: "Retention policy updated",
-          message: "Eligible data may be removed during the next maintenance pass.",
+          title: "Cleanup limits updated",
+          message: "Future cleanup passes now use the new work limits.",
           tone: "success",
         });
         await loadPage();
       } catch (cause) {
-        notifyFailure(
-          "Retention policy not updated",
-          cause,
-          "Workhorse rejected the retention policy",
-        );
+        notifyFailure("Cleanup limits not updated", cause, "Workhorse rejected the cleanup limits");
       } finally {
         setSavingSettings(false);
       }
@@ -5980,11 +5858,9 @@ function useDashboardController(
     content = (
       <SettingsPage
         data={loadState.data.value}
-        retentionImpact={null}
         saving={savingSettings}
         onSaveMaintenance={saveMaintenanceSettings}
-        onPreviewRetention={previewRetentionSettings}
-        onSaveRetention={saveRetentionSettings}
+        onSaveCleanupLimits={saveCleanupLimits}
         onRevertMaintenance={revertMaintenanceSetting}
         onRevertRetention={revertRetentionSetting}
         onDirtyChange={changeSettingsDirty}
