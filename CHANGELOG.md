@@ -29,6 +29,9 @@ First published line. Requires **schema v21**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse/core`: notification-assisted worker dispatch through one process-local
   `workhorse_jobs` listener per node-postgres pool, with queue routing, reconnect backoff, and
   jittered bounded polling as the durable fallback.
+- `@workhorse/core`: transactionally consistent, bounded queue-health snapshots with explicit
+  lower-bound markers, PostgreSQL observation provenance, configurable health budgets, and
+  machine-readable degradation reasons.
 - `@workhorse/drizzle`: Drizzle ORM provider with caller-owned transactions.
 - `@workhorse/hono`: Hono lifecycle integration and dashboard route registration.
 - `@workhorse/dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,

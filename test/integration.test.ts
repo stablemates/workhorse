@@ -7125,15 +7125,21 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(22);
-    expect(health.readyDepth).toBe(1);
-    expect(health.scheduledDepth).toBe(2);
-    expect(health.sleepingJobs).toBe(1);
-    expect(health.overdueWaits).toBe(0);
-    expect(health.nextWakeAt).toEqual(scheduledWait.wait.wakeAt);
-    expect(health.relations.some((relation) => relation.relation === "job_runtime")).toBe(true);
-    expect(health.lockWaitCount).toBeGreaterThanOrEqual(0);
-    expect(health.notificationQueueUsage).toBeGreaterThanOrEqual(0);
+    expect(health.snapshot).toMatchObject({
+      capturedAt: expect.any(Date),
+      schemaVersion: 22,
+      readyDepth: 1,
+      scheduledDepth: 2,
+      sleepingJobs: 1,
+      overdueWaits: 0,
+      nextWakeAt: scheduledWait.wait.wakeAt,
+    });
+    expect(
+      health.postgresql.relations.some((relation) => relation.relation === "job_runtime"),
+    ).toBe(true);
+    expect(health.postgresql.observedAt).toEqual(expect.any(Date));
+    expect(health.postgresql.lockWaitCount).toBeGreaterThanOrEqual(0);
+    expect(health.postgresql.notificationQueueUsage).toBeGreaterThanOrEqual(0);
     expect(await queue.queueMetricSnapshot()).toEqual([
       {
         queue: "default",
@@ -7146,6 +7152,84 @@ describe("live-runtime queue protocol", () => {
         blockedReadyDepth: 0,
       },
     ]);
+  });
+
+  it("evaluates exact queue health against explicit budgets with machine-readable reasons", async () => {
+    const jobId = await queue.enqueue("health-budget", {});
+    expect((await queue.claim("health-budget-worker", { leaseMs: 10_000 }))?.id).toBe(jobId);
+    await pool.query(
+      `UPDATE workhorse.job_runtime
+          SET expires_at = clock_timestamp() - interval '1 millisecond'
+        WHERE job_id = $1`,
+      [jobId],
+    );
+
+    const degraded = await queue.health();
+    expect(degraded.status).toEqual({
+      level: "degraded",
+      reasons: [{ code: "expired_leases", observed: 1, budget: 0 }],
+    });
+
+    const tolerated = await queue.health({ budgets: { expiredLeases: 1 } });
+    expect(tolerated.status).toEqual({ level: "healthy", reasons: [] });
+    await expect(queue.health({ budgets: { expiredLeases: -1 } })).rejects.toThrow(
+      /expiredLeases must be a non-negative finite number/,
+    );
+    await expect(queue.health({ budgets: { expiredLeases: 10_001 } })).rejects.toThrow(
+      /expiredLeases must be .*no greater than 10000/,
+    );
+  });
+
+  it("caps exact health counts before large runtime and history relations make reads unbounded", async () => {
+    await pool.query(`
+      WITH jobs AS (
+        INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts)
+        SELECT 'health-scale', 'health-scale', '{}'::jsonb, 1
+          FROM generate_series(1, 10001)
+        RETURNING id, queue_name
+      )
+      INSERT INTO workhorse.job_runtime(
+        job_id, queue_name, state, run_at, ready_at, sequence
+      )
+      SELECT id, queue_name, 'ready', clock_timestamp(), clock_timestamp(),
+             nextval('workhorse.ready_sequence_seq')
+        FROM jobs`);
+    await pool.query(`
+      INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+      SELECT job_id, 'health_scale', '2000-01-01 00:00:00+00'::timestamptz
+        FROM (SELECT job_id FROM workhorse.job_runtime LIMIT 1) seed
+        CROSS JOIN generate_series(1, 10001)`);
+
+    const health = await queue.health();
+    expect(health.snapshot.counts.ready).toBe(10_001);
+    expect(health.snapshot.readyDepth).toBe(10_001);
+    expect(health.snapshot.cappedFields).toEqual(
+      expect.arrayContaining(["counts.ready", "readyDepth"]),
+    );
+    expect(health.defaultHistoryRows.jobEvents).toBe(10_001);
+    expect(health.defaultHistoryRowsCapped.jobEvents).toBe(true);
+  });
+
+  it("keeps exact lifecycle counts consistent while jobs transition", async () => {
+    for (let index = 0; index < 40; index += 1) {
+      await queue.enqueue("health-transition", { index });
+    }
+
+    const transition = (async () => {
+      for (;;) {
+        const job = await queue.claim("health-transition-worker");
+        if (!job) return;
+        await queue.complete(job, "health-transition-worker", null);
+      }
+    })();
+    const snapshots = await Promise.all(Array.from({ length: 20 }, () => queue.health()));
+    await transition;
+
+    for (const health of snapshots) {
+      expect(health.snapshot.counts.ready).toBe(health.snapshot.readyDepth);
+      expect(health.snapshot.counts.scheduled).toBe(health.snapshot.scheduledDepth);
+      expect(health.snapshot.counts.active).toBe(health.snapshot.activeLeases);
+    }
   });
 
   it("round trips retention policy defaults and rejects unsafe or malformed policies in PostgreSQL", async () => {

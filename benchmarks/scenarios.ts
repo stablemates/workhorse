@@ -363,8 +363,10 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     invariants: [
       "ready and scheduled depths match the seed",
       "one active lease is expired",
-      "the expired lease explicitly marks the snapshot as degraded",
-      "state counts and protocol version remain internally consistent",
+      "the expired lease produces a stable machine-readable degradation reason",
+      "live state counts, depths, and protocol version share one exact snapshot",
+      "large runtime and history counts stop at explicit lower bounds",
+      "PostgreSQL statistics identify their independent observation time",
     ],
     metrics: [
       "readyDepth",
@@ -374,6 +376,11 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "degraded",
       "degradationReason",
       "schemaVersion",
+      "capturedAt",
+      "postgresqlObservedAt",
+      "scaleReadyRows",
+      "scaleHistoryRows",
+      "readyCountCapped",
       "snapshotMs",
     ],
   },
@@ -2527,19 +2534,46 @@ function assertHealthSnapshot(
   readyCount: number,
   scheduledCount: number,
 ): void {
-  recordInvariant(assertions, "health ready depth", health.readyDepth, readyCount);
-  recordInvariant(assertions, "health scheduled depth", health.scheduledDepth, scheduledCount);
-  recordInvariant(assertions, "health active leases", health.activeLeases, 1);
-  recordInvariant(assertions, "health expired leases", health.expiredLeases, 1);
-  recordInvariant(assertions, "health snapshot is degraded", health.expiredLeases > 0, true);
-  recordInvariant(assertions, "health active state count", health.counts.active, 1);
+  recordInvariant(assertions, "health ready depth", health.snapshot.readyDepth, readyCount);
+  recordInvariant(
+    assertions,
+    "health scheduled depth",
+    health.snapshot.scheduledDepth,
+    scheduledCount,
+  );
+  recordInvariant(assertions, "health active leases", health.snapshot.activeLeases, 1);
+  recordInvariant(assertions, "health expired leases", health.snapshot.expiredLeases, 1);
+  recordInvariant(assertions, "health snapshot is degraded", health.status.level, "degraded");
+  recordInvariant(
+    assertions,
+    "health degradation reason is stable",
+    health.status.reasons[0]?.code,
+    "expired_leases",
+  );
+  recordInvariant(assertions, "health active state count", health.snapshot.counts.active, 1);
+  recordInvariant(
+    assertions,
+    "health live counts share one snapshot",
+    health.snapshot.counts.ready === health.snapshot.readyDepth &&
+      health.snapshot.counts.scheduled === health.snapshot.scheduledDepth &&
+      health.snapshot.counts.active === health.snapshot.activeLeases,
+    true,
+  );
   recordInvariant(
     assertions,
     "health schema version is installed",
-    (health.schemaVersion ?? 0) >= 1,
+    (health.snapshot.schemaVersion ?? 0) >= 1,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "PostgreSQL observations carry their own time",
+    health.postgresql.observedAt instanceof Date,
     true,
   );
 }
+
+const healthSnapshotScaleRows = 10_001;
 
 async function healthSnapshot(
   context: OperationalScenarioContext,
@@ -2563,22 +2597,59 @@ async function healthSnapshot(
       WHERE job_id = $1 AND state = 'active'`,
     [expired!.id],
   );
+  const additionalReadyRows = healthSnapshotScaleRows - readyCount;
+  await context.pool.query(
+    `WITH jobs AS (
+       INSERT INTO workhorse.job(queue_name, job_type, payload, max_attempts)
+       SELECT $1, 'health-scale', '{}'::jsonb, 1 FROM generate_series(1, $2::integer)
+       RETURNING id, queue_name
+     )
+     INSERT INTO workhorse.job_runtime(job_id, queue_name, state, run_at, ready_at, sequence)
+     SELECT id, queue_name, 'ready', clock_timestamp(), clock_timestamp(),
+            nextval('workhorse.ready_sequence_seq')
+       FROM jobs`,
+    [context.queueName, additionalReadyRows],
+  );
+  await context.pool.query(
+    `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+     SELECT $1, 'health_scale', '2000-01-01 00:00:00+00'::timestamptz
+       FROM generate_series(1, $2::integer)`,
+    [expired!.id, healthSnapshotScaleRows],
+  );
   const [health, snapshotMs] = await measured(context.now, () => queue.health());
-  assertHealthSnapshot(assertions, health, readyCount, scheduledCount);
-  const degraded = health.expiredLeases > 0;
-  const degradationReason = degraded ? "expired-leases" : null;
+  assertHealthSnapshot(assertions, health, healthSnapshotScaleRows, scheduledCount);
+  recordInvariant(
+    assertions,
+    "health ready count is explicitly capped",
+    health.snapshot.cappedFields.includes("counts.ready") &&
+      health.snapshot.cappedFields.includes("readyDepth"),
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "health history count is explicitly capped",
+    health.defaultHistoryRowsCapped.jobEvents,
+    true,
+  );
+  const degraded = health.status.level === "degraded";
+  const degradationReason = health.status.reasons[0]?.code ?? null;
 
   return {
     name: "health-snapshot",
     durationMs: 0,
     metrics: {
-      readyDepth: health.readyDepth,
-      scheduledDepth: health.scheduledDepth,
-      activeLeases: health.activeLeases,
-      expiredLeases: health.expiredLeases,
+      readyDepth: health.snapshot.readyDepth,
+      scheduledDepth: health.snapshot.scheduledDepth,
+      activeLeases: health.snapshot.activeLeases,
+      expiredLeases: health.snapshot.expiredLeases,
       degraded,
       degradationReason,
-      schemaVersion: health.schemaVersion,
+      schemaVersion: health.snapshot.schemaVersion,
+      capturedAt: health.snapshot.capturedAt.toISOString(),
+      postgresqlObservedAt: health.postgresql.observedAt.toISOString(),
+      scaleReadyRows: healthSnapshotScaleRows,
+      scaleHistoryRows: healthSnapshotScaleRows,
+      readyCountCapped: health.snapshot.cappedFields.includes("readyDepth"),
       snapshotMs,
     },
     assertions,
