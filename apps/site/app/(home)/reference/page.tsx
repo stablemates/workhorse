@@ -266,7 +266,7 @@ export default function ReferencePage() {
           Conceptual documentation
         </Link>
         <Link href="/integrations" className="wh-link-underline text-[14px] font-medium">
-          Drizzle, Hono, and dashboard packages
+          ORM, Hono, and dashboard packages
         </Link>
       </div>
     </div>

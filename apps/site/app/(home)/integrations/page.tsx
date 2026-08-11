@@ -7,7 +7,7 @@ import { demoUrl } from "@/lib/site";
 export const metadata: Metadata = {
   title: "Integrations",
   description:
-    "Workhorse integration packages: @workhorse/drizzle for Drizzle-owned transactions, @workhorse/hono for typed middleware and managed workers, and @workhorse/dashboard for a transport-neutral operator UI.",
+    "Workhorse integration packages for Drizzle, Prisma, TypeORM, Kysely, Hono, and the transport-neutral operator dashboard.",
   alternates: { canonical: "/integrations" },
 };
 
@@ -21,6 +21,43 @@ await db.transaction(async (tx) => {
   await tx.insert(account).values({ id: accountId });
   // Same transaction, same commit boundary, no outbox relay.
   await workhorse.forTransaction(tx).enqueue("account.created", { accountId });
+});`;
+
+const kyselySample = `import { createKyselyAdapter } from "@workhorse/kysely";
+
+const workhorse = createKyselyAdapter(database, { notificationPool: pool });
+
+await database.transaction().execute(async (transaction) => {
+  const account = await transaction
+    .insertInto("account")
+    .values({ email })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await workhorse.forTransaction(transaction).enqueue("account.created", {
+    accountId: account.id,
+  });
+});`;
+
+const prismaSample = `import { createPrismaAdapter } from "@workhorse/prisma";
+
+const workhorse = createPrismaAdapter(prisma);
+
+await prisma.$transaction(async (tx) => {
+  const account = await tx.account.create({ data: { email } });
+  await workhorse.forTransaction(tx).enqueue("account.created", {
+    accountId: account.id,
+  });
+});`;
+
+const typeOrmSample = `import { createTypeOrmAdapter } from "@workhorse/typeorm";
+
+const workhorse = createTypeOrmAdapter(dataSource);
+
+await dataSource.transaction(async (manager) => {
+  const account = await manager.save(Account, { email });
+  await workhorse.forTransaction(manager).enqueue("account.created", {
+    accountId: account.id,
+  });
 });`;
 
 const honoSample = `import { createWorkhorseAdapter } from "@workhorse/core";
@@ -62,6 +99,39 @@ const packages = [
     notes: [
       "forTransaction(tx) binds the queue to an existing Drizzle transaction.",
       "Drizzle stays a peer concern: @workhorse/core has no ORM dependency.",
+    ],
+  },
+  {
+    name: "@workhorse/prisma",
+    tag: "ORM adapter",
+    lede: "Adapts Prisma clients and interactive transaction clients while leaving commit and disconnect ownership with the application.",
+    sample: prismaSample,
+    file: "prisma.ts",
+    notes: [
+      "forTransaction(tx) binds enqueue to Prisma's interactive transaction.",
+      "An optional node-postgres pool enables notification-assisted worker dispatch.",
+    ],
+  },
+  {
+    name: "@workhorse/typeorm",
+    tag: "ORM adapter",
+    lede: "Adapts TypeORM data sources and transactional entity managers without reaching into TypeORM's internal PostgreSQL driver.",
+    sample: typeOrmSample,
+    file: "typeorm.ts",
+    notes: [
+      "forTransaction(manager) uses the transaction-scoped entity manager.",
+      "An optional node-postgres pool enables notification-assisted worker dispatch.",
+    ],
+  },
+  {
+    name: "@workhorse/kysely",
+    tag: "Query builder adapter",
+    lede: "Adapts Kysely databases and transaction executors through compiled queries while reusing the caller's PostgreSQL dialect pool for notifications.",
+    sample: kyselySample,
+    file: "kysely.ts",
+    notes: [
+      "forTransaction(transaction) keeps enqueue on Kysely's transaction connection.",
+      "The PostgreSQL dialect pool remains caller-owned and can provide LISTEN connections.",
     ],
   },
   {
@@ -135,10 +205,9 @@ export default function IntegrationsPage() {
       <section className="wh-panel mt-16 rounded-xl p-6 sm:p-8">
         <p className="wh-mono-label">Not yet supported</p>
         <p className="mt-3 max-w-3xl text-[14.5px] leading-relaxed text-fd-muted-foreground">
-          Additional ORM and framework adapters are explicitly out of scope for this release, as are
-          production authentication and RBAC, rate limits, and cross-queue concurrency policies. The
-          protocol is plain SQL, so a third-party adapter is possible today; it is simply not
-          something this project supports yet.
+          Additional framework adapters are out of scope for this release, as are production
+          authentication and RBAC, rate limits, and cross-queue concurrency policies. The protocol
+          is plain SQL, so another ORM can implement the same provider boundary independently.
         </p>
         <div className="mt-6 flex flex-wrap gap-6">
           <Link href="/reference" className="wh-link-underline text-[14px] font-medium">

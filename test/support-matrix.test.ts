@@ -18,6 +18,9 @@ const publishedManifests = [
   "package.json",
   "packages/dashboard/package.json",
   "packages/drizzle/package.json",
+  "packages/kysely/package.json",
+  "packages/prisma/package.json",
+  "packages/typeorm/package.json",
   "packages/hono/package.json",
 ];
 

@@ -1,0 +1,46 @@
+{
+  "name": "@workhorse/typeorm",
+  "version": "0.1.0",
+  "description": "TypeORM provider for Workhorse",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "packages/typeorm"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5",
+    "@workhorse/core": "workspace:*",
+    "pg": "^8.16.3",
+    "typeorm": "0.3.31"
+  },
+  "peerDependencies": {
+    "@workhorse/core": ">=0.1.0 <1",
+    "typeorm": ">=0.3 <2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

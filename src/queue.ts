@@ -1397,7 +1397,7 @@ export class Queue {
   async promote(limit = 100): Promise<number> {
     // Promotion is bounded so a large delayed backlog cannot create one long lock transaction.
     const result = await this.database.query<{ count: number }>(
-      "SELECT workhorse.promote_v1($1) AS count",
+      "SELECT workhorse.promote_v1($1::integer) AS count",
       [limit],
     );
     const count = result.rows[0]!.count;
@@ -1410,18 +1410,18 @@ export class Queue {
   }
 
   async pauseQueue(queueName = this.defaultQueue): Promise<void> {
-    await this.database.query("SELECT workhorse.pause_queue_v1($1)", [queueName]);
+    await this.database.query("SELECT workhorse.pause_queue_v1($1::text)", [queueName]);
     logInfo("workhorse.queue.paused", "Queue paused", { "workhorse.queue.name": queueName });
   }
 
   async resumeQueue(queueName = this.defaultQueue): Promise<void> {
-    await this.database.query("SELECT workhorse.resume_queue_v1($1)", [queueName]);
+    await this.database.query("SELECT workhorse.resume_queue_v1($1::text)", [queueName]);
     logInfo("workhorse.queue.resumed", "Queue resumed", { "workhorse.queue.name": queueName });
   }
 
   async purgeQueue(queueName = this.defaultQueue): Promise<number> {
     const result = await this.database.query<{ count: number }>(
-      "SELECT workhorse.purge_queue_v1($1) AS count",
+      "SELECT workhorse.purge_queue_v1($1::text) AS count",
       [queueName],
     );
     const count = result.rows[0]!.count;
@@ -1446,7 +1446,9 @@ export class Queue {
   async registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }> {
     const result = await this.database.query<{ paused: boolean }>(
       `SELECT workhorse.register_worker_v1(
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+         $1::text, $2::uuid, $3::text, $4::integer, $5::text, $6::integer,
+         $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
+         $12::integer, $13::integer, $14::boolean
        ) AS paused`,
       [
         registration.workerId,
@@ -1472,7 +1474,7 @@ export class Queue {
   /** Remove one worker registration. A killed worker instead ages out of the fleet view. */
   async deregisterWorker(workerId: string): Promise<boolean> {
     const result = await this.database.query<{ deregistered: boolean }>(
-      "SELECT workhorse.deregister_worker_v1($1) AS deregistered",
+      "SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
       [workerId],
     );
     const deregistered = result.rows[0]!.deregistered;
@@ -1502,7 +1504,7 @@ export class Queue {
       paused_reason: string | null;
       paused_at: Date | null;
       last_heartbeat_at: Date;
-    }>("SELECT * FROM workhorse.set_worker_paused_v1($1, $2, $3, $4)", [
+    }>("SELECT * FROM workhorse.set_worker_paused_v1($1::text, $2::boolean, $3::text, $4::text)", [
       workerId,
       paused,
       options.requestedBy ?? null,
@@ -1571,7 +1573,7 @@ export class Queue {
   /** Drop registrations whose process stopped heartbeating longer ago than the given window. */
   async pruneWorkerRegistry(maxAgeMs = 24 * 60 * 60 * 1_000): Promise<number> {
     const result = await this.database.query<{ count: number }>(
-      "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1)) AS count",
+      "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count",
       [maxAgeMs / 1_000],
     );
     const count = result.rows[0]!.count;
@@ -1594,7 +1596,7 @@ export class Queue {
     return this.maintenanceSpan("tick", () =>
       withSpan("workhorse.recovery", {}, async (span) => {
         const result = await this.database.query<MaintenancePhaseRow>(
-          "SELECT * FROM workhorse.tick_v1($1, $2)",
+          "SELECT * FROM workhorse.tick_v1($1::integer, $2::integer)",
           [options.promoteLimit ?? 1_000, options.recoverLimit ?? 1_000],
         );
         const recovery = result.rows.find((row) => row.phase === "recover");
@@ -1614,7 +1616,7 @@ export class Queue {
   ): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("history_partitions", async () => {
       const result = await this.database.query<MaintenancePhaseRow>(
-        "SELECT * FROM workhorse.prepare_history_partitions_v1($1, $2)",
+        "SELECT * FROM workhorse.prepare_history_partitions_v1($1::boolean, $2::timestamptz)",
         [options.force ?? false, options.now ?? new Date()],
       );
       return result.rows.map(maintenancePhaseResult);
@@ -1634,7 +1636,7 @@ export class Queue {
   ): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("statistics_rollup", async () => {
       const result = await this.database.query<MaintenancePhaseRow>(
-        "SELECT * FROM workhorse.rollup_stats_v1($1, $2, $3)",
+        "SELECT * FROM workhorse.rollup_stats_v1($1::timestamptz, $2::integer, $3::integer)",
         [options.now ?? new Date(), options.maxBuckets ?? 240, options.recomputeBuckets ?? 2],
       );
       return result.rows.map(maintenancePhaseResult);
@@ -1646,7 +1648,7 @@ export class Queue {
   ): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("history_retention", async () => {
       const result = await this.database.query<MaintenancePhaseRow>(
-        "SELECT * FROM workhorse.retain_history_v1($1, $2)",
+        "SELECT * FROM workhorse.retain_history_v1($1::boolean, $2::timestamptz)",
         [options.force ?? false, options.now ?? new Date()],
       );
       return result.rows.map(maintenancePhaseResult);
@@ -1658,7 +1660,7 @@ export class Queue {
   ): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("terminal_storage", async () => {
       const result = await this.database.query<MaintenancePhaseRow>(
-        "SELECT * FROM workhorse.prune_terminal_storage_v1($1, $2)",
+        "SELECT * FROM workhorse.prune_terminal_storage_v1($1::boolean, $2::timestamptz)",
         [options.force ?? false, options.now ?? new Date()],
       );
       return result.rows.map(maintenancePhaseResult);
@@ -1699,7 +1701,9 @@ export class Queue {
   ): Promise<RetentionPolicy> {
     const result = await this.database.query<RetentionPolicyRow>(
       `SELECT (policy).* FROM workhorse.sync_retention_policy_v1(
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+         $1::integer, $2::integer, $3::integer, $4::integer, $5::integer,
+         $6::integer, $7::integer, $8::integer, $9::integer, $10::integer,
+         $11::integer, $12::boolean
        ) policy`,
       [
         definition.jobIdentityRetentionDays,
@@ -1732,7 +1736,7 @@ export class Queue {
       maxActivePerKey: definition.maxActivePerKey ?? null,
     }));
     const result = await this.database.query<ConcurrencyPolicyRow>(
-      "SELECT * FROM workhorse.sync_concurrency_policies_v1($1, $2::jsonb, $3)",
+      "SELECT * FROM workhorse.sync_concurrency_policies_v1($1::text, $2::jsonb, $3::boolean)",
       [namespace, JSON.stringify(input), options.prune ?? true],
     );
     return result.rows.map(concurrencyPolicy);
@@ -1794,7 +1798,7 @@ export class Queue {
       statisticsRowsPerPass: "statistics_rows_per_pass",
     };
     const result = await this.database.query<RetentionPolicyRow>(
-      "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1) policy",
+      "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
       [settings.map((setting) => databaseNames[setting])],
     );
     return retentionPolicy(result.rows[0]!);
@@ -1891,7 +1895,7 @@ export class Queue {
     }
     const result = await this.database.query<MaintenancePolicyRow>(
       `SELECT (policy).* FROM workhorse.sync_maintenance_policy_v1(
-         $1, $2, $3, $4::time, $5
+         $1::text, $2::integer, $3::integer, $4::time, $5::boolean
        ) policy`,
       [
         definition.timezone,
@@ -1919,7 +1923,7 @@ export class Queue {
     }
     const result = await this.database.query<MaintenancePolicyRow>(
       `SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(
-         $1, $2, $3, $4::time
+         $1::text, $2::integer, $3::integer, $4::time
        ) policy`,
       [
         definition.timezone ?? null,
@@ -1941,7 +1945,7 @@ export class Queue {
       historyRetentionLocalTime: "history_retention_local_time",
     };
     const result = await this.database.query<MaintenancePolicyRow>(
-      "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1) policy",
+      "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy",
       [settings.map((setting) => databaseNames[setting])],
     );
     return maintenancePolicy(result.rows[0]!);
@@ -1985,7 +1989,7 @@ export class Queue {
       { "workhorse.schedule.definition_count": definitions.length },
       async () => {
         await this.database.query(
-          "SELECT workhorse.sync_schedule_definitions_v1($1, $2::jsonb, $3)",
+          "SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)",
           [namespace, JSON.stringify(input), options.prune ?? true],
         );
         logInfo("workhorse.schedules.synchronized", "Recurring schedules synchronized", {
@@ -2033,7 +2037,7 @@ export class Queue {
     occurrenceAt: Date,
   ): Promise<string | null> {
     const result = await this.database.query<{ job_id: string | null }>(
-      "SELECT workhorse.fire_schedule_v1($1, $2, $3, $4) AS job_id",
+      "SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS job_id",
       [namespace, name, revision.toString(), occurrenceAt.toISOString()],
     );
     const jobId = result.rows[0]!.job_id;
@@ -2058,7 +2062,7 @@ export class Queue {
       status: RunTaskNowStatus;
       state: string | null;
       run_at: Date | string | null;
-    }>("SELECT status, state, run_at FROM workhorse.run_task_now_v1($1)", [jobId]);
+    }>("SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid)", [jobId]);
     const row = result.rows[0]!;
     logInfo("workhorse.job.run_now_requested", "Immediate job run requested", {
       "workhorse.job.id": jobId,
@@ -2078,7 +2082,7 @@ export class Queue {
     // requestedBy is caller attribution only; this API does not claim authorization.
     const result = await this.database.query<CancelRow>(
       `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at
-         FROM workhorse.cancel_v1($1, $2, $3)`,
+         FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
       [jobId, request.requestedBy ?? null, request.reason ?? null],
     );
     const row = result.rows[0]!;
@@ -2323,7 +2327,7 @@ export class Queue {
       );
     }
     const result = await this.database.query<DeadLetterRow>(
-      "SELECT * FROM workhorse.list_dead_letters_v1($1::jsonb, $2, $3, $4)",
+      "SELECT * FROM workhorse.list_dead_letters_v1($1::jsonb, $2::integer, $3::timestamptz, $4::uuid)",
       [
         JSON.stringify(deadLetterFilter(query)),
         limit,
@@ -2345,7 +2349,7 @@ export class Queue {
   async redrive(sourceJobId: string, request: RedriveRequest): Promise<RedriveResult> {
     try {
       const result = await this.database.query<RedriveRow>(
-        "SELECT * FROM workhorse.redrive_v1($1, $2, $3, $4)",
+        "SELECT * FROM workhorse.redrive_v1($1::uuid, $2::text, $3::text, $4::text)",
         [sourceJobId, request.requestedBy, request.reason, request.requestId],
       );
       const row = result.rows[0];
@@ -2375,7 +2379,7 @@ export class Queue {
     }
     try {
       const result = await this.database.query<BulkRedriveRow>(
-        "SELECT status, source_job_id, target_job_id, source_state, target_state, requested_at, source_finished_at_cursor, has_more FROM workhorse.redrive_many_v1($1::jsonb, $2, $3, $4, $5, $6, $7, $8) ORDER BY ordinal",
+        "SELECT status, source_job_id, target_job_id, source_state, target_state, requested_at, source_finished_at_cursor, has_more FROM workhorse.redrive_many_v1($1::jsonb, $2::integer, $3::boolean, $4::text, $5::text, $6::text, $7::timestamptz, $8::uuid) ORDER BY ordinal",
         [
           JSON.stringify(deadLetterFilter(filter)),
           limit,
@@ -2419,7 +2423,7 @@ export class Queue {
     const result = await this.database.query<RedriveLineageRow>(
       `WITH RECURSIVE connected_edges AS (
          SELECT edge.* FROM workhorse.job_redrive edge
-          WHERE edge.source_job_id = $1 OR edge.target_job_id = $1
+          WHERE edge.source_job_id = $1::uuid OR edge.target_job_id = $1::uuid
          UNION
          SELECT edge.*
            FROM connected_edges connected
@@ -2430,7 +2434,7 @@ export class Queue {
        SELECT bounded.source_job_id, bounded.target_job_id, bounded.requested_by, bounded.reason,
               bounded.request_id_preview, bounded.request_id_digest, bounded.request_id_length,
               bounded.source_state, bounded.target_initial_state, bounded.requested_at
-         FROM (SELECT * FROM connected_edges LIMIT $2) bounded
+         FROM (SELECT * FROM connected_edges LIMIT $2::integer) bounded
         ORDER BY bounded.requested_at, bounded.source_job_id, bounded.target_job_id`,
       [jobId, limit + 1],
     );
@@ -2450,7 +2454,7 @@ export class Queue {
       // claim_v2 commits ownership before returning the payload. Handler code must run only after
       // this query resolves so no row lock or claim transaction spans user code.
       const result = await this.database.query<ClaimRow>(
-        "SELECT * FROM workhorse.claim_v2($1, $2, $3)",
+        "SELECT * FROM workhorse.claim_v2($1::text, $2::text, $3::integer)",
         [queueName, workerId, options.leaseMs ?? 30_000],
       );
       const row = result.rows[0];
@@ -2511,7 +2515,7 @@ export class Queue {
       // Cancellation and stale ownership both stop compatibility callers, while workers can use the
       // status API to deliver a distinct cooperative cancellation signal.
       const result = await this.database.query<{ status: HeartbeatStatus }>(
-        "SELECT workhorse.heartbeat_v2($1, $2, $3, $4) AS status",
+        "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
         [job.id, workerId, job.fenceToken.toString(), leaseMs],
       );
       const status = result.rows[0]!.status;
@@ -2537,7 +2541,7 @@ export class Queue {
     const result = await this.database.query<{
       status: ExpireOwnedStatus;
       retry_state: "ready" | "scheduled" | null;
-    }>("SELECT * FROM workhorse.expire_owned_telemetry_v1($1, $2, $3)", [
+    }>("SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)", [
       job.id,
       workerId,
       job.fenceToken.toString(),
@@ -2559,7 +2563,7 @@ export class Queue {
 
   async acknowledgeCancel(job: ClaimedJob<unknown>, workerId: string): Promise<boolean> {
     const result = await this.database.query<{ accepted: boolean }>(
-      "SELECT workhorse.acknowledge_cancel_v1($1, $2, $3) AS accepted",
+      "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted",
       [job.id, workerId, job.fenceToken.toString()],
     );
     const accepted = result.rows[0]!.accepted;
@@ -2579,7 +2583,7 @@ export class Queue {
       `SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
               worker_id, created_at
          FROM workhorse.job_checkpoint
-        WHERE job_id = $1 AND checkpoint_name = $2`,
+        WHERE job_id = $1::uuid AND checkpoint_name = $2::text`,
       [jobId, name],
     );
     const row = result.rows[0];
@@ -2593,7 +2597,7 @@ export class Queue {
       `SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token::text,
               worker_id, created_at
          FROM workhorse.job_checkpoint
-        WHERE job_id = $1
+        WHERE job_id = $1::uuid
         ORDER BY created_at, checkpoint_name`,
       [jobId],
     );
@@ -2612,7 +2616,7 @@ export class Queue {
     }
     const result = await this.database.query<SaveCheckpointRow>(
       `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at
-         FROM workhorse.save_checkpoint_v1($1, $2, $3, $4, $5::jsonb)`,
+         FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
       [job.id, workerId, job.fenceToken.toString(), name, encodedValue],
     );
     const row = result.rows[0]!;
@@ -2641,7 +2645,7 @@ export class Queue {
       `SELECT job_id, progress_value, revision::text, attempt, fence_token::text,
               worker_id, created_at, updated_at
          FROM workhorse.job_progress
-        WHERE job_id = $1`,
+        WHERE job_id = $1::uuid`,
       [jobId],
     );
     const row = result.rows[0];
@@ -2660,7 +2664,7 @@ export class Queue {
     const result = await this.database.query<UpdateProgressRow>(
       `SELECT status, progress_value, revision::text, attempt, fence_token::text,
               worker_id, created_at, updated_at, retry_after_ms::text
-         FROM workhorse.update_progress_v1($1, $2, $3, $4::jsonb)`,
+         FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
       [job.id, workerId, job.fenceToken.toString(), encodedValue],
     );
     const row = result.rows[0]!;
@@ -2685,7 +2689,7 @@ export class Queue {
       `SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
               attempt, fence_token::text, worker_id, created_at
          FROM workhorse.job_wait
-        WHERE job_id = $1 AND wait_name = $2`,
+        WHERE job_id = $1::uuid AND wait_name = $2::text`,
       [jobId, name],
     );
     const row = result.rows[0];
@@ -2697,7 +2701,7 @@ export class Queue {
       `SELECT job_id, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
               attempt, fence_token::text, worker_id, created_at
          FROM workhorse.job_wait
-        WHERE job_id = $1
+        WHERE job_id = $1::uuid
         ORDER BY created_at, wait_name`,
       [jobId],
     );
@@ -2747,7 +2751,7 @@ export class Queue {
     const result = await this.database.query<ScheduleWaitRow>(
       `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at,
               attempt, fence_token::text, worker_id, created_at
-         FROM workhorse.schedule_wait_v1($1, $2, $3, $4, $5::bigint, $6::timestamptz)`,
+         FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
       [job.id, workerId, job.fenceToken.toString(), name, durationWire, wakeAtWire],
     );
     const row = result.rows[0]!;
@@ -2796,7 +2800,7 @@ export class Queue {
       // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
       // rather than overwriting the result of a recovered attempt.
       const query = await this.database.query<{ accepted: boolean }>(
-        "SELECT workhorse.complete_v1($1, $2, $3, $4::jsonb) AS accepted",
+        "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
         [job.id, workerId, job.fenceToken.toString(), JSON.stringify(result)],
       );
       const accepted = query.rows[0]!.accepted;
@@ -2842,13 +2846,16 @@ export class Queue {
           | "deadline_exceeded"
           | "timeout_exceeded"
           | "stale";
-      }>("SELECT workhorse.fail_v1($1, $2, $3, $4::jsonb, $5) AS state", [
-        job.id,
-        workerId,
-        job.fenceToken.toString(),
-        JSON.stringify(errorEnvelope(error, job.redactErrorDetails)),
-        retryDelayMs ?? null,
-      ]);
+      }>(
+        "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
+        [
+          job.id,
+          workerId,
+          job.fenceToken.toString(),
+          JSON.stringify(errorEnvelope(error, job.redactErrorDetails)),
+          retryDelayMs ?? null,
+        ],
+      );
       const state = result.rows[0]!.state;
       span.setAttribute("workhorse.retry.outcome", state);
       telemetryMetrics.failed.add(1, {
@@ -2876,7 +2883,7 @@ export class Queue {
         expired_leases: number;
         retried: number;
         retry_dimensions: Array<{ queue: string; type: string }>;
-      }>("SELECT * FROM workhorse.recover_expired_telemetry_v1($1, $2)", [
+      }>("SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)", [
         limit,
         retryDelayMs ?? null,
       ]);
@@ -2947,7 +2954,7 @@ export class Queue {
          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
          LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
          LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
-        WHERE j.id = $1`,
+        WHERE j.id = $1::uuid`,
       [id],
     );
     const row = result.rows[0];
