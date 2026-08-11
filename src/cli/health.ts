@@ -24,11 +24,11 @@ if (!databaseUrl)
   throw new Error("DATABASE_URL is required unless --database selects a local role");
 const pool = new Pool({ connectionString: databaseUrl });
 try {
-  // Emit only JSON so automation can consume stdout. Exit 2 is reserved for queue degradation
-  // reported by the canonical budget evaluation.
+  // Emit only JSON so automation can consume stdout. Exit 2 is reserved for recoverable queue
+  // degradation: a health budget is exceeded, with machine-readable reasons in status.reasons.
   const health = await new Queue(pool).health();
   console.log(JSON.stringify(health, null, 2));
-  if (health.status.level === "degraded") process.exitCode = 2;
+  if (health.status.level !== "healthy") process.exitCode = 2;
 } finally {
   await pool.end();
 }

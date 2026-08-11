@@ -45,16 +45,10 @@ state. Extra replicas do not multiply destructive work.
 
 ## Detect lag through health
 
-`Queue.health` returns `QueueHealth`, including queue depth, lease expiry, overdue durable waits,
-timing pressure, retention lag, relation churn, long transactions, and lock waits.
-
-`QueueHealth.snapshot` holds correctness-sensitive counts from one database snapshot. Its
-`capturedAt` time is the boundary for lease, wait, deadline, and timeout decisions. Its `cappedFields`
-list identifies lower bounds beyond the exact count ceiling. PostgreSQL statistics live under
-`QueueHealth.postgresql` with a separate observation time because they may lag.
-
-Pass `QueueHealthOptions.budgets` when your service has explicit tolerances. `QueueHealth.status`
-then reports `healthy` or `degraded` with stable reason codes, so probes and alerts do not parse prose.
+`Queue.health` returns `QueueHealth` from one consistent snapshot statement: queue depth, lease
+expiry, overdue durable waits, timing pressure, and retention lag, with PostgreSQL relation churn,
+long transactions, and lock waits separated under `observations`. `status` evaluates the snapshot
+against overridable budgets and names each exceeded one with a machine-readable reason code.
 
 Workhorse exposes these observations but does not export metrics. Connect `QueueHealth` and
 `WorkerMaintenanceTelemetry` to the monitoring system your operators already use.

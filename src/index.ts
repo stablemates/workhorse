@@ -1,4 +1,5 @@
 export { createWorkhorseAdapter } from "./adapter.js";
+export { DEFAULT_QUEUE_HEALTH_BUDGETS, evaluateQueueHealth } from "./health.js";
 export { WorkhorseMetricsObserver } from "./metrics.js";
 export type { WorkhorseAdapter, WorkhorseAdapterOptions } from "./adapter.js";
 export {
@@ -128,16 +129,13 @@ export type {
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
   PolicyValueProvenance,
-  PostgreSQLHealth,
   Queryable,
   QueueOptions,
   QueueHealth,
   QueueHealthBudgets,
-  QueueHealthCappedField,
-  QueueHealthDegradationCode,
-  QueueHealthDegradationReason,
-  QueueHealthOptions,
-  QueueHealthSnapshot,
+  QueueHealthObservations,
+  QueueHealthReason,
+  QueueHealthReasonCode,
   QueueHealthStatus,
   RedriveIdempotencyConflictDetails,
   RedriveIdempotencyConflictField,
@@ -162,6 +160,7 @@ export {
   DEFAULT_IDEMPOTENCY_TTL_MS,
   DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
   DEFAULT_JOB_VALUE_MAX_BYTES,
+  HEALTH_HISTORY_SCAN_LIMIT,
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_PROGRESS_VALUE_BYTES,
   MIN_PROGRESS_UPDATE_INTERVAL_MS,

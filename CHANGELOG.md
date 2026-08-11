@@ -26,14 +26,16 @@ First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse/core`: database-authoritative maintenance and retention settings with application
   defaults, operator overrides, per-setting provenance, revert operations, and bounded retention
   impact previews.
+- `@workhorse/core`: transactionally consistent `Queue.health()` snapshots — one SQL statement
+  for every correctness-sensitive value, size-capped history scans with explicit lower-bound
+  flags, PostgreSQL estimates separated under `observations`, and caller-overridable health
+  budgets producing machine-readable `status.reasons` shared by the `workhorse-health` exit
+  code, the benchmark invariants, and the dashboard verdict.
 - `@workhorse/core`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`, and
   `dashboard`.
 - `@workhorse/core`: notification-assisted worker dispatch through one process-local
   `workhorse_jobs` listener per node-postgres pool, with queue routing, reconnect backoff, and
   jittered bounded polling as the durable fallback.
-- `@workhorse/core`: transactionally consistent, bounded queue-health snapshots with explicit
-  lower-bound markers, PostgreSQL observation provenance, configurable health budgets, and
-  machine-readable degradation reasons.
 - `@workhorse/drizzle`: Drizzle ORM provider with caller-owned transactions.
 - `@workhorse/prisma`: Prisma ORM provider with caller-owned interactive transactions and optional
   node-postgres notification connections.

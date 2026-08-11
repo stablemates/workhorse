@@ -204,9 +204,15 @@ hint, and polling stays the source of truth.
 **Depends on:** P0-02
 
 - [x] Provide a transactionally consistent queue-health snapshot for correctness-sensitive counts.
-- [x] Separate exact transactional values from lagging PostgreSQL statistics.
-- [x] Add health budgets and machine-readable degraded reasons.
-- [x] Keep snapshot latency bounded on large runtime and history relations.
+      Every exact value is read in one SQL statement and stamped `capturedAt`.
+- [x] Separate exact transactional values from lagging PostgreSQL statistics, which moved under
+      `QueueHealth.observations`.
+- [x] Add health budgets and machine-readable degraded reasons. `evaluateQueueHealth` owns the
+      thresholds; the CLI exit code, the benchmark invariants, and the dashboard verdict consume
+      the same reasons.
+- [x] Keep snapshot latency bounded on large runtime and history relations. Terminal and bucket
+      counts stop at a scan cap with explicit lower-bound flags, and the smoke-profile
+      `health-snapshot` scenario records the latency evidence.
 
 ### [x] P0-06B Installation path for existing applications
 
