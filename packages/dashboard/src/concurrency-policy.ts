@@ -150,7 +150,9 @@ export function describeTaskConcurrency(job: {
     title: `${describeConcurrencyLimit(policy).title} ${
       concurrencyKey === null
         ? "This task has no concurrency key, so it consumes queue capacity only."
-        : `This task competes for its key's capacity as well. ${keys.title}`
+        : policy.maxActivePerKey === null
+          ? "This task has a concurrency key, but this queue does not limit tasks by key. It consumes queue capacity only."
+          : `This task competes for its key's capacity as well. ${keys.title}`
     }`,
   };
 }

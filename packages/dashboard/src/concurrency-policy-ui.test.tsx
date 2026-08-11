@@ -287,6 +287,18 @@ describe("task drawer concurrency line", () => {
     expect(described?.title).toContain("no concurrency key");
   });
 
+  it("does not claim keyed competition when per-key admission is disabled", () => {
+    const described = describeTaskConcurrency(
+      job({
+        runtimeState: "ready",
+        concurrencyKey: "tenant-a",
+        concurrencyPolicy: policy({ maxActivePerKey: null }),
+      }),
+    );
+    expect(described?.title).toContain("does not limit tasks by key");
+    expect(described?.title).not.toContain("competes for its key's capacity");
+  });
+
   it("shows nothing when the task has neither a key nor a queue policy", () => {
     expect(describeTaskConcurrency(job({ runtimeState: "ready" }))).toBeNull();
   });
