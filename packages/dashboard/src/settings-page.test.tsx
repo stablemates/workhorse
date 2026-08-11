@@ -15,7 +15,7 @@ Object.defineProperty(globalThis, "localStorage", {
 const maintenanceProvenance = {
   timezone: { source: "operator" as const, applicationDefault: "UTC" },
   partitionPreparationIntervalMs: {
-    source: "application" as const,
+    source: "operator" as const,
     applicationDefault: 21_600_000,
   },
   terminalCleanupIntervalMs: { source: "application" as const, applicationDefault: 300_000 },
@@ -40,7 +40,7 @@ const data: DashboardSettingsPage = {
   editable: true,
   maintenance: {
     timezone: "America/New_York",
-    partitionPreparationIntervalMs: 21_600_000,
+    partitionPreparationIntervalMs: 18_000_000,
     terminalCleanupIntervalMs: 300_000,
     historyRetentionLocalTime: "01:30",
     provenance: maintenanceProvenance,
@@ -128,6 +128,17 @@ describe("settings page", () => {
     );
 
     expect(html).toContain("Database-owned policy");
+    expect(html).toContain("Maintenance schedule");
+    expect(html).toContain("Choose when database-wide cleanup runs");
+    expect(html).toMatch(/mantine-Select-label[^>]*>Maintenance timezone/);
+    expect(html).toContain("Advanced maintenance");
+    expect(html).toContain("How often Workhorse checks that upcoming history partitions exist");
+    expect(html).toMatch(/mantine-Select-label[^>]*>Partition preparation interval/);
+    expect(html).toContain("Enter any cadence from one minute through seven days");
+    expect(html).toContain("Retention windows");
+    expect(html).toContain("Control how long Workhorse keeps each kind of stored history");
+    expect(html).toContain("Cleanup limits");
+    expect(html).toContain("Limit how much work each cleanup pass can perform");
     expect(html).toContain("Operator override");
     expect(html).toContain("12 finished tasks, 40 events, and 7 attempts");
     expect(html).toContain("Set at deploy");
