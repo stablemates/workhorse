@@ -30,7 +30,7 @@ const workhorse = createDrizzleAdapter(db, {
 ```
 
 The returned `WorkhorseAdapter` exposes `database`, `queue`, `forTransaction`, `createWorker`, and
-`close`. It gives framework integrations one stable surface without adding Drizzle to core.
+`close`. It gives worker processes one stable surface without adding Drizzle to core.
 
 ## Enqueue inside a Drizzle transaction
 
@@ -75,7 +75,7 @@ Workhorse's versioned SQL functions.
 ## Next
 
 - [Enqueue and transactions](/docs/enqueue) — understand the transaction guarantee
-- [Hono](/docs/hono) — expose the adapter through typed middleware
+- [Worker processes](/docs/worker-processes) — run handlers outside the web tier
 - [Installation](/docs/installation) — install the schema outside Drizzle migrations
 
 ---

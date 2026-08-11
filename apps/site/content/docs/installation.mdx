@@ -14,8 +14,8 @@ Install `@workhorse/core` with the PostgreSQL client your application already us
 pnpm add @workhorse/core pg
 ```
 
-Add a database provider, `@workhorse/hono`, or `@workhorse/dashboard` only when that integration belongs
-in the same process. The supported database providers are Drizzle, Prisma, TypeORM, and Kysely.
+Add a database provider or `@workhorse/dashboard` only when that integration belongs in the same
+process. The supported database providers are Drizzle, Prisma, TypeORM, and Kysely.
 
 The `workhorse init` command can inspect an existing project. It writes a worker configuration and
 prints a dashboard mount, but it leaves your routes and package manifest alone.

@@ -163,9 +163,6 @@ importers:
       '@workhorse/drizzle':
         specifier: workspace:*
         version: link:../packages/drizzle
-      '@workhorse/hono':
-        specifier: workspace:*
-        version: link:../packages/hono
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3))(@types/pg@8.20.0)(kysely@0.29.5)(pg@8.22.0)(prisma@6.19.3(typescript@5.9.3))
@@ -267,21 +264,6 @@ importers:
       pg:
         specifier: ^8.16.3
         version: 8.22.0
-
-  packages/hono:
-    devDependencies:
-      '@hono/node-server':
-        specifier: ^2.0.11
-        version: 2.0.11(hono@4.12.31)
-      '@workhorse/core':
-        specifier: workspace:*
-        version: link:../..
-      '@workhorse/dashboard':
-        specifier: workspace:*
-        version: link:../dashboard
-      hono:
-        specifier: ^4.12.31
-        version: 4.12.31
 
   packages/kysely:
     devDependencies:

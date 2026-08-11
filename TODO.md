@@ -21,7 +21,7 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 1. **P0-06 Consistent operational snapshots**
 2. **P1-05 Priority queues**
 
-The demo, the initial integration packages, the operator query surface, progress, dead letters,
+The demo, the ORM integration packages, the operator query surface, progress, dead letters,
 deadlines, the durable worker registry, the framework-neutral dashboard host, and the release and
 compatibility matrix are complete.
 
@@ -31,22 +31,20 @@ P2-06 and P2-07.
 
 ## P0: demo vertical slice and production hardening
 
-### [x] P0-00A Drizzle and Hono integration packages
+### [x] P0-00A Core adapter and Drizzle integration package
 
 **Depends on:** none
 
 These are the minimum ecosystem packages required by the first demo, not the start of broad
 provider coverage.
 
-- [x] Define the stable adapter boundary needed by both ORM providers and framework integrations.
+- [x] Define the stable adapter boundary needed by ORM providers and dedicated workers.
 - [x] Ship a separate Drizzle ORM provider package with caller-owned transaction support.
-- [x] Ship a separate Hono integration package with configuration, startup, and graceful shutdown
-      behavior.
-- [x] Ship a complete Hono dashboard mount that owns its packaged UI, assets, private oRPC transport,
-      authorization boundary, and either a caller-owned namespace or the application root.
-- [x] Keep Drizzle and Hono dependencies out of the core package.
+- [x] Ship a framework-neutral dashboard host that owns its packaged UI, assets, private oRPC
+      transport, authorization boundary, and mount path.
+- [x] Keep ORM and web-framework dependencies out of the core package.
 - [x] Add packed-package integration tests for transaction ownership, pooling, error translation,
-      worker lifecycle, shutdown, dashboard package contents, and Hono mount type compatibility.
+      worker lifecycle, shutdown, and dashboard package contents.
 
 ### [x] P0-00B Demo application and complete dashboard built with Drizzle and Hono
 
@@ -56,10 +54,10 @@ provider coverage.
 its intended integration experience, and its complete initial operator dashboard are
 understandable, installable, and useful.
 
-- [x] Build one end-to-end Workhorse application in `demo/`, using the Drizzle and Hono integration
-      packages.
+- [x] Build one end-to-end Workhorse application in `demo/`, using the Drizzle adapter and Hono as
+      an application-owned HTTP server.
 - [x] Build a complete dashboard with queue, job, schedule, worker, failure, and health views.
-- [x] Extract the dashboard into `@workhorse/dashboard` and make the demo consume the packaged Hono mount
+- [x] Extract the dashboard into `@workhorse/dashboard` and make the demo consume the generic host
       rather than owning a separate dashboard implementation.
 - [x] Use Mantine as the component foundation for the dashboard.
 - [x] Use oRPC for the dashboard's typed API boundary.
@@ -133,8 +131,8 @@ not depend on the later full OpenTelemetry and metrics package.
       idempotent adapter cleanup.
 - [x] Add optional status-only liveness/readiness probes that report draining without exposing
       application ingress.
-- [x] Document dedicated workers as the production default, Hono co-hosting as an explicit small-app
-      option, and one multi-slot coordinator per queue or policy group as the benchmark-backed topology.
+- [x] Document dedicated workers as the supported topology and one multi-slot coordinator per queue
+      or policy group as the benchmark-backed default within a process.
 
 ### [x] P0-03B Durable worker fleet registration
 
@@ -164,11 +162,10 @@ forcing the dashboard and the workers into one process.
 **Depends on:** P0-00B
 
 - [x] Move asset serving, HTML templating, runtime-config injection, oRPC prefixing, and the SSE
-      stream out of `@workhorse/hono` into a `Request`/`Response` host in `@workhorse/dashboard`.
+      stream into a `Request`/`Response` host in `@workhorse/dashboard`.
 - [x] Change the mount input from a Hono worker-lifecycle object to `{ database, queue }` so mounting
       never requires a worker runtime.
 - [x] Add a Connect-style Node bridge so Express, Connect, and Fastify integrate without new packages.
-- [x] Reduce `@workhorse/hono` to route registration and drop its `@orpc/server` dependency.
 - [x] Fall through untouched on requests outside the mount path.
 
 ### [x] P0-04 Notification-assisted dispatch
@@ -447,27 +444,24 @@ roadmap references; all implementation requirements now live under P0-00B.
 - [ ] Prevent cross-tenant reads and operator actions.
 - [ ] Benchmark high-tenant-cardinality index and planning behavior.
 
-### [ ] P2-06 Additional ORM and framework integration packages
+### [ ] P2-06 Additional ORM integration packages
 
 **Depends on:** P0-00A, P0-03C, P0-07, P1-01
 
-Dashboard mounting is no longer a reason to add a framework package: P0-03C made the host
-framework-neutral, and the Node bridge already covers Connect-style hosts. What remains here is
-_lifecycle_ integration — transactional enqueue, startup, dependency injection, graceful shutdown —
-which genuinely differs per framework.
+Framework packages are intentionally outside the roadmap. Applications use their existing
+dependency injection for `Queue`, while the generic dashboard host covers Fetch-native and
+Connect-style servers. ORM transaction ownership still differs enough to justify provider packages.
 
-- [ ] Evolve the adapter interface validated by Drizzle and Hono without moving lifecycle
+- [ ] Evolve the adapter interface validated by the supported ORM providers without moving lifecycle
       correctness out of SQL.
 - [x] Expand beyond Drizzle to a small set of popular TypeScript ORM providers, with transactional
       enqueue support and provider-specific integration tests.
 - [x] Select and document Prisma, TypeORM, and Kysely as the next ORM support matrix.
-- [ ] Ship each ORM provider and framework integration as a separate optional package rather than
+- [x] Ship each ORM provider as a separate optional package rather than
       adding ecosystem dependencies to the core package.
-- [ ] Expand beyond Hono to a small framework matrix and validate lifecycle, dependency injection,
-      configuration, startup, and graceful shutdown behavior for each package.
 - [ ] Provide transactional enqueue examples for common PostgreSQL clients and supported ORMs.
 - [ ] Test transaction ownership, connection pooling, shutdown, and error translation.
-- [ ] Keep the core package free of framework dependencies.
+- [x] Keep the core package free of ORM and framework dependencies.
 
 ### [ ] P2-07 Schema migration framework
 
@@ -488,8 +482,7 @@ and the compatibility policy is stable enough to define a real upgrade boundary.
 **Depends on:** P0-00B, P2-06
 
 - [ ] Add focused, runnable examples alongside the full product demo.
-- [ ] Include at least one core-only example, one example per supported ORM provider, and one example
-      per supported framework integration package.
+- [ ] Include at least one core-only example and one example per supported ORM provider.
 - [ ] Keep examples focused on realistic application flows rather than isolated API snippets.
 - [ ] Run example smoke tests in CI so package releases cannot silently break documented setups.
 - [ ] Link every integration package to its corresponding example and setup guide.

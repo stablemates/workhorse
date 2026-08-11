@@ -32,7 +32,6 @@
     "prisma",
     "typeorm",
     "kysely",
-    "hono",
     "dashboard",
     "---Reference---",
     "examples",

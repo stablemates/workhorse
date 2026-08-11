@@ -1,8 +1,8 @@
 # Changelog
 
-Seven published packages are versioned in lockstep and released from one tag. They are
+Six published packages are versioned in lockstep and released from one tag. They are
 `@workhorse/core`, `@workhorse/drizzle`, `@workhorse/prisma`, `@workhorse/typeorm`,
-`@workhorse/kysely`, `@workhorse/hono`, and `@workhorse/dashboard`. Each entry states its required
+`@workhorse/kysely`, and `@workhorse/dashboard`. Each entry states its required
 schema version and upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
@@ -38,7 +38,6 @@ First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL 
   node-postgres notification connections.
 - `@workhorse/kysely`: Kysely provider with caller-owned transactions and optional node-postgres
   notification connections.
-- `@workhorse/hono`: Hono lifecycle integration and dashboard route registration.
 - `@workhorse/dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,
   a settings page with audited policy changes, and a Connect-style Node bridge for Express,
   Connect, and Fastify.

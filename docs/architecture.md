@@ -45,9 +45,9 @@ flowchart LR
 
 PostgreSQL is the durable authority. A worker owns a job only while the active `job_runtime` row matches its worker ID and fence token and has not expired.
 
-Production deployment uses a dedicated worker process by default. The process owns its adapter,
+Workers run in dedicated processes. Each process owns its adapter,
 Workers, optional probe-only listener, termination signals, bounded drain, and final resource close.
-Framework co-hosting remains available but is not the default scaling boundary. See
+Web frameworks do not participate in worker lifecycle. See
 [`worker-processes.md`](worker-processes.md) and
 [ADR 0012](decisions/0012-dedicated-worker-processes.md).
 

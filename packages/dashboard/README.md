@@ -37,9 +37,6 @@ app.use(dashboardNodeMiddleware(host));
 Requests the host does not own are passed to `next()` untouched, so the dashboard never takes over
 unrelated application routes.
 
-For Hono, `mountWorkhorseDashboard` from [`@workhorse/hono`](../hono/README.md) wraps the same host
-and registers the routes for you.
-
 The host never installs or migrates schema. It verifies that the installed schema is compatible and
 returns `503` when it is not.
 

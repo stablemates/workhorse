@@ -35,7 +35,7 @@ Operational capabilities are demonstrated through their own surfaces rather than
   throttled backlog with a PostgreSQL-calculated next eligibility time; its dedicated worker drains
   that backlog only as tokens refill;
 - retention, partition preparation, cleanup, and health remain deterministic on System;
-- Drizzle transactional enqueue and Hono lifecycle integration remain application-level proofs;
+- Drizzle transactional enqueue and generic dashboard embedding remain application-level proofs;
 - indexes, notification hints, dedicated worker CLI behavior, bounds, and validation remain integration-test
   and benchmark concerns.
 

@@ -4,11 +4,11 @@ import { Worker } from "./worker.js";
 import type { WorkerOptions } from "./worker.js";
 
 /**
- * Stable runtime surface consumed by framework integrations.
+ * Stable runtime surface consumed by database providers and dedicated worker processes.
  *
  * Database providers own the conversion from their native database and transaction objects to the
- * core {@link Queryable} protocol. Framework integrations only need the default queue, worker
- * construction, and an idempotent resource shutdown hook.
+ * core {@link Queryable} protocol. A worker process uses the default queue, worker construction,
+ * and idempotent resource shutdown hook without depending on the provider's native types.
  */
 export interface WorkhorseAdapter<TTransaction = Queryable> {
   readonly database: Queryable;

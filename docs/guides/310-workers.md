@@ -32,9 +32,8 @@ a missing notification can delay a claim, but it cannot strand the job.
 The recommended deployment is a dedicated worker process, separate from your web app. The
 process owns its database connections, its workers, signal handling, and shutdown.
 
-You _can_ co-host workers inside your web server, and for small apps that's fine. But
-scaling them separately is the point: your queue depth and your HTTP traffic rarely need the
-same number of machines.
+Keep workers outside your web server because queue depth and HTTP traffic rarely need the same
+number of processes. This also lets a worker restart without taking down web ingress.
 
 ## Shutting down cleanly
 

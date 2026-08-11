@@ -2,7 +2,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import { installSchema, Queue } from "@workhorse/core";
+import { installSchema, Queue, type Worker } from "@workhorse/core";
+import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../src/local-database.js";
@@ -23,8 +24,11 @@ import {
   DEMO_DURABLE_TIMER_WAIT_MS,
   DEMO_LONG_RUNNING_MS,
   DEMO_LONG_RUNNING_SEED_JOBS,
+  DEMO_MAINTENANCE_INTERVAL_MS,
+  DEMO_MAINTENANCE_TASK_POLL_MS,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
+  DEMO_QUEUE,
   DEMO_RATE_LIMIT,
   DEMO_RATE_LIMIT_PER_KEY,
   DEMO_RATE_LIMIT_POLICY_NAMESPACE,
@@ -64,6 +68,7 @@ import {
   DEMO_FEATURE_SHOWCASE_SOURCE,
 } from "../src/feature-showcase.js";
 import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/model";
+import { createDemoWorkerDefinition } from "../src/worker-definition.js";
 
 /**
  * These tests exercise the demo application, but they must never run against the demo database.
@@ -115,16 +120,108 @@ const TEST_OBSERVABLE_JOB_MS = TEST_REGISTRY_INTERVAL_MS * 10;
  */
 const runningApplications: Array<{ stop: () => Promise<void> }> = [];
 
-function createTestApplication(options: CreateDemoApplicationOptions = {}) {
-  const application = createDemoApplication(database, {
+interface DemoTestRuntimeOptions {
+  workers?: boolean;
+  rateLimitWorker?: boolean;
+  onWorkerError?: (error: unknown) => void;
+  workerPollMs?: number;
+  registryIntervalMs?: number;
+  maintenanceTaskPollMs?: number;
+  longRunningJobMs?: number;
+  durableStepMs?: number;
+  durableTimerWaitMs?: number;
+  onDurableStepOperation?: (
+    scenario: keyof typeof durableDemoScenarios,
+    stepName: string,
+    attempt: number,
+  ) => void;
+  onDurableTimerOperation?: (
+    operation: "prepare" | "publish",
+    attempt: number,
+    fenceToken: bigint,
+  ) => void;
+}
+
+type TestApplicationOptions = CreateDemoApplicationOptions & DemoTestRuntimeOptions;
+
+function createTestWorkerRuntime(options: DemoTestRuntimeOptions) {
+  const adapter = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
+  const workers: Worker[] = [];
+  const runs: Promise<void>[] = [];
+  let started = false;
+  let quiescePromise: Promise<void> | undefined;
+
+  return {
+    context: { queue: adapter.queue },
+    start() {
+      if (started) return;
+      if (quiescePromise) throw new Error("A stopped test worker runtime cannot be restarted");
+      started = true;
+      if (options.workers === false) return;
+
+      const definitions = [
+        ...DEMO_WORKER_CONCURRENCY.map((concurrency) =>
+          createDemoWorkerDefinition(database, adapter.queue, {
+            concurrency,
+            pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
+            maintenanceIntervalMs: options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS,
+            maintenanceTaskPollMs: options.maintenanceTaskPollMs ?? DEMO_MAINTENANCE_TASK_POLL_MS,
+            registryIntervalMs: options.registryIntervalMs,
+            durableStepMs: options.durableStepMs,
+            durableTimerWaitMs: options.durableTimerWaitMs,
+            longRunningJobMs: options.longRunningJobMs,
+            onDurableStepOperation: options.onDurableStepOperation,
+            onDurableTimerOperation: options.onDurableTimerOperation,
+          }),
+        ),
+        ...(options.rateLimitWorker
+          ? [
+              createDemoWorkerDefinition(database, adapter.queue, {
+                queue: DEMO_RATE_LIMIT_QUEUE,
+                scheduleNamespaces: [],
+                concurrency: 1,
+                pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
+                registryIntervalMs: options.registryIntervalMs,
+              }),
+            ]
+          : []),
+      ];
+      for (const definition of definitions) {
+        const worker = adapter.createWorker(definition.options);
+        definition.configure(worker);
+        workers.push(worker);
+        runs.push(
+          worker.run().catch((error: unknown) => {
+            options.onWorkerError?.(error);
+          }),
+        );
+      }
+    },
+    quiesce() {
+      quiescePromise ??= (async () => {
+        for (const worker of workers) worker.stop();
+        await Promise.all(runs);
+      })();
+      return quiescePromise;
+    },
+    stop() {
+      return this.quiesce();
+    },
+  };
+}
+
+function createTestApplication(options: TestApplicationOptions = {}) {
+  const resolved = {
     workerPollMs: 15,
     registryIntervalMs: TEST_REGISTRY_INTERVAL_MS,
     longRunningJobMs: 25,
     durableStepMs: 0,
     ...options,
-  });
-  runningApplications.push(application.workhorse);
-  return application;
+  };
+  const application = createDemoApplication(database, resolved);
+  const workhorse = createTestWorkerRuntime(resolved);
+  runningApplications.push(workhorse);
+  return { ...application, workhorse };
 }
 
 beforeAll(async () => {

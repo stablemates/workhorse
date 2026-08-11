@@ -1,24 +1,17 @@
-import {
-  defineWorkerProcess,
-  type ClaimedJob,
-  type WorkerProcessDefinition,
-} from "@workhorse/core";
+import { defineWorkerProcess } from "@workhorse/core";
 import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { Pool } from "pg";
 import {
-  DEMO_MAINTENANCE_INTERVAL_MS,
-  DEMO_MAINTENANCE_TASK_POLL_MS,
   DEMO_QUEUE,
   DEMO_RATE_LIMIT_QUEUE,
-  DEMO_REGISTRY_INTERVAL_MS,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_WORKER_CONCURRENCY,
   DEMO_WORKER_POLL_MS,
 } from "./constants.js";
 import { createDemoDatabase } from "./database.js";
 import { resolveDemoDatabaseUrl } from "./environment.js";
-import { registerDemoHandlers } from "./handlers.js";
 import { demoLogger } from "./logger.js";
+import { createDemoWorkerDefinition } from "./worker-definition.js";
 
 /**
  * The demo's dedicated worker process.
@@ -27,13 +20,31 @@ import { demoLogger } from "./logger.js";
  * their own connection pool, and their own lifecycle, and share nothing with the web tier except
  * PostgreSQL. Run it with `workhorse worker --config <compiled module>`.
  *
- * Two default-queue workers show heterogeneous capacity. A third serial worker owns the partner
- * queue so its seeded backlog drains only as PostgreSQL refills the displayed rate tokens.
+ * The launcher starts this definition once per profile, so every worker owns a separate process
+ * and pool. Two profiles show heterogeneous default-queue capacity, while the third drains the
+ * rate-limited partner queue.
  */
 const databaseUrl = resolveDemoDatabaseUrl();
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
   ? Number(process.env.WORKHORSE_WORKER_POLL_MS)
   : DEMO_WORKER_POLL_MS;
+const profiles = [
+  {
+    queue: DEMO_QUEUE,
+    concurrency: DEMO_WORKER_CONCURRENCY[0],
+    scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
+  },
+  {
+    queue: DEMO_QUEUE,
+    concurrency: DEMO_WORKER_CONCURRENCY[1],
+    scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
+  },
+  { queue: DEMO_RATE_LIMIT_QUEUE, concurrency: 1, scheduleNamespaces: [] },
+] as const;
+const profile = profiles[Number(process.env.WORKHORSE_DEMO_WORKER_PROFILE)];
+if (!profile) {
+  throw new Error("WORKHORSE_DEMO_WORKER_PROFILE must select a configured worker profile");
+}
 
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 const database = createDemoDatabase(pool);
@@ -42,47 +53,21 @@ const adapter = createDrizzleAdapter(database, {
   close: () => pool.end(),
 });
 
-function workerDefinition(
-  queue: string,
-  concurrency: number,
-  scheduleNamespaces: readonly string[] = [],
-): WorkerProcessDefinition["workers"][number] {
-  return {
-    options: {
-      queue,
-      // No workerId: the demo takes the same generated `<hostname>-<pid>-<random>` identity any
-      // deployment gets by default, so the dashboard has to discover the fleet from PostgreSQL.
-      scheduleNamespaces,
+export default defineWorkerProcess({
+  adapter: () => adapter,
+  workers: [
+    createDemoWorkerDefinition(database, adapter.queue, {
+      queue: profile.queue,
+      concurrency: profile.concurrency,
+      scheduleNamespaces: profile.scheduleNamespaces,
       pollMs: workerPollMs,
-      // Declared once at startup. The demo deliberately offers no runtime concurrency control.
-      concurrency,
-      maintenanceIntervalMs: DEMO_MAINTENANCE_INTERVAL_MS,
-      maintenanceTaskPollMs: DEMO_MAINTENANCE_TASK_POLL_MS,
-      registryIntervalMs: DEMO_REGISTRY_INTERVAL_MS,
-      // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
-      // Returning undefined omits the worker override and lets SQL select the stored policy.
-      retryDelayMs: (attempt: number, job: ClaimedJob) =>
-        job.retryPolicy === null ? attempt * 100 : undefined,
-      onRegistrationError: (error: unknown) =>
+      onRegistrationError: (error) =>
         demoLogger.error(
           "workhorse.demo.worker_registration_failed",
           "Worker registration failed; the fleet view will not show this worker",
           error,
         ),
-    },
-    configure(worker) {
-      registerDemoHandlers(worker, { database, queue: adapter.queue });
-    },
-  };
-}
-
-export default defineWorkerProcess({
-  adapter: () => adapter,
-  workers: [
-    ...DEMO_WORKER_CONCURRENCY.map((concurrency) =>
-      workerDefinition(DEMO_QUEUE, concurrency, [DEMO_SCHEDULE_NAMESPACE]),
-    ),
-    workerDefinition(DEMO_RATE_LIMIT_QUEUE, 1),
+    }),
   ],
   logger: {
     info: (message) => demoLogger.info("workhorse.demo.worker_process", message),
