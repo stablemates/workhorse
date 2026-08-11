@@ -59,6 +59,14 @@ try {
     "--pack-destination",
     tarballs,
   ]);
+  await run("pnpm", [
+    "--silent",
+    "--dir",
+    "packages/kysely",
+    "pack",
+    "--pack-destination",
+    tarballs,
+  ]);
   await run("pnpm", ["--silent", "--dir", "packages/hono", "pack", "--pack-destination", tarballs]);
   await run("pnpm", [
     "--silent",
@@ -73,6 +81,7 @@ try {
   const drizzleTarball = path.join(tarballs, "workhorse-drizzle-0.1.0.tgz");
   const prismaTarball = path.join(tarballs, "workhorse-prisma-0.1.0.tgz");
   const typeormTarball = path.join(tarballs, "workhorse-typeorm-0.1.0.tgz");
+  const kyselyTarball = path.join(tarballs, "workhorse-kysely-0.1.0.tgz");
   const honoTarball = path.join(tarballs, "workhorse-hono-0.1.0.tgz");
   const dashboardTarball = path.join(tarballs, "workhorse-dashboard-0.1.0.tgz");
   const extracted = path.join(scratch, "core");
@@ -87,6 +96,7 @@ try {
     coreManifest.includes('"drizzle-orm"') ||
     coreManifest.includes('"@prisma/client"') ||
     coreManifest.includes('"typeorm"') ||
+    coreManifest.includes('"kysely"') ||
     coreManifest.includes('"hono"') ||
     coreManifest.includes('"@hono/node-server"')
   ) {
@@ -96,7 +106,7 @@ try {
     if (!file.endsWith(".js")) continue;
     const source = await readFile(file, "utf8");
     if (
-      /^\s*(?:import|export)\s.+\sfrom\s+["'](?:drizzle-orm(?:\/|["'])|@prisma\/client(?:\/|["'])|typeorm(?:\/|["'])|hono(?:\/|["']))/m.test(
+      /^\s*(?:import|export)\s.+\sfrom\s+["'](?:drizzle-orm(?:\/|["'])|@prisma\/client(?:\/|["'])|typeorm(?:\/|["'])|kysely(?:\/|["'])|hono(?:\/|["']))/m.test(
         source,
       )
     ) {
@@ -138,6 +148,7 @@ try {
           "@workhorse/drizzle": `file:${drizzleTarball}`,
           "@workhorse/prisma": `file:${prismaTarball}`,
           "@workhorse/typeorm": `file:${typeormTarball}`,
+          "@workhorse/kysely": `file:${kyselyTarball}`,
           "@workhorse/hono": `file:${honoTarball}`,
           "@workhorse/dashboard": `file:${dashboardTarball}`,
           "@hono/node-server": "2.0.11",
@@ -145,6 +156,7 @@ try {
           "@prisma/client": "6.19.3",
           prisma: "6.19.3",
           typeorm: "0.3.31",
+          kysely: "0.29.5",
           hono: "4.12.31",
           pg: "8.16.3",
           typescript: "5.8.3",
@@ -183,6 +195,7 @@ try {
     `import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { createPrismaAdapter } from "@workhorse/prisma";
 import { createTypeOrmAdapter } from "@workhorse/typeorm";
+import { createKyselyAdapter } from "@workhorse/kysely";
 import { defineWorkerProcess } from "@workhorse/core";
 import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
 import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";\nimport { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboard/server";\nimport type { DashboardNodeMiddleware } from "@workhorse/dashboard/server";
@@ -190,6 +203,7 @@ import type { DashboardTaskCounts } from "@workhorse/dashboard/model";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import type { DataSource, EntityManager } from "typeorm";
+import type { Kysely, Transaction } from "kysely";
 import { Hono } from "hono";
 import { Pool } from "pg";
 
@@ -202,6 +216,9 @@ const prismaAdapter = createPrismaAdapter(prisma);
 declare const dataSource: DataSource;
 declare const entityManager: EntityManager;
 const typeOrmAdapter = createTypeOrmAdapter(dataSource);
+declare const kysely: Kysely<Record<string, never>>;
+declare const kyselyTransaction: Transaction<Record<string, never>>;
+const kyselyAdapter = createKyselyAdapter(kysely);
 const workerProcess = defineWorkerProcess({
   adapter: () => adapter,
   workers: [{ configure: (worker) => void worker.handle("typed", async () => ({ ok: true })) }],
@@ -219,6 +236,7 @@ void integration.context.queue;
 void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { ok: true }));
 void prismaAdapter.forTransaction(prismaTransaction).enqueue("typed", { ok: true });
 void typeOrmAdapter.forTransaction(entityManager).enqueue("typed", { ok: true });
+void kyselyAdapter.forTransaction(kyselyTransaction).enqueue("typed", { ok: true });
 declare const dashboardClient: DashboardClient;
 const dashboardProps: DashboardProps = { client: dashboardClient };
 const dashboardCountsPromise: Promise<DashboardTaskCounts> = dashboardClient.taskCounts();

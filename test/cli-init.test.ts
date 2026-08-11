@@ -42,6 +42,7 @@ describe("workhorse init", () => {
 
     expect(detectProject({ dependencies: { "@prisma/client": "^6.0.0" } }).orm).toBe("prisma");
     expect(detectProject({ dependencies: { typeorm: "^0.3.0" } }).orm).toBe("typeorm");
+    expect(detectProject({ dependencies: { kysely: "^0.29.0" } }).orm).toBe("kysely");
   });
 
   it("falls back to a plain pg project when nothing is recognized", () => {
@@ -102,7 +103,7 @@ describe("workhorse init", () => {
     expect(config).toContain("createWorkhorseAdapter");
   });
 
-  it("scaffolds Prisma and TypeORM workers with explicit notification pools", () => {
+  it("scaffolds ORM workers with explicit notification pools", () => {
     const base = {
       framework: "none",
       typescript: true,
@@ -110,11 +111,14 @@ describe("workhorse init", () => {
     } as const;
     const prisma = renderWorkerConfig({ ...base, orm: "prisma" });
     const typeorm = renderWorkerConfig({ ...base, orm: "typeorm" });
+    const kysely = renderWorkerConfig({ ...base, orm: "kysely" });
 
     expect(prisma).toContain("createPrismaAdapter");
     expect(prisma).toContain("notificationPool: pool");
     expect(typeorm).toContain("createTypeOrmAdapter");
     expect(typeorm).toContain("await database.initialize()");
+    expect(kysely).toContain("createKyselyAdapter");
+    expect(kysely).toContain("new PostgresDialect({ pool })");
   });
 
   it("prints a framework-appropriate dashboard mount", () => {

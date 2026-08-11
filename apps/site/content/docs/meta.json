@@ -30,6 +30,7 @@
     "drizzle",
     "prisma",
     "typeorm",
+    "kysely",
     "hono",
     "dashboard",
     "---Reference---",

@@ -1,8 +1,9 @@
 # Changelog
 
-All six published packages — `@workhorse/core`, `@workhorse/drizzle`, `@workhorse/prisma`,
-`@workhorse/typeorm`, `@workhorse/hono`, and `@workhorse/dashboard` — are versioned in lockstep and released from one tag, so they share this
-file. Each entry states the schema version it requires and the steps needed to move to it.
+Seven published packages are versioned in lockstep and released from one tag. They are
+`@workhorse/core`, `@workhorse/drizzle`, `@workhorse/prisma`, `@workhorse/typeorm`,
+`@workhorse/kysely`, `@workhorse/hono`, and `@workhorse/dashboard`. Each entry states its required
+schema version and upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
@@ -34,6 +35,8 @@ First published line. Requires **schema v21**, Node.js **22 or 24**, PostgreSQL 
   node-postgres notification connections.
 - `@workhorse/typeorm`: TypeORM provider with caller-owned `EntityManager` transactions and optional
   node-postgres notification connections.
+- `@workhorse/kysely`: Kysely provider with caller-owned transactions and optional node-postgres
+  notification connections.
 - `@workhorse/hono`: Hono lifecycle integration and dashboard route registration.
 - `@workhorse/dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,
   a settings page with audited policy changes, and a Connect-style Node bridge for Express,

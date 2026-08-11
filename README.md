@@ -66,7 +66,7 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
   top-level redaction, byte bounds, and merged lifecycle timelines;
 - a durable worker registry that discovers the live fleet, reports declared concurrency, slot use,
   and draining, and carries cooperative operator pause to workers in any process;
-- separate Drizzle, Prisma, TypeORM, and Hono integration packages;
+- separate Drizzle, Prisma, TypeORM, Kysely, and Hono integration packages;
 - a separately packaged `@workhorse/dashboard` React operator dashboard with a framework-neutral
   request host, a Connect-style Node bridge, an injected transport-neutral client boundary,
   package-owned styles/assets, and audited local controls;
@@ -509,7 +509,7 @@ queue pause, worker availability, and database downtime can delay the next claim
 one-second maintenance cadence makes sub-second durable waits inefficient. Use
 `context.sleepUntil(name, date)` for an immutable absolute target.
 
-### ORM and Hono packages
+### Database provider and Hono packages
 
 `@workhorse/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
 adding Drizzle to the core package:
@@ -527,10 +527,9 @@ await db.transaction(async (tx) => {
 });
 ```
 
-`@workhorse/prisma` and `@workhorse/typeorm` expose the same transaction boundary through Prisma's
-interactive transaction client and TypeORM's transactional `EntityManager`. Their workers can use
-an explicitly supplied node-postgres pool for notification-assisted dispatch, or poll when no pool
-is available.
+`@workhorse/prisma`, `@workhorse/typeorm`, and `@workhorse/kysely` expose the same transaction
+boundary through each provider's transaction object. Their workers can use an explicitly supplied
+node-postgres pool for notification-assisted dispatch, or poll when no pool is available.
 
 `@workhorse/hono` exposes the queue through typed middleware, optionally starts co-hosted workers,
 and provides a Node server handle whose idempotent shutdown stops new claims, drains in-flight

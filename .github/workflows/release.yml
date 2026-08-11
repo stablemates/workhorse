@@ -77,7 +77,7 @@ jobs:
         run: |
           mkdir -p dist-tarballs
           pnpm --silent pack --pack-destination dist-tarballs
-          for package in dashboard drizzle prisma typeorm hono; do
+          for package in dashboard drizzle prisma typeorm kysely hono; do
             pnpm --silent --dir "packages/$package" pack --pack-destination "$PWD/dist-tarballs"
           done
           ls -l dist-tarballs
@@ -91,7 +91,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           npm publish --provenance --access public "dist-tarballs/workhorse-core-$version.tgz"
-          for package in dashboard drizzle prisma typeorm hono; do
+          for package in dashboard drizzle prisma typeorm kysely hono; do
             npm publish --provenance --access public "dist-tarballs/workhorse-$package-$version.tgz"
           done
 

@@ -7,7 +7,7 @@ import { demoUrl } from "@/lib/site";
 export const metadata: Metadata = {
   title: "Integrations",
   description:
-    "Workhorse integration packages for Drizzle, Prisma, TypeORM, Hono, and the transport-neutral operator dashboard.",
+    "Workhorse integration packages for Drizzle, Prisma, TypeORM, Kysely, Hono, and the transport-neutral operator dashboard.",
   alternates: { canonical: "/integrations" },
 };
 
@@ -21,6 +21,21 @@ await db.transaction(async (tx) => {
   await tx.insert(account).values({ id: accountId });
   // Same transaction, same commit boundary, no outbox relay.
   await workhorse.forTransaction(tx).enqueue("account.created", { accountId });
+});`;
+
+const kyselySample = `import { createKyselyAdapter } from "@workhorse/kysely";
+
+const workhorse = createKyselyAdapter(database, { notificationPool: pool });
+
+await database.transaction().execute(async (transaction) => {
+  const account = await transaction
+    .insertInto("account")
+    .values({ email })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await workhorse.forTransaction(transaction).enqueue("account.created", {
+    accountId: account.id,
+  });
 });`;
 
 const prismaSample = `import { createPrismaAdapter } from "@workhorse/prisma";
@@ -106,6 +121,17 @@ const packages = [
     notes: [
       "forTransaction(manager) uses the transaction-scoped entity manager.",
       "An optional node-postgres pool enables notification-assisted worker dispatch.",
+    ],
+  },
+  {
+    name: "@workhorse/kysely",
+    tag: "Query builder adapter",
+    lede: "Adapts Kysely databases and transaction executors through compiled queries while reusing the caller's PostgreSQL dialect pool for notifications.",
+    sample: kyselySample,
+    file: "kysely.ts",
+    notes: [
+      "forTransaction(transaction) keeps enqueue on Kysely's transaction connection.",
+      "The PostgreSQL dialect pool remains caller-owned and can provide LISTEN connections.",
     ],
   },
   {
