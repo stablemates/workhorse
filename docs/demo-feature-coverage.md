@@ -31,6 +31,9 @@ Operational capabilities are demonstrated through their own surfaces rather than
 
 - leases, heartbeats, fencing, recovery, worker concurrency, pause, and drain appear on Workers and System;
 - queue pause, resume, purge, and statistics appear in the local operator controls;
+- the `partner-api` queue consumes its initial queue and per-key token bursts, leaving a visible
+  throttled backlog with a PostgreSQL-calculated next eligibility time; its dedicated worker drains
+  that backlog only as tokens refill;
 - retention, partition preparation, cleanup, and health remain deterministic on System;
 - Drizzle transactional enqueue and Hono lifecycle integration remain application-level proofs;
 - indexes, notification hints, dedicated worker CLI behavior, bounds, and validation remain integration-test

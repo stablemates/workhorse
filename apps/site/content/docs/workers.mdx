@@ -31,8 +31,9 @@ stale owner.
 
 ## Choose concurrency by policy group
 
-`WorkerOptions.concurrency` limits active handlers in one `Worker`. Replicas multiply that capacity,
-so it is not a process-wide or fleet-wide rate limit.
+`WorkerOptions.concurrency` limits active handlers in one `Worker`. Replicas multiply that capacity.
+Use [concurrency policies](/docs/concurrency-policies) for a fleet-wide active budget and
+[rate limits](/docs/rate-limits) for a fleet-wide start budget.
 
 Use one multi-slot worker for handlers that share a queue and operational policy. Add another worker
 when work needs a different queue, lease policy, retry override, schedule namespace, or handler set.

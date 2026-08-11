@@ -227,6 +227,10 @@ export interface QueueMetricSnapshot {
   concurrencyLimit: number | null;
   concurrencyActive: number;
   blockedReadyDepth: number;
+  rateLimitPerSecond: number | null;
+  rateLimitAvailableTokens: number;
+  rateLimitThrottledReadyDepth: number;
+  rateLimitNextEligibleDelayMs: number | null;
 }
 
 export interface QueueMetricSource {
@@ -259,12 +263,32 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
     "workhorse.queue.concurrency.blocked_ready",
     { description: "Bounded ready depth blocked by queue concurrency policy", unit: "{job}" },
   );
+  const rateConfigured = activeMeter.createObservableGauge(
+    "workhorse.queue.rate_limit.configured",
+    { description: "Configured sustained queue start rate", unit: "{job}/s" },
+  );
+  const rateAvailable = activeMeter.createObservableGauge(
+    "workhorse.queue.rate_limit.available_tokens",
+    { description: "Refilled queue start tokens available now", unit: "{token}" },
+  );
+  const rateThrottled = activeMeter.createObservableGauge(
+    "workhorse.queue.rate_limit.throttled_ready",
+    { description: "Bounded ready depth waiting for rate-limit tokens", unit: "{job}" },
+  );
+  const rateNextEligibleDelay = activeMeter.createObservableGauge(
+    "workhorse.queue.rate_limit.next_eligible_delay",
+    { description: "Delay until the earliest sampled throttled job can start", unit: "ms" },
+  );
   const instruments = [
     queueDepth,
     oldestReadyAge,
     concurrencyLimit,
     concurrencyActive,
     concurrencyBlocked,
+    rateConfigured,
+    rateAvailable,
+    rateThrottled,
+    rateNextEligibleDelay,
   ];
   const callback: BatchObservableCallback = async (result) => {
     for (const snapshot of await source.queueMetricSnapshot()) {
@@ -288,6 +312,18 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
         result.observe(concurrencyLimit, snapshot.concurrencyLimit, queueAttribute);
         result.observe(concurrencyActive, snapshot.concurrencyActive, queueAttribute);
         result.observe(concurrencyBlocked, snapshot.blockedReadyDepth, queueAttribute);
+      }
+      if (snapshot.rateLimitPerSecond !== null) {
+        result.observe(rateConfigured, snapshot.rateLimitPerSecond, queueAttribute);
+        result.observe(rateAvailable, snapshot.rateLimitAvailableTokens, queueAttribute);
+        result.observe(rateThrottled, snapshot.rateLimitThrottledReadyDepth, queueAttribute);
+        if (snapshot.rateLimitNextEligibleDelayMs !== null) {
+          result.observe(
+            rateNextEligibleDelay,
+            snapshot.rateLimitNextEligibleDelayMs,
+            queueAttribute,
+          );
+        }
       }
     }
   };

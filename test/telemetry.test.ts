@@ -499,6 +499,10 @@ describe("OpenTelemetry", () => {
           concurrencyLimit: 5,
           concurrencyActive: 2,
           blockedReadyDepth: 4,
+          rateLimitPerSecond: 5,
+          rateLimitAvailableTokens: 0.5,
+          rateLimitThrottledReadyDepth: 6,
+          rateLimitNextEligibleDelayMs: 100,
         },
         {
           queue: "billing",
@@ -509,6 +513,10 @@ describe("OpenTelemetry", () => {
           concurrencyLimit: null,
           concurrencyActive: 0,
           blockedReadyDepth: 0,
+          rateLimitPerSecond: null,
+          rateLimitAvailableTokens: 0,
+          rateLimitThrottledReadyDepth: 0,
+          rateLimitNextEligibleDelayMs: null,
         },
       ]),
     });
@@ -532,6 +540,15 @@ describe("OpenTelemetry", () => {
     );
     const concurrencyBlocked = metricsData.find(
       (metric) => metric.descriptor.name === "workhorse.queue.concurrency.blocked_ready",
+    );
+    const rateConfigured = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.rate_limit.configured",
+    );
+    const rateAvailable = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.rate_limit.available_tokens",
+    );
+    const rateThrottled = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.rate_limit.throttled_ready",
     );
     expect(metricsData.map((metric) => metric.descriptor.name)).toContain("workhorse.queue.depth");
     expect(depth?.dataPoints).toEqual(
@@ -573,6 +590,15 @@ describe("OpenTelemetry", () => {
         value: 4,
         attributes: { "workhorse.queue.name": "mail" },
       }),
+    );
+    expect(rateConfigured?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 5, attributes: { "workhorse.queue.name": "mail" } }),
+    );
+    expect(rateAvailable?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 0.5, attributes: { "workhorse.queue.name": "mail" } }),
+    );
+    expect(rateThrottled?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 6, attributes: { "workhorse.queue.name": "mail" } }),
     );
     for (const metric of metricsData) {
       for (const point of metric.dataPoints) {

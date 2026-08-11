@@ -25,6 +25,11 @@ import {
   DEMO_LONG_RUNNING_SEED_JOBS,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
+  DEMO_RATE_LIMIT,
+  DEMO_RATE_LIMIT_PER_KEY,
+  DEMO_RATE_LIMIT_POLICY_NAMESPACE,
+  DEMO_RATE_LIMIT_QUEUE,
+  DEMO_RATE_LIMIT_SEED_JOBS,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
@@ -41,6 +46,7 @@ import {
   REPORT_SCHEDULE_NAME,
   seedDemoData,
   syncDemoConcurrencyPolicies,
+  syncDemoRateLimitPolicies,
   syncDemoSchedules,
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
@@ -133,7 +139,8 @@ beforeEach(async () => {
   await Promise.all(runningApplications.splice(0).map((workhorse) => workhorse.stop()));
   await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
     workhorse.job_wait, workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.queue_control, workhorse.concurrency_policy, workhorse.worker_registry,
+    workhorse.queue_control, workhorse.rate_limit_bucket, workhorse.rate_limit_policy,
+    workhorse.concurrency_policy, workhorse.worker_registry,
     workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job_stat_bucket, workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query(`UPDATE workhorse.job_stat_state SET
@@ -315,7 +322,7 @@ describe("Workhorse demo", () => {
 
     const seeded = await seedDemoData(database);
     expect(seeded).toMatchObject({ seeded: true, historicalJobCount: 362 });
-    expect(seeded.jobIds).toHaveLength(44);
+    expect(seeded.jobIds).toHaveLength(49);
     expect(await seedDemoData(database)).toEqual({
       seeded: false,
       jobIds: [],
@@ -333,12 +340,14 @@ describe("Workhorse demo", () => {
            ) representative_rows`,
         [seeded.jobIds],
       ),
-    ).toMatchObject({ rows: [{ versions: [expect.any(String), expect.any(String)] }] });
+    ).toMatchObject({
+      rows: [{ versions: [expect.any(String), expect.any(String), expect.any(String)] }],
+    });
     expect(
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 406 }],
+      rows: [{ count: 411 }],
     });
     expect(
       await pool.query(
@@ -562,16 +571,21 @@ describe("Workhorse demo", () => {
     });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 406,
+      all: 411,
       scheduled: 6,
-      queued: 29,
-      completed: 348,
+      queued: 32,
+      completed: 350,
       discarded: 21,
       retried: 22,
     });
-    // Seeds must never manufacture a retention problem: startup stays healthy and deterministic.
+    // The rate-limit scenario is the one deliberate degraded check; retention stays healthy.
     await expect(client.dashboard.system({ window: "1h" })).resolves.toMatchObject({
-      status: { level: "healthy", checks: [], criticalChecks: [], degradedChecks: [] },
+      status: {
+        level: "degraded",
+        checks: ["Queue partner-api has 3+ ready tasks waiting for rate-limit tokens"],
+        criticalChecks: [],
+        degradedChecks: ["Queue partner-api has 3+ ready tasks waiting for rate-limit tokens"],
+      },
       integrity: {
         retention: {
           maxLagMs: null,
@@ -588,8 +602,8 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 406,
-      counts: { all: 406, scheduled: 6, queued: 29, completed: 348, discarded: 21 },
+      total: 411,
+      counts: { all: 411, scheduled: 6, queued: 32, completed: 350, discarded: 21 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -598,6 +612,7 @@ describe("Workhorse demo", () => {
         "demo",
         "emails",
         "orders",
+        "partner-api",
         "showcase-dead-letter",
         "showcase-redrive-replay",
         "showcase-redrive-success",
@@ -605,6 +620,8 @@ describe("Workhorse demo", () => {
       workers: [
         HISTORICAL_WORKER_IDS[0],
         HISTORICAL_WORKER_IDS[1],
+        "rate-limit-seed-a",
+        "rate-limit-seed-b",
         "showcase-seed-dead-letter",
         "showcase-seed-redrive-replay",
         "showcase-seed-redrive-success",
@@ -613,7 +630,7 @@ describe("Workhorse demo", () => {
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 406 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 411 });
     expect(secondPage.jobs).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
@@ -715,6 +732,7 @@ describe("Workhorse demo", () => {
       "demo",
       "emails",
       "orders",
+      "partner-api",
       "showcase-dead-letter",
       "showcase-redrive-replay",
       "showcase-redrive-success",
@@ -737,6 +755,8 @@ describe("Workhorse demo", () => {
       groups: [
         HISTORICAL_WORKER_IDS[0],
         HISTORICAL_WORKER_IDS[1],
+        "rate-limit-seed-a",
+        "rate-limit-seed-b",
         "showcase-seed-dead-letter",
         "showcase-seed-redrive-replay",
         "showcase-seed-redrive-success",
@@ -855,6 +875,84 @@ describe("Workhorse demo", () => {
     expect(released?.id).toBe(remainingAcmeId);
     await queue.complete(globexClaim, globexWorker, { seededConcurrencyExample: true });
     await queue.complete(released!, "demo-concurrency-c", { seededConcurrencyExample: true });
+  });
+
+  it("seeds a visibly throttled partner API queue", async () => {
+    await syncDemoRateLimitPolicies(pool);
+    await seedDemoData(database);
+
+    await expect(new Queue(pool).rateLimitPolicies([DEMO_RATE_LIMIT_QUEUE])).resolves.toEqual([
+      expect.objectContaining({
+        namespace: DEMO_RATE_LIMIT_POLICY_NAMESPACE,
+        queue: DEMO_RATE_LIMIT_QUEUE,
+        rate: DEMO_RATE_LIMIT,
+        perKey: DEMO_RATE_LIMIT_PER_KEY,
+      }),
+    ]);
+    await expect(
+      pool.query(
+        `SELECT runtime.state, job.concurrency_key, count(*)::integer AS count
+           FROM workhorse.job job
+           JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
+          WHERE job.payload->>'source' = 'rate-limit-seed'
+          GROUP BY runtime.state, job.concurrency_key
+          ORDER BY job.concurrency_key`,
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        { state: "ready", concurrency_key: "customer-acme", count: 2 },
+        { state: "ready", concurrency_key: "customer-globex", count: 1 },
+      ],
+    });
+    expect(DEMO_RATE_LIMIT_SEED_JOBS).toHaveLength(5);
+    await expect(new Queue(pool).rateLimitStatuses([DEMO_RATE_LIMIT_QUEUE])).resolves.toMatchObject(
+      [
+        {
+          throttledReady: 3,
+          throttledKeys: 2,
+          nextEligibleAt: expect.any(Date),
+        },
+      ],
+    );
+  });
+
+  it("drains the partner API backlog only as rate tokens refill", async () => {
+    const { workhorse } = createTestApplication({ rateLimitWorker: true });
+    await syncDemoRateLimitPolicies(pool);
+    await seedDemoData(database);
+    workhorse.start();
+
+    try {
+      await pool.query(
+        `UPDATE workhorse.rate_limit_bucket
+            SET refilled_at = clock_timestamp() - interval '1 hour'
+          WHERE queue_name = $1`,
+        [DEMO_RATE_LIMIT_QUEUE],
+      );
+      await waitFor(
+        async () => {
+          const result = await pool.query<{ count: number }>(
+            `SELECT count(*)::integer AS count
+               FROM workhorse.job job
+               JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
+              WHERE job.payload->>'source' = 'rate-limit-seed'
+                AND outcome.state = 'succeeded'`,
+          );
+          return result.rows[0]!.count;
+        },
+        (count) => count === 4,
+      );
+      await expect(
+        pool.query(
+          `SELECT count(*)::integer AS count
+             FROM workhorse.job job
+             JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
+            WHERE job.payload->>'source' = 'rate-limit-seed' AND runtime.state = 'ready'`,
+        ),
+      ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    } finally {
+      await workhorse.stop();
+    }
   });
 
   it("materializes the representative execution-timeout example", async () => {

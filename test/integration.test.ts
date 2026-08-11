@@ -122,6 +122,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
     workhorse.schedule_occurrence, workhorse.schedule_definition,
+    workhorse.rate_limit_bucket, workhorse.rate_limit_policy,
     workhorse.concurrency_policy, workhorse.queue_control, workhorse.worker_registry,
     workhorse.job_wait, workhorse.job_checkpoint,
     workhorse.enqueue_idempotency, workhorse.job_redrive, workhorse.job_outcome, workhorse.job_runtime,
@@ -419,11 +420,11 @@ afterAll(async () => {
 });
 
 describe("live-runtime queue protocol", () => {
-  it("installs schema v22 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v23 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(22);
+    expect(version.rows[0]?.version).toBe(23);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;
@@ -2225,7 +2226,7 @@ describe("live-runtime queue protocol", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(22);
+    expect(health.schemaVersion).toBe(23);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -2970,7 +2971,7 @@ describe("live-runtime queue protocol", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v22 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v23 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -5528,6 +5529,239 @@ describe("live-runtime queue protocol", () => {
     });
   });
 
+  it("synchronizes token-bucket policies and limits starts across completed jobs", async () => {
+    const queueName = `rate-limit-total-${randomUUID()}`;
+    await expect(
+      queue.syncRateLimitPolicies("test", [
+        {
+          queue: queueName,
+          rate: { limit: 1, intervalMs: 100, burst: 1 },
+        },
+      ]),
+    ).resolves.toMatchObject([
+      {
+        namespace: "test",
+        queue: queueName,
+        rate: { limit: 1, intervalMs: 100, burst: 1 },
+        perKey: null,
+      },
+    ]);
+
+    const firstId = await queue.enqueue("rate-limited", { ordinal: 1 }, { queue: queueName });
+    const secondId = await queue.enqueue("rate-limited", { ordinal: 2 }, { queue: queueName });
+    const first = await queue.claim("rate-worker-a", { queue: queueName });
+    expect(first?.id).toBe(firstId);
+    await expect(queue.complete(first!, "rate-worker-a", null)).resolves.toBe(true);
+    await expect(queue.claim("rate-worker-b", { queue: queueName })).resolves.toBeNull();
+    await expect(queue.rateLimitStatuses([queueName])).resolves.toMatchObject([
+      {
+        queue: queueName,
+        availableTokens: expect.any(Number),
+        throttledReady: 1,
+        throttledKeys: 0,
+        nextEligibleAt: expect.any(Date),
+        sampleCapped: false,
+      },
+    ]);
+
+    await sleep(110);
+    await expect(queue.claim("rate-worker-b", { queue: queueName })).resolves.toMatchObject({
+      id: secondId,
+    });
+    await expect(queue.rateLimitPolicies([queueName])).resolves.toMatchObject([
+      {
+        queue: queueName,
+        rate: { limit: 1, intervalMs: 100, burst: 1 },
+      },
+    ]);
+  });
+
+  it("admits another key while the FIFO head key is throttled", async () => {
+    const queueName = `rate-limit-key-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      {
+        queue: queueName,
+        rate: { limit: 100, intervalMs: 1_000, burst: 100 },
+        perKey: { limit: 1, intervalMs: 150, burst: 1 },
+      },
+    ]);
+    const firstA = await queue.enqueue("key-rate", {}, { queue: queueName, concurrencyKey: "a" });
+    await queue.enqueue("key-rate", {}, { queue: queueName, concurrencyKey: "a" });
+    const firstB = await queue.enqueue("key-rate", {}, { queue: queueName, concurrencyKey: "b" });
+
+    await expect(queue.claim("key-rate-worker-a", { queue: queueName })).resolves.toMatchObject({
+      id: firstA,
+    });
+    await expect(queue.claim("key-rate-worker-b", { queue: queueName })).resolves.toMatchObject({
+      id: firstB,
+    });
+    await expect(queue.claim("key-rate-worker-c", { queue: queueName })).resolves.toBeNull();
+  });
+
+  it("consumes one queue token across competing claims and recovers by elapsed database time", async () => {
+    const queueName = `rate-limit-atomic-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      { queue: queueName, rate: { limit: 1, intervalMs: 100, burst: 1 } },
+    ]);
+    await queue.enqueueMany([
+      { type: "atomic-rate", payload: { ordinal: 1 }, options: { queue: queueName } },
+      { type: "atomic-rate", payload: { ordinal: 2 }, options: { queue: queueName } },
+    ]);
+
+    const claims = await Promise.all([
+      queue.claim("atomic-rate-worker-a", { queue: queueName }),
+      queue.claim("atomic-rate-worker-b", { queue: queueName }),
+    ]);
+    expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
+    await sleep(110);
+    await expect(queue.claim("atomic-rate-worker-c", { queue: queueName })).resolves.not.toBeNull();
+  });
+
+  it("refills continuously between interval boundaries", async () => {
+    const queueName = `rate-limit-continuous-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      { queue: queueName, rate: { limit: 2, intervalMs: 1_000, burst: 2 } },
+    ]);
+    await queue.enqueueMany([
+      { type: "continuous-rate", payload: 1, options: { queue: queueName } },
+      { type: "continuous-rate", payload: 2, options: { queue: queueName } },
+      { type: "continuous-rate", payload: 3, options: { queue: queueName } },
+    ]);
+    await expect(queue.claim("continuous-rate-a", { queue: queueName })).resolves.not.toBeNull();
+    await expect(queue.claim("continuous-rate-b", { queue: queueName })).resolves.not.toBeNull();
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() - interval '250 milliseconds'
+        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+      [queueName],
+    );
+
+    const partial = (await queue.rateLimitStatuses([queueName]))[0]!.availableTokens;
+    expect(partial).toBeGreaterThan(0.4);
+    expect(partial).toBeLessThan(1);
+    await expect(queue.claim("continuous-rate-c", { queue: queueName })).resolves.toBeNull();
+
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() - interval '550 milliseconds'
+        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+      [queueName],
+    );
+    await expect(queue.claim("continuous-rate-c", { queue: queueName })).resolves.not.toBeNull();
+  });
+
+  it("rolls token consumption back with a crashed claim transaction", async () => {
+    const queueName = `rate-limit-rollback-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      { queue: queueName, rate: { limit: 1, intervalMs: 60_000, burst: 1 } },
+    ]);
+    await queue.enqueueMany([
+      { type: "rollback-rate", payload: 1, options: { queue: queueName } },
+      { type: "rollback-rate", payload: 2, options: { queue: queueName } },
+    ]);
+
+    const transaction = await pool.connect();
+    try {
+      await transaction.query("BEGIN");
+      await expect(
+        new Queue(transaction).claim("rollback-rate-crashed", { queue: queueName }),
+      ).resolves.not.toBeNull();
+      await transaction.query("ROLLBACK");
+    } finally {
+      transaction.release();
+    }
+
+    await expect(
+      queue.claim("rollback-rate-survivor", { queue: queueName }),
+    ).resolves.not.toBeNull();
+    await expect(queue.claim("rollback-rate-blocked", { queue: queueName })).resolves.toBeNull();
+  });
+
+  it("bounds durable state by pruning fully refilled key buckets during claims", async () => {
+    const queueName = `rate-limit-key-pruning-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      {
+        queue: queueName,
+        rate: { limit: 100, intervalMs: 1_000, burst: 100 },
+        perKey: { limit: 1, intervalMs: 100, burst: 1 },
+      },
+    ]);
+    for (const key of ["a", "b", "c"]) {
+      await queue.enqueue("pruned-key-rate", null, { queue: queueName, concurrencyKey: key });
+      const claimed = await queue.claim(`pruned-key-${key}`, { queue: queueName });
+      await queue.complete(claimed!, `pruned-key-${key}`, null);
+    }
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() - interval '1 second'
+        WHERE queue_name = $1 AND bucket_scope = 'key'`,
+      [queueName],
+    );
+    await queue.enqueue("pruned-key-rate", null, {
+      queue: queueName,
+      concurrencyKey: "replacement",
+    });
+    await expect(
+      queue.claim("pruned-key-replacement", { queue: queueName }),
+    ).resolves.not.toBeNull();
+    await expect(
+      pool.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM workhorse.rate_limit_bucket
+          WHERE queue_name = $1 AND bucket_scope = 'key'`,
+        [queueName],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: "1" }] });
+  });
+
+  it("charges retries as new starts and validates deployment ownership", async () => {
+    const queueName = `rate-limit-retry-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("deployment-a", [
+      { queue: queueName, rate: { limit: 1, intervalMs: 100, burst: 1 } },
+    ]);
+    await expect(
+      queue.syncRateLimitPolicies("deployment-b", [
+        { queue: queueName, rate: { limit: 1, intervalMs: 100, burst: 1 } },
+      ]),
+    ).rejects.toThrow(/owned by another namespace/);
+    await expect(
+      queue.syncRateLimitPolicies("deployment-a", [
+        { queue: queueName, rate: { limit: 0, intervalMs: 100, burst: 1 } },
+      ]),
+    ).rejects.toThrow(/bounded positive integers/);
+
+    await queue.enqueue("rate-retry", {}, { queue: queueName, maxAttempts: 2 });
+    const first = await queue.claim("rate-retry-worker", { queue: queueName });
+    await expect(queue.fail(first!, "rate-retry-worker", new Error("retry"), 0)).resolves.toBe(
+      "ready",
+    );
+    await expect(queue.claim("rate-retry-worker", { queue: queueName })).resolves.toBeNull();
+    await sleep(110);
+    await expect(queue.claim("rate-retry-worker", { queue: queueName })).resolves.toMatchObject({
+      attempt: 2,
+    });
+  });
+
+  it("does not manufacture tokens when the persisted refill clock is ahead", async () => {
+    const queueName = `rate-limit-clock-${randomUUID()}`;
+    await queue.syncRateLimitPolicies("test", [
+      { queue: queueName, rate: { limit: 1, intervalMs: 100, burst: 1 } },
+    ]);
+    await queue.enqueueMany([
+      { type: "clock-rate", payload: 1, options: { queue: queueName } },
+      { type: "clock-rate", payload: 2, options: { queue: queueName } },
+    ]);
+    await expect(queue.claim("clock-rate-worker", { queue: queueName })).resolves.not.toBeNull();
+    await pool.query(
+      `UPDATE workhorse.rate_limit_bucket
+          SET refilled_at = clock_timestamp() + interval '1 hour'
+        WHERE queue_name = $1 AND bucket_scope = 'queue'`,
+      [queueName],
+    );
+
+    await sleep(110);
+    await expect(queue.claim("clock-rate-worker", { queue: queueName })).resolves.toBeNull();
+  });
+
   it("uses selective live-work indexes for concurrency admission checks", async () => {
     const client = await pool.connect();
     try {
@@ -7125,7 +7359,7 @@ describe("live-runtime queue protocol", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(22);
+    expect(health.schemaVersion).toBe(23);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -7144,6 +7378,10 @@ describe("live-runtime queue protocol", () => {
         concurrencyLimit: null,
         concurrencyActive: 0,
         blockedReadyDepth: 0,
+        rateLimitPerSecond: null,
+        rateLimitAvailableTokens: 0,
+        rateLimitThrottledReadyDepth: 0,
+        rateLimitNextEligibleDelayMs: null,
       },
     ]);
   });

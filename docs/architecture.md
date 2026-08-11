@@ -2,7 +2,7 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 22.
+The current clean-install protocol is schema version 23.
 
 This page is the precise reference. For the ideas it assumes — leases and fence tokens,
 at-least-once delivery, cooperative cancellation, the runtime/outcome split — start with
@@ -107,6 +107,27 @@ erDiagram
     int max_active
     int max_active_per_key
     timestamptz updated_at
+  }
+
+  rate_limit_policy {
+    text queue_name PK
+    text namespace
+    int rate_limit
+    int rate_interval_ms
+    int rate_burst
+    int per_key_limit
+    int per_key_interval_ms
+    int per_key_burst
+    timestamptz updated_at
+  }
+
+  rate_limit_policy ||--o{ rate_limit_bucket : "owns token state"
+  rate_limit_bucket {
+    text queue_name PK,FK
+    text bucket_scope PK
+    text bucket_key PK
+    numeric tokens
+    timestamptz refilled_at
   }
 
   job {
@@ -359,6 +380,43 @@ One row per queue stores a deployment-owned dispatch budget. `queue_name` is the
 
 Policy capacity counts only active rows whose lease has not expired. The policy is therefore a dispatch budget, not mutual exclusion. A handler can still overlap a replacement after its stale lease expires. Fence validation prevents the stale generation from committing a lifecycle result.
 
+### `rate_limit_policy` and `rate_limit_bucket`
+
+One `rate_limit_policy` row per queue defines a PostgreSQL-owned token bucket. The queue bucket
+requires `rate_limit`, `rate_interval_ms`, and `rate_burst`. Each accepts bounded positive integers:
+limits and bursts from 1 through 1,000,000, and intervals from 1 through 86,400,000 milliseconds.
+`queue_name` and `namespace` each accept 1 through 256 UTF-8 bytes.
+Nullable `per_key_limit`, `per_key_interval_ms`, and `per_key_burst` either appear together or remain
+null. A keyed policy gives every non-null `job.concurrency_key` an independent bucket within its
+queue. Keyless jobs consume only the queue bucket.
+
+`sync_rate_limit_policies_v1(namespace, definitions, prune)` and
+`Queue.syncRateLimitPolicies(namespace, definitions, { prune })` reconcile deployment-owned desired
+state. Each definition contains only `queue`, `rate`, and optional `perKey`; each bucket contains
+`limit`, `intervalMs`, and `burst`. Synchronization accepts at most 10,000 unique queues, rejects
+cross-namespace ownership, and prunes omitted rows by default. `Queue.rateLimitPolicies(queueNames)`
+returns persisted definitions without an implicit result cap.
+
+`rate_limit_bucket` stores mutable queue and key token balances separately from policy provenance.
+`rate_limit_bucket_v1` computes elapsed time from `clock_timestamp()`, clamps negative elapsed time
+to zero, adds `elapsed_ms * limit / interval_ms`, and caps the result at `burst`. One admitted start
+consumes one token in the claim transaction. Completion, failure, cancellation, durable suspension,
+and lease expiry never refund a token. Process clock skew cannot create capacity because application
+time never enters refill arithmetic. Admission probes do not create rows for keys that never start;
+the function inserts bucket state only when it consumes a token. Each claim inspects the oldest 100
+key buckets for its queue and removes those whose tokens have fully refilled. This bounds cleanup
+work while preventing inactive high-cardinality keys from accumulating forever. Deleting a policy
+cascades its remaining bucket state; recreating the policy therefore begins with a full burst.
+
+`Queue.rateLimitStatuses(queueNames)` observes at most 100 policies and the oldest 100 ready rows per
+policy. It reads a 101st sentinel to set `policySetCapped` or `sampleCapped`, but never returns that
+sentinel. Each returned row reports refilled queue tokens, throttled-ready depth, distinct sampled
+keys waiting for tokens, and the earliest sampled `nextEligibleAt`. An omitted or empty `queueNames`
+array observes every policy subject to the cap; a non-empty array filters exact queue names before
+the cap. `QueueHealth.rateLimitPolicies` includes the same observations and sets `capped` when either
+limit applies. OpenTelemetry exports configured starts per second, available queue tokens, throttled
+ready depth, and next-eligibility delay using queue name as the only policy dimension.
+
 ### History
 
 `job_event` is the append-only lifecycle audit. `attempt_history` contains one immutable row for every closed logical attempt, including retry, lease expiry, success, terminal failure, and cancellation after an attempt actually started. Its `started_at` preserves the logical attempt start across timer suspensions, while `claimed_at` identifies the final activation that closed it. Timer suspension itself emits events but does not close attempt history. Both history relations use UTC-daily range partitions with default fallbacks. Clean installation creates the current day plus three future days, and `prepare_history_partitions_v1` continuously replenishes and repairs that horizon.
@@ -524,9 +582,20 @@ Suspension aborts the handler's cooperative signal and exits through private wor
 
 ### Claim
 
-`claim_v2` takes the shared queue advisory lock and locks the queue policy row before admission. It computes acquisition and lease timestamps after those potentially blocking locks. Without a policy, it selects the FIFO head through `job_runtime_ready_idx`. With a policy, it counts only unexpired active rows through `job_runtime_active_queue_key_expiry_idx` and stops when queue capacity is full.
+`claim_v2` takes shared advisory locks for concurrency and rate-policy deployment, then locks any
+matching policy rows before admission. It computes acquisition and lease timestamps after those
+potentially blocking locks. Without a concurrency policy, it selects the FIFO head through
+`job_runtime_ready_idx`. With one, it counts only unexpired active rows through
+`job_runtime_active_queue_key_expiry_idx` and stops when queue capacity is full. With a rate policy,
+it refills the queue bucket from PostgreSQL time and returns null when no queue token exists.
 
-If key limits apply, `claim_v2` inspects at most the first 100 ready rows by FIFO sequence. It selects the earliest candidate whose queue-scoped key has capacity. Saturated candidates remain ready, so later admissible work can proceed without an unbounded saturated-prefix scan. Returning null after exhausting this window is observable through blocked-ready health and metric fields.
+If concurrency-key or rate-key limits apply, `claim_v2` inspects at most the first 100 ready rows by
+FIFO sequence. It selects the earliest candidate whose queue-scoped key has concurrency capacity and
+a rate token. Saturated or throttled candidates remain ready, so later admissible work can proceed
+without an unbounded prefix scan. The transaction consumes queue and key tokens only after its
+runtime update selects a candidate. Competing worker processes serialize on the rate-policy row, so
+one durable token admits one start even when claims overlap. Returning null after exhausting the
+window enters the Worker's normal bounded empty-claim wait instead of a claim loop.
 
 One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `claim_v1` remains installed as a compatibility function, but `Queue.claim` and production benchmarks use `claim_v2`.
 
@@ -547,8 +616,8 @@ heartbeat timer, abort controller, fence checks, and final transition.
 `pause()` prevents later claims while maintenance and active jobs continue. `resume()` clears the pause and
 makes claims immediately eligible. `stop()` enters draining state, prevents later claims, and allows every
 already active handler and its final fenced transition to finish before `run()` resolves. These process-local
-controls do not impose rate limits or queue weights. `concurrency_policy` separately enforces a durable
-dispatch budget across worker processes.
+controls do not impose queue weights. `concurrency_policy` enforces a durable active-work budget and
+`rate_limit_policy` enforces a durable start-rate budget across worker processes.
 
 An update that moves a governed runtime away from active, or deletes it, runs
 `notify_concurrency_capacity_v1`. The trigger publishes the queue on `workhorse_jobs`. Completion, failure,
@@ -746,7 +815,8 @@ The meter also exposes these baseline instruments:
 `registerQueueMetrics(queue)` registers the database-wide depth, age, and concurrency callbacks and returns a
 cleanup function. Register it once per database and telemetry resource; registering it for every
 worker duplicates observations. `Queue.queueMetricSnapshot()` groups live pressure by every queue
-present in `job_runtime`, `queue_control`, `worker_registry`, or `concurrency_policy`, plus the
+present in `job_runtime`, `queue_control`, `worker_registry`, `concurrency_policy`, or
+`rate_limit_policy`, plus the
 `Queue.defaultQueue`. Concurrency metrics carry only `workhorse.queue.name`; raw key values never become
 metric attributes.
 
