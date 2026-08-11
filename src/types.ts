@@ -704,10 +704,15 @@ export interface RetentionCategoryValues<T> {
   statistics: T;
 }
 
-export interface QueueHealth {
+/** Correctness-sensitive queue values captured by one PostgreSQL statement snapshot. */
+export interface QueueHealthSnapshot {
+  /** Database time shared by every value in this snapshot. */
+  capturedAt: Date;
   /** Canonical schema protocol version installed in this database. */
   schemaVersion: number | null;
   counts: Record<JobState, number>;
+  /** Fields whose value is a lower bound because the bounded exact count exceeded its ceiling. */
+  cappedFields: QueueHealthCappedField[];
   readyDepth: number;
   scheduledDepth: number;
   /** Scheduled runtimes currently suspended at a named durable timer boundary. */
@@ -730,6 +735,86 @@ export interface QueueHealth {
   activeExecutionTimeouts: number;
   /** Active attempts whose execution timeout target has elapsed but is not yet reaped. */
   overdueExecutionTimeouts: number;
+}
+
+export type QueueHealthCappedField =
+  | `counts.${JobState}`
+  | "readyDepth"
+  | "scheduledDepth"
+  | "sleepingJobs"
+  | "overdueWaits"
+  | "activeLeases"
+  | "expiredLeases"
+  | "deadlinePressure.pending"
+  | "deadlinePressure.overdue"
+  | "deadlinePressure.dueWithinMinute"
+  | "activeExecutionTimeouts"
+  | "overdueExecutionTimeouts";
+
+/** PostgreSQL observations that may change independently or lag the transactional queue state. */
+export interface PostgreSQLHealth {
+  observedAt: Date;
+  /** PostgreSQL relation statistics are estimates and may lag until stats flush. */
+  relations: Array<{
+    relation: string;
+    totalBytes: number;
+    tableBytes: number;
+    indexBytes: number;
+    liveTuples: number;
+    deadTuples: number;
+    modificationsSinceAnalyze: number;
+    /** HOT updates divided by all updates, or null when no updates were observed. */
+    hotUpdateRatio: number | null;
+    lastVacuum: Date | null;
+    lastAutovacuum: Date | null;
+    /** Daily partitions attached to this relation; zero for ordinary tables. */
+    partitions: number;
+  }>;
+  oldestTransactionAgeMs: number | null;
+  /** Sessions currently waiting on PostgreSQL locks, excluding the health query itself. */
+  lockWaitCount: number;
+  /** Fraction of PostgreSQL's global async notification queue currently occupied. */
+  notificationQueueUsage: number;
+}
+
+/** Maximum tolerated exact queue pressure. Null disables the age budget. */
+export interface QueueHealthBudgets {
+  expiredLeases: number;
+  overdueWaits: number;
+  overdueDeadlines: number;
+  overdueExecutionTimeouts: number;
+  oldestReadyAgeMs: number | null;
+}
+
+export interface QueueHealthOptions {
+  budgets?: Partial<QueueHealthBudgets>;
+}
+
+export type QueueHealthDegradationCode =
+  | "expired_leases"
+  | "overdue_waits"
+  | "overdue_deadlines"
+  | "overdue_execution_timeouts"
+  | "oldest_ready_age";
+
+export interface QueueHealthDegradationReason {
+  code: QueueHealthDegradationCode;
+  observed: number;
+  budget: number;
+}
+
+export interface QueueHealthStatus {
+  level: "healthy" | "degraded";
+  reasons: QueueHealthDegradationReason[];
+}
+
+export interface QueueHealth extends QueueHealthSnapshot {
+  /** Preferred exact-value boundary. Top-level snapshot fields remain compatibility aliases. */
+  snapshot: QueueHealthSnapshot;
+  /** Eventually consistent PostgreSQL observations, kept outside the exact queue snapshot. */
+  postgresql: PostgreSQLHealth;
+  /** Exact snapshot values evaluated against the effective caller budgets. */
+  status: QueueHealthStatus;
   /** Bounded queue concurrency utilization without raw concurrency-key labels. */
   concurrencyPolicies: {
     policies: Array<{
@@ -784,27 +869,14 @@ export interface QueueHealth {
     jobEvents: boolean;
     attemptHistory: boolean;
   };
-  /** PostgreSQL relation statistics are estimates and may lag until stats flush. */
-  relations: Array<{
-    relation: string;
-    totalBytes: number;
-    tableBytes: number;
-    indexBytes: number;
-    liveTuples: number;
-    deadTuples: number;
-    modificationsSinceAnalyze: number;
-    /** HOT updates divided by all updates, or null when no updates were observed. */
-    hotUpdateRatio: number | null;
-    lastVacuum: Date | null;
-    lastAutovacuum: Date | null;
-    /** Daily partitions attached to this relation; zero for ordinary tables. */
-    partitions: number;
-  }>;
-  oldestTransactionAgeMs: number | null;
-  /** Sessions currently waiting on PostgreSQL locks, excluding the health query itself. */
-  lockWaitCount: number;
-  /** Fraction of PostgreSQL's global async notification queue currently occupied. */
-  notificationQueueUsage: number;
+  /** @deprecated Read eventually consistent observations from `postgresql`. */
+  relations: PostgreSQLHealth["relations"];
+  /** @deprecated Read eventually consistent observations from `postgresql`. */
+  oldestTransactionAgeMs: PostgreSQLHealth["oldestTransactionAgeMs"];
+  /** @deprecated Read eventually consistent observations from `postgresql`. */
+  lockWaitCount: PostgreSQLHealth["lockWaitCount"];
+  /** @deprecated Read eventually consistent observations from `postgresql`. */
+  notificationQueueUsage: PostgreSQLHealth["notificationQueueUsage"];
 }
 
 /** One worker's self-reported runtime state, pushed on its registration cadence. */

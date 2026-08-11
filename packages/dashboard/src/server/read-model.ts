@@ -1171,7 +1171,7 @@ const dashboardStorageRelations: ReadonlyArray<{
 ];
 
 function dashboardStorage(health: QueueHealthSnapshot): DashboardSystemStorage {
-  const byRelation = new Map(health.relations.map((row) => [row.relation, row]));
+  const byRelation = new Map(health.postgresql.relations.map((row) => [row.relation, row]));
   const relations = dashboardStorageRelations
     .map((definition) => {
       const row = byRelation.get(definition.relation);
@@ -1595,10 +1595,22 @@ export async function readDashboardSystem(
     eventExists: row.event_exists,
     attemptExists: row.attempt_exists,
   }));
+  const exactHealthChecks = health.status.reasons.map((reason) => {
+    switch (reason.code) {
+      case "expired_leases":
+        return "Expired leases";
+      case "overdue_waits":
+        return "Durable waits are overdue";
+      case "overdue_deadlines":
+        return "Tasks are past their deadlines";
+      case "overdue_execution_timeouts":
+        return "Attempts are past their execution limits";
+      case "oldest_ready_age":
+        return "Ready work exceeds its age budget";
+    }
+  });
   const criticalChecks = [
-    runtime.expired > 0 ? "Expired leases" : null,
-    health.deadlinePressure.overdue > 0 ? "Tasks are past their deadlines" : null,
-    health.overdueExecutionTimeouts > 0 ? "Attempts are past their execution limits" : null,
+    ...exactHealthChecks,
     runtime.due_but_unpromoted > 0 ? "Scheduled tasks are overdue" : null,
     partitions.some((partition) => !partition.eventExists || !partition.attemptExists)
       ? "Daily history storage is missing"
@@ -1649,7 +1661,7 @@ export async function readDashboardSystem(
   }
 
   return {
-    capturedAt: new Date().toISOString(),
+    capturedAt: health.snapshot.capturedAt.toISOString(),
     window,
     windowSeconds,
     status,
@@ -1679,12 +1691,12 @@ export async function readDashboardSystem(
         recovered: summary.recovered,
       },
       deadline: {
-        pending: health.deadlinePressure.pending,
-        overdue: health.deadlinePressure.overdue,
-        dueWithinMinute: health.deadlinePressure.dueWithinMinute,
-        earliestAt: toIsoOrNull(health.deadlinePressure.earliestAt),
-        activeTimeouts: health.activeExecutionTimeouts,
-        overdueTimeouts: health.overdueExecutionTimeouts,
+        pending: health.snapshot.deadlinePressure.pending,
+        overdue: health.snapshot.deadlinePressure.overdue,
+        dueWithinMinute: health.snapshot.deadlinePressure.dueWithinMinute,
+        earliestAt: toIsoOrNull(health.snapshot.deadlinePressure.earliestAt),
+        activeTimeouts: health.snapshot.activeExecutionTimeouts,
+        overdueTimeouts: health.snapshot.overdueExecutionTimeouts,
       },
     },
     outcomes: outcomeRows.rows.map((row) => ({

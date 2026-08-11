@@ -31,6 +31,9 @@ First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse/core`: notification-assisted worker dispatch through one process-local
   `workhorse_jobs` listener per node-postgres pool, with queue routing, reconnect backoff, and
   jittered bounded polling as the durable fallback.
+- `@workhorse/core`: transactionally consistent, bounded queue-health snapshots with explicit
+  lower-bound markers, PostgreSQL observation provenance, configurable health budgets, and
+  machine-readable degradation reasons.
 - `@workhorse/drizzle`: Drizzle ORM provider with caller-owned transactions.
 - `@workhorse/prisma`: Prisma ORM provider with caller-owned interactive transactions and optional
   node-postgres notification connections.

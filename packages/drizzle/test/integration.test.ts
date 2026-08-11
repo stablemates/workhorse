@@ -164,6 +164,15 @@ describe("Drizzle provider integration", () => {
     expect(claimed?.deadlineAt?.getTime()).toBe(deadline.getTime());
   });
 
+  it("normalizes operational snapshot timestamps to Date values", async () => {
+    await adapter.queue.enqueue("health-date", {});
+
+    const health = await adapter.queue.health();
+
+    expect(health.snapshot.capturedAt).toBeInstanceOf(Date);
+    expect(health.postgresql.observedAt).toBeInstanceOf(Date);
+  });
+
   it("maps dead-letter redrive and conflicts through the Drizzle adapter", async () => {
     const sourceJobId = await adapter.queue.enqueue(
       "drizzle-redrive",
