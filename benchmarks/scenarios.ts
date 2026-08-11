@@ -47,6 +47,7 @@ export const operationalScenarioNames = [
   "idempotent-ingress",
   "retention-pruning",
   "health-snapshot",
+  "rate-limit-admission",
   "worker-concurrency",
   "notification-dispatch",
   "telemetry-context",
@@ -378,6 +379,26 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     ],
   },
   {
+    name: "rate-limit-admission",
+    purpose:
+      "Exercise transactional token-bucket admission, bounded throttle diagnostics, and refill-driven recovery without making a throughput claim.",
+    invariants: [
+      "a burst admits only the configured number of ready jobs",
+      "health reports throttled ready work and the next eligibility time",
+      "a continuously refilled token admits the remaining job without changing its identity",
+      "key-scoped admission bypasses an empty bucket for a different key",
+    ],
+    metrics: [
+      "burstClaims",
+      "throttledClaims",
+      "throttledReady",
+      "effectiveRatePerSecond",
+      "refillWaitMs",
+      "refillClaimMs",
+      "keyBypassClaimed",
+    ],
+  },
+  {
     name: "worker-concurrency",
     purpose:
       "Exercise bounded concurrent worker slots and equal-capacity worker topologies while recording throughput, start latency, and database-pressure proxies without excluding claim work from timing.",
@@ -448,6 +469,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
 ] as const;
 
 export const resetWorkhorseStateSql = `TRUNCATE workhorse.job_event, workhorse.attempt_history,
+  workhorse.rate_limit_bucket, workhorse.rate_limit_policy,
   workhorse.job_redrive, workhorse.job_query,
   workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE;
 ALTER SEQUENCE workhorse.fence_token_seq RESTART WITH 1;
@@ -3126,6 +3148,88 @@ async function workerConcurrency(
   return { name: "worker-concurrency", durationMs: 0, metrics, assertions };
 }
 
+async function rateLimitAdmission(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const assertions: ScenarioAssertion[] = [];
+  const metrics: Record<string, ScenarioMetric> = {};
+  const queue = new Queue(context.pool, context.queueName);
+  const refillWaitMs = Math.max(250, context.options.retryDelayMs);
+  await queue.syncRateLimitPolicies("operational-scenario", [
+    { queue: context.queueName, limit: 1, intervalMs: refillWaitMs, burst: 2 },
+  ]);
+  const jobIds = await Promise.all(
+    [0, 1, 2].map((ordinal) =>
+      queue.enqueue("rate-limit-admission", { ordinal }, { queue: context.queueName }),
+    ),
+  );
+  const initialClaims: Array<ClaimedJob | null> = [];
+  for (let ordinal = 0; ordinal < 3; ordinal += 1) {
+    initialClaims.push(
+      await queue.claim(`rate-limit-worker-${ordinal}`, { queue: context.queueName }),
+    );
+  }
+  const admitted = initialClaims.filter((claim) => claim !== null);
+  const health = await queue.health();
+  const pressure = health.rateLimitPolicies.policies[0]!;
+  metrics.burstClaims = admitted.length;
+  metrics.throttledClaims = initialClaims.filter((claim) => claim === null).length;
+  metrics.throttledReady = pressure.throttledReady;
+  metrics.effectiveRatePerSecond = pressure.effectiveRatePerSecond;
+  metrics.refillWaitMs = refillWaitMs;
+  recordInvariant(assertions, "burst admits configured capacity", admitted.length, 2);
+  recordInvariant(assertions, "one claim is throttled", metrics.throttledClaims, 1);
+  recordInvariant(assertions, "health reports throttled ready work", pressure.throttledReady, 1);
+  recordInvariant(
+    assertions,
+    "health reports a future eligibility time",
+    pressure.nextEligibleAt !== null && pressure.nextEligibleAt.getTime() > Date.now(),
+    true,
+  );
+
+  await context.sleep(refillWaitMs + 10);
+  const [refilled, refillClaimMs] = await measured(context.now, () =>
+    queue.claim("rate-limit-refill-worker", { queue: context.queueName }),
+  );
+  metrics.refillClaimMs = refillClaimMs;
+  recordInvariant(assertions, "refill admits the remaining job", refilled !== null, true);
+  recordInvariant(
+    assertions,
+    "refill preserves an accepted identity",
+    jobIds.includes(refilled!.id),
+    true,
+  );
+
+  await reset(context.pool);
+  const keyedQueue = new Queue(context.pool, context.queueName);
+  await keyedQueue.syncRateLimitPolicies("operational-scenario", [
+    {
+      queue: context.queueName,
+      scope: "key",
+      limit: 1,
+      intervalMs: refillWaitMs * 10,
+      burst: 1,
+    },
+  ]);
+  await keyedQueue.enqueue("key-rate", {}, { queue: context.queueName, concurrencyKey: "a" });
+  await keyedQueue.enqueue("key-rate", {}, { queue: context.queueName, concurrencyKey: "a" });
+  const keyB = await keyedQueue.enqueue(
+    "key-rate",
+    {},
+    {
+      queue: context.queueName,
+      concurrencyKey: "b",
+    },
+  );
+  await keyedQueue.claim("key-rate-a", { queue: context.queueName });
+  const keyBypass = await keyedQueue.claim("key-rate-b", { queue: context.queueName });
+  metrics.keyBypassClaimed = keyBypass?.id === keyB;
+  recordInvariant(assertions, "another key bypasses an empty bucket", keyBypass?.id, keyB);
+
+  return { name: "rate-limit-admission", durationMs: 0, metrics, assertions };
+}
+
 async function notificationDispatch(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
@@ -3380,6 +3484,7 @@ export const operationalScenarioImplementations: Readonly<
   "idempotent-ingress": idempotentIngress,
   "retention-pruning": retentionPruning,
   "health-snapshot": healthSnapshot,
+  "rate-limit-admission": rateLimitAdmission,
   "worker-concurrency": workerConcurrency,
   "notification-dispatch": notificationDispatch,
   "telemetry-context": telemetryContext,

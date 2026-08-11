@@ -15,6 +15,7 @@ its own final write, so they don't interfere with each other.
 
 Concurrency here is per worker. More workers add more process slots. Use a
 [concurrency policy](240-concurrency-policies.md) when the fleet must share one durable budget.
+Use a [rate limit](250-rate-limits.md) when the fleet must also control how quickly jobs start.
 
 ## Waiting without constant polling
 

@@ -85,6 +85,8 @@ export type {
   CancelStatus,
   ConcurrencyPolicy,
   ConcurrencyPolicyDefinition,
+  RateLimitPolicy,
+  RateLimitPolicyDefinition,
   DeadLetter,
   DeadLetterCursor,
   DeadLetterFilter,

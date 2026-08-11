@@ -133,6 +133,7 @@ beforeEach(async () => {
   await Promise.all(runningApplications.splice(0).map((workhorse) => workhorse.stop()));
   await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
     workhorse.job_wait, workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
+    workhorse.rate_limit_bucket, workhorse.rate_limit_policy,
     workhorse.queue_control, workhorse.concurrency_policy, workhorse.worker_registry,
     workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job_stat_bucket, workhorse.job RESTART IDENTITY CASCADE`);
@@ -2793,7 +2794,7 @@ describe("Workhorse demo", () => {
           type: "workhorse.prune_terminal_storage_v1",
           maintenance: expect.objectContaining({
             intervalMs: 300_000,
-            phases: ["enqueue_idempotency", "terminal_jobs"],
+            phases: ["rate_limit_buckets", "enqueue_idempotency", "terminal_jobs"],
           }),
         }),
         expect.objectContaining({

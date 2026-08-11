@@ -499,6 +499,9 @@ describe("OpenTelemetry", () => {
           concurrencyLimit: 5,
           concurrencyActive: 2,
           blockedReadyDepth: 4,
+          rateLimitPerSecond: 10,
+          rateLimitThrottledReadyDepth: 3,
+          rateLimitNextEligibleDelayMs: 75,
         },
         {
           queue: "billing",
@@ -509,6 +512,9 @@ describe("OpenTelemetry", () => {
           concurrencyLimit: null,
           concurrencyActive: 0,
           blockedReadyDepth: 0,
+          rateLimitPerSecond: null,
+          rateLimitThrottledReadyDepth: 0,
+          rateLimitNextEligibleDelayMs: null,
         },
       ]),
     });
@@ -532,6 +538,15 @@ describe("OpenTelemetry", () => {
     );
     const concurrencyBlocked = metricsData.find(
       (metric) => metric.descriptor.name === "workhorse.queue.concurrency.blocked_ready",
+    );
+    const rateLimit = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.rate_limit",
+    );
+    const rateLimitThrottled = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.rate_limit.throttled_ready",
+    );
+    const rateLimitDelay = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.rate_limit.next_eligibility_delay",
     );
     expect(metricsData.map((metric) => metric.descriptor.name)).toContain("workhorse.queue.depth");
     expect(depth?.dataPoints).toEqual(
@@ -574,6 +589,14 @@ describe("OpenTelemetry", () => {
         attributes: { "workhorse.queue.name": "mail" },
       }),
     );
+    expect(rateLimit?.dataPoints).toContainEqual(
+      expect.objectContaining({
+        value: 10,
+        attributes: { "workhorse.queue.name": "mail" },
+      }),
+    );
+    expect(rateLimitThrottled?.dataPoints).toContainEqual(expect.objectContaining({ value: 3 }));
+    expect(rateLimitDelay?.dataPoints).toContainEqual(expect.objectContaining({ value: 75 }));
     for (const metric of metricsData) {
       for (const point of metric.dataPoints) {
         expect(Object.keys(point.attributes)).not.toContain("workhorse.job.id");

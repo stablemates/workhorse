@@ -12,7 +12,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v21**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -21,6 +21,8 @@ First published line. Requires **schema v21**, Node.js **22 or 24**, PostgreSQL 
   checkpoints, dead letters and redrive, enqueue idempotency keys, persisted retry policies,
   declarative recurring schedules, versioned payload and result contracts, durable JSON size
   limits, operator redaction, automated history retention, and a durable worker registry.
+- `@workhorse/core`: deployment-synchronized queue and queue-scoped-key token buckets with
+  PostgreSQL-clock refill, transactional claim admission, bounded diagnostics, and bucket cleanup.
 - `@workhorse/core`: database-authoritative maintenance and retention settings with application
   defaults, operator overrides, per-setting provenance, revert operations, and bounded retention
   impact previews.

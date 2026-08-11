@@ -17,6 +17,8 @@ import type {
   ClaimedJob,
   ConcurrencyPolicy,
   ConcurrencyPolicyDefinition,
+  RateLimitPolicy,
+  RateLimitPolicyDefinition,
   DeadLetter,
   DeadLetterFilter,
   DeadLetterPage,
@@ -127,6 +129,7 @@ export type MaintenancePhase =
   | "event_retention"
   | "attempt_retention"
   | "schedule_occurrences"
+  | "rate_limit_buckets"
   | "enqueue_idempotency"
   | "terminal_jobs";
 
@@ -390,6 +393,16 @@ type ConcurrencyPolicyRow = {
   queue_name: string;
   max_active: number;
   max_active_per_key: number | null;
+  updated_at: Date;
+};
+
+type RateLimitPolicyRow = {
+  namespace: string;
+  queue_name: string;
+  scope: "queue" | "key";
+  refill_limit: number;
+  refill_interval_ms: number;
+  burst: number;
   updated_at: Date;
 };
 
@@ -670,6 +683,18 @@ function concurrencyPolicy(row: ConcurrencyPolicyRow): ConcurrencyPolicy {
     queue: row.queue_name,
     maxActive: row.max_active,
     maxActivePerKey: row.max_active_per_key,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rateLimitPolicy(row: RateLimitPolicyRow): RateLimitPolicy {
+  return {
+    namespace: row.namespace,
+    queue: row.queue_name,
+    scope: row.scope,
+    limit: row.refill_limit,
+    intervalMs: row.refill_interval_ms,
+    burst: row.burst,
     updatedAt: row.updated_at,
   };
 }
@@ -1747,6 +1772,36 @@ export class Queue {
       [queueNames],
     );
     return result.rows.map(concurrencyPolicy);
+  }
+
+  async syncRateLimitPolicies(
+    namespace: string,
+    definitions: readonly RateLimitPolicyDefinition[],
+    options: { prune?: boolean } = {},
+  ): Promise<RateLimitPolicy[]> {
+    const input = definitions.map((definition) => ({
+      queue: definition.queue,
+      scope: definition.scope ?? "queue",
+      limit: definition.limit,
+      intervalMs: definition.intervalMs,
+      burst: definition.burst ?? definition.limit,
+    }));
+    const result = await this.database.query<RateLimitPolicyRow>(
+      "SELECT * FROM workhorse.sync_rate_limit_policies_v1($1, $2::jsonb, $3)",
+      [namespace, JSON.stringify(input), options.prune ?? true],
+    );
+    return result.rows.map(rateLimitPolicy);
+  }
+
+  async rateLimitPolicies(queueNames: readonly string[] = []): Promise<RateLimitPolicy[]> {
+    const result = await this.database.query<RateLimitPolicyRow>(
+      `SELECT namespace, queue_name, scope, refill_limit, refill_interval_ms, burst, updated_at
+         FROM workhorse.rate_limit_policy
+        WHERE cardinality($1::text[]) = 0 OR queue_name = ANY($1::text[])
+        ORDER BY queue_name`,
+      [queueNames],
+    );
+    return result.rows.map(rateLimitPolicy);
   }
 
   async overrideRetentionPolicy(
@@ -3005,6 +3060,7 @@ export class Queue {
       retention,
       statistics,
       concurrency,
+      rateLimits,
     ] = await Promise.all([
       this.database.query<{ version: number }>(
         `SELECT CASE
@@ -3384,6 +3440,78 @@ export class Queue {
           ) blocked
          ORDER BY policy.queue_name
          LIMIT 100`),
+      this.database.query<{
+        namespace: string;
+        queue_name: string;
+        scope: "queue" | "key";
+        refill_limit: number;
+        refill_interval_ms: number;
+        burst: number;
+        throttled_ready: string;
+        effective_rate_per_second: number;
+        next_eligible_at: Date | null;
+        capped: boolean;
+      }>(`
+        WITH policies AS MATERIALIZED (
+          SELECT policy.*
+            FROM workhorse.rate_limit_policy policy
+           ORDER BY policy.queue_name
+           LIMIT 101
+        )
+        SELECT policy.namespace, policy.queue_name, policy.scope, policy.refill_limit,
+               policy.refill_interval_ms, policy.burst,
+               pressure.throttled_ready::text,
+               policy.refill_limit * 1000.0 / policy.refill_interval_ms
+                 AS effective_rate_per_second,
+               pressure.next_eligible_at,
+               (SELECT count(*) FROM policies) > 100 OR pressure.sample_capped AS capped
+          FROM policies policy
+          CROSS JOIN LATERAL (
+            SELECT count(*) FILTER (WHERE sample.ordinal > floor(sample.available_tokens))::integer
+                     AS throttled_ready,
+                   min(
+                     sample.refill_baseline + make_interval(secs =>
+                       ((sample.ordinal - sample.available_tokens)
+                         * policy.refill_interval_ms / policy.refill_limit)::double precision / 1000
+                     )
+                   ) FILTER (WHERE sample.ordinal > floor(sample.available_tokens))
+                     AS next_eligible_at,
+                   count(*) > 100 AS sample_capped
+              FROM (
+                SELECT numbered.ordinal,
+                       GREATEST(
+                         clock_timestamp(),
+                         COALESCE(bucket.refilled_at, clock_timestamp())
+                       ) AS refill_baseline,
+                       LEAST(
+                         policy.burst::numeric,
+                         COALESCE(bucket.tokens, policy.burst::numeric)
+                           + CASE WHEN bucket.refilled_at IS NULL THEN 0 ELSE
+                               GREATEST(0, extract(epoch FROM
+                                 clock_timestamp() - bucket.refilled_at) * 1000)
+                               * policy.refill_limit / policy.refill_interval_ms
+                             END
+                       ) AS available_tokens
+                  FROM (
+                    SELECT ready.concurrency_key,
+                           row_number() OVER (
+                             PARTITION BY CASE WHEN policy.scope = 'queue' THEN ''
+                                               ELSE COALESCE(ready.concurrency_key, '') END
+                             ORDER BY ready.sequence, ready.job_id
+                           ) AS ordinal
+                      FROM workhorse.job_runtime ready
+                     WHERE ready.state = 'ready' AND ready.queue_name = policy.queue_name
+                     ORDER BY ready.sequence, ready.job_id
+                     LIMIT 101
+                  ) numbered
+                  LEFT JOIN workhorse.rate_limit_bucket bucket
+                    ON bucket.queue_name = policy.queue_name
+                   AND bucket.bucket_key = CASE WHEN policy.scope = 'queue' THEN ''
+                                                ELSE COALESCE(numbered.concurrency_key, '') END
+              ) sample
+          ) pressure
+         ORDER BY policy.queue_name
+         LIMIT 100`),
     ]);
 
     const stateCounts: QueueHealth["counts"] = {
@@ -3431,6 +3559,20 @@ export class Queue {
           highestKeyActive: Number(row.highest_key_active),
         })),
         capped: concurrency.rows.some((row) => row.capped),
+      },
+      rateLimitPolicies: {
+        policies: rateLimits.rows.map((row) => ({
+          namespace: row.namespace,
+          queue: row.queue_name,
+          scope: row.scope,
+          limit: row.refill_limit,
+          intervalMs: row.refill_interval_ms,
+          burst: row.burst,
+          throttledReady: Number(row.throttled_ready),
+          effectiveRatePerSecond: Number(row.effective_rate_per_second),
+          nextEligibleAt: row.next_eligible_at,
+        })),
+        capped: rateLimits.rows.some((row) => row.capped),
       },
       statistics: {
         rolledUpThrough: statisticsRow.rolled_up_through,
@@ -3514,12 +3656,16 @@ export class Queue {
       max_active: number | null;
       concurrency_active: string;
       blocked_ready: string;
+      rate_limit_per_second: number | null;
+      rate_throttled_ready: string;
+      rate_next_eligible_delay_ms: number | null;
     }>(
       `WITH queue_names AS (
          SELECT $1::text AS queue_name
          UNION SELECT queue_name FROM workhorse.job_runtime
          UNION SELECT queue_name FROM workhorse.queue_control
          UNION SELECT queue_name FROM workhorse.concurrency_policy
+         UNION SELECT queue_name FROM workhorse.rate_limit_policy
          UNION SELECT queue_name FROM workhorse.worker_registry
        ), usage AS (
          SELECT names.queue_name,
@@ -3537,9 +3683,13 @@ export class Queue {
           GROUP BY names.queue_name
        )
        SELECT usage.*, policy.max_active,
-              COALESCE(blocked.blocked_ready, 0)::text AS blocked_ready
+              COALESCE(blocked.blocked_ready, 0)::text AS blocked_ready,
+              rate.refill_limit * 1000.0 / rate.refill_interval_ms AS rate_limit_per_second,
+              COALESCE(throttling.throttled_ready, 0)::text AS rate_throttled_ready,
+              throttling.next_eligible_delay_ms AS rate_next_eligible_delay_ms
          FROM usage
          LEFT JOIN workhorse.concurrency_policy policy ON policy.queue_name = usage.queue_name
+         LEFT JOIN workhorse.rate_limit_policy rate ON rate.queue_name = usage.queue_name
          LEFT JOIN LATERAL (
            SELECT count(*) FILTER (
                     WHERE usage.concurrency_active::integer >= policy.max_active
@@ -3561,6 +3711,47 @@ export class Queue {
                 ORDER BY ready.sequence, ready.job_id LIMIT 100
              ) sample
          ) blocked ON policy.queue_name IS NOT NULL
+         LEFT JOIN LATERAL (
+           SELECT count(*) FILTER (WHERE sample.ordinal > floor(sample.available_tokens))::integer
+                    AS throttled_ready,
+                  min(
+                    sample.refill_delay_ms + (sample.ordinal - sample.available_tokens)
+                      * rate.refill_interval_ms / rate.refill_limit
+                  ) FILTER (WHERE sample.ordinal > floor(sample.available_tokens))
+                    AS next_eligible_delay_ms
+             FROM (
+               SELECT numbered.ordinal,
+                      GREATEST(
+                        0,
+                        extract(epoch FROM
+                          COALESCE(bucket.refilled_at, clock_timestamp()) - clock_timestamp()) * 1000
+                      ) AS refill_delay_ms,
+                      LEAST(
+                        rate.burst::numeric,
+                        COALESCE(bucket.tokens, rate.burst::numeric)
+                          + CASE WHEN bucket.refilled_at IS NULL THEN 0 ELSE
+                              GREATEST(0, extract(epoch FROM
+                                clock_timestamp() - bucket.refilled_at) * 1000)
+                              * rate.refill_limit / rate.refill_interval_ms
+                            END
+                      ) AS available_tokens
+                 FROM (
+                   SELECT ready.concurrency_key,
+                          row_number() OVER (
+                            PARTITION BY CASE WHEN rate.scope = 'queue' THEN ''
+                                              ELSE COALESCE(ready.concurrency_key, '') END
+                            ORDER BY ready.sequence, ready.job_id
+                          ) AS ordinal
+                     FROM workhorse.job_runtime ready
+                    WHERE ready.state = 'ready' AND ready.queue_name = usage.queue_name
+                    ORDER BY ready.sequence, ready.job_id LIMIT 100
+                 ) numbered
+                 LEFT JOIN workhorse.rate_limit_bucket bucket
+                   ON bucket.queue_name = usage.queue_name
+                  AND bucket.bucket_key = CASE WHEN rate.scope = 'queue' THEN ''
+                                               ELSE COALESCE(numbered.concurrency_key, '') END
+             ) sample
+         ) throttling ON rate.queue_name IS NOT NULL
         ORDER BY usage.queue_name`,
       [this.defaultQueue],
     );
@@ -3573,6 +3764,13 @@ export class Queue {
       concurrencyLimit: row.max_active,
       concurrencyActive: Number(row.concurrency_active),
       blockedReadyDepth: Number(row.blocked_ready),
+      rateLimitPerSecond:
+        row.rate_limit_per_second === null ? null : Number(row.rate_limit_per_second),
+      rateLimitThrottledReadyDepth: Number(row.rate_throttled_ready),
+      rateLimitNextEligibleDelayMs:
+        row.rate_next_eligible_delay_ms === null
+          ? null
+          : Math.max(0, Number(row.rate_next_eligible_delay_ms)),
     }));
   }
 }

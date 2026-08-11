@@ -13,6 +13,7 @@
     "idempotency",
     "schedules",
     "concurrency-policies",
+    "rate-limits",
     "---Executing work---",
     "workers",
     "retries",
