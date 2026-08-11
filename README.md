@@ -77,7 +77,7 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
 - a JSON PostgreSQL queue-health command;
 - a reproducible conventional-table versus live-runtime benchmark.
 
-Explicitly excluded: workflows, additional ORM/framework adapters, production authentication and RBAC, rate limits, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
+Explicitly excluded: workflows, additional ORM adapters, framework integration packages, production authentication and RBAC, rate limits, cross-queue concurrency policies, general-purpose signals, child jobs, arbitrary scheduled SQL, forced handler interruption, exactly-once external effects, and unsupported performance claims.
 
 Checkpoint outputs remain immutable restart evidence. Mutable progress is stored separately and never
 changes the accepted payload, checkpoint outputs, or terminal result.

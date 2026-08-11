@@ -62,7 +62,7 @@ import {
   DEMO_FEATURE_SHOWCASE_SOURCE,
 } from "../src/feature-showcase.js";
 import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/model";
-import { registerDemoHandlers } from "../src/handlers.js";
+import { createDemoWorkerDefinition } from "../src/worker-definition.js";
 
 /**
  * These tests exercise the demo application, but they must never run against the demo database.
@@ -153,25 +153,20 @@ function createTestWorkerRuntime(options: DemoTestRuntimeOptions) {
       if (options.workers === false) return;
 
       for (const concurrency of DEMO_WORKER_CONCURRENCY) {
-        const worker = adapter.createWorker({
-          queue: DEMO_QUEUE,
-          scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
-          pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
+        const definition = createDemoWorkerDefinition(database, adapter.queue, {
           concurrency,
+          pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
           maintenanceIntervalMs: options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS,
           maintenanceTaskPollMs: options.maintenanceTaskPollMs ?? DEMO_MAINTENANCE_TASK_POLL_MS,
           registryIntervalMs: options.registryIntervalMs,
-          retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
-        });
-        registerDemoHandlers(worker, {
-          database,
-          queue: adapter.queue,
           durableStepMs: options.durableStepMs,
           durableTimerWaitMs: options.durableTimerWaitMs,
           longRunningJobMs: options.longRunningJobMs,
           onDurableStepOperation: options.onDurableStepOperation,
           onDurableTimerOperation: options.onDurableTimerOperation,
         });
+        const worker = adapter.createWorker(definition.options);
+        definition.configure(worker);
         workers.push(worker);
         runs.push(
           worker.run().catch((error: unknown) => {
