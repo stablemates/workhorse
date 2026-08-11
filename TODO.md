@@ -18,7 +18,10 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
-1. **P1-05 Priority queues**
+1. **P0-08 Built-in single-admin dashboard authentication**
+2. **P1-05 Priority queues**
+3. **P2-13 Python client and worker SDK**
+4. **P2-14 Go client and worker SDK**
 
 The demo, the ORM integration packages, the operator query surface, progress, dead letters,
 deadlines, the durable worker registry, the framework-neutral dashboard host, and the release and
@@ -26,7 +29,7 @@ compatibility matrix are complete.
 
 Full OpenTelemetry support is complete, so later claim-path work can measure latency before and
 after changing dispatch. P0-07 also established the published compatibility contract needed by
-P2-06 and P2-07.
+P2-06, P2-07, P2-13, and P2-14.
 
 ## P0: demo vertical slice and production hardening
 
@@ -253,6 +256,32 @@ hint, and polling stays the source of truth.
       server's own version, a newer-than-tested major runs but claims nothing, and benchmark
       evidence stays one fixed configuration that implies neither.
 
+### [ ] P0-08 Built-in single-admin dashboard authentication
+
+**Depends on:** P0-03C, P0-06B
+
+The embedded host already accepts an application-owned `authorize` callback, but the standalone
+dashboard has no identity provider to delegate to. Give standalone deployments a secure baseline
+without treating one shared administrator as multi-user RBAC.
+
+- [ ] Add an optional single-admin username and password mode configured through environment
+      variables or equivalent explicit server options.
+- [ ] Store only a password hash in production configuration, accept secrets through files where
+      container platforms support them, and keep any plaintext-password convenience explicitly
+      development-only.
+- [ ] Exchange a successful login for a bounded `Secure`, `HttpOnly`, and explicitly `SameSite`
+      session cookie; add logout, expiry, credential rotation, origin checks, and login throttling.
+- [ ] Derive the audit actor from the authenticated server session. Never trust the browser's
+      `auditActor` or mutation payload as identity evidence.
+- [ ] Keep host-supplied authorization as an alternative mode for embedded applications that
+      already own sessions. Reject ambiguous configurations that enable both modes.
+- [ ] Publish the authenticated standalone service as a supported container artifact so Python and
+      Go users do not need a Node.js application or npm installation to run the dashboard.
+- [ ] Allow an explicit local-development bypass only while the listener is bound to loopback or a
+      Unix socket, and refuse that bypass for a remotely reachable listener.
+- [ ] Cover HTML, asset, private RPC, mutation, expiry, rotation, CSRF, brute-force, and proxy/TLS
+      behavior in packed-package tests and deployment documentation.
+
 ## P1: job controls and reliability
 
 ### [x] P1-01 Enqueue idempotency keys
@@ -425,13 +454,18 @@ The complete dashboard scope was moved into the first demo so the product's oper
 validated before unrelated feature expansion. The P2-03 identifier remains here only to preserve
 roadmap references; all implementation requirements now live under P0-00B.
 
-### [ ] P2-04 Authentication, RBAC, and audit log
+### [ ] P2-04 Premium SSO, RBAC, and multi-user audit
 
-**Depends on:** none
+**Depends on:** P0-08
 
+- [ ] Integrate external identity providers through a documented SSO protocol and keep this
+      capability outside the baseline single-admin distribution.
 - [ ] Define read-only, operator, scheduler-deployer, and administrator roles.
 - [ ] Enforce authorization outside claim-critical SQL paths.
-- [ ] Record append-only audit events for administrative mutations.
+- [ ] Record the authenticated human identity and append-only audit events for administrative
+      mutations.
+- [ ] Preserve the built-in single-admin mode for installations that do not need SSO or multiple
+      roles.
 - [ ] Document direct-database access assumptions and least-privilege grants.
 
 ### [ ] P2-05 Multi-tenancy
@@ -486,23 +520,29 @@ and the compatibility policy is stable enough to define a real upgrade boundary.
 - [ ] Run example smoke tests in CI so package releases cannot silently break documented setups.
 - [ ] Link every integration package to its corresponding example and setup guide.
 
-### [ ] P2-09 Public API package and framework mounts
+### [ ] P2-09 Public HTTP ingress API and clients
 
-**Depends on:** P2-01, P2-04
+**Depends on:** P0-07, P2-01
 
-**Design before implementation.** The demo must not become the accidental public API contract. Define a
-reusable, versioned Workhorse API package and its authorization boundary before exposing job operations over
-HTTP. This is separate from the existing dashboard mount and its private oRPC transport.
+**Design before implementation.** Workhorse currently exposes no supported application ingress over
+HTTP. The demo must not become the accidental contract. Define a reusable, versioned ingress API
+and its authorization boundary before exposing job operations over HTTP. Ingress remains separate
+from the dashboard, administrative API, and private oRPC transport.
 
-- [ ] Define the supported read and mutation surface independently from the dashboard's private oRPC
-      transport.
-- [ ] Decide package boundaries for the transport-neutral API contract, typed client, and framework-specific
-      mounts such as Hono.
+- [ ] Define the supported enqueue, lookup, cancellation, signal, and result surface independently
+      from the dashboard's private oRPC transport; include only operations whose core contracts are
+      stable when implementation begins.
+- [ ] Specify a versioned wire contract, idempotency, authentication, caller authorization, audit
+      context, error mapping, pagination, redaction, request limits, and compatibility semantics.
+- [ ] Decide package boundaries for the transport-neutral API contract, generated clients, a
+      standalone ingress service, and optional JavaScript framework mounts.
 - [ ] Support mounting the future public API either at the application root or below a caller-owned
       namespace such as `/workhorse`, without taking over unrelated host routes or middleware in the
       namespaced case.
-- [ ] Define authentication, RBAC, audit context, error mapping, pagination, redaction, and compatibility
-      semantics before stabilizing endpoints.
+- [ ] Give ingress and administration different listeners, credentials, authorization policies,
+      rate limits, and deployment guidance. Enabling one must never expose the other.
+- [ ] Preserve caller-owned PostgreSQL transactions as the preferred path for atomic enqueue; state
+      clearly that an HTTP request cannot join the caller's database transaction.
 - [ ] Keep schema installation, migrations, seed data, and application-specific job creation outside the API
       package.
 - [ ] Add packed-consumer tests proving independent installation, namespace mounting, authorization, and
@@ -579,6 +619,44 @@ editable at all.
 - [ ] Provide restore and offline-query guidance without promising transparent hot/cold dashboard
       queries in the first version.
 - [ ] Keep storage providers in optional packages and preserve PostgreSQL-only operation by default.
+
+### [ ] P2-13 Python client and worker SDK
+
+**Depends on:** P0-07
+
+Python applications use the same PostgreSQL protocol as TypeScript applications. They run the
+standalone dashboard for administration rather than embedding or reimplementing its private
+transport.
+
+- [ ] Publish an enqueue client that supports caller-owned transactions through a documented set of
+      PostgreSQL drivers.
+- [ ] Publish sync and async worker runtimes with handler registration, bounded concurrency,
+      cancellation, heartbeats, graceful drain, telemetry context, and typed lifecycle failures.
+- [ ] Implement lifecycle operations through the versioned SQL functions and canonical JSON
+      contracts. Do not port correctness-sensitive transitions into Python.
+- [ ] Assert schema compatibility before clients mutate state or workers claim jobs, and test the
+      supported Python, PostgreSQL, and driver matrix in CI.
+- [ ] Ship installation, dedicated-worker, transaction, retry, checkpoint, wait, and standalone
+      dashboard examples as tested package artifacts.
+
+### [ ] P2-14 Go client and worker SDK
+
+**Depends on:** P0-07
+
+Go applications use the same PostgreSQL protocol as TypeScript applications. They run the
+standalone dashboard for administration rather than embedding or reimplementing its private
+transport.
+
+- [ ] Publish an enqueue client that supports caller-owned transactions through a documented set of
+      PostgreSQL drivers.
+- [ ] Publish a worker runtime with handler registration, bounded concurrency, context cancellation,
+      heartbeats, graceful drain, telemetry context, and typed lifecycle failures.
+- [ ] Implement lifecycle operations through the versioned SQL functions and canonical JSON
+      contracts. Do not port correctness-sensitive transitions into Go.
+- [ ] Assert schema compatibility before clients mutate state or workers claim jobs, and test the
+      supported Go, PostgreSQL, and driver matrix in CI.
+- [ ] Ship installation, dedicated-worker, transaction, retry, checkpoint, wait, and standalone
+      dashboard examples as tested module artifacts.
 
 ## P3: orchestration
 

@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-04
 - **Related:** [ADR 0017](0017-durable-worker-registry.md), [ADR 0012](0012-dedicated-worker-processes.md), [ADR 0021](0021-no-framework-integration-packages.md)
-- **Superseded in part by:** [ADR 0021](0021-no-framework-integration-packages.md)
+- **Superseded in part by:** [ADR 0021](0021-no-framework-integration-packages.md), [ADR 0022](0022-built-in-dashboard-authentication.md)
 
 ## Context
 
@@ -44,4 +44,5 @@ The standalone `workhorse dashboard` CLI is the deliberate exception: it owns it
 ## Non-goals
 
 - Publishing framework packages for their own sake. The host covers mounting; a package is justified only by lifecycle integration.
-- Authentication or RBAC. `authorize` remains a required host-supplied callback, and `auditActor` is attribution rather than authorization.
+- Authentication or RBAC was outside this decision. ADR 0022 later adds a built-in single-admin
+  mode while preserving host-supplied authorization for embedded dashboards.
