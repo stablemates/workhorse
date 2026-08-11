@@ -24,11 +24,11 @@ if (!databaseUrl)
   throw new Error("DATABASE_URL is required unless --database selects a local role");
 const pool = new Pool({ connectionString: databaseUrl });
 try {
-  // Emit only JSON so automation can consume stdout. Exit 2 is reserved for recoverable queue
-  // degradation: an expired lease exists and a recovery worker may not be keeping up.
+  // Emit only JSON so automation can consume stdout. Exit 2 is reserved for queue degradation
+  // reported by the canonical budget evaluation.
   const health = await new Queue(pool).health();
   console.log(JSON.stringify(health, null, 2));
-  if (health.expiredLeases > 0) process.exitCode = 2;
+  if (health.status.level === "degraded") process.exitCode = 2;
 } finally {
   await pool.end();
 }
