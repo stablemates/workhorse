@@ -801,6 +801,28 @@ external supervisor can restart it.
 The optional probe-only listener reports liveness while running or draining and readiness only while
 accepting claims. It does not expose application HTTP ingress, queue data, or mutations.
 
+## Framework co-hosting lifecycle
+
+`WorkhorseRuntime<TTransaction>` owns the shared lifecycle used by `HonoWorkhorse`,
+`ExpressWorkhorse`, and `FastifyWorkhorse`. `start()` constructs each configured `Worker`, calls its
+`configure` function, and starts its run loop once. A stopped runtime cannot restart. `quiesce()`
+calls `Worker.stop()` for every started worker and waits for all run loops. `stop()` is idempotent;
+it waits for `quiesce()` and calls `WorkhorseAdapter.close()` once, including after failed startup.
+`onWorkerError` observes a rejected run loop without changing the framework process lifecycle.
+
+`HonoWorkhorse.middleware()` writes `HonoWorkhorseContext<TTransaction>` to
+`context.var.workhorse`. `ExpressWorkhorse.middleware()` writes the default queue to
+`request.workhorse`; `ExpressWorkhorse.contextFor(request)` restores the adapter's exact transaction
+type for `forTransaction`. `registerWorkhorse(fastify, runtime)` decorates each Fastify request in
+`onRequest`; `FastifyWorkhorse.contextFor(request)` restores the transaction type.
+
+`serveWithWorkhorse` in `@workhorse/hono` and `@workhorse/express` starts the runtime before the HTTP
+listener. If startup fails, it stops the runtime before rejecting. Each returned `shutdown()` is
+idempotent. It closes the listener and quiesces workers concurrently, waits for both drains, then
+closes adapter-owned resources. Fastify uses `onReady` to start workers, `preClose` to quiesce them,
+and `onClose` to close adapter-owned resources. Dedicated worker processes remain the production
+default because framework replica count otherwise controls worker capacity and database pressure.
+
 ## Operational limits
 
 - The canonical schema is a clean-install artifact, not an online version 1 to version 2 migration.

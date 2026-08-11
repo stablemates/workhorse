@@ -1,4 +1,10 @@
 export { createWorkhorseAdapter } from "./adapter.js";
+export { WorkhorseRuntime } from "./framework-runtime.js";
+export type {
+  WorkhorseRuntimeContext,
+  WorkhorseRuntimeOptions,
+  WorkhorseRuntimeWorkerDefinition,
+} from "./framework-runtime.js";
 export { WorkhorseMetricsObserver } from "./metrics.js";
 export type { WorkhorseAdapter, WorkhorseAdapterOptions } from "./adapter.js";
 export {

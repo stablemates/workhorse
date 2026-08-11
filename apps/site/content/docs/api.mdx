@@ -62,7 +62,8 @@ Process exports are `defineWorkerProcess`, `startWorkerProcess`, `runWorkerProce
 ## Database and framework adapters
 
 Core exports `Queryable`, `createWorkhorseAdapter`, `WorkhorseAdapter`, and
-`WorkhorseAdapterOptions`.
+`WorkhorseAdapterOptions`. Framework-neutral co-hosting exports are `WorkhorseRuntime`,
+`WorkhorseRuntimeContext`, `WorkhorseRuntimeOptions`, and `WorkhorseRuntimeWorkerDefinition`.
 
 `@workhorse/drizzle` exports `createDrizzleAdapter`, `drizzleQueryable`, `DrizzleExecutor`,
 `DrizzleAdapterOptions`, and `DrizzleQueryError`.
@@ -71,6 +72,13 @@ Core exports `Queryable`, `createWorkhorseAdapter`, `WorkhorseAdapter`, and
 `HonoWorkerDefinition`, `HonoWorkhorseOptions`, `serveWithWorkhorse`,
 `ServeWithWorkhorseOptions`, `HonoWorkhorseServer`, `mountWorkhorseDashboard`, and
 `MountWorkhorseDashboardOptions`.
+
+`@workhorse/express` exports `ExpressWorkhorse`, `ExpressWorkhorseContext`,
+`ExpressWorkerDefinition`, `ExpressWorkhorseOptions`, `serveWithWorkhorse`,
+`ServeWithWorkhorseOptions`, and `ExpressWorkhorseServer`.
+
+`@workhorse/fastify` exports `FastifyWorkhorse`, `FastifyWorkhorseContext`,
+`FastifyWorkerDefinition`, `FastifyWorkhorseOptions`, and `registerWorkhorse`.
 
 `@workhorse/dashboard` exports `Dashboard`, `DashboardProps`, `WorkhorseThemeProvider`,
 `DashboardColorScheme`, and `useWorkhorseTheme`.

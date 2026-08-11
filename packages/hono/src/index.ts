@@ -3,12 +3,15 @@ import type { ServerType } from "@hono/node-server";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMiddleware } from "hono/factory";
-import type { WorkhorseAdapter, Queryable, Queue, Worker, WorkerOptions } from "@workhorse/core";
+import {
+  WorkhorseRuntime,
+  type WorkhorseAdapter,
+  type WorkhorseRuntimeContext,
+  type WorkhorseRuntimeOptions,
+  type WorkhorseRuntimeWorkerDefinition,
+} from "@workhorse/core";
 
-export interface HonoWorkhorseContext<TTransaction> {
-  readonly queue: Queue;
-  forTransaction(transaction: TTransaction): Queue;
-}
+export type HonoWorkhorseContext<TTransaction> = WorkhorseRuntimeContext<TTransaction>;
 
 export type HonoWorkhorseEnv<TTransaction> = {
   Variables: {
@@ -16,35 +19,13 @@ export type HonoWorkhorseEnv<TTransaction> = {
   };
 };
 
-export interface HonoWorkerDefinition {
-  options?: WorkerOptions;
-  configure(worker: Worker): void;
-}
-
-export interface HonoWorkhorseOptions {
-  workers?: readonly HonoWorkerDefinition[];
-  onWorkerError?: (error: unknown, worker: Worker) => void;
-}
+export type HonoWorkerDefinition = WorkhorseRuntimeWorkerDefinition;
+export type HonoWorkhorseOptions = WorkhorseRuntimeOptions;
 
 /** Owns Workhorse worker startup and shutdown for one Hono application process. */
-export class HonoWorkhorse<TTransaction> {
-  readonly database: Queryable;
-  readonly context: HonoWorkhorseContext<TTransaction>;
-  private readonly workers: Worker[] = [];
-  private readonly runs: Promise<void>[] = [];
-  private started = false;
-  private quiescePromise: Promise<void> | undefined;
-  private closePromise: Promise<void> | undefined;
-
-  constructor(
-    private readonly adapter: WorkhorseAdapter<TTransaction>,
-    private readonly options: HonoWorkhorseOptions = {},
-  ) {
-    this.database = adapter.database;
-    this.context = {
-      queue: adapter.queue,
-      forTransaction: (transaction) => adapter.forTransaction(transaction),
-    };
+export class HonoWorkhorse<TTransaction> extends WorkhorseRuntime<TTransaction> {
+  constructor(adapter: WorkhorseAdapter<TTransaction>, options: HonoWorkhorseOptions = {}) {
+    super(adapter, options, "HonoWorkhorse");
   }
 
   /** Typed middleware that exposes `c.var.workhorse` to routes. */
@@ -53,47 +34,6 @@ export class HonoWorkhorse<TTransaction> {
       context.set("workhorse", this.context);
       await next();
     });
-  }
-
-  /** Start every configured worker once. Worker loops run in the background. */
-  start(): void {
-    if (this.started) return;
-    if (this.quiescePromise || this.closePromise) {
-      throw new Error("A stopped HonoWorkhorse runtime cannot be restarted");
-    }
-    this.started = true;
-
-    for (const definition of this.options.workers ?? []) {
-      const worker = this.adapter.createWorker(definition.options);
-      definition.configure(worker);
-      this.workers.push(worker);
-      this.runs.push(
-        worker.run().catch((error: unknown) => {
-          this.options.onWorkerError?.(error, worker);
-        }),
-      );
-    }
-  }
-
-  /** Stop new claims and wait for every in-flight handler to finish. */
-  quiesce(): Promise<void> {
-    this.quiescePromise ??= (async () => {
-      for (const worker of this.workers) worker.stop();
-      await Promise.all(this.runs);
-    })();
-    return this.quiescePromise;
-  }
-
-  /** Quiesce workers, then close provider-owned resources. This method is idempotent. */
-  stop(): Promise<void> {
-    this.closePromise ??= (async () => {
-      try {
-        await this.quiesce();
-      } finally {
-        await this.adapter.close();
-      }
-    })();
-    return this.closePromise;
   }
 }
 
@@ -179,9 +119,24 @@ export async function serveWithWorkhorse<TTransaction>(
     shutdown() {
       shutdownPromise ??= (async () => {
         const serverClosed = closeServer(server);
-        await workhorse.quiesce();
-        await serverClosed;
-        await workhorse.stop();
+        let failure: unknown;
+        let failed = false;
+        const drains = await Promise.allSettled([workhorse.quiesce(), serverClosed]);
+        for (const drain of drains) {
+          if (drain.status === "rejected" && !failed) {
+            failure = drain.reason;
+            failed = true;
+          }
+        }
+        try {
+          await workhorse.stop();
+        } catch (error) {
+          if (!failed) {
+            failure = error;
+            failed = true;
+          }
+        }
+        if (failed) throw failure;
       })();
       return shutdownPromise;
     },

@@ -66,7 +66,7 @@ The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you
   top-level redaction, byte bounds, and merged lifecycle timelines;
 - a durable worker registry that discovers the live fleet, reports declared concurrency, slot use,
   and draining, and carries cooperative operator pause to workers in any process;
-- separate `@workhorse/drizzle` and `@workhorse/hono` integration packages;
+- separate Drizzle, Hono, Express, and Fastify integration packages;
 - a separately packaged `@workhorse/dashboard` React operator dashboard with a framework-neutral
   request host, a Connect-style Node bridge, an injected transport-neutral client boundary,
   package-owned styles/assets, and audited local controls;
@@ -509,7 +509,7 @@ queue pause, worker availability, and database downtime can delay the next claim
 one-second maintenance cadence makes sub-second durable waits inefficient. Use
 `context.sleepUntil(name, date)` for an immutable absolute target.
 
-### Drizzle and Hono packages
+### Drizzle and framework packages
 
 `@workhorse/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
 adding Drizzle to the core package:
@@ -527,10 +527,10 @@ await db.transaction(async (tx) => {
 });
 ```
 
-`@workhorse/hono` exposes the queue through typed middleware, optionally starts co-hosted workers,
-and provides a Node server handle whose idempotent shutdown stops new claims, drains in-flight
-handlers and requests, then closes explicitly provider-owned resources. See the package READMEs for
-complete configuration and ownership behavior.
+`@workhorse/hono`, `@workhorse/express`, and `@workhorse/fastify` expose the queue through request
+context and optionally start co-hosted workers. Each integration binds graceful shutdown to its
+framework lifecycle, so it stops new claims, drains handlers and requests, then closes explicitly
+provider-owned resources. See the package READMEs for complete configuration and ownership behavior.
 
 ### Mounting the dashboard on any framework
 

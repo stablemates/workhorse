@@ -1,6 +1,6 @@
 # Dedicated worker processes
 
-Workhorse recommends a **dedicated worker process for production deployments**. Running workers inside a web process remains supported by `@workhorse/hono` for development, demos, and deliberately small deployments, but it is not the default production topology.
+Workhorse recommends a **dedicated worker process for production deployments**. Running workers inside a web process remains supported by the Hono, Express, and Fastify packages for development, demos, and deliberately small deployments, but it is not the default production topology.
 
 This document records the worker-concurrency investigation, benchmark findings, process-lifecycle contract, CLI usage, deployment tradeoffs, and remaining limitations.
 

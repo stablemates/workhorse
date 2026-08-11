@@ -1,0 +1,44 @@
+{
+  "name": "@workhorse/fastify",
+  "version": "0.1.0",
+  "description": "Fastify lifecycle and request-context integration for Workhorse",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "packages/fastify"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@workhorse/core": "workspace:*",
+    "fastify": "^5.11.3"
+  },
+  "peerDependencies": {
+    "@workhorse/core": ">=0.1.0 <1",
+    "fastify": ">=5 <6"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
