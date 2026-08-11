@@ -30,7 +30,7 @@ describe("dashboard concurrency policy read model", () => {
     expect(dashboardConcurrencyPolicySummary(policy)).not.toHaveProperty("concurrencyKey");
   });
 
-  it("degrades only when ready work is blocked with no global capacity", () => {
+  it("degrades whenever a queue-wide or per-key budget blocks ready work", () => {
     expect(
       concurrencyPolicyDegradedChecks({
         concurrencyPolicies: { policies: [policy], capped: false },
@@ -39,10 +39,15 @@ describe("dashboard concurrency policy read model", () => {
     expect(
       concurrencyPolicyDegradedChecks({
         concurrencyPolicies: {
-          policies: [
-            { ...policy, available: 1 },
-            { ...policy, blockedReady: 0 },
-          ],
+          policies: [{ ...policy, available: 1 }],
+          capped: false,
+        },
+      }),
+    ).toEqual(["Concurrency policy blocks ready tasks on payments"]);
+    expect(
+      concurrencyPolicyDegradedChecks({
+        concurrencyPolicies: {
+          policies: [{ ...policy, blockedReady: 0 }],
           capped: false,
         },
       }),

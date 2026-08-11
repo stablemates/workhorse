@@ -2503,6 +2503,19 @@ describe("Workhorse demo", () => {
         blockedReady: 0,
       },
     });
+    const systemPage = await client.dashboard.system({ window: "1h" });
+    expect(systemPage.queues.find((row) => row.queue === "policy-only-demo")).toMatchObject({
+      paused: false,
+      ready: 0,
+      active: 0,
+      concurrencyPolicy: {
+        namespace: "dashboard-test",
+        maxActive: 3,
+        active: 0,
+        available: 3,
+        blockedReady: 0,
+      },
+    });
     await expect(client.dashboard.jobDetail({ id: readyId })).resolves.toMatchObject({
       identity: { concurrencyKey: "tenant-secret" },
       concurrencyPolicy: {

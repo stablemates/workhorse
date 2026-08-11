@@ -1295,12 +1295,12 @@ function retentionDegradedChecks(retention: DashboardSystemRetention): string[] 
   return checks;
 }
 
-/** Queue admission is degraded when ready work cannot claim any remaining global capacity. */
+/** Queue admission is degraded whenever a queue-wide or per-key budget blocks ready work. */
 export function concurrencyPolicyDegradedChecks(
   health: Pick<QueueHealthSnapshot, "concurrencyPolicies">,
 ): string[] {
   return health.concurrencyPolicies.policies
-    .filter((policy) => policy.available === 0 && policy.blockedReady > 0)
+    .filter((policy) => policy.blockedReady > 0)
     .map((policy) => `Concurrency policy blocks ready tasks on ${policy.queue}`);
 }
 
@@ -1467,6 +1467,7 @@ export async function readDashboardSystem(
       ), queue_names AS (
         SELECT queue_name FROM workhorse.job_runtime
         UNION SELECT queue_name FROM workhorse.queue_control
+        UNION SELECT queue_name FROM workhorse.concurrency_policy
         UNION SELECT queue_name FROM rolled
       ), runtime AS (
         SELECT queue_name,
