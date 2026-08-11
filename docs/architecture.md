@@ -583,8 +583,8 @@ Workhorse emits at most eight attributes on one span and exports
 
 The runtime emits structured OpenTelemetry log records through `@opentelemetry/api-logs`. Debug
 records cover enqueue acceptance and replay, claims, accepted heartbeats, handler registration and
-execution boundaries, checkpoints, progress, maintenance no-ops, schedule replay, and worker
-deregistration. Info records cover queue and worker lifecycle, final execution outcomes, rejected
+execution boundaries, checkpoints, progress, schedule replay, and worker deregistration. Info
+records cover queue and worker lifecycle, final execution outcomes, rejected
 heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule
 changes, redrive, and maintenance that changes rows or returns an error.
 
@@ -594,7 +594,9 @@ Debug event names are `workhorse.job.enqueued`, `workhorse.job.enqueue_replayed`
 `workhorse.handler.registered`, `workhorse.handler.started`, `workhorse.handler.finished`,
 `workhorse.schedule.fire_replayed`, `workhorse.worker.registered`, and
 `workhorse.worker.deregistered`.
-`workhorse.maintenance.completed` uses debug when the phase changes no rows and returns no error.
+`workhorse.maintenance.completed` emits only when the phase changes rows or returns an error.
+Successful no-ops and skipped advisory locks emit no log; maintenance counters and duration
+histograms still record them.
 `workhorse.worker_registry.pruned` uses debug when no stale registrations exist.
 
 Info event names are `workhorse.jobs.promoted`, `workhorse.leases.recovered`,
@@ -630,6 +632,10 @@ Maintenance records use `workhorse.maintenance.operation`, `workhorse.maintenanc
 registration records may use concurrency, active slots, draining, and pause state. Handler
 completion adds `workhorse.handler.duration_ms`.
 
+`Worker.refreshRegistration` emits `workhorse.worker.registered` after the first successful
+registration and when `activeSlots`, `draining`, or the PostgreSQL-owned pause result changes. The
+durable heartbeat still runs at `registryIntervalMs`, but an unchanged refresh emits no log.
+
 Logs may include job, worker, schedule, and checkpoint identity because logs are event records.
 Workhorse never logs payloads, results, error messages, cancellation reasons, idempotency keys, or
 progress and checkpoint values. The active OpenTelemetry context remains attached at emission, so
@@ -644,6 +650,15 @@ at or above 1,000 milliseconds. `workhorse.dashboard.rpc_failed` uses error for 
 include the request input, response output, error details, headers, or URL query. Dashboard assets,
 application pages, authorization failures, and schema compatibility failures do not produce these
 RPC records. Without a Logs SDK, the OpenTelemetry API discards them.
+
+The demo preload always installs one `NodeSDK` and one rotating file log processor. It writes NDJSON
+to `logs/<environment>/<service>.ndjson`, rotates before the next record would take the current file
+past 10,485,760 bytes, and retains five numbered archives. `WORKHORSE_DEMO_LOG_DIRECTORY`,
+`WORKHORSE_DEMO_LOG_MAX_BYTES`, and `WORKHORSE_DEMO_LOG_ARCHIVES` override the root, byte limit,
+and archive count. The server and worker use different `service.name` values, so they never write
+the same file. If `WORKHORSE_DEMO_TELEMETRY = "true"`, the same SDK adds exactly one OTLP log
+processor plus automatic trace and metric instrumentation. Otherwise trace and metric exporters
+are disabled while local structured logs remain active.
 
 The meter also exposes these baseline instruments:
 
