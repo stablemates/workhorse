@@ -704,10 +704,124 @@ export interface RetentionCategoryValues<T> {
   statistics: T;
 }
 
+/**
+ * Cap applied to health scans over unbounded history relations.
+ *
+ * Terminal state counts and the materialized-bucket count stop scanning here, so one snapshot
+ * statement stays bounded no matter how much history is retained. Capped values are exact until
+ * the cap and lower bounds beyond it, and each carries an explicit `capped` flag.
+ */
+export const HEALTH_HISTORY_SCAN_LIMIT = 100_000;
+
+/** Stable machine-readable identifiers for queue health degradation. */
+export type QueueHealthReasonCode =
+  | "expired-leases"
+  | "overdue-deadlines"
+  | "overdue-execution-timeouts"
+  | "stalled-promotion"
+  | "missing-history-partitions"
+  | "rollup-stalled"
+  | "retention-lag"
+  | "eligible-history-partitions"
+  | "default-history-rows"
+  | "concurrency-blocked"
+  | "rate-limit-throttled";
+
+/**
+ * One exceeded health budget.
+ *
+ * `observed` and `budget` share one unit per code: milliseconds for `stalled-promotion`,
+ * `rollup-stalled`, and `retention-lag`; plain counts for every other code.
+ */
+export interface QueueHealthReason {
+  code: QueueHealthReasonCode;
+  /** Critical means work is stopping or being lost; degraded costs storage or throughput. */
+  severity: "critical" | "degraded";
+  observed: number;
+  budget: number;
+  /** Present on per-queue codes: `concurrency-blocked` and `rate-limit-throttled`. */
+  queue?: string;
+  /** Present on `retention-lag`, naming the late retention category. */
+  category?: keyof RetentionCategoryValues<unknown>;
+}
+
+/** Overall level plus every exceeded budget, most severe reasons first. */
+export interface QueueHealthStatus {
+  level: "healthy" | "degraded" | "critical";
+  reasons: QueueHealthReason[];
+}
+
+/**
+ * Thresholds separating expected operational noise from degradation.
+ *
+ * Zero-tolerance conditions such as expired leases or overdue deadlines have no budget entry;
+ * any occurrence is critical.
+ */
+export interface QueueHealthBudgets {
+  /**
+   * How long a due scheduled runtime may stay unpromoted before promotion counts as stalled.
+   * Generous against the worker tick cadence: one slow tick is load, sustained lag is an outage.
+   */
+  promotionLagMs: number;
+  /**
+   * A rollup this far behind is treated as stalled. History retention refuses to delete past the
+   * watermark, so a stalled rollup turns into unbounded history growth.
+   */
+  rollupStalledLagMs: number;
+  /** Grace for row-deleted retention categories before cleanup lag counts as degradation. */
+  rowRetentionLagMs: number;
+  /** Grace for partition-dropped categories; covers cadence plus a partial boundary day. */
+  partitionRetentionLagMs: number;
+  /** Completed history days allowed to await deletion before retention counts as behind. */
+  eligibleHistoryPartitions: number;
+}
+
+/**
+ * PostgreSQL-side observations included with a health snapshot.
+ *
+ * These are estimates and instantaneous server state, not transactional facts: relation
+ * statistics lag until the statistics collector flushes, and activity is read outside the
+ * snapshot statement. Correctness-sensitive counts live on {@link QueueHealth} itself.
+ */
+export interface QueueHealthObservations {
+  relations: Array<{
+    relation: string;
+    totalBytes: number;
+    tableBytes: number;
+    indexBytes: number;
+    liveTuples: number;
+    deadTuples: number;
+    modificationsSinceAnalyze: number;
+    /** HOT updates divided by all updates, or null when no updates were observed. */
+    hotUpdateRatio: number | null;
+    lastVacuum: Date | null;
+    lastAutovacuum: Date | null;
+    /** Daily partitions attached to this relation; zero for ordinary tables. */
+    partitions: number;
+  }>;
+  oldestTransactionAgeMs: number | null;
+  /** Sessions currently waiting on PostgreSQL locks, excluding the health query itself. */
+  lockWaitCount: number;
+  /** Fraction of PostgreSQL's global async notification queue currently occupied. */
+  notificationQueueUsage: number;
+}
+
 export interface QueueHealth {
+  /**
+   * Transaction timestamp of the snapshot statement.
+   *
+   * Every correctness-sensitive value below was read in one PostgreSQL statement, so they all
+   * describe the queue as of this instant. Only `observations` is read outside the snapshot.
+   */
+  capturedAt: Date;
   /** Canonical schema protocol version installed in this database. */
   schemaVersion: number | null;
   counts: Record<JobState, number>;
+  /**
+   * True when terminal counts hit the bounded history scan cap and are lower bounds.
+   * Live-state counts are always exact; only succeeded, failed, and canceled can cap.
+   */
+  terminalCountsCapped: boolean;
   readyDepth: number;
   scheduledDepth: number;
   /** Scheduled runtimes currently suspended at a named durable timer boundary. */
@@ -730,6 +844,10 @@ export interface QueueHealth {
   activeExecutionTimeouts: number;
   /** Active attempts whose execution timeout target has elapsed but is not yet reaped. */
   overdueExecutionTimeouts: number;
+  /** Scheduled runtimes, durable waits included, whose run-at target has passed unpromoted. */
+  overdueScheduled: number;
+  /** Age of the longest-unpromoted due scheduled runtime, or null when none is due. */
+  oldestOverdueScheduledAgeMs: number | null;
   /** Bounded queue concurrency utilization without raw concurrency-key labels. */
   concurrencyPolicies: {
     policies: Array<{
@@ -763,6 +881,8 @@ export interface QueueHealth {
     lastRunAt: Date | null;
     /** Materialized minute buckets, and the span they currently cover. */
     buckets: number;
+    /** True when the bucket count hit the bounded history scan cap and is a lower bound. */
+    bucketsCapped: boolean;
     oldestBucketAt: Date | null;
     newestBucketAt: Date | null;
   };
@@ -784,27 +904,21 @@ export interface QueueHealth {
     jobEvents: boolean;
     attemptHistory: boolean;
   };
-  /** PostgreSQL relation statistics are estimates and may lag until stats flush. */
-  relations: Array<{
-    relation: string;
-    totalBytes: number;
-    tableBytes: number;
-    indexBytes: number;
-    liveTuples: number;
-    deadTuples: number;
-    modificationsSinceAnalyze: number;
-    /** HOT updates divided by all updates, or null when no updates were observed. */
-    hotUpdateRatio: number | null;
-    lastVacuum: Date | null;
-    lastAutovacuum: Date | null;
-    /** Daily partitions attached to this relation; zero for ordinary tables. */
-    partitions: number;
+  /**
+   * Existence of the UTC-daily history partitions for today plus the next three days.
+   * A missing day means partition preparation is not keeping ahead of writes.
+   */
+  historyPartitionDays: Array<{
+    /** UTC day in `YYYYMMDD` form, matching the partition name suffix. */
+    day: string;
+    startsAt: Date;
+    hasJobEvents: boolean;
+    hasAttemptHistory: boolean;
   }>;
-  oldestTransactionAgeMs: number | null;
-  /** Sessions currently waiting on PostgreSQL locks, excluding the health query itself. */
-  lockWaitCount: number;
-  /** Fraction of PostgreSQL's global async notification queue currently occupied. */
-  notificationQueueUsage: number;
+  /** Budget evaluation of this snapshot. Budgets are caller-overridable per call. */
+  status: QueueHealthStatus;
+  /** Lagging PostgreSQL statistics and server state, separated from the transactional facts. */
+  observations: QueueHealthObservations;
 }
 
 /** One worker's self-reported runtime state, pushed on its registration cadence. */

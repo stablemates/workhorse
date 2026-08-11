@@ -25,10 +25,10 @@ if (!databaseUrl)
 const pool = new Pool({ connectionString: databaseUrl });
 try {
   // Emit only JSON so automation can consume stdout. Exit 2 is reserved for recoverable queue
-  // degradation: an expired lease exists and a recovery worker may not be keeping up.
+  // degradation: a health budget is exceeded, with machine-readable reasons in status.reasons.
   const health = await new Queue(pool).health();
   console.log(JSON.stringify(health, null, 2));
-  if (health.expiredLeases > 0) process.exitCode = 2;
+  if (health.status.level !== "healthy") process.exitCode = 2;
 } finally {
   await pool.end();
 }
