@@ -79,6 +79,11 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   `@workhorse/dashboard` and its own client, and it changes without a schema version bump. Do not
   build against it; the supported operator surface is the `Queue` query API.
 
+Only the TypeScript client and worker implement this protocol as a supported SDK today. Protocol
+portability does not make an untested language implementation supported. Python and Go become
+supported only after their own runtime, driver, PostgreSQL, packed-artifact, and compatibility
+matrices run in CI.
+
 ## Release process
 
 Every release is a tag, and every tag runs the full check suite before anything is published.
