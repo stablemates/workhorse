@@ -18,9 +18,6 @@ const publishedManifests = [
   "package.json",
   "packages/dashboard/package.json",
   "packages/drizzle/package.json",
-  "packages/express/package.json",
-  "packages/fastify/package.json",
-  "packages/hono/package.json",
 ];
 
 async function read(relativePath: string): Promise<string> {

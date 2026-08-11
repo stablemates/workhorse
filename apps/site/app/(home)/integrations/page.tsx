@@ -7,7 +7,7 @@ import { demoUrl } from "@/lib/site";
 export const metadata: Metadata = {
   title: "Integrations",
   description:
-    "Workhorse integration packages for Drizzle-owned transactions, Hono, Express, and Fastify lifecycles, and a transport-neutral operator UI.",
+    "Workhorse integration packages for Drizzle-owned transactions and a transport-neutral operator UI.",
   alternates: { canonical: "/integrations" },
 };
 
@@ -21,47 +21,6 @@ await db.transaction(async (tx) => {
   await tx.insert(account).values({ id: accountId });
   // Same transaction, same commit boundary, no outbox relay.
   await workhorse.forTransaction(tx).enqueue("account.created", { accountId });
-});`;
-
-const honoSample = `import { createWorkhorseAdapter } from "@workhorse/core";
-import { HonoWorkhorse, type HonoWorkhorseEnv } from "@workhorse/hono";
-import { Hono } from "hono";
-import type { PoolClient } from "pg";
-
-const runtime = new HonoWorkhorse<PoolClient>(
-  createWorkhorseAdapter({ database: pool, adaptTransaction: (client) => client }),
-);
-const app = new Hono<HonoWorkhorseEnv<PoolClient>>().use(runtime.middleware());
-
-app.post("/invoices", async (c) => {
-  // Typed queue access from the request context.
-  await c.var.workhorse.queue.enqueue("invoice.capture", await c.req.json());
-  return c.body(null, 202);
-});`;
-
-const expressSample = `import express from "express";
-import { ExpressWorkhorse, serveWithWorkhorse } from "@workhorse/express";
-
-const runtime = new ExpressWorkhorse(adapter);
-const app = express().use(express.json()).use(runtime.middleware());
-
-app.post("/invoices", async (request, response) => {
-  await request.workhorse.queue.enqueue("invoice.capture", request.body);
-  response.sendStatus(202);
-});
-
-const server = await serveWithWorkhorse({ app, workhorse: runtime, port: 3000 });`;
-
-const fastifySample = `import Fastify from "fastify";
-import { FastifyWorkhorse, registerWorkhorse } from "@workhorse/fastify";
-
-const runtime = new FastifyWorkhorse(adapter);
-const app = Fastify();
-await registerWorkhorse(app, runtime);
-
-app.post("/invoices", async (request, response) => {
-  await request.workhorse.queue.enqueue("invoice.capture", request.body);
-  return response.code(202).send();
 });`;
 
 const dashboardSample = `import { Dashboard, WorkhorseThemeProvider } from "@workhorse/dashboard";
@@ -87,42 +46,6 @@ const packages = [
     notes: [
       "forTransaction(tx) binds the queue to an existing Drizzle transaction.",
       "Drizzle stays a peer concern: @workhorse/core has no ORM dependency.",
-    ],
-  },
-  {
-    name: "@workhorse/hono",
-    tag: "Framework middleware",
-    lede: "Exposes the queue through typed middleware, starts configured workers exactly once, and returns a Node server handle whose idempotent shutdown drains handlers and requests before closing provider-owned resources.",
-    sample: honoSample,
-    file: "server.ts",
-    notes: [
-      "Workers start once per process, not once per request.",
-      "Shutdown is idempotent: stop claims, drain handlers, then drain requests.",
-      "Resources you did not hand over are never closed for you.",
-    ],
-  },
-  {
-    name: "@workhorse/express",
-    tag: "Framework middleware",
-    lede: "Injects queue access into Express requests and owns an idempotent server shutdown that drains HTTP requests and worker handlers before closing adapter resources.",
-    sample: expressSample,
-    file: "express-server.ts",
-    notes: [
-      "Middleware shares one adapter context across requests.",
-      "The server helper starts configured workers once per process.",
-      "Use the dashboard Node middleware without constructing a worker runtime.",
-    ],
-  },
-  {
-    name: "@workhorse/fastify",
-    tag: "Framework plugin",
-    lede: "Injects queue access into Fastify requests and maps worker startup, draining, and adapter closure onto Fastify's ready and close hooks.",
-    sample: fastifySample,
-    file: "fastify-server.ts",
-    notes: [
-      "The request decoration is ready before application routes run.",
-      "Fastify close drains worker handlers before adapter resources close.",
-      "Repeated close calls do not close the adapter twice.",
     ],
   },
   {
@@ -184,10 +107,10 @@ export default function IntegrationsPage() {
       <section className="wh-panel mt-16 rounded-xl p-6 sm:p-8">
         <p className="wh-mono-label">Not yet supported</p>
         <p className="mt-3 max-w-3xl text-[14.5px] leading-relaxed text-fd-muted-foreground">
-          Additional ORM providers and framework adapters beyond Hono, Express, and Fastify are out
-          of scope for this release, as are production authentication and RBAC, rate limits, and
-          cross-queue concurrency policies. The protocol is plain SQL, so a third-party adapter is
-          possible today; it is simply not something this project supports yet.
+          Additional ORM providers are out of scope for this release. Framework packages are
+          intentionally absent: web routes use their application's dependency injection, and the
+          dashboard host already supports Fetch-native and Connect-style servers. Production
+          authentication and RBAC also remain application responsibilities.
         </p>
         <div className="mt-6 flex flex-wrap gap-6">
           <Link href="/reference" className="wh-link-underline text-[14px] font-medium">

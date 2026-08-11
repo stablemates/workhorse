@@ -1,5 +1,6 @@
-import { serveWithWorkhorse } from "@workhorse/hono";
+import { getRequestListener } from "@hono/node-server";
 import { installSchema } from "@workhorse/core";
+import { createServer } from "node:http";
 import { Pool } from "pg";
 import {
   createDemoApplication,
@@ -30,8 +31,6 @@ import { demoLogger } from "./logger.js";
  * live-compiled UI with hot reload while the HTML still goes through the packaged host. There is no
  * second server and no second URL.
  *
- * Set WORKHORSE_DEMO_IN_PROCESS_WORKERS=true to co-host workers here instead, which is the
- * supported small-application topology.
  */
 const databaseUrl = resolveDemoDatabaseUrl();
 const mode = process.env.WORKHORSE_DEMO_MODE ?? "production";
@@ -40,7 +39,6 @@ if (mode !== "development" && mode !== "production") {
 }
 const port = Number(process.env.PORT ?? 3000);
 const environment = process.env.WORKHORSE_ENV ?? mode;
-const inProcessWorkers = process.env.WORKHORSE_DEMO_IN_PROCESS_WORKERS === "true";
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 
 const database = createDemoDatabase(pool);
@@ -62,16 +60,12 @@ demoLogger.info(
 // bundle. Both render the page through the same host, so only module delivery differs.
 const dashboardDev = mode === "development" ? await createDashboardDevServer() : undefined;
 
-const { app, workhorse } = createDemoApplication(database, {
+const { app } = createDemoApplication(database, {
   dev: dashboardDev,
   environment,
-  workers: inProcessWorkers,
   operator: createLocalOperator(database),
   queueController: createLocalQueueController(database),
   scheduleController: createLocalScheduleController(database),
-  close: () => pool.end(),
-  onWorkerError: (error) =>
-    demoLogger.error("workhorse.demo.worker_stopped", "Workhorse worker stopped", error),
 });
 const metricsObserver = startDemoMetricsObserver(pool);
 if (process.env.SEED_DEMO_DATA !== "false") {
@@ -85,25 +79,35 @@ if (process.env.SEED_DEMO_DATA !== "false") {
     },
   );
 }
-const running = await serveWithWorkhorse({
-  fetch: app.fetch,
-  workhorse,
-  port,
-  // Vite's module and hot-reload routes run before the application, and fall through to it for
-  // everything they do not own.
-  ...(dashboardDev ? { nodeMiddleware: dashboardDev.middlewares } : {}),
-  onListen: ({ port: listeningPort }) => {
-    demoLogger.info("workhorse.demo.listening", "Workhorse demo server listening", {
-      "server.address": process.env.PORTLESS_URL ?? `http://localhost:${listeningPort}`,
-      "server.port": listeningPort,
-    });
-  },
+const application = getRequestListener(app.fetch);
+const server = createServer((request, response) => {
+  const next = (error?: unknown) => {
+    if (error) {
+      response.statusCode = 500;
+      response.end("Internal Server Error");
+      return;
+    }
+    application(request, response);
+  };
+  if (dashboardDev) dashboardDev.middlewares(request, response, next);
+  else next();
 });
-demoLogger.info(
-  "workhorse.demo.worker_topology",
-  inProcessWorkers ? "Workers are co-hosted in this process" : "Workers run as a separate process",
-  { "workhorse.demo.worker_topology": inProcessWorkers ? "in_process" : "dedicated_process" },
-);
+await new Promise<void>((resolve, reject) => {
+  server.once("error", reject);
+  server.listen(port, () => {
+    server.removeListener("error", reject);
+    resolve();
+  });
+});
+const address = server.address();
+if (!address || typeof address === "string") throw new Error("Demo server did not bind a TCP port");
+demoLogger.info("workhorse.demo.listening", "Workhorse demo server listening", {
+  "server.address": process.env.PORTLESS_URL ?? `http://localhost:${address.port}`,
+  "server.port": address.port,
+});
+demoLogger.info("workhorse.demo.worker_topology", "Workers run as a separate process", {
+  "workhorse.demo.worker_topology": "dedicated_process",
+});
 
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
@@ -113,8 +117,10 @@ async function shutdown(signal: string): Promise<void> {
     "process.signal": signal,
   });
   metricsObserver?.stop();
-  await running.shutdown();
-  await dashboardDev?.close();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  await Promise.all([pool.end(), dashboardDev?.close()]);
   demoLogger.info("workhorse.demo.shutdown_completed", "Demo shutdown completed");
 }
 

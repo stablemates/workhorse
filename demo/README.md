@@ -2,21 +2,16 @@
 
 This is the end-to-end product demo for Workhorse. It lets you create test jobs from the operator dashboard, request cooperative cancellation, watch workers process them, inspect retries and terminal failures, and observe recurring work, retention health, and queue health.
 
-The demo application uses Hono and Drizzle to exercise both integration packages in a realistic setup.
-Seed data includes a transactionally created order and durable job, and worker-owned scheduling drives
-recurring work. Those frameworks support the demo; Workhorse's durable execution model is what the demo
-is designed to show.
+The demo uses Hono as its web server and Drizzle through Workhorse's ORM adapter. Seed data includes
+a transactionally created order and durable job, and worker-owned scheduling drives recurring work.
 
-**The demo runs its workers as a separate process.** That is the topology the documentation recommends
-for production, and running it here means the demo has to actually solve the problem it recommends:
-the server and the workers share nothing but PostgreSQL. Workers announce themselves in
+**The demo runs each worker in a separate process.** The Hono server and two workers share nothing
+but PostgreSQL. Workers announce themselves in
 `workhorse.worker_registry`, the dashboard reads the fleet from there, and operator pause travels
-through SQL. The browser refreshes on a bounded polling interval. Set
-`WORKHORSE_DEMO_IN_PROCESS_WORKERS=true` to co-host workers in the server instead, which is the
-supported small-application topology and what the integration tests exercise.
+through SQL. The browser refreshes on a bounded polling interval.
 
-The demo imports the complete admin application from the publishable packages. `@workhorse/hono`
-mounts `@workhorse/dashboard` at `/`, including its oRPC API. The demo owns no
+The demo imports the complete admin application from the publishable packages. Its Hono app mounts
+the framework-neutral `@workhorse/dashboard` host at `/`, including its oRPC API. The demo owns no
 Vite config, no browser entry, and no React dependency: it is a plain consumer, doing nothing a real
 application could not copy. It contributes only demo-owned workers, controllers, projections, and
 seed data.
@@ -76,7 +71,7 @@ pnpm demo
 ```
 
 The command recreates only the purpose-guarded `workhorse_demo` database, compiles the server-side runtime
-packages, then starts a watched Hono server and a watched dedicated worker process. Everything is served from
+packages, then starts a watched Hono server and two watched dedicated worker processes. Everything is served from
 `http://workhorse.localhost:43155/`, mounted at `/`; the demo intentionally exposes no ad hoc public job
 API. Set `WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay.
 Startup also creates a living feature showcase: eight task-visible feature families each contribute three
@@ -121,11 +116,9 @@ application shell keeps the header and responsive sidebar in place while browser
 `/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
 the `filter` query parameter, with pagination persisted as `page`.
 
-The demo runs **one** worker process hosting **two** workers, one with three execution slots and one
-strictly serial. They therefore share a hostname and pid and differ only in their generated identity
-— which is exactly why the default id carries a random suffix as well as host and pid. A production
-deployment would more often run one worker per replica; the demo packs two into a process so the
-fleet view shows heterogeneous capacity without needing two deployments.
+The demo runs **two** worker processes, one with three execution slots and one strictly serial. Each
+process owns one `Worker` and one PostgreSQL pool, so the fleet view demonstrates heterogeneous
+capacity across the same boundary a deployment would scale.
 
 Neither worker is **named**. They take the same generated
 `<hostname>-<pid>-<random>` identity any deployment gets by default, so the dashboard has to
@@ -135,8 +128,8 @@ declared worker list at all. Worker status is explicit: `busy` owns an active le
 attempt during the bounded five-minute observation window without a live registration, and `offline` is
 a declared worker that has stopped refreshing. The global header shows connection state and supports an
 explicit refresh. Both workers use a 15-second idle polling delay by default; set
-`WORKHORSE_WORKER_POLL_MS`, or pass `workerPollMs` to `createDemoApplication` for the in-process
-topology. Mantine follows the browser's preferred light or dark color scheme.
+`WORKHORSE_WORKER_POLL_MS` to override it. Mantine follows the browser's preferred light or dark
+color scheme.
 
 Pausing a worker from the dashboard writes to `workhorse.worker_registry` rather than calling a method
 on a local object, so it reaches the worker process. Like cancellation it is cooperative: claiming stops
@@ -183,8 +176,7 @@ audited control updates the durable schedule definition, and Jobs and Workers sh
 execution.
 
 Dashboard mounting is optional at the application boundary. Pass `{ dashboard: false }` to
-`createDemoApplication` to omit the browser application and oRPC endpoint while retaining the
-configured workers. React Grab lives only in the demo development frontend; it is not a dependency or asset
+`createDemoApplication` to omit the browser application and oRPC endpoint. React Grab lives only in the demo development frontend; it is not a dependency or asset
 of `@workhorse/dashboard` and is not included in production.
 
 For the deployable production shape, build and start the compiled demo explicitly:
@@ -193,8 +185,9 @@ For the deployable production shape, build and start the compiled demo explicitl
 pnpm demo:production
 ```
 
-That path creates the optimized dashboard bundle and serves it from Hono without Vite, HMR, or React Grab.
-It does not reset the database, which makes it suitable as the basis for future public deployment work.
+That path creates the optimized dashboard bundle, then starts the Hono process and both worker
+processes without Vite, HMR, or React Grab. It does not reset the database, which makes it suitable
+as the basis for future public deployment work.
 
 Set `DATABASE_URL` and `PORT` to override the local defaults. The application installs the current
 Workhorse schema and its idempotent demo table at startup. Maintenance runs through the workers

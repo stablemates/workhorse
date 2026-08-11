@@ -43,23 +43,6 @@ try {
     "--pack-destination",
     tarballs,
   ]);
-  await run("pnpm", ["--silent", "--dir", "packages/hono", "pack", "--pack-destination", tarballs]);
-  await run("pnpm", [
-    "--silent",
-    "--dir",
-    "packages/express",
-    "pack",
-    "--pack-destination",
-    tarballs,
-  ]);
-  await run("pnpm", [
-    "--silent",
-    "--dir",
-    "packages/fastify",
-    "pack",
-    "--pack-destination",
-    tarballs,
-  ]);
   await run("pnpm", [
     "--silent",
     "--dir",
@@ -71,9 +54,6 @@ try {
 
   const coreTarball = path.join(tarballs, "workhorse-core-0.1.0.tgz");
   const drizzleTarball = path.join(tarballs, "workhorse-drizzle-0.1.0.tgz");
-  const honoTarball = path.join(tarballs, "workhorse-hono-0.1.0.tgz");
-  const expressTarball = path.join(tarballs, "workhorse-express-0.1.0.tgz");
-  const fastifyTarball = path.join(tarballs, "workhorse-fastify-0.1.0.tgz");
   const dashboardTarball = path.join(tarballs, "workhorse-dashboard-0.1.0.tgz");
   const extracted = path.join(scratch, "core");
   await mkdir(extracted);
@@ -137,16 +117,8 @@ try {
         dependencies: {
           "@workhorse/core": `file:${coreTarball}`,
           "@workhorse/drizzle": `file:${drizzleTarball}`,
-          "@workhorse/hono": `file:${honoTarball}`,
-          "@workhorse/express": `file:${expressTarball}`,
-          "@workhorse/fastify": `file:${fastifyTarball}`,
           "@workhorse/dashboard": `file:${dashboardTarball}`,
-          "@hono/node-server": "2.0.11",
           "drizzle-orm": "0.45.2",
-          hono: "4.12.31",
-          express: "5.2.1",
-          fastify: "5.11.3",
-          "@types/express": "5.0.3",
           pg: "8.16.3",
           typescript: "5.8.3",
           "@types/node": "24.1.0",
@@ -183,15 +155,9 @@ try {
     path.join(consumer, "type-smoke.ts"),
     `import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { defineWorkerProcess } from "@workhorse/core";
-import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
-import { ExpressWorkhorse } from "@workhorse/express";
-import { FastifyWorkhorse, registerWorkhorse } from "@workhorse/fastify";
 import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";\nimport { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboard/server";\nimport type { DashboardNodeMiddleware } from "@workhorse/dashboard/server";
 import type { DashboardTaskCounts } from "@workhorse/dashboard/model";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Hono } from "hono";
-import express from "express";
-import Fastify from "fastify";
 import { Pool } from "pg";
 
 const pool = new Pool();
@@ -202,22 +168,9 @@ const workerProcess = defineWorkerProcess({
   workers: [{ configure: (worker) => void worker.handle("typed", async () => ({ ok: true })) }],
   probes: { port: 9090 },
 });
-const integration = new HonoWorkhorse(adapter);
-const expressIntegration = new ExpressWorkhorse(adapter);
-const expressApp = express().use(expressIntegration.middleware());
-const fastifyIntegration = new FastifyWorkhorse(adapter);
-const fastifyApp = Fastify();
-await registerWorkhorse(fastifyApp, fastifyIntegration);
-const app = new Hono();
-// Mounting takes a database and a Queue, never a worker runtime, so a packed consumer can host the
-// dashboard in a process that runs no workers at all.
-mountWorkhorseDashboard(app, { database: pool, authorize: () => true });
 const dashboardHost = createDashboardHost({ database: pool, authorize: () => true });
 const nodeMiddleware: DashboardNodeMiddleware = dashboardNodeMiddleware(dashboardHost);
 void nodeMiddleware;
-void integration.context.queue;
-void expressApp;
-void fastifyApp;
 void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { ok: true }));
 declare const dashboardClient: DashboardClient;
 const dashboardProps: DashboardProps = { client: dashboardClient };
@@ -243,7 +196,7 @@ void workerProcess;
     throw new Error("The packed Workhorse CLI did not expose worker command help");
   }
   await run("node", ["integration.mjs"], consumer);
-  process.stdout.write("Packed core, Drizzle, framework, and dashboard consumer tests passed.\n");
+  process.stdout.write("Packed core, Drizzle, and dashboard consumer tests passed.\n");
 } finally {
   await rm(scratch, { recursive: true, force: true });
 }

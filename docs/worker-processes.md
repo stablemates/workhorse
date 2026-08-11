@@ -1,23 +1,19 @@
 # Dedicated worker processes
 
-Workhorse recommends a **dedicated worker process for production deployments**. Running workers inside a web process remains supported by the Hono, Express, and Fastify packages for development, demos, and deliberately small deployments, but it is not the default production topology.
+Workhorse workers run in dedicated processes. The web tier and worker tier communicate through
+PostgreSQL, but they scale, restart, and fail independently.
 
 This document records the worker-concurrency investigation, benchmark findings, process-lifecycle contract, CLI usage, deployment tradeoffs, and remaining limitations.
 
 ## Why workers are separate from web servers
 
-A worker and an HTTP application have different scaling and failure boundaries:
+A worker and an HTTP application have different scaling and failure boundaries. A dedicated process
+keeps job capacity independent of HTTP replica count, isolates handler failures from web ingress,
+and gives each worker an explicit PostgreSQL pool, memory budget, and shutdown path.
 
-| Concern               | Dedicated worker process                                | Worker co-hosted with web                                 |
-| --------------------- | ------------------------------------------------------- | --------------------------------------------------------- |
-| Scaling               | Scale job capacity independently                        | Web replicas also multiply worker capacity                |
-| Deploy drain          | Drain jobs without coupling to request drain            | Must coordinate two unrelated drains                      |
-| Failure isolation     | Handler or worker failure does not kill web ingress     | A process failure removes both capacities                 |
-| Resource tuning       | Dedicated PostgreSQL pool, memory, CPU, and concurrency | Shared event loop and database pool                       |
-| Simplicity            | Requires another process/deployment                     | Convenient for local and small applications               |
-| Scheduled maintenance | Worker replicas own worker scheduling/maintenance       | Web replica count implicitly affects ownership contenders |
-
-The recommendation is not that co-hosting is always wrong. It is that production operators should make worker scaling an explicit decision rather than accidentally deriving it from the number of HTTP replicas.
+Prefer one worker per process when you want each worker identity, concurrency budget, and failure
+boundary to map directly to an operating-system process or orchestrator replica. A process may still
+contain several workers when they intentionally share one lifecycle and resource budget.
 
 The optional Workhorse probe server described below is **not application HTTP ingress**. It serves only liveness and readiness status for an orchestrator.
 

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createDrizzleAdapter } from "@workhorse/drizzle";
-import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
+import { createDashboardHost } from "@workhorse/dashboard/server";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {
@@ -29,12 +29,9 @@ import {
   DEMO_FEATURE_SHOWCASE_SOURCE,
   type DemoFeaturePayload,
 } from "./feature-showcase.js";
-import { registerDemoHandlers } from "./handlers.js";
 import type { DemoDatabase } from "./database.js";
 
 import {
-  DEMO_DURABLE_STEP_MS,
-  DEMO_DURABLE_TIMER_WAIT_MS,
   DEMO_CONCURRENCY_MAX_ACTIVE,
   DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY,
   DEMO_CONCURRENCY_POLICY_NAMESPACE,
@@ -42,22 +39,18 @@ import {
   DEMO_LONG_RUNNING_SEED_DELAY_MS,
   DEMO_LONG_RUNNING_SEED_JOBS,
   DEMO_MAINTENANCE_INTERVAL_MS,
-  DEMO_MAINTENANCE_TASK_POLL_MS,
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
   DEMO_PERSISTENT_RETRY_DELAYS_MS,
   DEMO_PERSISTENT_RETRY_POLICIES,
   DEMO_QUEUE,
   DEMO_RECOVERABLE_RETRY_POLICY,
-  DEMO_REGISTRY_INTERVAL_MS,
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_SEED_IDEMPOTENCY_KEY,
   DEMO_SEED_IDEMPOTENCY_SCOPE,
   DEMO_TIMING_HANDLER_MS,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
-  DEMO_WORKER_CONCURRENCY,
-  DEMO_WORKER_POLL_MS,
   DURABLE_TIMER_JOB_TYPE,
   FAILURE_JOB_TYPE,
   HEARTBEAT_SCHEDULE_NAME,
@@ -86,17 +79,7 @@ interface DemoIdempotency {
 }
 
 export interface CreateDemoApplicationOptions {
-  close?: () => void | Promise<void>;
-  onWorkerError?: (error: unknown) => void;
   dashboard?: boolean;
-  /**
-   * Run the demo workers inside this process.
-   *
-   * The demo's own `pnpm demo` deployment sets this to false and runs `demo/src/worker.ts` as a
-   * dedicated process, which is the topology the documentation recommends. In-process workers
-   * remain supported for small applications and are what the integration tests exercise.
-   */
-  workers?: boolean;
   /**
    * Serve the dashboard from source with hot reload instead of the packaged bundle.
    *
@@ -115,29 +98,7 @@ export interface CreateDemoApplicationOptions {
   taskController?: TaskController;
   workerController?: WorkerController;
   settingsController?: SettingsController;
-  workerPollMs?: number;
-  /**
-   * How often in-process workers refresh their durable registration.
-   *
-   * Reported slot use is only as fresh as this cadence, so the demo keeps it short enough that the
-   * workers view tracks overlapping handlers as they happen.
-   */
-  registryIntervalMs?: number;
   maintenanceIntervalMs?: number;
-  maintenanceTaskPollMs?: number;
-  longRunningJobMs?: number;
-  durableStepMs?: number;
-  durableTimerWaitMs?: number;
-  onDurableStepOperation?: (
-    scenario: DurableDemoScenario,
-    stepName: string,
-    attempt: number,
-  ) => void;
-  onDurableTimerOperation?: (
-    operation: "prepare" | "publish",
-    attempt: number,
-    fenceToken: bigint,
-  ) => void;
 }
 
 export interface AuditContext {
@@ -957,9 +918,6 @@ export function createDemoApplication(
   options: CreateDemoApplicationOptions = {},
 ) {
   const maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS;
-  const maintenanceTaskPollMs = options.maintenanceTaskPollMs ?? DEMO_MAINTENANCE_TASK_POLL_MS;
-  const durableStepMs = options.durableStepMs ?? DEMO_DURABLE_STEP_MS;
-  const durableTimerWaitMs = options.durableTimerWaitMs ?? DEMO_DURABLE_TIMER_WAIT_MS;
   const environment = options.environment ?? "development";
   // Worker pause state is durable and fleet-wide; it survives restarts and reaches remote workers.
   const workerController = options.workerController ?? createLocalWorkerController(database);
@@ -971,49 +929,13 @@ export function createDemoApplication(
   const settingsController =
     options.settingsController ??
     (options.operator?.mode === "local" ? createLocalSettingsController(database) : undefined);
-  const adapter = createDrizzleAdapter(database, {
-    defaultQueue: DEMO_QUEUE,
-    close: options.close,
-  });
-  const runWorkersInProcess = options.workers !== false;
-  const workhorse = new HonoWorkhorse(adapter, {
-    workers: (runWorkersInProcess ? DEMO_WORKER_CONCURRENCY : []).map((concurrency) => ({
-      options: {
-        queue: DEMO_QUEUE,
-        // Unnamed, exactly like the dedicated worker process: identity is generated per instance.
-        scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
-        pollMs: options.workerPollMs ?? DEMO_WORKER_POLL_MS,
-        // Declared once at startup. The demo deliberately offers no runtime concurrency control.
-        concurrency,
-        maintenanceIntervalMs,
-        maintenanceTaskPollMs,
-        registryIntervalMs: options.registryIntervalMs ?? DEMO_REGISTRY_INTERVAL_MS,
-        // Keep unconfigured demo jobs fast while persisted policies remain PostgreSQL-owned.
-        // Returning undefined omits the worker override and lets SQL select the stored policy.
-        retryDelayMs: (attempt, job) => (job.retryPolicy === null ? attempt * 100 : undefined),
-      },
-      configure(worker) {
-        registerDemoHandlers(worker, {
-          database,
-          queue: adapter.queue,
-          durableStepMs,
-          durableTimerWaitMs,
-          longRunningJobMs: options.longRunningJobMs,
-          onDurableStepOperation: options.onDurableStepOperation,
-          onDurableTimerOperation: options.onDurableTimerOperation,
-        });
-      },
-    })),
-    onWorkerError(error) {
-      options.onWorkerError?.(error);
-    },
-  });
-  const app = new Hono().use("*", workhorse.middleware());
+  const adapter = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
+  const app = new Hono();
 
   if (options.dashboard !== false) {
-    mountWorkhorseDashboard(app, {
+    const dashboard = createDashboardHost({
       path: "/",
-      database: workhorse.database,
+      database: adapter.database,
       authorize: () => true,
       environment,
       maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs },
@@ -1027,9 +949,13 @@ export function createDemoApplication(
       auditActor: "local-demo",
       dev: options.dev,
     });
+    app.all(
+      "*",
+      async (context) => (await dashboard.handle(context.req.raw)) ?? context.notFound(),
+    );
   }
 
-  return { app, workhorse, workerController };
+  return { app, queue: adapter.queue, workerController };
 }
 
 function jsonbValue(value: Json | null) {
