@@ -8,6 +8,7 @@ import {
   createLocalScheduleController,
   installDemoSchema,
   seedDemoData,
+  syncDemoConcurrencyPolicies,
   syncDemoSchedules,
 } from "./app.js";
 import { createDemoDatabase } from "./database.js";
@@ -47,9 +48,14 @@ const database = createDemoDatabase(pool);
 await installSchema(pool);
 await installDemoSchema(database);
 await syncDemoSchedules(pool);
+await syncDemoConcurrencyPolicies(pool);
 demoLogger.info(
   "workhorse.demo.schedules_synchronized",
   "Synchronized recurring demo schedules for worker-owned execution",
+);
+demoLogger.info(
+  "workhorse.demo.concurrency_policies_synchronized",
+  "Synchronized fleet-wide demo concurrency policies",
 );
 
 // Development compiles the dashboard from source in this process. Production serves the packaged

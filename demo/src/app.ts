@@ -35,6 +35,9 @@ import type { DemoDatabase } from "./database.js";
 import {
   DEMO_DURABLE_STEP_MS,
   DEMO_DURABLE_TIMER_WAIT_MS,
+  DEMO_CONCURRENCY_MAX_ACTIVE,
+  DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY,
+  DEMO_CONCURRENCY_POLICY_NAMESPACE,
   DEMO_IDEMPOTENCY_TTL_MS,
   DEMO_LONG_RUNNING_SEED_DELAY_MS,
   DEMO_LONG_RUNNING_SEED_JOBS,
@@ -565,6 +568,18 @@ export async function syncDemoSchedules(database: Pool): Promise<void> {
     reportSchedule(enabledByName.get(REPORT_SCHEDULE_NAME) ?? true),
     longRunningSchedule(enabledByName.get(LONG_RUNNING_SCHEDULE_NAME) ?? true),
     ...featureShowcaseSchedules(enabledByName),
+  ]);
+}
+
+/** Synchronize the fleet-wide dispatch budget showcased by the seeded long-running jobs. */
+export async function syncDemoConcurrencyPolicies(database: Pool): Promise<void> {
+  const queue = new Queue(database, DEMO_QUEUE);
+  await queue.syncConcurrencyPolicies(DEMO_CONCURRENCY_POLICY_NAMESPACE, [
+    {
+      queue: DEMO_QUEUE,
+      maxActive: DEMO_CONCURRENCY_MAX_ACTIVE,
+      maxActivePerKey: DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY,
+    },
   ]);
 }
 
@@ -1114,9 +1129,10 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
           LONG_RUNNING_JOB_TYPE,
           { source: "long-running-seed", label: job.label },
           {
+            concurrencyKey: job.concurrencyKey,
             maxAttempts: 1,
             runAt,
-            tags: ["demo-test", "long-running", "low-resource"],
+            tags: ["demo-test", "long-running", "low-resource", "concurrency-policy"],
           },
         ),
       );

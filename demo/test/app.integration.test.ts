@@ -12,6 +12,9 @@ import {
   createLocalQueueController,
   createLocalOperator,
   createLocalScheduleController,
+  DEMO_CONCURRENCY_MAX_ACTIVE,
+  DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY,
+  DEMO_CONCURRENCY_POLICY_NAMESPACE,
   DEMO_OPERATOR_IDEMPOTENCY_KEY,
   DEMO_OPERATOR_IDEMPOTENCY_SCOPE,
   DEMO_SEED_IDEMPOTENCY_KEY,
@@ -37,6 +40,7 @@ import {
   LONG_RUNNING_SCHEDULE_NAME,
   REPORT_SCHEDULE_NAME,
   seedDemoData,
+  syncDemoConcurrencyPolicies,
   syncDemoSchedules,
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
@@ -129,7 +133,7 @@ beforeEach(async () => {
   await Promise.all(runningApplications.splice(0).map((workhorse) => workhorse.stop()));
   await pool.query(`TRUNCATE public.workhorse_demo_audit, public.workhorse_demo_seed, public.workhorse_demo_order, workhorse.job_event,
     workhorse.job_wait, workhorse.job_checkpoint, workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.queue_control, workhorse.worker_registry,
+    workhorse.queue_control, workhorse.concurrency_policy, workhorse.worker_registry,
     workhorse.enqueue_idempotency, workhorse.job_outcome, workhorse.job_runtime,
     workhorse.job_stat_bucket, workhorse.job RESTART IDENTITY CASCADE`);
   await pool.query(`UPDATE workhorse.job_stat_state SET
@@ -374,7 +378,7 @@ describe("Workhorse demo", () => {
     ).toMatchObject({ rows: [{ count: 2, sources: 2, targets: 2 }] });
     expect(
       await pool.query(
-        `SELECT job.payload, job.max_attempts, job.tags, runtime.state,
+        `SELECT job.payload, job.concurrency_key, job.max_attempts, job.tags, runtime.state,
                 runtime.run_at > clock_timestamp() AS is_future
            FROM workhorse.job job
            JOIN workhorse.job_runtime runtime ON runtime.job_id = job.id
@@ -382,10 +386,11 @@ describe("Workhorse demo", () => {
           ORDER BY payload->>'label'`,
       ),
     ).toMatchObject({
-      rows: DEMO_LONG_RUNNING_SEED_JOBS.map(({ label }) => ({
+      rows: DEMO_LONG_RUNNING_SEED_JOBS.map(({ label, concurrencyKey }) => ({
         payload: { source: "long-running-seed", label },
+        concurrency_key: concurrencyKey,
         max_attempts: 1,
-        tags: ["demo-test", "long-running", "low-resource"],
+        tags: ["demo-test", "long-running", "low-resource", "concurrency-policy"],
         state: "scheduled",
         is_future: true,
       })),
@@ -760,6 +765,96 @@ describe("Workhorse demo", () => {
       groupBy: "status",
       groups: ["canceled", "failed", "ready", "scheduled", "succeeded"],
     });
+  });
+
+  it("synchronizes a fleet budget and seeds queue-scoped key examples", async () => {
+    await syncDemoConcurrencyPolicies(pool);
+    await seedDemoData(database);
+
+    await expect(new Queue(pool).concurrencyPolicies(["demo"])).resolves.toEqual([
+      expect.objectContaining({
+        namespace: DEMO_CONCURRENCY_POLICY_NAMESPACE,
+        queue: "demo",
+        maxActive: DEMO_CONCURRENCY_MAX_ACTIVE,
+        maxActivePerKey: DEMO_CONCURRENCY_MAX_ACTIVE_PER_KEY,
+      }),
+    ]);
+    await expect(
+      pool.query(
+        `SELECT payload->>'label' AS label, concurrency_key, tags
+           FROM workhorse.job
+          WHERE job_type = 'demo.long-running'
+            AND payload->>'source' = 'long-running-seed'
+          ORDER BY payload->>'label'`,
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          label: "archive-validation",
+          concurrency_key: "customer-acme",
+          tags: expect.arrayContaining(["concurrency-policy"]),
+        },
+        {
+          label: "partner-catalog-sync",
+          concurrency_key: "customer-acme",
+          tags: expect.arrayContaining(["concurrency-policy"]),
+        },
+        {
+          label: "quarterly-report-export",
+          concurrency_key: "customer-globex",
+          tags: expect.arrayContaining(["concurrency-policy"]),
+        },
+      ],
+    });
+
+    const examples = await pool.query<{ id: string; label: string; concurrency_key: string }>(
+      `SELECT id::text, payload->>'label' AS label, concurrency_key
+         FROM workhorse.job
+        WHERE job_type = 'demo.long-running'
+          AND payload->>'source' = 'long-running-seed'`,
+    );
+    const idByLabel = new Map(examples.rows.map((row) => [row.label, row.id]));
+    const keyById = new Map(examples.rows.map((row) => [row.id, row.concurrency_key]));
+    const exampleIds = examples.rows.map((row) => row.id);
+    await pool.query(
+      `UPDATE workhorse.job_runtime
+          SET state = 'scheduled', run_at = clock_timestamp() + interval '1 day',
+              ready_at = NULL, sequence = NULL, worker_id = NULL, acquired_at = NULL,
+              heartbeat_at = NULL, expires_at = NULL, attempt_timeout_at = NULL,
+              fence_token = 0, wait_name = NULL, attempt_started_at = NULL,
+              cancel_requested_at = NULL, cancel_requested_by = NULL, cancel_reason = NULL`,
+    );
+    await pool.query(
+      `UPDATE workhorse.job_runtime
+          SET state = 'ready', run_at = clock_timestamp(), ready_at = clock_timestamp(),
+              sequence = nextval('workhorse.ready_sequence_seq')
+        WHERE job_id = ANY($1::uuid[])`,
+      [exampleIds],
+    );
+
+    const queue = new Queue(pool, "demo");
+    const first = await queue.claim("demo-concurrency-a", { queue: "demo" });
+    const second = await queue.claim("demo-concurrency-b", { queue: "demo" });
+    if (!first || !second) throw new Error("Expected two distinct concurrency keys to be admitted");
+    expect([keyById.get(first.id), keyById.get(second.id)].toSorted()).toEqual([
+      "customer-acme",
+      "customer-globex",
+    ]);
+    await expect(queue.claim("demo-concurrency-c", { queue: "demo" })).resolves.toBeNull();
+
+    const acmeClaim = keyById.get(first.id) === "customer-acme" ? first : second;
+    const acmeWorker = acmeClaim === first ? "demo-concurrency-a" : "demo-concurrency-b";
+    const globexClaim = acmeClaim === first ? second : first;
+    const globexWorker = globexClaim === first ? "demo-concurrency-a" : "demo-concurrency-b";
+    const remainingAcmeId = [
+      idByLabel.get("archive-validation"),
+      idByLabel.get("partner-catalog-sync"),
+    ].find((id) => id !== acmeClaim.id);
+    await queue.complete(acmeClaim, acmeWorker, { seededConcurrencyExample: true });
+    const released = await queue.claim("demo-concurrency-c", { queue: "demo" });
+    expect(released?.id).toBe(remainingAcmeId);
+    await queue.complete(globexClaim, globexWorker, { seededConcurrencyExample: true });
+    await queue.complete(released!, "demo-concurrency-c", { seededConcurrencyExample: true });
   });
 
   it("materializes the representative execution-timeout example", async () => {
