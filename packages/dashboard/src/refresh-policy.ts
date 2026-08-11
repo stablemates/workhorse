@@ -15,6 +15,22 @@ export function dashboardRefreshIntervalMs(value: DashboardRefreshIntervalValue)
   return dashboardRefreshIntervals.find((option) => option.value === value)?.ms ?? null;
 }
 
+export function dashboardPollingIntervalMs(
+  value: DashboardRefreshIntervalValue,
+  paused: boolean,
+): number | null {
+  if (paused) return null;
+  return dashboardRefreshIntervalMs(value);
+}
+
+export function discardBackgroundSettingsRefresh(
+  background: boolean,
+  settingsPage: boolean,
+  settingsDirty: boolean,
+): boolean {
+  return background && settingsPage && settingsDirty;
+}
+
 export function startDashboardPolling(intervalMs: number | null, refresh: () => void): () => void {
   if (intervalMs === null) return () => undefined;
   const timer = setInterval(refresh, intervalMs);
