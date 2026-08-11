@@ -149,6 +149,42 @@ export interface ConcurrencyPolicy {
   updatedAt: Date;
 }
 
+/** One continuously refilled token bucket. PostgreSQL supplies the clock for every refill. */
+export interface RateLimit {
+  /** Tokens added during each interval. One token admits one job start. */
+  limit: number;
+  intervalMs: number;
+  /** Maximum tokens retained after idle time. */
+  burst: number;
+}
+
+/** One queue's deployment-synchronized start-rate budget. */
+export interface RateLimitPolicyDefinition {
+  queue: string;
+  rate: RateLimit;
+  /** Uniform independent bucket for each non-null concurrency key. */
+  perKey?: RateLimit | null;
+}
+
+/** Persisted and normalized queue rate-limit policy. */
+export interface RateLimitPolicy {
+  namespace: string;
+  queue: string;
+  rate: RateLimit;
+  perKey: RateLimit | null;
+  updatedAt: Date;
+}
+
+/** A bounded operational observation of one rate-limit policy. */
+export interface RateLimitStatus extends RateLimitPolicy {
+  availableTokens: number;
+  throttledReady: number;
+  throttledKeys: number;
+  nextEligibleAt: Date | null;
+  sampleCapped: boolean;
+  policySetCapped: boolean;
+}
+
 /** One job accepted by {@link Queue.enqueueMany}, with the same semantics as `Queue.enqueue`. */
 export interface EnqueueRequest<TPayload extends Json = Json> {
   type: string;
@@ -707,6 +743,11 @@ export interface QueueHealth {
       saturatedKeys: number;
       highestKeyActive: number;
     }>;
+    capped: boolean;
+  };
+  /** Bounded token-bucket pressure. Ready counts are lower bounds when `capped` is true. */
+  rateLimitPolicies: {
+    policies: RateLimitStatus[];
     capped: boolean;
   };
   /**

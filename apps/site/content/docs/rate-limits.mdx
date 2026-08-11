@@ -1,0 +1,45 @@
+---
+title: How do I limit how quickly work starts?
+description: Synchronize PostgreSQL-owned queue and keyed token buckets across every worker.
+---
+
+Concurrency limits active work. `Queue.syncRateLimitPolicies` limits starts over time, even when
+tasks finish immediately.
+
+## Synchronize desired policy
+
+```ts
+await queue.syncRateLimitPolicies("workers", [
+  {
+    queue: "provider-api",
+    rate: { limit: 60, intervalMs: 60_000, burst: 10 },
+    perKey: { limit: 5, intervalMs: 60_000, burst: 2 },
+  },
+]);
+```
+
+The queue bucket admits sixty starts per minute and retains ten tokens after idle time. Every
+non-null `concurrencyKey` also receives an independent five-per-minute bucket with a burst of two.
+
+PostgreSQL supplies refill time and consumes tokens in the claim transaction. Application clock
+skew cannot create capacity, and competing worker processes cannot spend the same token.
+
+## Observe throttling
+
+`Queue.rateLimitStatuses()` reports available queue tokens, bounded throttled-ready depth, throttled
+key count, and the earliest sampled eligibility time. `Queue.health()` includes the same summary,
+and OpenTelemetry exports queue-level configured rate, tokens, throttle depth, and eligibility delay.
+
+The Queues page keeps concurrency and start rate in separate columns. This makes an active-work cap
+visually distinct from a ready task waiting for its next token.
+
+## Next
+
+- [Concurrency policies](/docs/concurrency-policies) — limit simultaneous active work
+- [Retries](/docs/retries) — every retry start consumes a token
+- [Operations](/docs/operations) — inspect throttled queue pressure
+
+---
+
+Exact SQL functions, limits, storage, and refill semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#rate_limit_policy-and-rate_limit_bucket).

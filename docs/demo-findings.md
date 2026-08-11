@@ -37,6 +37,9 @@ The demo now proves these paths against PostgreSQL rather than mocks:
 - worker instances expose bounded local concurrency and `{ concurrency, activeSlots, paused, draining }`
   runtime state, while the demo intentionally keeps two default-concurrency workers rather than presenting
   an unrecorded performance comparison;
+- a dedicated partner API queue consumes a queue-wide and per-key token burst through the public claim
+  path, then leaves a bounded throttled backlog visible beside its sustained rate and next eligibility;
+  a serial worker drains that queue only when PostgreSQL admits another start;
 - `pnpm demo` recreates only a purpose-guarded demo database, builds the workspace, and serves the app.
 
 Checkpoint outputs remain immutable durable evidence. Schema version 16 adds a separate fenced, bounded

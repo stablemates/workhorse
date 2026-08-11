@@ -13,13 +13,14 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v21**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
 - `@workhorse/core`: durable PostgreSQL job queue with at-least-once delivery, leases and fencing,
   cooperative cancellation, deadlines and execution timeouts, durable waits, progress and
   checkpoints, dead letters and redrive, enqueue idempotency keys, persisted retry policies,
+  queue and per-key token-bucket rate limits,
   declarative recurring schedules, versioned payload and result contracts, durable JSON size
   limits, operator redaction, automated history retention, and a durable worker registry.
 - `@workhorse/core`: database-authoritative maintenance and retention settings with application

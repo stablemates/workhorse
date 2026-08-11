@@ -7,6 +7,7 @@ import type {
   DashboardJobDetail,
   DashboardManagedQueueRow,
   DashboardQueuesPage,
+  DashboardRateLimitPolicySummary,
   DashboardSystemPage,
 } from "./model.js";
 import {
@@ -54,6 +55,7 @@ function queueRow(overrides: Partial<DashboardManagedQueueRow> = {}): DashboardM
     canceled: 0,
     terminalCountsApproximate: false,
     concurrencyPolicy: policy(),
+    rateLimitPolicy: null,
     ...overrides,
   };
 }
@@ -63,6 +65,7 @@ function queuesPage(overrides: Partial<DashboardQueuesPage> = {}): DashboardQueu
     capturedAt: "2026-08-11T12:00:00.000Z",
     queues: [queueRow()],
     concurrencyPoliciesCapped: false,
+    rateLimitPoliciesCapped: false,
     ...overrides,
   };
 }
@@ -232,6 +235,29 @@ describe("queues page concurrency columns", () => {
     expect(renderQueues(queuesPage({ concurrencyPoliciesCapped: true }), QueuesPage)).toContain(
       "bounded sample",
     );
+  });
+});
+
+describe("queues page rate-limit columns", () => {
+  it("shows sustained, burst, per-key, and current throttling as separate facts", async () => {
+    const { QueuesPage } = await import("./dashboard.js");
+    const rateLimitPolicy: DashboardRateLimitPolicySummary = {
+      namespace: "demo",
+      rate: { limit: 12, intervalMs: 60_000, burst: 3 },
+      perKey: { limit: 2, intervalMs: 1_000, burst: 1 },
+      availableTokens: 0.25,
+      throttledReady: 4,
+      throttledKeys: 2,
+      nextEligibleAt: "2026-08-11T12:00:01.000Z",
+    };
+    const html = renderQueues(queuesPage({ queues: [queueRow({ rateLimitPolicy })] }), QueuesPage);
+
+    expect(html).toContain(">Start rate<");
+    expect(html).toContain(">Throttled<");
+    expect(html).toContain("12/1m · burst 3");
+    expect(html).toContain("2/1s · burst 1 per key");
+    expect(html).toContain("4 · 2 keys");
+    expect(html).toContain("The earliest can start at 2026-08-11T12:00:01.000Z");
   });
 });
 
@@ -580,7 +606,7 @@ describe("system queue pressure concurrency column", () => {
       },
       QueuePressure,
     );
-    expect(html).toContain(">Limit<");
+    expect(html).toContain(">Admission<");
     expect(html).toContain("4 / 4");
     expect(html).toContain("3 blocked");
     expect(html).toContain('aria-label="Blocked: At least 3 ready tasks');

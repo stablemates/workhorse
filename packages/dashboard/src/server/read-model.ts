@@ -13,6 +13,7 @@ import {
   DashboardEventsWindow,
   DashboardJobDetail,
   DashboardQueuesPage,
+  DashboardRateLimitPolicySummary,
   DashboardRetentionCategory,
   DashboardRetentionCategoryRow,
   DashboardScheduleRow,
@@ -32,6 +33,7 @@ import {
   DashboardSettingsPage,
   MaintenanceLoopCadences,
   dashboardConcurrencyPolicySummary,
+  dashboardRateLimitPolicySummary,
   readIdempotencyEvidence,
 } from "../model.js";
 import {
@@ -354,6 +356,8 @@ export async function readDashboardQueues(
         SELECT queue_name FROM workhorse.queue_control
         UNION
         SELECT queue_name FROM workhorse.concurrency_policy
+        UNION
+        SELECT queue_name FROM workhorse.rate_limit_policy
       ), live_counts AS (
         SELECT queue_name,
                count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
@@ -429,12 +433,7 @@ export async function readDashboardQueues(
     );
   }
 
-  const concurrencyPolicies = new Map<string, DashboardConcurrencyPolicySummary>(
-    health.concurrencyPolicies.policies.map((policy) => [
-      policy.queue,
-      dashboardConcurrencyPolicySummary(policy),
-    ]),
-  );
+  const admissionPolicies = dashboardAdmissionPolicies(health);
 
   return {
     capturedAt: new Date().toISOString(),
@@ -448,9 +447,11 @@ export async function readDashboardQueues(
       failed: terminalCounts.get(row.queue)?.failed ?? 0,
       canceled: terminalCounts.get(row.queue)?.canceled ?? 0,
       terminalCountsApproximate: approximate,
-      concurrencyPolicy: concurrencyPolicies.get(row.queue) ?? null,
+      concurrencyPolicy: admissionPolicies.concurrency.get(row.queue) ?? null,
+      rateLimitPolicy: admissionPolicies.rateLimits.get(row.queue) ?? null,
     })),
     concurrencyPoliciesCapped: health.concurrencyPolicies.capped,
+    rateLimitPoliciesCapped: health.rateLimitPolicies.capped,
   };
 }
 
@@ -1304,6 +1305,34 @@ export function concurrencyPolicyDegradedChecks(
     .map((policy) => `Concurrency policy blocks ready tasks on ${policy.queue}`);
 }
 
+export function rateLimitPolicyDegradedChecks(
+  health: Pick<QueueHealthSnapshot, "rateLimitPolicies">,
+): string[] {
+  return health.rateLimitPolicies.policies
+    .filter((policy) => policy.throttledReady > 0)
+    .map(
+      (policy) =>
+        `Queue ${policy.queue} has ${policy.throttledReady}+ ready tasks waiting for rate-limit tokens`,
+    );
+}
+
+function dashboardAdmissionPolicies(health: QueueHealthSnapshot) {
+  return {
+    concurrency: new Map<string, DashboardConcurrencyPolicySummary>(
+      health.concurrencyPolicies.policies.map((policy) => [
+        policy.queue,
+        dashboardConcurrencyPolicySummary(policy),
+      ]),
+    ),
+    rateLimits: new Map<string, DashboardRateLimitPolicySummary>(
+      health.rateLimitPolicies.policies.map((policy) => [
+        policy.queue,
+        dashboardRateLimitPolicySummary(policy),
+      ]),
+    ),
+  };
+}
+
 export async function readDashboardSystem(
   database: DashboardDatabase,
   queue: Queue,
@@ -1468,6 +1497,7 @@ export async function readDashboardSystem(
         SELECT queue_name FROM workhorse.job_runtime
         UNION SELECT queue_name FROM workhorse.queue_control
         UNION SELECT queue_name FROM workhorse.concurrency_policy
+        UNION SELECT queue_name FROM workhorse.rate_limit_policy
         UNION SELECT queue_name FROM rolled
       ), runtime AS (
         SELECT queue_name,
@@ -1578,6 +1608,7 @@ export async function readDashboardSystem(
   const degradedChecks = [
     ...retentionDegradedChecks(retention),
     ...concurrencyPolicyDegradedChecks(health),
+    ...rateLimitPolicyDegradedChecks(health),
   ];
   // A stalled rollup is a storage problem rather than a dispatch one: history retention holds at
   // the watermark rather than deleting the input to windows nobody has computed yet.
@@ -1591,12 +1622,7 @@ export async function readDashboardSystem(
     degradedChecks,
   };
 
-  const concurrencyPolicies = new Map<string, DashboardConcurrencyPolicySummary>(
-    health.concurrencyPolicies.policies.map((policy) => [
-      policy.queue,
-      dashboardConcurrencyPolicySummary(policy),
-    ]),
-  );
+  const admissionPolicies = dashboardAdmissionPolicies(health);
   const queues = queueRows.rows
     .map((row) => ({
       queue: row.queue,
@@ -1608,7 +1634,8 @@ export async function readDashboardSystem(
       retrying: row.retrying,
       enqueuedPerMinute: row.enqueued / minutes,
       completedPerMinute: row.completed / minutes,
-      concurrencyPolicy: concurrencyPolicies.get(row.queue) ?? null,
+      concurrencyPolicy: admissionPolicies.concurrency.get(row.queue) ?? null,
+      rateLimitPolicy: admissionPolicies.rateLimits.get(row.queue) ?? null,
     }))
     // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
     .sort((left, right) => {
@@ -1671,6 +1698,7 @@ export async function readDashboardSystem(
     })),
     queues,
     concurrencyPoliciesCapped: health.concurrencyPolicies.capped,
+    rateLimitPoliciesCapped: health.rateLimitPolicies.capped,
     retryStorm: { buckets: retryBuckets, topTypes: retryTypeRows.rows },
     failingTypes: failingTypeRows.rows.map((row) => ({
       queue: row.queue,

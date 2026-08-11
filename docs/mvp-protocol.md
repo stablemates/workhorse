@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 22 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 23 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency. It also supports retry policies,
 checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
@@ -25,6 +25,8 @@ and per-minute statistics complete the protocol.
 | `schedule_occurrence` | Deduplicated schedule fire mapped to a job                                 | Insert once per schedule second; job ID populated atomically                          |
 | `retention_policy`    | Authoritative cleanup windows, work limits, defaults, and provenance       | Application seed or operator override and revert                                      |
 | `concurrency_policy`  | Deployment-owned queue and optional queue-scoped key dispatch budgets      | Namespaced desired-state synchronization                                              |
+| `rate_limit_policy`   | Deployment-owned queue and optional keyed token-bucket definitions         | Namespaced desired-state synchronization                                              |
+| `rate_limit_bucket`   | Durable queue and key token balances                                       | Refilled and consumed only during admission                                           |
 | `maintenance_policy`  | IANA timezone, local retention time, cadences, defaults, and provenance    | Application seed or operator override and revert                                      |
 | `maintenance_state`   | Per-task due state and retained-history safety watermark                   | SQL-owned maintenance state                                                           |
 
@@ -45,7 +47,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 
 1. `enqueue_many_v1` validates up to 1,000 JSONB requests against one timestamp, including canonical payload size, contract version, and redaction metadata, then returns `(ordinal, job_id, accepted)`. Keyed requests first acquire deterministic sorted scoped-ownership locks, while acceptance side effects remain in caller ordinal order. New requests set `accepted` and insert `job`, `job_runtime`, and one `enqueued` event; exact replays clear `accepted` and return the retained job ID before durable, FIFO, or notification side effects; mismatches abort the whole statement with structured safe conflict details. `enqueue_v1` delegates to it.
 2. `promote_v1` locks a bounded due set with `SKIP LOCKED`, updates scheduled runtime rows to ready, assigns sequences, and appends events.
-3. `claim_v2` locks the queue policy, checks unexpired active capacity, and selects one admissible row from a bounded FIFO window. It performs one runtime state update to active with worker, fence, heartbeat, lease expiry, and the current attempt's execution-timeout budget, then returns raw payload plus the accepted contract version, result limit, and error-redaction flag and appends the claim event.
+3. `claim_v2` locks the queue's concurrency and rate-limit policies, checks unexpired active capacity, and refills PostgreSQL-time token buckets. It selects one concurrency- and rate-admissible row from a bounded FIFO window, then changes that runtime to active and consumes its queue and key tokens in the same transaction. The update records worker, fence, heartbeat, lease expiry, and the current attempt's execution-timeout budget. The function returns raw payload plus the accepted contract version, result limit, and error-redaction flag, then appends the claim event.
 4. `heartbeat_v2` returns `accepted`, `cancel_requested`, or `stale` for the exact unexpired active generation and extends only accepted leases. Additive compatibility `heartbeat_v1` returns true only for accepted.
 5. `cancel_v1` locks the sole runtime. Ready, scheduled, and durable-wait continuations become canceled immediately. Active work records one request and returns `cancel_requested`; repeats retain the first request. Existing terminal success/failure returns `already_terminal`; existing cancellation returns `canceled`.
 6. `acknowledge_cancel_v1` accepts only the exact unexpired worker/fence carrying a request, then inserts the canceled outcome, truthful attempt history, and terminal event atomically.
@@ -161,8 +163,9 @@ Before scheduling concerns, the worker execution contract is:
 - Every active job has its own heartbeat, abort signal, and fenced completion/failure lifecycle.
 - `pause()` blocks new claims but does not cancel active handlers; `resume()` reopens claims immediately.
 - `stop()` blocks new claims and drains active handlers before `run()` resolves.
-- Concurrency is local execution capacity, not a durable worker registry, cross-process rate limit, queue
-  weighting policy, or exactly-once guarantee.
+- Worker concurrency is local execution capacity. `concurrency_policy` and `rate_limit_policy`
+  separately coordinate active work and start rate across processes. None provides queue weighting
+  or an exactly-once guarantee.
 
 `Queue.syncSchedules(namespace, definitions, { prune })` runs against the target database only, normally during deployment.
 
