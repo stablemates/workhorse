@@ -276,7 +276,9 @@ export const dashboardRouter = {
     cron: procedure.handler(({ context }) =>
       readDashboardCron(context.database, context.maintenanceLoops),
     ),
-    queues: procedure.handler(({ context }) => readDashboardQueues(context.database)),
+    queues: procedure.handler(({ context }) =>
+      readDashboardQueues(context.database, context.queue),
+    ),
     system: procedure
       .input(systemInput)
       .handler(({ context, input }) =>
@@ -302,6 +304,7 @@ export const dashboardRouter = {
         context.database,
         input.id,
         context.projectDurability,
+        context.queue,
       );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       return detail;
