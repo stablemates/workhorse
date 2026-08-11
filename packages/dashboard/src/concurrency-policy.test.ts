@@ -19,6 +19,7 @@ describe("dashboard concurrency policy read model", () => {
     expect(dashboardConcurrencyPolicySummary(policy)).toEqual({
       namespace: "checkout",
       maxActive: 4,
+      utilizationKnown: true,
       active: 4,
       available: 0,
       blockedReady: 3,
