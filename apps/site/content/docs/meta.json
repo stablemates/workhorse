@@ -28,6 +28,8 @@
     "maintenance",
     "---Integrations---",
     "drizzle",
+    "prisma",
+    "typeorm",
     "hono",
     "dashboard",
     "---Reference---",

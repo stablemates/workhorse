@@ -43,6 +43,22 @@ try {
     "--pack-destination",
     tarballs,
   ]);
+  await run("pnpm", [
+    "--silent",
+    "--dir",
+    "packages/prisma",
+    "pack",
+    "--pack-destination",
+    tarballs,
+  ]);
+  await run("pnpm", [
+    "--silent",
+    "--dir",
+    "packages/typeorm",
+    "pack",
+    "--pack-destination",
+    tarballs,
+  ]);
   await run("pnpm", ["--silent", "--dir", "packages/hono", "pack", "--pack-destination", tarballs]);
   await run("pnpm", [
     "--silent",
@@ -55,6 +71,8 @@ try {
 
   const coreTarball = path.join(tarballs, "workhorse-core-0.1.0.tgz");
   const drizzleTarball = path.join(tarballs, "workhorse-drizzle-0.1.0.tgz");
+  const prismaTarball = path.join(tarballs, "workhorse-prisma-0.1.0.tgz");
+  const typeormTarball = path.join(tarballs, "workhorse-typeorm-0.1.0.tgz");
   const honoTarball = path.join(tarballs, "workhorse-hono-0.1.0.tgz");
   const dashboardTarball = path.join(tarballs, "workhorse-dashboard-0.1.0.tgz");
   const extracted = path.join(scratch, "core");
@@ -67,15 +85,21 @@ try {
   const coreManifest = JSON.stringify(corePackage);
   if (
     coreManifest.includes('"drizzle-orm"') ||
+    coreManifest.includes('"@prisma/client"') ||
+    coreManifest.includes('"typeorm"') ||
     coreManifest.includes('"hono"') ||
     coreManifest.includes('"@hono/node-server"')
   ) {
-    throw new Error("The packed core package manifest must not reference Drizzle or Hono");
+    throw new Error("The packed core package manifest must not reference an ORM or Hono");
   }
   for (const file of await filesBelow(path.join(extracted, "package", "dist"))) {
     if (!file.endsWith(".js")) continue;
     const source = await readFile(file, "utf8");
-    if (source.includes('from "drizzle-orm"') || source.includes('from "hono')) {
+    if (
+      /^\s*(?:import|export)\s.+\sfrom\s+["'](?:drizzle-orm(?:\/|["'])|@prisma\/client(?:\/|["'])|typeorm(?:\/|["'])|hono(?:\/|["']))/m.test(
+        source,
+      )
+    ) {
       throw new Error(`The packed core package contains an ecosystem import in ${file}`);
     }
   }
@@ -112,10 +136,15 @@ try {
         dependencies: {
           "@workhorse/core": `file:${coreTarball}`,
           "@workhorse/drizzle": `file:${drizzleTarball}`,
+          "@workhorse/prisma": `file:${prismaTarball}`,
+          "@workhorse/typeorm": `file:${typeormTarball}`,
           "@workhorse/hono": `file:${honoTarball}`,
           "@workhorse/dashboard": `file:${dashboardTarball}`,
           "@hono/node-server": "2.0.11",
           "drizzle-orm": "0.45.2",
+          "@prisma/client": "6.19.3",
+          prisma: "6.19.3",
+          typeorm: "0.3.31",
           hono: "4.12.31",
           pg: "8.16.3",
           typescript: "5.8.3",
@@ -152,17 +181,27 @@ try {
   await writeFile(
     path.join(consumer, "type-smoke.ts"),
     `import { createDrizzleAdapter } from "@workhorse/drizzle";
+import { createPrismaAdapter } from "@workhorse/prisma";
+import { createTypeOrmAdapter } from "@workhorse/typeorm";
 import { defineWorkerProcess } from "@workhorse/core";
 import { HonoWorkhorse, mountWorkhorseDashboard } from "@workhorse/hono";
 import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";\nimport { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboard/server";\nimport type { DashboardNodeMiddleware } from "@workhorse/dashboard/server";
 import type { DashboardTaskCounts } from "@workhorse/dashboard/model";
 import { drizzle } from "drizzle-orm/node-postgres";
+import type { PrismaClient, Prisma } from "@prisma/client";
+import type { DataSource, EntityManager } from "typeorm";
 import { Hono } from "hono";
 import { Pool } from "pg";
 
 const pool = new Pool();
 const db = drizzle({ client: pool });
 const adapter = createDrizzleAdapter(db);
+declare const prisma: PrismaClient;
+declare const prismaTransaction: Prisma.TransactionClient;
+const prismaAdapter = createPrismaAdapter(prisma);
+declare const dataSource: DataSource;
+declare const entityManager: EntityManager;
+const typeOrmAdapter = createTypeOrmAdapter(dataSource);
 const workerProcess = defineWorkerProcess({
   adapter: () => adapter,
   workers: [{ configure: (worker) => void worker.handle("typed", async () => ({ ok: true })) }],
@@ -178,6 +217,8 @@ const nodeMiddleware: DashboardNodeMiddleware = dashboardNodeMiddleware(dashboar
 void nodeMiddleware;
 void integration.context.queue;
 void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { ok: true }));
+void prismaAdapter.forTransaction(prismaTransaction).enqueue("typed", { ok: true });
+void typeOrmAdapter.forTransaction(entityManager).enqueue("typed", { ok: true });
 declare const dashboardClient: DashboardClient;
 const dashboardProps: DashboardProps = { client: dashboardClient };
 const dashboardCountsPromise: Promise<DashboardTaskCounts> = dashboardClient.taskCounts();
@@ -186,12 +227,27 @@ void dashboardCountsPromise;
 void workerProcess;
 `,
   );
+  const prismaDirectory = path.join(consumer, "prisma");
+  await mkdir(prismaDirectory);
+  await writeFile(
+    path.join(prismaDirectory, "schema.prisma"),
+    `generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+`,
+  );
   await writeFile(
     path.join(consumer, "integration.mjs"),
     await readFile(path.join(repository, "test", "fixtures", "packed-consumer.mjs"), "utf8"),
   );
 
   await run("pnpm", ["install", "--ignore-scripts", "--frozen-lockfile=false"], consumer);
+  await run("pnpm", ["exec", "prisma", "generate", "--schema", "prisma/schema.prisma"], consumer);
   await run("pnpm", ["exec", "tsc", "-p", "tsconfig.json"], consumer);
   const cliHelp = await run(
     "node",
@@ -202,7 +258,7 @@ void workerProcess;
     throw new Error("The packed Workhorse CLI did not expose worker command help");
   }
   await run("node", ["integration.mjs"], consumer);
-  process.stdout.write("Packed core, Drizzle, Hono, and dashboard consumer tests passed.\n");
+  process.stdout.write("Packed core, ORM providers, Hono, and dashboard consumer tests passed.\n");
 } finally {
   await rm(scratch, { recursive: true, force: true });
 }
