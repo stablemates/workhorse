@@ -549,13 +549,14 @@ Workers own scheduling and maintenance in process, the same model good_job, pg-b
 Clean installation creates the current UTC day plus three future daily partitions. Retention defaults to 14 days for identity, outcomes, events, attempts, and occurrences, and each window remains configurable through `Queue.syncRetentionPolicy`. Terminal identity deletion is interlocked with a persisted history-retention watermark, so frequent terminal cleanup cannot outrun daily history retirement or late history insertion.
 
 The settings page groups values by ownership. When the host supplies
-`DashboardSettingsController`, operators can change the maintenance timezone, daily retention time,
-and cleanup batch limits, and they can revert those values individually. Retention windows and the
+`DashboardSettingsController`, operators can change the maintenance timezone and daily retention
+time, and they can revert those values individually. Retention windows, cleanup limits, and the
 partition preparation and terminal cleanup intervals show their effective values, application
 defaults, and operator-override status, but they remain read-only because changing them can delete
-history or alter internal maintenance behavior. Worker concurrency, lease, heartbeat, and polling
-values are reported from live processes but remain read-only because changing them requires a
-deployment.
+history or alter internal maintenance behavior. Browser display preferences live in a separate
+section because they affect only the current browser. Worker concurrency, lease, heartbeat, and
+polling values are reported from live processes but remain read-only because changing them requires
+a deployment.
 
 Handler failures use SQL-owned, Sidekiq-inspired retry scheduling. For zero-based retry count `count` (the first failed attempt is `0`), the delay is `(count ** 4) + 15 + floor(random() * 10) * (count + 1)` seconds. The default 25-attempt budget spreads retries across roughly 20 days. Keeping the calculation in `fail_v1` gives every client the same durable protocol; `WorkerOptions.retryDelayMs` remains an explicit override, including `0` for an immediate retry or a callback `(attempt, job) => milliseconds | undefined`; returning `undefined` defers to PostgreSQL's persisted policy or compatibility default.
 
