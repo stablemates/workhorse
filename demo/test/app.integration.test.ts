@@ -2656,6 +2656,60 @@ describe("Workhorse demo", () => {
     ]);
   });
 
+  it("reads a terminal task's exact current policy beyond the health summary cap", async () => {
+    const { app, workhorse } = createTestApplication();
+    const client = dashboardClient(app);
+    const queue = workhorse.context.queue;
+    const terminalQueue = "zz-terminal-policy";
+    await queue.syncConcurrencyPolicies("dashboard-cap-test", [
+      ...Array.from({ length: 101 }, (_, index) => ({
+        queue: `policy-${String(index).padStart(3, "0")}`,
+        maxActive: 1,
+      })),
+      { queue: terminalQueue, maxActive: 7, maxActivePerKey: 3 },
+    ]);
+
+    const health = await queue.health();
+    expect(health.concurrencyPolicies.capped).toBe(true);
+    expect(health.concurrencyPolicies.policies).toHaveLength(100);
+    expect(health.concurrencyPolicies.policies.map((policy) => policy.queue)).not.toContain(
+      terminalQueue,
+    );
+
+    const jobId = await queue.enqueue(
+      "terminal-beyond-policy-cap",
+      {},
+      { queue: terminalQueue, concurrencyKey: "tenant-private" },
+    );
+    const claim = await queue.claim("terminal-policy-worker", { queue: terminalQueue });
+    expect(claim?.id).toBe(jobId);
+    await queue.complete(claim!, "terminal-policy-worker", { done: true });
+
+    await expect(client.dashboard.jobDetail({ id: jobId })).resolves.toMatchObject({
+      identity: {
+        state: "succeeded",
+        concurrencyKey: "tenant-private",
+      },
+      current: { runtime: null },
+      concurrencyPolicy: {
+        namespace: "dashboard-cap-test",
+        maxActive: 7,
+        maxActivePerKey: 3,
+        active: 0,
+      },
+    });
+    expect(
+      JSON.stringify(
+        await client.dashboard.tasks({
+          filter: "all",
+          page: 1,
+          pageSize: 25,
+          queue: terminalQueue,
+        }),
+      ),
+    ).not.toContain("tenant-private");
+  });
+
   it("reconciles local schedule toggles with worker-owned schedule definitions", async () => {
     await syncDemoSchedules(pool);
     const { app } = createTestApplication({

@@ -2133,7 +2133,7 @@ export async function readDashboardJobDetail(
   projectDurability: DashboardDurabilityProjector = () => null,
   queue?: Queue,
 ): Promise<DashboardJobDetail | null> {
-  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows, health] = await Promise.all([
+  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows] = await Promise.all([
     database.execute<{
       id: string;
       queue: string;
@@ -2256,15 +2256,34 @@ export async function readDashboardJobDetail(
        WHERE job_id = ${id}
       ORDER BY occurred_at, event_id
     `),
-    queue?.health() ?? null,
   ]);
 
   const job = jobRows.rows[0];
   if (!job) return null;
   const state = job.outcome_state ?? job.runtime_state ?? "unknown";
-  const policy = health?.concurrencyPolicies.policies.find(
+  const [currentPolicy, health] = queue
+    ? await Promise.all([
+        queue.concurrencyPolicies([job.queue]).then((policies) => policies[0] ?? null),
+        // Terminal detail drops live utilization entirely, so only tasks that can still become
+        // active need the bounded health aggregates beside their exact persisted policy.
+        job.runtime_state === null ? null : queue.health(),
+      ])
+    : [null, null];
+  const healthPolicy = health?.concurrencyPolicies.policies.find(
     (candidate) => candidate.queue === job.queue,
   );
+  const concurrencyPolicy: DashboardConcurrencyPolicySummary | null = currentPolicy
+    ? {
+        namespace: currentPolicy.namespace,
+        maxActive: currentPolicy.maxActive,
+        active: healthPolicy?.active ?? 0,
+        available: healthPolicy?.available ?? currentPolicy.maxActive,
+        blockedReady: healthPolicy?.blockedReady ?? 0,
+        maxActivePerKey: currentPolicy.maxActivePerKey,
+        saturatedKeys: healthPolicy?.saturatedKeys ?? 0,
+        highestKeyActive: healthPolicy?.highestKeyActive ?? 0,
+      }
+    : null;
   return {
     identity: {
       id: job.id,
@@ -2282,7 +2301,7 @@ export async function readDashboardJobDetail(
     // The queue's policy as it stands now, sent for every task including finished ones. Workhorse
     // stores no per-task policy snapshot, so the drawer labels this as current rather than
     // historical; only `identity.concurrencyKey` is a fact about the run itself.
-    concurrencyPolicy: policy ? dashboardConcurrencyPolicySummary(policy) : null,
+    concurrencyPolicy,
     payload: job.payload,
     progress:
       job.progress_revision === null

@@ -311,10 +311,27 @@ describe("task drawer concurrency line", () => {
 
   it("reads a scheduled task as the budget it will enter rather than one it holds", () => {
     const described = describeTaskConcurrency(
-      job({ runtimeState: "scheduled", concurrencyPolicy: policy() }),
+      job({
+        runtimeState: "scheduled",
+        concurrencyKey: "tenant-a",
+        concurrencyPolicy: policy({ maxActivePerKey: 2 }),
+      }),
     );
     expect(described?.basis).toBe("pending");
     expect(described?.title).toContain("will enter this budget when it becomes ready");
+    expect(described?.title).toContain("will compete for its key's capacity");
+    expect(described?.title).not.toContain("This task competes");
+    expect(described?.title).not.toContain("This task consumes");
+    expect(described?.keyTitle).not.toContain("competes");
+  });
+
+  it("keeps a scheduled keyless task's capacity wording future-facing", () => {
+    const described = describeTaskConcurrency(
+      job({ runtimeState: "scheduled", concurrencyPolicy: policy() }),
+    );
+    expect(described?.title).toContain("will consume queue capacity only");
+    expect(described?.title).not.toContain("This task consumes");
+    expect(described?.keyTitle).not.toContain("competes");
   });
 
   it("says a keyless task consumes queue capacity only", () => {
