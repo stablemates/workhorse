@@ -7,6 +7,13 @@ Instructions for coding agents. Everything here is a rule an agent has broken be
 Use the Epiq MCP tools to read issues and update their status. The `epiq` executable opens an
 interactive TUI, so do not use it for agent workflows.
 
+## Do not run GitHub Actions
+
+GitHub Actions are intentionally disabled at the repository level while this repository is
+private. Do not dispatch, re-enable, or try to repair any workflow. Leave the definitions in
+`.github/workflows/` intact until the repository becomes public and the CI work is scheduled
+explicitly.
+
 ## Never run the demo server
 
 Do not start the demo. Not `pnpm demo`, not `pnpm demo:app`, not a variant, not in the
