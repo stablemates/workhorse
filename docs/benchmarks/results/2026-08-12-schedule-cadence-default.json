@@ -1,0 +1,145 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 25,
+        "sampleIntervalMs": 500,
+        "targetJobs": 500,
+        "targetRatePerSecond": 100,
+        "workerConcurrency": 4
+      },
+      "enqueueBatchSize": 25,
+      "jobsPerRun": 100,
+      "leaseMs": 30000,
+      "repetitions": 3,
+      "seed": 1,
+      "workerConcurrency": [1, 4, 8]
+    },
+    "operational": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "retryDelayMs": 75,
+      "scenarios": ["schedule-cadence-jitter"],
+      "scheduleDelayMs": 75,
+      "scheduleSamples": 5
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_lookdown_df9e8f9e",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-12T19:25:13.438Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "queuePrefix": "operational",
+      "retryDelayMs": 75,
+      "scenarios": ["schedule-cadence-jitter"],
+      "scheduleDelayMs": 75,
+      "scheduleSamples": 5
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": true,
+            "expected": true,
+            "name": "schedule definition synchronized",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "baseline occurrence reserved",
+            "passed": true
+          },
+          {
+            "actual": 5,
+            "expected": 5,
+            "name": "every planned sample fired",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "every occurrence owns one job",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "worker remained loaded while schedules fired",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "fire delays are finite and non-negative",
+            "passed": true
+          }
+        ],
+        "durationMs": 5147.316739,
+        "metrics": {
+          "fireDelayMaxMs": 581.645,
+          "fireDelayP50Ms": 580.34,
+          "fireDelayP95Ms": 581.645,
+          "loadJobsCompleted": 1340,
+          "loadJobsStarted": 1340,
+          "maintenanceIntervalMs": 1000,
+          "scheduleSamples": 5
+        },
+        "name": "schedule-cadence-jitter"
+      }
+    ],
+    "totalDurationMs": 5147.334082
+  },
+  "profile": "default",
+  "provenance": {
+    "command": [
+      "/home/anton/.local/share/mise/installs/node/24.15.0/bin/node",
+      "/home/anton/orca/workspaces/workhorse/lookdown/src/cli/benchmark.ts",
+      "--",
+      "--suite",
+      "lifecycle",
+      "--profile",
+      "default",
+      "--scenario",
+      "schedule-cadence-jitter",
+      "--output",
+      "docs/benchmarks/results/2026-08-12-schedule-cadence-default.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187805184
+    },
+    "source": {
+      "commit": "7e2678ab0595f20371b1cb17a856b5782e3141b7",
+      "dirty": false
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}
