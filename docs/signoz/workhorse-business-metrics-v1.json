@@ -133,7 +133,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.job.enqueued",
+                        "metricName": "workhorse.jobs.enqueued",
                         "temporality": "",
                         "timeAggregation": "rate",
                         "spaceAggregation": "sum",
@@ -192,7 +192,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.job.claimed",
+                        "metricName": "workhorse.jobs.claimed",
                         "temporality": "",
                         "timeAggregation": "rate",
                         "spaceAggregation": "sum",
@@ -251,7 +251,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.job.count",
+                        "metricName": "workhorse.jobs.count",
                         "temporality": "",
                         "timeAggregation": "latest",
                         "spaceAggregation": "max",
@@ -315,7 +315,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.job.execution",
+                        "metricName": "workhorse.handler.executions",
                         "temporality": "",
                         "timeAggregation": "rate",
                         "spaceAggregation": "sum",
@@ -323,7 +323,7 @@
                       }
                     ],
                     "filter": {
-                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.job.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'succeeded', 'timeout']"
+                      "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.handler.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'succeeded', 'timeout']"
                     },
                     "groupBy": [
                       {
@@ -378,7 +378,7 @@
                           "signal": "metrics",
                           "aggregations": [
                             {
-                              "metricName": "workhorse.job.execution",
+                              "metricName": "workhorse.handler.executions",
                               "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
@@ -395,12 +395,12 @@
                               "fieldContext": "attribute"
                             },
                             {
-                              "name": "workhorse.job.outcome",
+                              "name": "workhorse.handler.outcome",
                               "fieldDataType": "string",
                               "fieldContext": "attribute"
                             }
                           ],
-                          "legend": "{{workhorse.job.type}} {{workhorse.job.outcome}}"
+                          "legend": "{{workhorse.job.type}} {{workhorse.handler.outcome}}"
                         }
                       }
                     ]
@@ -416,13 +416,13 @@
         "spec": {
           "display": {
             "name": "Handler runtime percentiles",
-            "description": "p50, p95, and p99 handler duration in seconds, grouped by task type."
+            "description": "p50, p95, and p99 handler duration in milliseconds, grouped by task type."
           },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
             "spec": {
               "formatting": {
-                "unit": "s",
+                "unit": "ms",
                 "decimalPrecision": "1"
               },
               "legend": {
@@ -445,7 +445,7 @@
                           "signal": "metrics",
                           "aggregations": [
                             {
-                              "metricName": "workhorse.job.execution.duration.bucket",
+                              "metricName": "workhorse.handler.duration.bucket",
                               "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "p50",
@@ -472,7 +472,7 @@
                           "signal": "metrics",
                           "aggregations": [
                             {
-                              "metricName": "workhorse.job.execution.duration.bucket",
+                              "metricName": "workhorse.handler.duration.bucket",
                               "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "p95",
@@ -499,7 +499,7 @@
                           "signal": "metrics",
                           "aggregations": [
                             {
-                              "metricName": "workhorse.job.execution.duration.bucket",
+                              "metricName": "workhorse.handler.duration.bucket",
                               "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "p99",
@@ -708,7 +708,7 @@
                     "signal": "metrics",
                     "aggregations": [
                       {
-                        "metricName": "workhorse.job.count",
+                        "metricName": "workhorse.jobs.count",
                         "temporality": "",
                         "timeAggregation": "latest",
                         "spaceAggregation": "max",
@@ -828,7 +828,7 @@
                           "disabled": true,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.job.count",
+                              "metricName": "workhorse.jobs.count",
                               "temporality": "",
                               "timeAggregation": "latest",
                               "spaceAggregation": "max",
@@ -855,7 +855,7 @@
                           "disabled": true,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.job.execution",
+                              "metricName": "workhorse.handler.executions",
                               "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
@@ -863,7 +863,7 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.outcome = 'succeeded'"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.handler.outcome = 'succeeded'"
                           },
                           "groupBy": [
                             {
@@ -924,7 +924,7 @@
                           "disabled": true,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.job.execution",
+                              "metricName": "workhorse.handler.executions",
                               "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
@@ -932,7 +932,7 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.job.outcome = 'succeeded'"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.handler.outcome = 'succeeded'"
                           }
                         }
                       },
@@ -944,7 +944,7 @@
                           "disabled": true,
                           "aggregations": [
                             {
-                              "metricName": "workhorse.job.execution",
+                              "metricName": "workhorse.handler.executions",
                               "temporality": "",
                               "timeAggregation": "rate",
                               "spaceAggregation": "sum",
@@ -952,7 +952,7 @@
                             }
                           ],
                           "filter": {
-                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.job.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'timeout']"
+                            "expression": "deployment.environment.name IN $environment AND service.name IN $service AND workhorse.queue.name IN $queue AND workhorse.job.type IN $task AND workhorse.handler.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'timeout']"
                           }
                         }
                       },

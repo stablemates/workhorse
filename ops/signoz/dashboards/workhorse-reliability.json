@@ -11,10 +11,10 @@
       "id": "execution-latency",
       "title": "Execution latency p95",
       "description": "The slow end of handler execution time by job type.",
-      "unit": "s",
+      "unit": "ms",
       "queries": [
         {
-          "metric": "workhorse.job.execution.duration.bucket",
+          "metric": "workhorse.handler.duration.bucket",
           "timeAggregation": "rate",
           "spaceAggregation": "p95",
           "groupBy": ["workhorse.job.type"],
@@ -110,7 +110,7 @@
           "legend": "maintenance error {{workhorse.maintenance.phase}}"
         },
         {
-          "metric": "workhorse.lease.recovered",
+          "metric": "workhorse.leases.expired",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
           "legend": "recovered leases"
@@ -131,7 +131,7 @@
       "unit": "ops/s",
       "queries": [
         {
-          "metric": "workhorse.job.cancellation",
+          "metric": "workhorse.jobs.cancellation",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
           "groupBy": ["workhorse.cancellation.status"],
@@ -146,7 +146,7 @@
       "unit": "ops/s",
       "queries": [
         {
-          "metric": "workhorse.job.redrive",
+          "metric": "workhorse.jobs.redrive",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
           "groupBy": ["workhorse.redrive.status"],

@@ -7,9 +7,10 @@ that state more than once.
 ## Process metrics happen automatically
 
 Workhorse uses the OpenTelemetry API when it enqueues, claims, executes, cancels, recovers, or
-performs redrive operations. It also records schedule firing and maintenance. If your application configures an
-OpenTelemetry SDK before it imports `@workhorse/core`, those measurements flow through your chosen
-exporter. Without an SDK they are harmless no-ops.
+performs redrive operations. It also records schedule firing and maintenance. Once your application
+configures an OpenTelemetry SDK, those measurements flow through your chosen exporter. Configure it
+before or after you import `@workhorse/core`; Workhorse notices the change and follows the SDK you
+installed. Without an SDK the measurements are harmless no-ops.
 
 Execution metrics use queue, job type, and outcome as attributes. They never use a job ID, payload,
 worker ID, or error message. Those values grow without a stable bound, so putting them in metric
@@ -39,13 +40,19 @@ multiple observers would export duplicate gauges and add unnecessary queries.
 
 ## Reading the signals together
 
-Use `workhorse.job.enqueued` and `workhorse.job.claimed` to see whether work enters and leaves the
+Use `workhorse.jobs.enqueued` and `workhorse.jobs.claimed` to see whether work enters and leaves the
 ready queue. If enqueue continues while claim stops, compare `workhorse.queue.paused`, worker
 capacity, and the age of the oldest ready job.
 
-Use `workhorse.job.execution` for outcomes and `workhorse.job.execution.duration` for handler
-latency. A rising retry or lease-loss rate points to different problems than terminal failures, so
-the bounded outcome attribute keeps those paths separate without identifying individual jobs.
+Use `workhorse.handler.executions` for outcomes and `workhorse.handler.duration` for handler
+latency. Both carry the same bounded outcome attribute. A rising retry or lease-loss rate points to
+different problems than terminal failures, so that attribute keeps those paths separate without
+identifying individual jobs.
+
+Every event reaches one instrument only. If you want the number of activations that ended a given
+way, count `workhorse.handler.executions`; if you want the durable result the queue wrote, count
+`workhorse.jobs.completed`, `workhorse.jobs.failed`, or `workhorse.jobs.retried`. The two differ
+when an attempt suspends on a durable wait, which closes an activation without ending the attempt.
 
 Use the maintenance, schedule-lag, expired-lease, overdue-deadline, and overdue-timeout metrics to
 detect work that should have advanced but did not. PostgreSQL remains authoritative; the metrics
