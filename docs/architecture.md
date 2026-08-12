@@ -686,7 +686,7 @@ runtime update selects a candidate. Competing worker processes serialize on the 
 one durable token admits one start even when claims overlap. Returning null after exhausting the
 window enters the Worker's normal bounded empty-claim wait instead of a claim loop.
 
-One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `claim_v1` remains installed as a compatibility function, but `Queue.claim` and production benchmarks use `claim_v2`.
+One runtime update changes the selected row to active and installs worker, global fence, acquisition, heartbeat, and expiry data. The same transaction appends the claim event before returning identity, payload, normalized `retryPolicy`, contract version, result limit, and error-redaction flag. No transaction remains open while user code runs. `Queue.claim` and production benchmarks use `claim_v2`. The clean-install schema does not install the retired `claim_v1` function.
 
 ### Worker concurrency and lifecycle
 
@@ -715,7 +715,7 @@ without waiting for its fallback poll.
 
 ### Heartbeat
 
-`heartbeat_v2` reads the runtime queue, takes its shared policy advisory lock, locks any policy row, and then locks the exact active worker/fence generation. This lock order serializes lease renewal with admission, so an expired lease cannot regain capacity after another claim consumed it. The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`. It extends the lease only for `accepted`. Additive `heartbeat_v1` compatibility returns `true` only for `accepted`, so existing callers still stop treating canceled or stale work as owned.
+`heartbeat_v2` reads the runtime queue, takes its shared policy advisory lock, locks any policy row, and then locks the exact active worker/fence generation. This lock order serializes lease renewal with admission, so an expired lease cannot regain capacity after another claim consumed it. The function returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`. It extends the lease only for `accepted`. The clean-install schema does not install the retired boolean `heartbeat_v1` function.
 
 ### Cancellation
 
