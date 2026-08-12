@@ -2,6 +2,11 @@
 
 Instructions for coding agents. Everything here is a rule an agent has broken before.
 
+## Use the Epiq MCP for issue tracking
+
+Use the Epiq MCP tools to read issues and update their status. The `epiq` executable opens an
+interactive TUI, so do not use it for agent workflows.
+
 ## Never run the demo server
 
 Do not start the demo. Not `pnpm demo`, not `pnpm demo:app`, not a variant, not in the
