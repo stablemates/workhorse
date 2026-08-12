@@ -1,5 +1,4 @@
 import { CronExpressionParser } from "cron-parser";
-import type { Span } from "@opentelemetry/api";
 import { databaseErrorCode, databaseErrorDetails, expectOneRow, WorkhorseError } from "./errors.js";
 import type {
   BulkRedrivePage,
@@ -55,21 +54,16 @@ import type {
   WorkerPauseResult,
   WorkerRegistration,
   WorkerRegistryEntry,
-  TraceContext,
 } from "./types.js";
 import { HEALTH_HISTORY_SCAN_LIMIT } from "./types.js";
 import { DEFAULT_QUEUE_HEALTH_BUDGETS, evaluateQueueHealth } from "./health.js";
 import { perQueueDepthSelect, totalDepthSelect } from "./queue-depth.js";
 import {
-  jobMetricAttributes,
   jobSpanAttributes,
   logDebug,
   logInfo,
-  recordCancellation,
-  recordHeartbeatFailure,
   recordRedrive,
   recordScheduleFired,
-  telemetryMetrics,
   type QueueMetricSnapshot,
   withSpan,
 } from "./telemetry.js";
@@ -80,6 +74,7 @@ import {
 } from "./notifications.js";
 import { createQueueModuleContext } from "./queue/module-context.js";
 import { createQueueModules, type QueueModules } from "./queue/modules.js";
+import { errorForTelemetry, recordRecoveryTelemetry } from "./queue/claim-lease-fence.js";
 import {
   EnqueueIdempotencyConflictError,
   JobContractUnavailableError,
@@ -94,6 +89,9 @@ export {
   JobContractValidationError,
   JobValueSizeLimitError,
 };
+import { nullableRowTimestamp, rowTimestamp } from "./queue/row-mapping.js";
+
+export { errorForTelemetry };
 
 export interface ScheduleJobDefinition {
   type: string;
@@ -153,34 +151,6 @@ export interface MaintenancePhaseResult {
   error: Json;
 }
 import { MAX_REDRIVE_BATCH_SIZE, MAX_WAIT_DURATION_MS } from "./types.js";
-
-type ClaimRow = {
-  job_id: string;
-  job_type: string;
-  payload: Json;
-  contract_version: string | null;
-  result_max_bytes: number;
-  redact_error_details: boolean;
-  trace_context: TraceContext | null;
-  attempt: number;
-  max_attempts: number;
-  retry_policy: RetryPolicy | null;
-  deadline_at: Date | string | null;
-  execution_timeout_ms: string | null;
-  attempt_timeout_at: Date | string | null;
-  fence_token: string;
-  lease_expires_at: Date | string;
-};
-
-type CancelRow = {
-  status: CancelResult["status"];
-  state: CancelResult["state"];
-  current_attempt: number | null;
-  requested_at: Date | null;
-  requested_by: string | null;
-  reason: string | null;
-  finished_at: Date | null;
-};
 
 type DeadLetterRow = {
   job_id: string;
@@ -341,11 +311,6 @@ type MaintenancePhaseRow = {
   retried: number;
   retry_dimensions: Array<{ queue: string; type: string }>;
 };
-
-type RecoveryTelemetry = Pick<
-  MaintenancePhaseRow,
-  "rows_affected" | "expired_leases" | "retried" | "retry_dimensions"
->;
 
 type RetentionPolicyRow = {
   job_identity_retention_days: number | null;
@@ -914,51 +879,6 @@ function maintenancePhaseResult(row: MaintenancePhaseRow): MaintenancePhaseResul
   };
 }
 
-function recordRecoveryTelemetry(span: Span, recovery: RecoveryTelemetry): void {
-  span.setAttributes({
-    "workhorse.recovery.rows_affected": recovery.rows_affected,
-    "workhorse.recovery.expired_leases": recovery.expired_leases,
-    "workhorse.recovery.retried": recovery.retried,
-  });
-  telemetryMetrics.expiredLeases.add(recovery.expired_leases);
-  const retriesByJob = new Map<string, { count: number; queue: string; type: string }>();
-  for (const dimension of recovery.retry_dimensions ?? []) {
-    const key = `${dimension.queue}\u0000${dimension.type}`;
-    const existing = retriesByJob.get(key);
-    if (existing === undefined) {
-      retriesByJob.set(key, { count: 1, ...dimension });
-    } else {
-      existing.count += 1;
-    }
-  }
-  let attributedRetries = 0;
-  for (const retry of retriesByJob.values()) {
-    attributedRetries += retry.count;
-    telemetryMetrics.retried.add(retry.count, {
-      "workhorse.queue.name": retry.queue,
-      "workhorse.job.type": retry.type,
-    });
-  }
-  if (attributedRetries < recovery.retried) {
-    telemetryMetrics.retried.add(recovery.retried - attributedRetries, {
-      "workhorse.queue.name": "unknown",
-      "workhorse.job.type": "unknown",
-    });
-  }
-}
-
-function claimedTimestamp(value: Date | string, field: string): Date {
-  const timestamp = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(timestamp.getTime())) {
-    throw new TypeError(`Claim returned an invalid ${field} timestamp`);
-  }
-  return timestamp;
-}
-
-function nullableClaimedTimestamp(value: Date | string | null, field: string): Date | null {
-  return value === null ? null : claimedTimestamp(value, field);
-}
-
 function deadLetterFilter(filter: DeadLetterFilter): Record<string, Json> {
   return {
     ...(filter.queue === undefined ? {} : { queue: filter.queue }),
@@ -985,10 +905,10 @@ function deadLetter(row: DeadLetterRow): DeadLetter {
     currentAttempt: row.current_attempt,
     maxAttempts: row.max_attempts,
     retryPolicy: row.retry_policy,
-    deadlineAt: nullableClaimedTimestamp(row.deadline_at, "deadline_at"),
+    deadlineAt: nullableRowTimestamp(row.deadline_at, "deadline_at"),
     executionTimeoutMs: row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
     error: row.error,
-    finishedAt: claimedTimestamp(row.finished_at, "finished_at"),
+    finishedAt: rowTimestamp(row.finished_at, "finished_at"),
     redriveCount: Number(row.redrive_count),
   };
 }
@@ -1018,14 +938,14 @@ function jobListItem(row: JobListRow): JobListItem {
     currentAttempt: row.current_attempt,
     maxAttempts: row.max_attempts,
     retryPolicy: row.retry_policy,
-    deadlineAt: nullableClaimedTimestamp(row.deadline_at, "deadline_at"),
+    deadlineAt: nullableRowTimestamp(row.deadline_at, "deadline_at"),
     executionTimeoutMs: row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
-    runAt: claimedTimestamp(row.run_at, "run_at"),
-    cancelRequestedAt: nullableClaimedTimestamp(row.cancel_requested_at, "cancel_requested_at"),
+    runAt: rowTimestamp(row.run_at, "run_at"),
+    cancelRequestedAt: nullableRowTimestamp(row.cancel_requested_at, "cancel_requested_at"),
     cancelRequestedBy: row.cancel_requested_by,
     cancelReason: row.cancel_reason,
-    createdAt: claimedTimestamp(row.created_at, "created_at"),
-    updatedAt: claimedTimestamp(row.updated_at, "updated_at"),
+    createdAt: rowTimestamp(row.created_at, "created_at"),
+    updatedAt: rowTimestamp(row.updated_at, "updated_at"),
     payload: row.payload,
     payloadStatus: row.payload_status,
     payloadBytes: row.payload_bytes === null ? null : Number(row.payload_bytes),
@@ -1036,7 +956,7 @@ function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
   const base = {
     recordId: row.record_id,
     attempt: row.attempt,
-    occurredAt: claimedTimestamp(row.occurred_at, "occurred_at"),
+    occurredAt: rowTimestamp(row.occurred_at, "occurred_at"),
   };
   if (row.kind === "event") {
     if (row.event_type === null || row.details === null) {
@@ -1062,9 +982,9 @@ function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
     fenceToken: BigInt(row.fence_token),
     workerId: row.worker_id,
     outcome: row.outcome,
-    startedAt: claimedTimestamp(row.started_at, "started_at"),
-    claimedAt: claimedTimestamp(row.claimed_at, "claimed_at"),
-    finishedAt: claimedTimestamp(row.finished_at, "finished_at"),
+    startedAt: rowTimestamp(row.started_at, "started_at"),
+    claimedAt: rowTimestamp(row.claimed_at, "claimed_at"),
+    finishedAt: rowTimestamp(row.finished_at, "finished_at"),
     error: row.error,
   };
 }
@@ -1076,8 +996,7 @@ function redriveResult(row: RedriveRow): RedriveResult {
     targetJobId: row.target_job_id,
     sourceState: row.source_state,
     targetState: row.target_state,
-    requestedAt:
-      row.requested_at === null ? null : claimedTimestamp(row.requested_at, "requested_at"),
+    requestedAt: row.requested_at === null ? null : rowTimestamp(row.requested_at, "requested_at"),
   };
 }
 
@@ -1092,7 +1011,7 @@ function redriveLineageRecord(row: RedriveLineageRow): RedriveLineageRecord {
     requestIdLength: row.request_id_length,
     sourceState: row.source_state,
     targetInitialState: row.target_initial_state,
-    requestedAt: claimedTimestamp(row.requested_at, "requested_at"),
+    requestedAt: rowTimestamp(row.requested_at, "requested_at"),
   };
 }
 
@@ -1244,25 +1163,6 @@ function maintenancePolicy(row: MaintenancePolicyRow): MaintenancePolicy {
     ) as MaintenancePolicy["provenance"],
     updatedAt: row.updated_at,
   };
-}
-
-const REDACTED_ERROR_MESSAGE = "Job handler failed; details redacted";
-const REDACTED_ERROR_NAME = "RedactedJobError";
-
-export function errorForTelemetry(error: unknown, redactDetails: boolean): Error | string {
-  if (!redactDetails) return error instanceof Error ? error : String(error);
-  const redacted = new Error(REDACTED_ERROR_MESSAGE);
-  redacted.name = REDACTED_ERROR_NAME;
-  return redacted;
-}
-
-function errorEnvelope(error: unknown, redactDetails = false): Json {
-  // Persist a bounded JSON representation instead of relying on Error's non-enumerable fields.
-  if (redactDetails) return { name: REDACTED_ERROR_NAME, message: REDACTED_ERROR_MESSAGE };
-  if (error instanceof Error) {
-    return { name: error.name, message: error.message, stack: error.stack ?? null };
-  }
-  return { name: "NonErrorThrown", message: String(error) };
 }
 
 function checkpointRecord<TValue extends Json>(row: CheckpointRow): JobCheckpoint<TValue> {
@@ -2190,35 +2090,12 @@ export class Queue {
       status: row.status,
       jobId,
       state: row.state,
-      runAt: nullableClaimedTimestamp(row.run_at, "run_at"),
+      runAt: nullableRowTimestamp(row.run_at, "run_at"),
     };
   }
 
   async cancel(jobId: string, request: CancellationRequest = {}): Promise<CancelResult> {
-    // PostgreSQL validates metadata and serializes cancellation with every lifecycle transition.
-    // requestedBy is caller attribution only; this API does not claim authorization.
-    const result = await this.database.query<CancelRow>(
-      `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at
-         FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
-      [jobId, request.requestedBy ?? null, request.reason ?? null],
-    );
-    const row = expectOneRow(result, "workhorse.cancel_v1");
-    recordCancellation(row.status);
-    logInfo("workhorse.job.cancellation_processed", "Job cancellation processed", {
-      "workhorse.job.id": jobId,
-      "workhorse.job.state": row.state ?? "not_found",
-      "workhorse.operation.status": row.status,
-    });
-    return {
-      status: row.status,
-      jobId,
-      state: row.state,
-      currentAttempt: row.current_attempt,
-      requestedAt: row.requested_at,
-      requestedBy: row.requested_by,
-      reason: row.reason,
-      finishedAt: row.finished_at,
-    };
+    return this.modules.claimLeaseFence.cancel(jobId, request);
   }
 
   async listJobs(query: JobListQuery = {}): Promise<JobListPage> {
@@ -2419,61 +2296,11 @@ export class Queue {
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedJob<TPayload> | null> {
-    const queueName = options.queue ?? this.defaultQueue;
-    const startedAt = performance.now();
-    return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
-      // claim_v2 commits ownership before returning the payload. Handler code must run only after
-      // this query resolves so no row lock or claim transaction spans user code.
-      const result = await this.database.query<ClaimRow>(
-        "SELECT * FROM workhorse.claim_v2($1::text, $2::text, $3::integer)",
-        [queueName, workerId, options.leaseMs ?? 30_000],
-      );
-      const row = result.rows[0];
-      telemetryMetrics.claimDuration.record(performance.now() - startedAt, {
-        "workhorse.queue.name": queueName,
-        "workhorse.claim.result": row === undefined ? "empty" : "claimed",
-      });
-      if (!row) return null;
-      span.setAttributes({
-        "workhorse.job.id": row.job_id,
-        "workhorse.job.type": row.job_type,
-        "workhorse.job.attempt": row.attempt,
-      });
-      telemetryMetrics.claimed.add(1, {
-        "workhorse.queue.name": queueName,
-        "workhorse.job.type": row.job_type,
-      });
-      logDebug("workhorse.job.claimed", "Job claimed", {
-        "workhorse.job.id": row.job_id,
-        "workhorse.job.type": row.job_type,
-        "workhorse.job.attempt": row.attempt,
-        "workhorse.queue.name": queueName,
-        "workhorse.worker.id": workerId,
-      });
-      return {
-        id: row.job_id,
-        queue: queueName,
-        type: row.job_type,
-        payload: row.payload as TPayload,
-        contractVersion: row.contract_version,
-        resultMaxBytes: row.result_max_bytes,
-        redactErrorDetails: row.redact_error_details === true,
-        traceContext: row.trace_context,
-        attempt: row.attempt,
-        maxAttempts: row.max_attempts,
-        retryPolicy: row.retry_policy,
-        deadlineAt: nullableClaimedTimestamp(row.deadline_at, "deadline_at"),
-        executionTimeoutMs:
-          row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
-        attemptTimeoutAt: nullableClaimedTimestamp(row.attempt_timeout_at, "attempt_timeout_at"),
-        fenceToken: BigInt(row.fence_token),
-        leaseExpiresAt: claimedTimestamp(row.lease_expires_at, "lease_expires_at"),
-      };
-    });
+    return this.modules.claimLeaseFence.claim<TPayload>(workerId, options);
   }
 
   async heartbeat(job: ClaimedJob<unknown>, workerId: string, leaseMs = 30_000): Promise<boolean> {
-    return (await this.heartbeatStatus(job, workerId, leaseMs)) === "accepted";
+    return this.modules.claimLeaseFence.heartbeat(job, workerId, leaseMs);
   }
 
   async heartbeatStatus(
@@ -2481,68 +2308,15 @@ export class Queue {
     workerId: string,
     leaseMs = 30_000,
   ): Promise<HeartbeatStatus> {
-    return withSpan("workhorse.heartbeat", jobSpanAttributes(job), async (span) => {
-      // Cancellation and stale ownership both stop compatibility callers, while workers can use the
-      // status API to deliver a distinct cooperative cancellation signal.
-      const result = await this.database.query<{ status: HeartbeatStatus }>(
-        "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
-        [job.id, workerId, job.fenceToken.toString(), leaseMs],
-      );
-      const status = expectOneRow(result, "workhorse.heartbeat_v2").status;
-      span.setAttribute("workhorse.heartbeat.status", status);
-      if (status !== "accepted") {
-        recordHeartbeatFailure(status);
-        logInfo("workhorse.job.heartbeat_rejected", "Job heartbeat rejected", {
-          ...jobSpanAttributes(job),
-          "workhorse.heartbeat.status": status,
-          "workhorse.worker.id": workerId,
-        });
-      } else {
-        logDebug("workhorse.job.heartbeat_accepted", "Job heartbeat accepted", {
-          ...jobSpanAttributes(job),
-          "workhorse.worker.id": workerId,
-        });
-      }
-      return status;
-    });
+    return this.modules.claimLeaseFence.heartbeatStatus(job, workerId, leaseMs);
   }
 
   async expireOwned(job: ClaimedJob<unknown>, workerId: string): Promise<ExpireOwnedStatus> {
-    const result = await this.database.query<{
-      status: ExpireOwnedStatus;
-      retry_state: "ready" | "scheduled" | null;
-    }>("SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)", [
-      job.id,
-      workerId,
-      job.fenceToken.toString(),
-    ]);
-    const expiration = expectOneRow(result, "workhorse.expire_owned_telemetry_v1");
-    if (expiration.retry_state !== null) {
-      await withSpan("workhorse.retry", jobSpanAttributes(job), async (span) => {
-        span.setAttribute("workhorse.retry.outcome", expiration.retry_state!);
-        telemetryMetrics.retried.add(1, jobMetricAttributes(job));
-      });
-    }
-    logInfo("workhorse.job.ownership_expired", "Owned job lease expired", {
-      ...jobSpanAttributes(job),
-      "workhorse.expiration.status": expiration.status,
-      "workhorse.worker.id": workerId,
-    });
-    return expiration.status;
+    return this.modules.claimLeaseFence.expireOwned(job, workerId);
   }
 
   async acknowledgeCancel(job: ClaimedJob<unknown>, workerId: string): Promise<boolean> {
-    const result = await this.database.query<{ accepted: boolean }>(
-      "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted",
-      [job.id, workerId, job.fenceToken.toString()],
-    );
-    const accepted = expectOneRow(result, "workhorse.acknowledge_cancel_v1").accepted;
-    logInfo("workhorse.job.cancellation_acknowledged", "Job cancellation acknowledged", {
-      ...jobSpanAttributes(job),
-      "workhorse.cancel.accepted": accepted,
-      "workhorse.worker.id": workerId,
-    });
-    return accepted;
+    return this.modules.claimLeaseFence.acknowledgeCancel(job, workerId);
   }
 
   async getCheckpoint<TValue extends Json = Json>(
@@ -2750,27 +2524,8 @@ export class Queue {
     workerId: string,
     result: TResult,
   ): Promise<boolean> {
-    return withSpan("workhorse.complete", jobSpanAttributes(job), async (span) => {
+    return this.modules.claimLeaseFence.complete(job, workerId, result, () => {
       this.modules.enqueueContracts.validateResult(job, result);
-      // Completion is conditional on the exact unexpired lease and fence. A stale worker gets false
-      // rather than overwriting the result of a recovered attempt.
-      const query = await this.database.query<{ accepted: boolean }>(
-        "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
-        [job.id, workerId, job.fenceToken.toString(), JSON.stringify(result)],
-      );
-      const accepted = expectOneRow(query, "workhorse.complete_v1").accepted;
-      span.setAttribute("workhorse.complete.accepted", accepted);
-      if (accepted) telemetryMetrics.completed.add(1, jobMetricAttributes(job));
-      logInfo(
-        accepted ? "workhorse.job.completed" : "workhorse.job.completion_rejected",
-        accepted ? "Job completed" : "Stale job completion rejected",
-        {
-          ...jobSpanAttributes(job),
-          "workhorse.complete.accepted": accepted,
-          "workhorse.worker.id": workerId,
-        },
-      );
-      return accepted;
     });
   }
 
@@ -2788,71 +2543,11 @@ export class Queue {
     | "timeout_exceeded"
     | "stale"
   > {
-    return withSpan("workhorse.retry", jobSpanAttributes(job), async (span) => {
-      // PostgreSQL decides whether retry budget remains and atomically closes the old attempt before
-      // creating the next projection. Undefined selects SQL-owned backoff; a number explicitly
-      // overrides it, including zero for an immediate retry.
-      const result = await this.database.query<{
-        state:
-          | "ready"
-          | "scheduled"
-          | "failed"
-          | "cancel_requested"
-          | "deadline_exceeded"
-          | "timeout_exceeded"
-          | "stale";
-      }>(
-        "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state",
-        [
-          job.id,
-          workerId,
-          job.fenceToken.toString(),
-          JSON.stringify(errorEnvelope(error, job.redactErrorDetails)),
-          retryDelayMs ?? null,
-        ],
-      );
-      const state = expectOneRow(result, "workhorse.fail_v1").state;
-      span.setAttribute("workhorse.retry.outcome", state);
-      telemetryMetrics.failed.add(1, {
-        ...jobMetricAttributes(job),
-        "workhorse.attempt.outcome": state,
-      });
-      if (state === "ready" || state === "scheduled") {
-        telemetryMetrics.retried.add(1, jobMetricAttributes(job));
-      }
-      logInfo("workhorse.job.failure_processed", "Job attempt failure processed", {
-        ...jobSpanAttributes(job),
-        "workhorse.attempt.outcome": state,
-        "workhorse.worker.id": workerId,
-      });
-      return state;
-    });
+    return this.modules.claimLeaseFence.fail(job, workerId, error, retryDelayMs);
   }
 
   async recoverExpired(limit = 100, retryDelayMs?: number): Promise<number> {
-    return withSpan("workhorse.recovery", {}, async (span) => {
-      // Recovery may be called by many workers. SKIP LOCKED inside the function partitions work
-      // between callers while fence checks prevent an old lease from recovering a newer attempt.
-      const result = await this.database.query<{
-        rows_affected: number;
-        expired_leases: number;
-        retried: number;
-        retry_dimensions: Array<{ queue: string; type: string }>;
-      }>("SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)", [
-        limit,
-        retryDelayMs ?? null,
-      ]);
-      const recovery = expectOneRow(result, "workhorse.recover_expired_telemetry_v1");
-      recordRecoveryTelemetry(span, recovery);
-      if (recovery.rows_affected > 0) {
-        logInfo("workhorse.leases.recovered", "Expired leases recovered", {
-          "workhorse.recovery.rows_affected": recovery.rows_affected,
-          "workhorse.recovery.expired_leases": recovery.expired_leases,
-          "workhorse.recovery.retried": recovery.retried,
-        });
-      }
-      return recovery.rows_affected;
-    });
+    return this.modules.claimLeaseFence.recoverExpired(limit, retryDelayMs);
   }
 
   async getJob<TResult = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
