@@ -1909,41 +1909,19 @@ export class Queue {
   }
 
   async promote(limit = 100): Promise<number> {
-    // Promotion is bounded so a large delayed backlog cannot create one long lock transaction.
-    const result = await this.database.query<{ count: number }>(
-      "SELECT workhorse.promote_v1($1::integer) AS count",
-      [limit],
-    );
-    const count = expectOneRow(result, "workhorse.promote_v1").count;
-    if (count > 0) {
-      logInfo("workhorse.jobs.promoted", "Scheduled jobs promoted", {
-        "workhorse.job.count": count,
-      });
-    }
-    return count;
+    return this.modules.queueAdministration.promote(limit);
   }
 
   async pauseQueue(queueName = this.defaultQueue): Promise<void> {
-    await this.database.query("SELECT workhorse.pause_queue_v1($1::text)", [queueName]);
-    logInfo("workhorse.queue.paused", "Queue paused", { "workhorse.queue.name": queueName });
+    return this.modules.queueAdministration.pauseQueue(queueName);
   }
 
   async resumeQueue(queueName = this.defaultQueue): Promise<void> {
-    await this.database.query("SELECT workhorse.resume_queue_v1($1::text)", [queueName]);
-    logInfo("workhorse.queue.resumed", "Queue resumed", { "workhorse.queue.name": queueName });
+    return this.modules.queueAdministration.resumeQueue(queueName);
   }
 
   async purgeQueue(queueName = this.defaultQueue): Promise<number> {
-    const result = await this.database.query<{ count: number }>(
-      "SELECT workhorse.purge_queue_v1($1::text) AS count",
-      [queueName],
-    );
-    const count = expectOneRow(result, "workhorse.purge_queue_v1").count;
-    logInfo("workhorse.queue.purged", "Queue purged", {
-      "workhorse.queue.name": queueName,
-      "workhorse.job.count": count,
-    });
-    return count;
+    return this.modules.queueAdministration.purgeQueue(queueName);
   }
 
   /**
