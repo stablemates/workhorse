@@ -4,7 +4,7 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
-- [`results/2026-08-12-schedule-cadence-default.json`](benchmarks/results/2026-08-12-schedule-cadence-default.json): loaded recurring-schedule cadence at the default worker maintenance interval, interpreted in [ADR 0025](decisions/0025-worker-schedule-cadence.md).
+- [`results/2026-08-12-schedule-cadence-default.json`](benchmarks/results/2026-08-12-schedule-cadence-default.json): loaded recurring-schedule cadence at the default maintenance interval for a worker, interpreted in [ADR 0025](decisions/0025-worker-schedule-cadence.md).
 - [`results/2026-08-11-metrics-lifecycle.json`](benchmarks/results/2026-08-11-metrics-lifecycle.json): eager against lazy metric instrument lifecycle, per-emission cost and late-provider registration, interpreted in [ADR 0024](decisions/0024-metrics-instrument-lifecycle.md).
 - [2026-08-10 payload-contract smoke analysis](benchmarks/2026-08-10-payload-contracts-smoke-analysis.md): contracted transition timings and redaction invariants without an overhead claim.
 - [`results/2026-08-10-payload-contracts-smoke.json`](benchmarks/results/2026-08-10-payload-contracts-smoke.json): schema-v20 lifecycle smoke artifact for the extended `retry-paths` scenario.

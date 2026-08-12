@@ -42,7 +42,7 @@
       "work_mem": "4096kB"
     }
   },
-  "generatedAt": "2026-08-12T19:25:13.438Z",
+  "generatedAt": "2026-08-12T19:30:41.829Z",
   "lifecycle": {
     "options": {
       "batchSize": 8,
@@ -96,20 +96,20 @@
             "passed": true
           }
         ],
-        "durationMs": 5147.316739,
+        "durationMs": 5141.261368,
         "metrics": {
-          "fireDelayMaxMs": 581.645,
-          "fireDelayP50Ms": 580.34,
-          "fireDelayP95Ms": 581.645,
-          "loadJobsCompleted": 1340,
-          "loadJobsStarted": 1340,
+          "fireDelayMaxMs": 965.518,
+          "fireDelayP50Ms": 953.655,
+          "fireDelayP95Ms": 965.518,
+          "loadJobsCompleted": 1383,
+          "loadJobsStarted": 1383,
           "maintenanceIntervalMs": 1000,
           "scheduleSamples": 5
         },
         "name": "schedule-cadence-jitter"
       }
     ],
-    "totalDurationMs": 5147.334082
+    "totalDurationMs": 5141.270616000001
   },
   "profile": "default",
   "provenance": {
@@ -136,7 +136,7 @@
       "totalMemoryBytes": 29187805184
     },
     "source": {
-      "commit": "7e2678ab0595f20371b1cb17a856b5782e3141b7",
+      "commit": "f86828895f03dcec7214327efcbbb3b1f973279a",
       "dirty": false
     }
   },

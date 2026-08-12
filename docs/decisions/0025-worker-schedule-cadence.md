@@ -25,19 +25,19 @@ and PostgreSQL traffic active while the separate maintenance loop evaluates the 
 scenario reads `schedule_occurrence.fired_at - schedule_occurrence.occurrence_at`, then verifies that
 every planned second owns one durable occurrence and one job.
 
-The default-profile run completed 1,340 load jobs while it sampled five schedule fires. All six
+The default-profile run completed 1,383 load jobs while it sampled five schedule fires. All six
 scenario invariants passed on PostgreSQL 18.4 and Node.js 24.15.0.
 
 | Metric                    | Result     |
 | ------------------------- | ---------- |
 | Maintenance interval      | 1,000 ms   |
-| Fire delay p50            | 580.340 ms |
-| Fire delay p95            | 581.645 ms |
-| Worst observed fire delay | 581.645 ms |
+| Fire delay p50            | 953.655 ms |
+| Fire delay p95            | 965.518 ms |
+| Worst observed fire delay | 965.518 ms |
 
 The full report is
 [`docs/benchmarks/results/2026-08-12-schedule-cadence-default.json`](../benchmarks/results/2026-08-12-schedule-cadence-default.json).
-It records commit `7e2678ab0595f20371b1cb17a856b5782e3141b7` with a clean benchmark source tree.
+It records commit `f86828895f03dcec7214327efcbbb3b1f973279a` with a clean benchmark source tree.
 
 This run measures one development machine and one process. It does not establish a production
 latency objective or cover host suspension. It does answer the ownership question: sustained queue
@@ -52,8 +52,8 @@ The measured worst delay stayed within the configured maintenance interval under
 Moving cadence into SQL would restore the extension and control-plane costs rejected by ADR 0003
 without evidence that process ownership misses the current contract.
 
-Reopen this decision if the product requires a fire-delay objective below one maintenance interval,
-or if repeated controlled runs show delays beyond that interval under supported production load.
+Reopen this decision if the product requires a fire-delay objective below one maintenance interval.
+Also reopen it if repeated controlled runs show longer delays under supported production load.
 
 ## Consequences
 
