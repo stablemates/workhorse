@@ -1,13 +1,13 @@
 import { ORPCError, os } from "@orpc/server";
 import type { Queue } from "@workhorse/core";
-import {
-  dashboardAttemptOutcomes,
-  dashboardDemoJobKinds,
-  dashboardDemoScenarios,
-  dashboardJobEventTypes,
-  type DashboardSystemWindow,
-  type MaintenanceLoopCadences,
-} from "../model.js";
+import type {
+  CompleteDashboardOptions,
+  DashboardDemoJobKind,
+  DashboardDemoScenario,
+  DashboardEventTypeFilter,
+  DashboardSystemWindow,
+  MaintenanceLoopCadences,
+} from "../wire.js";
 import { z } from "zod";
 import type {
   DashboardDurabilityProjector,
@@ -107,6 +107,50 @@ const activityInput = z.object({
 const systemInput = z.object({
   window: z.enum(["15m", "1h", "24h"]).default("1h"),
 });
+const eventTypeValues = [
+  "enqueued",
+  "claimed",
+  "succeeded",
+  "failed",
+  "retry_scheduled",
+  "canceled",
+  "promoted",
+  "lease_expired",
+  "execution_timed_out",
+  "redriven",
+  "redrive_created",
+  "wait_elapsed",
+  "retry",
+  "deadline_exceeded",
+  "timeout",
+] as const;
+const checkedEventTypeValues: CompleteDashboardOptions<
+  DashboardEventTypeFilter,
+  typeof eventTypeValues
+> = eventTypeValues;
+const eventType = z.enum(checkedEventTypeValues);
+const demoJobKindValues = [
+  "success",
+  "retry",
+  "durable",
+  "timer",
+  "failure",
+  "idempotent",
+  "long-running",
+] as const;
+const checkedDemoJobKindValues: CompleteDashboardOptions<
+  DashboardDemoJobKind,
+  typeof demoJobKindValues
+> = demoJobKindValues;
+const demoScenarioValues = [
+  "order-fulfillment",
+  "customer-onboarding",
+  "report-publication",
+] as const;
+const checkedDemoScenarioValues: CompleteDashboardOptions<
+  DashboardDemoScenario,
+  typeof demoScenarioValues
+> = demoScenarioValues;
 /**
  * The event feed is bounded by a window and paged by offset, like the task listing.
  *
@@ -121,15 +165,12 @@ const eventsInput = z.object({
   kind: z.enum(["all", "event", "attempt"]).default("all"),
   queue: z.string().trim().min(1).nullable().default(null),
   jobType: z.string().trim().min(1).nullable().default(null),
-  types: z
-    .array(z.enum([...dashboardJobEventTypes, ...dashboardAttemptOutcomes]))
-    .max(dashboardJobEventTypes.length + dashboardAttemptOutcomes.length)
-    .default([]),
+  types: z.array(eventType).max(eventType.options.length).default([]),
   jobId: z.uuid().nullable().default(null),
 });
 const enqueueTestInput = z.object({
-  kind: z.enum(dashboardDemoJobKinds),
-  scenario: z.enum(dashboardDemoScenarios).optional(),
+  kind: z.enum(checkedDemoJobKindValues),
+  scenario: z.enum(checkedDemoScenarioValues).optional(),
   audit: auditSchema,
 });
 const setScheduleEnabledInput = z.object({

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { taskRowActionGroups, type DashboardJobRow, type TaskRowAction } from "./model.js";
+import { taskRowActionGroups, type TaskRowAction } from "./presentation.js";
+import type { DashboardJobRow } from "./wire.js";
 
 function row(overrides: Partial<DashboardJobRow> = {}): DashboardJobRow {
   return {

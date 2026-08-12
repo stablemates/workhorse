@@ -1,4 +1,4 @@
-import type { DashboardRateLimitPolicySummary } from "./model.js";
+import type { DashboardRateLimitPolicySummary } from "./wire.js";
 
 export const rateLimitCappedFootnote =
   "Rate-limit pressure uses a bounded sample, so throttled counts are lower bounds.";
