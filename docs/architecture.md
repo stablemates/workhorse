@@ -618,7 +618,7 @@ Each worker polls `prepare_history_partitions_v1`, `retain_history_v1`, and `pru
 
 Terminal-job pruning selects a bounded candidate window of identities with outcomes, both minimum windows elapsed, no live runtime, no retained schedule occurrence, and history boundaries behind the global retained-through watermark. The bounded delete cascades outcome, checkpoints, and waits. History insert triggers serialize with parent deletion and move the watermark backward for late old history, while queue purge explicitly removes history before identity.
 
-All maintenance functions return one row per phase, `(phase, rows_affected, duration_ms, skipped_lock, error)`. The worker records this telemetry per loop, exposes it through `worker.maintenanceTelemetry()`, and forwards each row to the optional `onMaintenance` callback. Between passes a worker issues only the claim query.
+All maintenance functions return one row per phase, `(phase, rows_affected, duration_ms, skipped_lock, error)`. `WorkerMaintenanceLoop` is the shared `tick | statistics_rollup | background_tasks` taxonomy for phase telemetry and drift metrics. The worker exposes the latest phase rows through `worker.maintenanceTelemetry()` and forwards each row to the optional `onMaintenance` callback. Between passes a worker issues only the claim query.
 
 ## OpenTelemetry metrics
 
@@ -681,7 +681,7 @@ redrive attribution as metric attributes.
 
 `schedule_wait_v1` accepts either a relative bigint duration or an absolute timestamp, locks the exact active worker/fence generation, and rechecks lease expiry after acquiring the runtime lock. A first future target inserts `job_wait`, changes runtime to wait-marked scheduled state, clears ownership, and emits `wait_scheduled`. A first past-due target is still recorded but leaves runtime active and returns elapsed. Relative replay returns the first stored target even if later configuration supplies another duration; absolute target or mode changes conflict. Reaching an elapsed name emits `wait_replayed`.
 
-Suspension aborts the handler's cooperative signal and exits through private worker control flow, so the heartbeat stops and the worker slot is free for another claim. It does not call failure or completion and does not increment attempts. Normal promotion later makes the same logical attempt claimable with a new fence. Wake latency is bounded by maintenance cadence and worker availability, not by an exact wall-clock guarantee. Queue health reports the number of sleeping and overdue waits plus the next durable wake target.
+Suspension aborts the handler's cooperative signal and exits through private worker control flow, so the heartbeat stops and the worker slot is free for another claim. If the handler catches that signal and returns, the worker reasserts the recorded suspension. It also emits `workhorse.handler.signal_swallowed` at warning severity with `workhorse.handler.outcome = suspended`. Suspension does not call failure or completion and does not increment attempts. Normal promotion later makes the same logical attempt claimable with a new fence. Wake latency is bounded by maintenance cadence and worker availability, not by an exact wall-clock guarantee. Queue health reports the number of sleeping and overdue waits plus the next durable wake target.
 
 ### Claim
 
@@ -834,6 +834,7 @@ execution boundaries, checkpoints, progress, schedule replay, and worker deregis
 records cover queue and worker lifecycle, final execution outcomes, rejected
 heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule
 changes, redrive, and maintenance that changes rows or returns an error.
+Warning records identify handlers that catch a durable-wait suspension signal and return normally.
 
 Debug event names are `workhorse.job.enqueued`, `workhorse.job.enqueue_replayed`,
 `workhorse.job.claimed`, `workhorse.job.heartbeat_accepted`,
@@ -862,7 +863,10 @@ Info event names are `workhorse.jobs.promoted`, `workhorse.leases.recovered`,
 `workhorse.retention_policy.synchronized` and `workhorse.maintenance_policy.synchronized` record
 successful configuration changes at info.
 
-The internal `logDebug` and `logInfo` functions accept the closed `WorkhorseLogEvent` union. They
+The warning event name is `workhorse.handler.signal_swallowed`. It carries bounded job and worker
+identity plus `workhorse.handler.outcome`. It never carries the swallowed value or error.
+
+The internal `logDebug`, `logInfo`, and `logWarn` functions accept the closed `WorkhorseLogEvent` union. They
 set `eventName`, `severityNumber`, `severityText`, and a stable text body. Job records may use
 `workhorse.job.id`, `workhorse.job.type`, `workhorse.job.attempt`, `workhorse.job.state`, and
 `workhorse.operation.status`. Owned transitions add `workhorse.worker.id`.

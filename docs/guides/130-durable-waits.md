@@ -48,6 +48,10 @@ already elapsed and execution should continue past it.
 When execution reaches a wait that has already elapsed, it's recorded as already done and
 the handler continues straight past it. That's how the code after the wait finally runs.
 
+Don't catch the control signal thrown by `ctx.sleep()` or `ctx.sleepUntil()`. If a handler catches
+it and returns, the worker still honors the recorded wait. It also warns that the signal was
+swallowed. Any side effects after the catch have already happened and can't be undone.
+
 ## Waiting is not failing
 
 A wait does **not** consume an attempt. The attempt counter stays exactly where it was.

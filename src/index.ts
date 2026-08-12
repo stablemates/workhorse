@@ -79,6 +79,7 @@ export type {
   Failpoint,
   Handler,
   HandlerContext,
+  WorkerMaintenanceLoop,
   WorkerMaintenanceTelemetry,
   WorkerOptions,
   WorkerRuntimeState,

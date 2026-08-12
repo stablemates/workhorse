@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-logs";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_PROGRESS_VALUE_BYTES,
@@ -10,6 +11,21 @@ import {
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const records: LogRecord[] = [];
+const provider: LoggerProvider = {
+  getLogger: () => ({
+    enabled: () => true,
+    emit: (record) => records.push(record),
+  }),
+};
+
+beforeAll(() => {
+  logs.setGlobalLoggerProvider(provider);
+});
+
+afterAll(() => {
+  logs.disable();
+});
 
 describe("checkpoints progress waits", () => {
   it("persists immutable checkpoints with ownership provenance", async () => {
@@ -978,6 +994,7 @@ describe("checkpoints progress waits", () => {
   });
 
   it("does not complete or fail when application code catches the suspension sentinel", async () => {
+    records.length = 0;
     const id = await queue.enqueue("caught-wait-sentinel", {});
     let caught = false;
     let codeAfterCatch = false;
@@ -1015,9 +1032,21 @@ describe("checkpoints progress waits", () => {
         )
       ).rows[0].count,
     ).toBe(0);
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventName: "workhorse.handler.signal_swallowed",
+          severityText: "WARN",
+          attributes: expect.objectContaining({
+            "workhorse.job.id": id,
+            "workhorse.handler.outcome": "suspended",
+          }),
+        }),
+      ]),
+    );
   });
 
-  it("preserves durable suspension when application code catches and rethrows its signal", async () => {
+  it("preserves durable suspension when application code catches and throws a different error", async () => {
     const id = await queue.enqueue("rethrown-wait-sentinel", {});
     let caught: unknown;
     const worker = new Worker(queue, { workerId: "rethrown-sentinel-worker" }).handle(
@@ -1027,7 +1056,7 @@ describe("checkpoints progress waits", () => {
           await context.sleep("rethrown", 60_000);
         } catch (error) {
           caught = error;
-          throw error;
+          throw new Error("replacement handler error", { cause: error });
         }
         return { shouldNotComplete: true };
       },

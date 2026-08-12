@@ -48,7 +48,7 @@ await context.sleepUntil("embargo", publishAt);
 
 `context.getWait(name)` and the low-level Queue read/schedule methods expose the stored wait and provenance. Lease loss and absolute-target conflicts are typed errors.
 
-Scheduling a wait is implemented as internal worker control flow. The worker aborts the handler signal with its private suspension sentinel, stops the heartbeat loop in `finally`, and releases the worker slot before the next claim. It recognizes the sentinel and deliberately skips `fail_v1` and `complete_v1`. The signal is not part of the public API and application code must not catch and suppress it. Even if handler code catches it, the aborted signal and final ownership checks prevent stale completion, but arbitrary user effects performed after catching the signal cannot be undone.
+Scheduling a wait is implemented as internal worker control flow. The worker aborts the handler signal with its private suspension sentinel, stops the heartbeat loop in `finally`, and releases the worker slot before the next claim. It recognizes the sentinel and deliberately skips `fail_v1` and `complete_v1`. The signal is not part of the public API and application code must not catch and suppress it. If handler code catches the sentinel and returns, the outcome arbiter reasserts the recorded suspension and emits `workhorse.handler.signal_swallowed` at warning severity. Arbitrary user effects performed after catching the signal cannot be undone.
 
 Code before a sleep is replayed when the handler restarts. Externally visible or expensive work before a wait must use checkpoints or its own idempotency. Durable sleep does not introduce stack-frame persistence or a workflow graph.
 
