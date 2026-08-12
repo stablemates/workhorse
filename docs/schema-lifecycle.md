@@ -28,6 +28,15 @@ starting version after taking that lock, and commits one version step atomically
 `0024-add-schema-migration-ledger.sql`, which creates `workhorse.schema_migration` and advances the
 single `workhorse.schema_version` row from 23 to 24.
 
+`sql/schema/versions/0023.sql` preserves the supported baseline as a test fixture. It is immutable,
+just like a released migration, and does not ship in the package. `test/schema-migrations.test.ts`
+installs that fixture in one database, applies `migrateSchema(database)`, and compares its
+schema-only dump with a second database created by `installSchema(database)`. The dump omits
+ownership, privileges, comments, security labels, publications, and subscriptions. The test also
+removes `pg_dump` headers and randomized restriction keys before comparison. The existing database
+test suite includes this check, so its configured PostgreSQL matrix will exercise both paths when
+repository CI is enabled.
+
 Schema versions and SQL function versions are separate. A migration may add `claim_v3` while
 retaining `claim_v2` for a compatibility window, but the migration's filename and target schema
 version do not change either function suffix.
