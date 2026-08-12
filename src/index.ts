@@ -20,7 +20,9 @@ export type {
 export {
   assertSchemaCompatible,
   installSchema,
+  migrateSchema,
   readSchemaVersion,
+  WORKHORSE_SCHEMA_BASELINE_VERSION,
   WORKHORSE_SCHEMA_VERSION,
 } from "./schema.js";
 export {

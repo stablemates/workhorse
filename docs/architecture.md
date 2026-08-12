@@ -2,7 +2,21 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 23.
+The current clean-install protocol is schema version 24. Version 23 is the oldest supported
+forward-migration baseline.
+
+`installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
+version 24 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+immutable files in `sql/migrations/` in version order.
+
+Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
+`workhorse:schema-migration`. It requires version 23 and creates `workhorse.schema_migration`. It
+records the version 23 baseline and version 24 step. It then replaces the schema-version row with 24. If a concurrent replay acquires the lock after the first migration, it sees version 24 and
+makes no changes.
+
+Versions below 23, versions above 24, gaps, and mixed version rows fail without running a migration.
+SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
+function or reinterpret that suffix.
 
 This page is the precise reference. For the ideas it assumes — leases and fence tokens,
 at-least-once delivery, cooperative cancellation, the runtime/outcome split — start with
@@ -1013,7 +1027,8 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical schema is a clean-install artifact, not an online version 1 to version 2 migration.
+- The canonical artifact installs version 24. Forward migration starts at version 23; older schemas
+  require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.
 - Job, outcome, event, attempt, and schedule-occurrence retention default to 14 days and remain independently configurable. Enqueue-idempotency bindings expire by their request TTL and are cleaned before terminal identity pruning.

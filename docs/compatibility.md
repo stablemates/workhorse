@@ -66,10 +66,9 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   single row in `workhorse.schema_version`. `assertSchemaCompatible` refuses anything else, and it
   refuses on both sides: an older runtime against a newer schema fails just as loudly as the
   reverse. A mixed fleet mid-deploy is not supported.
-- **Installation is clean-database only.** `installSchema` refuses to touch an existing versioned
-  schema it did not just create, and refuses to interpret an unversioned `workhorse` schema at all.
-  There is no online migration path in the `0.x` line. Upgrading a schema version means installing
-  into a fresh schema and draining the old one.
+- **Installation is clean-database only.** `installSchema` refuses to interpret an older or
+  unversioned `workhorse` schema. `migrateSchema` owns explicit forward upgrades from the version 23
+  baseline, while earlier versions still require a fresh schema or a separately engineered path.
 - **Correctness-sensitive transitions stay in versioned SQL functions.** Claim, completion, retry,
   cancellation, deadline, and maintenance transitions are owned by SQL. A client that speaks the
   same schema version speaks the same protocol, whatever language it is written in.

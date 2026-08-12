@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 23 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 24 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency. It also supports retry policies,
 checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
@@ -205,7 +205,8 @@ for each task.
 
 ## Validation limits
 
-- The schema file supports clean installation, not online migration from earlier schema versions.
+- `installSchema` supports clean installation. `migrateSchema` supports ordered forward migration
+  from the version 23 baseline; earlier versions have no derived historical migration chain.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` runs; drift is bounded by the worker tick cadence.
 - Schedule precision is one second and cron expressions are evaluated in the worker's configured timezone.
 - `Worker.run()` shares one `LISTEN workhorse_jobs` connection per node-postgres pool. Queue payloads

@@ -10,6 +10,12 @@ CREATE TABLE IF NOT EXISTS workhorse.schema_version (
   installed_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+CREATE TABLE IF NOT EXISTS workhorse.schema_migration (
+  version integer PRIMARY KEY,
+  description text NOT NULL CHECK (description <> ''),
+  applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
 CREATE OR REPLACE FUNCTION workhorse.valid_tags(p_tags text[])
 RETURNS boolean
 LANGUAGE sql
@@ -6167,7 +6173,11 @@ BEGIN
 END;
 $$;
 
-  INSERT INTO workhorse.schema_version(version) VALUES (23) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_migration(version, description) VALUES
+  (23, 'forward migration baseline'),
+  (24, 'add schema migration ledger')
+ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (24) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )
