@@ -408,8 +408,8 @@ session to authorize against; `--host` and `--allow-mutations` widen that and sa
 prints the dashboard mount for your framework. Nothing about the mount needs to know where the
 workers run: they register themselves in PostgreSQL.
 
-Schema installation is clean-database only and refuses to modify an existing schema rather than
-pretending to be a migration. Ordered migrations are roadmap item P2-07.
+Schema installation is clean-database only. Existing databases at the supported version 23 baseline
+advance through immutable ordered steps by calling `migrateSchema` before version 24 processes start.
 
 ## Minimal usage
 
