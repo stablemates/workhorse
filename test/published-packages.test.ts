@@ -57,6 +57,17 @@ describe("published package manifests", () => {
   );
 });
 
+describe("ORM adapter entry points", () => {
+  const adapters = ["drizzle", "prisma", "typeorm", "kysely"];
+
+  it.each(adapters)("keeps %s as thin glue over the public core adapter API", async (adapter) => {
+    const source = await read(`packages/${adapter}/src/index.ts`);
+    expect(source.trimEnd().split("\n").length).toBeLessThanOrEqual(50);
+    expect(source).not.toMatch(/from ["']@workhorse\/core\//);
+    expect(source).not.toMatch(/from ["'](?:\.\.\/)+\.\.\/src\//);
+  });
+});
+
 describe("consumers of the package list", () => {
   it("packs and publishes the derived list rather than a copy", async () => {
     const workflow = await read(".github/workflows/release.yml");
