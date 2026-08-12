@@ -580,7 +580,8 @@ then repeats on an unreferenced timer; `stop()` clears the timer; `collect()` pr
 one-shot collection. `onError` receives interval failures. Applications must run at most one observer
 per database because every observer sees the same global PostgreSQL state.
 
-The observer records `workhorse.jobs.count` for scheduled, ready, and active rows by queue and state;
+Its queue query reads the shared depth aggregates in `src/queue-depth.ts` and joins `queue_control`
+for the pause flag. The observer records `workhorse.jobs.count` for scheduled, ready, and active rows by queue and state;
 `workhorse.queue.oldest_ready.age`; `workhorse.queue.paused`; `workhorse.lease.expired`;
 `workhorse.deadline.overdue`; and `workhorse.execution_timeout.overdue`. A second query groups
 `worker_registry` rows into mutually exclusive `running`, `paused`, `draining`, and `offline` states;
@@ -834,7 +835,13 @@ rather than on an emission path:
   `workhorse.queue.rate_limit.next_eligible_delay` report rate-policy state for governed queues.
 
 `workhorse.queue.depth` and `WorkhorseMetricsObserver`'s `workhorse.jobs.count` measure the same
-live work through separate depth reads. Task 0.1c gives that read one owner.
+live work and read it the same way. `src/queue-depth.ts` owns every aggregate over
+`workhorse.job_runtime`: `depthColumns()` renders named aggregates such as `ready`, `expired`, and
+`oldest_ready_age_ms`, `totalDepthSelect()` renders the database-wide row the health snapshot uses,
+and `perQueueDepthSelect()` renders the per-queue rows `Queue.queueMetricSnapshot()` and the
+observer use. Every count aggregates the `job_id` primary key, so a queue with no runtime rows
+reports zero across the outer join rather than one. Callers supply their own queue-name source and
+name the aggregates they need; no caller writes its own aggregate.
 
 `registerQueueMetrics(queue)` registers the database-wide depth, age, and concurrency callbacks and returns a
 cleanup function. Register it once per database and telemetry resource; registering it for every
