@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createDrizzleAdapter } from "@workhorse/drizzle";
-import { createDashboardHost } from "@workhorse/dashboard/server";
+import {
+  createDashboardHost,
+  createDashboardOperatorControllers,
+  type DashboardOperatorAction,
+} from "@workhorse/dashboard/server";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {
@@ -695,192 +699,117 @@ export function createLocalScheduleController(database: DemoDatabase): ScheduleC
   };
 }
 
-export function createLocalQueueController(database: DemoDatabase): QueueController {
-  return {
-    async setQueuePaused(queueName, paused, audit) {
-      return database.transaction(async (transaction) => {
-        const beforeRows = await transaction.execute<{ paused: boolean }>(sql`
-          SELECT paused FROM workhorse.queue_control WHERE queue_name = ${queueName} FOR UPDATE
-        `);
-        const before = { paused: beforeRows.rows[0]?.paused ?? false };
-        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: queueName });
-        if (paused) await workhorse.queue.pauseQueue(queueName);
-        else await workhorse.queue.resumeQueue(queueName);
-        await transaction.execute(sql`
-          INSERT INTO public.workhorse_demo_audit
-            (actor, reason, request_id, occurred_at, action, target, before, after, status)
-          VALUES
-            (${audit.actor}, ${audit.reason}, ${audit.requestId},
-             ${audit.occurredAt ?? new Date().toISOString()}, 'setQueuePaused', ${`queue:${queueName}`},
-             ${JSON.stringify(before)}::jsonb, ${JSON.stringify({ paused })}::jsonb, 'succeeded')
-        `);
-        return { paused };
-      });
-    },
-    async purgeQueue(queueName, audit) {
-      return database.transaction(async (transaction) => {
-        const beforeRows = await transaction.execute<{ purgeable_jobs: number }>(sql`
-          SELECT count(*)::integer AS purgeable_jobs
-            FROM workhorse.job_runtime
-           WHERE queue_name = ${queueName} AND state IN ('ready', 'scheduled')
-        `);
-        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: queueName });
-        const deletedCount = await workhorse.queue.purgeQueue(queueName);
-        await transaction.execute(sql`
-          INSERT INTO public.workhorse_demo_audit
-            (actor, reason, request_id, occurred_at, action, target, before, after, status)
-          VALUES
-            (${audit.actor}, ${audit.reason}, ${audit.requestId},
-             ${audit.occurredAt ?? new Date().toISOString()}, 'purgeQueue', ${`queue:${queueName}`},
-             ${JSON.stringify(beforeRows.rows[0] ?? { purgeable_jobs: 0 })}::jsonb,
-             ${JSON.stringify({ deletedCount })}::jsonb, 'succeeded')
-        `);
-        return { deletedCount };
-      });
-    },
-  };
-}
-
-/**
- * Normalize a cancellation timestamp to ISO-8601.
- *
- * `CancelResult` is typed with `Date`, but a driver may hand back the raw `timestamptz` string
- * depending on how the transaction is issued. Both are accepted here so the projected result and
- * the audit row can never disagree about the shape of a recorded time.
- */
 function isoTimestamp(value: Date | string | null): string | null {
   return value === null ? null : new Date(value).toISOString();
 }
 
-/**
- * Audited cancellation of one task.
- *
- * The cancellation and its audit row share one transaction, so an operator action is never
- * recorded without the lifecycle transition it claims to describe, and never applied without a
- * recorded actor and request id. When supplied, the optional reason is stored on both the lifecycle
- * transition and audit row. The stored `after` payload keeps the exact status
- * PostgreSQL returned, including `cancel_requested`, so a later reader can tell an immediate
- * cancellation apart from a cooperative request that an active handler still had to observe.
- * Canceling one occurrence of a recurring schedule cancels only that task; the schedule
- * definition is untouched and keeps firing.
- */
-export function createLocalTaskController(database: DemoDatabase): TaskController {
-  return {
-    async runTaskNow(jobId, audit) {
-      return database.transaction(async (transaction) => {
-        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
-        const beforeRows = await transaction.execute<{
-          state: string | null;
-          run_at: Date | string | null;
-          wait_name: string | null;
-        }>(sql`
-          SELECT COALESCE(r.state, o.state) AS state,
-                 COALESCE(r.run_at, o.run_at) AS run_at,
-                 r.wait_name
-            FROM workhorse.job j
-            LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-            LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-           WHERE j.id = ${jobId}
-        `);
-        const result = await workhorse.queue.runTaskNow(jobId);
-        const projected = {
-          status: result.status,
-          id: result.jobId,
-          state: result.state,
-          runAt: isoTimestamp(result.runAt),
-        };
-        const before = beforeRows.rows[0];
-        await transaction.execute(sql`
-          INSERT INTO public.workhorse_demo_audit
-            (actor, reason, request_id, occurred_at, action, target, before, after, status)
-          VALUES
-            (${audit.actor}, ${audit.reason}, ${audit.requestId},
-             ${audit.occurredAt ?? new Date().toISOString()}, 'runTaskNow', ${`job:${jobId}`},
-             ${JSON.stringify({
-               state: before?.state ?? null,
-               runAt: isoTimestamp(before?.run_at ?? null),
-               waitName: before?.wait_name ?? null,
-             })}::jsonb,
-             ${JSON.stringify(projected)}::jsonb,
-             ${result.status === "not_found" || result.status === "waiting" ? "failed" : "succeeded"})
-        `);
-        return projected;
-      });
-    },
-    async cancelTask(jobId, audit) {
-      return database.transaction(async (transaction) => {
-        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
-        const beforeRows = await transaction.execute<{ state: string | null }>(sql`
-          SELECT COALESCE(r.state, o.state) AS state
-            FROM workhorse.job j
-            LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-            LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-           WHERE j.id = ${jobId}
-        `);
-        const result = await workhorse.queue.cancel(jobId, {
-          requestedBy: audit.actor,
-          reason: audit.reason ?? undefined,
-        });
-        const projected: DemoCancelTaskResult = {
-          status: result.status,
-          jobId: result.jobId,
-          state: result.state,
-          currentAttempt: result.currentAttempt,
-          requestedAt: isoTimestamp(result.requestedAt),
-          requestedBy: result.requestedBy,
-          reason: result.reason,
-          finishedAt: isoTimestamp(result.finishedAt),
-        };
-        await transaction.execute(sql`
-          INSERT INTO public.workhorse_demo_audit
-            (actor, reason, request_id, occurred_at, action, target, before, after, status)
-          VALUES
-            (${audit.actor}, ${audit.reason}, ${audit.requestId},
-             ${audit.occurredAt ?? new Date().toISOString()}, 'cancelTask', ${`job:${jobId}`},
-             ${JSON.stringify({ state: beforeRows.rows[0]?.state ?? null })}::jsonb,
-             ${JSON.stringify(projected)}::jsonb,
-             ${result.status === "not_found" ? "failed" : "succeeded"})
-        `);
-        return projected;
-      });
-    },
-  };
+function operatorAuditStatus(
+  action: DashboardOperatorAction,
+  result: unknown,
+): "failed" | "succeeded" {
+  const status =
+    typeof result === "object" && result !== null && "status" in result ? result.status : undefined;
+  if (action.kind === "runTaskNow" && (status === "not_found" || status === "waiting")) {
+    return "failed";
+  }
+  if (action.kind === "cancelTask" && status === "not_found") return "failed";
+  return "succeeded";
 }
 
 /**
- * Audited pause and resume for one registered worker.
+ * Run a shared Queue-backed controller action inside the demo's audit transaction.
  *
- * The pause is written to `workhorse.worker_registry` rather than applied to a process-local
- * `Worker` object, so it reaches workers running in their own processes. Like cancellation, it is
- * cooperative: the worker stops claiming when it next refreshes its registration, and any handler
- * already executing runs to completion.
+ * The shared factory owns the Queue calls and result projection. This runner owns only the demo's
+ * before snapshot and audit row, preserving the atomic audit boundary without copying controller
+ * behavior into the demo host.
  */
-export function createLocalWorkerController(database: DemoDatabase): WorkerController {
-  return {
-    async setWorkerPaused(workerId, paused, audit) {
-      return database.transaction(async (transaction) => {
+export function createLocalOperatorControllers(database: DemoDatabase) {
+  return createDashboardOperatorControllers({
+    run: (action, operation) =>
+      database.transaction(async (transaction) => {
+        let before: Json;
+        let target: string;
+        switch (action.kind) {
+          case "setQueuePaused": {
+            const rows = await transaction.execute<{ paused: boolean }>(sql`
+              SELECT paused FROM workhorse.queue_control
+               WHERE queue_name = ${action.queueName} FOR UPDATE
+            `);
+            before = { paused: rows.rows[0]?.paused ?? false };
+            target = `queue:${action.queueName}`;
+            break;
+          }
+          case "purgeQueue": {
+            const rows = await transaction.execute<{ purgeable_jobs: number }>(sql`
+              SELECT count(*)::integer AS purgeable_jobs
+                FROM workhorse.job_runtime
+               WHERE queue_name = ${action.queueName} AND state IN ('ready', 'scheduled')
+            `);
+            before = rows.rows[0] ?? { purgeable_jobs: 0 };
+            target = `queue:${action.queueName}`;
+            break;
+          }
+          case "runTaskNow": {
+            const rows = await transaction.execute<{
+              state: string | null;
+              run_at: Date | string | null;
+              wait_name: string | null;
+            }>(sql`
+              SELECT COALESCE(r.state, o.state) AS state,
+                     COALESCE(r.run_at, o.run_at) AS run_at,
+                     r.wait_name
+                FROM workhorse.job j
+                LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+                LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+               WHERE j.id = ${action.jobId}
+            `);
+            const row = rows.rows[0];
+            before = {
+              state: row?.state ?? null,
+              runAt: isoTimestamp(row?.run_at ?? null),
+              waitName: row?.wait_name ?? null,
+            };
+            target = `job:${action.jobId}`;
+            break;
+          }
+          case "cancelTask": {
+            const rows = await transaction.execute<{ state: string | null }>(sql`
+              SELECT COALESCE(r.state, o.state) AS state
+                FROM workhorse.job j
+                LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+                LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+               WHERE j.id = ${action.jobId}
+            `);
+            before = { state: rows.rows[0]?.state ?? null };
+            target = `job:${action.jobId}`;
+            break;
+          }
+          case "setWorkerPaused": {
+            const rows = await transaction.execute<{ paused: boolean }>(sql`
+              SELECT paused FROM workhorse.worker_registry
+               WHERE worker_id = ${action.workerId} FOR UPDATE
+            `);
+            before = { paused: rows.rows[0]?.paused ?? false };
+            target = `worker:${action.workerId}`;
+            break;
+          }
+        }
         const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
-        const beforeRows = await transaction.execute<{ paused: boolean }>(sql`
-          SELECT paused FROM workhorse.worker_registry WHERE worker_id = ${workerId} FOR UPDATE
-        `);
-        const result = await workhorse.queue.setWorkerPaused(workerId, paused, {
-          requestedBy: audit.actor,
-          reason: audit.reason,
-        });
-        if (!result) throw new Error(`Worker ${workerId} is not registered`);
+        const result = await operation(workhorse.queue);
+        const status = operatorAuditStatus(action, result);
+        const audit = action.audit;
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
-             ${audit.occurredAt ?? new Date().toISOString()}, 'setWorkerPaused', ${`worker:${workerId}`},
-             ${JSON.stringify({ paused: beforeRows.rows[0]?.paused ?? false })}::jsonb,
-             ${JSON.stringify({ paused: result.paused })}::jsonb, 'succeeded')
+             ${audit.occurredAt ?? new Date().toISOString()}, ${action.kind},
+             ${target}, ${JSON.stringify(before)}::jsonb,
+             ${JSON.stringify(result)}::jsonb, ${status})
         `);
-        return { paused: result.paused };
-      });
-    },
-  };
+        return result;
+      }),
+  });
 }
 
 export function createLocalSettingsController(database: DemoDatabase): SettingsController {
@@ -937,13 +866,14 @@ export function createDemoApplication(
 ) {
   const maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS;
   const environment = options.environment ?? "development";
+  const localControllers = createLocalOperatorControllers(database);
   // Worker pause state is durable and fleet-wide; it survives restarts and reaches remote workers.
-  const workerController = options.workerController ?? createLocalWorkerController(database);
+  const workerController = options.workerController ?? localControllers.workerController;
   // Cancellation is offered only where the rest of the mutating operator surface is. A read-only
   // deployment keeps exactly the dashboard it had, with no cancel action anywhere.
   const taskController =
     options.taskController ??
-    (options.operator?.mode === "local" ? createLocalTaskController(database) : undefined);
+    (options.operator?.mode === "local" ? localControllers.taskController : undefined);
   const settingsController =
     options.settingsController ??
     (options.operator?.mode === "local" ? createLocalSettingsController(database) : undefined);

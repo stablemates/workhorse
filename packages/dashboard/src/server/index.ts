@@ -9,6 +9,12 @@ export type { DashboardRuntimeConfig, RenderDashboardHtmlOptions } from "./html.
 export type { DashboardHost, DashboardHostOptions } from "./host.js";
 export { dashboardNodeMiddleware } from "./node.js";
 export type { DashboardNodeMiddleware } from "./node.js";
+export { createDashboardOperatorControllers } from "./operator-controllers.js";
+export type {
+  DashboardOperatorAction,
+  DashboardOperatorControllerOptions,
+  DashboardOperatorControllers,
+} from "./operator-controllers.js";
 export {
   readDashboardEventDetail,
   readDashboardEvents,

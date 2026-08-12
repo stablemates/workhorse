@@ -5,7 +5,7 @@ import { Pool } from "pg";
 import {
   createDemoApplication,
   createLocalOperator,
-  createLocalQueueController,
+  createLocalOperatorControllers,
   createLocalScheduleController,
   installDemoSchema,
   seedDemoData,
@@ -43,6 +43,7 @@ const environment = process.env.WORKHORSE_ENV ?? mode;
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 
 const database = createDemoDatabase(pool);
+const localOperatorControllers = createLocalOperatorControllers(database);
 
 await installSchema(pool);
 await installDemoSchema(database);
@@ -70,7 +71,7 @@ const { app } = createDemoApplication(database, {
   dev: dashboardDev,
   environment,
   operator: createLocalOperator(database),
-  queueController: createLocalQueueController(database),
+  queueController: localOperatorControllers.queueController,
   scheduleController: createLocalScheduleController(database),
 });
 const metricsObserver = startDemoMetricsObserver(pool);
