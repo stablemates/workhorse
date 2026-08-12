@@ -10,7 +10,7 @@ import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../src/local-da
 import {
   createDemoApplication,
   createDemoDatabase,
-  createLocalQueueController,
+  createLocalOperatorControllers,
   createLocalOperator,
   createLocalScheduleController,
   DEMO_CONCURRENCY_MAX_ACTIVE,
@@ -2621,7 +2621,7 @@ describe("Workhorse demo", () => {
     const queueName = "managed-demo";
     const { app, workhorse } = createTestApplication({
       operator: createLocalOperator(database),
-      queueController: createLocalQueueController(database),
+      queueController: createLocalOperatorControllers(database).queueController,
     });
     const client = dashboardClient(app);
     await new Queue(pool).syncConcurrencyPolicies("dashboard-test", [
