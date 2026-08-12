@@ -1,3 +1,4 @@
+import { expectOneRow } from "@workhorse/core";
 import type { Queue, RetryPolicy } from "@workhorse/core";
 import {
   DashboardActivityBucket,
@@ -273,7 +274,7 @@ export async function readDashboardTaskCounts(
            count(*) FILTER (WHERE current_attempt > 1)::integer AS retried_live_count
       FROM workhorse.job_runtime
   `);
-  const live = runtimeRows.rows[0]!;
+  const live = expectOneRow(runtimeRows, "the live job runtime counts");
   const [completed, discarded, canceled, retriedTerminal] = await Promise.all([
     estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'succeeded'`),
     estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'failed'`),
@@ -323,7 +324,7 @@ async function readDashboardTaskCountsExact(
            count(*) FILTER (WHERE state = 'canceled')::integer AS canceled_count
       FROM tasks
   `);
-  const counts = countRows.rows[0]!;
+  const counts = expectOneRow(countRows, "the task attempt counts");
 
   return {
     all: counts.all_count,
@@ -1022,7 +1023,7 @@ export async function readDashboardCron(
        ORDER BY state.task_name
     `),
   ]);
-  const policy = policyRows.rows[0]!;
+  const policy = expectOneRow(policyRows, "the maintenance policy read");
   const state = new Map(
     stateRows.rows.map((row) => [
       row.task_name,
@@ -1557,9 +1558,9 @@ export async function readDashboardSystem(
     queue.health(),
   ]);
 
-  const summary = summaryRows.rows[0]!;
-  const runtime = runtimeRows.rows[0]!;
-  const wait = waitRows.rows[0]!;
+  const summary = expectOneRow(summaryRows, "the snapshot summary read");
+  const runtime = expectOneRow(runtimeRows, "the snapshot runtime read");
+  const wait = expectOneRow(waitRows, "the snapshot durable-wait read");
   const retention = dashboardRetention(health);
   const storage = dashboardStorage(health);
   const minutes = windowSeconds / 60;

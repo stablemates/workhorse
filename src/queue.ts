@@ -1,5 +1,6 @@
 import { CronExpressionParser } from "cron-parser";
 import type { Span } from "@opentelemetry/api";
+import { databaseErrorCode, databaseErrorDetails, expectOneRow, WorkhorseError } from "./errors.js";
 import type {
   BulkRedrivePage,
   BulkRedriveOptions,
@@ -39,6 +40,7 @@ import type {
   MaintenancePolicy,
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
+  PolicyValueProvenance,
   Queryable,
   QueueOptions,
   QueueHealth,
@@ -1111,8 +1113,73 @@ function redriveLineageRecord(row: RedriveLineageRow): RedriveLineageRecord {
   };
 }
 
-function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
+/**
+ * Column name for every retention setting a caller can name.
+ *
+ * PostgreSQL owns retention settings, so each one is spelled twice: once as the camel-case field
+ * a caller passes and once as the snake-case column `override_retention_policy_v1` and
+ * `revert_retention_policy_v1` expect. This table is the only place the two spellings meet.
+ * Provenance also keys off the column name, since `operator_overrides` reports columns.
+ */
+const RETENTION_POLICY_COLUMNS: Readonly<Record<RetentionPolicySetting, string>> = {
+  jobIdentityRetentionDays: "job_identity_retention_days",
+  terminalOutcomeRetentionDays: "terminal_outcome_retention_days",
+  jobEventRetentionDays: "job_event_retention_days",
+  attemptHistoryRetentionDays: "attempt_history_retention_days",
+  scheduleOccurrenceRetentionDays: "schedule_occurrence_retention_days",
+  statisticsRetentionDays: "statistics_retention_days",
+  terminalJobPruneLimit: "terminal_job_prune_limit",
+  historyPartitionsPerPass: "history_partitions_per_pass",
+  defaultPartitionRowsPerPass: "default_partition_rows_per_pass",
+  occurrenceRowsPerPass: "occurrence_rows_per_pass",
+  statisticsRowsPerPass: "statistics_rows_per_pass",
+};
+
+/** Column name for every maintenance setting a caller can name. See {@link RETENTION_POLICY_COLUMNS}. */
+const MAINTENANCE_POLICY_COLUMNS: Readonly<Record<MaintenancePolicySetting, string>> = {
+  timezone: "timezone",
+  partitionPreparationIntervalMs: "partition_preparation_interval_ms",
+  terminalCleanupIntervalMs: "terminal_cleanup_interval_ms",
+  historyRetentionLocalTime: "history_retention_local_time",
+};
+
+/**
+ * Build the per-setting provenance block from one column table.
+ *
+ * A policy row carries each setting twice — the effective value under its own column and the
+ * application default under `application_<column>` — and lists the columns an operator overrode.
+ * Reading those by index keeps the column names in the table above rather than repeating all
+ * three spellings per setting. `read` converts a stored value to its public form, which only
+ * maintenance needs, for the local time PostgreSQL returns with seconds attached.
+ */
+function policyProvenance<TSetting extends string>(
+  row: { operator_overrides: string[] },
+  columns: Readonly<Record<TSetting, string>>,
+  read: (value: unknown, setting: TSetting) => unknown = (value) => value,
+): Record<TSetting, PolicyValueProvenance<unknown>> {
   const overrides = new Set(row.operator_overrides);
+  const values = row as unknown as Record<string, unknown>;
+  const entries = Object.entries(columns) as [TSetting, string][];
+  return Object.fromEntries(
+    entries.map(([setting, column]) => [
+      setting,
+      {
+        source: overrides.has(column) ? "operator" : "application",
+        applicationDefault: read(values[`application_${column}`], setting),
+      },
+    ]),
+  ) as Record<TSetting, PolicyValueProvenance<unknown>>;
+}
+
+/** Column names an operator may name when overriding or reverting settings of one policy. */
+function policyColumnNames<TSetting extends string>(
+  settings: readonly TSetting[],
+  columns: Readonly<Record<TSetting, string>>,
+): string[] {
+  return settings.map((setting) => columns[setting]);
+}
+
+function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
   return {
     jobIdentityRetentionDays: row.job_identity_retention_days,
     terminalOutcomeRetentionDays: row.terminal_outcome_retention_days,
@@ -1125,52 +1192,7 @@ function retentionPolicy(row: RetentionPolicyRow): RetentionPolicy {
     defaultPartitionRowsPerPass: row.default_partition_rows_per_pass,
     occurrenceRowsPerPass: row.occurrence_rows_per_pass,
     statisticsRowsPerPass: row.statistics_rows_per_pass,
-    provenance: {
-      jobIdentityRetentionDays: {
-        source: overrides.has("job_identity_retention_days") ? "operator" : "application",
-        applicationDefault: row.application_job_identity_retention_days,
-      },
-      terminalOutcomeRetentionDays: {
-        source: overrides.has("terminal_outcome_retention_days") ? "operator" : "application",
-        applicationDefault: row.application_terminal_outcome_retention_days,
-      },
-      jobEventRetentionDays: {
-        source: overrides.has("job_event_retention_days") ? "operator" : "application",
-        applicationDefault: row.application_job_event_retention_days,
-      },
-      attemptHistoryRetentionDays: {
-        source: overrides.has("attempt_history_retention_days") ? "operator" : "application",
-        applicationDefault: row.application_attempt_history_retention_days,
-      },
-      scheduleOccurrenceRetentionDays: {
-        source: overrides.has("schedule_occurrence_retention_days") ? "operator" : "application",
-        applicationDefault: row.application_schedule_occurrence_retention_days,
-      },
-      statisticsRetentionDays: {
-        source: overrides.has("statistics_retention_days") ? "operator" : "application",
-        applicationDefault: row.application_statistics_retention_days,
-      },
-      terminalJobPruneLimit: {
-        source: overrides.has("terminal_job_prune_limit") ? "operator" : "application",
-        applicationDefault: row.application_terminal_job_prune_limit,
-      },
-      historyPartitionsPerPass: {
-        source: overrides.has("history_partitions_per_pass") ? "operator" : "application",
-        applicationDefault: row.application_history_partitions_per_pass,
-      },
-      defaultPartitionRowsPerPass: {
-        source: overrides.has("default_partition_rows_per_pass") ? "operator" : "application",
-        applicationDefault: row.application_default_partition_rows_per_pass,
-      },
-      occurrenceRowsPerPass: {
-        source: overrides.has("occurrence_rows_per_pass") ? "operator" : "application",
-        applicationDefault: row.application_occurrence_rows_per_pass,
-      },
-      statisticsRowsPerPass: {
-        source: overrides.has("statistics_rows_per_pass") ? "operator" : "application",
-        applicationDefault: row.application_statistics_rows_per_pass,
-      },
-    },
+    provenance: policyProvenance(row, RETENTION_POLICY_COLUMNS) as RetentionPolicy["provenance"],
     updatedAt: new Date(row.updated_at),
   };
 }
@@ -1223,30 +1245,20 @@ function localMaintenanceTime(value: string): string {
 }
 
 function maintenancePolicy(row: MaintenancePolicyRow): MaintenancePolicy {
-  const overrides = new Set(row.operator_overrides);
+  // PostgreSQL returns a `time` with seconds attached; callers see `HH:mm`. No other maintenance
+  // setting is converted.
+  const read = (value: unknown, setting: MaintenancePolicySetting): unknown =>
+    setting === "historyRetentionLocalTime" ? localMaintenanceTime(value as string) : value;
   return {
     timezone: row.timezone,
     partitionPreparationIntervalMs: row.partition_preparation_interval_ms,
     terminalCleanupIntervalMs: row.terminal_cleanup_interval_ms,
     historyRetentionLocalTime: localMaintenanceTime(row.history_retention_local_time),
-    provenance: {
-      timezone: {
-        source: overrides.has("timezone") ? "operator" : "application",
-        applicationDefault: row.application_timezone,
-      },
-      partitionPreparationIntervalMs: {
-        source: overrides.has("partition_preparation_interval_ms") ? "operator" : "application",
-        applicationDefault: row.application_partition_preparation_interval_ms,
-      },
-      terminalCleanupIntervalMs: {
-        source: overrides.has("terminal_cleanup_interval_ms") ? "operator" : "application",
-        applicationDefault: row.application_terminal_cleanup_interval_ms,
-      },
-      historyRetentionLocalTime: {
-        source: overrides.has("history_retention_local_time") ? "operator" : "application",
-        applicationDefault: localMaintenanceTime(row.application_history_retention_local_time),
-      },
-    },
+    provenance: policyProvenance(
+      row,
+      MAINTENANCE_POLICY_COLUMNS,
+      read,
+    ) as MaintenancePolicy["provenance"],
     updatedAt: row.updated_at,
   };
 }
@@ -1318,7 +1330,7 @@ function validateWaitName(name: string): void {
   }
 }
 
-export class CheckpointLeaseLostError extends Error {
+export class CheckpointLeaseLostError extends WorkhorseError {
   constructor(jobId: string, checkpointName: string) {
     super(
       `Cannot save checkpoint ${checkpointName} for job ${jobId} because the lease is stale or expired`,
@@ -1327,14 +1339,14 @@ export class CheckpointLeaseLostError extends Error {
   }
 }
 
-export class ProgressLeaseLostError extends Error {
+export class ProgressLeaseLostError extends WorkhorseError {
   constructor(jobId: string) {
     super(`Cannot update progress for job ${jobId} because the lease is stale or expired`);
     this.name = "ProgressLeaseLostError";
   }
 }
 
-export class ProgressRateLimitError extends Error {
+export class ProgressRateLimitError extends WorkhorseError {
   constructor(
     readonly jobId: string,
     readonly retryAfterMs: number,
@@ -1345,7 +1357,7 @@ export class ProgressRateLimitError extends Error {
 }
 
 /** The same scoped enqueue key is still retained for a materially different request. */
-export class EnqueueIdempotencyConflictError extends Error {
+export class EnqueueIdempotencyConflictError extends WorkhorseError {
   constructor(readonly details: EnqueueIdempotencyConflictDetails) {
     super(
       `Enqueue idempotency conflict in scope ${details.scope} for key ${details.keyPreview} (${details.keyDigest}); fields: ${details.conflictingFields.join(", ")}`,
@@ -1469,37 +1481,34 @@ function validEnqueueConflictDetails(value: unknown): value is EnqueueIdempotenc
   );
 }
 
-function enqueueConflictDetails(error: unknown): EnqueueIdempotencyConflictDetails {
-  const seen = new Set<object>();
-  let current = error;
-
-  for (let depth = 0; depth < 16; depth++) {
-    if (typeof current !== "object" || current === null || seen.has(current)) break;
-    seen.add(current);
-
+/**
+ * Find the first `DETAIL` payload along the wrapper chain that parses into the shape `valid`
+ * accepts, or fall back to sanitized defaults.
+ *
+ * An unrecognized payload is never propagated. `DETAIL` is diagnostic text an operator or an ORM
+ * can also write into, so anything failing validation is treated as absent rather than trusted.
+ */
+function conflictDetails<TDetails>(
+  error: unknown,
+  valid: (value: unknown) => value is TDetails,
+  sanitized: TDetails,
+): TDetails {
+  for (const detail of databaseErrorDetails(error)) {
     try {
-      if ("detail" in current && typeof current.detail === "string") {
-        try {
-          const detail: unknown = JSON.parse(current.detail);
-          if (validEnqueueConflictDetails(detail)) return detail;
-        } catch {
-          // Continue through adapter wrappers in case PostgreSQL's DETAIL is on a cause.
-        }
-      }
-      current = "cause" in current ? current.cause : undefined;
+      const parsed: unknown = JSON.parse(detail);
+      if (valid(parsed)) return parsed;
     } catch {
-      break;
+      // Keep walking; PostgreSQL's DETAIL may sit behind an adapter wrapper's own detail string.
     }
   }
-
-  return sanitizedEnqueueConflictDetails;
+  return sanitized;
 }
 
 function enqueueConflict(error: unknown): EnqueueIdempotencyConflictError | null {
-  if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "P1001") {
-    return null;
-  }
-  return new EnqueueIdempotencyConflictError(enqueueConflictDetails(error));
+  if (databaseErrorCode(error) !== "P1001") return null;
+  return new EnqueueIdempotencyConflictError(
+    conflictDetails(error, validEnqueueConflictDetails, sanitizedEnqueueConflictDetails),
+  );
 }
 
 const redriveConflictFields = new Set<RedriveIdempotencyConflictField>(["reason", "requestedBy"]);
@@ -1563,37 +1572,14 @@ function validRedriveConflictDetails(value: unknown): value is RedriveIdempotenc
   );
 }
 
-function redriveConflictDetails(error: unknown): RedriveIdempotencyConflictDetails {
-  const seen = new Set<object>();
-  let current = error;
-  for (let depth = 0; depth < 16; depth += 1) {
-    if (typeof current !== "object" || current === null || seen.has(current)) break;
-    seen.add(current);
-    try {
-      if ("detail" in current && typeof current.detail === "string") {
-        try {
-          const detail: unknown = JSON.parse(current.detail);
-          if (validRedriveConflictDetails(detail)) return detail;
-        } catch {
-          // Continue through adapter wrappers in case PostgreSQL's DETAIL is on a cause.
-        }
-      }
-      current = "cause" in current ? current.cause : undefined;
-    } catch {
-      break;
-    }
-  }
-  return sanitizedRedriveConflictDetails;
-}
-
 function redriveConflict(error: unknown): RedriveIdempotencyConflictError | null {
-  if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "P1002") {
-    return null;
-  }
-  return new RedriveIdempotencyConflictError(redriveConflictDetails(error));
+  if (databaseErrorCode(error) !== "P1002") return null;
+  return new RedriveIdempotencyConflictError(
+    conflictDetails(error, validRedriveConflictDetails, sanitizedRedriveConflictDetails),
+  );
 }
 
-export class RedriveIdempotencyConflictError extends Error {
+export class RedriveIdempotencyConflictError extends WorkhorseError {
   constructor(readonly details: RedriveIdempotencyConflictDetails) {
     super(
       `Redrive request conflict for source ${details.sourceJobId} and request ${details.requestIdPreview} (${details.requestIdDigest}); fields: ${details.conflictingFields.join(", ")}`,
@@ -1602,14 +1588,14 @@ export class RedriveIdempotencyConflictError extends Error {
   }
 }
 
-export class CheckpointConflictError extends Error {
+export class CheckpointConflictError extends WorkhorseError {
   constructor(jobId: string, checkpointName: string) {
     super(`Checkpoint ${checkpointName} for job ${jobId} already exists with a different value`);
     this.name = "CheckpointConflictError";
   }
 }
 
-export class WaitLeaseLostError extends Error {
+export class WaitLeaseLostError extends WorkhorseError {
   constructor(
     readonly jobId: string,
     readonly waitName: string,
@@ -1621,7 +1607,7 @@ export class WaitLeaseLostError extends Error {
   }
 }
 
-export class WaitConflictError extends Error {
+export class WaitConflictError extends WorkhorseError {
   constructor(
     readonly jobId: string,
     readonly waitName: string,
@@ -1634,14 +1620,14 @@ export class WaitConflictError extends Error {
   }
 }
 
-export class WaitLimitExceededError extends Error {
+export class WaitLimitExceededError extends WorkhorseError {
   constructor(readonly jobId: string) {
     super(`Job ${jobId} already has the maximum of 1000 durable waits`);
     this.name = "WaitLimitExceededError";
   }
 }
 
-export class JobContractValidationError extends Error {
+export class JobContractValidationError extends WorkhorseError {
   constructor(
     readonly jobType: string,
     readonly contractVersion: string,
@@ -1652,7 +1638,7 @@ export class JobContractValidationError extends Error {
   }
 }
 
-export class JobValueSizeLimitError extends RangeError {
+export class JobValueSizeLimitError extends WorkhorseError {
   constructor(
     readonly jobType: string,
     readonly valueKind: "payload" | "result",
@@ -1664,7 +1650,7 @@ export class JobValueSizeLimitError extends RangeError {
   }
 }
 
-export class JobContractUnavailableError extends Error {
+export class JobContractUnavailableError extends WorkhorseError {
   constructor(
     readonly jobType: string,
     readonly contractVersion: string,
@@ -1941,7 +1927,7 @@ export class Queue {
       "SELECT workhorse.promote_v1($1::integer) AS count",
       [limit],
     );
-    const count = result.rows[0]!.count;
+    const count = expectOneRow(result, "workhorse.promote_v1").count;
     if (count > 0) {
       logInfo("workhorse.jobs.promoted", "Scheduled jobs promoted", {
         "workhorse.job.count": count,
@@ -1965,7 +1951,7 @@ export class Queue {
       "SELECT workhorse.purge_queue_v1($1::text) AS count",
       [queueName],
     );
-    const count = result.rows[0]!.count;
+    const count = expectOneRow(result, "workhorse.purge_queue_v1").count;
     logInfo("workhorse.queue.purged", "Queue purged", {
       "workhorse.queue.name": queueName,
       "workhorse.job.count": count,
@@ -2008,7 +1994,7 @@ export class Queue {
         registration.draining,
       ],
     );
-    const paused = result.rows[0]!.paused;
+    const paused = expectOneRow(result, "workhorse.register_worker_v1").paused;
     return { paused };
   }
 
@@ -2018,7 +2004,7 @@ export class Queue {
       "SELECT workhorse.deregister_worker_v1($1::text) AS deregistered",
       [workerId],
     );
-    const deregistered = result.rows[0]!.deregistered;
+    const deregistered = expectOneRow(result, "workhorse.deregister_worker_v1").deregistered;
     logDebug("workhorse.worker.deregistered", "Worker deregistered", {
       "workhorse.worker.id": workerId,
       "workhorse.worker.deregistered": deregistered,
@@ -2117,7 +2103,7 @@ export class Queue {
       "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count",
       [maxAgeMs / 1_000],
     );
-    const count = result.rows[0]!.count;
+    const count = expectOneRow(result, "workhorse.prune_worker_registry_v1").count;
     const attributes = { "workhorse.worker.count": count };
     if (count > 0) {
       logInfo("workhorse.worker_registry.pruned", "Stale worker registrations pruned", attributes);
@@ -2261,7 +2247,7 @@ export class Queue {
         options.force ?? false,
       ],
     );
-    const policy = retentionPolicy(result.rows[0]!);
+    const policy = retentionPolicy(expectOneRow(result, "workhorse.sync_retention_policy_v1"));
     logInfo("workhorse.retention_policy.synchronized", "Retention policy synchronized");
     return policy;
   }
@@ -2333,52 +2319,26 @@ export class Queue {
   async overrideRetentionPolicy(
     definition: Partial<RetentionPolicyDefinition>,
   ): Promise<RetentionPolicy> {
-    const databaseNames: Record<RetentionPolicySetting, string> = {
-      jobIdentityRetentionDays: "job_identity_retention_days",
-      terminalOutcomeRetentionDays: "terminal_outcome_retention_days",
-      jobEventRetentionDays: "job_event_retention_days",
-      attemptHistoryRetentionDays: "attempt_history_retention_days",
-      scheduleOccurrenceRetentionDays: "schedule_occurrence_retention_days",
-      statisticsRetentionDays: "statistics_retention_days",
-      terminalJobPruneLimit: "terminal_job_prune_limit",
-      historyPartitionsPerPass: "history_partitions_per_pass",
-      defaultPartitionRowsPerPass: "default_partition_rows_per_pass",
-      occurrenceRowsPerPass: "occurrence_rows_per_pass",
-      statisticsRowsPerPass: "statistics_rows_per_pass",
-    };
     const overrides = Object.fromEntries(
       Object.entries(definition)
         .filter((entry): entry is [RetentionPolicySetting, number | null] => entry[1] !== undefined)
-        .map(([setting, value]) => [databaseNames[setting], value]),
+        .map(([setting, value]) => [RETENTION_POLICY_COLUMNS[setting], value]),
     );
     const result = await this.database.query<RetentionPolicyRow>(
       "SELECT (policy).* FROM workhorse.override_retention_policy_v1($1::jsonb) policy",
       [JSON.stringify(overrides)],
     );
-    return retentionPolicy(result.rows[0]!);
+    return retentionPolicy(expectOneRow(result, "workhorse.override_retention_policy_v1"));
   }
 
   async revertRetentionPolicy(
     settings: readonly RetentionPolicySetting[],
   ): Promise<RetentionPolicy> {
-    const databaseNames: Record<RetentionPolicySetting, string> = {
-      jobIdentityRetentionDays: "job_identity_retention_days",
-      terminalOutcomeRetentionDays: "terminal_outcome_retention_days",
-      jobEventRetentionDays: "job_event_retention_days",
-      attemptHistoryRetentionDays: "attempt_history_retention_days",
-      scheduleOccurrenceRetentionDays: "schedule_occurrence_retention_days",
-      statisticsRetentionDays: "statistics_retention_days",
-      terminalJobPruneLimit: "terminal_job_prune_limit",
-      historyPartitionsPerPass: "history_partitions_per_pass",
-      defaultPartitionRowsPerPass: "default_partition_rows_per_pass",
-      occurrenceRowsPerPass: "occurrence_rows_per_pass",
-      statisticsRowsPerPass: "statistics_rows_per_pass",
-    };
     const result = await this.database.query<RetentionPolicyRow>(
       "SELECT (policy).* FROM workhorse.revert_retention_policy_v1($1::text[]) policy",
-      [settings.map((setting) => databaseNames[setting])],
+      [policyColumnNames(settings, RETENTION_POLICY_COLUMNS)],
     );
-    return retentionPolicy(result.rows[0]!);
+    return retentionPolicy(expectOneRow(result, "workhorse.revert_retention_policy_v1"));
   }
 
   async previewRetentionPolicy(
@@ -2435,7 +2395,7 @@ export class Queue {
         candidate.statisticsRetentionDays,
       ],
     );
-    const row = result.rows[0]!;
+    const row = expectOneRow(result, "the retention policy preview");
     const sampled = {
       terminalJobs: Number(row.terminal_jobs),
       jobEvents: Number(row.job_events),
@@ -2457,7 +2417,7 @@ export class Queue {
     const result = await this.database.query<RetentionPolicyRow>(
       "SELECT (policy).* FROM workhorse.get_retention_policy_v1() policy",
     );
-    return retentionPolicy(result.rows[0]!);
+    return retentionPolicy(expectOneRow(result, "workhorse.get_retention_policy_v1"));
   }
 
   async syncMaintenancePolicy(
@@ -2482,7 +2442,7 @@ export class Queue {
         options.force ?? false,
       ],
     );
-    const policy = maintenancePolicy(result.rows[0]!);
+    const policy = maintenancePolicy(expectOneRow(result, "workhorse.sync_maintenance_policy_v1"));
     logInfo("workhorse.maintenance_policy.synchronized", "Maintenance policy synchronized", {
       "workhorse.maintenance.timezone": policy.timezone,
     });
@@ -2509,30 +2469,24 @@ export class Queue {
         definition.historyRetentionLocalTime ?? null,
       ],
     );
-    return maintenancePolicy(result.rows[0]!);
+    return maintenancePolicy(expectOneRow(result, "workhorse.override_maintenance_policy_v1"));
   }
 
   async revertMaintenancePolicy(
     settings: readonly MaintenancePolicySetting[],
   ): Promise<MaintenancePolicy> {
-    const databaseNames: Record<MaintenancePolicySetting, string> = {
-      timezone: "timezone",
-      partitionPreparationIntervalMs: "partition_preparation_interval_ms",
-      terminalCleanupIntervalMs: "terminal_cleanup_interval_ms",
-      historyRetentionLocalTime: "history_retention_local_time",
-    };
     const result = await this.database.query<MaintenancePolicyRow>(
       "SELECT (policy).* FROM workhorse.revert_maintenance_policy_v1($1::text[]) policy",
-      [settings.map((setting) => databaseNames[setting])],
+      [policyColumnNames(settings, MAINTENANCE_POLICY_COLUMNS)],
     );
-    return maintenancePolicy(result.rows[0]!);
+    return maintenancePolicy(expectOneRow(result, "workhorse.revert_maintenance_policy_v1"));
   }
 
   async getMaintenancePolicy(): Promise<MaintenancePolicy> {
     const result = await this.database.query<MaintenancePolicyRow>(
       "SELECT (policy).* FROM workhorse.get_maintenance_policy_v1() policy",
     );
-    return maintenancePolicy(result.rows[0]!);
+    return maintenancePolicy(expectOneRow(result, "workhorse.get_maintenance_policy_v1"));
   }
 
   async syncSchedules(
@@ -2617,7 +2571,7 @@ export class Queue {
       "SELECT workhorse.fire_schedule_v1($1::text, $2::text, $3::bigint, $4::timestamptz) AS job_id",
       [namespace, name, revision.toString(), occurrenceAt.toISOString()],
     );
-    const jobId = result.rows[0]!.job_id;
+    const jobId = expectOneRow(result, "workhorse.fire_schedule_v1").job_id;
     if (jobId !== null) {
       recordScheduleFired(namespace, name, occurrenceAt);
       logInfo("workhorse.schedule.fired", "Recurring schedule fired", {
@@ -2640,7 +2594,7 @@ export class Queue {
       state: string | null;
       run_at: Date | string | null;
     }>("SELECT status, state, run_at FROM workhorse.run_task_now_v1($1::uuid)", [jobId]);
-    const row = result.rows[0]!;
+    const row = expectOneRow(result, "workhorse.run_task_now_v1");
     logInfo("workhorse.job.run_now_requested", "Immediate job run requested", {
       "workhorse.job.id": jobId,
       "workhorse.job.state": row.state ?? "not_found",
@@ -2662,7 +2616,7 @@ export class Queue {
          FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
       [jobId, request.requestedBy ?? null, request.reason ?? null],
     );
-    const row = result.rows[0]!;
+    const row = expectOneRow(result, "workhorse.cancel_v1");
     recordCancellation(row.status);
     logInfo("workhorse.job.cancellation_processed", "Job cancellation processed", {
       "workhorse.job.id": jobId,
@@ -3094,7 +3048,7 @@ export class Queue {
         "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
         [job.id, workerId, job.fenceToken.toString(), leaseMs],
       );
-      const status = result.rows[0]!.status;
+      const status = expectOneRow(result, "workhorse.heartbeat_v2").status;
       span.setAttribute("workhorse.heartbeat.status", status);
       if (status !== "accepted") {
         recordHeartbeatFailure(status);
@@ -3122,7 +3076,7 @@ export class Queue {
       workerId,
       job.fenceToken.toString(),
     ]);
-    const expiration = result.rows[0]!;
+    const expiration = expectOneRow(result, "workhorse.expire_owned_telemetry_v1");
     if (expiration.retry_state !== null) {
       await withSpan("workhorse.retry", jobSpanAttributes(job), async (span) => {
         span.setAttribute("workhorse.retry.outcome", expiration.retry_state!);
@@ -3142,7 +3096,7 @@ export class Queue {
       "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted",
       [job.id, workerId, job.fenceToken.toString()],
     );
-    const accepted = result.rows[0]!.accepted;
+    const accepted = expectOneRow(result, "workhorse.acknowledge_cancel_v1").accepted;
     logInfo("workhorse.job.cancellation_acknowledged", "Job cancellation acknowledged", {
       ...jobSpanAttributes(job),
       "workhorse.cancel.accepted": accepted,
@@ -3195,7 +3149,7 @@ export class Queue {
          FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
       [job.id, workerId, job.fenceToken.toString(), name, encodedValue],
     );
-    const row = result.rows[0]!;
+    const row = expectOneRow(result, "workhorse.save_checkpoint_v1");
     if (row.status === "stale") throw new CheckpointLeaseLostError(job.id, name);
     if (row.status === "conflict") throw new CheckpointConflictError(job.id, name);
     if (row.status !== "saved" && row.status !== "existing") {
@@ -3243,7 +3197,7 @@ export class Queue {
          FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
       [job.id, workerId, job.fenceToken.toString(), encodedValue],
     );
-    const row = result.rows[0]!;
+    const row = expectOneRow(result, "workhorse.update_progress_v1");
     if (row.status === "stale") throw new ProgressLeaseLostError(job.id);
     if (row.status === "rate_limited") {
       throw new ProgressRateLimitError(job.id, Number(row.retry_after_ms));
@@ -3330,7 +3284,7 @@ export class Queue {
          FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
       [job.id, workerId, job.fenceToken.toString(), name, durationWire, wakeAtWire],
     );
-    const row = result.rows[0]!;
+    const row = expectOneRow(result, "workhorse.schedule_wait_v1");
     if (row.status === "stale") throw new WaitLeaseLostError(job.id, name);
     if (row.status === "conflict") {
       throw new WaitConflictError(job.id, name, waitRecord({ ...row, job_id: job.id }));
@@ -3379,7 +3333,7 @@ export class Queue {
         "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
         [job.id, workerId, job.fenceToken.toString(), JSON.stringify(result)],
       );
-      const accepted = query.rows[0]!.accepted;
+      const accepted = expectOneRow(query, "workhorse.complete_v1").accepted;
       span.setAttribute("workhorse.complete.accepted", accepted);
       if (accepted) telemetryMetrics.completed.add(1, jobMetricAttributes(job));
       logInfo(
@@ -3432,7 +3386,7 @@ export class Queue {
           retryDelayMs ?? null,
         ],
       );
-      const state = result.rows[0]!.state;
+      const state = expectOneRow(result, "workhorse.fail_v1").state;
       span.setAttribute("workhorse.retry.outcome", state);
       telemetryMetrics.failed.add(1, {
         ...jobMetricAttributes(job),
@@ -3463,7 +3417,7 @@ export class Queue {
         limit,
         retryDelayMs ?? null,
       ]);
-      const recovery = result.rows[0]!;
+      const recovery = expectOneRow(result, "workhorse.recover_expired_telemetry_v1");
       recordRecoveryTelemetry(span, recovery);
       if (recovery.rows_affected > 0) {
         logInfo("workhorse.leases.recovered", "Expired leases recovered", {
