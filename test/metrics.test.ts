@@ -7,7 +7,7 @@ import {
 } from "@opentelemetry/sdk-metrics";
 import type { QueryResult, QueryResultRow } from "pg";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Queue as WorkhorseQueue } from "../src/queue.js";
+import type { WorkerQueueApi } from "../src/worker.js";
 import type { ClaimedJob, Queryable } from "../src/types.js";
 
 const exporter = new InMemoryMetricExporter(AggregationTemporality.DELTA);
@@ -38,6 +38,40 @@ function metric(name: string) {
 
 async function collect(): Promise<void> {
   await provider.forceFlush();
+}
+
+async function unsupportedWorkerQueueOperation(): Promise<never> {
+  throw new Error("Worker queue operation was not configured for this test");
+}
+
+const workerQueueDefaults: WorkerQueueApi = {
+  defaultQueue: "default",
+  claim: async () => null,
+  heartbeatStatus: unsupportedWorkerQueueOperation,
+  expireOwned: unsupportedWorkerQueueOperation,
+  acknowledgeCancel: unsupportedWorkerQueueOperation,
+  listCheckpoints: unsupportedWorkerQueueOperation,
+  saveCheckpoint: unsupportedWorkerQueueOperation,
+  getProgress: unsupportedWorkerQueueOperation,
+  updateProgress: unsupportedWorkerQueueOperation,
+  listWaits: unsupportedWorkerQueueOperation,
+  scheduleWait: unsupportedWorkerQueueOperation,
+  complete: unsupportedWorkerQueueOperation,
+  fail: unsupportedWorkerQueueOperation,
+  tick: async () => [],
+  prepareHistoryPartitions: async () => [],
+  rollupStatistics: async () => [],
+  retainHistory: async () => [],
+  pruneTerminalStorage: async () => [],
+  schedules: unsupportedWorkerQueueOperation,
+  fireSchedule: unsupportedWorkerQueueOperation,
+  registerWorker: unsupportedWorkerQueueOperation,
+  deregisterWorker: unsupportedWorkerQueueOperation,
+  pruneWorkerRegistry: unsupportedWorkerQueueOperation,
+};
+
+function workerQueue(overrides: Partial<WorkerQueueApi>): WorkerQueueApi {
+  return { ...workerQueueDefaults, ...overrides };
 }
 
 beforeEach(() => exporter.reset());
@@ -92,15 +126,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
       fenceToken: 1n,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
-    const queue = {
-      defaultQueue: "default",
-      tick: async () => [],
-      prepareHistoryPartitions: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
+    const queue = workerQueue({
       claim: async () => job,
       complete: async () => true,
-    } as unknown as WorkhorseQueue;
+    });
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
@@ -151,15 +180,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
       fenceToken: 1n,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
-    const queue = {
-      defaultQueue: "default",
-      tick: async () => [],
-      prepareHistoryPartitions: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
+    const queue = workerQueue({
       claim: async () => job,
       fail: async () => "scheduled",
-    } as unknown as WorkhorseQueue;
+    });
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
@@ -203,15 +227,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
       fenceToken: 3n,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
-    const queue = {
-      defaultQueue: "default",
-      tick: async () => [],
-      prepareHistoryPartitions: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
+    const queue = workerQueue({
       claim: async () => job,
       fail: async () => "failed",
-    } as unknown as WorkhorseQueue;
+    });
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
@@ -255,15 +274,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
       fenceToken: 1n,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
-    const queue = {
-      defaultQueue: "default",
-      tick: async () => [],
-      prepareHistoryPartitions: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
+    const queue = workerQueue({
       claim: async () => job,
       acknowledgeCancel: async () => true,
-    } as unknown as WorkhorseQueue;
+    });
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
@@ -307,16 +321,11 @@ describe("Workhorse OpenTelemetry metrics", () => {
       fenceToken: 1n,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
-    const queue = {
-      defaultQueue: "default",
-      tick: async () => [],
-      prepareHistoryPartitions: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
+    const queue = workerQueue({
       claim: async () => job,
       expireOwned: async () => "cancel_requested",
       acknowledgeCancel: async () => true,
-    } as unknown as WorkhorseQueue;
+    });
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
@@ -464,7 +473,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
   it("records SQL-owned maintenance work and duration", async () => {
     const { Worker } = await import("../src/worker.js");
-    const queue = {
+    const queue = workerQueue({
       defaultQueue: "default",
       tick: async () => [
         {
@@ -475,11 +484,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
           error: null,
         },
       ],
-      prepareHistoryPartitions: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
       claim: async () => null,
-    } as unknown as WorkhorseQueue;
+    });
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
@@ -749,15 +755,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
       fenceToken: 1n,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
-    const queue = {
-      defaultQueue: "default",
-      tick: async () => [],
-      prepareHistoryPartitions: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
+    const queue = workerQueue({
       claim: async () => job,
       fail: async () => databaseState,
-    } as unknown as WorkhorseQueue;
+    });
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
@@ -801,12 +802,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       fenceToken: 1n,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
-    const queue = {
-      defaultQueue: "default",
-      tick: async () => [],
-      prepareHistoryPartitions: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
+    const queue = workerQueue({
       claim: async () => job,
       scheduleWait: async () => ({
         status: "scheduled",
@@ -823,7 +819,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
           createdAt: new Date(),
         },
       }),
-    } as unknown as WorkhorseQueue;
+    });
     const worker = new Worker(queue, {
       queue: "reports",
       registryIntervalMs: 0,
@@ -868,15 +864,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
       fenceToken: 1n,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
-    const queue = {
-      defaultQueue: "default",
-      tick: async () => [],
-      prepareHistoryPartitions: async () => [],
-      retainHistory: async () => [],
-      pruneTerminalStorage: async () => [],
+    const queue = workerQueue({
       claim: async () => job,
       fail: async () => "failed",
-    } as unknown as WorkhorseQueue;
+    });
     const worker = new Worker(queue, {
       queue: "default",
       registryIntervalMs: 0,
