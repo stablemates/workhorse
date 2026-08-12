@@ -55,6 +55,43 @@ describe("published package manifests", () => {
       expect(manifest.scripts?.typecheck).toBeDefined();
     },
   );
+
+  it("declares the standalone dashboard boundary without a core-dashboard compile cycle", async () => {
+    const coreManifest = JSON.parse(await read("package.json")) as {
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+    const contractManifest = JSON.parse(await read("packages/dashboard-contract/package.json")) as {
+      private?: boolean;
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const dashboardManifest = JSON.parse(await read("packages/dashboard/package.json")) as {
+      exports?: Record<string, unknown>;
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const coreDashboardSource = await read("src/cli/dashboard.ts");
+    const standaloneSource = await read("packages/dashboard/src/server/standalone.ts");
+
+    expect(contractManifest.private).not.toBe(true);
+    expect(contractManifest.dependencies).toBeUndefined();
+    expect(contractManifest.devDependencies).toEqual({ typescript: "^5.8.3" });
+    expect(coreManifest.dependencies?.["@workhorse/dashboard-contract"]).toBe("workspace:*");
+    expect(coreManifest.peerDependencies?.["@workhorse/dashboard"]).toBe("0.1.0");
+    expect(coreManifest.peerDependenciesMeta?.["@workhorse/dashboard"]?.optional).toBe(true);
+    expect(dashboardManifest.dependencies?.["@workhorse/dashboard-contract"]).toBe("workspace:*");
+    expect(dashboardManifest.exports?.["./standalone"]).toEqual({
+      types: "./dist/server/standalone.d.ts",
+      import: "./dist/server/standalone.js",
+    });
+    expect(coreDashboardSource).toContain('from "@workhorse/dashboard-contract"');
+    expect(coreDashboardSource).toContain('"@workhorse/dashboard/standalone"');
+    expect(coreDashboardSource).not.toContain('.join("/")');
+    expect(coreDashboardSource).not.toContain("interface DashboardServerModule");
+    expect(standaloneSource).toContain("DashboardStandaloneModule<Queryable>");
+  });
 });
 
 describe("ORM adapter entry points", () => {
