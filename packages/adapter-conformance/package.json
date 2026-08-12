@@ -1,0 +1,25 @@
+{
+  "name": "@workhorse/adapter-conformance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@prisma/client": "6.19.3",
+    "@workhorse/core": "workspace:*",
+    "@workhorse/drizzle": "workspace:*",
+    "@workhorse/kysely": "workspace:*",
+    "@workhorse/prisma": "workspace:*",
+    "@workhorse/typeorm": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "kysely": "0.29.5",
+    "pg": "^8.16.3",
+    "typeorm": "0.3.31",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
