@@ -411,4 +411,3 @@ export const HEALTH_SNAPSHOT_SQL = `
     CROSS JOIN terminal
     CROSS JOIN retention
     CROSS JOIN rollup`;
-
