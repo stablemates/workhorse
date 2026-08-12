@@ -886,6 +886,16 @@ baseline and instrumented cohorts. The instrumented cohort activates in-memory s
 exporters. The scenario verifies exports, payload isolation, context recovery, and the absence of a
 dispatch index. Its stable order makes the timings diagnostic rather than a performance claim.
 
+## Errors
+
+Every error Workhorse raises deliberately extends `WorkhorseError` (`src/errors.ts`), which extends `Error` and sets `name` in each subclass. `instanceof WorkhorseError` therefore means "Workhorse rejected this call", not "this call failed": a PostgreSQL error, a handler's own throw, and a driver connection failure propagate unchanged and do not carry the base. The exported subclasses are `CheckpointConflictError`, `CheckpointLeaseLostError`, `EnqueueIdempotencyConflictError`, `JobContractUnavailableError`, `JobContractValidationError`, `JobValueSizeLimitError`, `MissingRowError`, `ProgressLeaseLostError`, `ProgressRateLimitError`, `RedriveIdempotencyConflictError`, `WaitConflictError`, `WaitLeaseLostError`, and `WaitLimitExceededError` from the queue, plus `CancellationRequestedError`, `DeadlineExceededError`, `ExecutionTimeoutError`, and `InjectedCrashError` from the worker.
+
+Recognizing a PostgreSQL failure means reading through whatever an ORM wrapped it in. `databaseErrorCode(error)` returns the SQLSTATE and `databaseErrorDetails(error)` returns every `DETAIL` string along the chain. Both walk breadth-first over `cause`, `driverError`, and `meta`, visit at most 16 objects, and track visited objects so a cyclic `cause` terminates. A candidate SQLSTATE must match `/^[0-9A-Z]{5}$/`; a Prisma code matching `/^P\d{4}$/` on an object that also carries `meta` is held back and returned only when nothing nested supplies a real SQLSTATE, because Prisma reports `P2010` on the same field and retains the true SQLSTATE under `meta`.
+
+Workhorse raises two SQLSTATEs of its own: `P1001` for an enqueue idempotency conflict and `P1002` for a redrive idempotency conflict. `Queue` converts each into its typed error, decoding the conflict diagnostics from `DETAIL`. A payload failing shape validation is discarded in favor of sanitized placeholder details rather than propagated, since `DETAIL` is diagnostic text an operator or an ORM can also write.
+
+`expectOneRow(result, source)` takes the single row a statement is defined to return and throws `MissingRowError` naming `source` when the result is empty. An empty result from a set-returning function that declares one row means the installed schema and this client disagree.
+
 ## Delivery semantics
 
 Workhorse provides durable at-least-once execution. Enqueue idempotency can make repeated acceptance attempts converge on one durable job identity, but it does not make handler execution or external effects exactly once. A process can die after an external effect but before completion commits, or after completion commits but before observing the response. Applications must use provider idempotency keys or transactional outbox/inbox patterns for non-idempotent effects.
