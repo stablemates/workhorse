@@ -4,6 +4,7 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [`results/2026-08-12-schedule-cadence-default.json`](benchmarks/results/2026-08-12-schedule-cadence-default.json): loaded recurring-schedule cadence at the default maintenance interval for a worker, interpreted in [ADR 0025](decisions/0025-worker-schedule-cadence.md).
 - [`results/2026-08-11-metrics-lifecycle.json`](benchmarks/results/2026-08-11-metrics-lifecycle.json): eager against lazy metric instrument lifecycle, per-emission cost and late-provider registration, interpreted in [ADR 0024](decisions/0024-metrics-instrument-lifecycle.md).
 - [2026-08-10 payload-contract smoke analysis](benchmarks/2026-08-10-payload-contracts-smoke-analysis.md): contracted transition timings and redaction invariants without an overhead claim.
 - [`results/2026-08-10-payload-contracts-smoke.json`](benchmarks/results/2026-08-10-payload-contracts-smoke.json): schema-v20 lifecycle smoke artifact for the extended `retry-paths` scenario.
@@ -55,6 +56,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | Scenario                        | Evidence produced                                                                                                                                                                                |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `scheduled-promotion-drift`     | bounded promotion batches and due-time drift distribution                                                                                                                                        |
+| `schedule-cadence-jitter`       | recurring fire-delay distribution, worst observed delay, durable occurrence uniqueness, and completed load jobs at the configured maintenance cadence                                            |
 | `heartbeat-fencing`             | accepted heartbeat cost and stale-fence rejection cost                                                                                                                                           |
 | `cancellation-lifecycle`        | immediate/waiting cancellation, active signal/ack, expiry materialization, stale races, truthful history, recurrence, and query timings                                                          |
 | `deadline-timeout-lifecycle`    | pre-claim deadline exclusion, active abort delivery, timeout retry, stale-write fencing, distinct history, and health pressure                                                                   |
@@ -183,20 +185,21 @@ pnpm benchmark -- --help
 
 Core options:
 
-| Option            | Values                            | Meaning                                  |
-| ----------------- | --------------------------------- | ---------------------------------------- |
-| `--suite`         | `all`, `comparative`, `lifecycle` | Select the suite                         |
-| `--profile`       | `smoke`, `default`, `full`        | Select a bounded configuration           |
-| `--scenario`      | comma-separated names             | Run a lifecycle subset                   |
-| `--seed`          | non-negative integer              | Seed the deterministic shuffled plan     |
-| `--jobs`          | positive integer                  | Jobs per fixed comparative run           |
-| `--enqueue-batch` | positive integer                  | Jobs per `enqueueMany` request           |
-| `--repetitions`   | positive integer                  | Independent repetitions                  |
-| `--workers`       | comma-separated integers          | Worker-concurrency sweep                 |
-| `--churn-rate`    | positive integer                  | Producer target jobs per second          |
-| `--churn-jobs`    | positive integer                  | Exact churn jobs per design              |
-| `--sample-ms`     | positive integer                  | Independent telemetry interval           |
-| `--output`        | path                              | Persist canonical deterministic-key JSON |
+| Option               | Values                            | Meaning                                   |
+| -------------------- | --------------------------------- | ----------------------------------------- |
+| `--suite`            | `all`, `comparative`, `lifecycle` | Select the suite                          |
+| `--profile`          | `smoke`, `default`, `full`        | Select a bounded configuration            |
+| `--scenario`         | comma-separated names             | Run a lifecycle subset                    |
+| `--seed`             | non-negative integer              | Seed the deterministic shuffled plan      |
+| `--jobs`             | positive integer                  | Jobs per fixed comparative run            |
+| `--enqueue-batch`    | positive integer                  | Jobs per `enqueueMany` request            |
+| `--repetitions`      | positive integer                  | Independent repetitions                   |
+| `--workers`          | comma-separated integers          | Worker-concurrency sweep                  |
+| `--churn-rate`       | positive integer                  | Producer target jobs per second           |
+| `--churn-jobs`       | positive integer                  | Exact churn jobs per design               |
+| `--sample-ms`        | positive integer                  | Independent telemetry interval            |
+| `--schedule-samples` | positive integer                  | Recurring fires sampled under worker load |
+| `--output`           | path                              | Persist canonical deterministic-key JSON  |
 
 ## Profiles
 
