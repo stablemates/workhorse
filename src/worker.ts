@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { CronExpressionParser } from "cron-parser";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
+import { WorkhorseError } from "./errors.js";
 import { errorForTelemetry, Queue } from "./queue.js";
 import { jitterDuration } from "./notifications.js";
 import type { MaintenancePhaseResult } from "./queue.js";
@@ -77,7 +78,7 @@ export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
   observedAt: string;
 }
 
-export class InjectedCrashError extends Error {
+export class InjectedCrashError extends WorkhorseError {
   constructor(readonly failpoint: Failpoint) {
     super(`Injected crash at ${failpoint}`);
     this.name = "InjectedCrashError";
@@ -85,7 +86,7 @@ export class InjectedCrashError extends Error {
 }
 
 /** AbortSignal reason used when PostgreSQL reports a cancellation request for an owned job. */
-export class CancellationRequestedError extends Error {
+export class CancellationRequestedError extends WorkhorseError {
   constructor(readonly jobId: string) {
     super(`Cancellation was requested for job ${jobId}`);
     this.name = "CancellationRequestedError";
@@ -93,7 +94,7 @@ export class CancellationRequestedError extends Error {
 }
 
 /** AbortSignal reason used when a job's immutable absolute deadline is reached. */
-export class DeadlineExceededError extends Error {
+export class DeadlineExceededError extends WorkhorseError {
   constructor(readonly jobId: string) {
     super(`Deadline was exceeded for job ${jobId}`);
     this.name = "DeadlineExceededError";
@@ -101,7 +102,7 @@ export class DeadlineExceededError extends Error {
 }
 
 /** AbortSignal reason used when one logical attempt consumes its active execution budget. */
-export class ExecutionTimeoutError extends Error {
+export class ExecutionTimeoutError extends WorkhorseError {
   constructor(
     readonly jobId: string,
     readonly attempt: number,

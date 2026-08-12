@@ -49,6 +49,12 @@ First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL 
 - A supported-version contract: `MINIMUM_POSTGRES_MAJOR`, `SUPPORTED_POSTGRES_MAJORS`,
   `MINIMUM_NODE_MAJOR`, `SUPPORTED_NODE_MAJORS`, and `readPostgresSupport` are exported from
   `@workhorse/core`, exercised by the CI matrix, and reported by `workhorse schema status`.
+- `@workhorse/core`: `WorkhorseError`, the base class every error Workhorse raises now extends, so
+  one `instanceof` test recognizes a rejected call without enumerating seventeen class names.
+- `@workhorse/core`: `databaseErrorCode`, `expectOneRow`, and `MissingRowError`. `databaseErrorCode`
+  reads a SQLSTATE through the wrappers an ORM adds around a driver error; `expectOneRow` takes the
+  single row a statement is defined to return and throws `MissingRowError` naming that statement
+  when the result is empty.
 - npm provenance on every published tarball.
 
 ### Changed
@@ -68,6 +74,14 @@ name the retired instruments.
   `WorkhorseMetricsObserver` moves to `src/metrics-observer.ts`. The package export is unchanged —
   `WorkhorseMetricsObserver` is still exported from `@workhorse/core` — and no other export from
   either module was public.
+- `@workhorse/core`: `JobValueSizeLimitError` extends `WorkhorseError` rather than `RangeError`.
+  Code testing `instanceof RangeError` on it must test `instanceof JobValueSizeLimitError` or
+  `instanceof WorkhorseError` instead. Its name, message, and fields are unchanged.
+- `@workhorse/core`: enqueue and redrive idempotency conflicts are now recognized through an ORM's
+  error wrapper rather than only on the error object the driver threw. A conflict raised inside a
+  Drizzle, Prisma, TypeORM, or Kysely transaction reaches the caller as
+  `EnqueueIdempotencyConflictError` or `RedriveIdempotencyConflictError` instead of the adapter's
+  own query error.
 - `@workhorse/core`: the duplicated instruments are retired in favor of one name per event.
   `workhorse.job.enqueued` becomes `workhorse.jobs.enqueued`, `workhorse.job.claimed` becomes
   `workhorse.jobs.claimed`, `workhorse.lease.recovered` becomes `workhorse.leases.expired`,

@@ -1,4 +1,5 @@
 export { createWorkhorseAdapter } from "./adapter.js";
+export { databaseErrorCode, expectOneRow, MissingRowError, WorkhorseError } from "./errors.js";
 export { DEFAULT_QUEUE_HEALTH_BUDGETS, evaluateQueueHealth } from "./health.js";
 export { WorkhorseMetricsObserver } from "./metrics-observer.js";
 export type { WorkhorseAdapter, WorkhorseAdapterOptions } from "./adapter.js";
