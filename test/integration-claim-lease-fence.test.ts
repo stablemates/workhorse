@@ -295,6 +295,44 @@ describe("claim lease fence", () => {
     expect(await queue.getJob(id)).toMatchObject({ state: "canceled", result: null });
   });
 
+  it("materializes cancellation while a handler is scheduling a durable wait", async () => {
+    const schedulingStarted = deferred();
+    const releaseScheduling = deferred();
+    const racingQueue = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property !== "scheduleWait") return Reflect.get(target, property, receiver);
+        return async (...args: Parameters<Queue["scheduleWait"]>) => {
+          schedulingStarted.resolve();
+          await releaseScheduling.promise;
+          return target.scheduleWait(...args);
+        };
+      },
+    });
+    const id = await queue.enqueue("cancel-during-wait", null);
+    const worker = new Worker(racingQueue, {
+      workerId: "cancel-during-wait-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 1_000,
+    }).handle("cancel-during-wait", async (_payload, context) => {
+      await context.sleep("blocked-wait", 60_000);
+      return { shouldNotComplete: true };
+    });
+
+    const execution = worker.runOnce();
+    try {
+      await schedulingStarted.promise;
+      expect(await queue.cancel(id)).toMatchObject({ status: "cancel_requested" });
+      releaseScheduling.resolve();
+      await expect(execution).resolves.toBe(true);
+    } finally {
+      releaseScheduling.resolve();
+      await execution.catch(() => undefined);
+    }
+
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "canceled", result: null });
+    await expect(queue.listWaits(id)).resolves.toEqual([]);
+  });
+
   it("isolates cancellation across concurrent default-concurrency workers", async () => {
     const ids = await Promise.all([
       queue.enqueue("concurrent-worker-cancel", { sequence: 1 }),
@@ -603,6 +641,81 @@ describe("claim lease fence", () => {
       currentAttempt: 2,
       error: { name: "ExecutionTimeout" },
     });
+  });
+
+  it("keeps lease recovery authoritative when it wins an attempt-timeout race", async () => {
+    const expirationStarted = deferred();
+    const releaseExpiration = deferred();
+    const localTimerLeadMs = 400;
+    const racingQueue = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property === "claim") {
+          return async (...args: Parameters<Queue["claim"]>) => {
+            const claimed = await target.claim(...args);
+            if (claimed?.attemptTimeoutAt) {
+              claimed.attemptTimeoutAt = new Date(
+                claimed.attemptTimeoutAt.getTime() - localTimerLeadMs,
+              );
+            }
+            return claimed;
+          };
+        }
+        if (property === "expireOwned") {
+          return async (...args: Parameters<Queue["expireOwned"]>) => {
+            expirationStarted.resolve();
+            await releaseExpiration.promise;
+            return target.expireOwned(...args);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const id = await queue.enqueue("timeout-lease-race", null, {
+      executionTimeoutMs: 500,
+      maxAttempts: 2,
+    });
+    const reasons: unknown[] = [];
+    const worker = new Worker(racingQueue, {
+      workerId: "timeout-lease-race-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 1_000,
+      retryDelayMs: 0,
+    }).handle("timeout-lease-race", async (_payload, context) => {
+      await new Promise<void>((_resolve, reject) => {
+        context.signal.addEventListener(
+          "abort",
+          () => {
+            reasons.push(context.signal.reason);
+            reject(context.signal.reason);
+          },
+          { once: true },
+        );
+      });
+      return null;
+    });
+
+    const execution = worker.runOnce();
+    try {
+      await expirationStarted.promise;
+      await pool.query(
+        "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 ms' WHERE job_id = $1",
+        [id],
+      );
+      expect(await queue.recoverExpired(100, 0)).toBe(1);
+      releaseExpiration.resolve();
+      await expect(execution).resolves.toBe(true);
+    } finally {
+      releaseExpiration.resolve();
+      await execution.catch(() => undefined);
+    }
+
+    expect(reasons).toEqual([expect.any(ExecutionTimeoutError)]);
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+    const history = await pool.query<{ outcome: string }>(
+      "SELECT outcome FROM workhorse.attempt_history WHERE job_id = $1",
+      [id],
+    );
+    expect(history.rows).toEqual([{ outcome: "lease_expired" }]);
   });
 
   it("materializes cancellation requested before an overdue deadline without stranding runtime", async () => {
