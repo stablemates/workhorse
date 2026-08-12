@@ -177,7 +177,6 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
 
   const pool = new Pool({ connectionString: databaseUrl });
   const running = await startDashboardServer(pool, {
-    databaseUrl,
     port,
     hostname,
     allowMutations,

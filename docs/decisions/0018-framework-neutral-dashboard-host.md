@@ -39,7 +39,7 @@ The standalone `workhorse dashboard` CLI is the deliberate exception: it owns it
 - Adding a framework means writing route registration, not reimplementing the dashboard. Lifecycle integration — transactional enqueue, startup, graceful shutdown — remains the real per-framework work.
 - The demo is a plain consumer: no Vite config, no browser entry, no React dependency, and no path a real application could not copy.
 - Development and production differ only in where modules come from. The HTML is assembled by the same code in both.
-- `@workhorse/core` gained a `dashboard` command without depending on `@workhorse/dashboard`. Because that package depends on core, a type reference in the other direction would make the builds circular, so the CLI declares the three functions it calls structurally and loads them through a runtime-built specifier. The packed-package test is what keeps that declaration honest.
+- `@workhorse/core` gained a `dashboard` command without installing `@workhorse/dashboard` for worker-only users. The type-only `@workhorse/dashboard-contract` package now defines the standalone entry point without depending on either package. Core loads the optional `@workhorse/dashboard/standalone` entry, while dashboard implements the shared contract, so package checks replace the former runtime-built specifier and copied structural types.
 
 ## Non-goals
 
