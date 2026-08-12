@@ -20,14 +20,15 @@ export interface QueueModules {
 }
 
 export function createQueueModules(context: QueueModuleContext): QueueModules {
+  const enqueueContracts = new EnqueueContractsModule(context);
   return Object.freeze({
-    enqueueContracts: new EnqueueContractsModule(context),
+    enqueueContracts,
     claimLeaseFence: new ClaimLeaseFenceModule(context),
     checkpointsProgressWaits: new CheckpointsProgressWaitsModule(context),
     queueAdministration: new QueueAdministrationModule(context),
     workerRegistry: new WorkerRegistryModule(context),
     retentionMaintenance: new RetentionMaintenanceModule(context),
-    cronSchedules: new CronSchedulesModule(context),
+    cronSchedules: new CronSchedulesModule(context, enqueueContracts),
     operatorReads: new OperatorReadsModule(context),
   });
 }
