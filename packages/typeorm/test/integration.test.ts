@@ -4,7 +4,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { createDatabaseTestHarness } from "../../../test/support/db.js";
 import { createTypeOrmAdapter, TypeOrmQueryError } from "../src/index.js";
 
-const database = createDatabaseTestHarness(import.meta.url, { max: 2, extraSchemas: ["public"] });
+const database = createDatabaseTestHarness(import.meta.url, {
+  max: 2,
+  extraSchemas: ["public"],
+  poolOwner: "caller",
+});
 const { databaseUrl, pool } = database;
 const dataSource = new DataSource({
   type: "postgres",
@@ -33,7 +37,7 @@ beforeEach(async () => {
 
 afterAll(async () => {
   await adapter.close();
-  await database.teardown({ closePool: false });
+  await database.teardown();
 });
 
 describe("TypeORM provider integration", () => {

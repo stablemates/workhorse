@@ -14,13 +14,17 @@ import {
  */
 export function createDatabaseTestHarness(
   fileUrl: string,
-  options: { max?: number; extraSchemas?: readonly string[] } = {},
+  options: {
+    max?: number;
+    extraSchemas?: readonly string[];
+    poolOwner?: "harness" | "caller";
+  } = {},
 ): {
   databaseUrl: string;
   pool: Pool;
   setup: () => Promise<void>;
   reset: () => Promise<void>;
-  teardown: (options?: { closePool?: boolean }) => Promise<void>;
+  teardown: () => Promise<void>;
 } {
   const sourceUrl = localDatabaseUrl("test");
   assertLocalDatabasePurpose(sourceUrl, "test");
@@ -68,8 +72,8 @@ export function createDatabaseTestHarness(
         );
       }
     },
-    async teardown(teardownOptions = {}) {
-      if (teardownOptions.closePool !== false) await pool.end();
+    async teardown() {
+      if (options.poolOwner !== "caller") await pool.end();
       await dropDatabase(isolatedUrl, isolatedName);
     },
   };
@@ -78,7 +82,10 @@ export function createDatabaseTestHarness(
 function isolatedDatabaseUrl(sourceUrl: string, fileUrl: string): string {
   const url = new URL(sourceUrl);
   const sourceName = databaseName(sourceUrl);
-  const digest = createHash("sha256").update(fileUrl).digest("hex").slice(0, 10);
+  const digest = createHash("sha256")
+    .update(`${fileUrl}\0${process.pid}`)
+    .digest("hex")
+    .slice(0, 10);
   url.pathname = `/${sourceName.slice(0, 52)}_${digest}`;
   return url.toString();
 }

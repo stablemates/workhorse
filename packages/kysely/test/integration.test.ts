@@ -7,6 +7,7 @@ import { createKyselyAdapter, KyselyQueryError } from "../src/index.js";
 const databaseTest = createDatabaseTestHarness(import.meta.url, {
   max: 2,
   extraSchemas: ["public"],
+  poolOwner: "caller",
 });
 const { pool } = databaseTest;
 const database = new Kysely<Record<string, never>>({ dialect: new PostgresDialect({ pool }) });
@@ -26,7 +27,7 @@ beforeEach(async () => {
 
 afterAll(async () => {
   await adapter.close();
-  await databaseTest.teardown({ closePool: false });
+  await databaseTest.teardown();
 });
 
 describe("Kysely provider integration", () => {
