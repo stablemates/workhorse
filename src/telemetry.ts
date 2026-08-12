@@ -9,6 +9,7 @@ import {
   type BatchObservableCallback,
   type Context,
   type Counter,
+  type Gauge,
   type Histogram,
   type MetricOptions,
   type Span,
@@ -16,7 +17,13 @@ import {
   type TextMapSetter,
 } from "@opentelemetry/api";
 import { SeverityNumber, logs, type LogAttributes, type Logger } from "@opentelemetry/api-logs";
-import type { ClaimedJob, TraceContext } from "./types.js";
+import type {
+  CancelStatus,
+  ClaimedJob,
+  HeartbeatStatus,
+  RedriveStatus,
+  TraceContext,
+} from "./types.js";
 
 const INSTRUMENTATION_NAME = "@workhorse/core";
 
@@ -148,6 +155,19 @@ function lazyHistogram(name: string, options: MetricOptions): Pick<Histogram, "r
   };
 }
 
+/**
+ * Synchronous gauge on the lazy lifecycle. Exported for `WorkhorseMetricsObserver`, which records
+ * its own gauges rather than emitting through {@link telemetryMetrics}.
+ */
+export function lazyGauge(name: string, options: MetricOptions): Pick<Gauge, "record"> {
+  return {
+    record: lazyMetric(
+      () => metrics.getMeter(INSTRUMENTATION_NAME).createGauge(name, options),
+      (instrument, ...args: Parameters<Gauge["record"]>) => instrument.record(...args),
+    ),
+  };
+}
+
 const carrierSetter: TextMapSetter<Record<string, string>> = {
   set(carrier, key, value) {
     carrier[key.toLowerCase()] = value;
@@ -199,7 +219,115 @@ export const telemetryMetrics = {
     description: "Delay beyond a worker maintenance loop's configured cadence",
     unit: "ms",
   }),
+  handlerExecutions: lazyCounter("workhorse.handler.executions", {
+    description: "Worker handler activations by outcome",
+    unit: "{execution}",
+  }),
+  cancellations: lazyCounter("workhorse.jobs.cancellation", {
+    description: "Job cancellation requests by durable result",
+    unit: "{request}",
+  }),
+  redrives: lazyCounter("workhorse.jobs.redrive", {
+    description: "Job redrive requests by durable result",
+    unit: "{request}",
+  }),
+  schedulesFired: lazyCounter("workhorse.schedule.fired", {
+    description: "Recurring schedule occurrences durably fired",
+    unit: "{occurrence}",
+  }),
+  scheduleLag: lazyHistogram("workhorse.schedule.lag", {
+    description: "Delay between a scheduled occurrence and its durable firing",
+    unit: "s",
+  }),
+  heartbeatFailures: lazyCounter("workhorse.worker.heartbeat.failure", {
+    description: "Worker heartbeats rejected by PostgreSQL ownership or timing checks",
+    unit: "{heartbeat}",
+  }),
+  maintenanceRuns: lazyCounter("workhorse.maintenance.runs", {
+    description: "Workhorse maintenance phase executions",
+    unit: "{run}",
+  }),
+  maintenanceRows: lazyCounter("workhorse.maintenance.rows", {
+    description: "Rows affected by Workhorse maintenance phases",
+    unit: "{row}",
+  }),
+  maintenanceDuration: lazyHistogram("workhorse.maintenance.duration", {
+    description: "Workhorse maintenance phase duration",
+    unit: "ms",
+  }),
+  maintenanceErrors: lazyCounter("workhorse.maintenance.errors", {
+    description: "Workhorse maintenance phase failures",
+    unit: "{error}",
+  }),
 };
+
+/** Bounded `workhorse.handler.outcome` values. `unknown` covers an activation that ended without
+ * reaching a recorded outcome, which only a defect in worker control flow produces. */
+export type JobExecutionOutcome =
+  | "canceled"
+  | "deadline_exceeded"
+  | "failed"
+  | "lease_lost"
+  | "retry"
+  | "succeeded"
+  | "suspended"
+  | "timeout"
+  | "unknown";
+
+export function recordHandlerExecution(
+  queue: string,
+  type: string,
+  outcome: JobExecutionOutcome,
+): void {
+  telemetryMetrics.handlerExecutions.add(1, {
+    "workhorse.queue.name": queue,
+    "workhorse.job.type": type,
+    "workhorse.handler.outcome": outcome,
+  });
+}
+
+export function recordMaintenanceMetrics(event: {
+  loop: string;
+  phase: string;
+  rowsAffected: number;
+  durationMs: number;
+  skippedLock: boolean;
+  error: unknown;
+}): void {
+  const attributes = {
+    "workhorse.maintenance.loop": event.loop,
+    "workhorse.maintenance.phase": event.phase,
+    "workhorse.maintenance.skipped_lock": event.skippedLock,
+  };
+  telemetryMetrics.maintenanceRuns.add(1, attributes);
+  telemetryMetrics.maintenanceRows.add(event.rowsAffected, attributes);
+  telemetryMetrics.maintenanceDuration.record(event.durationMs, attributes);
+  if (event.error !== null) telemetryMetrics.maintenanceErrors.add(1, attributes);
+}
+
+export function recordCancellation(status: CancelStatus): void {
+  telemetryMetrics.cancellations.add(1, { "workhorse.cancellation.status": status });
+}
+
+export function recordRedrive(status: RedriveStatus, count = 1): void {
+  if (count > 0) telemetryMetrics.redrives.add(count, { "workhorse.redrive.status": status });
+}
+
+export function recordScheduleFired(namespace: string, name: string, occurrenceAt: Date): void {
+  const attributes = {
+    "workhorse.schedule.namespace": namespace,
+    "workhorse.schedule.name": name,
+  };
+  telemetryMetrics.schedulesFired.add(1, attributes);
+  telemetryMetrics.scheduleLag.record(
+    Math.max(0, Date.now() - occurrenceAt.getTime()) / 1_000,
+    attributes,
+  );
+}
+
+export function recordHeartbeatFailure(status: Exclude<HeartbeatStatus, "accepted">): void {
+  telemetryMetrics.heartbeatFailures.add(1, { "workhorse.heartbeat.status": status });
+}
 
 export function jobSpanAttributes(
   job: Pick<ClaimedJob<unknown>, "id" | "type" | "attempt">,

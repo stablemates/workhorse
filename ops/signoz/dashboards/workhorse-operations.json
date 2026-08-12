@@ -14,14 +14,14 @@
       "unit": "ops/s",
       "queries": [
         {
-          "metric": "workhorse.job.enqueued",
+          "metric": "workhorse.jobs.enqueued",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
           "groupBy": ["workhorse.queue.name"],
           "legend": "enqueued {{workhorse.queue.name}}"
         },
         {
-          "metric": "workhorse.job.claimed",
+          "metric": "workhorse.jobs.claimed",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
           "groupBy": ["workhorse.queue.name"],
@@ -36,11 +36,11 @@
       "unit": "ops/s",
       "queries": [
         {
-          "metric": "workhorse.job.execution",
+          "metric": "workhorse.handler.executions",
           "timeAggregation": "rate",
           "spaceAggregation": "sum",
-          "groupBy": ["workhorse.job.outcome"],
-          "legend": "{{workhorse.job.outcome}}"
+          "groupBy": ["workhorse.handler.outcome"],
+          "legend": "{{workhorse.handler.outcome}}"
         }
       ]
     },
@@ -51,7 +51,7 @@
       "unit": "{job}",
       "queries": [
         {
-          "metric": "workhorse.job.count",
+          "metric": "workhorse.jobs.count",
           "timeAggregation": "latest",
           "spaceAggregation": "sum",
           "groupBy": ["workhorse.queue.name", "workhorse.job.state"],

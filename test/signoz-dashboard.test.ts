@@ -28,10 +28,10 @@ describe("SigNoz business dashboard", () => {
 
     expect(panels.some((panel) => panel.spec.plugin.kind === "signoz/NumberPanel")).toBe(false);
     for (const [title, metric] of [
-      ["Enqueued tasks", "workhorse.job.enqueued"],
-      ["Started tasks", "workhorse.job.claimed"],
-      ["Running and waiting tasks", "workhorse.job.count"],
-      ["Completed tasks", "workhorse.job.execution"],
+      ["Enqueued tasks", "workhorse.jobs.enqueued"],
+      ["Started tasks", "workhorse.jobs.claimed"],
+      ["Running and waiting tasks", "workhorse.jobs.count"],
+      ["Completed tasks", "workhorse.handler.executions"],
     ] as const) {
       const panel = panels.find((candidate) => candidate.spec.display.name === title);
       expect(panel?.spec.plugin.kind).toBe("signoz/BarChartPanel");
@@ -50,7 +50,7 @@ describe("SigNoz business dashboard", () => {
       (candidate) => candidate.spec.display.name === "Completed tasks",
     );
     expect(JSON.stringify(completedTasks)).toContain(
-      "workhorse.job.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'succeeded', 'timeout']",
+      "workhorse.handler.outcome IN ['canceled', 'deadline_exceeded', 'failed', 'succeeded', 'timeout']",
     );
   });
 
@@ -72,19 +72,19 @@ describe("SigNoz business dashboard", () => {
       );
     };
 
-    expect(metricNames("Execution outcomes")).toEqual(new Set(["workhorse.job.execution"]));
+    expect(metricNames("Execution outcomes")).toEqual(new Set(["workhorse.handler.executions"]));
     expect(metricNames("Handler runtime percentiles")).toEqual(
-      new Set(["workhorse.job.execution.duration.bucket"]),
+      new Set(["workhorse.handler.duration.bucket"]),
     );
     expect(metricNames("Worker slots")).toEqual(
       new Set(["workhorse.worker.active", "workhorse.worker.capacity"]),
     );
-    expect(metricNames("Queue depth")).toEqual(new Set(["workhorse.job.count"]));
+    expect(metricNames("Queue depth")).toEqual(new Set(["workhorse.jobs.count"]));
     expect(metricNames("Oldest ready job")).toEqual(new Set(["workhorse.queue.oldest_ready.age"]));
     expect(metricNames("Estimated queue drain time")).toEqual(
-      new Set(["workhorse.job.count", "workhorse.job.execution"]),
+      new Set(["workhorse.jobs.count", "workhorse.handler.executions"]),
     );
-    expect(metricNames("Terminal success rate")).toEqual(new Set(["workhorse.job.execution"]));
+    expect(metricNames("Terminal success rate")).toEqual(new Set(["workhorse.handler.executions"]));
   });
 
   it("loads every dashboard reconciled by the demo telemetry command", async () => {
@@ -121,27 +121,30 @@ describe("SigNoz business dashboard", () => {
       "workhorse.job.type",
     ]);
     for (const metric of [
-      "workhorse.job.enqueued",
-      "workhorse.job.claimed",
-      "workhorse.job.count",
-      "workhorse.job.execution",
-      "workhorse.job.execution.duration.bucket",
+      "workhorse.jobs.enqueued",
+      "workhorse.jobs.claimed",
+      "workhorse.jobs.count",
+      "workhorse.handler.executions",
+      "workhorse.handler.duration.bucket",
       "workhorse.queue.oldest_ready.age",
       "workhorse.worker.active",
       "workhorse.worker.capacity",
     ]) {
       expect(encoded).toContain(`"metricName":"${metric}"`);
     }
-    for (const legacyMetric of [
-      "workhorse.jobs.claimed",
-      "workhorse.jobs.completed",
-      "workhorse.jobs.failed",
-      "workhorse.handler.duration",
-      "workhorse.handler.runtime",
-      "workhorse.queue.depth",
-      "workhorse.queue.oldest_ready_age",
+    // The eager instrumentation module consolidated away by 0.1b owned these names. A dashboard
+    // still asking for one of them would query a series nothing writes.
+    for (const retiredMetric of [
+      "workhorse.job.enqueued",
+      "workhorse.job.claimed",
+      "workhorse.job.count",
+      "workhorse.job.execution",
+      "workhorse.job.execution.duration.bucket",
+      "workhorse.job.cancellation",
+      "workhorse.job.redrive",
+      "workhorse.lease.recovered",
     ]) {
-      expect(encoded).not.toContain(`"metricName":"${legacyMetric}"`);
+      expect(encoded).not.toContain(`"metricName":"${retiredMetric}"`);
     }
     expect(encoded).not.toContain('"temporality":"cumulative"');
     expect(encoded).toContain('"temporality":""');

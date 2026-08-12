@@ -5,8 +5,6 @@ import { CronExpressionParser } from "cron-parser";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { errorForTelemetry, Queue } from "./queue.js";
 import { jitterDuration } from "./notifications.js";
-import { recordJobExecution, recordMaintenanceMetrics } from "./metrics.js";
-import type { JobExecutionOutcome } from "./metrics.js";
 import type { MaintenancePhaseResult } from "./queue.js";
 import {
   extractTraceContext,
@@ -14,8 +12,11 @@ import {
   jobSpanAttributes,
   logDebug,
   logInfo,
+  recordHandlerExecution,
+  recordMaintenanceMetrics,
   telemetryMetrics,
   withSpan,
+  type JobExecutionOutcome,
 } from "./telemetry.js";
 import type {
   ClaimedJob,
@@ -447,6 +448,9 @@ export class Worker {
 
   private async executeJob(job: ClaimedJob): Promise<void> {
     const startedAt = performance.now();
+    // executeJobWithinSpan records the outcome here so one handler-duration histogram carries it.
+    // A second duration instrument dimensioned by outcome would double-count every activation.
+    const activation: { outcome: JobExecutionOutcome } = { outcome: "unknown" };
     return withSpan(
       "workhorse.handler",
       {
@@ -460,11 +464,14 @@ export class Worker {
           "workhorse.worker.id": this.workerId,
         });
         try {
-          await this.executeJobWithinSpan(job, span);
+          await this.executeJobWithinSpan(job, span, activation);
         } finally {
           const durationMs = performance.now() - startedAt;
           const attributes = jobMetricAttributes(job);
-          telemetryMetrics.handlerDuration.record(durationMs, attributes);
+          telemetryMetrics.handlerDuration.record(durationMs, {
+            ...attributes,
+            "workhorse.handler.outcome": activation.outcome,
+          });
           telemetryMetrics.handlerRuntime.add(durationMs, attributes);
           logDebug("workhorse.handler.finished", "Job handler finished", {
             ...jobSpanAttributes(job),
@@ -479,20 +486,19 @@ export class Worker {
     );
   }
 
-  private async executeJobWithinSpan(job: ClaimedJob, span: Span): Promise<void> {
+  private async executeJobWithinSpan(
+    job: ClaimedJob,
+    span: Span,
+    activation: { outcome: JobExecutionOutcome },
+  ): Promise<void> {
     // afterClaim is outside the committed claim transaction. Throwing here leaves the lease exactly
     // as a killed process would, which allows deterministic expiry-recovery testing.
-    const executionStartedAt = performance.now();
     let executionRecorded = false;
     const recordExecution = (outcome: JobExecutionOutcome): void => {
       if (executionRecorded) return;
       executionRecorded = true;
-      recordJobExecution(
-        this.queueName,
-        job.type,
-        outcome,
-        (performance.now() - executionStartedAt) / 1_000,
-      );
+      activation.outcome = outcome;
+      recordHandlerExecution(this.queueName, job.type, outcome);
       logInfo("workhorse.job.execution_finished", "Job execution finished", {
         ...jobSpanAttributes(job),
         "workhorse.queue.name": this.queueName,

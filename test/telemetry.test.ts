@@ -244,7 +244,6 @@ describe("OpenTelemetry", () => {
     for (const metricName of [
       "workhorse.jobs.claimed",
       "workhorse.jobs.completed",
-      "workhorse.handler.duration",
       "workhorse.handler.runtime",
     ]) {
       const metric = metricsData.find((candidate) => candidate.descriptor.name === metricName);
@@ -257,6 +256,20 @@ describe("OpenTelemetry", () => {
         }),
       );
     }
+    // Handler duration is the one instrument that carries the activation outcome, so it replaces
+    // the retired outcome-dimensioned duration histogram without double-counting an activation.
+    expect(
+      metricsData.find((candidate) => candidate.descriptor.name === "workhorse.handler.duration")
+        ?.dataPoints,
+    ).toContainEqual(
+      expect.objectContaining({
+        attributes: {
+          "workhorse.job.type": "mail.send",
+          "workhorse.queue.name": "mail",
+          "workhorse.handler.outcome": "succeeded",
+        },
+      }),
+    );
   });
 
   it("does not count an idempotent replay as a newly enqueued job", async () => {

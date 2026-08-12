@@ -1,14 +1,5 @@
 import { CronExpressionParser } from "cron-parser";
 import type { Span } from "@opentelemetry/api";
-import {
-  recordCancellation,
-  recordClaimedJob,
-  recordEnqueuedJobs,
-  recordHeartbeatFailure,
-  recordRecoveredLeases,
-  recordRedrive,
-  recordScheduleFired,
-} from "./metrics.js";
 import type {
   BulkRedrivePage,
   BulkRedriveOptions,
@@ -76,6 +67,10 @@ import {
   jobSpanAttributes,
   logDebug,
   logInfo,
+  recordCancellation,
+  recordHeartbeatFailure,
+  recordRedrive,
+  recordScheduleFired,
   telemetryMetrics,
   type QueueMetricSnapshot,
   withSpan,
@@ -1928,9 +1923,6 @@ export class Queue {
             [JSON.stringify(input)],
           );
           const jobIds = result.rows.map((row) => row.job_id);
-          recordEnqueuedJobs(
-            result.rows.filter((row) => row.accepted).map((row) => input[row.ordinal - 1]!),
-          );
           for (const [index, row] of result.rows.entries()) {
             // Production SQL always returns ordinal. The index fallback keeps structural Queryable
             // test doubles from making observability change the enqueue result path.
@@ -3070,7 +3062,6 @@ export class Queue {
         "workhorse.job.type": row.job_type,
         "workhorse.job.attempt": row.attempt,
       });
-      recordClaimedJob(queueName, row.job_type);
       telemetryMetrics.claimed.add(1, {
         "workhorse.queue.name": queueName,
         "workhorse.job.type": row.job_type,
@@ -3491,7 +3482,6 @@ export class Queue {
       ]);
       const recovery = result.rows[0]!;
       recordRecoveryTelemetry(span, recovery);
-      recordRecoveredLeases(recovery.expired_leases);
       if (recovery.rows_affected > 0) {
         logInfo("workhorse.leases.recovered", "Expired leases recovered", {
           "workhorse.recovery.rows_affected": recovery.rows_affected,
