@@ -6,8 +6,12 @@ import type {
   RetentionPolicyDefinition,
   RetentionPolicySetting,
 } from "@workhorse/core";
-import type { DashboardDemoJobKind, DashboardDemoScenario } from "../client.js";
-import type { DashboardDurabilityPlan, DashboardRunNowStatus } from "../model.js";
+import type {
+  DashboardDemoJobKind,
+  DashboardDemoScenario,
+  DashboardDurabilityPlan,
+  DashboardRunNowStatus,
+} from "../model.js";
 
 export interface DashboardAuditContext {
   actor: string;

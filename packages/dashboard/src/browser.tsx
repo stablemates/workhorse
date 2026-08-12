@@ -30,7 +30,9 @@ createRoot(document.getElementById("root")!).render(
         client={client}
         basePath={config.basePath}
         auditActor={config.auditActor}
-        demoTools={config.demoTools ? { enqueueTest: client.enqueueTest } : undefined}
+        demoTools={
+          config.demoTools && client.enqueueTest ? { enqueueTest: client.enqueueTest } : undefined
+        }
       />
     </WorkhorseThemeProvider>
   </StrictMode>,

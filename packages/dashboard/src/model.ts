@@ -1197,6 +1197,44 @@ export const dashboardAttemptOutcomes = [
   "timeout",
 ] as const;
 
+/**
+ * One value the events feed can be filtered by: an event type or an attempt outcome.
+ *
+ * The feed merges the two append-only history tables, so a filter names a value from either
+ * vocabulary. Naming the union once keeps a filter that survived parsing from having to be
+ * re-checked before it is sent.
+ */
+export type DashboardEventTypeFilter =
+  | (typeof dashboardJobEventTypes)[number]
+  | (typeof dashboardAttemptOutcomes)[number];
+
+/**
+ * The demonstration jobs a demo host can enqueue from the dashboard.
+ *
+ * The vocabulary lives here rather than in the router or the client because both need it: the
+ * router builds its input schema from this list, and the browser offers exactly these choices.
+ */
+export const dashboardDemoJobKinds = [
+  "success",
+  "retry",
+  "durable",
+  "timer",
+  "failure",
+  "idempotent",
+  "long-running",
+] as const;
+
+export type DashboardDemoJobKind = (typeof dashboardDemoJobKinds)[number];
+
+/** The multi-step demo scenarios, each of which enqueues its own shape of work. */
+export const dashboardDemoScenarios = [
+  "order-fulfillment",
+  "customer-onboarding",
+  "report-publication",
+] as const;
+
+export type DashboardDemoScenario = (typeof dashboardDemoScenarios)[number];
+
 /** Which of the two append-only history tables a feed row came from. */
 export type DashboardEventKind = "event" | "attempt";
 

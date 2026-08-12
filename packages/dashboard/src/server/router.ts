@@ -2,6 +2,8 @@ import { ORPCError, os } from "@orpc/server";
 import type { Queue } from "@workhorse/core";
 import {
   dashboardAttemptOutcomes,
+  dashboardDemoJobKinds,
+  dashboardDemoScenarios,
   dashboardJobEventTypes,
   type DashboardSystemWindow,
   type MaintenanceLoopCadences,
@@ -126,8 +128,8 @@ const eventsInput = z.object({
   jobId: z.uuid().nullable().default(null),
 });
 const enqueueTestInput = z.object({
-  kind: z.enum(["success", "retry", "durable", "timer", "failure", "idempotent", "long-running"]),
-  scenario: z.enum(["order-fulfillment", "customer-onboarding", "report-publication"]).optional(),
+  kind: z.enum(dashboardDemoJobKinds),
+  scenario: z.enum(dashboardDemoScenarios).optional(),
   audit: auditSchema,
 });
 const setScheduleEnabledInput = z.object({
