@@ -1,9 +1,29 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("schema installation", () => {
+  it("ships a clean-install artifact without upgrade residue", async () => {
+    const schema = await readFile(path.join(repository, "sql", "schema.sql"), "utf8");
+
+    expect(schema).not.toMatch(/^ALTER TABLE /m);
+    expect(schema).not.toMatch(/^DROP (?:FUNCTION|TRIGGER) IF EXISTS /m);
+  });
+
+  it("does not install retired functions", async () => {
+    const retiredFunctions = await pool.query<{ claim: string | null; heartbeat: string | null }>(
+      `SELECT
+         to_regprocedure('workhorse.claim_v1(text,text,integer)')::text AS claim,
+         to_regprocedure('workhorse.heartbeat_v1(uuid,text,bigint,integer)')::text AS heartbeat`,
+    );
+    expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
+  });
+
   it("installs schema v23 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
