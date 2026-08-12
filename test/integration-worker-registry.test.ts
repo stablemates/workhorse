@@ -738,12 +738,12 @@ describe("worker registry", () => {
       // Statistics roll up before retention so the same pass can reclaim the history it summarized.
       "statistics_rollup:stat_rollup",
       "statistics_rollup:stat_retention",
-      "history_partitions:history_partitions",
-      "history_retention:event_retention",
-      "history_retention:attempt_retention",
-      "history_retention:schedule_occurrences",
-      "terminal_storage:enqueue_idempotency",
-      "terminal_storage:terminal_jobs",
+      "background_tasks:history_partitions",
+      "background_tasks:event_retention",
+      "background_tasks:attempt_retention",
+      "background_tasks:schedule_occurrences",
+      "background_tasks:enqueue_idempotency",
+      "background_tasks:terminal_jobs",
     ]);
     expect(worker.maintenanceTelemetry()).toEqual(telemetry);
 
