@@ -1,0 +1,120 @@
+# Smoke benchmarks on main.
+#
+# This workflow exists to detect *drift*, not to publish performance numbers. It runs the `smoke`
+# profile, which is small enough to finish in minutes on a shared runner and therefore far too
+# small — and far too noisy — to support a scalability claim. What it does prove is that the
+# comparative harness and every lifecycle scenario still run green against a fresh schema, and it
+# leaves a provenance-bearing artifact behind so a later regression can be bisected against dated
+# evidence rather than against memory.
+#
+# Publication-grade evidence still comes from a deliberate `default` or `full` run on stable
+# hardware, recorded under docs/benchmarks/. See "Continuous smoke benchmarks" in
+# docs/benchmarking.md for how to read the artifact and what a trend does and does not mean.
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly, off the hour, so a queued run does not compete with the cron spike.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  # Benchmarks are only meaningful one at a time on a runner, and a superseded run has no value.
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: smoke benchmark
+    runs-on: ubuntu-latest
+    # An explicit ceiling. A benchmark that hangs — a scenario waiting on a job that never claims,
+    # a churn producer that never drains — must fail the run rather than occupy a runner for the
+    # six-hour default.
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORKHORSE_BENCH_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_bench
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The suite runs from source through tsx, so no build is needed. The reset installs
+      # sql/schema.sql, which is what makes every run start from the same schema state.
+      - run: pnpm db:reset:bench
+
+      # The canonical report goes to a file; stdout would repeat the whole document into the log.
+      - name: Run comparative and lifecycle smoke suites
+        timeout-minutes: 20
+        run: |
+          pnpm benchmark -- \
+            --suite all \
+            --profile smoke \
+            --output "benchmark-report.json" > /dev/null
+
+      # Fails the run if the artifact is not the contract docs/benchmarking.md describes, so an
+      # empty or half-written report cannot be uploaded as if it were evidence.
+      - name: Check the report carries provenance and passing assertions
+        run: |
+          jq -e '
+            .schemaVersion == 3
+            and .profile == "smoke"
+            and (.provenance.source.commit | type) == "string"
+            and (.comparative.summaries | length) > 0
+            and (.lifecycle.scenarios | length) > 0
+            and ([.lifecycle.scenarios[].assertions[].passed] | all)
+          ' benchmark-report.json > /dev/null
+
+      - name: Summarize
+        if: always()
+        run: |
+          test -f benchmark-report.json || exit 0
+          {
+            echo "## Smoke benchmark"
+            echo
+            jq -r '"Commit `\(.provenance.source.commit[0:12])` (dirty: \(.provenance.source.dirty)) on \(.environment.postgresVersion | split(" ")[0:2] | join(" "))"' benchmark-report.json
+            echo
+            # Means with their 95% confidence intervals, because a single mean at two repetitions
+            # is not a number anyone should compare across runs.
+            echo "| Design | Workers | Jobs/s (95% CI) | Claim p95 ms (95% CI) |"
+            echo "| --- | ---: | ---: | ---: |"
+            jq -r 'def ci: if .mean == null then "n/a"
+                           else "\(.mean | .*100 | round / 100) [\(.confidenceInterval95.lower | .*100 | round / 100), \(.confidenceInterval95.upper | .*100 | round / 100)]"
+                           end;
+              .comparative.summaries[]
+              | "| \(.design) | \(.workerConcurrency) | \(.throughputPerSecond | ci) | \(.claimLatencyMs.perRunP95 | ci) |"' benchmark-report.json
+            echo
+            echo "| Scenario | Duration (ms) | Assertions |"
+            echo "| --- | ---: | --- |"
+            jq -r '.lifecycle.scenarios[]
+              | "| \(.name) | \(.durationMs | .*10 | round / 10) | \(if ([.assertions[].passed] | all) then "passed" else "FAILED" end) |"' benchmark-report.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Uploaded even on failure: a report from a run whose assertions failed is the evidence
+      # needed to diagnose it.
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke-${{ github.run_number }}
+          path: benchmark-report.json
+          if-no-files-found: error
+          retention-days: 90
