@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { CompletionTarget, dropSchema, type TargetMetadata, type WorkItem } from "./types.js";
+import { installedVersion } from "./versions.js";
 
 export interface PgBossLike {
   start(): Promise<unknown>;
@@ -12,7 +13,7 @@ export class PgBossTarget extends CompletionTarget {
   metadata: TargetMetadata = {
     name: "pg-boss",
     packageName: "pg-boss",
-    version: "12.26.2",
+    version: installedVersion("pg-boss"),
     schema: "pgboss_competitor",
     queue: "competitor_baseline",
     configuration: {
