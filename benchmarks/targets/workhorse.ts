@@ -2,12 +2,13 @@ import type { Pool } from "pg";
 import { Queue, Worker, installSchema } from "../../src/index.js";
 import type { Json } from "../../src/types.js";
 import { CompletionTarget, type TargetMetadata, type WorkItem } from "./types.js";
+import { repositoryVersion } from "./versions.js";
 
 export class WorkhorseTarget extends CompletionTarget {
   metadata: TargetMetadata = {
     name: "workhorse",
     packageName: "@workhorse/core",
-    version: "0.1.0",
+    version: repositoryVersion,
     schema: "workhorse",
     queue: "competitor_baseline",
     configuration: {
