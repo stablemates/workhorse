@@ -2,11 +2,14 @@
 
 ## Current pre-release policy
 
-Until the first production-supported release, Workhorse keeps the canonical current schema in
-`sql/schema/current.sql`. `pnpm schema:generate` derives the shipped clean-install artifact at
-`sql/schema.sql`, and `pnpm schema:check` rejects a stale artifact. Development schema changes edit
-the source and increment `WORKHORSE_SCHEMA_VERSION`. We intentionally do not accumulate migrations
-while the data model is still moving quickly.
+Schema version 23 is the forward-migration baseline. Workhorse does not derive migrations for
+versions 1 through 22. Each later change adds one immutable file to `sql/migrations/`, increments
+`WORKHORSE_SCHEMA_VERSION`, and updates the canonical current schema in
+`sql/schema/current.sql`.
+
+`pnpm schema:generate` derives the shipped clean-install artifact at `sql/schema.sql`, and
+`pnpm schema:check` rejects a stale artifact. The artifact represents the latest schema directly;
+it does not concatenate or replay the migration files.
 
 The artifact contains only the current table, trigger, and function definitions. It contains no
 in-place `ALTER TABLE` steps, retired function signatures, or `DROP ... IF EXISTS` upgrade
@@ -18,28 +21,32 @@ schema only when it exactly matches the current canonical version. It is not an 
 Framework mounts call `assertSchemaCompatible(database)` and never create, seed, or alter database
 objects.
 
+`migrateSchema(database)` is the explicit upgrade path. It rejects an uninstalled schema, versions
+below the baseline, versions newer than the runtime, and gaps in the ordered migration list. Each
+migration file takes the `workhorse:schema-migration` transaction advisory lock, validates its
+starting version after taking that lock, and commits one version step atomically. The first step is
+`0024-add-schema-migration-ledger.sql`, which creates `workhorse.schema_migration` and advances the
+single `workhorse.schema_version` row from 23 to 24.
+
+Schema versions and SQL function versions are separate. A migration may add `claim_v3` while
+retaining `claim_v2` for a compatibility window, but the migration's filename and target schema
+version do not change either function suffix.
+
 Application data is outside this lifecycle. In particular, all representative jobs, schedules,
 audit records, and other seed/reset behavior live in `demo/` and are not shipped as core migrations.
 The development command `pnpm demo` recreates the purpose-guarded demo database on every run so the
 current canonical schema is always exercised from scratch. `pnpm demo:production` preserves its
 database and represents the future deployable shape.
 
-## Production baseline
+## Deployment order
 
-Immediately before the first supported production release:
-
-1. Freeze the then-current `sql/schema.sql` as migration `0001` and declare it the production
-   baseline.
-2. Add an ordered migration runner with an advisory lock, one transaction per migration where
-   PostgreSQL permits it, checksums, status reporting, and independent schema/protocol versions.
-3. Require migrations to run explicitly in deployment or CI before new application instances start.
-4. Keep runtime and dashboard mounts read-only with respect to DDL. They should fail clearly on an
-   incompatible version rather than attempting an opportunistic upgrade.
-5. Test both a fresh install and every supported upgrade path from released versions.
+Run migrations explicitly before new application instances start. Runtime and dashboard mounts
+remain read-only with respect to DDL and fail on an incompatible version. A mixed fleet cannot span
+a schema change unless both runtime versions already support the same SQL function versions.
 
 ## After production launch
 
 Every schema change ships as a new immutable ordered migration. Released migrations are never edited.
-The canonical schema remains useful for fresh-install equivalence tests, but the supported upgrade
-path is the migration chain. Destructive or long-running PostgreSQL changes require a separately
-rehearsed expand/migrate/contract rollout and documented rollback or roll-forward procedure.
+The canonical schema remains useful for fresh installation, while the migration chain owns upgrades.
+Destructive or long-running PostgreSQL changes require a separately rehearsed
+expand/migrate/contract rollout and documented rollback or roll-forward procedure.

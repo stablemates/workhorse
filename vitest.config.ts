@@ -8,6 +8,7 @@ export const databaseTestFiles = [
   "test/integration-*.test.ts",
   "test/isolation-canary-*.test.ts",
   "test/schema-installation.test.ts",
+  "test/schema-migrations.test.ts",
 ];
 
 export default defineConfig({
