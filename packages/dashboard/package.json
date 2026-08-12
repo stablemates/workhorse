@@ -45,6 +45,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && pnpm build:library && pnpm build:app",
+    "build:dev": "pnpm build:library",
     "build:library": "tsc -p tsconfig.json && cp src/styles.css dist/styles.css && cp -R src/assets dist/assets",
     "build:app": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",

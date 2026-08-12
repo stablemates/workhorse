@@ -8,20 +8,16 @@ import {
   SUPPORTED_NODE_MAJORS,
   SUPPORTED_POSTGRES_MAJORS,
 } from "../src/support.js";
+import { publishedPackages } from "../scripts/packages.js";
 
 // A supported-version contract is only worth stating if the statement and the thing that tests it
 // cannot drift apart. src/support.ts is the source of truth; everything below is a consumer of it,
 // and this file is what makes adding a version in one place and forgetting the others a failure.
 
 const repository = path.resolve(import.meta.dirname, "..");
-const publishedManifests = [
-  "package.json",
-  "packages/dashboard/package.json",
-  "packages/drizzle/package.json",
-  "packages/kysely/package.json",
-  "packages/prisma/package.json",
-  "packages/typeorm/package.json",
-];
+// Which manifests are published is owned by scripts/packages.ts, so adding a package brings it
+// under the engines and provenance checks below without an edit here.
+const publishedManifests = (await publishedPackages()).map((entry) => entry.manifest);
 
 async function read(relativePath: string): Promise<string> {
   return readFile(path.join(repository, relativePath), "utf8");
