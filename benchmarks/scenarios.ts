@@ -35,6 +35,7 @@ import type { ClaimedJob, Failpoint, Queryable, QueueHealth } from "../src/index
 
 export const operationalScenarioNames = [
   "scheduled-promotion-drift",
+  "schedule-cadence-jitter",
   "heartbeat-fencing",
   "cancellation-lifecycle",
   "deadline-timeout-lifecycle",
@@ -92,6 +93,8 @@ export interface OperationalScenarioOptions {
   batchSize?: number;
   /** Delay before scheduled work becomes due. */
   scheduleDelayMs?: number;
+  /** Recurring occurrences sampled by the loaded cadence scenario. */
+  scheduleSamples?: number;
   /** Lease duration used by crash and recovery scenarios. */
   leaseMs?: number;
   /** Delayed retry interval. */
@@ -115,6 +118,7 @@ export interface ResolvedOperationalScenarioOptions {
   heartbeatCount: number;
   batchSize: number;
   scheduleDelayMs: number;
+  scheduleSamples: number;
   leaseMs: number;
   retryDelayMs: number;
   pruneLimit: number;
@@ -144,6 +148,25 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "scheduled depth reaches zero and ready depth equals the seed count",
     ],
     metrics: ["jobs", "promotionBatches", "promoted", "driftP50Ms", "driftP95Ms", "driftMaxMs"],
+  },
+  {
+    name: "schedule-cadence-jitter",
+    purpose:
+      "Measure recurring-schedule fire delay while a real Worker continuously executes queued jobs.",
+    invariants: [
+      "every planned sample fires while the worker remains loaded",
+      "every planned second creates one durable occurrence and job",
+      "all observed fire delays are finite and non-negative",
+    ],
+    metrics: [
+      "scheduleSamples",
+      "loadJobsStarted",
+      "loadJobsCompleted",
+      "maintenanceIntervalMs",
+      "fireDelayP50Ms",
+      "fireDelayP95Ms",
+      "fireDelayMaxMs",
+    ],
   },
   {
     name: "heartbeat-fencing",
@@ -494,6 +517,7 @@ const defaults: ResolvedOperationalScenarioOptions = {
   heartbeatCount: 5,
   batchSize: 5,
   scheduleDelayMs: 40,
+  scheduleSamples: 3,
   leaseMs: 40,
   retryDelayMs: 40,
   pruneLimit: 1_000,
@@ -532,6 +556,10 @@ export function resolveOperationalScenarioOptions(
     scheduleDelayMs: positiveInteger(
       "scheduleDelayMs",
       options.scheduleDelayMs ?? defaults.scheduleDelayMs,
+    ),
+    scheduleSamples: positiveInteger(
+      "scheduleSamples",
+      options.scheduleSamples ?? defaults.scheduleSamples,
     ),
     leaseMs: positiveInteger("leaseMs", options.leaseMs ?? defaults.leaseMs),
     retryDelayMs: positiveInteger("retryDelayMs", options.retryDelayMs ?? defaults.retryDelayMs),
@@ -766,6 +794,145 @@ async function scheduledPromotionDrift(
       driftP50Ms: percentile(drifts, 0.5),
       driftP95Ms: percentile(drifts, 0.95),
       driftMaxMs: percentile(drifts, 1),
+    },
+    assertions,
+  };
+}
+
+async function scheduleCadenceJitter(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const queue = new Queue(context.pool, context.queueName);
+  const assertions: ScenarioAssertion[] = [];
+  const namespace = `${context.queueName}-${Date.now()}`;
+  const scheduleType = "benchmark-schedule-cadence";
+  const loadType = "benchmark-schedule-load";
+  const maintenanceIntervalMs = 1_000;
+  const baselineOccurrence = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+
+  await queue.syncSchedules(namespace, [
+    {
+      name: "every-second",
+      schedule: "* * * * * *",
+      job: {
+        type: scheduleType,
+        payload: null,
+        queue: context.queueName,
+      },
+    },
+  ]);
+  const [definition] = await queue.schedules([namespace]);
+  recordInvariant(assertions, "schedule definition synchronized", definition !== undefined, true);
+  const baselineJobId = await queue.fireSchedule(
+    namespace,
+    definition!.name,
+    definition!.revision,
+    baselineOccurrence,
+  );
+  recordInvariant(assertions, "baseline occurrence reserved", baselineJobId !== null, true);
+
+  for (let index = 0; index < context.options.jobCount; index += 1) {
+    await queue.enqueue(loadType, { index });
+  }
+
+  let keepLoaded = true;
+  let loadJobsStarted = 0;
+  let loadJobsCompleted = 0;
+  const worker = new Worker(queue, {
+    workerId: `${context.queueName}-worker`,
+    queue: context.queueName,
+    concurrency: 4,
+    leaseMs: 5_000,
+    heartbeatMs: 1_000,
+    pollMs: 10,
+    maintenanceIntervalMs,
+    maintenanceTaskPollMs: 60_000,
+    statisticsRollupIntervalMs: 0,
+    registryIntervalMs: 0,
+    scheduleNamespaces: [namespace],
+    scheduleCatchupLimit: context.options.scheduleSamples,
+  })
+    .handle(loadType, async () => {
+      loadJobsStarted += 1;
+      await context.sleep(10);
+      if (keepLoaded) await queue.enqueue(loadType, null);
+      loadJobsCompleted += 1;
+      return null;
+    })
+    .handle(scheduleType, () => null);
+
+  const running = worker.run();
+  try {
+    const deadline = performance.now() + (context.options.scheduleSamples + 3) * 1_000;
+    while (true) {
+      const count = await context.pool.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+           FROM workhorse.schedule_occurrence
+          WHERE namespace = $1 AND schedule_name = $2 AND occurrence_at > $3`,
+        [namespace, definition!.name, baselineOccurrence],
+      );
+      if (Number(count.rows[0]?.count ?? 0) >= context.options.scheduleSamples) break;
+      if (performance.now() >= deadline) {
+        throw new Error("Timed out waiting for loaded recurring-schedule samples");
+      }
+      await context.sleep(10);
+    }
+  } finally {
+    keepLoaded = false;
+    worker.stop();
+    await running;
+  }
+
+  const occurrenceRows = await context.pool.query<{
+    fire_delay_ms: string;
+    job_id: string | null;
+  }>(
+    `SELECT extract(epoch FROM (fired_at - occurrence_at)) * 1000 AS fire_delay_ms, job_id
+       FROM workhorse.schedule_occurrence
+      WHERE namespace = $1 AND schedule_name = $2 AND occurrence_at > $3
+      ORDER BY occurrence_at
+      LIMIT $4`,
+    [namespace, definition!.name, baselineOccurrence, context.options.scheduleSamples],
+  );
+  const fireDelays = occurrenceRows.rows.map((row) => Number(row.fire_delay_ms));
+
+  recordInvariant(
+    assertions,
+    "every planned sample fired",
+    occurrenceRows.rows.length,
+    context.options.scheduleSamples,
+  );
+  recordInvariant(
+    assertions,
+    "every occurrence owns one job",
+    occurrenceRows.rows.every((row) => row.job_id !== null),
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "worker remained loaded while schedules fired",
+    loadJobsStarted >= context.options.scheduleSamples,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "fire delays are finite and non-negative",
+    fireDelays.every((value) => Number.isFinite(value) && value >= 0),
+    true,
+  );
+
+  return {
+    name: "schedule-cadence-jitter",
+    durationMs: 0,
+    metrics: {
+      scheduleSamples: context.options.scheduleSamples,
+      loadJobsStarted,
+      loadJobsCompleted,
+      maintenanceIntervalMs,
+      fireDelayP50Ms: percentile(fireDelays, 0.5),
+      fireDelayP95Ms: percentile(fireDelays, 0.95),
+      fireDelayMaxMs: percentile(fireDelays, 1),
     },
     assertions,
   };
@@ -3465,6 +3632,7 @@ export const operationalScenarioImplementations: Readonly<
   Record<OperationalScenarioName, OperationalScenarioRunner>
 > = {
   "scheduled-promotion-drift": scheduledPromotionDrift,
+  "schedule-cadence-jitter": scheduleCadenceJitter,
   "heartbeat-fencing": heartbeatFencing,
   "cancellation-lifecycle": cancellationLifecycle,
   "deadline-timeout-lifecycle": deadlineTimeoutLifecycle,

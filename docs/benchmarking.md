@@ -183,20 +183,21 @@ pnpm benchmark -- --help
 
 Core options:
 
-| Option            | Values                            | Meaning                                  |
-| ----------------- | --------------------------------- | ---------------------------------------- |
-| `--suite`         | `all`, `comparative`, `lifecycle` | Select the suite                         |
-| `--profile`       | `smoke`, `default`, `full`        | Select a bounded configuration           |
-| `--scenario`      | comma-separated names             | Run a lifecycle subset                   |
-| `--seed`          | non-negative integer              | Seed the deterministic shuffled plan     |
-| `--jobs`          | positive integer                  | Jobs per fixed comparative run           |
-| `--enqueue-batch` | positive integer                  | Jobs per `enqueueMany` request           |
-| `--repetitions`   | positive integer                  | Independent repetitions                  |
-| `--workers`       | comma-separated integers          | Worker-concurrency sweep                 |
-| `--churn-rate`    | positive integer                  | Producer target jobs per second          |
-| `--churn-jobs`    | positive integer                  | Exact churn jobs per design              |
-| `--sample-ms`     | positive integer                  | Independent telemetry interval           |
-| `--output`        | path                              | Persist canonical deterministic-key JSON |
+| Option               | Values                            | Meaning                                   |
+| -------------------- | --------------------------------- | ----------------------------------------- |
+| `--suite`            | `all`, `comparative`, `lifecycle` | Select the suite                          |
+| `--profile`          | `smoke`, `default`, `full`        | Select a bounded configuration            |
+| `--scenario`         | comma-separated names             | Run a lifecycle subset                    |
+| `--seed`             | non-negative integer              | Seed the deterministic shuffled plan      |
+| `--jobs`             | positive integer                  | Jobs per fixed comparative run            |
+| `--enqueue-batch`    | positive integer                  | Jobs per `enqueueMany` request            |
+| `--repetitions`      | positive integer                  | Independent repetitions                   |
+| `--workers`          | comma-separated integers          | Worker-concurrency sweep                  |
+| `--churn-rate`       | positive integer                  | Producer target jobs per second           |
+| `--churn-jobs`       | positive integer                  | Exact churn jobs per design               |
+| `--sample-ms`        | positive integer                  | Independent telemetry interval            |
+| `--schedule-samples` | positive integer                  | Recurring fires sampled under worker load |
+| `--output`           | path                              | Persist canonical deterministic-key JSON  |
 
 ## Profiles
 
