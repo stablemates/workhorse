@@ -94,6 +94,7 @@
   "dependencies": {
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/api-logs": "0.221.0",
+    "@workhorse/dashboard-contract": "workspace:*",
     "cron-parser": "5.6.2",
     "pg": "^8.16.3"
   },
@@ -116,6 +117,14 @@
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "@workhorse/dashboard": "0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@workhorse/dashboard": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22"

@@ -99,6 +99,8 @@ try {
     "dist/rpc-client.d.ts",
     "dist/server/index.js",
     "dist/server/index.d.ts",
+    "dist/server/standalone.js",
+    "dist/server/standalone.d.ts",
     "dist/app/index.html",
     "dist/styles.css",
     "dist/assets/workhorse-mark.png",
@@ -134,6 +136,13 @@ try {
           "@types/react": "19.1.10",
           "@types/react-dom": "19.1.7",
         },
+        pnpm: {
+          // Published packages can depend on another package from the same unreleased lockstep set.
+          // Force those nested edges through the tarballs under test instead of the public registry.
+          overrides: Object.fromEntries(
+            published.map((entry) => [entry.name, `file:${path.join(tarballs, entry.tarball)}`]),
+          ),
+        },
       },
       null,
       2,
@@ -164,7 +173,11 @@ import { createPrismaAdapter } from "@workhorse/prisma";
 import { createTypeOrmAdapter } from "@workhorse/typeorm";
 import { createKyselyAdapter } from "@workhorse/kysely";
 import { defineWorkerProcess } from "@workhorse/core";
-import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";\nimport { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboard/server";\nimport type { DashboardNodeMiddleware } from "@workhorse/dashboard/server";
+import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";
+import { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboard/server";
+import type { DashboardNodeMiddleware } from "@workhorse/dashboard/server";
+import { startDashboardServer as startStandaloneDashboard } from "@workhorse/dashboard/standalone";
+import type { DashboardCommandOptions, DashboardStandaloneModule } from "@workhorse/dashboard-contract";
 import type { DashboardTaskCounts } from "@workhorse/dashboard/model";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { PrismaClient, Prisma } from "@prisma/client";
@@ -191,7 +204,16 @@ const workerProcess = defineWorkerProcess({
 });
 const dashboardHost = createDashboardHost({ database: pool, authorize: () => true });
 const nodeMiddleware: DashboardNodeMiddleware = dashboardNodeMiddleware(dashboardHost);
+const standaloneStart: DashboardStandaloneModule<Pool>["startDashboardServer"] = startStandaloneDashboard;
+const standaloneOptions: DashboardCommandOptions = {
+  port: 3000,
+  hostname: "127.0.0.1",
+  allowMutations: false,
+  actor: "packed-test",
+};
 void nodeMiddleware;
+void standaloneStart;
+void standaloneOptions;
 void db.transaction(async (tx) => adapter.forTransaction(tx).enqueue("typed", { ok: true }));
 void prismaAdapter.forTransaction(prismaTransaction).enqueue("typed", { ok: true });
 void typeOrmAdapter.forTransaction(entityManager).enqueue("typed", { ok: true });
