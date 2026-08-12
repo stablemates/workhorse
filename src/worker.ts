@@ -243,6 +243,7 @@ export class Worker {
   private readonly instanceId = randomUUID();
   private lastRegistryRefreshAt = Number.NEGATIVE_INFINITY;
   private registered = false;
+  private pendingStopRegistrationRefresh: Promise<void> | undefined;
   private loggedRegistrationState:
     | { activeSlots: number; draining: boolean; paused: boolean }
     | undefined;
@@ -315,7 +316,12 @@ export class Worker {
     this.draining = this.running || this.activeSlots > 0;
     // The maintenance loop exits immediately on stop, so a draining worker would otherwise never
     // publish that state and would simply vanish from an operator's fleet view mid-drain.
-    if (this.draining && this.registered) void this.refreshRegistration(true);
+    if (this.draining && this.registered) {
+      const previousRefresh = this.pendingStopRegistrationRefresh ?? Promise.resolve();
+      this.pendingStopRegistrationRefresh = previousRefresh.then(() =>
+        this.refreshRegistration(true),
+      );
+    }
     logInfo("workhorse.worker.stop_requested", "Worker stop requested", {
       "workhorse.queue.name": this.queueName,
       "workhorse.worker.id": this.workerId,
@@ -936,6 +942,8 @@ export class Worker {
   /** Best-effort removal of this worker's registration once its loop has stopped. */
   private async deregister(): Promise<void> {
     if (!this.registered) return;
+    await this.pendingStopRegistrationRefresh;
+    this.pendingStopRegistrationRefresh = undefined;
     this.registered = false;
     this.loggedRegistrationState = undefined;
     try {
