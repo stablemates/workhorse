@@ -13,6 +13,7 @@ import {
   jobSpanAttributes,
   logDebug,
   logInfo,
+  logWarn,
   recordHandlerExecution,
   recordMaintenanceMetrics,
   telemetryMetrics,
@@ -31,6 +32,33 @@ import type {
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
 const DEFAULT_POLL_MS = 250;
 const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
+
+type AttemptOutcome =
+  | "completed"
+  | "failed"
+  | "lease_expired"
+  | "deadline_exceeded"
+  | "attempt_timeout"
+  | "cancelled"
+  | "suspended_for_wait";
+
+class AttemptOutcomeArbiter {
+  private accepted: AttemptOutcome | undefined;
+
+  get outcome(): AttemptOutcome | undefined {
+    return this.accepted;
+  }
+
+  submit(outcome: AttemptOutcome): boolean {
+    if (this.accepted !== undefined) return false;
+    this.accepted = outcome;
+    return true;
+  }
+
+  is(outcome: AttemptOutcome): boolean {
+    return this.accepted === outcome;
+  }
+}
 
 export type Failpoint =
   | "afterClaim"
@@ -68,13 +96,10 @@ export type Handler<TPayload = Json, TResult extends Json = Json> = (
   context: HandlerContext<TPayload>,
 ) => Promise<TResult> | TResult;
 
+export type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_tasks";
+
 export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
-  loop:
-    | "tick"
-    | "statistics_rollup"
-    | "history_partitions"
-    | "history_retention"
-    | "terminal_storage";
+  loop: WorkerMaintenanceLoop;
   observedAt: string;
 }
 
@@ -500,10 +525,8 @@ export class Worker {
   ): Promise<void> {
     // afterClaim is outside the committed claim transaction. Throwing here leaves the lease exactly
     // as a killed process would, which allows deterministic expiry-recovery testing.
-    let executionRecorded = false;
     const recordExecution = (outcome: JobExecutionOutcome): void => {
-      if (executionRecorded) return;
-      executionRecorded = true;
+      if (activation.outcome !== "unknown") return;
       activation.outcome = outcome;
       recordHandlerExecution(this.queueName, job.type, outcome);
       logInfo("workhorse.job.execution_finished", "Job execution finished", {
@@ -514,18 +537,20 @@ export class Worker {
       });
     };
     const recordFailure = (state: Awaited<ReturnType<Queue["fail"]>>): void => {
-      if (state === "ready" || state === "scheduled") recordExecution("retry");
-      else if (state === "failed") recordExecution("failed");
-      else if (state === "deadline_exceeded") recordExecution("deadline_exceeded");
-      else if (state === "timeout_exceeded") recordExecution("timeout");
-      else if (state === "stale") recordExecution("lease_lost");
+      if (state === "ready" || state === "scheduled") {
+        if (arbiter.submit("failed")) recordExecution("retry");
+      } else if (state === "failed") {
+        if (arbiter.submit("failed")) recordExecution("failed");
+      } else if (state === "deadline_exceeded") {
+        if (arbiter.submit("deadline_exceeded")) recordExecution("deadline_exceeded");
+      } else if (state === "timeout_exceeded") {
+        if (arbiter.submit("attempt_timeout")) recordExecution("timeout");
+      } else if (state === "stale") {
+        if (arbiter.submit("lease_expired")) recordExecution("lease_lost");
+      }
     };
     const controller = new AbortController();
-    let leaseLost = false;
-    let cancellationRequested = false;
-    let deadlineExceeded = false;
-    let timeoutExceeded = false;
-    let durablySuspended = false;
+    const arbiter = new AttemptOutcomeArbiter();
     // Each job owns an independent self-scheduling heartbeat. The next delay starts only after the
     // previous query settles, so a slow database call cannot overlap another heartbeat for this job.
     let heartbeatTimer: NodeJS.Timeout | undefined;
@@ -544,18 +569,21 @@ export class Worker {
       }
     };
     const markCancellationRequested = (): void => {
-      cancellationRequested = true;
+      arbiter.submit("cancelled");
       stopHeartbeat();
       if (!controller.signal.aborted) controller.abort(new CancellationRequestedError(job.id));
     };
     const acknowledgeCancellation = async (): Promise<boolean> => {
       const accepted = await this.queue.acknowledgeCancel(job, this.workerId);
-      if (accepted) recordExecution("canceled");
+      if (accepted && arbiter.is("cancelled")) recordExecution("canceled");
       return accepted;
     };
     const expireOwnership = (): Promise<ExpireOwnedStatus> => {
       expirationPromise ??= this.queue.expireOwned(job, this.workerId).then((status) => {
         if (status === "cancel_requested") markCancellationRequested();
+        else if (status === "deadline_exceeded") arbiter.submit("deadline_exceeded");
+        else if (status === "timeout_exceeded") arbiter.submit("attempt_timeout");
+        else if (status === "stale") arbiter.submit("lease_expired");
         return status;
       });
       return expirationPromise;
@@ -565,18 +593,16 @@ export class Worker {
       if (status === "cancel_requested") {
         markCancellationRequested();
       } else if (status === "deadline_exceeded") {
-        deadlineExceeded = true;
         stopHeartbeat();
         void expireOwnership();
         if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(job.id));
       } else if (status === "timeout_exceeded") {
-        timeoutExceeded = true;
         stopHeartbeat();
         void expireOwnership();
         if (!controller.signal.aborted)
           controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
       } else if (status === "stale") {
-        leaseLost = true;
+        arbiter.submit("lease_expired");
         stopHeartbeat();
         if (!controller.signal.aborted) controller.abort(new Error("Job lease was lost"));
       }
@@ -595,10 +621,8 @@ export class Worker {
             job.deadlineAt !== null &&
             (job.attemptTimeoutAt === null || job.deadlineAt <= job.attemptTimeoutAt);
           if (isDeadline) {
-            deadlineExceeded = true;
             if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(job.id));
           } else {
-            timeoutExceeded = true;
             if (!controller.signal.aborted)
               controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
           }
@@ -624,7 +648,6 @@ export class Worker {
             },
             (error: unknown) => {
               if (heartbeatStopped) return;
-              leaseLost = true;
               stopHeartbeat();
               controller.abort(error);
             },
@@ -731,8 +754,7 @@ export class Worker {
           }
           const scheduled = await this.queue.scheduleWait(job, this.workerId, name, request);
           waits?.set(name, scheduled.wait);
-          if (scheduled.status === "scheduled") {
-            durablySuspended = true;
+          if (scheduled.status === "scheduled" && arbiter.submit("suspended_for_wait")) {
             controller.abort(DURABLE_WAIT_SUSPENSION);
             throw DURABLE_WAIT_SUSPENSION;
           }
@@ -761,12 +783,28 @@ export class Worker {
         sleepUntil,
       });
       await this.inject("afterHandler", job);
-      if (cancellationRequested) {
+      if (arbiter.is("suspended_for_wait")) {
+        logWarn("workhorse.handler.signal_swallowed", "Job handler swallowed its abort signal", {
+          ...jobSpanAttributes(job),
+          "workhorse.queue.name": this.queueName,
+          "workhorse.worker.id": this.workerId,
+          "workhorse.handler.outcome": "suspended",
+        });
+        span.setAttribute("workhorse.handler.outcome", "suspended");
+        recordExecution("suspended");
+        return;
+      }
+      if (arbiter.is("cancelled")) {
         await acknowledgeCancellation();
         span.setAttribute("workhorse.handler.outcome", "canceled");
         return;
       }
-      if (leaseLost || controller.signal.aborted)
+      if (arbiter.is("lease_expired")) {
+        span.setAttribute("workhorse.handler.outcome", "stale");
+        recordExecution("lease_lost");
+        return;
+      }
+      if (controller.signal.aborted)
         throw controller.signal.reason ?? new Error("Job lease was lost");
       await this.inject("beforeComplete", job);
       const accepted = await this.queue.complete(job, this.workerId, result);
@@ -777,15 +815,12 @@ export class Worker {
         }
         throw new Error("Completion rejected because the lease is stale or expired");
       }
+      if (!arbiter.submit("completed")) return;
       span.setAttribute("workhorse.handler.outcome", "succeeded");
       recordExecution("succeeded");
       await this.inject("afterComplete", job);
     } catch (error) {
-      if (
-        durablySuspended ||
-        error === DURABLE_WAIT_SUSPENSION ||
-        controller.signal.reason === DURABLE_WAIT_SUSPENSION
-      ) {
+      if (arbiter.is("suspended_for_wait")) {
         span.setAttribute("workhorse.handler.outcome", "suspended");
         recordExecution("suspended");
         return;
@@ -794,17 +829,18 @@ export class Worker {
       // the wrong durable state. Ordinary handler errors do close and retry the attempt.
       if (error instanceof InjectedCrashError) throw error;
       if (
-        cancellationRequested ||
+        arbiter.is("cancelled") ||
         error instanceof CancellationRequestedError ||
         controller.signal.reason instanceof CancellationRequestedError
       ) {
+        arbiter.submit("cancelled");
         await acknowledgeCancellation();
         span.setAttribute("workhorse.handler.outcome", "canceled");
         return;
       }
       if (
-        deadlineExceeded ||
-        timeoutExceeded ||
+        arbiter.is("deadline_exceeded") ||
+        arbiter.is("attempt_timeout") ||
         error instanceof DeadlineExceededError ||
         error instanceof ExecutionTimeoutError ||
         controller.signal.reason instanceof DeadlineExceededError ||
@@ -822,21 +858,25 @@ export class Worker {
           expirationPromise = undefined;
           expirationStatus = await expireOwnership();
         }
-        if (expirationStatus === "cancel_requested") {
+        if (arbiter.is("cancelled")) {
           await acknowledgeCancellation();
           span.setAttribute("workhorse.handler.outcome", "canceled");
           return;
         }
-        if (expirationStatus === "stale") {
+        if (arbiter.is("lease_expired")) {
           recordExecution("lease_lost");
           span.setAttribute("workhorse.handler.outcome", "stale");
           return;
         }
-        const executionTimedOut =
-          expirationStatus === "timeout_exceeded" ||
-          (expirationStatus === undefined && timeoutExceeded) ||
-          error instanceof ExecutionTimeoutError ||
-          controller.signal.reason instanceof ExecutionTimeoutError;
+        if (arbiter.outcome === undefined) {
+          arbiter.submit(
+            error instanceof ExecutionTimeoutError ||
+              controller.signal.reason instanceof ExecutionTimeoutError
+              ? "attempt_timeout"
+              : "deadline_exceeded",
+          );
+        }
+        const executionTimedOut = arbiter.is("attempt_timeout");
         recordExecution(executionTimedOut ? "timeout" : "deadline_exceeded");
         span.setAttribute(
           "workhorse.handler.outcome",
@@ -1009,11 +1049,11 @@ export class Worker {
         "background_tasks",
       );
       for (const result of await this.queue.prepareHistoryPartitions())
-        this.recordMaintenance("history_partitions", result);
+        this.recordMaintenance("background_tasks", result);
       for (const result of await this.queue.retainHistory())
-        this.recordMaintenance("history_retention", result);
+        this.recordMaintenance("background_tasks", result);
       for (const result of await this.queue.pruneTerminalStorage())
-        this.recordMaintenance("terminal_storage", result);
+        this.recordMaintenance("background_tasks", result);
       // Registrations are operator state, not lifecycle attribution, so a failed prune must never
       // stop maintenance that retention and partitioning depend on.
       if (this.registryIntervalMs !== 0) {
@@ -1027,7 +1067,7 @@ export class Worker {
     nowMs: number,
     lastRunAt: number,
     cadenceMs: number,
-    loop: "tick" | "statistics_rollup" | "background_tasks",
+    loop: WorkerMaintenanceLoop,
   ): void {
     if (!Number.isFinite(lastRunAt)) return;
     telemetryMetrics.maintenanceDrift.record(Math.max(0, nowMs - lastRunAt - cadenceMs), {

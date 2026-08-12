@@ -55,6 +55,7 @@ const telemetryLogger = lazyLogger();
 type WorkhorseLogEvent =
   | "workhorse.handler.finished"
   | "workhorse.handler.registered"
+  | "workhorse.handler.signal_swallowed"
   | "workhorse.handler.started"
   | "workhorse.job.cancellation_acknowledged"
   | "workhorse.job.cancellation_processed"
@@ -97,7 +98,7 @@ type WorkhorseLogEvent =
 
 function emitLog(
   severityNumber: SeverityNumber,
-  severityText: "DEBUG" | "INFO",
+  severityText: "DEBUG" | "INFO" | "WARN",
   eventName: WorkhorseLogEvent,
   body: string,
   attributes: LogAttributes,
@@ -119,6 +120,14 @@ export function logInfo(
   attributes: LogAttributes = {},
 ): void {
   emitLog(SeverityNumber.INFO, "INFO", eventName, body, attributes);
+}
+
+export function logWarn(
+  eventName: WorkhorseLogEvent,
+  body: string,
+  attributes: LogAttributes = {},
+): void {
+  emitLog(SeverityNumber.WARN, "WARN", eventName, body, attributes);
 }
 
 function lazyMetric<TInstrument, TArguments extends unknown[]>(
