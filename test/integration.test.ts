@@ -1879,6 +1879,61 @@ describe("live-runtime queue protocol", () => {
     ]);
   });
 
+  it("durably times out an attempt whose local timer fires before the database clock agrees", async () => {
+    // Regression for the not_due swallow. node-postgres hands attemptTimeoutAt back at millisecond
+    // precision while PostgreSQL stores microseconds, so the worker's local expiration timer can
+    // fire before clock_timestamp() reaches the stored value and expire_owned_v1 answers not_due.
+    // The worker used to treat that answer as completion and abandon the attempt in active state.
+    // This claim wrapper widens the natural sub-millisecond window to one no scheduler can hide:
+    // the timer fires 100ms early, and the worker must keep asking until the database agrees.
+    const skewMs = 100;
+    const earlyTimerQueue = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property !== "claim") return Reflect.get(target, property, receiver);
+        return async (...args: Parameters<Queue["claim"]>) => {
+          const claimed = await target.claim(...args);
+          if (claimed?.attemptTimeoutAt) {
+            claimed.attemptTimeoutAt = new Date(claimed.attemptTimeoutAt.getTime() - skewMs);
+          }
+          return claimed;
+        };
+      },
+    });
+    const id = await queue.enqueue("early-timer-timeout", null, {
+      executionTimeoutMs: 200,
+      maxAttempts: 2,
+    });
+    const reasons: unknown[] = [];
+    const worker = new Worker(earlyTimerQueue, {
+      workerId: "early-timer-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 50,
+    }).handle("early-timer-timeout", async (_payload, context) => {
+      await new Promise<void>((_resolve, reject) => {
+        context.signal.addEventListener(
+          "abort",
+          () => {
+            reasons.push(context.signal.reason);
+            reject(context.signal.reason);
+          },
+          { once: true },
+        );
+      });
+      return null;
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    expect(await queue.getJob(id)).toMatchObject({ state: "ready", currentAttempt: 2 });
+    expect(await worker.runOnce()).toBe(true);
+    expect(reasons).toHaveLength(2);
+    expect(reasons.every((reason) => reason instanceof ExecutionTimeoutError)).toBe(true);
+    expect(await queue.getJob(id)).toMatchObject({
+      state: "failed",
+      currentAttempt: 2,
+      error: { name: "ExecutionTimeout" },
+    });
+  });
+
   it("materializes cancellation requested before an overdue deadline without stranding runtime", async () => {
     const id = await queue.enqueue("cancel-before-deadline", null, {
       deadline: new Date(Date.now() + 120),
