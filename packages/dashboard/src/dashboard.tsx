@@ -133,6 +133,7 @@ import {
 import {
   eventsListingKey,
   eventsLocationHref,
+  isEventTypeFilter,
   parseEventsLocation,
   type EventsLocationState,
 } from "./events-location.js";
@@ -4290,7 +4291,7 @@ function EventsPage({
             w={260}
             data={eventTypeOptions}
             value={query.types}
-            onChange={(value) => filter({ types: value })}
+            onChange={(value) => filter({ types: value.filter(isEventTypeFilter) })}
           />
           <Select
             size="xs"

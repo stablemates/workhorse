@@ -3,6 +3,7 @@ import {
   dashboardJobEventTypes,
   type DashboardEventKind,
   type DashboardEventsWindow,
+  type DashboardEventTypeFilter,
 } from "./model.js";
 
 export const eventPageSizes = [25, 50, 100] as const;
@@ -16,7 +17,7 @@ export interface EventsLocationState {
   kind: EventsKindFilter;
   queue: string | null;
   jobType: string | null;
-  types: string[];
+  types: DashboardEventTypeFilter[];
   /** The history record shown in the drawer, encoded as `kind:recordId`. */
   eventId: string | null;
 }
@@ -36,6 +37,16 @@ const windows = new Set<DashboardEventsWindow>(["15m", "1h", "6h", "24h"]);
 const kinds = new Set<EventsKindFilter>(["all", "event", "attempt"]);
 const eventTypes = new Set<string>([...dashboardJobEventTypes, ...dashboardAttemptOutcomes]);
 
+/**
+ * True when a value names an event type or attempt outcome the feed can filter by.
+ *
+ * The browser widgets and the query string both hand back plain strings, and this is where such a
+ * string becomes a filter the client is allowed to send.
+ */
+export function isEventTypeFilter(value: string): value is DashboardEventTypeFilter {
+  return eventTypes.has(value);
+}
+
 function optionalValue(parameters: URLSearchParams, key: string): string | null {
   return parameters.get(key)?.trim() || null;
 }
@@ -53,7 +64,10 @@ export function parseEventsLocation(search: string | URLSearchParams): EventsLoc
   const types = (parameters.get("events") ?? "")
     .split(",")
     .map((type) => type.trim())
-    .filter((type, index, values) => eventTypes.has(type) && values.indexOf(type) === index);
+    .filter(
+      (type, index, values): type is DashboardEventTypeFilter =>
+        isEventTypeFilter(type) && values.indexOf(type) === index,
+    );
 
   return {
     window: requestedWindow && windows.has(requestedWindow) ? requestedWindow : "1h",
