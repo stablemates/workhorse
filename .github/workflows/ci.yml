@@ -24,6 +24,7 @@ jobs:
   static:
     name: format, lint, types
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -34,11 +35,28 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm lint
+      - run: pnpm build:runtime:dev
       - run: pnpm typecheck
 
-  test:
-    name: test (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
+  unit:
+    name: environment-independent tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:runtime:dev
+      - run: pnpm test:unit
+
+  database:
+    name: database tests (node ${{ matrix.node }}, postgres ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -68,18 +86,18 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The package test suites import @workhorse/core through its published entry point, so the
-      # library half has to exist before vitest runs. The browser bundle is only needed by the
-      # demo smoke test.
-      - run: pnpm build:runtime:dev
+      # The package test suites import built package entry points, and the demo integration suite
+      # serves packages/dashboard/dist/app. The latter requires the full build by repository rule.
+      - run: pnpm build
       # The reset creates the database and installs sql/schema.sql, which is also the first proof
       # that the canonical schema is accepted by this PostgreSQL major at all.
       - run: pnpm db:reset:test
-      - run: pnpm test
+      - run: pnpm test:database
 
   packed:
     name: packed install (node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -116,6 +134,7 @@ jobs:
   demo:
     name: demo smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:18-alpine
