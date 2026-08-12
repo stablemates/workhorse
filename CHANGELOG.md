@@ -55,6 +55,12 @@ First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL 
   reads a SQLSTATE through the wrappers an ORM adds around a driver error; `expectOneRow` takes the
   single row a statement is defined to return and throws `MissingRowError` naming that statement
   when the result is empty.
+- `@workhorse/core`: the shared adapter core an ORM provider is built from — `QueryError`,
+  `rowsToQueryResult`, `attachNotificationPool`, `createProviderQueryable`, and
+  `createProviderAdapter`, alongside the existing `createWorkhorseAdapter`. A provider now supplies
+  only how its ORM runs a statement; error translation, the result shape, the notification
+  capability, and the transaction wiring are owned once. What an adapter must guarantee is written
+  down in [`docs/architecture.md`](docs/architecture.md).
 - npm provenance on every published tarball.
 
 ### Changed
