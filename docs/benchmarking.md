@@ -4,6 +4,7 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [`results/2026-08-11-metrics-lifecycle.json`](benchmarks/results/2026-08-11-metrics-lifecycle.json): eager against lazy metric instrument lifecycle, per-emission cost and late-provider registration, interpreted in [ADR 0024](decisions/0024-metrics-instrument-lifecycle.md).
 - [2026-08-10 payload-contract smoke analysis](benchmarks/2026-08-10-payload-contracts-smoke-analysis.md): contracted transition timings and redaction invariants without an overhead claim.
 - [`results/2026-08-10-payload-contracts-smoke.json`](benchmarks/results/2026-08-10-payload-contracts-smoke.json): schema-v20 lifecycle smoke artifact for the extended `retry-paths` scenario.
 - [`results/2026-08-10-notification-dispatch-smoke.json`](benchmarks/results/2026-08-10-notification-dispatch-smoke.json): notification-assisted dispatch smoke artifact comparing idle claims and enqueue-to-claim latency with polling-only dispatch.
@@ -392,3 +393,13 @@ The JSON root is `artifactVersion: 1`, `contract: "common-success-path-v1"`, and
 Do not compare Graphile's post-success schema size as if it retained completed jobs. Do not interpret pg-boss or Graphile handler timing as directly comparable manual claim latency, and do not infer fencing guarantees from this suite. Workhorse exposes public claim/fence operations; both competitor worker APIs own claiming internally.
 
 The timed end point is successful completion of every task handler. Framework-owned durable settlement can finish after a handler returns, so the suite does not claim a cross-product durable-settlement latency. Graceful shutdown and telemetry collection are outside timed phases. Product-specific handler/claim batching must be reported in a separately labeled optimized profile rather than mixed into this common per-job baseline.
+
+## Standalone metric lifecycle microbenchmark
+
+`benchmarks/metrics-lifecycle.ts` compares the two metric instrument lifecycles core ships: the eager module-scope instruments in `src/metrics.ts` and the lazy, provider-change-aware instruments in `src/telemetry.ts`. It measures per-emission cost with telemetry off and on, and reports whether each lifecycle still reaches an OpenTelemetry SDK registered after the instrumentation module loaded.
+
+```bash
+pnpm benchmark:metrics-lifecycle -- --output docs/benchmarks/results/<date>-metrics-lifecycle.json
+```
+
+This benchmark needs no database and does not run under `pnpm benchmark`. Emission cost is nanoseconds per call, roughly four orders of magnitude below claim latency, so a throughput scenario cannot resolve the difference between the lifecycles; do not read one as evidence about them. [ADR 0024](decisions/0024-metrics-instrument-lifecycle.md) interprets the result.

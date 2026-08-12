@@ -1,0 +1,93 @@
+{
+  "options": {
+    "emissionsPerRepetition": 1000000,
+    "repetitions": 12,
+    "warmupRepetitions": 3
+  },
+  "measurements": [
+    {
+      "lifecycle": "eager",
+      "provider": "off",
+      "nanosecondsPerEmission": {
+        "count": 12,
+        "min": 0.5082280000000026,
+        "max": 0.7206989999999962,
+        "mean": 0.5344065833333348,
+        "sampleStandardDeviation": 0.05906547180491909,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 0.4968779199492911,
+          "upper": 0.5719352467173785,
+          "marginOfError": 0.03752866338404371
+        }
+      }
+    },
+    {
+      "lifecycle": "lazy",
+      "provider": "off",
+      "nanosecondsPerEmission": {
+        "count": 12,
+        "min": 11.372079000000014,
+        "max": 11.62947399999996,
+        "mean": 11.468222083333337,
+        "sampleStandardDeviation": 0.07481053304357621,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 11.42068941786262,
+          "upper": 11.515754748804055,
+          "marginOfError": 0.0475326654707164
+        }
+      }
+    },
+    {
+      "lifecycle": "eager",
+      "provider": "on",
+      "nanosecondsPerEmission": {
+        "count": 12,
+        "min": 368.77314200000046,
+        "max": 381.928441,
+        "mean": 373.85291333333345,
+        "sampleStandardDeviation": 3.9999898098725484,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 371.31142392290246,
+          "upper": 376.39440274376443,
+          "marginOfError": 2.5414894104309864
+        }
+      }
+    },
+    {
+      "lifecycle": "lazy",
+      "provider": "on",
+      "nanosecondsPerEmission": {
+        "count": 12,
+        "min": 406.62950999999885,
+        "max": 421.45761400000083,
+        "mean": 414.12171741666674,
+        "sampleStandardDeviation": 5.170109627555981,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 410.8367643308439,
+          "upper": 417.4066705024896,
+          "marginOfError": 3.2849530858228584
+        }
+      }
+    }
+  ],
+  "registration": [
+    {
+      "lifecycle": "eager",
+      "emissionsBeforeRegistration": 3,
+      "emissionsAfterRegistration": 5,
+      "collectedAfterRegistration": null,
+      "reachesLateProvider": false
+    },
+    {
+      "lifecycle": "lazy",
+      "emissionsBeforeRegistration": 3,
+      "emissionsAfterRegistration": 5,
+      "collectedAfterRegistration": 5,
+      "reachesLateProvider": true
+    }
+  ]
+}
