@@ -36,6 +36,8 @@ Comparative overrides:
   --churn-rate N     Fixed producer target jobs per second
   --churn-jobs N     Exact jobs produced and completed per design
   --sample-ms N      Churn telemetry sample interval in milliseconds
+  --schedule-samples N
+                     Recurring occurrences sampled under worker load
 
 Output:
   --output PATH      Also write the canonical versioned JSON report to PATH
@@ -117,6 +119,7 @@ function cliOptions(): BenchmarkRunOptions {
   const targetRatePerSecond = positiveInteger("--churn-rate");
   const targetJobs = positiveInteger("--churn-jobs");
   const sampleIntervalMs = positiveInteger("--sample-ms");
+  const scheduleSamples = positiveInteger("--schedule-samples");
   const scenarios = scenarioList();
 
   return {
@@ -140,7 +143,10 @@ function cliOptions(): BenchmarkRunOptions {
             },
           }),
     },
-    operational: scenarios === undefined ? {} : { scenarios },
+    operational: {
+      ...(scenarios === undefined ? {} : { scenarios }),
+      ...(scheduleSamples === undefined ? {} : { scheduleSamples }),
+    },
   };
 }
 

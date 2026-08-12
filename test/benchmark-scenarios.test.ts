@@ -184,6 +184,26 @@ describe("operational scenario contracts", () => {
     );
     expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|latency target|sla/);
   });
+
+  it("defines loaded recurring-schedule cadence evidence", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "schedule-cadence-jitter",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/while the worker remains loaded/);
+    expect(contract!.invariants.join("\n")).toMatch(/one durable occurrence and job/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "scheduleSamples",
+        "loadJobsStarted",
+        "maintenanceIntervalMs",
+        "fireDelayP50Ms",
+        "fireDelayP95Ms",
+        "fireDelayMaxMs",
+      ]),
+    );
+  });
 });
 
 describe("resolveOperationalScenarioOptions", () => {
@@ -195,6 +215,7 @@ describe("resolveOperationalScenarioOptions", () => {
     expect(resolved.heartbeatCount).toBeLessThanOrEqual(resolved.jobCount);
     expect(resolved.scheduleDelayMs).toBeLessThanOrEqual(100);
     expect(resolved.leaseMs).toBeLessThanOrEqual(100);
+    expect(resolved.scheduleSamples).toBeGreaterThanOrEqual(3);
     expect(resolved.scenarios).toEqual(operationalScenarioNames);
   });
 
@@ -208,6 +229,7 @@ describe("resolveOperationalScenarioOptions", () => {
         leaseMs: 6,
         retryDelayMs: 7,
         pruneLimit: 8,
+        scheduleSamples: 3,
         queuePrefix: " smoke ",
         scenarios: ["health-snapshot", "heartbeat-fencing"],
       }),
@@ -219,6 +241,7 @@ describe("resolveOperationalScenarioOptions", () => {
       leaseMs: 6,
       retryDelayMs: 7,
       pruneLimit: 8,
+      scheduleSamples: 3,
       queuePrefix: "smoke",
       scenarios: ["heartbeat-fencing", "health-snapshot"],
     });
