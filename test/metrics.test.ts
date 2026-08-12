@@ -358,7 +358,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
               ready: "3",
               active: "1",
               oldest_ready_age_ms: 4_500,
-              expired_leases: "1",
+              expired: "1",
               overdue_deadlines: "2",
               overdue_execution_timeouts: "1",
               paused: true,
@@ -414,6 +414,24 @@ describe("Workhorse OpenTelemetry metrics", () => {
       }),
     ]);
     expect(metric("workhorse.queue.paused")?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes: { "workhorse.queue.name": "mail" },
+        value: 1,
+      }),
+    ]);
+    expect(metric("workhorse.lease.expired")?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes: { "workhorse.queue.name": "mail" },
+        value: 1,
+      }),
+    ]);
+    expect(metric("workhorse.deadline.overdue")?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes: { "workhorse.queue.name": "mail" },
+        value: 2,
+      }),
+    ]);
+    expect(metric("workhorse.execution_timeout.overdue")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: { "workhorse.queue.name": "mail" },
         value: 1,
