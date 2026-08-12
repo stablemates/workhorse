@@ -2,10 +2,16 @@
 
 ## Current pre-release policy
 
-Until the first production-supported release, Workhorse keeps one canonical clean-install schema in
-`sql/schema.sql`. Development schema changes edit that file in place and increment
-`WORKHORSE_SCHEMA_VERSION`. We intentionally do not accumulate migrations while the data model is
-still moving quickly.
+Until the first production-supported release, Workhorse keeps the canonical current schema in
+`sql/schema/current.sql`. `pnpm schema:generate` derives the shipped clean-install artifact at
+`sql/schema.sql`, and `pnpm schema:check` rejects a stale artifact. Development schema changes edit
+the source and increment `WORKHORSE_SCHEMA_VERSION`. We intentionally do not accumulate migrations
+while the data model is still moving quickly.
+
+The artifact contains only the current table, trigger, and function definitions. It contains no
+in-place `ALTER TABLE` steps, retired function signatures, or `DROP ... IF EXISTS` upgrade
+prologues. Idempotent `CREATE OR REPLACE` definitions let installation reconverge an already-current
+schema without carrying old signatures forward.
 
 `installSchema(database)` is explicit. It installs a clean database and accepts an already-installed
 schema only when it exactly matches the current canonical version. It is not an upgrade mechanism.
