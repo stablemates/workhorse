@@ -1,57 +1,70 @@
 ---
-title: Which runtimes does Workhorse support?
-description: Understand the tested Node.js, PostgreSQL, module, package, and schema compatibility boundaries.
+title: Compatibility
+description: Node.js 22+, PostgreSQL 15+, no extensions, and an exact-match schema — what is tested and what that means.
 ---
 
-A runtime is supported when continuous integration runs the full suite against it. Workhorse may run
-elsewhere, but untested versions do not carry the same correctness evidence.
+You need to know two things before adopting a queue: will it run on your stack, and what does
+"supported" actually prove. Workhorse requires Node.js 22 or newer and PostgreSQL 15 or newer, and
+a version counts as supported only when continuous integration runs the full suite against it on
+every change. Workhorse may run elsewhere, but untested versions do not carry the same correctness
+evidence.
 
-## Check the current matrix
+## The tested matrix
 
-The exact Node.js and PostgreSQL majors change over time, so the
-[compatibility matrix](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md) owns
-those values.
+CI exercises every combination of Node.js 22 and 24 with PostgreSQL 15, 16, 17, and 18. The
+runtime exports the same boundary to tooling: `MINIMUM_NODE_MAJOR` is 22, `MINIMUM_POSTGRES_MAJOR`
+is 15, and `SUPPORTED_NODE_MAJORS` and `SUPPORTED_POSTGRES_MAJORS` list the CI majors. A test in
+the repository fails whenever the CI matrix, the package `engines` fields, and these constants
+drift apart, so the published numbers are always the exercised numbers. The
+[compatibility matrix](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md)
+tracks them as they change.
 
-`SUPPORTED_NODE_MAJORS` and `SUPPORTED_POSTGRES_MAJORS` expose the same release boundary to tooling.
-`describePostgresSupport` explains whether a connected server is tested, merely newer, or refused.
+You can classify a connected server at runtime. `readPostgresSupport` reports whether it is tested,
+merely newer than tested, or below the minimum; `assertSupportedPostgres` refuses to proceed below
+the minimum before schema installation can fail confusingly.
 
 ```ts
 import { readPostgresSupport } from "@workhorse/core";
 
 const support = await readPostgresSupport(pool);
-console.log(support);
+console.log(support); // { major: 17, version: "17.2 …", supported: true, tested: true }
 ```
 
-Workhorse requires plain PostgreSQL with its default procedural language. It installs no optional
-extension.
+A server newer than the tested majors is reported as supported but untested rather than rejected —
+refusing to run on a release that did not exist at publish time would strand you on every
+PostgreSQL upgrade.
 
-Published packages are ESM and include TypeScript declarations. JavaScript uses the same runtime,
-while CommonJS loading is outside the supported package format.
+## Plain PostgreSQL, no extensions
+
+Workhorse requires only stock PostgreSQL with its default procedural language. It installs no
+extension, so it runs on managed services — RDS, Cloud SQL, Neon, Supabase — without an allowlist
+conversation.
+
+Published packages are ESM with TypeScript declarations. Plain JavaScript uses the same runtime;
+CommonJS loading is outside the supported package format.
 
 ## Match the schema exactly
 
-The PostgreSQL schema is the durable protocol. An application runtime and installed schema must agree
-exactly because workers can otherwise interpret lifecycle state differently.
+The PostgreSQL schema is the durable protocol. The application runtime and the installed schema
+must agree exactly, because mismatched workers could interpret lifecycle state differently.
 
-Call `assertSchemaCompatible` during startup. A mismatch should fail the process before it claims or
-changes work.
+Call `assertSchemaCompatible` during startup. A mismatch should fail the process before it claims
+or changes work.
 
-Schema installation is clean-install only. Workhorse does not provide an online migration path, so a
-protocol change needs a separately designed drain and data transition.
-
-The dashboard transport can change without a schema bump because it is private to matching package
-versions. Use the public `Queue` read API for application integrations.
+Schema installation is clean-install only. Workhorse does not yet provide an online migration path,
+so a release that changes the schema needs a separately designed drain and data transition. The
+dashboard transport can change without a schema bump because it is private to matching package
+versions — use the public `Queue` read API for application integrations.
 
 ## Treat releases as one package set
 
 Core and its integration packages release together. Keep their versions aligned so adapters,
-dashboard contracts, and exported types describe the same source revision.
+dashboard contracts, and exported types describe the same source revision. The
+[changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) records breaking
+changes and the schema version each release requires.
 
-The [changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) records breaking
-changes and the schema required by each release.
-
-Support proves correctness under the tested matrix. It does not promise a throughput level for your
-database, payloads, handlers, or deployment topology.
+One honest caveat: support proves correctness under the tested matrix. It does not promise a
+throughput level for your database, payloads, handlers, or deployment topology.
 
 ## Next
 

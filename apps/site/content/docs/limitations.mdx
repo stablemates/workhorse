@@ -1,65 +1,105 @@
 ---
-title: When is Workhorse the wrong fit?
-description: Compare the current delivery, scheduling, orchestration, authorization, and migration boundaries with your requirements.
+title: Limitations
+description: What Workhorse does not do today — with the workaround for each boundary that has one.
 ---
 
-Workhorse fits PostgreSQL-backed applications that accept at-least-once handlers and a clean-install
-schema. Choose another system when a missing capability is central to your workload.
+Choosing infrastructure means knowing what it will not do before it is load-bearing. Workhorse fits
+PostgreSQL-backed applications that accept at-least-once handlers and a clean-install schema. This
+page lists every boundary honestly, with the workaround where one exists.
+
+Workhorse currently positions itself as an evidence-first validation release, not a
+production-support promise. Its purpose is to validate the durable-execution protocol —
+transactional enqueue, fenced ownership, checkpoint replay, cooperative cancellation, audited
+redrive — with recorded evidence, before hardening claims are made.
+
+## No workflows, DAGs, or job dependencies
+
+Workhorse is a queue, not a workflow engine. There is no dependency graph, no child-job runtime,
+and no fan-out/fan-in primitive. A job cannot declare "run after those three finish".
+
+Workaround: model orchestration explicitly. A handler can enqueue its successors transactionally,
+and checkpoints make a multi-stage handler behave like a small linear workflow. For real DAGs, use
+a workflow system on top or instead.
+
+## No priorities
+
+Queues are FIFO by ready time. There is no priority field, so an urgent job cannot jump a backlog.
+
+Workaround: separate queues. Give latency-sensitive work its own queue and its own workers, and use
+concurrency policies to keep bulk work from starving it.
+
+## No signals or early wake
+
+Durable waits are time-based. A sleeping job wakes when its timer is due — not when an external
+event arrives — and an operator cannot wake it early, except that `runTaskNow` can release one
+scheduled job.
+
+Workaround: poll from the handler. Sleep in bounded intervals and check the external condition on
+each activation; each check is one cheap handler pass.
+
+## No cross-queue concurrency policies
+
+Concurrency and rate-limit policies are scoped to one queue. You cannot express "at most 10 active
+jobs across these three queues".
+
+Workaround: route work that shares a budget onto one queue, and use `concurrencyKey` for per-tenant
+budgets within it.
+
+## Cancellation is cooperative, never forced
+
+JavaScript cannot be preempted safely, so Workhorse never kills a running handler. Cancellation,
+deadlines, and execution timeouts abort the handler's `AbortSignal`; the code runs until it
+observes that signal or loses its lease. Process shutdown likewise drains handlers rather than
+preempting them.
+
+Workaround: pass `context.signal` into every cancelable operation and check it between units of
+work. If work truly requires forced termination, isolate it in a process you can kill and make its
+effects recoverable.
 
 ## External effects are at least once
 
-PostgreSQL cannot commit an HTTP call, email, or payment in the same transaction as job completion. A
-worker can finish the effect and die before it records success.
+PostgreSQL cannot commit an HTTP call, email, or payment in the same transaction as job completion.
+A worker can perform the effect and die before recording success, so the effect can happen again.
+Enqueue idempotency keys deduplicate job identities; they cannot make one accepted handler execute
+exactly once. Redrive is another at-least-once execution.
 
-Use provider idempotency keys, transactional inbox or outbox patterns, or compensation. Enqueue keys
-prevent duplicate job identities, but they cannot make one accepted handler execute exactly once.
+Workaround: this is the designed model, not an accident. Wrap each effect in a named `checkpoint`
+so completed stages never rerun, and give the provider an idempotency key — the job ID or a domain
+ID — to close the final gap between effect and checkpoint commit.
 
-Redrive creates another at-least-once execution. Operator tooling must confirm that repeating the
-effect is safe before it replays failures.
+## TypeScript only
 
-## Scheduling is durable rather than real time
+There are no SDKs for other languages. The schema is documented SQL, but only the TypeScript
+runtime implements the claim, heartbeat, and completion protocol.
 
-Delayed jobs and durable waits store not-before boundaries. If someone pauses the queue, or workers
-or PostgreSQL become unavailable, a worker can claim the job later than its boundary.
+## No public HTTP ingress
 
-Recurring schedules need a running worker with the matching namespace. Workhorse bounds catch-up
-after downtime and does not provide a hard real-time scheduler.
+Nothing accepts jobs over HTTP. Producers need a database connection and the SDK.
 
-## Stop is cooperative
+Workaround: enqueue from your own API routes — which is also where transactional enqueue with your
+business writes lives.
 
-Cancellation, deadlines, and execution timeouts abort a handler signal. JavaScript continues until
-the handler observes that signal or loses its lease.
+## No online schema migrations
 
-Process shutdown also drains rather than preempts handlers. If your application requires immediate
-forced interruption, isolate that work in a process you can terminate and make its effects recoverable.
+The schema installs cleanly and requires an exact runtime match. There is no online migration path
+or compatibility layer between protocol versions, which matters most for long-lived production
+data.
 
-## Workhorse is a queue, not a workflow engine
+Workaround: plan the drain, cutover, and evidence retention before adopting a release that changes
+the schema. The changelog records which releases do.
 
-Workhorse has FIFO queues, but no priorities, dependency graph, child-job runtime, or cross-queue
-concurrency policy. Application code must model orchestration explicitly or use a workflow system.
+## No built-in dashboard auth
 
-Durable waits are time-based. They do not accept arbitrary signals or operator early wake commands.
+The dashboard and mutation APIs record attribution — who asked, why — but provide no
+authentication, authorization, roles, or tenant isolation.
 
-## The host owns security and telemetry
-
-The dashboard and mutation APIs provide attribution, not authentication, authorization, role-based
-access, or tenant isolation. Every host must enforce its own operator boundary.
-
-Workhorse exposes health and maintenance telemetry but no built-in metrics endpoint or tracing export.
-Connect handler and process signals to your observability system.
-
-## Schema evolution needs a deliberate migration
-
-The current schema installs cleanly and requires an exact runtime match. Workhorse does not ship
-online schema migration or compatibility write views between protocol versions.
-
-This boundary matters most for long-lived production data. Plan the drain, cutover, and evidence
-retention before adopting a release that changes the schema.
+Workaround: mount the dashboard behind your application's existing auth boundary, and authorize
+actors before calling `cancel`, `redrive`, or `setWorkerPaused`.
 
 ## Next
 
-- [Core concepts](/docs/concepts) — understand the guarantees behind these boundaries
-- [Compatibility](/docs/compatibility) — check the tested runtime and schema matrix
+- [Core concepts](/docs/concepts) — the guarantees behind these boundaries
+- [Compatibility](/docs/compatibility) — the tested runtime and schema matrix
 - [Deployment and operations](/docs/operations) — design recovery around cooperative processes
 
 ---

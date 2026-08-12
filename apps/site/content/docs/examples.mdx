@@ -1,41 +1,193 @@
 ---
-title: Which guide contains the pattern I need?
-description: Find the verified example that matches one application or operator boundary.
+title: Examples
+description: Six end-to-end patterns, from transactional enqueue in a route to an incident redrive script.
 ---
 
-Each concept guide owns its example so behavior and code change together. Use this page only to find
-the right owner.
+Documentation explains one concept at a time; real code combines several. This page shows six
+complete patterns you can adapt directly. Every snippet uses the public API as shipped — the
+concept guides linked from each pattern explain the behavior behind it.
 
-## Producing work
+## Transactional enqueue in an API route
 
-- [Quickstart](/docs/quickstart) creates a `Queue`, registers `Worker.handle`, and runs one job.
-- [Enqueue and transactions](/docs/enqueue) passes a caller-owned `Queryable` to `Queue.enqueue`.
-- [Idempotency](/docs/idempotency) attaches a stable key through `EnqueueOptions.idempotency`.
-- [Schedules](/docs/schedules) synchronizes a namespace through `Queue.syncSchedules`.
-- [Concurrency policies](/docs/concurrency-policies) synchronizes fleet-wide queue and keyed dispatch budgets.
+The problem: a request creates an order and must guarantee a fulfillment job — but only if the
+order commits. Pass your open transaction as the last argument to `enqueue`, and the job and the
+order share one commit or one rollback.
 
-## Executing work
+```ts
+import { Pool } from "pg";
+import { Queue } from "@workhorse/core";
 
-- [Workers](/docs/workers) registers a handler and defines a dedicated worker process.
-- [Durable execution](/docs/durable-execution) uses `HandlerContext.checkpoint` and `sleepUntil`.
-- [Progress](/docs/progress) publishes operator state through `HandlerContext.setProgress`.
-- [Cancellation](/docs/cancellation) passes `HandlerContext.signal` into interruptible work.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const queue = new Queue(pool);
 
-## Operating work
+export async function createOrder(orderId: string, items: string[]) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("INSERT INTO orders (id, items) VALUES ($1, $2)", [orderId, items]);
+    await queue.enqueue("order.fulfill", { orderId }, { queue: "orders" }, client);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+```
 
-- [Queries and timelines](/docs/queries) reads `JobSnapshot`, `JobListPage`, and lifecycle evidence.
-- [Dead letters](/docs/dead-letters) previews failure recovery through `Queue.redriveMany`.
-- [Drizzle](/docs/drizzle) binds enqueue to a Drizzle transaction.
-- [Prisma](/docs/prisma) binds enqueue to an interactive transaction.
-- [TypeORM](/docs/typeorm) binds enqueue to a transactional entity manager.
-- [Kysely](/docs/kysely) binds enqueue to a Kysely transaction executor.
-- Web routes receive `Queue` through the application's existing dependency injection.
+If the insert fails, no job exists. If the enqueue fails, no order exists. There is no window where
+one is visible without the other. Using Drizzle, Prisma, TypeORM, or Kysely instead of raw `pg`?
+The [adapter packages](/docs/drizzle) give you the same guarantee through `forTransaction`.
+
+## Multi-stage handler with checkpoints and a durable sleep
+
+The problem: a trial signup should send a welcome email now and a follow-up in seven days, and
+neither email may ever send twice. Checkpoints make each send a restart boundary; the durable sleep
+releases the worker slot for the whole week.
+
+```ts
+worker.handle("trial.lifecycle", async (payload: { to: string; followUpAt: string }, context) => {
+  await context.checkpoint("welcome", () => mailer.welcome(payload.to));
+
+  await context.sleepUntil("follow-up-window", new Date(payload.followUpAt));
+
+  await context.checkpoint("follow-up", () => mailer.followUp(payload.to));
+  return { deliveredTo: payload.to };
+});
+```
+
+The sleep stores a named timer, drops the lease, and parks the job in `scheduled` — no worker slot
+is held for seven days. When the timer is due, a worker runs the handler from the top; the saved
+`welcome` checkpoint returns its stored value instead of sending again. A crash at any point
+replays only the stages that never committed.
+
+## Nightly job synced on deploy
+
+The problem: an invoice run must happen every night at 03:00 with no separate scheduler service.
+Declare the schedule in code and synchronize it during deployment; any worker watching the
+namespace fires it.
+
+```ts
+// Deployment step: reconcile the namespace to exactly this set.
+await queue.syncSchedules("billing-production", [
+  {
+    name: "nightly-invoice-run",
+    schedule: "0 3 * * *",
+    job: {
+      type: "invoice.generate",
+      queue: "billing",
+      payload: { scope: "due" },
+    },
+  },
+]);
+
+// Worker process: evaluate and fire schedules for that namespace.
+const worker = new Worker(queue, {
+  scheduleNamespaces: ["billing-production"],
+});
+worker.handle("invoice.generate", generateInvoices);
+await worker.run();
+```
+
+Competing workers cannot double-fire: each occurrence has a durable key from its namespace, name,
+and planned time, so PostgreSQL converges every racing call on one job. Removing the definition
+from the array disables it on the next deploy — code stays the owner of intent.
+
+## Webhook idempotency
+
+The problem: payment providers redeliver webhooks, and each delivery must produce exactly one job.
+Build the idempotency key from the provider's event ID; a replayed delivery returns the original
+job instead of creating another.
+
+```ts
+export async function handleStripeWebhook(event: { id: string; type: string; data: unknown }) {
+  const jobId = await queue.enqueue(
+    "stripe.event",
+    { eventId: event.id, eventType: event.type },
+    {
+      queue: "webhooks",
+      idempotency: {
+        key: `stripe:${event.id}`,
+        scope: "stripe-webhooks",
+      },
+    },
+  );
+  return { accepted: jobId };
+}
+```
+
+An equivalent replay returns the same job ID with no new job, event, or notification — the route
+stays safely retryable end to end. If a request reuses the key with a _different_ payload,
+`Queue.enqueue` throws `EnqueueIdempotencyConflictError` rather than silently dropping the
+difference. The handler still runs at least once, so keep its external effects idempotent too.
+
+## Incident redrive script
+
+The problem: a provider outage dead-lettered a batch of jobs, the provider has recovered, and an
+operator needs to replay exactly those failures — safely, and only once. Dry-run first, then reuse
+one incident request ID across pages so a crashed script can rerun without duplicating work.
+
+```ts
+const filter = { queue: "billing", errorName: "ProviderTimeout" };
+const request = {
+  requestedBy: "anton@example.com",
+  reason: "provider incident INC-2041 resolved",
+  requestId: "INC-2041",
+};
+
+// 1. Preview what would be redriven. Creates nothing.
+const preview = await queue.redriveMany(filter, request, { dryRun: true, limit: 100 });
+console.log(`${preview.results.length} jobs eligible`);
+
+// 2. Redrive for real, page by page, reusing the same request.
+let cursor = undefined;
+do {
+  const page = await queue.redriveMany(filter, request, { limit: 100, cursor });
+  for (const result of page.results) {
+    console.log(result.status, result.sourceJobId, "->", result.targetJobId);
+  }
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+```
+
+Each redrive creates a fresh job that copies the queue, type, payload, and retry policy; the failed
+source stays unchanged as evidence, and `Queue.getRedriveLineage` links the two. Repeating a page
+under the same `requestId` returns the existing targets — the script is safe to rerun mid-incident.
+
+## Cooperative cancellation
+
+The problem: a customer withdraws an order while its export job is running. JavaScript cannot be
+preempted safely, so cancellation is a durable request the handler observes through its
+`AbortSignal`.
+
+```ts
+// Operator side: record who asked and why.
+await queue.cancel(jobId, {
+  requestedBy: "support@example.com",
+  reason: "customer withdrew the order",
+});
+
+// Handler side: check the signal between units of work.
+worker.handle("export.build", async (payload: { parts: string[] }, context) => {
+  for (const part of payload.parts) {
+    if (context.signal.aborted) throw context.signal.reason;
+    await uploadPart(part, { signal: context.signal });
+  }
+  return { exported: true };
+});
+```
+
+If the job has not started, PostgreSQL cancels it immediately with no invented attempt history. If
+it is active, the worker's heartbeat delivers the request and aborts `context.signal` with
+`CancellationRequestedError`. A handler that ignores the signal loses its lease eventually, and
+recovery materializes the cancellation instead of retrying.
 
 ## Next
 
-- [API index](/docs/api) — find a public identifier
-- [Core concepts](/docs/concepts) — understand the lifecycle behind every pattern
-- [Limitations](/docs/limitations) — check whether the pattern matches your guarantees
+- [Quickstart](/docs/quickstart) — run the crash-survival demo these patterns build on
+- [Durable execution](/docs/durable-execution) — the rules behind checkpoints and sleeps
+- [Dead letters](/docs/dead-letters) — the full redrive model behind the incident script
 
 ---
 

@@ -1,55 +1,91 @@
 ---
-title: What is Workhorse for?
-description: Start here to understand the PostgreSQL-backed queue, its guarantees, and the problems it solves.
+title: What is Workhorse?
+description: A durable job queue that lives inside PostgreSQL, so your jobs commit with your data.
 ---
 
-Workhorse runs durable background jobs from PostgreSQL. It gives an application one database for
-business writes, queued work, execution state, and operator evidence.
+Every application eventually needs work that outlives a request: send the email, charge the card,
+rebuild the report. The moment that work moves to a separate broker, you have two systems that can
+disagree — an order row without its job, or a job for an order that rolled back.
 
-## Why keep the queue in PostgreSQL?
+Workhorse removes the second system. It is a durable job queue built from PostgreSQL tables and
+versioned SQL functions, driven by the `@workhorse/core` TypeScript library. There is no broker, no
+Redis, and no PostgreSQL extension — one database owns your business data, your queued work, your
+execution state, and the evidence of what happened.
 
-An application often needs a database change and some later work to agree. If those operations use
-different systems, one can commit while the other fails.
+## The core promise
 
-`Queue.enqueue` can use the same transaction as your application write. If the transaction rolls
-back, PostgreSQL removes both the business change and the job.
+`Queue.enqueue` accepts your open transaction as its last argument. If the transaction commits, the
+job exists; if it rolls back, PostgreSQL removes the business write and the job together.
 
-Workhorse needs no broker, Redis service, or PostgreSQL extension. Your application owns the
-database connection, while versioned SQL functions own every lifecycle transition.
+```ts
+import { Pool } from "pg";
+import { Queue } from "@workhorse/core";
 
-## What runs a job?
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const queue = new Queue(pool);
 
-Your application registers a handler with `Worker.handle`. A `Worker` claims ready jobs, runs their
-handlers, and records the result.
+const client = await pool.connect();
+try {
+  await client.query("BEGIN");
+  await client.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
+  await queue.enqueue("order.fulfill", { orderId }, {}, client);
+  await client.query("COMMIT");
+} finally {
+  client.release();
+}
+```
 
-Each time a worker claims a job, PostgreSQL grants a temporary lease and a fence token. If that
-worker disappears, another can recover the job, while the old worker loses permission to change it.
+A `Worker` claims the job and runs the handler you registered with `Worker.handle`. Each claim
+grants a temporary lease and a fence token. If the worker dies, the lease expires, another worker
+recovers the job, and the fence token blocks the dead worker from writing stale results.
 
-Handlers run outside database transactions, so delivery is at least once. External effects need a
-stable provider key or another idempotency boundary.
+Handlers run outside database transactions, so delivery is at least once: a handler can run twice
+after a crash. Named checkpoints make that safe. If a handler restarts, `ctx.checkpoint` replays
+each completed stage's stored result instead of running it again.
 
-## What evidence remains?
+```ts
+import { Worker } from "@workhorse/core";
 
-Workhorse stores immutable outcomes and append-only history after execution. `Queue.getJob`,
-`Queue.getJobTimeline`, and the dashboard read that evidence without enlarging dispatch indexes.
+const worker = new Worker(queue).handle("order.fulfill", async (payload, ctx) => {
+  const charge = await ctx.checkpoint("charge", () => chargeCard(payload.orderId));
+  // If the process dies here, the retry skips "charge" and resumes below.
+  const label = await ctx.checkpoint("label", () => printLabel(payload.orderId));
+  return { chargeId: charge.chargeId, labelId: label.labelId };
+});
+await worker.run();
+```
 
-Named checkpoints preserve completed stages across retries. Durable waits release the worker slot
-and restart the handler later from its entry point.
+Beyond checkpoints, jobs get retries with configurable backoff, durable sleeps that release the
+worker slot, cron-style schedules, idempotent enqueue, dead letters with redrive, and immutable
+history you can query with `Queue.getJob` and `Queue.getJobTimeline`.
+
+## When to use it
+
+If your application already runs on PostgreSQL and needs reliable background work, Workhorse fits.
+It needs Node.js 22 or newer and PostgreSQL 15 or newer, and it installs with two commands.
+
+Be aware of what it is not. This is an evidence-first validation release, not a battle-hardened
+platform. Workhorse has no workflow or DAG engine, no job priorities, and no exactly-once external
+effects — external calls still need provider idempotency keys. If you need a queue that scales
+independently of your database, a dedicated broker remains the right tool.
 
 ## Which package do I need?
 
 - `@workhorse/core` provides `Queue`, `Worker`, schema tools, process orchestration, and the CLI.
+- `@workhorse/dashboard` provides the operator interface and its framework-neutral server host.
 - `@workhorse/drizzle` adapts Drizzle databases and transactions to the core `Queryable` protocol.
 - `@workhorse/prisma` adapts Prisma clients and interactive transactions.
 - `@workhorse/typeorm` adapts TypeORM data sources and transactional entity managers.
 - `@workhorse/kysely` adapts Kysely databases and transactions.
-- `@workhorse/dashboard` provides the operator interface and its framework-neutral server host.
+
+Most applications start with `@workhorse/core` plus the `pg` driver. Add an adapter only when you
+want to enqueue inside your ORM's transactions.
 
 ## Next
 
 - [Installation](/docs/installation) — add the package and install its schema
-- [Quickstart](/docs/quickstart) — enqueue and run a small job
-- [Core concepts](/docs/concepts) — understand state, ownership, and delivery
+- [Quickstart](/docs/quickstart) — run a job, kill the worker, watch it finish anyway
+- [Core concepts](/docs/concepts) — states, ownership, and why a handler can run twice
 
 ---
 
