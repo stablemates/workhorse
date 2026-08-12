@@ -83,6 +83,8 @@ import {
   supportsJobNotifications,
   type JobNotificationSubscription,
 } from "./notifications.js";
+import { createQueueModuleContext } from "./queue/module-context.js";
+import { createQueueModules, type QueueModules } from "./queue/modules.js";
 
 export interface ScheduleJobDefinition {
   type: string;
@@ -144,12 +146,8 @@ export interface MaintenancePhaseResult {
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
-  DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
   DEFAULT_JOB_VALUE_MAX_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
-  MAX_JOB_QUERY_PAGE_SIZE,
-  MAX_JOB_QUERY_PAYLOAD_BYTES,
-  MAX_JOB_QUERY_REDACT_KEYS,
   MAX_JOB_CONTRACT_SENSITIVE_KEYS,
   MAX_JOB_VALUE_MAX_BYTES,
   MAX_REDRIVE_BATCH_SIZE,
@@ -995,21 +993,6 @@ function deadLetter(row: DeadLetterRow): DeadLetter {
   };
 }
 
-const JOB_STATES = new Set<JobState>([
-  "scheduled",
-  "ready",
-  "active",
-  "succeeded",
-  "failed",
-  "canceled",
-]);
-
-function validateFiniteDate(value: Date | undefined, field: string): void {
-  if (value !== undefined && (!(value instanceof Date) || !Number.isFinite(value.getTime()))) {
-    throw new TypeError(`${field} must be a finite Date`);
-  }
-}
-
 function jobListFilter(filter: JobListFilter): Record<string, Json> {
   return {
     ...(filter.queue === undefined ? {} : { queue: filter.queue }),
@@ -1795,6 +1778,7 @@ function jobAcceptance(options: QueueOptions, jobType: string, payload: Json): J
  */
 export class Queue {
   private readonly options: QueueOptions;
+  private readonly modules: QueueModules;
 
   constructor(
     private readonly database: Queryable,
@@ -1802,6 +1786,9 @@ export class Queue {
     options: QueueOptions = {},
   ) {
     this.options = validateQueueOptions(options);
+    this.modules = createQueueModules(
+      createQueueModuleContext(database, defaultQueue, this.options),
+    );
   }
 
   /** @internal Whether workers can reserve a node-postgres LISTEN connection. */
@@ -2636,131 +2623,8 @@ export class Queue {
   }
 
   async listJobs(query: JobListQuery = {}): Promise<JobListPage> {
-    if (typeof query !== "object" || query === null || Array.isArray(query)) {
-      throw new TypeError("listJobs query must be an object");
-    }
-    const allowedQueryFields = new Set([
-      "queue",
-      "type",
-      "states",
-      "createdAfter",
-      "createdBefore",
-      "limit",
-      "cursor",
-      "payload",
-    ]);
-    for (const field of Object.keys(query)) {
-      if (!allowedQueryFields.has(field)) {
-        throw new TypeError(`listJobs query contains unknown field: ${field}`);
-      }
-    }
-
-    const limit = query.limit ?? 100;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_JOB_QUERY_PAGE_SIZE) {
-      throw new RangeError(
-        `listJobs limit must be an integer between 1 and ${MAX_JOB_QUERY_PAGE_SIZE}`,
-      );
-    }
-
-    validateFiniteDate(query.createdAfter, "listJobs createdAfter");
-    validateFiniteDate(query.createdBefore, "listJobs createdBefore");
-    if (
-      query.createdAfter !== undefined &&
-      query.createdBefore !== undefined &&
-      query.createdAfter.getTime() >= query.createdBefore.getTime()
-    ) {
-      throw new RangeError("listJobs createdAfter must be earlier than createdBefore");
-    }
-
-    if (query.states !== undefined) {
-      if (!Array.isArray(query.states) || query.states.length === 0) {
-        throw new RangeError("listJobs states must be a non-empty array when supplied");
-      }
-      const uniqueStates = new Set<JobState>();
-      for (const state of query.states) {
-        if (!JOB_STATES.has(state))
-          throw new TypeError(`listJobs state is invalid: ${String(state)}`);
-        if (uniqueStates.has(state))
-          throw new RangeError(`listJobs states must be unique: ${state}`);
-        uniqueStates.add(state);
-      }
-    }
-
-    const cursor = query.cursor;
-    if (cursor !== undefined) {
-      if (typeof cursor !== "object" || cursor === null) {
-        throw new TypeError("listJobs cursor must be an object");
-      }
-      for (const field of Object.keys(cursor)) {
-        if (!new Set(["createdAt", "jobId", "signature"]).has(field)) {
-          throw new TypeError(`listJobs cursor contains unknown field: ${field}`);
-        }
-      }
-      for (const [field, value] of [
-        ["createdAt", cursor.createdAt],
-        ["jobId", cursor.jobId],
-        ["signature", cursor.signature],
-      ] as const) {
-        if (typeof value !== "string" || value.length === 0) {
-          throw new TypeError(`listJobs cursor ${field} must be a non-empty string`);
-        }
-      }
-    }
-
-    if (
-      query.payload !== undefined &&
-      (typeof query.payload !== "object" || query.payload === null || Array.isArray(query.payload))
-    ) {
-      throw new TypeError("listJobs payload must be an object");
-    }
-    const projection = query.payload ?? {};
-    for (const field of Object.keys(projection)) {
-      if (!new Set(["include", "maxBytes", "redactKeys"]).has(field)) {
-        throw new TypeError(`listJobs payload contains unknown field: ${field}`);
-      }
-    }
-    if (projection.include !== undefined && typeof projection.include !== "boolean") {
-      throw new TypeError("listJobs payload include must be a boolean");
-    }
-    if (
-      projection.maxBytes !== undefined &&
-      (!Number.isSafeInteger(projection.maxBytes) ||
-        projection.maxBytes < 1 ||
-        projection.maxBytes > MAX_JOB_QUERY_PAYLOAD_BYTES)
-    ) {
-      throw new RangeError(
-        `listJobs payload maxBytes must be an integer between 1 and ${MAX_JOB_QUERY_PAYLOAD_BYTES}`,
-      );
-    }
-    const redactKeys = projection.redactKeys ?? [];
-    if (!Array.isArray(redactKeys)) {
-      throw new TypeError("listJobs payload redactKeys must be an array");
-    }
-    if (redactKeys.length > MAX_JOB_QUERY_REDACT_KEYS) {
-      throw new RangeError(
-        `listJobs payload redactKeys must contain at most ${MAX_JOB_QUERY_REDACT_KEYS} keys`,
-      );
-    }
-    const uniqueRedactKeys = new Set<string>();
-    for (const key of redactKeys) {
-      if (typeof key !== "string") {
-        throw new TypeError("listJobs payload redactKeys must contain only strings");
-      }
-      const length = [...key].length;
-      if (length < 1 || length > 200) {
-        throw new RangeError("listJobs payload redactKeys must contain 1 to 200 characters");
-      }
-      if (uniqueRedactKeys.has(key)) {
-        throw new RangeError(`listJobs payload redactKeys must be unique: ${key}`);
-      }
-      uniqueRedactKeys.add(key);
-    }
-
-    const payloadProjection = {
-      include: projection.include ?? false,
-      maxBytes: projection.maxBytes ?? DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
-      redactKeys,
-    };
+    const { limit, cursor, payloadProjection } =
+      this.modules.operatorReads.validateJobListQuery(query);
     const result = await this.database.query<JobListRow>(
       `SELECT job_id, queue_name, job_type, concurrency_key, tags, state, current_attempt, max_attempts,
               retry_policy, deadline_at, execution_timeout_ms::text AS execution_timeout_ms,
@@ -2795,34 +2659,11 @@ export class Queue {
   }
 
   async getJobTimeline(jobId: string, query: JobTimelineQuery = {}): Promise<JobTimelinePage> {
-    const limit = query.limit ?? 100;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_JOB_QUERY_PAGE_SIZE) {
-      throw new RangeError(
-        `getJobTimeline limit must be an integer between 1 and ${MAX_JOB_QUERY_PAGE_SIZE}`,
-      );
-    }
-
-    const cursor = query.cursor;
-    if (cursor !== undefined) {
-      if (typeof cursor !== "object" || cursor === null) {
-        throw new TypeError("getJobTimeline cursor must be an object");
-      }
-      for (const [field, value] of [
-        ["jobId", cursor.jobId],
-        ["occurredAt", cursor.occurredAt],
-        ["recordId", cursor.recordId],
-      ] as const) {
-        if (typeof value !== "string" || value.length === 0) {
-          throw new TypeError(`getJobTimeline cursor ${field} must be a non-empty string`);
-        }
-      }
-      if (cursor.kind !== "event" && cursor.kind !== "attempt") {
-        throw new TypeError("getJobTimeline cursor kind must be event or attempt");
-      }
-      if (cursor.jobId !== jobId) {
-        throw new RangeError("getJobTimeline cursor jobId must match the requested jobId");
-      }
-    }
+    const { limit, cursor } = this.modules.operatorReads.validateJobTimelineQuery(
+      jobId,
+      query.limit,
+      query.cursor,
+    );
 
     const result = await this.database.query<JobTimelineRow>(
       `SELECT kind, record_id::text AS record_id, attempt, event_type, details,
