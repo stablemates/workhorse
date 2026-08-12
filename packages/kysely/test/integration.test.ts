@@ -1,13 +1,14 @@
-import { EnqueueIdempotencyConflictError, installSchema } from "@workhorse/core";
+import { EnqueueIdempotencyConflictError } from "@workhorse/core";
 import { Kysely, PostgresDialect, sql } from "kysely";
-import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../../src/local-database.js";
+import { createDatabaseTestHarness } from "../../../test/support/db.js";
 import { createKyselyAdapter, KyselyQueryError } from "../src/index.js";
 
-const databaseUrl = localDatabaseUrl("test");
-assertLocalDatabasePurpose(databaseUrl, "test");
-const pool = new Pool({ connectionString: databaseUrl, max: 2 });
+const databaseTest = createDatabaseTestHarness(import.meta.url, {
+  max: 2,
+  extraSchemas: ["public"],
+});
+const { pool } = databaseTest;
 const database = new Kysely<Record<string, never>>({ dialect: new PostgresDialect({ pool }) });
 const adapter = createKyselyAdapter(database, {
   notificationPool: pool,
@@ -15,21 +16,17 @@ const adapter = createKyselyAdapter(database, {
 });
 
 beforeAll(async () => {
-  await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
-  await installSchema(pool);
-  await pool.query("DROP TABLE IF EXISTS public.workhorse_kysely_test");
+  await databaseTest.setup();
   await pool.query("CREATE TABLE public.workhorse_kysely_test (value text PRIMARY KEY)");
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE public.workhorse_kysely_test, workhorse.job_event,
-    workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE`);
+  await databaseTest.reset();
 });
 
 afterAll(async () => {
-  await pool.query("DROP TABLE IF EXISTS public.workhorse_kysely_test");
   await adapter.close();
+  await databaseTest.teardown({ closePool: false });
 });
 
 describe("Kysely provider integration", () => {

@@ -8,7 +8,6 @@ import {
   MeterProvider,
   PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
-import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CancellationRequestedError,
@@ -35,11 +34,11 @@ import {
   Worker,
   WorkhorseMetricsObserver,
 } from "../src/index.js";
-import { assertLocalDatabasePurpose, localDatabaseUrl } from "../src/local-database.js";
+import { Pool } from "pg";
+import { createDatabaseTestHarness } from "./support/db.js";
 
-const databaseUrl = localDatabaseUrl("test");
-assertLocalDatabasePurpose(databaseUrl, "test");
-const pool = new Pool({ connectionString: databaseUrl, max: 10 });
+const database = createDatabaseTestHarness(import.meta.url, { max: 10 });
+const { databaseUrl, pool } = database;
 const queue = new Queue(pool);
 const safeKeyDigest = (scope: string, key: string) =>
   createHash("sha256").update(`${scope}\x1f${key}`, "utf8").digest("hex").slice(0, 12);
@@ -124,18 +123,11 @@ async function createFailedJob({
 }
 
 beforeAll(async () => {
-  await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
-  await installSchema(pool);
+  await database.setup();
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE workhorse.job_event, workhorse.attempt_history,
-    workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.rate_limit_bucket, workhorse.rate_limit_policy,
-    workhorse.concurrency_policy, workhorse.queue_control, workhorse.worker_registry,
-    workhorse.job_wait, workhorse.job_checkpoint,
-    workhorse.enqueue_idempotency, workhorse.job_redrive, workhorse.job_outcome, workhorse.job_runtime,
-    workhorse.job_stat_bucket, workhorse.job RESTART IDENTITY CASCADE`);
+  await database.reset();
   await pool.query(`UPDATE workhorse.job_stat_state SET
     rolled_up_through = date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
     last_run_at = NULL, updated_at = clock_timestamp()`);
@@ -425,7 +417,7 @@ describe("job contracts", () => {
 });
 
 afterAll(async () => {
-  await pool.end();
+  await database.teardown();
 });
 
 describe("live-runtime queue protocol", () => {

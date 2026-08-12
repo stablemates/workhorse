@@ -1,13 +1,11 @@
-import { EnqueueIdempotencyConflictError, installSchema } from "@workhorse/core";
-import { Pool } from "pg";
+import { EnqueueIdempotencyConflictError } from "@workhorse/core";
 import { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../../src/local-database.js";
+import { createDatabaseTestHarness } from "../../../test/support/db.js";
 import { createTypeOrmAdapter, TypeOrmQueryError } from "../src/index.js";
 
-const databaseUrl = localDatabaseUrl("test");
-assertLocalDatabasePurpose(databaseUrl, "test");
-const pool = new Pool({ connectionString: databaseUrl, max: 2 });
+const database = createDatabaseTestHarness(import.meta.url, { max: 2, extraSchemas: ["public"] });
+const { databaseUrl, pool } = database;
 const dataSource = new DataSource({
   type: "postgres",
   url: databaseUrl,
@@ -24,22 +22,18 @@ const adapter = createTypeOrmAdapter(dataSource, {
 });
 
 beforeAll(async () => {
+  await database.setup();
   await dataSource.initialize();
-  await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
-  await installSchema(pool);
-  await pool.query("DROP TABLE IF EXISTS public.workhorse_typeorm_test");
   await pool.query("CREATE TABLE public.workhorse_typeorm_test (value text PRIMARY KEY)");
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE public.workhorse_typeorm_test, workhorse.job_event,
-    workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE`);
+  await database.reset();
 });
 
 afterAll(async () => {
-  await pool.query("DROP TABLE IF EXISTS public.workhorse_typeorm_test");
   await adapter.close();
+  await database.teardown({ closePool: false });
 });
 
 describe("TypeORM provider integration", () => {
