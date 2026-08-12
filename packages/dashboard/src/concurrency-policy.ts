@@ -12,7 +12,7 @@
  * three different explanations of the same number.
  */
 
-import type { DashboardConcurrencyPolicySummary } from "./model.js";
+import type { DashboardConcurrencyPolicySummary } from "./wire.js";
 
 /** One queue's limit cell: how much of the fleet-wide budget is in use. */
 export interface ConcurrencyLimitDisplay {

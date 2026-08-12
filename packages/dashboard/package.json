@@ -21,9 +21,13 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./model": {
-      "types": "./dist/model.d.ts",
-      "import": "./dist/model.js"
+    "./wire": {
+      "types": "./dist/wire.d.ts",
+      "import": "./dist/wire.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation.d.ts",
+      "import": "./dist/presentation.js"
     },
     "./styles.css": "./dist/styles.css",
     "./server": {

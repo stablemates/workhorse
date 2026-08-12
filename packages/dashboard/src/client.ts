@@ -39,6 +39,6 @@ export type DashboardAuditInput = DashboardProcedureInputs["setQueuePaused"]["au
 /** Cancellation attribution, whose reason is optional because a cancel may state none. */
 export type DashboardCancellationAuditInput = DashboardProcedureInputs["cancelTask"]["audit"];
 
-// The demo vocabulary is owned by model.ts, which the router reads to build its own input schema.
+// The demo vocabulary is owned by wire.ts, which the router reads to build its own input schema.
 // Re-exported here so a host still has one import for the whole client-facing contract.
-export type { DashboardDemoJobKind, DashboardDemoScenario } from "./model.js";
+export type { DashboardDemoJobKind, DashboardDemoScenario } from "./wire.js";

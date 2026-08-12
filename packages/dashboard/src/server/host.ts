@@ -3,7 +3,7 @@ import { extname, join, normalize } from "node:path";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
 import { assertSchemaCompatible, Queue, type Queryable } from "@workhorse/core";
-import type { MaintenanceLoopCadences } from "../model.js";
+import type { MaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { renderDashboardHtml } from "./html.js";
 import { dashboardRouter } from "./router.js";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dashboardConcurrencyPolicySummary } from "./model.js";
+import { dashboardConcurrencyPolicySummary } from "./wire.js";
 import { healthCheckMessages } from "./server/read-model.js";
 
 describe("dashboard concurrency policy read model", () => {

@@ -9,7 +9,7 @@ import type {
   DashboardQueuesPage,
   DashboardRateLimitPolicySummary,
   DashboardSystemPage,
-} from "./model.js";
+} from "./wire.js";
 import {
   concurrencyCappedFootnote,
   describeConcurrencyBlocked,

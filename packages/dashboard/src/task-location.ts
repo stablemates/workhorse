@@ -1,4 +1,4 @@
-import type { DashboardTaskFilter } from "./model.js";
+import type { DashboardTaskFilter } from "./wire.js";
 
 export const taskPageSizes = [25, 50, 100] as const;
 export type TaskPageSize = (typeof taskPageSizes)[number];
