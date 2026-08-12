@@ -1,61 +1,86 @@
 ---
-title: How does a failed job retry?
+title: Retries
 description: Give jobs an attempt budget and a persisted backoff policy that PostgreSQL applies consistently.
 ---
 
-When a handler throws, PostgreSQL decides whether another attempt remains. It records failure
-evidence before moving the job back to `ready`, `scheduled`, or a terminal outcome.
+When a handler throws, the job usually is not finished — it has failed one attempt. PostgreSQL
+records the failure evidence, checks whether budget remains, and moves the job back to
+`scheduled` with a wake time or to a terminal failed outcome. This page covers who decides,
+when the next attempt runs, and what survives in between.
 
 ## Set an attempt budget
 
-`EnqueueOptions.maxAttempts` limits how many logical attempts the job can use. When the budget is
-gone, `fail_v1` removes the runtime row and writes an immutable failed outcome.
+`EnqueueOptions.maxAttempts` limits how many logical attempts one job may use. Each failure —
+a thrown error or a crashed worker's expired lease — spends one. When the budget is gone,
+the database deletes the runtime row and writes an immutable failed outcome.
 
-The database enforces this budget regardless of which client reported the failure. A worker override
-can change timing, but it cannot create extra attempts.
+```ts
+await queue.enqueue("provider.sync", { accountId }, { maxAttempts: 5 });
+```
+
+The budget check happens in SQL, always. A worker override can change retry timing, but no
+client configuration can create extra attempts. You cannot accidentally configure infinite
+retries.
 
 ## Persist the delay policy with the job
 
-`RetryPolicy` supports fixed, exponential, and decorrelated-jitter policies. PostgreSQL validates the
-chosen shape and stores it with the immutable job definition.
+Retrying instantly is usually wrong: if a provider is down, hammering it just burns attempts.
+`EnqueueOptions.retryPolicy` stores a backoff shape with the immutable job definition, and
+PostgreSQL validates it at enqueue time. Three shapes exist:
 
 ```ts
-await queue.enqueue(
-  "provider.sync",
-  { accountId },
-  {
-    retryPolicy: providerRetryPolicy,
-  },
-);
+// Always wait the same time.
+const fixed = { type: "fixed", delayMs: 10_000 };
+
+// Grow toward a ceiling.
+const exponential = {
+  type: "exponential",
+  initialDelayMs: 1_000,
+  multiplier: 2,
+  maxDelayMs: 60_000,
+};
+
+// Randomized growth — the right default for external services.
+const jitter = { type: "decorrelated-jitter", baseDelayMs: 1_000, maxDelayMs: 60_000 };
+
+await queue.enqueue("provider.sync", { accountId }, { retryPolicy: jitter, maxAttempts: 5 });
 ```
 
-A fixed policy always uses the same delay. Exponential delay grows toward a ceiling, while
-decorrelated jitter spreads a group of failures across different wake times.
+Prefer decorrelated jitter for anything that talks to an external service. When a thousand
+jobs fail together, jitter spreads their wake times so the retry wave cannot knock the
+recovering service over again.
 
-Workhorse derives jitter from stable job state. Recreating a `Queue` or replaying the same transition
-therefore cannot select a fresh random delay.
+Workhorse derives the jitter from stable job state — identity and attempt number — rather
+than fresh randomness. Replaying the same transition therefore selects the same delay, which
+keeps retry timing explainable after the fact.
 
-## Keep failure and recovery consistent
+## One policy for both failure paths
 
-An explicit policy applies when a handler throws and when recovery finds an expired lease. That
-keeps a crashed process from changing the job's backoff behavior.
+A job can need a retry for two different reasons: its handler threw, or its worker died and
+the lease expired. An explicit policy applies to both paths, so a crashed process does not
+get different backoff behavior from a failing one.
 
-Jobs without a policy preserve compatibility behavior, which differs between handler failure and
-lease recovery. Set a persisted policy when consistent timing matters.
+Jobs without a policy keep older compatibility behavior, which differs between the two paths:
+a thrown error gets a legacy randomized backoff, and an expired lease retries immediately.
+Set a persisted policy whenever consistent timing matters.
 
-`Queue.fail` and `WorkerOptions.retryDelayMs` can override the next delay. If a worker callback returns
-`undefined`, PostgreSQL falls back to the persisted policy or compatibility behavior.
+Overrides exist for the cases that need them. `Queue.fail` accepts an explicit delay, and
+`WorkerOptions.retryDelayMs` takes a number or `(attempt, job) => number | undefined`. An
+explicit value wins — including an explicit `0` for "retry immediately" — and `undefined`
+defers to the persisted policy or the compatibility default.
 
-## What survives another attempt?
+## What survives another attempt
 
-The job ID, payload, tags, policy, and saved checkpoints remain. PostgreSQL increments the attempt,
-and it assigns a new fence token when the next worker claims the job.
+The job ID, payload, tags, policy, and every saved [checkpoint](/docs/durable-execution)
+remain. PostgreSQL increments the attempt counter, and the next claim assigns a new fence
+token so a stale previous owner cannot write over the new attempt.
 
-A retry is another run of the same job. A redrive happens only after terminal failure and creates a
-new job identity.
+A retry is the same job having another go. A redrive is different: it happens only after
+terminal failure and creates a [new job identity](/docs/dead-letters).
 
-`JobSnapshot.retryPolicy` shows the normalized policy. Timeline events record the selected delay and
-its source, which lets an operator explain why a job remains scheduled.
+`JobSnapshot.retryPolicy` shows the normalized policy, and timeline events record each
+selected delay with its source. When an operator asks why a job is still `scheduled`, the
+evidence answers.
 
 ## Next
 

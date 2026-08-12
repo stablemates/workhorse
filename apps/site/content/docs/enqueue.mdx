@@ -1,32 +1,58 @@
 ---
-title: How do I enqueue work safely?
+title: Enqueue and transactions
 description: Accept immediate, delayed, batched, or transactional jobs without separating them from application state.
 ---
 
-`Queue.enqueue` turns a type and JSON payload into a durable job. Pass an application transaction
-when the job must agree with another database write.
+The classic queue bug is a job that disagrees with your data: the order row committed but the
+fulfillment job was lost, or the job exists and the row does not. Workhorse removes that gap by
+living in the same PostgreSQL database as your data — an enqueue is a row your transaction can
+carry. This page covers everything an enqueue can do: run now, run later, join a transaction,
+batch, and target a named queue.
 
 ## Enqueue immediate or delayed work
 
-Without `runAt`, PostgreSQL places the job in `ready`. A future `runAt` places it in `scheduled`
-until `tick_v1` promotes it.
+`queue.enqueue(type, payload, options?)` turns a type and JSON payload into a durable job and
+returns its ID. Without `runAt`, PostgreSQL places the job in `ready` and a worker can claim it
+immediately. A future `runAt` places it in `scheduled` until promotion moves it to `ready`.
 
 ```ts
+// Run as soon as a worker is free.
 await queue.enqueue("email.send", { to: "person@example.com" });
 
+// Run no earlier than the reminder date, on the billing queue.
 await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", runAt: reminderDate });
 ```
 
-`runAt` is a not-before boundary. If someone pauses the queue, or workers become unavailable, a
-worker can claim the job later than the boundary.
+`runAt` is a not-before boundary, not an appointment. If someone pauses the queue, or workers
+become unavailable, a worker claims the job later than the boundary — never earlier.
 
-`EnqueueOptions` also carries tags, a concurrency key, an attempt budget, a retry policy, a deadline,
-an execution timeout, and enqueue idempotency. The architecture reference owns their exact bounds and defaults.
+`EnqueueOptions` carries everything else a job can be born with:
+
+```ts
+await queue.enqueue(
+  "report.generate",
+  { month: "2026-08" },
+  {
+    queue: "reports",
+    tags: ["tenant:acme"],
+    concurrencyKey: "acme",
+    maxAttempts: 5, // default is 25
+    retryPolicy: { type: "exponential", initialDelayMs: 1_000, multiplier: 2, maxDelayMs: 60_000 },
+    deadline: endOfMonth, // terminal once reached, even with retries left
+    executionTimeoutMs: 120_000, // active-time budget per attempt
+    idempotency: { key: `report:2026-08:acme` },
+  },
+);
+```
+
+Each option is owned by its own page — [retries](/docs/retries), [deadlines](/docs/deadlines),
+[idempotency](/docs/idempotency) — and the architecture reference owns exact bounds and defaults.
 
 ## Join an application transaction
 
-Pass the active `Queryable` after the options. PostgreSQL then commits the job and your application
-write together, which removes the gap that an outbox normally reconciles.
+This is the option that replaces an outbox. Pass your open transaction client as the fourth
+argument and PostgreSQL commits the job and your business write together — or rolls both back
+together. There is no window where one exists without the other.
 
 ```ts
 const client = await pool.connect();
@@ -44,31 +70,53 @@ try {
 }
 ```
 
-This transaction covers durable acceptance only. Handlers run later and outside the transaction, so
-their external effects still need idempotency.
+The fourth argument accepts anything with a pg-compatible `query` method, so the ORM adapters
+pass their own transaction handles the same way.
+
+One boundary to keep in mind: the transaction covers durable acceptance only. Handlers run later,
+outside your transaction, so their external effects still need their own idempotency.
 
 ## Enqueue a batch
 
-`Queue.enqueueMany` validates and writes a bounded group in one statement. Returned IDs preserve
-input order, and the whole group commits or rolls back together.
+If a single operation produces many jobs — a fan-out to every subscriber, an import — use
+`queue.enqueueMany`. It validates and writes the whole group in one statement, and it also accepts
+a transaction as its second argument.
 
-Use several bounded calls when your input exceeds the published limit. Add an idempotency key to
-each request if a caller may repeat part of the batch.
+```ts
+const jobIds = await queue.enqueueMany(
+  recipients.map((recipient) => ({
+    type: "email.digest",
+    payload: { to: recipient.email },
+    options: { queue: "mail", idempotency: { key: `digest:${week}:${recipient.id}` } },
+  })),
+);
+```
+
+Returned IDs preserve input order, and the whole group commits or rolls back together. One call
+accepts at most 1,000 requests; split larger input into several bounded calls. If a caller may
+repeat part of the batch, give each request an idempotency key so the repeat converges instead of
+duplicating.
 
 ## Separate queues without adding priorities
 
-`new Queue(database, defaultQueue)` selects the client default, while `options.queue` overrides one
-job. A `Worker` claims from its configured queue.
+`new Queue(pool, "billing")` sets the client default queue; `options.queue` overrides one job. A
+`Worker` claims from its configured queue only.
 
-Workhorse orders ready jobs by FIFO sequence and has no priority layer. Use separate queue names when
-different work needs different capacity or worker policy.
+Workhorse orders ready jobs by FIFO sequence and has no priority layer. When different work needs
+different capacity, latency, or worker policy, give it its own queue name and its own workers —
+that isolation is explicit and observable where a priority number is not.
 
-Use `options.concurrencyKey` when a synchronized queue policy also limits one application-defined
-group. Keys are scoped to their queue and remain part of idempotent enqueue identity.
+Three controls operate on a whole queue:
 
-`Queue.pauseQueue` prevents workers from claiming new jobs without changing them. `Queue.resumeQueue`
-lets workers claim again, while `Queue.purgeQueue` removes scheduled work and releases its enqueue
-keys.
+```ts
+await queue.pauseQueue("billing"); // workers stop claiming; jobs are unchanged
+await queue.resumeQueue("billing"); // claiming resumes
+await queue.purgeQueue("billing"); // removes waiting work, releases its enqueue keys
+```
+
+Use `options.concurrencyKey` when a synchronized policy should also limit one application-defined
+group — one tenant, one destination host. Keys are scoped to their queue and remain part of
+idempotent enqueue identity.
 
 ## Next
 

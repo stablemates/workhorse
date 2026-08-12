@@ -1,66 +1,123 @@
 ---
-title: How does Workhorse maintain its PostgreSQL data?
-description: Coordinate bounded background work, retain evidence safely, and detect cleanup lag.
+title: Maintenance and retention
+description: Workers keep PostgreSQL tidy automatically — promotion, recovery, partitions, and evidence retirement — while you set policy and watch for lag.
 ---
 
-Workers ask PostgreSQL to promote jobs, recover expired leases, maintain partitions, and retire old
-data. PostgreSQL coordinates those requests so adding workers does not duplicate maintenance.
+A durable queue accumulates: delayed jobs waiting to become ready, leases that expired with their
+workers, history partitions filling up, and evidence that eventually outlives its usefulness.
+Workhorse handles all of it as bounded background work that workers drive automatically.
+PostgreSQL coordinates the passes with advisory locks, so scaling from one worker to fifty never
+multiplies destructive work — one worker wins each due phase, the rest get cheap no-ops.
 
-## Coordinate bounded maintenance
+## The phases, and how to watch them
 
-`Queue.tick`, `prepareHistoryPartitions`, `retainHistory`, and `pruneTerminalStorage` expose the
-maintenance phases to controlled scripts and tests.
+Workers call the same versioned SQL functions you can call yourself:
 
-Workers call the same versioned SQL functions in bounded passes. Advisory locks select one worker for
-each due phase, while other workers return cheap no-op results.
+- `queue.tick` promotes due jobs to ready and recovers expired leases.
+- `queue.prepareHistoryPartitions` creates future time partitions before data arrives.
+- `queue.rollupStatistics` folds raw history into durable statistics buckets.
+- `queue.retainHistory` retires history the statistics rollup no longer needs.
+- `queue.pruneTerminalStorage` removes expired idempotency bindings, then terminal job bundles.
 
-`WorkerOptions.onMaintenance` receives a `WorkerMaintenanceTelemetry` result for each SQL phase. The
-result names the phase, affected rows, duration, lock outcome, and error.
+Direct calls are for controlled scripts and tests; in production the workers already make them.
+To observe each pass, give any worker an `onMaintenance` callback:
 
-## Retain evidence in dependency order
+```ts
+const worker = new Worker(queue, {
+  onMaintenance(telemetry) {
+    metrics.record("workhorse.maintenance", {
+      phase: telemetry.phase,
+      rows: telemetry.rowsAffected,
+      durationMs: telemetry.durationMs,
+    });
+  },
+});
+```
 
-`Queue.syncRetentionPolicy` stores application defaults for database-wide minimum windows and work
-bounds. It updates values that an operator has not overridden and preserves every active override.
+The `WorkerMaintenanceTelemetry` result names the phase, affected rows, duration, lock outcome,
+and any error — enough to chart cleanup throughput in whatever monitoring you already run.
 
-`Queue.overrideRetentionPolicy` changes selected values without a deploy. `Queue.revertRetentionPolicy`
-clears selected overrides and restores the latest application defaults. PostgreSQL rejects a
-`RetentionPolicyDefinition` that could remove job identity before retained evidence or descendants.
+## Set retention policy
 
-History uses time partitions, so `Queue.prepareHistoryPartitions` creates future storage before data
-arrives. `Queue.retainHistory` retires eligible history only after statistics no longer need it.
+Retention decides how long evidence lives. `queue.syncRetentionPolicy` stores your application's
+defaults as a deploy step:
 
-`Queue.pruneTerminalStorage` removes expired idempotency bindings before terminal job bundles. A
-retained `job_redrive` descendant keeps its source identity available for lineage.
+```ts
+await queue.syncRetentionPolicy({
+  jobIdentityRetentionDays: 90,
+  terminalOutcomeRetentionDays: 30,
+  jobEventRetentionDays: 14,
+  attemptHistoryRetentionDays: 14,
+  scheduleOccurrenceRetentionDays: 30,
+  statisticsRetentionDays: 365,
+});
+```
 
-## Decide when phases become due
+Sync updates only values an operator has not overridden, so a deploy never silently reverts an
+incident-time decision. During an incident, `queue.overrideRetentionPolicy` changes selected
+values without a deploy, and `queue.revertRetentionPolicy` restores the application defaults for
+the settings you name. `queue.getRetentionPolicy` shows the effective policy.
 
-`Queue.syncMaintenancePolicy` stores one set of application defaults for the database. The policy
-includes an IANA timezone and local wall-clock time for daily history retention.
+Before any destructive change, preview it:
 
-`Queue.overrideMaintenancePolicy` changes selected values without a deploy. The settings page shows
-their source, while `Queue.revertMaintenancePolicy` restores the latest application defaults.
+```ts
+const impact = await queue.previewRetentionPolicy({ terminalOutcomeRetentionDays: 7 });
+console.log(impact.eligible.terminalJobs, impact.capped.terminalJobs);
+```
 
-Workers may invoke eligibility checks at different moments, but the database owns the shared due
-state. Extra replicas do not multiply destructive work.
+The preview counts currently eligible rows per category, size-capped with an explicit `capped`
+flag. The dashboard settings page runs the same preview before applying a change.
 
-## Detect lag through health
+PostgreSQL guards the dependency order: it rejects any `RetentionPolicyDefinition` that could
+remove a job's identity before its retained evidence, and a retained `job_redrive` descendant
+keeps its source identity available for lineage.
 
-`Queue.health` returns `QueueHealth` from one consistent snapshot statement: queue depth, lease
-expiry, overdue durable waits, timing pressure, and retention lag, with PostgreSQL relation churn,
-long transactions, and lock waits separated under `observations`. `status` evaluates the snapshot
-against overridable budgets and names each exceeded one with a machine-readable reason code.
+## Set maintenance cadence
 
-Workhorse exposes these observations but does not export metrics. Connect `QueueHealth` and
-`WorkerMaintenanceTelemetry` to the monitoring system your operators already use.
+`queue.syncMaintenancePolicy` stores one set of scheduling defaults for the database, including
+an IANA timezone and local wall-clock time for the daily history retention pass.
+`queue.overrideMaintenancePolicy` and `queue.revertMaintenancePolicy` follow the same
+override-and-revert model as retention, and the dashboard settings page shows each value's
+source. Workers check eligibility at different moments, but the database owns the shared due
+state — extra replicas change nothing.
 
-The dashboard previews currently eligible rows before it applies a retention change. Process-owned
-worker options remain read-only because changing them requires a deployment.
+## Detect lag before it hurts
+
+Cleanup that silently stalls becomes a full disk weeks later. `queue.health` budgets exactly this:
+a stalled statistics rollup, late retention, or a missing history partition each produces a
+`status.reasons` entry with a stable code.
+
+```ts
+const health = await queue.health();
+if (health.status.level !== "healthy") {
+  for (const reason of health.status.reasons) alert(reason.code, reason.observed);
+}
+```
+
+For continuous export rather than polling, Workhorse emits OpenTelemetry metrics for in-process
+activity automatically once your application configures an SDK. Database-wide gauges — queue
+depth, ready-work age, expired leases, fleet capacity — come from a dedicated observer:
+
+```ts
+import { WorkhorseMetricsObserver } from "@workhorse/core";
+
+const observer = new WorkhorseMetricsObserver(pool, {
+  onError: (error) => logger.error({ error }, "workhorse metrics collection failed"),
+}).start();
+
+// During service shutdown:
+observer.stop();
+```
+
+Run exactly one observer per database, beside a long-lived service — every replica sees the same
+queues, so multiple observers export duplicate gauges. `registerQueueMetrics` and
+`queue.queueMetricSnapshot` are the lower-level pieces if you integrate by hand.
 
 ## Next
 
-- [Worker processes](/docs/worker-processes) — own the runtime that invokes maintenance
-- [Queries and timelines](/docs/queries) — interpret the wider read model
-- [Dead letters](/docs/dead-letters) — understand lineage that can delay cleanup
+- [Worker processes](/docs/worker-processes) — the runtime that drives maintenance
+- [Queries and timelines](/docs/queries) — health budgets and the wider read model
+- [Dead letters and redrive](/docs/dead-letters) — lineage that can delay cleanup
 
 ---
 

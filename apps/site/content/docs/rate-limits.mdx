@@ -1,12 +1,18 @@
 ---
-title: How do I limit how quickly work starts?
+title: Rate limits
 description: Synchronize PostgreSQL-owned queue and keyed token buckets across every worker.
 ---
 
-Concurrency limits active work. `Queue.syncRateLimitPolicies` limits starts over time, even when
-tasks finish immediately.
+An external API allows sixty calls a minute. A concurrency policy cannot enforce that: it limits
+how much work runs at once, and sixty jobs that each finish in a hundred milliseconds sail through
+a `maxActive` of five. A rate-limit policy governs the other axis — how quickly work starts —
+with a token bucket that PostgreSQL owns, so every worker process draws from the same budget no
+matter how many you run.
 
 ## Synchronize desired policy
+
+Like concurrency policies, rate limits are desired state, declared per namespace and reconciled
+on deploy.
 
 ```ts
 await queue.syncRateLimitPolicies("workers", [
@@ -18,20 +24,40 @@ await queue.syncRateLimitPolicies("workers", [
 ]);
 ```
 
-The queue bucket admits sixty starts per minute and retains ten tokens after idle time. Every
-non-null `concurrencyKey` also receives an independent five-per-minute bucket with a burst of two.
+Reading the `rate` bucket: time refills tokens at `limit` per `intervalMs` — sixty starts per
+minute — and each job start consumes one token. `burst` caps how many tokens survive an idle
+period, so a quiet hour buys at most ten immediate starts, not a flood.
 
-PostgreSQL supplies refill time and consumes tokens in the claim transaction. Application clock
-skew cannot create capacity, and competing worker processes cannot spend the same token.
+`perKey` is optional. When set, every non-null `concurrencyKey` gets its own independent bucket —
+here, five starts per minute with a burst of two. One customer exhausting its bucket waits for its
+own refill while another customer's job starts. A keyless job draws from the queue bucket only.
+Omitted policies are pruned by default, and another namespace cannot replace a queue this
+namespace owns.
+
+## PostgreSQL owns the clock
+
+The claim transaction consumes tokens, and PostgreSQL supplies the refill time. Application clock
+skew cannot mint capacity, and two competing workers cannot spend the same token — the same
+property that makes claims safe makes throttling exact.
+
+Tokens are never refunded. The budget measures starts: a job that succeeds, fails, waits, or loses
+its lease keeps its token spent, and every retry start consumes a fresh one. Size the limit for
+attempts, not for jobs.
 
 ## Observe throttling
 
-`Queue.rateLimitStatuses()` reports available queue tokens, bounded throttled-ready depth, throttled
-key count, and the earliest sampled eligibility time. `Queue.health()` includes the same summary,
-and OpenTelemetry exports queue-level configured rate, tokens, throttle depth, and eligibility delay.
+```ts
+const statuses = await queue.rateLimitStatuses();
+// availableTokens, throttledReady, throttledKeys, nextEligibleAt per policy
+```
 
-The Queues page keeps concurrency and start rate in separate columns. This makes an active-work cap
-visually distinct from a ready task waiting for its next token.
+Each status reports available queue tokens, bounded throttled-ready depth, the count of throttled
+keys, and the earliest sampled eligibility time — enough to tell "waiting for a token" apart from
+"nothing to run". `queue.health()` includes the same summary, and OpenTelemetry exports
+queue-level configured rate, tokens, throttle depth, and eligibility delay.
+
+The dashboard's Queues page keeps concurrency and start rate in separate columns, so an
+active-work cap stays visually distinct from a ready job waiting for its next token.
 
 ## Next
 

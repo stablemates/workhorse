@@ -1,48 +1,65 @@
 ---
-title: How do I report job progress?
-description: Publish a bounded latest-value projection for operators without changing durable control flow.
+title: Progress
+description: Publish a live, bounded status value for operators without changing durable control flow.
 ---
 
-Progress answers what an active handler is doing now. It is mutable operator data, so it cannot tell
-Workhorse to skip a stage after a retry.
+A three-minute import looks identical to a stuck one from the outside: both sit in `active`.
+Progress closes that gap. It is a mutable, latest-value-only projection of what the handler is
+doing right now — operator data, not control flow. After a retry, progress cannot tell
+Workhorse to skip a stage; that is what [checkpoints](/docs/durable-execution) are for.
 
 ## Publish the latest value
 
-Call `HandlerContext.setProgress` with a JSON value that your operator surface understands.
+Call `HandlerContext.setProgress` with any JSON value your operator surface understands.
+Each accepted update replaces the previous one.
 
 ```ts
-worker.handle("catalog.import", async (payload, context) => {
-  await context.setProgress({ phase: "reading" });
-  const result = await importCatalog(payload);
-  await context.setProgress({ phase: "complete", imported: result.count });
-  return result;
+worker.handle("catalog.import", async (payload: { source: string }, ctx) => {
+  await ctx.setProgress({ phase: "reading", processed: 0 });
+
+  let processed = 0;
+  for await (const batch of readBatches(payload.source)) {
+    await importBatch(batch);
+    processed += batch.length;
+    await ctx.setProgress({ phase: "importing", processed });
+  }
+
+  await ctx.setProgress({ phase: "complete", processed });
+  return { imported: processed };
 });
 ```
 
-`HandlerContext.getProgress` returns the latest retained value. A custom runtime can use
-`Queue.updateProgress` and `Queue.getProgress` with the claimed job and worker identity.
+`HandlerContext.getProgress` returns the latest retained value from inside a handler. Outside
+one, `Queue.getProgress` reads it by job ID, and a custom runtime can write through
+`Queue.updateProgress` with the claimed job and worker identity. The
+[dashboard](/docs/dashboard) renders the value live.
 
-## Why is progress rate-limited?
+## Why progress is rate-limited
 
-Every changed value updates one `job_progress` row and appends a small `progress_updated` event. A
-tight loop would create database churn without making the interface more useful.
+Every changed value updates one `job_progress` row and appends a small `progress_updated`
+event. A tight loop — say, one update per imported row — would churn the database without
+making the interface more useful; no operator reads a thousand updates a second.
 
-PostgreSQL therefore size-caps and rate-limits changed values. A caller that updates too quickly gets
-`ProgressRateLimitError`, including when it may retry.
+PostgreSQL therefore size-caps the value and rate-limits changed writes. A caller that
+updates too quickly gets `ProgressRateLimitError`, which says when it may retry. In the loop
+above, updating once per batch stays comfortably inside the limit.
 
-Repeating an identical value is a no-op. It does not advance the revision or append another event,
-which makes harmless retries cheap.
+Repeating an identical value is a free no-op: it does not advance the revision or append an
+event. You can call `setProgress` defensively without paying for it.
 
-## What survives?
+## What survives, and who may write
 
-Each accepted update records the attempt, fence token, worker ID, revision, and timestamps. The
-latest value survives retries and terminal materialization until retention removes the job identity.
+Each accepted update records the attempt, fence token, worker ID, revision, and timestamps.
+The latest value survives retries and terminal materialization, until retention removes the
+job identity — so a failed job's last reported phase remains readable evidence.
 
-Only the current unexpired owner can change progress. A stale generation receives
-`ProgressLeaseLostError`, so old handlers cannot overwrite a newer activation's status.
+Only the current unexpired owner can write. If a stale generation tries — an old handler
+still running after its lease was recovered — it gets `ProgressLeaseLostError`, so a zombie
+cannot overwrite the newer activation's status.
 
-Progress is not a checkpoint. Use `HandlerContext.checkpoint` when another activation must reuse a
-completed result instead of running the operation again.
+Keep the division of labor sharp: progress is what an operator watches; a checkpoint is what
+another activation reuses. If losing the value would change what your code does next, it is
+not progress — make it a checkpoint.
 
 ## Next
 

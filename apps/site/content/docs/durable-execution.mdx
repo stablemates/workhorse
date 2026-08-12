@@ -1,25 +1,29 @@
 ---
-title: How do I preserve work across retries and waits?
-description: Use named checkpoints and durable waits when a handler must survive another activation.
+title: Durable execution
+description: Use named checkpoints and durable waits so a handler survives retries, crashes, and long pauses.
 ---
 
-Workhorse restarts a handler from its entry point after a retry or durable wait. Named boundaries let
-the new activation reuse completed work instead of relying on a saved JavaScript stack.
+After a retry, a crash, or a durable wait, Workhorse calls your handler again — from the top.
+There is no saved JavaScript stack to resume; the process that held it may be gone, deployed
+over twice since. Durable execution is how a restarted handler skips the work it already
+finished: you name the boundaries, and the new activation replays their stored results.
 
 ## Save completed stages with checkpoints
 
-`HandlerContext.checkpoint` looks for a saved value under the supplied name. If none exists, it runs
-the operation and stores its JSON result under the current fenced lease.
+`HandlerContext.checkpoint(name, operation)` looks for a stored value under the name. The
+first activation finds none, runs the operation, and persists its JSON result under the
+current fenced lease. Every later activation finds the value and returns it without running
+the operation again.
 
 ```ts
-worker.handle("order.fulfill", async (payload: { orderId: string }, context) => {
-  const charge = await context.checkpoint("charge", () =>
+worker.handle("order.fulfill", async (payload: { orderId: string }, ctx) => {
+  const charge = await ctx.checkpoint("charge", () =>
     payments.charge(payload.orderId, {
       idempotencyKey: `charge:${payload.orderId}`,
     }),
   );
 
-  const shipment = await context.checkpoint("shipment", () =>
+  const shipment = await ctx.checkpoint("shipment", () =>
     logistics.createShipment(payload.orderId, charge.id),
   );
 
@@ -27,42 +31,65 @@ worker.handle("order.fulfill", async (payload: { orderId: string }, context) => 
 });
 ```
 
-If another activation reaches `charge`, Workhorse returns the stored value. Reusing the same name
-with a different value raises `CheckpointConflictError` instead of changing durable evidence.
+If this handler fails while creating the shipment, the retry replays the stored `charge`
+result and only reruns `shipment`. The card is charged once across any number of attempts.
 
-A checkpoint commits after its operation finishes. If the process dies between an external effect
-and that commit, the effect can happen again, so provider calls still need stable idempotency keys.
+One honest caveat: a checkpoint commits **after** its operation finishes. If the process dies
+between the external effect and that commit, the next activation runs the operation again.
+Delivery stays [at-least-once](/docs/concepts), so effects that must not repeat still need a
+provider idempotency key — that is why the example passes one to `payments.charge`. The
+checkpoint makes repeats rare; the provider key makes them harmless.
 
-## Release a worker slot with a durable wait
+Reusing a checkpoint name with a different value raises `CheckpointConflictError` instead of
+silently changing durable evidence.
 
-`HandlerContext.sleep` stores a named relative timer. `HandlerContext.sleepUntil` stores a named
-absolute target.
+## Release the worker slot with a durable wait
 
-The durable wait removes active ownership and places the job in `scheduled`. The worker slot becomes
-free, while the current logical attempt remains open.
+Some jobs need to pause — an hour before a reminder, until tomorrow morning. Sleeping inside
+the handler wastes a worker slot for the whole wait. A durable wait releases the job instead:
+
+- `HandlerContext.sleep(name, durationMs)` stores a named relative timer.
+- `HandlerContext.sleepUntil(name, wakeAt)` stores a named absolute target.
+
+The wait drops the lease, frees the worker slot, and places the job in `scheduled`. It does
+**not** consume an attempt — waiting is normal work, not failure. A job that sleeps five
+times and succeeds has used one attempt.
 
 ```ts
-worker.handle("email.follow-up", async (payload: { to: string; followUpAt: string }, context) => {
-  await context.checkpoint("welcome", () => mailer.welcome(payload.to));
-  await context.sleepUntil("follow-up-window", new Date(payload.followUpAt));
-  await context.checkpoint("follow-up", () => mailer.followUp(payload.to));
+worker.handle("email.follow-up", async (payload: { to: string; followUpAt: string }, ctx) => {
+  await ctx.checkpoint("welcome", () => mailer.welcome(payload.to));
+  await ctx.sleepUntil("follow-up-window", new Date(payload.followUpAt));
+  await ctx.checkpoint("follow-up", () => mailer.followUp(payload.to));
   return { deliveredTo: payload.to };
 });
 ```
 
-When the timer becomes due, promotion makes the job ready and a worker calls the handler from the
-top. The saved `welcome` checkpoint returns without sending that message again.
+When the timer is due, promotion makes the job ready and some worker — not necessarily the
+original — calls the handler from the top. The stored `welcome` checkpoint replays, execution
+reaches the elapsed `follow-up-window` wait and continues straight past it, and only then does
+the follow-up send. Everything before a wait runs at least twice, so checkpoint it or make it
+idempotent.
+
+A wake time means "eligible from then", not "runs exactly then". Promotion runs on an
+interval and a worker must be free; expect seconds of slack, and do not build precise timing
+on top of it.
 
 ## Treat names as immutable program state
 
-Checkpoint and wait names belong to the job's durable control flow. Keep them stable across deploys,
-because changing a name creates a different boundary.
+Checkpoint and wait names are the job's durable control flow. The name is how a later
+activation recognizes a boundary it already passed, so keep names stable across deploys —
+renaming one creates a different boundary, and in-flight jobs will rerun the stage.
 
-A repeated relative wait keeps its original duration and wake target. A repeated absolute wait must
-keep its original target, while changing the mode or target raises `WaitConflictError`.
+The database defends these rules explicitly:
 
-`HandlerContext.getCheckpoint` and `getWait` read one boundary. `Queue.listCheckpoints` and
-`listWaits` expose retained evidence to operator code.
+- A repeated relative wait keeps its original duration and wake target. Changing an absolute
+  wait's target — or switching a name between modes — raises `WaitConflictError`.
+- Checkpoint values are size-capped, and one job's open waits are bounded; exceeding the wait
+  bound raises `WaitLimitExceededError`.
+
+For inspection, `HandlerContext.getCheckpoint` and `getWait` read one boundary from inside a
+handler, and `Queue.listCheckpoints` and `Queue.listWaits` expose the retained evidence to
+operator code.
 
 ## Next
 
