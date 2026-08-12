@@ -76,6 +76,42 @@ same synthetic node-postgres metadata described above. `KyselyQueryError` retain
 original `cause`, follows at most 16 nested causes, accepts only five-character uppercase
 alphanumeric codes, and copies the discovered code to its wrapper.
 
+### What an adapter must guarantee
+
+`src/adapter.ts` owns the shared implementation of every guarantee below, exported from
+`@workhorse/core` as `QueryError`, `rowsToQueryResult`, `attachNotificationPool`,
+`createProviderQueryable`, `createProviderAdapter`, and `createWorkhorseAdapter`. An adapter that
+uses them supplies only how its ORM runs a statement; an adapter that does not still owes the same
+guarantees.
+
+1. **Statement execution.** `query(text, values)` sends `text` unmodified with `values` as
+   positional parameters, and returns a `QueryResult` whose `rows` preserve result order.
+   `rowsToQueryResult` sets `rowCount` to the row-array length, `command` to the empty string,
+   `oid` to zero, and `fields` to an empty array; core reads only `rows` and `rowCount`. A provider
+   that answers with anything other than a row array is a failed query, not an empty result.
+2. **Transaction adaptation.** `forTransaction(transaction)` returns a `Queue` bound to the
+   caller's transaction and never commits, rolls back, disconnects, or destroys it.
+3. **Error translation.** A failed statement throws an error extending `QueryError`, which retains
+   `statement` and the original `cause` and copies the SQLSTATE to `code`. The code comes from
+   `databaseErrorCode` in `src/errors.ts`: breadth-first over `cause`, `driverError`, and `meta`,
+   at most 16 objects, cycle-safe, accepting only five-character uppercase alphanumeric codes, and
+   preferring a nested SQLSTATE over a Prisma `P\d{4}` code that carries `meta`. Core depends on
+   this to raise `EnqueueIdempotencyConflictError` for SQLSTATE `P1001` and
+   `RedriveIdempotencyConflictError` for `P1002` through any ORM wrapper. Messages never copy
+   parameter values.
+4. **Failures that pass through untranslated.** A `QueryError` is already translated and is
+   rethrown as-is rather than nested again. A `RangeError` states that the statement itself was
+   malformed — a placeholder with no matching value — which is the caller's error rather than the
+   database's.
+5. **Notification capability.** Optional. An adapter that can lend a dedicated session sets
+   `connect()`, `notificationConnectionCapacity`, and `notificationConnectionIdentity` on the
+   queryable, which `attachNotificationPool` does from a node-postgres pool's `connect()` and
+   `options.max`. The pool object is the sharing identity, so queryables built from one pool share
+   one listener. Transaction queryables never carry the capability, because that session ends.
+   Without it, workers fall back to bounded polling.
+6. **Resource ownership.** An adapter closes nothing it did not create. `WorkhorseAdapter.close()`
+   invokes the configured `close` callback at most once, however many times it is called.
+
 The operator dashboard is a separate boundary from the worker fleet. It is a framework-neutral
 request host that reads everything it shows from PostgreSQL, including worker identity, runtime
 state, and policy provenance, so it can be mounted in a process that runs no workers at all.
