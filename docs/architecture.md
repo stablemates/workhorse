@@ -125,7 +125,15 @@ guarantees.
 `createQueueModules` constructs eight receivers. They are `EnqueueContractsModule`,
 `ClaimLeaseFenceModule`, `CheckpointsProgressWaitsModule`, `QueueAdministrationModule`,
 `WorkerRegistryModule`, `RetentionMaintenanceModule`, `CronSchedulesModule`, and
-`OperatorReadsModule`. The first seven contain no behavior until their matching extraction lands.
+`OperatorReadsModule`. Six contain no behavior until their matching extraction lands.
+
+`EnqueueContractsModule.enqueue` and `enqueueMany` own enqueue serialization, tracing, telemetry,
+and `P1001` conflict translation. `jobAcceptance` selects and validates the current payload
+contract for direct enqueue and schedule synchronization. `validateResult` validates completion
+against the contract version accepted by the claimed job. `validateQueueOptions` checks contract
+configuration before `Queue` creates the immutable module context. `Queue.enqueue`,
+`enqueueMany`, `syncSchedules`, and `complete` delegate these operations without changing their
+public signatures. `src/queue.ts` continues to re-export the four public error classes.
 
 `OperatorReadsModule.validateJobListQuery` and `validateJobTimelineQuery` own the validation already
 moved behind the facade. They use `validateJobListQuery`, `validateJobTimelineCursor`, and
