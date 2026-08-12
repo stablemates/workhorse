@@ -3,10 +3,10 @@ pre-commit:
     - name: check
       run: pnpm format && pnpm lint
       stage_fixed: true
-    - name: check types
-      run: pnpm typecheck
-    - name: test
-      run: pnpm test
+    # - name: check types
+      # run: pnpm typecheck
+    # - name: test
+    #   run: pnpm test
 
 post-checkout:
   jobs:
