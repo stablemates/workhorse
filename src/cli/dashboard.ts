@@ -30,6 +30,15 @@ export interface RunningDashboard {
  * The packed-package test exercises the real wiring, which is what keeps this declaration honest.
  */
 interface DashboardServerModule {
+  createDashboardOperatorControllers(options: {
+    requestedBy: string;
+    run<T>(action: unknown, operation: (queue: Queue) => Promise<T>): Promise<T>;
+  }): {
+    operator: { mode: "local" };
+    queueController: Record<string, unknown>;
+    taskController: Record<string, unknown>;
+    workerController: Record<string, unknown>;
+  };
   createDashboardHost(options: Record<string, unknown>): {
     handle(request: Request): Promise<Response | null>;
     owns(request: Request): boolean;
@@ -60,67 +69,6 @@ async function loadDashboard(): Promise<DashboardServerModule> {
 }
 
 /**
- * Operator controls backed directly by `Queue`.
- *
- * A standalone console has no application to delegate audit and authorization to, which is exactly
- * why mutations are opt-in. When they are enabled, `requestedBy` carries the configured actor so
- * the durable lifecycle records still say who asked, even though nothing here can prove it.
- */
-function standaloneControllers(queue: Queue, actor: string) {
-  return {
-    operator: { mode: "local" as const },
-    queueController: {
-      async setQueuePaused(queueName: string, paused: boolean) {
-        if (paused) await queue.pauseQueue(queueName);
-        else await queue.resumeQueue(queueName);
-        return { paused };
-      },
-      async purgeQueue(queueName: string) {
-        return { deletedCount: await queue.purgeQueue(queueName) };
-      },
-    },
-    taskController: {
-      async runTaskNow(jobId: string) {
-        const result = await queue.runTaskNow(jobId);
-        return {
-          status: result.status,
-          id: result.jobId,
-          state: result.state,
-          runAt: result.runAt === null ? null : new Date(result.runAt).toISOString(),
-        };
-      },
-      async cancelTask(jobId: string, audit: { reason: string | null }) {
-        const result = await queue.cancel(jobId, {
-          requestedBy: actor,
-          reason: audit.reason ?? undefined,
-        });
-        return {
-          status: result.status,
-          jobId: result.jobId,
-          state: result.state,
-          currentAttempt: result.currentAttempt,
-          requestedAt:
-            result.requestedAt === null ? null : new Date(result.requestedAt).toISOString(),
-          requestedBy: result.requestedBy,
-          reason: result.reason,
-          finishedAt: result.finishedAt === null ? null : new Date(result.finishedAt).toISOString(),
-        };
-      },
-    },
-    workerController: {
-      async setWorkerPaused(workerId: string, paused: boolean, audit: { reason: string }) {
-        const result = await queue.setWorkerPaused(workerId, paused, {
-          requestedBy: actor,
-          reason: audit.reason,
-        });
-        if (!result) throw new Error(`Worker ${workerId} is not registered`);
-        return { paused: result.paused };
-      },
-    },
-  };
-}
-
-/**
  * Serve the operator dashboard as its own process against any Workhorse database.
  *
  * This owns the process, so unlike an embedded mount it also owns its connection pool and accepts a
@@ -131,10 +79,14 @@ export async function startDashboardServer(
   pool: Pool,
   options: DashboardCommandOptions,
 ): Promise<RunningDashboard> {
-  const { createDashboardHost, dashboardNodeMiddleware } = await loadDashboard();
+  const { createDashboardHost, createDashboardOperatorControllers, dashboardNodeMiddleware } =
+    await loadDashboard();
   const queue = new Queue(pool);
   const controls = options.allowMutations
-    ? standaloneControllers(queue, options.actor)
+    ? createDashboardOperatorControllers({
+        requestedBy: options.actor,
+        run: (_action, operation) => operation(queue),
+      })
     : { operator: { mode: "read-only" as const } };
 
   const host = createDashboardHost({
