@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -11,15 +13,56 @@ import {
 import { createDatabaseTestHarness } from "./support/db.js";
 
 const database = createDatabaseTestHarness(import.meta.url);
+const cleanDatabase = createDatabaseTestHarness(new URL("?clean-install", import.meta.url).href);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const executeFile = promisify(execFile);
+let cleanInstallSchema: string;
+
+async function dumpNormalizedSchema(databaseUrl: string): Promise<string> {
+  const { stdout } = await executeFile(
+    "pg_dump",
+    [
+      "--schema-only",
+      "--schema=workhorse",
+      "--no-owner",
+      "--no-privileges",
+      "--no-comments",
+      "--no-security-labels",
+      "--no-publications",
+      "--no-subscriptions",
+      databaseUrl,
+    ],
+    { maxBuffer: 10 * 1024 * 1024 },
+  );
+
+  return stdout
+    .split("\n")
+    .filter(
+      (line) =>
+        line !== "" &&
+        !line.startsWith("--") &&
+        !line.startsWith("\\restrict ") &&
+        !line.startsWith("\\unrestrict "),
+    )
+    .join("\n");
+}
 
 describe("schema migrations", () => {
   beforeAll(async () => {
-    await database.setup();
+    await Promise.all([database.setup(), cleanDatabase.setup()]);
+    cleanInstallSchema = await dumpNormalizedSchema(cleanDatabase.databaseUrl);
+
+    const baseline = await readFile(
+      path.join(repository, "sql", "schema", "versions", "0023.sql"),
+      "utf8",
+    );
+    await database.pool.query("DROP SCHEMA workhorse CASCADE");
+    await database.pool.query(baseline);
+    await migrateSchema(database.pool);
   });
 
   afterAll(async () => {
-    await database.teardown();
+    await Promise.all([database.teardown(), cleanDatabase.teardown()]);
   });
 
   it("starts after the declared baseline and has no version gaps", async () => {
@@ -48,14 +91,6 @@ describe("schema migrations", () => {
   });
 
   it("migrates the supported v23 baseline to the current schema", async () => {
-    await database.pool.query(`
-      DROP TABLE workhorse.schema_migration;
-      DELETE FROM workhorse.schema_version;
-      INSERT INTO workhorse.schema_version(version) VALUES (23);
-    `);
-
-    await migrateSchema(database.pool);
-
     expect(await readSchemaVersion(database.pool)).toBe(24);
     const migrations = await database.pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -64,6 +99,10 @@ describe("schema migrations", () => {
       { version: 23, description: "forward migration baseline" },
       { version: 24, description: "add schema migration ledger" },
     ]);
+  });
+
+  it("produces the same schema through clean installation and forward migration", async () => {
+    expect(await dumpNormalizedSchema(database.databaseUrl)).toBe(cleanInstallSchema);
   });
 
   it("leaves an already-current schema unchanged", async () => {
