@@ -805,6 +805,26 @@ PostgreSQL planner and collector readings are observations rather than transacti
 
 Retention health includes the persisted policy, oldest retained timestamps, per-category cleanup lag, counts of fully eligible event and attempt partitions, and bounded row counts for both default partitions. Fallback counts are exact through 10,000 rows; `defaultHistoryRowsCapped` marks 10,001 as a lower bound. Live jobs are excluded from terminal identity lag. History lag is based only on fully droppable partitions or expired default rows, not the intentionally retained partial boundary day.
 
+## Dashboard package boundary
+
+`@workhorse/dashboard-contract` exports `DashboardCommandOptions`, `RunningDashboard`, and
+`DashboardStandaloneModule<Database>`. The package contains declarations only and imports neither
+`@workhorse/core` nor `@workhorse/dashboard`. Both packages depend on this contract, so neither
+copies the standalone API from the other.
+
+`@workhorse/dashboard/standalone` exports `startDashboardServer(database, options)`. The caller
+owns `database` and closes it after `RunningDashboard.close()` stops the HTTP listener. The
+dashboard entry owns `Queue`, `createDashboardOperatorControllers`, `createDashboardHost`,
+`dashboardNodeMiddleware`, and the Node HTTP server. It binds `options.hostname` and `options.port`,
+uses `/` as the dashboard path, and enables queue, task, and worker mutations only when
+`options.allowMutations` is true.
+
+`src/cli/dashboard.ts` imports only the shared contract. It loads the optional
+`@workhorse/dashboard/standalone` entry and verifies that the module exports
+`startDashboardServer`. The `@workhorse/core` manifest declares `@workhorse/dashboard` as an
+optional peer, so a worker-only installation does not install React or the dashboard package.
+`workhorse dashboard` reports the missing optional package before it opens a listener.
+
 ## OpenTelemetry traces, logs, and baseline metrics
 
 The host application configures the OpenTelemetry context manager, propagator, readers, processors,

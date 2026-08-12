@@ -30,6 +30,10 @@
       "types": "./dist/server/index.d.ts",
       "import": "./dist/server/index.js"
     },
+    "./standalone": {
+      "types": "./dist/server/standalone.d.ts",
+      "import": "./dist/server/standalone.js"
+    },
     "./client": {
       "types": "./dist/rpc-client.d.ts",
       "import": "./dist/rpc-client.js"
@@ -60,6 +64,7 @@
     "@orpc/client": "^1.14.8",
     "@orpc/server": "^1.14.8",
     "@phosphor-icons/react": "^2.1.10",
+    "@workhorse/dashboard-contract": "workspace:*",
     "recharts": "^3.10.1",
     "zod": "^4.4.3"
   },
