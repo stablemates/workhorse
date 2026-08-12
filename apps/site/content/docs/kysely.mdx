@@ -1,10 +1,16 @@
 ---
-title: How do I use Workhorse with Kysely?
+title: Kysely
 description: Adapt a Kysely database and enqueue jobs inside caller-owned transactions.
 ---
 
-`@workhorse/kysely` converts Kysely databases and transactions into the core `Queryable` protocol.
-Workhorse keeps its schema lifecycle outside Kysely migrations.
+Your application already writes through Kysely. When a request inserts a row and enqueues a
+follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
+and a committed row with no job is a silent gap. `@workhorse/kysely` closes that gap: it converts
+Kysely databases and transactions into the core `Queryable` protocol, so `Queue.enqueue` runs
+inside the same transaction as your Kysely writes.
+
+Workhorse keeps its schema lifecycle outside Kysely migrations. Kysely owns your tables; Workhorse
+owns its versioned SQL functions.
 
 ## Create the adapter
 
@@ -14,8 +20,9 @@ Install the integration beside Kysely and node-postgres.
 pnpm add @workhorse/kysely kysely pg
 ```
 
-Pass the database to `createKyselyAdapter`. If the same process runs workers, pass the pool from
-`PostgresDialect` so they can reserve a notification connection.
+Pass the database to `createKyselyAdapter`. Kysely's `PostgresDialect` already holds a
+node-postgres pool, so if the same process runs workers, pass that pool as `notificationPool` —
+workers then reserve a connection for `LISTEN/NOTIFY` and pick up new jobs immediately.
 
 ```ts
 import { createKyselyAdapter } from "@workhorse/kysely";
@@ -34,10 +41,14 @@ const workhorse = createKyselyAdapter(database, {
 });
 ```
 
+The returned `WorkhorseAdapter` exposes `database`, `queue`, `forTransaction`, `createWorker`, and
+`close` — one stable surface for both request handlers and worker processes.
+
 ## Enqueue inside a transaction
 
-Call `forTransaction` with the transaction passed to the callback. The queue executes its compiled
-SQL through that transaction, so the job follows the surrounding commit or rollback.
+This is the pattern the adapter exists for. Call `forTransaction` with the transaction passed to
+the callback. The queue executes its compiled SQL through that transaction, so the job follows the
+surrounding commit or rollback.
 
 ```ts
 await database.transaction().execute(async (transaction) => {
@@ -53,16 +64,23 @@ await database.transaction().execute(async (transaction) => {
 });
 ```
 
-If the callback throws, Kysely rolls back both writes. The adapter's default queue remains outside
-that transaction.
+If the callback throws, Kysely rolls back both writes. Nothing outside the transaction ever sees a
+half-committed pair. The adapter's default queue remains outside that transaction — use it for
+enqueues that stand alone.
 
 ## Keep resource ownership explicit
 
-The adapter does not destroy a caller-owned database unless `close` is configured. Without
-`notificationPool`, workers use bounded polling and keep the same durable behavior.
+The adapter does not destroy a caller-owned database unless `close` is configured. Add that hook
+only when the adapter owns the database, because `adapter.close` may run during process shutdown or
+failed startup. Without `notificationPool`, workers use bounded polling and keep the same durable
+behavior — jobs still run, just on the polling cadence.
 
-`KyselyQueryError` retains the statement, original cause, and PostgreSQL error code. Install the
-Workhorse schema with the core deployment tools rather than a Kysely migration.
+Database execution failures become `KyselyQueryError`, which retains the statement, original cause,
+and PostgreSQL error code. Typed Workhorse conflicts — idempotency, checkpoint, and wait errors —
+remain their core error classes.
+
+Install the Workhorse schema with the core deployment tools rather than a Kysely migration — the
+schema is a versioned protocol, not application tables.
 
 ## Next
 

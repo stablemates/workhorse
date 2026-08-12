@@ -1,20 +1,24 @@
 ---
-title: How do I run a failed job again?
-description: Inspect terminal failures and create fresh, auditable job identities from selected work.
+title: Dead letters and redrive
+description: Inspect terminal failures, then create fresh, fully audited jobs from them once the underlying incident is fixed.
 ---
 
-When a job exhausts its attempts, Workhorse keeps an immutable failed outcome. Redrive creates a new
-job from that evidence instead of rewriting the failed job.
+A payment provider goes down for an hour. Two hundred jobs exhaust their retries and fail
+terminally. When the provider recovers, you want those jobs to run again — without editing rows,
+without losing the evidence of what happened, and without replaying anything twice. That is
+redrive: Workhorse keeps the failed job as immutable evidence and creates a new job from it, with
+an audit trail linking the two.
 
 ## List terminal failures
 
-`Queue.listDeadLetters` reads the cold failure index and supports bounded filters for queue, type,
-tags, error name, and finish time.
+`queue.listDeadLetters(query)` reads a cold failure index that stays separate from the ready and
+active indexes. A backlog of a million failures cannot slow workers as they claim jobs.
 
 ```ts
 const page = await queue.listDeadLetters({
   queue: "billing",
   errorName: "ProviderTimeout",
+  finishedAfter: new Date("2026-08-12T09:00:00Z"),
 });
 
 for (const failure of page.items) {
@@ -22,13 +26,15 @@ for (const failure of page.items) {
 }
 ```
 
-The cursor uses immutable finish time and job identity. Dead-letter listing stays separate from
-ready and active indexes, so a large failure backlog does not slow workers as they claim jobs.
+Filters cover `queue`, `type`, `tags` (every supplied tag must match), `errorName`,
+`finishedAfter`, and `finishedBefore`. Each `DeadLetter` carries the payload, the terminal error,
+the attempt counts, and `redriveCount` — how many times an operator has already redriven it. The
+cursor pages by immutable finish time and job identity, so pages stay stable while you work.
 
-## Create one redrive
+## Redrive one job
 
-`Queue.redrive` requires the actor, reason, and a stable request ID. Your operator layer must
-authorize the actor before calling it.
+`queue.redrive(sourceJobId, request)` requires three things: who asked, why, and a stable request
+ID. Workhorse records attribution; your operator layer must authorize the actor before calling.
 
 ```ts
 const result = await queue.redrive(sourceJobId, {
@@ -36,39 +42,70 @@ const result = await queue.redrive(sourceJobId, {
   reason: "provider incident resolved",
   requestId: incidentId,
 });
+
+console.log(result.status, result.targetJobId);
 ```
 
-The target copies the queue, type, payload, tags, retry policy, attempt budget, and execution timeout.
-It does not copy attempts, errors, checkpoints, waits, cancellation state, or the old deadline.
+The new job copies what defines the work: queue, type, payload, tags, retry policy, attempt
+budget, and execution timeout. It deliberately does not copy attempts, errors, checkpoints,
+waits, cancellation state, or the old deadline — the new job starts clean.
 
-The source remains unchanged as evidence. `job_redrive` stores the lineage edge, so
-`Queue.getRedriveLineage` can trace later copies back to their failures.
+The source job stays exactly as it failed. `job_redrive` stores the lineage edge, and
+`queue.getRedriveLineage(jobId)` walks the connected graph in either direction, so you can trace
+a running job back to the failure that spawned it — or forward through repeated redrives.
 
-## Make operator retries safe
+## Repeat safely
 
-Repeating the same source and request returns the existing target. If attribution changes under the
-same request ID, Workhorse throws `RedriveIdempotencyConflictError` instead of losing audit evidence.
+Operator tools crash, and operators double-click. Redrive absorbs both. Repeating the same source
+and request ID returns the existing target with status `replayed` instead of creating a
+duplicate. If a different actor or reason arrives under the same request ID, Workhorse throws
+`RedriveIdempotencyConflictError` rather than overwrite audit evidence.
 
-PostgreSQL stores a digest rather than the raw request ID. Operator views receive safe diagnostics
-without turning incident identifiers into durable payload.
+PostgreSQL stores a digest of the request ID, not the raw value, so incident identifiers never
+become durable payload — operator views still get safe diagnostics.
 
-## Work through a backlog carefully
+## Work through a backlog
 
-`Queue.redriveMany` processes a bounded page of matching failures in stable order. Its dry-run option
-returns eligible sources without creating jobs or lineage.
+`queue.redriveMany(filter, request, options)` processes a bounded page of matching failures in
+stable order. Start with a dry run:
 
-Start with a narrow dry run, confirm the external dependency has recovered, and then reuse one
-incident request across cursor pages. If the tool crashes, repeating the page converges on its
-existing targets.
+```ts
+const preview = await queue.redriveMany(
+  { queue: "billing", errorName: "ProviderTimeout" },
+  { requestedBy: actor.email, reason: "provider incident resolved", requestId: incidentId },
+  { dryRun: true, limit: 100 },
+);
+console.log(preview.results.length, "eligible");
+```
 
-Redrive is another at-least-once execution. Payment, email, and webhook handlers still need provider
-idempotency before an operator replays them.
+A dry run returns eligible sources without creating jobs or lineage. Once you have confirmed the
+external dependency actually recovered, drop `dryRun` and reuse the same incident `requestId`
+across cursor pages:
+
+```ts
+let cursor = undefined;
+do {
+  const page = await queue.redriveMany(
+    { queue: "billing", errorName: "ProviderTimeout" },
+    { requestedBy: actor.email, reason: "provider incident resolved", requestId: incidentId },
+    { limit: 100, cursor },
+  );
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+```
+
+If the loop crashes mid-backlog, run it again: pages that already redrove converge on their
+existing targets instead of duplicating them.
+
+One honest caveat: a redriven job is another at-least-once execution. Payment, email, and webhook
+handlers still need provider-side idempotency before an operator replays them — redrive makes the
+operation auditable, not magically exactly-once.
 
 ## Next
 
-- [Retries](/docs/retries) — understand the automatic attempts before terminal failure
+- [Retries](/docs/retries) — the automatic attempts that precede a terminal failure
 - [Queries and timelines](/docs/queries) — inspect the source and target evidence
-- [Idempotency](/docs/idempotency) — distinguish enqueue keys from redrive request IDs
+- [Idempotency](/docs/idempotency) — enqueue keys versus redrive request IDs
 
 ---
 

@@ -1,51 +1,76 @@
 ---
-title: How should I run workers?
-description: Register handlers, choose process boundaries, control how workers take jobs, and drain active work safely.
+title: Workers
+description: Register handlers, size concurrency, tune the lease, and drain active work safely.
 ---
 
-A `Worker` owns a bounded set of handler executions for one queue. Production deployments should
-place workers in a dedicated process so job capacity can scale independently from HTTP traffic.
+Jobs sit in PostgreSQL until a process runs them. That process is a `Worker`: a loop that
+claims ready jobs, runs your handlers, and records each result. This page covers everything
+between `new Worker(queue)` and a clean shutdown.
 
-## Register handlers
+## Register handlers and run
 
-`Worker.handle` associates a job type with an async function. The returned worker supports chained
-registration, while each handler result must be JSON.
+`Worker.handle` binds a job type to an async function. Registration chains, so one worker can
+serve many types. Each handler receives the payload and a `HandlerContext`, and returns a JSON
+result that becomes the job's durable outcome.
 
 ```ts
 import { Worker } from "@workhorse/core";
 
-const worker = new Worker(queue, { queue: "email" }).handle(
-  "email.send",
-  async (payload: { to: string }, context) => {
-    await mailer.send(payload.to, { signal: context.signal });
+const worker = new Worker(queue, { queue: "email", concurrency: 5 })
+  .handle("email.send", async (payload: { to: string }, ctx) => {
+    await mailer.send(payload.to, { signal: ctx.signal });
     return { deliveredTo: payload.to };
-  },
-);
+  })
+  .handle("email.digest", async (payload: { userId: string }) => {
+    return { sent: await sendDigest(payload.userId) };
+  });
 
 await worker.run();
 ```
 
-The `HandlerContext` exposes the claimed job, its `AbortSignal`, checkpoints, waits, and progress.
-Those methods preserve the current fence, so custom handler code cannot accidentally write as a
-stale owner.
+`run` loops until you stop it; pass an `AbortSignal` as `worker.run(signal)` to tie its
+lifetime to your process. `runOnce` performs a single claim-and-run pass and returns whether
+it found work — useful in tests and scripts.
 
-## Choose concurrency by policy group
+The `HandlerContext` carries the claimed job, its `AbortSignal`, checkpoints, durable waits,
+and progress. Every context method writes under the current fence, so handler code cannot
+accidentally write as a stale owner after the job moves on.
 
-`WorkerOptions.concurrency` limits active handlers in one `Worker`. Replicas multiply that capacity.
-Use [concurrency policies](/docs/concurrency-policies) for a fleet-wide active budget and
-[rate limits](/docs/rate-limits) for a fleet-wide start budget.
+## The options that matter
 
-Use one multi-slot worker for handlers that share a queue and operational policy. Add another worker
-when work needs a different queue, lease policy, retry override, schedule namespace, or handler set.
+```ts
+const worker = new Worker(queue, {
+  queue: "email", // queue to claim from
+  concurrency: 5, // simultaneous handler slots, default 1
+  leaseMs: 30_000, // ownership granted per claim and heartbeat (the default)
+  workerId: "email-worker-1", // defaults to <hostname>-<pid>-<random>
+});
+```
 
-Each active job owns its own heartbeat loop and fence generation. The [core concepts](/docs/concepts)
-guide owns the lease explanation; the practical consequence is that one failed slot does not transfer
-ownership from another.
+- **`concurrency`** caps simultaneous handlers in this one `Worker`. Replicas multiply that
+  capacity. When the fleet must share one budget, use
+  [concurrency policies](/docs/concurrency-policies); for a shared start rate, use
+  [rate limits](/docs/rate-limits).
+- **`leaseMs`** is how long a claim owns a job before the database may recover it. Each
+  active job runs its own background heartbeat — every `heartbeatMs`, defaulting to a third
+  of `leaseMs` — that extends the lease while the handler runs. A shorter lease means faster
+  recovery after a crash; a longer one tolerates worse network pauses.
+- **`workerId`** identifies the lease owner. Leave it generated unless a process manager
+  guarantees uniqueness: two live workers sharing one identity collide over ownership. The
+  default embeds host and pid, so fleet views stay readable.
+- **`retryDelayMs`** overrides the persisted retry policy — a number, or
+  `(attempt, job) => number | undefined`, where `undefined` defers to the database.
+- **`scheduleNamespaces`** and **`scheduleCatchupLimit`** opt this worker into evaluating
+  [recurring schedules](/docs/schedules).
 
-## Use a dedicated process
+Group handlers that share a queue and operational policy into one multi-slot worker. Add a
+second worker when work needs a different queue, lease, retry override, or schedule namespace.
 
-`defineWorkerProcess` describes the adapter and worker configurations. `runWorkerProcess` adds signal
-handling and process supervision, while the `workhorse worker` CLI loads the compiled definition.
+## Run workers in a dedicated process
+
+Queue depth and HTTP traffic rarely scale together, so production deployments put workers in
+their own process. `defineWorkerProcess` describes the adapter and workers; the
+`workhorse worker` CLI loads the compiled definition and adds signal handling and supervision.
 
 ```ts
 import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse/core";
@@ -54,7 +79,7 @@ export default defineWorkerProcess({
   adapter: () => createWorkhorseAdapter(adapterOptions),
   workers: [
     {
-      options: { queue: "email" },
+      options: { queue: "email", concurrency: 5 },
       configure(worker) {
         worker.handle("email.send", sendEmail);
       },
@@ -63,27 +88,34 @@ export default defineWorkerProcess({
 });
 ```
 
-The process owns its database resources, worker loops, optional probes, and shutdown. Compile the
-configuration before the CLI imports it because the CLI does not install a TypeScript loader.
+The process owns its database resources, worker loops, optional probes, and shutdown. Compile
+the definition before the CLI imports it — the CLI does not install a TypeScript loader.
 
-## Pause and stop for different reasons
+## Pause, stop, and drain
 
-`Worker.pause` stops the local worker from asking for jobs while active handlers continue.
-`Worker.resume` lets it ask again, and `Worker.stop` drains active work before `run` resolves.
+Three verbs cover controlled slowdown, and each answers a different situation:
 
-`Queue.setWorkerPaused` stores an operator request in `worker_registry`. A worker receives it during
-registration refresh, so a dashboard can pause a process that runs elsewhere.
+- **`worker.pause()`** stops this worker from claiming while active handlers finish.
+  `worker.resume()` lets it claim again; `worker.isPaused()` reads the effective state.
+- **`worker.stop()`** drains: no new claims, active handlers run to completion, then `run`
+  resolves. On `SIGTERM`, the worker process does this for you.
+- **`Queue.setWorkerPaused`** stores an operator pause in `worker_registry`. The worker picks
+  it up on its next registration refresh — about `registryIntervalMs`, five seconds by
+  default — so a dashboard can pause a process it does not host. A local `resume()` cannot
+  clear an operator pause, and an operator pause dies with the process incarnation it named.
 
-When an operator asks a worker to pause, the request belongs to one process incarnation. Use
-`Queue.pauseQueue` when a replacement worker must also stop asking for work.
+If work must stop durably — surviving worker restarts — pause the queue with
+`Queue.pauseQueue`, not the worker.
 
 ## Read fleet state carefully
 
-`Queue.listWorkers` reads the durable registry, while `Worker.runtimeState` reads the local process.
-Registry slot counts are recent observations rather than synchronous views of another event loop.
+`Worker.runtimeState()` reads the local process: slots, pause flags, draining. `Queue.listWorkers`
+reads the durable registry that every worker refreshes on an interval. Registry slot counts are
+recent observations, not synchronous views of another event loop — treat them as a moment-ago
+snapshot.
 
-Unless a process manager guarantees uniqueness, leave `workerId` generated. Reusing one identity
-across live replicas creates an ownership collision.
+A worker that dies stops refreshing and goes stale in the registry. Its jobs are not lost: their
+leases expire and recovery makes them claimable again.
 
 ## Next
 

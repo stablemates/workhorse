@@ -1,57 +1,103 @@
 ---
-title: How does a job move through Workhorse?
-description: Understand the tables, states, ownership, and delivery contract behind every job.
+title: Core concepts
+description: The mental model behind every job — identity, live state, ownership, delivery, and evidence.
 ---
 
-A Workhorse job separates immutable identity from live state and terminal evidence. That split keeps
-dispatch fast because completed jobs leave the table workers search.
+Most queue bugs are really model bugs: you assumed a job runs once, or that a dead worker's writes
+stop mattering, or that finished jobs slow down the queue. This page gives you the model that makes
+Workhorse's behavior predictable — where a job lives, who may touch it, and what remains afterward.
 
-## Where does a job live?
+## A job is three kinds of row
 
-`job` stores the identity, queue, type, payload, attempt budget, and policy. PostgreSQL writes this
-row when it accepts the job and never changes its semantic fields.
+Workhorse splits every job across three relations, one per kind of fact.
 
-`job_runtime` exists while the job is `scheduled`, `ready`, or `active`. Workers and SQL functions
-change this row as the job becomes eligible, gains an owner, or returns for another attempt.
+`job` stores immutable identity: queue, type, payload, attempt budget, and policy. PostgreSQL
+writes this row when it accepts the job and never changes its semantic fields.
 
-`job_outcome` appears when the job becomes `succeeded`, `failed`, or `canceled`. PostgreSQL removes
-the runtime row and writes the outcome in the same transaction.
+`job_runtime` is the live row. It exists only while the job is `scheduled`, `ready`, or `active`,
+and it is the only mutable lifecycle relation — workers and SQL functions change it as the job
+becomes eligible, gains an owner, or returns for another attempt.
 
-A committed job has one runtime row or one outcome row. It never has both, so readers cannot observe
-the job as live and terminal at the same time.
+`job_outcome` is the terminal row. When the job becomes `succeeded`, `failed`, or `canceled`,
+PostgreSQL deletes the runtime row and inserts the outcome in the same transaction.
 
-## Who owns active work?
+A committed job therefore has one runtime row or one outcome row, never both. No reader can observe
+a job as live and terminal at the same time, and terminal jobs leave the indexes workers search —
+which is why a million finished jobs do not slow the next claim.
 
-A `Worker` calls `claim_v2` when it has a free slot. PostgreSQL checks any durable queue policy, then records the worker ID, an expiry, and
-a fence token on `job_runtime`.
+## The six states
 
-The worker calls `heartbeat_v2` while the handler runs. If heartbeats stop, recovery closes the old
-attempt and makes the job eligible again.
+```
+scheduled ──▶ ready ──▶ active ──▶ succeeded
+                ▲          │  └───▶ failed
+                └──(retry)─┘  └───▶ canceled
+```
 
-Every semantic write carries the worker ID and fence token. A stale worker cannot complete, fail, or
-change a job after a newer worker has claimed it.
+- `scheduled`: the job has a future `runAt`, a retry delay, or a durable sleep in progress.
+- `ready`: the job is eligible and waiting for a worker slot, in queue-local FIFO order.
+- `active`: one worker owns the job under a lease and is running its handler.
+- `succeeded`, `failed`, `canceled`: terminal. Result, error, or cancellation envelope is stored.
 
-## Why can a handler run again?
+`Queue.getJob` returns a snapshot with `state`, `currentAttempt`, `result`, and `error`, whichever
+side of the split the job is on.
+
+```ts
+const job = await queue.getJob(jobId);
+console.log(job?.state, job?.currentAttempt, job?.result);
+```
+
+## Who owns active work
+
+When a `Worker` has a free slot, it calls the `claim_v2` SQL function. PostgreSQL checks any queue
+policy, then records the worker ID, a lease expiry, and a fence token on `job_runtime`. The worker
+sends heartbeats through `heartbeat_v2` while the handler runs.
+
+If heartbeats stop, recovery closes the old attempt and makes the job eligible again. Every
+semantic write carries the worker ID and fence token, so a stale worker cannot complete, fail, or
+change a job after a newer worker has claimed it — the full mechanics live in
+[Workers](/docs/workers).
+
+## Why a handler can run twice
 
 The handler runs outside the transaction that grants ownership. A process can finish an external
-effect and die before PostgreSQL records success, so recovery must run the handler again.
+effect — the email sent, the card charged — and die before PostgreSQL records success. Recovery
+cannot tell that apart from a crash before the effect, so it must run the handler again.
 
-That is at-least-once delivery. Use stable provider idempotency keys for external effects, and use
-`HandlerContext.checkpoint` to reuse completed stages inside a job.
+That is at-least-once delivery, and it shapes how you write handlers:
 
-## Where does history go?
+- If a stage must not repeat within a job, wrap it in `HandlerContext.checkpoint`. A completed
+  checkpoint replays its stored result on the next run instead of executing again.
+- If an external call must not repeat across systems, give the provider a stable idempotency key.
+  Checkpoints narrow the duplicate window; only the provider can close it.
 
-`job_event` records lifecycle changes, while `attempt_history` records how each logical attempt
-closed. These append-only relations can grow and retire independently of the live dispatch path.
+```ts
+worker.handle("invoice.send", async (payload: { invoiceId: string }, ctx) => {
+  return ctx.checkpoint("send", () =>
+    emailProvider.send({ idempotencyKey: `invoice:${payload.invoiceId}` }),
+  );
+});
+```
 
-`job_query` gives operator reads their own bounded projection. Queries and the dashboard can inspect
-all states without adding broad indexes to `job_runtime`.
+[Durable execution](/docs/durable-execution) covers checkpoints, durable sleeps, and their rules.
+
+## Where history goes
+
+Execution leaves append-only evidence, kept off the dispatch path so audits never compete with
+claims.
+
+`job_event` records every lifecycle change; `attempt_history` records how each logical attempt
+closed. `Queue.getJobTimeline` merges both into one cursor stream, so you can answer "what happened
+to job X" from SQL-backed records rather than log lines.
+
+`job_query` is a separate bounded projection for operator reads. `Queue.listJobs` and the dashboard
+page through it across all states without adding broad indexes to `job_runtime`. Both history
+relations are partitioned by day and retired by retention policy, independently of live dispatch.
 
 ## Next
 
-- [Workers](/docs/workers) — see how a process claims and owns jobs
-- [Retries](/docs/retries) — see what happens after an attempt fails
-- [Durable execution](/docs/durable-execution) — preserve useful work across another run
+- [Workers](/docs/workers) — leases, fence tokens, and how a process claims jobs
+- [Retries](/docs/retries) — what happens after an attempt fails
+- [Durable execution](/docs/durable-execution) — preserve completed work across another run
 
 ---
 
