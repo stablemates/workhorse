@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { CompletionTarget, dropSchema, type TargetMetadata, type WorkItem } from "./types.js";
+import { benchmarkTargetVersions } from "./versions.js";
 
 export interface WorkerUtilsLike {
   migrate(): Promise<unknown>;
@@ -17,7 +18,7 @@ export class GraphileWorkerTarget extends CompletionTarget {
   metadata: TargetMetadata = {
     name: "graphile-worker",
     packageName: "graphile-worker",
-    version: "0.17.3",
+    version: benchmarkTargetVersions["graphile-worker"],
     schema: "graphile_worker_competitor",
     queue: "competitor_baseline",
     configuration: {

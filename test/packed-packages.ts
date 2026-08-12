@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { packedPackages, packageTarballFilename } from "../scripts/package-metadata.js";
 
 const exec = promisify(execFile);
 const repository = path.resolve(import.meta.dirname, "..");
@@ -34,54 +35,30 @@ try {
   await run("pnpm", ["build"]);
   const tarballs = path.join(scratch, "tarballs");
   await mkdir(tarballs);
-  await run("pnpm", ["--silent", "pack", "--pack-destination", tarballs]);
-  await run("pnpm", [
-    "--silent",
-    "--dir",
-    "packages/drizzle",
-    "pack",
-    "--pack-destination",
-    tarballs,
-  ]);
-  await run("pnpm", [
-    "--silent",
-    "--dir",
-    "packages/prisma",
-    "pack",
-    "--pack-destination",
-    tarballs,
-  ]);
-  await run("pnpm", [
-    "--silent",
-    "--dir",
-    "packages/typeorm",
-    "pack",
-    "--pack-destination",
-    tarballs,
-  ]);
-  await run("pnpm", [
-    "--silent",
-    "--dir",
-    "packages/kysely",
-    "pack",
-    "--pack-destination",
-    tarballs,
-  ]);
-  await run("pnpm", [
-    "--silent",
-    "--dir",
-    "packages/dashboard",
-    "pack",
-    "--pack-destination",
-    tarballs,
-  ]);
+  const tarballsByName = new Map<string, string>();
+  for (const packageEntry of packedPackages) {
+    const manifest = JSON.parse(
+      await readFile(path.join(repository, packageEntry.directory, "package.json"), "utf8"),
+    ) as { name: string; version: string };
+    await run("pnpm", [
+      "--silent",
+      "--dir",
+      packageEntry.directory,
+      "pack",
+      "--pack-destination",
+      tarballs,
+    ]);
+    const filename = packageTarballFilename(manifest.name, manifest.version);
+    tarballsByName.set(packageEntry.name, path.join(tarballs, filename));
+  }
 
-  const coreTarball = path.join(tarballs, "workhorse-core-0.1.0.tgz");
-  const drizzleTarball = path.join(tarballs, "workhorse-drizzle-0.1.0.tgz");
-  const prismaTarball = path.join(tarballs, "workhorse-prisma-0.1.0.tgz");
-  const typeormTarball = path.join(tarballs, "workhorse-typeorm-0.1.0.tgz");
-  const kyselyTarball = path.join(tarballs, "workhorse-kysely-0.1.0.tgz");
-  const dashboardTarball = path.join(tarballs, "workhorse-dashboard-0.1.0.tgz");
+  function tarball(name: string): string {
+    const result = tarballsByName.get(name);
+    if (!result) throw new Error(`No packed tarball for ${name}`);
+    return result;
+  }
+
+  const coreTarball = tarball("@workhorse/core");
   const extracted = path.join(scratch, "core");
   await mkdir(extracted);
   await run("tar", ["-xzf", coreTarball, "-C", extracted]);
@@ -114,7 +91,7 @@ try {
 
   const dashboardExtracted = path.join(scratch, "dashboard");
   await mkdir(dashboardExtracted);
-  await run("tar", ["-xzf", dashboardTarball, "-C", dashboardExtracted]);
+  await run("tar", ["-xzf", tarball("@workhorse/dashboard"), "-C", dashboardExtracted]);
   for (const required of [
     "dist/index.js",
     "dist/index.d.ts",
@@ -142,12 +119,7 @@ try {
         private: true,
         type: "module",
         dependencies: {
-          "@workhorse/core": `file:${coreTarball}`,
-          "@workhorse/drizzle": `file:${drizzleTarball}`,
-          "@workhorse/prisma": `file:${prismaTarball}`,
-          "@workhorse/typeorm": `file:${typeormTarball}`,
-          "@workhorse/kysely": `file:${kyselyTarball}`,
-          "@workhorse/dashboard": `file:${dashboardTarball}`,
+          ...Object.fromEntries(packedPackages.map(({ name }) => [name, `file:${tarball(name)}`])),
           "drizzle-orm": "0.45.2",
           "@prisma/client": "6.19.3",
           prisma: "6.19.3",
