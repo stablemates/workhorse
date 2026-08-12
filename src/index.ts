@@ -82,6 +82,7 @@ export type {
   WorkerMaintenanceLoop,
   WorkerMaintenanceTelemetry,
   WorkerOptions,
+  WorkerQueueApi,
   WorkerRuntimeState,
 } from "./worker.js";
 export { defineWorkerProcess, runWorkerProcess, startWorkerProcess } from "./worker-process.js";
