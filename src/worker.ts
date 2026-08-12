@@ -599,7 +599,10 @@ export class Worker {
           stopHeartbeat();
           void expireOwnership();
         },
-        Math.max(0, expirationAt.getTime() - Date.now()),
+        // The extra millisecond keeps the timer from leading the database clock: expirationAt was
+        // truncated to milliseconds on the way to the client, so firing at it exactly can precede
+        // the stored microsecond value and earn a not_due answer from expiration.
+        Math.max(0, expirationAt.getTime() + 1 - Date.now()),
       );
       expirationTimer.unref();
     }
@@ -801,7 +804,18 @@ export class Worker {
         controller.signal.reason instanceof DeadlineExceededError ||
         controller.signal.reason instanceof ExecutionTimeoutError
       ) {
-        const expirationStatus = await expirationPromise;
+        // "not_due" is the database refusing the transition: its clock has not reached the stored
+        // expiry the local timer fired for. Timestamps round-trip to the client at millisecond
+        // precision while PostgreSQL stores microseconds, so the timer can lead by a fraction.
+        // Ask again until the database agrees — returning on not_due would abandon an attempt the
+        // handler already gave up, leaving it active under a live lease until lease recovery.
+        let expirationStatus = await expirationPromise;
+        const expirationRetryBudgetAt = Date.now() + 1_000;
+        while (expirationStatus === "not_due" && Date.now() < expirationRetryBudgetAt) {
+          await sleep(5);
+          expirationPromise = undefined;
+          expirationStatus = await expireOwnership();
+        }
         if (expirationStatus === "cancel_requested") {
           await acknowledgeCancellation();
           span.setAttribute("workhorse.handler.outcome", "canceled");
