@@ -51,6 +51,34 @@ First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL 
   `@workhorse/core`, exercised by the CI matrix, and reported by `workhorse schema status`.
 - npm provenance on every published tarball.
 
+### Changed
+
+The line is unreleased, so these changes precede first publication and no deployment upgrades
+through them. They are recorded because the pre-release dashboards and ADRs in this repository
+name the retired instruments.
+
+- `@workhorse/core`: metric instruments are created on first emission and re-created when the
+  global meter provider changes. An application may now install its OpenTelemetry SDK after
+  importing `@workhorse/core` and still receive metrics; previously every instrument bound to
+  whichever provider existed at import, so a later SDK silently received nothing.
+  [ADR 0024](docs/decisions/0024-metrics-instrument-lifecycle.md) records the measurement behind
+  this.
+- `@workhorse/core`: two instrumentation modules emitted separately on the same lifecycle events.
+  They are now one. `src/metrics.ts` is deleted; `src/telemetry.ts` owns every instrument, and
+  `WorkhorseMetricsObserver` moves to `src/metrics-observer.ts`. The package export is unchanged —
+  `WorkhorseMetricsObserver` is still exported from `@workhorse/core` — and no other export from
+  either module was public.
+- `@workhorse/core`: the duplicated instruments are retired in favor of one name per event.
+  `workhorse.job.enqueued` becomes `workhorse.jobs.enqueued`, `workhorse.job.claimed` becomes
+  `workhorse.jobs.claimed`, `workhorse.lease.recovered` becomes `workhorse.leases.expired`,
+  `workhorse.job.cancellation` becomes `workhorse.jobs.cancellation`, `workhorse.job.redrive`
+  becomes `workhorse.jobs.redrive`, and `workhorse.job.count` becomes `workhorse.jobs.count`.
+- `@workhorse/core`: `workhorse.job.execution` becomes `workhorse.handler.executions`, and its
+  `workhorse.job.outcome` attribute becomes `workhorse.handler.outcome`. The
+  `workhorse.job.execution.duration` histogram is removed; `workhorse.handler.duration` now carries
+  the outcome attribute and times the same activation in **milliseconds rather than seconds**.
+  Dashboards and alerts that read the retired histogram need both the new name and the new unit.
+
 ### Upgrade notes
 
 There is no prior published release, so there is nothing to upgrade from. For the shape future

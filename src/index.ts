@@ -1,6 +1,6 @@
 export { createWorkhorseAdapter } from "./adapter.js";
 export { DEFAULT_QUEUE_HEALTH_BUDGETS, evaluateQueueHealth } from "./health.js";
-export { WorkhorseMetricsObserver } from "./metrics.js";
+export { WorkhorseMetricsObserver } from "./metrics-observer.js";
 export type { WorkhorseAdapter, WorkhorseAdapterOptions } from "./adapter.js";
 export {
   assertSchemaCompatible,

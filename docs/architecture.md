@@ -535,37 +535,52 @@ All maintenance functions return one row per phase, `(phase, rows_affected, dura
 
 ## OpenTelemetry metrics
 
-`@workhorse/core` depends only on `@opentelemetry/api`. It creates the `@workhorse/core` meter at
-module evaluation and never installs an SDK, reader, exporter, or resource. Applications must install
-their OpenTelemetry SDK before importing Workhorse. Without a global meter provider every instrument
-is a no-op.
+`@workhorse/core` depends only on `@opentelemetry/api` and never installs an SDK, reader, exporter,
+or resource. `src/telemetry.ts` owns every instrument. `lazyCounter`, `lazyHistogram`, and
+`lazyGauge` create the underlying instrument on first emission and re-create it whenever
+`metrics.getMeterProvider()` returns a provider other than the one last seen, so an application may
+install its OpenTelemetry SDK before or after importing Workhorse. Emissions made while no provider
+is registered are discarded, as the API's no-op provider discards them. ADR 0024 records the
+measurement that selected this lifecycle over module-scope instrument creation.
 
 Queue and worker operations emit these synchronous instruments:
 
-| Instrument                           | Kind and unit           | Recording point and attributes                                                                                                                                                                          |
-| ------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workhorse.job.enqueued`             | counter, `{job}`        | One accepted `enqueue_many_v1` member, grouped by `workhorse.queue.name` and `workhorse.job.type`. An outer caller transaction may still roll back after this statement returns.                        |
-| `workhorse.job.claimed`              | counter, `{job}`        | One successful `claim_v2`, by queue and job type. Empty claim polls emit nothing.                                                                                                                       |
-| `workhorse.job.execution`            | counter, `{execution}`  | One worker handler activation, by queue, job type, and `workhorse.job.outcome`. Outcomes are `succeeded`, `retry`, `failed`, `canceled`, `deadline_exceeded`, `timeout`, `lease_lost`, and `suspended`. |
-| `workhorse.job.execution.duration`   | histogram, `s`          | Wall-clock duration of the same activation, with the same attributes. Durable wait suspension closes an activation without closing its logical attempt.                                                 |
-| `workhorse.job.cancellation`         | counter, `{request}`    | One `cancel_v1` result, by `workhorse.cancellation.status`.                                                                                                                                             |
-| `workhorse.job.redrive`              | counter, `{request}`    | Every result from single or bulk redrive operations, by `workhorse.redrive.status`.                                                                                                                     |
-| `workhorse.schedule.fired`           | counter, `{occurrence}` | One `fire_schedule_v1` call that returns a job ID, by schedule namespace and name.                                                                                                                      |
-| `workhorse.schedule.lag`             | histogram, `s`          | Delay from the planned occurrence to the successful fire, with the schedule attributes.                                                                                                                 |
-| `workhorse.lease.recovered`          | counter, `{lease}`      | Rows changed by `recover_expired_v1`; zero-result passes emit nothing.                                                                                                                                  |
-| `workhorse.worker.heartbeat.failure` | counter, `{heartbeat}`  | Every `heartbeat_v2` status other than `accepted`, by `workhorse.heartbeat.status`.                                                                                                                     |
-| `workhorse.maintenance.runs`         | counter, `{run}`        | Each maintenance result, by loop, phase, and skipped-lock flag.                                                                                                                                         |
-| `workhorse.maintenance.rows`         | counter, `{row}`        | Rows affected by the same result and attributes.                                                                                                                                                        |
-| `workhorse.maintenance.duration`     | histogram, `ms`         | SQL-reported duration for the same result and attributes.                                                                                                                                               |
-| `workhorse.maintenance.errors`       | counter, `{error}`      | Maintenance results whose `error` is non-null, with the same attributes.                                                                                                                                |
+| Instrument                           | Kind and unit           | Recording point and attributes                                                                                                                                                                                                |
+| ------------------------------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workhorse.jobs.enqueued`            | counter, `{job}`        | One accepted `enqueue_many_v1` member, grouped by `workhorse.queue.name` and `workhorse.job.type`. An outer caller transaction may still roll back after this statement returns.                                              |
+| `workhorse.jobs.claimed`             | counter, `{job}`        | One successful `claim_v2`, by queue and job type. Empty claim polls emit nothing.                                                                                                                                             |
+| `workhorse.jobs.completed`           | counter, `{job}`        | One accepted `complete_v1`, by queue and job type. A rejected stale completion emits nothing.                                                                                                                                 |
+| `workhorse.jobs.failed`              | counter, `{job}`        | One `fail_v1` result, by queue, job type, and `workhorse.attempt.outcome`.                                                                                                                                                    |
+| `workhorse.jobs.retried`             | counter, `{job}`        | Each attempt returned to live work by failure, owned expiry, or bounded recovery, by queue and job type. Recovery rows without dimensions use `unknown` for both.                                                             |
+| `workhorse.jobs.cancellation`        | counter, `{request}`    | One `cancel_v1` result, by `workhorse.cancellation.status`.                                                                                                                                                                   |
+| `workhorse.jobs.redrive`             | counter, `{request}`    | Every result from single or bulk redrive operations, by `workhorse.redrive.status`.                                                                                                                                           |
+| `workhorse.handler.executions`       | counter, `{execution}`  | One worker handler activation, by queue, job type, and `workhorse.handler.outcome`. Outcomes are `succeeded`, `retry`, `failed`, `canceled`, `deadline_exceeded`, `timeout`, `lease_lost`, and `suspended`.                   |
+| `workhorse.handler.duration`         | histogram, `ms`         | Wall-clock duration of the same activation, with the same attributes. An activation that ends without a recorded outcome reports `unknown`. Durable wait suspension closes an activation without closing its logical attempt. |
+| `workhorse.handler.runtime`          | counter, `ms`           | Cumulative handler execution time by queue and job type.                                                                                                                                                                      |
+| `workhorse.claim.duration`           | histogram, `ms`         | `claim_v2` latency, by queue and the bounded `workhorse.claim.result` values `claimed` and `empty`.                                                                                                                           |
+| `workhorse.leases.expired`           | counter, `{lease}`      | Leases recovered by `recover_expired_v1`; zero-result passes emit nothing.                                                                                                                                                    |
+| `workhorse.schedule.fired`           | counter, `{occurrence}` | One `fire_schedule_v1` call that returns a job ID, by schedule namespace and name.                                                                                                                                            |
+| `workhorse.schedule.lag`             | histogram, `s`          | Delay from the planned occurrence to the successful fire, with the schedule attributes.                                                                                                                                       |
+| `workhorse.worker.heartbeat.failure` | counter, `{heartbeat}`  | Every `heartbeat_v2` status other than `accepted`, by `workhorse.heartbeat.status`.                                                                                                                                           |
+| `workhorse.maintenance.runs`         | counter, `{run}`        | Each maintenance result, by loop, phase, and skipped-lock flag.                                                                                                                                                               |
+| `workhorse.maintenance.rows`         | counter, `{row}`        | Rows affected by the same result and attributes.                                                                                                                                                                              |
+| `workhorse.maintenance.duration`     | histogram, `ms`         | SQL-reported duration for the same result and attributes.                                                                                                                                                                     |
+| `workhorse.maintenance.errors`       | counter, `{error}`      | Maintenance results whose `error` is non-null, with the same attributes.                                                                                                                                                      |
+| `workhorse.maintenance.drift`        | histogram, `ms`         | Delay beyond a worker maintenance loop's configured cadence, by loop.                                                                                                                                                         |
 
-`WorkhorseMetricsObserver` performs two concurrent read-only queries every `intervalMs`, which
+Each lifecycle event reaches exactly one instrument. A handler activation is counted by
+`workhorse.handler.executions` and timed by `workhorse.handler.duration`, both dimensioned by
+outcome; the write it produces is counted by `workhorse.jobs.completed`, `workhorse.jobs.failed`, or
+`workhorse.jobs.retried` at the queue operation that performed it.
+
+`WorkhorseMetricsObserver` lives in `src/metrics-observer.ts` and records its gauges through the same
+lazy lifecycle. It performs two concurrent read-only queries every `intervalMs`, which
 defaults to 10,000 and must be a safe integer of at least 1,000. `start()` collects immediately and
 then repeats on an unreferenced timer; `stop()` clears the timer; `collect()` provides a serialized
 one-shot collection. `onError` receives interval failures. Applications must run at most one observer
 per database because every observer sees the same global PostgreSQL state.
 
-The observer records `workhorse.job.count` for scheduled, ready, and active rows by queue and state;
+The observer records `workhorse.jobs.count` for scheduled, ready, and active rows by queue and state;
 `workhorse.queue.oldest_ready.age`; `workhorse.queue.paused`; `workhorse.lease.expired`;
 `workhorse.deadline.overdue`; and `workhorse.execution_timeout.overdue`. A second query groups
 `worker_registry` rows into mutually exclusive `running`, `paused`, `draining`, and `offline` states;
@@ -804,7 +819,8 @@ the same file. If `WORKHORSE_DEMO_TELEMETRY = "true"`, the same SDK adds exactly
 processor plus automatic trace and metric instrumentation. Otherwise trace and metric exporters
 are disabled while local structured logs remain active.
 
-The meter also exposes these baseline instruments:
+`registerQueueMetrics` adds these observable instruments, which the meter reads at collection time
+rather than on an emission path:
 
 - `workhorse.queue.depth` is an observable gauge split by `workhorse.queue.name` and the
   `workhorse.job.state` values `ready`, `scheduled`, and `active`.
@@ -813,12 +829,12 @@ The meter also exposes these baseline instruments:
 - `workhorse.queue.concurrency.limit` is the queue's configured active-job limit.
 - `workhorse.queue.concurrency.active` counts active rows with unexpired leases in governed queues.
 - `workhorse.queue.concurrency.blocked_ready` reports bounded ready work that policy admission rejects.
-- `workhorse.jobs.enqueued`, `workhorse.jobs.claimed`, `workhorse.jobs.completed`,
-  `workhorse.jobs.failed`, `workhorse.jobs.retried`, and `workhorse.leases.expired` are counters.
-- `workhorse.claim.duration`, `workhorse.handler.duration`, and
-  `workhorse.maintenance.drift` are millisecond histograms.
-- `workhorse.handler.runtime` is a millisecond counter. Its per-second rate divided by 1,000 is the
-  equivalent number of continuously busy workers consumed by a dimension set.
+- `workhorse.queue.rate_limit.configured`, `workhorse.queue.rate_limit.available_tokens`,
+  `workhorse.queue.rate_limit.throttled_ready`, and
+  `workhorse.queue.rate_limit.next_eligible_delay` report rate-policy state for governed queues.
+
+`workhorse.queue.depth` and `WorkhorseMetricsObserver`'s `workhorse.jobs.count` measure the same
+live work through separate depth reads. Task 0.1c gives that read one owner.
 
 `registerQueueMetrics(queue)` registers the database-wide depth, age, and concurrency callbacks and returns a
 cleanup function. Register it once per database and telemetry resource; registering it for every
@@ -829,9 +845,10 @@ present in `job_runtime`, `queue_control`, `worker_registry`, `concurrency_polic
 metric attributes.
 
 Lifecycle counters and handler instruments use `workhorse.queue.name` and `workhorse.job.type`.
-`workhorse.jobs.failed` also uses the bounded `workhorse.attempt.outcome` values `ready`,
-`scheduled`, `failed`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, and `stale`
-returned by `fail_v1`.
+`workhorse.handler.executions` and `workhorse.handler.duration` add the bounded
+`workhorse.handler.outcome`. `workhorse.jobs.failed` also uses the bounded
+`workhorse.attempt.outcome` values `ready`, `scheduled`, `failed`, `cancel_requested`,
+`deadline_exceeded`, `timeout_exceeded`, and `stale` returned by `fail_v1`.
 Claim latency uses `workhorse.queue.name` and the bounded `workhorse.claim.result`. Maintenance
 instruments retain their bounded loop attribute. Job IDs, worker IDs, schedule names, namespaces,
 tags, payload values, and error messages remain forbidden metric attributes.
