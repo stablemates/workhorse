@@ -583,4 +583,3 @@ export class Queue {
     return this.modules.operatorReads.queueMetricSnapshot();
   }
 }
-

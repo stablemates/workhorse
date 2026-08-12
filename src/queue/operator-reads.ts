@@ -1098,4 +1098,3 @@ export class OperatorReadsModule extends QueueModule {
     });
   }
 }
-
