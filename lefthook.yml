@@ -4,7 +4,7 @@ pre-commit:
       run: pnpm format && pnpm lint
       stage_fixed: true
     # - name: check types
-      # run: pnpm typecheck
+    # run: pnpm typecheck
     # - name: test
     #   run: pnpm test
 
