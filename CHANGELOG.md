@@ -93,6 +93,14 @@ name the retired instruments.
   the outcome attribute and times the same activation in **milliseconds rather than seconds**.
   Dashboards and alerts that read the retired histogram need both the new name and the new unit.
 
+- `@workhorse/dashboard`: `DashboardClient` is inferred from the router that serves it rather than
+  written out a second time by hand. The method names and shapes are the ones the dashboard already
+  spoke, so a host built against the packaged client needs no change; a host that answered a
+  slightly different shape now hears about it from the type-checker. Filter arguments that were
+  typed as `string` are now the vocabulary the router accepts — `events({ types })` takes event
+  types and attempt outcomes, exported as `DashboardEventTypeFilter`. Adding a procedure is an edit
+  to the router alone.
+
 ### Upgrade notes
 
 There is no prior published release, so there is nothing to upgrade from. For the shape future
