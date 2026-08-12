@@ -1,33 +1,26 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
-import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { installSchema, Queue, RedriveIdempotencyConflictError, Worker } from "@workhorse/core";
-import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../../src/local-database.js";
+import { Queue, RedriveIdempotencyConflictError, Worker } from "@workhorse/core";
+import { createDatabaseTestHarness } from "../../../test/support/db.js";
 import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "../src/index.js";
 
-const databaseUrl = localDatabaseUrl("test");
-assertLocalDatabasePurpose(databaseUrl, "test");
-const pool = new Pool({ connectionString: databaseUrl, max: 2 });
+const database = createDatabaseTestHarness(import.meta.url, { max: 2, extraSchemas: ["public"] });
+const { pool } = database;
 const db = drizzle({ client: pool });
 const adapter = createDrizzleAdapter(db);
 
 beforeAll(async () => {
-  await pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
-  await installSchema(pool);
-  await pool.query("DROP TABLE IF EXISTS public.workhorse_drizzle_test");
+  await database.setup();
   await pool.query("CREATE TABLE public.workhorse_drizzle_test (value text PRIMARY KEY)");
 });
 
 beforeEach(async () => {
-  await pool.query(`TRUNCATE public.workhorse_drizzle_test, workhorse.job_event,
-    workhorse.attempt_history, workhorse.schedule_occurrence, workhorse.schedule_definition,
-    workhorse.job_outcome, workhorse.job_runtime, workhorse.job RESTART IDENTITY CASCADE`);
+  await database.reset();
 });
 
 afterAll(async () => {
-  await pool.query("DROP TABLE IF EXISTS public.workhorse_drizzle_test");
-  await pool.end();
+  await database.teardown();
 });
 
 describe("Drizzle provider integration", () => {
