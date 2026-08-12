@@ -1,99 +1,45 @@
-import { diag, metrics, type Attributes } from "@opentelemetry/api";
-import type { CancelStatus, HeartbeatStatus, Queryable, RedriveStatus } from "./types.js";
+import { diag } from "@opentelemetry/api";
+import { lazyGauge } from "./telemetry.js";
+import type { Queryable } from "./types.js";
 
-const meter = metrics.getMeter("@workhorse/core");
-
-const enqueuedJobs = meter.createCounter("workhorse.job.enqueued", {
-  description: "Job enqueue requests accepted by PostgreSQL",
-  unit: "{job}",
-});
-const jobExecutions = meter.createCounter("workhorse.job.execution", {
-  description: "Worker job handler executions by outcome",
-  unit: "{execution}",
-});
-const jobExecutionDuration = meter.createHistogram("workhorse.job.execution.duration", {
-  description: "Wall-clock duration of worker job handler executions",
-  unit: "s",
-});
-const jobCount = meter.createGauge("workhorse.job.count", {
+// Every instrument here uses the lazy lifecycle selected by ADR 0024. A module-scope instrument
+// created eagerly binds to whichever meter provider exists at import, so an application that
+// installs its SDK after importing Workhorse would receive nothing.
+const jobCount = lazyGauge("workhorse.jobs.count", {
   description: "Current live jobs by queue and runtime state",
   unit: "{job}",
 });
-const oldestReadyAge = meter.createGauge("workhorse.queue.oldest_ready.age", {
+const oldestReadyAge = lazyGauge("workhorse.queue.oldest_ready.age", {
   description: "Age of the oldest ready job",
   unit: "s",
 });
-const expiredLeases = meter.createGauge("workhorse.lease.expired", {
+const expiredLeases = lazyGauge("workhorse.lease.expired", {
   description: "Current active leases past their expiry time",
   unit: "{lease}",
 });
-const overdueDeadlines = meter.createGauge("workhorse.deadline.overdue", {
+const overdueDeadlines = lazyGauge("workhorse.deadline.overdue", {
   description: "Current live jobs past their absolute deadline",
   unit: "{job}",
 });
-const overdueExecutionTimeouts = meter.createGauge("workhorse.execution_timeout.overdue", {
+const overdueExecutionTimeouts = lazyGauge("workhorse.execution_timeout.overdue", {
   description: "Current active attempts past their execution timeout",
   unit: "{attempt}",
 });
-const queuePaused = meter.createGauge("workhorse.queue.paused", {
+const queuePaused = lazyGauge("workhorse.queue.paused", {
   description: "Whether dispatch is paused for a queue",
   unit: "1",
 });
-const workerCount = meter.createGauge("workhorse.worker.count", {
+const workerCount = lazyGauge("workhorse.worker.count", {
   description: "Registered workers by queue and runtime state",
   unit: "{worker}",
 });
-const workerCapacity = meter.createGauge("workhorse.worker.capacity", {
+const workerCapacity = lazyGauge("workhorse.worker.capacity", {
   description: "Declared worker execution slots",
   unit: "{slot}",
 });
-const workerActive = meter.createGauge("workhorse.worker.active", {
+const workerActive = lazyGauge("workhorse.worker.active", {
   description: "Occupied worker execution slots",
   unit: "{slot}",
-});
-const maintenanceRuns = meter.createCounter("workhorse.maintenance.runs", {
-  description: "Workhorse maintenance phase executions",
-  unit: "{run}",
-});
-const maintenanceRows = meter.createCounter("workhorse.maintenance.rows", {
-  description: "Rows affected by Workhorse maintenance phases",
-  unit: "{row}",
-});
-const maintenanceDuration = meter.createHistogram("workhorse.maintenance.duration", {
-  description: "Workhorse maintenance phase duration",
-  unit: "ms",
-});
-const maintenanceErrors = meter.createCounter("workhorse.maintenance.errors", {
-  description: "Workhorse maintenance phase failures",
-  unit: "{error}",
-});
-const recoveredLeases = meter.createCounter("workhorse.lease.recovered", {
-  description: "Expired job leases recovered for retry or terminalization",
-  unit: "{lease}",
-});
-const cancellationRequests = meter.createCounter("workhorse.job.cancellation", {
-  description: "Job cancellation requests by durable result",
-  unit: "{request}",
-});
-const schedulesFired = meter.createCounter("workhorse.schedule.fired", {
-  description: "Recurring schedule occurrences durably fired",
-  unit: "{occurrence}",
-});
-const scheduleLag = meter.createHistogram("workhorse.schedule.lag", {
-  description: "Delay between a scheduled occurrence and its durable firing",
-  unit: "s",
-});
-const redriveRequests = meter.createCounter("workhorse.job.redrive", {
-  description: "Job redrive requests by durable result",
-  unit: "{request}",
-});
-const claimedJobs = meter.createCounter("workhorse.job.claimed", {
-  description: "Jobs claimed for worker execution",
-  unit: "{job}",
-});
-const heartbeatFailures = meter.createCounter("workhorse.worker.heartbeat.failure", {
-  description: "Worker heartbeats rejected by PostgreSQL ownership or timing checks",
-  unit: "{heartbeat}",
 });
 
 type QueueObservationRow = {
@@ -115,102 +61,6 @@ type WorkerObservationRow = {
   capacity: string;
   active_slots: string;
 };
-
-export function recordEnqueuedJobs(requests: readonly { queue: string; type: string }[]): void {
-  const counts = new Map<string, { attributes: Attributes; count: number }>();
-  for (const request of requests) {
-    const key = JSON.stringify([request.queue, request.type]);
-    const existing = counts.get(key);
-    if (existing) {
-      existing.count += 1;
-    } else {
-      counts.set(key, {
-        attributes: {
-          "workhorse.queue.name": request.queue,
-          "workhorse.job.type": request.type,
-        },
-        count: 1,
-      });
-    }
-  }
-  for (const { attributes, count } of counts.values()) enqueuedJobs.add(count, attributes);
-}
-
-export type JobExecutionOutcome =
-  | "canceled"
-  | "deadline_exceeded"
-  | "failed"
-  | "lease_lost"
-  | "retry"
-  | "succeeded"
-  | "suspended"
-  | "timeout";
-
-export function recordJobExecution(
-  queue: string,
-  type: string,
-  outcome: JobExecutionOutcome,
-  durationSeconds: number,
-): void {
-  const attributes = {
-    "workhorse.queue.name": queue,
-    "workhorse.job.type": type,
-    "workhorse.job.outcome": outcome,
-  };
-  jobExecutions.add(1, attributes);
-  jobExecutionDuration.record(durationSeconds, attributes);
-}
-
-export function recordMaintenanceMetrics(event: {
-  loop: string;
-  phase: string;
-  rowsAffected: number;
-  durationMs: number;
-  skippedLock: boolean;
-  error: unknown;
-}): void {
-  const attributes = {
-    "workhorse.maintenance.loop": event.loop,
-    "workhorse.maintenance.phase": event.phase,
-    "workhorse.maintenance.skipped_lock": event.skippedLock,
-  };
-  maintenanceRuns.add(1, attributes);
-  maintenanceRows.add(event.rowsAffected, attributes);
-  maintenanceDuration.record(event.durationMs, attributes);
-  if (event.error !== null) maintenanceErrors.add(1, attributes);
-}
-
-export function recordRecoveredLeases(count: number): void {
-  if (count > 0) recoveredLeases.add(count);
-}
-
-export function recordCancellation(status: CancelStatus): void {
-  cancellationRequests.add(1, { "workhorse.cancellation.status": status });
-}
-
-export function recordScheduleFired(namespace: string, name: string, occurrenceAt: Date): void {
-  const attributes = {
-    "workhorse.schedule.namespace": namespace,
-    "workhorse.schedule.name": name,
-  };
-  schedulesFired.add(1, attributes);
-  scheduleLag.record(Math.max(0, Date.now() - occurrenceAt.getTime()) / 1_000, attributes);
-}
-
-export function recordRedrive(status: RedriveStatus, count = 1): void {
-  if (count > 0) redriveRequests.add(count, { "workhorse.redrive.status": status });
-}
-
-export function recordClaimedJob(queue: string, type: string): void {
-  claimedJobs.add(1, {
-    "workhorse.queue.name": queue,
-    "workhorse.job.type": type,
-  });
-}
-
-export function recordHeartbeatFailure(status: Exclude<HeartbeatStatus, "accepted">): void {
-  heartbeatFailures.add(1, { "workhorse.heartbeat.status": status });
-}
 
 /**
  * Explicit PostgreSQL observer for queue-wide state that cannot be counted safely by every worker.

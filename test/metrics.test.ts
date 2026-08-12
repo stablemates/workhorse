@@ -61,7 +61,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     ]);
     await collect();
 
-    expect(metric("workhorse.job.enqueued")?.dataPoints).toEqual([
+    expect(metric("workhorse.jobs.enqueued")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
           "workhorse.job.type": "email.send",
@@ -110,20 +110,20 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await worker.runOnce();
     await collect();
 
-    expect(metric("workhorse.job.execution")?.dataPoints).toEqual([
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.outcome": "succeeded",
+          "workhorse.handler.outcome": "succeeded",
           "workhorse.job.type": "email.send",
           "workhorse.queue.name": "mail",
         },
         value: 1,
       }),
     ]);
-    expect(metric("workhorse.job.execution.duration")?.dataPoints).toEqual([
+    expect(metric("workhorse.handler.duration")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.outcome": "succeeded",
+          "workhorse.handler.outcome": "succeeded",
           "workhorse.job.type": "email.send",
           "workhorse.queue.name": "mail",
         },
@@ -171,10 +171,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await worker.runOnce();
     await collect();
 
-    expect(metric("workhorse.job.execution")?.dataPoints).toEqual([
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.outcome": "retry",
+          "workhorse.handler.outcome": "retry",
           "workhorse.job.type": "email.send",
           "workhorse.queue.name": "mail",
         },
@@ -223,10 +223,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await worker.runOnce();
     await collect();
 
-    expect(metric("workhorse.job.execution")?.dataPoints).toEqual([
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.outcome": "failed",
+          "workhorse.handler.outcome": "failed",
           "workhorse.job.type": "email.send",
           "workhorse.queue.name": "mail",
         },
@@ -275,10 +275,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await worker.runOnce();
     await collect();
 
-    expect(metric("workhorse.job.execution")?.dataPoints).toEqual([
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.outcome": "canceled",
+          "workhorse.handler.outcome": "canceled",
           "workhorse.job.type": "email.send",
           "workhorse.queue.name": "mail",
         },
@@ -334,10 +334,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await worker.runOnce();
     await collect();
 
-    expect(metric("workhorse.job.execution")?.dataPoints).toEqual([
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.outcome": "canceled",
+          "workhorse.handler.outcome": "canceled",
           "workhorse.job.type": "email.send",
           "workhorse.queue.name": "mail",
         },
@@ -347,7 +347,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
   });
 
   it("observes queue pressure and worker capacity from PostgreSQL", async () => {
-    const { WorkhorseMetricsObserver } = await import("../src/metrics.js");
+    const { WorkhorseMetricsObserver } = await import("../src/metrics-observer.js");
     const database: Queryable = {
       query: async <R extends QueryResultRow>(text: string) => {
         if (text.includes("FROM workhorse.job_runtime")) {
@@ -383,7 +383,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await new WorkhorseMetricsObserver(database).collect();
     await collect();
 
-    expect(metric("workhorse.job.count")?.dataPoints).toEqual(
+    expect(metric("workhorse.jobs.count")?.dataPoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           attributes: { "workhorse.job.state": "ready", "workhorse.queue.name": "mail" },
@@ -430,7 +430,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
         return queryResult([] as R[]);
       },
     };
-    const { WorkhorseMetricsObserver } = await import("../src/metrics.js");
+    const { WorkhorseMetricsObserver } = await import("../src/metrics-observer.js");
     const observer = new WorkhorseMetricsObserver(database, { intervalMs: 1_000 });
 
     observer.start();
@@ -497,7 +497,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await new Queue(database).recoverExpired();
     await collect();
 
-    expect(metric("workhorse.lease.recovered")?.dataPoints).toEqual([
+    expect(metric("workhorse.leases.expired")?.dataPoints).toEqual([
       expect.objectContaining({ value: 7 }),
     ]);
   });
@@ -522,7 +522,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await new Queue(database).cancel("job-1", { requestedBy: "operator", reason: "deploy" });
     await collect();
 
-    expect(metric("workhorse.job.cancellation")?.dataPoints).toEqual([
+    expect(metric("workhorse.jobs.cancellation")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: { "workhorse.cancellation.status": "cancel_requested" },
         value: 1,
@@ -580,7 +580,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     });
     await collect();
 
-    expect(metric("workhorse.job.redrive")?.dataPoints).toEqual([
+    expect(metric("workhorse.jobs.redrive")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: { "workhorse.redrive.status": "redriven" },
         value: 1,
@@ -622,7 +622,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     );
     await collect();
 
-    expect(metric("workhorse.job.redrive")?.dataPoints).toEqual(
+    expect(metric("workhorse.jobs.redrive")?.dataPoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           attributes: { "workhorse.redrive.status": "redriven" },
@@ -660,7 +660,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await new Queue(database).claim("worker-1", { queue: "mail" });
     await collect();
 
-    expect(metric("workhorse.job.claimed")?.dataPoints).toEqual([
+    expect(metric("workhorse.jobs.claimed")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
           "workhorse.job.type": "email.send",
@@ -751,10 +751,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await worker.runOnce();
     await collect();
 
-    expect(metric("workhorse.job.execution")?.dataPoints).toEqual([
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.outcome": outcome,
+          "workhorse.handler.outcome": outcome,
           "workhorse.job.type": "email.send",
           "workhorse.queue.name": "mail",
         },
@@ -818,10 +818,10 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await worker.runOnce();
     await collect();
 
-    expect(metric("workhorse.job.execution")?.dataPoints).toEqual([
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.outcome": "suspended",
+          "workhorse.handler.outcome": "suspended",
           "workhorse.job.type": "report.publish",
           "workhorse.queue.name": "reports",
         },
@@ -868,15 +868,51 @@ describe("Workhorse OpenTelemetry metrics", () => {
     await worker.runOnce();
     await collect();
 
-    expect(metric("workhorse.job.execution")?.dataPoints).toEqual([
+    expect(metric("workhorse.handler.executions")?.dataPoints).toEqual([
       expect.objectContaining({
         attributes: {
-          "workhorse.job.outcome": "failed",
+          "workhorse.handler.outcome": "failed",
           "workhorse.job.type": "unknown.job",
           "workhorse.queue.name": "default",
         },
         value: 1,
       }),
     ]);
+  });
+
+  // ADR 0024: every instrument is created on first emission and re-created when the global meter
+  // provider changes, so an SDK installed after the application imported Workhorse still receives
+  // metrics. The eager module-scope lifecycle this replaced bound to the no-op provider forever.
+  it("reaches a meter provider registered after the instrumentation module loaded", async () => {
+    const { Queue } = await import("../src/queue.js");
+    const lateExporter = new InMemoryMetricExporter(AggregationTemporality.DELTA);
+    const lateReader = new PeriodicExportingMetricReader({
+      exporter: lateExporter,
+      exportIntervalMillis: 60_000,
+    });
+    const lateProvider = new MeterProvider({ readers: [lateReader] });
+    const database: Queryable = {
+      query: async <R extends QueryResultRow>() =>
+        queryResult([{ ordinal: 1, job_id: "job-late", accepted: true }] as unknown as R[]),
+    };
+
+    metrics.disable();
+    metrics.setGlobalMeterProvider(lateProvider);
+    try {
+      await new Queue(database).enqueue("email.send", null, { queue: "mail" });
+      await lateProvider.forceFlush();
+
+      expect(
+        lateExporter
+          .getMetrics()
+          .flatMap((resource) => resource.scopeMetrics)
+          .flatMap((scope) => scope.metrics)
+          .find((candidate) => candidate.descriptor.name === "workhorse.jobs.enqueued")?.dataPoints,
+      ).toEqual([expect.objectContaining({ value: 1 })]);
+    } finally {
+      await lateProvider.shutdown();
+      metrics.disable();
+      metrics.setGlobalMeterProvider(provider);
+    }
   });
 });
