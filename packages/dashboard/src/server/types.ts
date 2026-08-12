@@ -11,7 +11,7 @@ import type {
   DashboardDemoScenario,
   DashboardDurabilityPlan,
   DashboardRunNowStatus,
-} from "../model.js";
+} from "../wire.js";
 
 export interface DashboardAuditContext {
   actor: string;

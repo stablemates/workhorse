@@ -93,8 +93,10 @@ try {
   for (const required of [
     "dist/index.js",
     "dist/index.d.ts",
-    "dist/model.js",
-    "dist/model.d.ts",
+    "dist/wire.js",
+    "dist/wire.d.ts",
+    "dist/presentation.js",
+    "dist/presentation.d.ts",
     "dist/rpc-client.js",
     "dist/rpc-client.d.ts",
     "dist/server/index.js",
@@ -178,7 +180,8 @@ import { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboa
 import type { DashboardNodeMiddleware } from "@workhorse/dashboard/server";
 import { startDashboardServer as startStandaloneDashboard } from "@workhorse/dashboard/standalone";
 import type { DashboardCommandOptions, DashboardStandaloneModule } from "@workhorse/dashboard-contract";
-import type { DashboardTaskCounts } from "@workhorse/dashboard/model";
+import type { DashboardTaskCounts } from "@workhorse/dashboard/wire";
+import { describeRetryPolicy } from "@workhorse/dashboard/presentation";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import type { DataSource, EntityManager } from "typeorm";
@@ -186,6 +189,7 @@ import type { Kysely, Transaction } from "kysely";
 import { Pool } from "pg";
 
 const pool = new Pool();
+void describeRetryPolicy(null);
 const db = drizzle({ client: pool });
 const adapter = createDrizzleAdapter(db);
 declare const prisma: PrismaClient;

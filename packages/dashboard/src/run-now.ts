@@ -1,5 +1,6 @@
 import type { DashboardClient } from "./client.js";
-import { describeRunNowOutcome, type DashboardRunNowStatus } from "./model.js";
+import { describeRunNowOutcome } from "./presentation.js";
+import type { DashboardRunNowStatus } from "./wire.js";
 
 /**
  * What one run-now request reported, held so the list can state it and offer the released task.

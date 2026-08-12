@@ -67,7 +67,7 @@ import {
   DEMO_FEATURE_SHOWCASE_JOB_TYPE,
   DEMO_FEATURE_SHOWCASE_SOURCE,
 } from "../src/feature-showcase.js";
-import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/model";
+import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/wire";
 import { createDemoWorkerDefinition } from "../src/worker-definition.js";
 
 /**

@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
-import type { DashboardSettingsPage } from "./model.js";
+import type { DashboardSettingsPage } from "./wire.js";
 
 const storage = new Map<string, string>();
 Object.defineProperty(globalThis, "localStorage", {

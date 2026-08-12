@@ -6,9 +6,9 @@ import {
   cancelOutcomeTone,
   describeCancelOutcome,
   runNowOutcomeTone,
-  type DashboardCancelStatus,
   type DashboardResultTone,
-} from "./model.js";
+} from "./presentation.js";
+import type { DashboardCancelStatus } from "./wire.js";
 import type { RunNowFeedback } from "./run-now.js";
 
 /**

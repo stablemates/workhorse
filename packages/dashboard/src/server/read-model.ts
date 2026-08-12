@@ -36,7 +36,7 @@ import {
   dashboardConcurrencyPolicySummary,
   dashboardRateLimitPolicySummary,
   readIdempotencyEvidence,
-} from "../model.js";
+} from "../wire.js";
 import {
   statAttemptErrors,
   statAttempts,
