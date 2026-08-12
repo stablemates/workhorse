@@ -40,6 +40,15 @@ async function readManifest(relativePath: string): Promise<Manifest> {
   return JSON.parse(await readFile(path.join(repositoryRoot, relativePath), "utf8")) as Manifest;
 }
 
+async function readWorkspaceManifest(relativePath: string): Promise<Manifest | undefined> {
+  try {
+    return await readManifest(relativePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 /** The tarball basename `pnpm pack` produces for a scoped name: `@workhorse/x` -> `workhorse-x`. */
 function tarballName(name: string, version: string): string {
   return `${name.replace(/^@/, "").replace(/\//g, "-")}-${version}.tgz`;
@@ -68,14 +77,14 @@ export async function corePackage(): Promise<PublishedPackage> {
 /** The publishable packages under `packages/`, in directory order. */
 export async function workspacePackages(): Promise<readonly PublishedPackage[]> {
   const entries = await readdir(path.join(repositoryRoot, "packages"), { withFileTypes: true });
-  const directories = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .toSorted();
+  const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 target lacks Array#toSorted().
+  directories.sort();
   const described = await Promise.all(
     directories.map(async (directory) => {
       const relativePath = `packages/${directory}/package.json`;
-      const manifest = await readManifest(relativePath);
+      const manifest = await readWorkspaceManifest(relativePath);
+      if (!manifest) return undefined;
       return manifest.private === true ? undefined : await describe(relativePath, directory);
     }),
   );
