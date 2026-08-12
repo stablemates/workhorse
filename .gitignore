@@ -16,3 +16,7 @@ health*.json
 logs/
 ops/signoz/pours/
 .jcode/
+
+# [epiq]: local hydrated state is never committed
+.epiq/events/
+.epiq/log/
