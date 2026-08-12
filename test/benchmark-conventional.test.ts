@@ -1,15 +1,16 @@
-import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   conventionalSchema,
   ConventionalQueue,
   conventionalSql,
 } from "../benchmarks/conventional.js";
-import { assertLocalDatabasePurpose, localDatabaseUrl } from "../src/local-database.js";
+import { createDatabaseTestHarness } from "./support/db.js";
 
-const databaseUrl = localDatabaseUrl("test");
-assertLocalDatabasePurpose(databaseUrl, "test");
-const pool = new Pool({ connectionString: databaseUrl, max: 4 });
+const database = createDatabaseTestHarness(import.meta.url, {
+  max: 4,
+  extraSchemas: [conventionalSchema],
+});
+const { pool } = database;
 const queue = new ConventionalQueue(pool, "benchmark-conventional-test");
 
 async function enqueueSequence(jobId: string): Promise<number | null> {
@@ -22,7 +23,7 @@ async function enqueueSequence(jobId: string): Promise<number | null> {
 }
 
 beforeAll(async () => {
-  await pool.query(`DROP SCHEMA IF EXISTS ${conventionalSchema} CASCADE`);
+  await database.setup();
   await queue.setup();
 });
 
@@ -31,8 +32,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
-  await pool.query(`DROP SCHEMA IF EXISTS ${conventionalSchema} CASCADE`);
-  await pool.end();
+  await database.teardown();
 });
 
 describe("conventional benchmark SQL", () => {
