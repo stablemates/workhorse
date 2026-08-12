@@ -1,10 +1,9 @@
-import {
-  dashboardAttemptOutcomes,
-  dashboardJobEventTypes,
-  type DashboardEventKind,
-  type DashboardEventsWindow,
-  type DashboardEventTypeFilter,
-} from "./model.js";
+import { dashboardAttemptOutcomes, dashboardJobEventTypes } from "./presentation.js";
+import type {
+  DashboardEventKind,
+  DashboardEventsWindow,
+  DashboardEventTypeFilter,
+} from "./wire.js";
 
 export const eventPageSizes = [25, 50, 100] as const;
 export type EventPageSize = (typeof eventPageSizes)[number];

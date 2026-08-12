@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { describeDurableBoundary, describeTaskResult, readTaskResultEvidence } from "./model.js";
+import {
+  describeDurableBoundary,
+  describeTaskResult,
+  readTaskResultEvidence,
+} from "./presentation.js";
 
 /**
  * These tests pin what the Task details drawer is allowed to claim about durable results.

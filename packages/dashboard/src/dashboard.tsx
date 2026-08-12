@@ -83,16 +83,18 @@ import {
   dashboardJobEventTypes,
   describeCancellationRequest,
   describeCancelOutcome,
+  describeDurableBoundary,
   describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
   formatRetryDelay,
   idempotencyEvidenceLine,
   isTerminalTaskState,
-  readIdempotencyEvidence,
+  readTaskResultEvidence,
   taskRowActionGroups,
-} from "./model.js";
-import { describeDurableBoundary, readTaskResultEvidence, type TaskResultState } from "./model.js";
+  type TaskResultState,
+} from "./presentation.js";
+import { readIdempotencyEvidence } from "./wire.js";
 import type {
   DashboardCancellationRequest,
   DashboardCronPage,
@@ -115,9 +117,8 @@ import type {
   DashboardTasksPage,
   DashboardWorkersPage,
   DashboardSettingsPage,
-  TaskRowActionCapabilities,
-  TaskRowActionId,
-} from "./model.js";
+} from "./wire.js";
+import type { TaskRowActionCapabilities, TaskRowActionId } from "./presentation.js";
 import type { DashboardClient, DashboardDemoTools } from "./client.js";
 import { requestRunNow, type RunNowFeedback } from "./run-now.js";
 import { notifyCancel, notifyDashboard, notifyFailure, notifyRunNow } from "./notifications.js";

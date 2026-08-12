@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   describeIdempotency,
   formatIdempotencyWindow,
+  idempotencyEvidenceLine,
+} from "./presentation.js";
+import {
   hasIdempotencyEvidence,
   idempotencyEventDetailKeys,
-  idempotencyEvidenceLine,
   readIdempotencyEvidence,
   type IdempotencyEvidence,
-} from "./model.js";
+} from "./wire.js";
 
 const rawKey = "order-9f3a-super-secret-caller-key";
 

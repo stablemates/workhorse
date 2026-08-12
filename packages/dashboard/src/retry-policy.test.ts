@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeRetryEventSource, describeRetryPolicy, formatRetryDelay } from "./model.js";
+import { describeRetryEventSource, describeRetryPolicy, formatRetryDelay } from "./presentation.js";
 
 describe("retry policy vocabulary", () => {
   it("never shows a raw stored kind and always keeps exact values available", () => {
