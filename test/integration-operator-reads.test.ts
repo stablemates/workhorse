@@ -1003,6 +1003,37 @@ describe("operator reads", () => {
     }
   });
 
+  it("preserves the public validation contract while operator queries move behind a module", async () => {
+    const invalidDate = new Date(Number.NaN);
+    const calls: Array<readonly [() => Promise<unknown>, RegExp]> = [
+      [() => queue.listJobs(null as never), /listJobs query must be an object/],
+      [() => queue.listJobs({ limit: 0 }), /listJobs limit must be an integer between 1 and/],
+      [() => queue.listJobs({ createdAfter: invalidDate }), /must be a finite Date/],
+      [() => queue.listJobs({ states: ["ready", "ready"] }), /states must be unique: ready/],
+      [
+        () =>
+          queue.listJobs({
+            cursor: { createdAt: "now", jobId: "job", signature: "signature", extra: true },
+          } as never),
+        /listJobs cursor contains unknown field: extra/,
+      ],
+      [
+        () =>
+          queue.getJobTimeline("job-a", {
+            cursor: {
+              jobId: "job-b",
+              occurredAt: "now",
+              kind: "event",
+              recordId: "record",
+            },
+          }),
+        /cursor jobId must match the requested jobId/,
+      ],
+    ];
+
+    for (const [call, message] of calls) await expect(call()).rejects.toThrow(message);
+  });
+
   it("omits payloads by default and redacts before enforcing byte bounds", async () => {
     const objectId = await queue.enqueue("payload-object", {
       visible: "ok",

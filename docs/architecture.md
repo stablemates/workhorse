@@ -112,6 +112,26 @@ guarantees.
 6. **Resource ownership.** An adapter closes nothing it did not create. `WorkhorseAdapter.close()`
    invokes the configured `close` callback at most once, however many times it is called.
 
+### Queue module seams
+
+`Queue` remains the only public facade for queue operations. Its constructor calls
+`createQueueModuleContext` and `createQueueModules`. Neither function is exported from
+`src/index.ts`, so internal relocations do not change the package interface.
+
+`createQueueModuleContext` returns an immutable `QueueModuleContext`. The context contains the
+`Queryable`, default queue name, and validated `QueueOptions`. Every internal module extends
+`QueueModule`, which retains that context for relocated behavior.
+
+`createQueueModules` constructs eight receivers. They are `EnqueueContractsModule`,
+`ClaimLeaseFenceModule`, `CheckpointsProgressWaitsModule`, `QueueAdministrationModule`,
+`WorkerRegistryModule`, `RetentionMaintenanceModule`, `CronSchedulesModule`, and
+`OperatorReadsModule`. The first seven contain no behavior until their matching extraction lands.
+
+`OperatorReadsModule.validateJobListQuery` and `validateJobTimelineQuery` own the validation already
+moved behind the facade. They use `validateJobListQuery`, `validateJobTimelineCursor`, and
+`validatePageLimit` from `src/queue/filter-cursor.ts`. The validators enforce the limits exported as
+`MAX_JOB_QUERY_PAGE_SIZE`, `MAX_JOB_QUERY_PAYLOAD_BYTES`, and `MAX_JOB_QUERY_REDACT_KEYS`.
+
 The operator dashboard is a separate boundary from the worker fleet. It is a framework-neutral
 request host that reads everything it shows from PostgreSQL, including worker identity, runtime
 state, and policy provenance, so it can be mounted in a process that runs no workers at all.
