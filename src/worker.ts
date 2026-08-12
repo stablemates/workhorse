@@ -4,9 +4,15 @@ import { hostname } from "node:os";
 import { CronExpressionParser } from "cron-parser";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { WorkhorseError } from "./errors.js";
-import { errorForTelemetry, Queue } from "./queue.js";
+import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
 import { jitterDuration } from "./notifications.js";
-import type { MaintenancePhaseResult } from "./queue.js";
+import type { JobNotificationSubscription } from "./notifications.js";
+import type {
+  ScheduleWaitRequest,
+  ScheduleWaitResult,
+} from "./queue/checkpoints-progress-waits.js";
+import type { StoredSchedule } from "./queue/cron-schedules.js";
+import type { MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 import {
   extractTraceContext,
   jobMetricAttributes,
@@ -26,7 +32,9 @@ import type {
   JobCheckpoint,
   JobProgress,
   JobWait,
+  HeartbeatStatus,
   Json,
+  WorkerRegistration,
 } from "./types.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
@@ -101,6 +109,95 @@ export type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_t
 export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
   loop: WorkerMaintenanceLoop;
   observedAt: string;
+}
+
+/**
+ * The queue protocol consumed by {@link Worker}.
+ *
+ * This interface is the wire boundary for future Worker SDKs. An implementation may execute the
+ * operations in-process or transport them to another runtime, but it must preserve their durable
+ * claim, fence, cancellation, wait, maintenance, and worker-registration semantics. Notification
+ * methods are an optional wake-up capability; implementations that omit them retain correct
+ * dispatch through bounded polling.
+ */
+export interface WorkerQueueApi {
+  readonly defaultQueue: string;
+  supportsJobNotifications?(): boolean;
+  subscribeToJobNotifications?(
+    queueName: string,
+    wake: () => void,
+    error: (error: unknown) => void,
+  ): Promise<JobNotificationSubscription | null>;
+  claim(
+    workerId: string,
+    options?: { queue?: string; leaseMs?: number },
+  ): Promise<ClaimedJob | null>;
+  heartbeatStatus(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    leaseMs?: number,
+  ): Promise<HeartbeatStatus>;
+  expireOwned(job: ClaimedJob<unknown>, workerId: string): Promise<ExpireOwnedStatus>;
+  acknowledgeCancel(job: ClaimedJob<unknown>, workerId: string): Promise<boolean>;
+  listCheckpoints(jobId: string): Promise<JobCheckpoint[]>;
+  saveCheckpoint<TValue extends Json>(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+    value: TValue,
+  ): Promise<JobCheckpoint<TValue>>;
+  getProgress(jobId: string): Promise<JobProgress | null>;
+  updateProgress<TValue extends Json>(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    value: TValue,
+  ): Promise<JobProgress<TValue>>;
+  listWaits(jobId: string): Promise<JobWait[]>;
+  scheduleWait(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+    request: ScheduleWaitRequest,
+  ): Promise<ScheduleWaitResult>;
+  complete<TResult extends Json>(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    result: TResult,
+  ): Promise<boolean>;
+  fail(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    error: unknown,
+    retryDelayMs?: number,
+  ): Promise<FailureStatus>;
+  tick(options?: {
+    promoteLimit?: number;
+    recoverLimit?: number;
+  }): Promise<MaintenancePhaseResult[]>;
+  prepareHistoryPartitions(options?: {
+    force?: boolean;
+    now?: Date;
+  }): Promise<MaintenancePhaseResult[]>;
+  rollupStatistics(options?: {
+    now?: Date;
+    maxBuckets?: number;
+    recomputeBuckets?: number;
+  }): Promise<MaintenancePhaseResult[]>;
+  retainHistory(options?: { force?: boolean; now?: Date }): Promise<MaintenancePhaseResult[]>;
+  pruneTerminalStorage(options?: {
+    force?: boolean;
+    now?: Date;
+  }): Promise<MaintenancePhaseResult[]>;
+  schedules(namespaces: readonly string[]): Promise<StoredSchedule[]>;
+  fireSchedule(
+    namespace: string,
+    name: string,
+    revision: bigint,
+    occurrenceAt: Date,
+  ): Promise<string | null>;
+  registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }>;
+  deregisterWorker(workerId: string): Promise<boolean>;
+  pruneWorkerRegistry(maxAgeMs?: number): Promise<number>;
 }
 
 export class InjectedCrashError extends WorkhorseError {
@@ -287,7 +384,7 @@ export class Worker {
   private wakeVersion = 0;
 
   constructor(
-    private readonly queue: Queue,
+    private readonly queue: WorkerQueueApi,
     private readonly options: WorkerOptions = {},
   ) {
     this.workerId = options.workerId ?? defaultWorkerId();
@@ -296,9 +393,7 @@ export class Worker {
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
-    const supportsJobNotifications = (queue as Partial<Queue>).supportsJobNotifications;
-    this.jitterDispatchPolling =
-      typeof supportsJobNotifications === "function" && supportsJobNotifications.call(queue);
+    this.jitterDispatchPolling = queue.supportsJobNotifications?.() ?? false;
     this.dispatchPollMs =
       options.pollMs ??
       (this.jitterDispatchPolling ? DEFAULT_NOTIFICATION_FALLBACK_POLL_MS : DEFAULT_POLL_MS);
@@ -536,7 +631,7 @@ export class Worker {
         "workhorse.handler.outcome": outcome,
       });
     };
-    const recordFailure = (state: Awaited<ReturnType<Queue["fail"]>>): void => {
+    const recordFailure = (state: Awaited<ReturnType<WorkerQueueApi["fail"]>>): void => {
       if (state === "ready" || state === "scheduled") {
         if (arbiter.submit("failed")) recordExecution("retry");
       } else if (state === "failed") {
@@ -1111,14 +1206,13 @@ export class Worker {
       this.wakeLoops();
     };
 
-    let notificationSubscription: Awaited<ReturnType<Queue["subscribeToJobNotifications"]>> = null;
+    let notificationSubscription: JobNotificationSubscription | null = null;
     try {
       if (shouldStop()) return;
       await this.runMaintenance();
       if (shouldStop()) return;
 
-      const subscribeToJobNotifications = (this.queue as Partial<Queue>)
-        .subscribeToJobNotifications;
+      const subscribeToJobNotifications = this.queue.subscribeToJobNotifications;
       if (typeof subscribeToJobNotifications === "function") {
         notificationSubscription = await subscribeToJobNotifications.call(
           this.queue,
