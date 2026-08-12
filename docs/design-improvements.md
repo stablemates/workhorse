@@ -108,12 +108,12 @@ blocks, so no subset is targetable with `-t` and `test:integration` runs everyth
 uses the pool — legal under vitest hook scoping, but a trap in a file this long.
 
 **Change.** Split into per-domain files matching the seams intended for the 1.2
-decomposition: enqueue and contracts; claim/lease/fence; checkpoints, progress, and waits;
-cron schedules; retention and maintenance; worker registry; operator reads (listJobs,
-dead letters, redrive); health and snapshots. Use the 0.2 harness for each. If a test does
-not fit any seam cleanly, that is signal the seam is wrong — adjust the 1.2 plan, not the
-test. Add coverage tooling (`@vitest/coverage-v8`) and record a baseline; the repo currently
-has none.
+decomposition: enqueue and contracts; claim/lease/fence; retry and attempt lifecycle;
+checkpoints, progress, and waits; queue administration; cron schedules; retention and
+maintenance; worker registry; operator reads (listJobs, dead letters, redrive); health and
+snapshots. Use the 0.2 harness for each. If a test does not fit any seam cleanly, that is
+signal the seam is wrong — adjust the 1.2 plan, not the test. Add coverage tooling
+(`@vitest/coverage-v8`) and record a baseline; the repo currently has none.
 
 **Done when** no test file under `test/` exceeds ~1,500 lines; each domain file runs green in
 isolation; a coverage baseline for `src/` is checked into the pull request description.
@@ -241,14 +241,14 @@ are near-duplicates; `getRedriveLineage()` runs a recursive CTE inline
 8 call sites — a `FencedLease` value object would collapse both.
 
 **Change.** Keep the public `Queue` class and its method signatures exactly as they are.
-Delegate to internal modules along eight concerns: enqueue and contracts; claim/lease/fence;
-checkpoints, progress, and waits; queue administration (pause/resume/purge/promote); worker
-registry; retention and maintenance policy; cron schedules; operator reads + health + metric
-snapshots. Move `health()`'s inline SQL into `sql/` as versioned functions or at minimum a
-dedicated read module. Extract the shared filter/cursor validator. No behavior change, no
-hot-path SQL change — mechanical relocation, one concern per pull request, each landing green
-against the 0.3 test files. P1-05 priority queues then modifies a small claim module instead
-of a 3,964-line file.
+Delegate to internal modules along ten concerns: enqueue and contracts; claim/lease/fence;
+retry and attempt lifecycle; checkpoints, progress, and waits; queue administration
+(pause/resume/purge/promote); worker registry; retention and maintenance policy; cron
+schedules; operator reads; health and metric snapshots. Move `health()`'s inline SQL into
+`sql/` as versioned functions or at minimum a dedicated read module. Extract the shared
+filter/cursor validator. No behavior change, no hot-path SQL change — mechanical relocation,
+one concern per pull request, each landing green against the 0.3 test files. P1-05 priority
+queues then modifies a small claim module instead of a 3,964-line file.
 
 **Done when** `queue.ts` is under ~600 lines of pure delegation; each internal module has a
 matching 0.3 test file; the public API surface (checked via `src/index.ts` exports and the
