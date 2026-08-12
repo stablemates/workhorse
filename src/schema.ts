@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { expectOneRow } from "./errors.js";
 import { assertSupportedPostgres } from "./support.js";
 import type { Queryable } from "./types.js";
 
@@ -53,7 +54,7 @@ export async function installSchema(database: Queryable): Promise<void> {
                  AS legacy(relation_name)
               WHERE to_regclass(format('workhorse.%I', relation_name)) IS NOT NULL
            ) AS legacy_relation_exists`);
-  const state = existing.rows[0]!;
+  const state = expectOneRow(existing, "the schema installation probe");
   if (state.schema_exists) {
     if (!state.version_table_exists)
       throw new Error("refusing to install into an unversioned existing workhorse schema");
