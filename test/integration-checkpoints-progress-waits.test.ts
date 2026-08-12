@@ -1017,6 +1017,36 @@ describe("checkpoints progress waits", () => {
     ).toBe(0);
   });
 
+  it("preserves durable suspension when application code catches and rethrows its signal", async () => {
+    const id = await queue.enqueue("rethrown-wait-sentinel", {});
+    let caught: unknown;
+    const worker = new Worker(queue, { workerId: "rethrown-sentinel-worker" }).handle(
+      "rethrown-wait-sentinel",
+      async (_payload, context) => {
+        try {
+          await context.sleep("rethrown", 60_000);
+        } catch (error) {
+          caught = error;
+          throw error;
+        }
+        return { shouldNotComplete: true };
+      },
+    );
+
+    expect(await worker.runOnce()).toBe(true);
+    expect(caught).toBeDefined();
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
+    const events = await pool.query<{ event_type: string }>(
+      "SELECT event_type FROM workhorse.job_event WHERE job_id = $1 ORDER BY event_id",
+      [id],
+    );
+    expect(events.rows.map((row) => row.event_type)).toEqual([
+      "enqueued",
+      "claimed",
+      "wait_scheduled",
+    ]);
+  });
+
   it("does not query durability tables for handlers that use no durability helpers", async () => {
     const durabilityQueries: string[] = [];
     const countingDatabase: Queryable = {
