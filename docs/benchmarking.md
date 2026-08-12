@@ -303,6 +303,32 @@ Raw claim samples and raw PostgreSQL plans are intentionally retained so derived
 - Run publication-grade tests on stable hardware without unrelated load and preserve raw JSON plus environment metadata.
 - External side effects remain at least once. Queue benchmark success does not prove exactly-once delivery to HTTP, email, or payment providers.
 
+## Continuous smoke benchmarks
+
+`.github/workflows/benchmark.yml` runs the smoke profile on every push to `main`, nightly at 04:17 UTC, and on manual dispatch. It provisions PostgreSQL 18, runs `pnpm db:reset:bench`, then:
+
+```bash
+pnpm benchmark -- --suite all --profile smoke --output benchmark-report.json
+```
+
+The job is capped at 30 minutes and the benchmark step at 20, so a scenario that waits on a job which never arrives fails the run instead of holding a runner.
+
+Two things follow every run. A step summary renders each comparative group's mean throughput and per-run claim p95 with their 95% confidence intervals, plus every lifecycle scenario's duration and assertion verdict. The full canonical report is uploaded as the `benchmark-smoke-<run number>` artifact, retained for 90 days, and uploaded even when the run fails — a failing report is the evidence needed to diagnose the failure.
+
+Before uploading, the workflow asserts the report is `schemaVersion: 3`, carries a source commit under `provenance`, contains comparative summaries and lifecycle scenarios, and that every lifecycle assertion passed. A run that produces a half-written report fails rather than publishing it as evidence.
+
+### Reading the trend
+
+The workflow answers one question: does the harness still run green, and has anything changed by an amount too large to be noise? It does not answer how fast Workhorse is.
+
+- **Assertions are the signal.** A lifecycle assertion that flips from passing to failing is a real regression at any profile. Investigate it directly.
+- **Timings are not a signal on their own.** The smoke profile runs 12 jobs over 2 repetitions on a shared runner. Confidence intervals at that size routinely span more than the mean, and consecutive nightly runs can differ by a factor of two with no code change between them.
+- **Only act on a sustained shift.** Treat a timing change as worth investigating when several consecutive runs move the same way and the new interval does not overlap the old one. A single slow night is runner noise.
+- **Never compare across environments.** Runner hardware, PostgreSQL image, and settings all vary. Compare a workflow artifact only with other workflow artifacts, and read `environment` and `provenance` before concluding anything.
+- **Reproduce before recording.** A trend the workflow surfaces is a prompt to run `default` or `full` on stable hardware and record that artifact under `docs/benchmarks/`. The workflow artifact itself is never publication evidence.
+
+The [interpretation rules](#interpretation-rules) above apply to these artifacts unchanged.
+
 ## Environment metadata
 
 Alongside a publication artifact, capture at least:
