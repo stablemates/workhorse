@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { metrics } from "@opentelemetry/api";
+import {
+  AggregationTemporality,
+  type DataPoint,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from "@opentelemetry/sdk-metrics";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -25,6 +33,7 @@ import {
   type Queryable,
   type RetentionPolicyDefinition,
   Worker,
+  WorkhorseMetricsObserver,
 } from "../src/index.js";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../src/local-database.js";
 
@@ -7404,6 +7413,51 @@ describe("live-runtime queue protocol", () => {
         rateLimitNextEligibleDelayMs: null,
       },
     ]);
+  });
+
+  it("observes the same live depth through the metrics observer", async () => {
+    // health(), queueMetricSnapshot(), and the observer share one depth read, so this asserts the
+    // observer's gauges against the health snapshot taken from the same rows. A paused queue with
+    // no jobs is included because only the observer reports it, and it must report zeroes.
+    await queue.enqueue("ready", {});
+    await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
+    const claimed = await queue.claim("observer-worker");
+    expect(claimed).not.toBeNull();
+    await queue.pauseQueue("idle-paused");
+
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const previousProvider = metrics.getMeterProvider();
+    metrics.setGlobalMeterProvider(provider);
+    try {
+      await new WorkhorseMetricsObserver(pool).collect();
+      await provider.forceFlush();
+    } finally {
+      metrics.setGlobalMeterProvider(previousProvider);
+      await provider.shutdown();
+    }
+
+    const points = (exporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics)
+      .flatMap((scope) => scope.metrics)
+      .find((candidate) => candidate.descriptor.name === "workhorse.jobs.count")?.dataPoints ??
+      []) as DataPoint<number>[];
+    const depth = (queueName: string, state: string) =>
+      points.find(
+        (point) =>
+          point.attributes["workhorse.queue.name"] === queueName &&
+          point.attributes["workhorse.job.state"] === state,
+      )?.value;
+    const health = await queue.health();
+    expect(depth("default", "ready")).toBe(health.readyDepth);
+    expect(depth("default", "scheduled")).toBe(health.scheduledDepth);
+    expect(depth("default", "active")).toBe(health.activeLeases);
+    expect(depth("idle-paused", "ready")).toBe(0);
+    expect(depth("idle-paused", "scheduled")).toBe(0);
+    expect(depth("idle-paused", "active")).toBe(0);
   });
 
   it("evaluates caller-overridable health budgets into machine-readable status reasons", async () => {

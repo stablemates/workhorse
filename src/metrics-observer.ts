@@ -1,4 +1,5 @@
 import { diag } from "@opentelemetry/api";
+import { perQueueDepthSelect } from "./queue-depth.js";
 import { lazyGauge } from "./telemetry.js";
 import type { Queryable } from "./types.js";
 
@@ -48,7 +49,7 @@ type QueueObservationRow = {
   ready: string;
   active: string;
   oldest_ready_age_ms: number | string | null;
-  expired_leases: string;
+  expired: string;
   overdue_deadlines: string;
   overdue_execution_timeouts: string;
   paused: boolean;
@@ -115,38 +116,24 @@ export class WorkhorseMetricsObserver {
           SELECT queue_name FROM workhorse.job_runtime
           UNION
           SELECT queue_name FROM workhorse.queue_control
-        ), runtime AS (
-          SELECT queue_name,
-                 count(*) FILTER (WHERE state = 'scheduled')::text AS scheduled,
-                 count(*) FILTER (WHERE state = 'ready')::text AS ready,
-                 count(*) FILTER (WHERE state = 'active')::text AS active,
-                 extract(epoch FROM clock_timestamp() - min(ready_at)
-                   FILTER (WHERE state = 'ready')) * 1000 AS oldest_ready_age_ms,
-                 count(*) FILTER (
-                   WHERE state = 'active' AND expires_at <= clock_timestamp()
-                 )::text AS expired_leases,
-                 count(*) FILTER (
-                   WHERE deadline_at IS NOT NULL AND deadline_at <= clock_timestamp()
-                 )::text AS overdue_deadlines,
-                 count(*) FILTER (
-                   WHERE state = 'active' AND attempt_timeout_at <= clock_timestamp()
-                 )::text AS overdue_execution_timeouts
-            FROM workhorse.job_runtime
-           GROUP BY queue_name
+        ), depth AS (
+          ${perQueueDepthSelect(
+            [
+              "scheduled",
+              "ready",
+              "active",
+              "oldest_ready_age_ms",
+              "expired",
+              "overdue_deadlines",
+              "overdue_execution_timeouts",
+            ],
+            "queue_names",
+          )}
         )
-        SELECT queue_names.queue_name,
-               coalesce(runtime.scheduled, '0') AS scheduled,
-               coalesce(runtime.ready, '0') AS ready,
-               coalesce(runtime.active, '0') AS active,
-               runtime.oldest_ready_age_ms,
-               coalesce(runtime.expired_leases, '0') AS expired_leases,
-               coalesce(runtime.overdue_deadlines, '0') AS overdue_deadlines,
-               coalesce(runtime.overdue_execution_timeouts, '0') AS overdue_execution_timeouts,
-               coalesce(control.paused, false) AS paused
-          FROM queue_names
-          LEFT JOIN runtime USING (queue_name)
+        SELECT depth.*, coalesce(control.paused, false) AS paused
+          FROM depth
           LEFT JOIN workhorse.queue_control control USING (queue_name)
-         ORDER BY queue_names.queue_name`),
+         ORDER BY depth.queue_name`),
       this.database.query<WorkerObservationRow>(`
         SELECT queue_name,
                CASE WHEN last_heartbeat_at < clock_timestamp() - interval '30 seconds'
@@ -173,7 +160,7 @@ export class WorkhorseMetricsObserver {
       if (row.oldest_ready_age_ms !== null) {
         oldestReadyAge.record(Number(row.oldest_ready_age_ms) / 1_000, attributes);
       }
-      expiredLeases.record(Number(row.expired_leases), attributes);
+      expiredLeases.record(Number(row.expired), attributes);
       overdueDeadlines.record(Number(row.overdue_deadlines), attributes);
       overdueExecutionTimeouts.record(Number(row.overdue_execution_timeouts), attributes);
       queuePaused.record(row.paused ? 1 : 0, attributes);

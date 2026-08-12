@@ -61,6 +61,7 @@ import type {
 } from "./types.js";
 import { HEALTH_HISTORY_SCAN_LIMIT } from "./types.js";
 import { DEFAULT_QUEUE_HEALTH_BUDGETS, evaluateQueueHealth } from "./health.js";
+import { perQueueDepthSelect, totalDepthSelect } from "./queue-depth.js";
 import {
   injectTraceContext,
   jobMetricAttributes,
@@ -530,42 +531,24 @@ const HEALTH_SNAPSHOT_SQL = `
            END AS schema_version
       FROM workhorse.schema_version
   ), depth AS (
-    SELECT count(*) FILTER (WHERE state = 'ready')::text AS ready,
-           count(*) FILTER (WHERE state = 'scheduled')::text AS scheduled,
-           count(*) FILTER (WHERE state = 'scheduled' AND wait_name IS NOT NULL)::text AS sleeping,
-           count(*) FILTER (
-             WHERE state = 'scheduled' AND wait_name IS NOT NULL
-               AND run_at <= clock_timestamp()
-           )::text AS overdue_waits,
-           min(run_at) FILTER (
-             WHERE state = 'scheduled' AND wait_name IS NOT NULL
-           ) AS next_wake_at,
-           count(*) FILTER (WHERE state = 'active')::text AS active,
-           count(*) FILTER (WHERE state = 'active' AND expires_at <= clock_timestamp())::text AS expired,
-           extract(epoch FROM clock_timestamp() - min(ready_at) FILTER (WHERE state = 'ready')) * 1000
-             AS oldest_ready_age_ms,
-           count(*) FILTER (
-             WHERE state = 'scheduled' AND run_at <= clock_timestamp()
-           )::text AS overdue_scheduled,
-           extract(epoch FROM clock_timestamp() - min(run_at) FILTER (
-             WHERE state = 'scheduled' AND run_at <= clock_timestamp()
-           )) * 1000 AS oldest_overdue_scheduled_age_ms,
-           count(*) FILTER (WHERE deadline_at IS NOT NULL)::text AS pending_deadlines,
-           count(*) FILTER (
-             WHERE deadline_at IS NOT NULL AND deadline_at <= clock_timestamp()
-           )::text AS overdue_deadlines,
-           count(*) FILTER (
-             WHERE deadline_at > clock_timestamp()
-               AND deadline_at <= clock_timestamp() + interval '1 minute'
-           )::text AS deadlines_due_within_minute,
-           min(deadline_at) AS earliest_deadline_at,
-           count(*) FILTER (
-             WHERE state = 'active' AND attempt_timeout_at IS NOT NULL
-           )::text AS active_execution_timeouts,
-           count(*) FILTER (
-             WHERE state = 'active' AND attempt_timeout_at <= clock_timestamp()
-           )::text AS overdue_execution_timeouts
-      FROM workhorse.job_runtime
+    ${totalDepthSelect([
+      "ready",
+      "scheduled",
+      "sleeping",
+      "overdue_waits",
+      "next_wake_at",
+      "active",
+      "expired",
+      "oldest_ready_age_ms",
+      "overdue_scheduled",
+      "oldest_overdue_scheduled_age_ms",
+      "pending_deadlines",
+      "overdue_deadlines",
+      "deadlines_due_within_minute",
+      "earliest_deadline_at",
+      "active_execution_timeouts",
+      "overdue_execution_timeouts",
+    ])}
   ), terminal AS (
     -- Terminal history is unbounded, so its counts stop scanning at the cap. Live-state counts
     -- come from depth and stay exact; claim-shaped work never pays for lifetime history here.
@@ -3792,19 +3775,10 @@ export class Queue {
          UNION SELECT queue_name FROM workhorse.rate_limit_policy
          UNION SELECT queue_name FROM workhorse.worker_registry
        ), usage AS (
-         SELECT names.queue_name,
-                count(runtime.job_id) FILTER (WHERE runtime.state = 'ready')::text AS ready,
-                count(runtime.job_id) FILTER (WHERE runtime.state = 'scheduled')::text AS scheduled,
-                count(runtime.job_id) FILTER (WHERE runtime.state = 'active')::text AS active,
-                count(runtime.job_id) FILTER (
-                  WHERE runtime.state = 'active' AND runtime.expires_at > clock_timestamp()
-                )::text AS concurrency_active,
-                extract(epoch FROM clock_timestamp() - min(runtime.ready_at) FILTER (
-                  WHERE runtime.state = 'ready'
-                )) * 1000 AS oldest_ready_age_ms
-           FROM queue_names names
-           LEFT JOIN workhorse.job_runtime runtime ON runtime.queue_name = names.queue_name
-          GROUP BY names.queue_name
+         ${perQueueDepthSelect(
+           ["ready", "scheduled", "active", "concurrency_active", "oldest_ready_age_ms"],
+           "queue_names",
+         )}
        )
        SELECT usage.*, policy.max_active,
               COALESCE(blocked.blocked_ready, 0)::text AS blocked_ready
