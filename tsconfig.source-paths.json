@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@workhorse/core": ["src/index.ts"],
+      "@workhorse/dashboard": ["packages/dashboard/src/index.ts"],
+      "@workhorse/dashboard/dev": ["packages/dashboard/src/dev.ts"],
+      "@workhorse/dashboard/model": ["packages/dashboard/src/model.ts"],
+      "@workhorse/dashboard/server": ["packages/dashboard/src/server/index.ts"],
+      "@workhorse/dashboard/*": ["packages/dashboard/src/*"],
+      "@workhorse/drizzle": ["packages/drizzle/src/index.ts"],
+      "@workhorse/kysely": ["packages/kysely/src/index.ts"],
+      "@workhorse/prisma": ["packages/prisma/src/index.ts"],
+      "@workhorse/typeorm": ["packages/typeorm/src/index.ts"]
+    }
+  }
+}

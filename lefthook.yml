@@ -1,12 +1,15 @@
 pre-commit:
   jobs:
-    - name: check
-      run: pnpm format && pnpm lint
-      stage_fixed: true
-    # - name: check types
-    # run: pnpm typecheck
-    # - name: test
-    #   run: pnpm test
+    - name: check types
+      run: pnpm typecheck
+    - name: test changed scope
+      run: pnpm test:changed {staged_files}
+    - name: test changed database scope
+      glob: "{src/**,benchmarks/**,packages/*/src/**,demo/src/**,demo/test/app.integration.test.ts,packages/*/test/integration.test.ts,test/support/**,test/benchmark-conventional.test.ts,test/integration-*.test.ts,test/isolation-canary-*.test.ts,test/schema-installation.test.ts}"
+      run: pnpm build && pnpm test:database:changed {staged_files}
+    - name: test database scope after SQL changes
+      glob: "sql/**"
+      run: pnpm test:schema
 
 post-checkout:
   jobs:
