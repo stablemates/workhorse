@@ -1,6 +1,15 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+export const databaseTestFiles = [
+  "demo/test/app.integration.test.ts",
+  "packages/*/test/integration.test.ts",
+  "test/benchmark-conventional.test.ts",
+  "test/integration-*.test.ts",
+  "test/isolation-canary-*.test.ts",
+  "test/schema-installation.test.ts",
+];
+
 export default defineConfig({
   resolve: {
     alias: {
