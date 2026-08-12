@@ -1,24 +1,25 @@
 ---
-title: How do I mount the operator dashboard?
-description: Serve the packaged React interface from any host while keeping authorization and mutations under application control.
+title: Dashboard
+description: Mount the packaged operator interface in any framework, behind your own authorization, with mutations under host control.
 ---
 
-`@workhorse/dashboard` reads operator state from PostgreSQL and serves its interface through a
-framework-neutral host. It does not need to run beside the workers it observes.
+`@workhorse/dashboard` gives your operators a full interface — jobs, attempts, checkpoints,
+schedules, queues, workers, failures, health — without you building a single admin page. It reads
+everything from PostgreSQL, so a dashboard mounted anywhere can observe workers running on
+machines it has never met.
 
-## What does the dashboard show?
+## What it shows
 
-The interface lists jobs, attempts, checkpoints, progress, schedules, queues, workers, failures, and
-system health. It can also expose host-authorized controls for cancellation, run-now actions, queue
-state, schedules, and requests that pause workers.
+Every view comes from the same read models as [Queries and timelines](/docs/queries): job
+listings with redacted payloads, per-job timelines, dead letters, the worker registry, and the
+health verdict with its reasons. With host-authorized controllers wired in, it can also cancel
+jobs, run schedules now, pause queues and workers, and edit maintenance and retention policy.
 
-Every view comes from PostgreSQL read models. A dashboard process can therefore report workers from
-separate machines without reading their process memory.
+## Mount it in your server
 
-## Create the server host
-
-`createDashboardHost` accepts a `Request` and returns a `Response` only when it owns the configured
-path.
+`createDashboardHost` builds a framework-neutral handler over standard `Request`/`Response`
+objects. It answers only for requests under its configured path and returns `null` for
+everything else.
 
 ```ts
 import { createDashboardHost } from "@workhorse/dashboard/server";
@@ -31,53 +32,78 @@ const host = createDashboardHost({
 });
 ```
 
-Fetch-native frameworks call `host.handle(request)`. Connect-style frameworks wrap the same host
-with `dashboardNodeMiddleware`.
+Fetch-native frameworks — Hono, Next.js route handlers, SvelteKit, Nitro — call
+`host.handle(request)` and fall through when it resolves to `null`:
 
-The host checks schema compatibility and refuses incompatible requests. It never installs or
-migrates database objects.
+```ts
+app.all("/workhorse/*", async (c) => {
+  const response = await host.handle(c.req.raw);
+  return response ?? c.notFound();
+});
+```
 
-## Treat authorization as a host responsibility
+Connect-style frameworks — Express, Connect, Fastify via `@fastify/middie` — wrap the same host:
 
-The `authorize` callback protects the interface, assets, and RPC methods. Workhorse has no built-in
-authentication, role model, or tenant boundary.
+```ts
+import { dashboardNodeMiddleware } from "@workhorse/dashboard/server";
 
-Use `operator`, `queueController`, `taskController`, `workerController`, `scheduleController`, and
-`settingsController` when mutations must pass through your own authorization and audit services.
+app.use(dashboardNodeMiddleware(host));
+```
 
-`auditActor` and `requestedBy` provide attribution after authorization. They do not grant permission
-by themselves.
+The middleware passes unowned requests to `next()` untouched, so the dashboard never captures
+unrelated routes. On every owned request, the host checks schema compatibility and refuses with a
+clear error rather than serving against a mismatched database. It never installs or migrates
+anything.
 
-The settings page keeps database policy separate from deployment configuration. It edits maintenance
-and retention through `DashboardSettingsController`, previews destructive retention changes, and
-shows process-owned worker values without offering runtime edits.
+## Authorization is yours
 
-## Customize without forking the interface
+Workhorse ships no authentication, no role model, and no tenant boundary — an honest gap, not an
+oversight. The `authorize` callback is the entire security boundary: it runs before the
+interface, the assets, and every RPC method. Return `false` for a 403, or return your own
+`Response` to redirect to a login flow.
 
-Hosts can render `Dashboard` and `WorkhorseThemeProvider` directly, then connect them with
-`createDashboardClient`. Import the packaged stylesheet so the component receives its expected
-tokens and layout.
+Mutations go further. The `operator`, `queueController`, `taskController`, `workerController`,
+`scheduleController`, and `settingsController` options let each mutation pass through your own
+authorization and audit services. `auditActor` and the `requestedBy` fields provide attribution
+after authorization — they record who acted, they never decide who may.
 
-`configuredWorkers` can describe expected processes before they first register. `projectDurability`
-can translate checkpoint evidence into domain-specific steps without changing stored queue data.
+The settings page edits maintenance and retention policy through `DashboardSettingsController`,
+previews destructive retention changes before applying them, and shows process-owned worker
+values read-only, because changing those requires a deployment.
 
-The standalone `workhorse dashboard` command is useful for a local console. Unless the operator
-explicitly enables mutations, the command remains read-only. An authenticated embedded mount remains
-the production choice.
+## The standalone CLI
 
-## Read refreshes as bounded polling
+For a quick local console, skip the mounting entirely:
 
-The browser refreshes only the active page at the selected cadence. Job volume does not create extra
-browser requests, and manual refresh remains available when polling is undesirable.
+```bash
+workhorse dashboard --port 3000
+```
 
-The dashboard is an operator view rather than a transactional snapshot. PostgreSQL statistics and
-worker registry data can lag their underlying processes.
+It binds `127.0.0.1`, serves read-only, and performs no authentication. `--host` and
+`--allow-mutations` exist, but each publishes an unauthenticated control surface and warns when
+used. Treat the CLI as a developer tool; an authenticated embedded mount is the production
+choice.
+
+## Customize without forking
+
+Hosts that want the components inside their own React tree can render `Dashboard` and
+`WorkhorseThemeProvider` directly, connected through `createDashboardClient`, importing the
+packaged stylesheet for tokens and layout. `configuredWorkers` describes expected worker
+processes before they first register, and `projectDurability` translates checkpoint evidence
+into domain-specific step names without touching stored queue data.
+
+## Refresh model
+
+The browser polls only the active page at the selected cadence, so job volume never multiplies
+browser requests; manual refresh covers the rest. Remember what you are looking at: an operator
+view, not a transactional snapshot. PostgreSQL statistics and worker registry rows can lag the
+processes behind them by design.
 
 ## Next
 
-- [Queries and timelines](/docs/queries) — use the same read models from application code
-- [Installation](/docs/installation) — add only the optional packages your deployment uses
-- [Workers](/docs/workers) — publish fleet state and receive requests to stop work
+- [Queries and timelines](/docs/queries) — the same read models from application code
+- [Installation](/docs/installation) — add only the optional packages you use
+- [Operations](/docs/operations) — fleet controls behind the dashboard's buttons
 
 ---
 

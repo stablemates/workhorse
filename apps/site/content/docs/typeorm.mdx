@@ -1,10 +1,16 @@
 ---
-title: How do I use Workhorse with TypeORM?
+title: TypeORM
 description: Adapt a TypeORM data source and enqueue jobs through transactional entity managers.
 ---
 
-`@workhorse/typeorm` converts TypeORM data sources and transactional entity managers into the core
-`Queryable` protocol. Workhorse keeps its schema lifecycle outside TypeORM migrations.
+Your application already writes through TypeORM. When a request saves an entity and enqueues a
+follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
+and a committed row with no job is a silent gap. `@workhorse/typeorm` closes that gap: it converts
+TypeORM data sources and transactional entity managers into the core `Queryable` protocol, so
+`Queue.enqueue` runs inside the same transaction as your entity writes.
+
+Workhorse keeps its schema lifecycle outside TypeORM migrations. TypeORM owns your entities;
+Workhorse owns its versioned SQL functions.
 
 ## Create the adapter
 
@@ -25,10 +31,14 @@ const workhorse = createTypeOrmAdapter(dataSource, {
 });
 ```
 
+The returned `WorkhorseAdapter` exposes `database`, `queue`, `forTransaction`, `createWorker`, and
+`close` — one stable surface for both request handlers and worker processes.
+
 ## Enqueue inside a transaction
 
-Call `forTransaction` with the callback's entity manager. The queue sends its SQL through that
-manager, so the job follows the surrounding commit or rollback.
+This is the pattern the adapter exists for. Call `forTransaction` with the callback's entity
+manager. The queue sends its SQL through that manager, so the job follows the surrounding commit or
+rollback.
 
 ```ts
 await dataSource.transaction(async (manager) => {
@@ -39,17 +49,29 @@ await dataSource.transaction(async (manager) => {
 });
 ```
 
-If the callback throws, TypeORM rolls back both writes. The adapter's default queue remains outside
-that transaction.
+If the callback throws, TypeORM rolls back both writes. Nothing outside the transaction ever sees a
+half-committed pair. The adapter's default queue remains outside that transaction — use it for
+enqueues that stand alone.
 
 ## Enable notification-assisted workers
 
 TypeORM does not expose its internal node-postgres pool as a stable API. Supply a separate
 caller-owned pool as `notificationPool` when workers should reserve a connection for
-`LISTEN/NOTIFY`. Without it, workers use bounded polling and keep the same durable behavior.
+`LISTEN/NOTIFY` and pick up new jobs immediately. Without it, workers use bounded polling and keep
+the same durable behavior — jobs still run, just on the polling cadence.
 
-`TypeOrmQueryError` retains the statement, original cause, and PostgreSQL driver code. Install the
-Workhorse schema with the core deployment tools.
+Database execution failures become `TypeOrmQueryError`, which retains the statement, original
+cause, and PostgreSQL driver code. Typed Workhorse conflicts — idempotency, checkpoint, and wait
+errors — remain their core error classes.
+
+## Keep resource ownership explicit
+
+Unless you supply `close`, the adapter leaves the data source initialized. Add that hook only when
+the adapter owns the data source, because `adapter.close` may run during process shutdown or failed
+startup.
+
+Install the Workhorse schema with the core deployment tools. TypeORM migrations should not manage
+Workhorse's versioned SQL functions — the schema is a versioned protocol, not application entities.
 
 ## Next
 

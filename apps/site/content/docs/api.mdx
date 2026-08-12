@@ -1,142 +1,139 @@
 ---
-title: Where do I find each Workhorse API?
-description: Find exported identifiers by responsibility, then use the published declarations for exact signatures.
+title: API overview
+description: The public surface grouped by concern — Queue, Worker, HandlerContext, errors, schema tools, and the CLI.
 ---
 
-This page is an index of the public surface, not another explanation of its concepts. Follow the
-guide links for behavior and the published declarations for exact types.
+Workhorse's public surface is small: one `Queue` class for producing and operating jobs, one
+`Worker` class for running them, and a handful of schema and process helpers around them. This page
+maps that surface by concern so you can find the right method fast. It is an overview, not an
+exhaustive reference — the published TypeScript declarations carry the exact signatures, and
+[`src/index.ts`](https://github.com/stablemates/workhorse/blob/main/src/index.ts) is the
+authoritative export list.
 
-## Schema and support
+## Queue
 
-`installSchema`, `readSchemaVersion`, `assertSchemaCompatible`, `WORKHORSE_SCHEMA_VERSION`,
-`assertSupportedPostgres`, `describePostgresSupport`, `readPostgresSupport`, `MINIMUM_NODE_MAJOR`,
-`MINIMUM_POSTGRES_MAJOR`, `SUPPORTED_NODE_MAJORS`, `SUPPORTED_POSTGRES_MAJORS`, and `PostgresSupport`.
+`new Queue(database, options?)` takes any `Queryable` — a `pg` pool, a client, or an ORM adapter —
+and exposes everything below.
 
-## Queue production and control
+**Producing work.** `enqueue(type, payload, options?, transaction?)` accepts one job and returns
+its ID; pass an open transaction as the last argument to commit the job with your data.
+`enqueueMany(requests, transaction?)` accepts a bounded batch. `EnqueueOptions` carries `queue`,
+`runAt`, `deadline`, `executionTimeoutMs`, `maxAttempts`, `retryPolicy`, `concurrencyKey`, `tags`,
+and `idempotency`.
 
-`Queue`, `EnqueueOptions`, `EnqueueRequest`, `EnqueueIdempotency`, `RetryPolicy`, `RunTaskNowResult`,
-`RunTaskNowStatus`, `ScheduleWaitRequest`, `ScheduleWaitResult`, `ScheduleDefinition`,
-`ScheduleJobDefinition`, `StoredSchedule`, `QueueOptions`, `JobTypeContracts`,
-`JobContractVersion`, and `JobContractValidator`.
+**Stopping work.** `cancel(jobId, { requestedBy, reason })` records an attributed cooperative
+cancellation. Queued work cancels immediately; active handlers observe it through their
+`AbortSignal`.
 
-The exported constants are `MAX_ENQUEUE_BATCH_SIZE`, `DEFAULT_IDEMPOTENCY_SCOPE`,
-`DEFAULT_IDEMPOTENCY_TTL_MS`, `MAX_IDEMPOTENCY_KEY_BYTES`, `MAX_IDEMPOTENCY_SCOPE_BYTES`,
-`MAX_IDEMPOTENCY_TTL_MS`, `MAX_EXECUTION_TIMEOUT_MS`, `DEFAULT_JOB_VALUE_MAX_BYTES`,
-`MAX_JOB_VALUE_MAX_BYTES`, and `MAX_JOB_CONTRACT_SENSITIVE_KEYS`.
+**Recurring work.** `syncSchedules(namespace, definitions, options?)` reconciles a namespace of
+cron definitions during deployment. `schedules(namespaces)` reads them back, `fireSchedule` exposes
+the revision-fenced firing operation, and `runTaskNow(jobId)` releases one scheduled job early.
 
-## Job reads and durable evidence
+**Deployment-synchronized policies.** `syncConcurrencyPolicies`, `syncRateLimitPolicies`,
+`syncRetentionPolicy`, and `syncMaintenancePolicy` write desired state; each has a matching read —
+`concurrencyPolicies`, `rateLimitPolicies` and `rateLimitStatuses`, `getRetentionPolicy`, and
+`getMaintenancePolicy`. Retention adds `overrideRetentionPolicy`, `revertRetentionPolicy`, and
+`previewRetentionPolicy` for operator changes with provenance.
 
-`Json`, `JobState`, `JobSnapshot`, `ClaimedJob`, `JobCheckpoint`, `JobProgress`, `JobWait`,
-`JobListFilter`, `JobListQuery`, `JobListCursor`, `JobListItem`, `JobListPage`,
-`JobPayloadProjection`, `JobPayloadStatus`, `JobTimelineQuery`, `JobTimelineCursor`,
-`JobTimelineEntry`, `JobTimelineEvent`, `JobTimelineAttempt`, `JobTimelinePage`, and
-`JobAttemptOutcome`.
+**Reading evidence.** `getJob(id)` returns one durable `JobSnapshot`. `listJobs(query)` pages a
+cross-state operator projection with filters, payload bounds, and redaction.
+`getJobTimeline(jobId, query?)` merges lifecycle events and finalized attempts into one page.
+`listCheckpoints` and `listWaits` expose a job's durable boundaries.
 
-The related constants are `MAX_CHECKPOINT_VALUE_BYTES`, `MAX_PROGRESS_VALUE_BYTES`,
-`MIN_PROGRESS_UPDATE_INTERVAL_MS`, `MAX_WAIT_DURATION_MS`, `MAX_JOB_QUERY_PAGE_SIZE`,
-`DEFAULT_JOB_QUERY_PAYLOAD_BYTES`, `MAX_JOB_QUERY_PAYLOAD_BYTES`, and
-`MAX_JOB_QUERY_REDACT_KEYS`.
+**Failure recovery.** `listDeadLetters(query)` pages terminal failures. `redrive(sourceJobId,
+request)` creates one audited fresh job from a failure; `redriveMany(filter, request, options)`
+processes a bounded page with a dry-run option; `getRedriveLineage(jobId)` traces copies back to
+their sources.
 
-## Cancellation and failure recovery
+**Fleet and health.** `listWorkers()` reads the durable worker registry and
+`setWorkerPaused(workerId, paused, attribution)` requests a cooperative operator pause.
+`health(options?)` returns a `QueueHealth` verdict with reasons; `queueMetricSnapshot()` feeds
+metrics exporters. `pauseQueue`, `resumeQueue`, and `purgeQueue` act on one queue name.
 
-`CancellationRequest`, `CancelResult`, `CancelStatus`, `HeartbeatStatus`, `ExpireOwnedStatus`,
-`DeadLetterFilter`, `DeadLetterCursor`, `DeadLetterQuery`, `DeadLetter`, `DeadLetterPage`,
-`RedriveRequest`, `RedriveResult`, `RedriveStatus`, `RedriveLineage`, `RedriveLineageRecord`,
-`BulkRedriveOptions`, and `BulkRedrivePage`.
+**Maintenance.** Workers normally drive maintenance for you. The underlying operations —
+`promote`, `recoverExpired`, `tick`, `rollupStatistics`, `prepareHistoryPartitions`,
+`retainHistory`, and `pruneTerminalStorage` — are public for controlled setups and tests.
 
-The related constants are `MAX_CANCELLATION_REQUESTED_BY_CHARACTERS`,
-`MAX_CANCELLATION_REASON_CHARACTERS`, `MAX_REDRIVE_BATCH_SIZE`, and
-`MAX_REDRIVE_REQUEST_ID_BYTES`.
+## Worker
 
-## Workers and processes
+`new Worker(queue, options?)` claims and runs jobs with bounded concurrency.
 
-`Worker`, `Handler`, `HandlerContext`, `WorkerOptions`, `WorkerRuntimeState`,
-`WorkerMaintenanceTelemetry`, `WorkerRegistration`, `WorkerPauseResult`, `WorkerRegistryEntry`,
-`MaintenancePhase`, and `MaintenancePhaseResult`.
+- `handle(type, handler)` registers a typed handler and returns the worker for chaining.
+- `run(signal?)` is the production loop; `runOnce()` performs one claim-and-run pass.
+- `stop()` drains: no new claims, active handlers finish. `pause()` and `resume()` toggle claiming
+  locally; `runtimeState()` and `maintenanceTelemetry()` expose what the worker is doing.
 
-Process exports are `defineWorkerProcess`, `startWorkerProcess`, `runWorkerProcess`,
-`WorkerProcessDefinition`, `WorkerProcessWorkerDefinition`, `WorkerProcessLogger`,
-`WorkerProcessProbeOptions`, `WorkerProcessSignal`, `WorkerProcessSignalSource`,
-`RunWorkerProcessOptions`, and `StartedWorkerProcess`.
+`WorkerOptions` covers identity and capacity (`queue`, `workerId`, `concurrency`), ownership timing
+(`leaseMs`, `heartbeatMs`, `pollMs`), maintenance cadence (`maintenanceIntervalMs`,
+`statisticsRollupIntervalMs`, `registryIntervalMs`), schedule evaluation (`scheduleNamespaces`,
+`scheduleCatchupLimit`), retry shaping (`retryDelayMs`), and error callbacks
+(`onRegistrationError`, `onNotificationError`, `onMaintenance`).
 
-## Database adapters
+## HandlerContext
 
-Core exports `Queryable`, `createWorkhorseAdapter`, `WorkhorseAdapter`, and
-`WorkhorseAdapterOptions`.
+Every handler receives `(payload, context)`. The context is the durable-execution surface:
 
-`@workhorse/drizzle` exports `createDrizzleAdapter`, `drizzleQueryable`, `DrizzleExecutor`,
-`DrizzleAdapterOptions`, and `DrizzleQueryError`.
-
-`@workhorse/prisma` exports `createPrismaAdapter`, `prismaQueryable`, `PrismaExecutor`,
-`PrismaAdapterOptions`, and `PrismaQueryError`.
-
-`@workhorse/typeorm` exports `createTypeOrmAdapter`, `typeOrmQueryable`, `TypeOrmExecutor`,
-`TypeOrmAdapterOptions`, and `TypeOrmQueryError`.
-
-`@workhorse/kysely` exports `createKyselyAdapter`, `kyselyQueryable`, `KyselyExecutor`,
-`KyselyAdapterOptions`, and `KyselyQueryError`.
-
-`@workhorse/dashboard` exports `Dashboard`, `DashboardProps`, `WorkhorseThemeProvider`,
-`DashboardColorScheme`, and `useWorkhorseTheme`.
-
-Notification exports are `DashboardNotifications`, `DashboardNotification`,
-`dashboardNotificationPosition`, `notifyDashboard`, `notifyFailure`, and
-`clearDashboardNotifications`.
-
-Client types are `DashboardAuditInput`, `DashboardClient`, `DashboardDemoJobKind`,
-`DashboardDemoScenario`, and `DashboardDemoTools`.
-
-Location exports are `parseTaskLocation`, `taskDetailNavigation`, `taskListingKey`,
-`taskLocationHref`, `taskPageSizes`, `TaskActivityGroup`, `TaskActivityPeriod`,
-`TaskDetailNavigation`, `TaskLocationState`, and `TaskPageSize`.
-
-`@workhorse/dashboard/client` exports `createDashboardClient`.
-
-`@workhorse/dashboard/server` exports `createDashboardHost`, `DashboardHost`,
-`DashboardHostOptions`, `dashboardNodeMiddleware`, and `DashboardNodeMiddleware`.
-
-Its router and readers are `dashboardRouter`, `DashboardRouter`, `DashboardRpcContext`,
-`readDashboardEvents`, `readDashboardSnapshot`, and `readDashboardWorkers`.
-
-Its reader type is `DashboardEventsQuery`. Its database exports are `dashboardDatabase`,
-`DashboardDatabase`, `DashboardSql`, and `sql`.
-
-Host helpers are `dashboardAssetsDirectory`, `normalizeDashboardPath`, `renderDashboardHtml`,
-`DashboardRuntimeConfig`, `RenderDashboardHtmlOptions`, `DASHBOARD_BROWSER_MODULES_PLACEHOLDER`, and
-`DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER`.
-
-Its control types are `DashboardAuditContext`, `DashboardCancelTaskResult`,
-`DashboardDurabilityProjector`, `DashboardOperator`, `DashboardQueueController`,
-`DashboardScheduleController`, `DashboardTaskController`, and `DashboardWorkerController`.
-
-## Policy and health
-
-`RetentionPolicyDefinition`, `RetentionPolicy`, `MaintenancePolicyDefinition`, `MaintenancePolicy`,
-`ConcurrencyPolicyDefinition`, `ConcurrencyPolicy`, `RateLimit`, `RateLimitPolicyDefinition`,
-`RateLimitPolicy`, `RateLimitStatus`, `RetentionCategoryValues`, `QueueHealth`,
-`QueueHealthObservations`, `QueueHealthStatus`, `QueueHealthReason`, `QueueHealthReasonCode`, and
-`QueueHealthBudgets`, plus `evaluateQueueHealth`, `DEFAULT_QUEUE_HEALTH_BUDGETS`, and
-`HEALTH_HISTORY_SCAN_LIMIT`.
+- `job` — the `ClaimedJob` with ID, attempt, and metadata.
+- `signal` — an `AbortSignal` aborted on cancellation, deadline, or execution timeout.
+- `checkpoint(name, operation)` — run once, persist the JSON result, replay it on restart.
+- `sleep(name, durationMs)` and `sleepUntil(name, wakeAt)` — durable timers that release the
+  worker slot without consuming the attempt.
+- `setProgress(value)` and `getProgress()` — mutable operator-visible status.
+- `getCheckpoint(name)` and `getWait(name)` — read one durable boundary without executing code.
 
 ## Errors
 
-`EnqueueIdempotencyConflictError`, `EnqueueIdempotencyConflictDetails`,
-`EnqueueIdempotencyConflictField`, `RedriveIdempotencyConflictError`,
-`RedriveIdempotencyConflictDetails`, `RedriveIdempotencyConflictField`,
-`CheckpointConflictError`, `CheckpointLeaseLostError`, `ProgressLeaseLostError`,
-`ProgressRateLimitError`, `WaitConflictError`, `WaitLeaseLostError`, `WaitLimitExceededError`,
-`JobContractValidationError`, `JobContractUnavailableError`, `JobValueSizeLimitError`,
-`CancellationRequestedError`, `DeadlineExceededError`, `ExecutionTimeoutError`, `InjectedCrashError`,
-and `Failpoint`.
+All Workhorse errors extend `WorkhorseError`. The ones you are most likely to catch:
 
-The current declaration entry point is
-[`src/index.ts`](https://github.com/stablemates/workhorse/blob/main/src/index.ts).
+- `EnqueueIdempotencyConflictError` and `RedriveIdempotencyConflictError` — a replay differed
+  materially from the original request.
+- `CheckpointConflictError` and `WaitConflictError` — a durable name was reused with different
+  content; `WaitLimitExceededError` bounds waits per job.
+- `CheckpointLeaseLostError`, `ProgressLeaseLostError`, and `WaitLeaseLostError` — a stale worker
+  tried to write after losing ownership.
+- `CancellationRequestedError`, `DeadlineExceededError`, and `ExecutionTimeoutError` — the reasons
+  behind an aborted `context.signal`.
+- `JobContractValidationError`, `JobContractUnavailableError`, and `JobValueSizeLimitError` —
+  payload contract and size enforcement.
+
+Exported constants such as `MAX_ENQUEUE_BATCH_SIZE`, `MAX_CHECKPOINT_VALUE_BYTES`, and
+`MAX_REDRIVE_BATCH_SIZE` expose every operational limit to tooling.
+
+## Schema and support
+
+- `installSchema(database)` installs the full schema; run it as a deployment step.
+- `assertSchemaCompatible(database)` fails startup on a runtime/schema mismatch;
+  `readSchemaVersion` and `WORKHORSE_SCHEMA_VERSION` expose both sides of that check.
+- `assertSupportedPostgres`, `readPostgresSupport`, and `describePostgresSupport` classify the
+  connected server; `MINIMUM_NODE_MAJOR`, `MINIMUM_POSTGRES_MAJOR`, `SUPPORTED_NODE_MAJORS`, and
+  `SUPPORTED_POSTGRES_MAJORS` publish the tested boundary.
+
+## Worker processes and adapters
+
+- `defineWorkerProcess(definition)` describes an owned runtime — adapter, workers, probes.
+- `startWorkerProcess` starts it under your control; `runWorkerProcess` adds the standalone
+  Node.js lifecycle with signal handling and bounded drain.
+- `createWorkhorseAdapter` builds a `WorkhorseAdapter` from any `Queryable`; the
+  [Drizzle](/docs/drizzle), [Prisma](/docs/prisma), [TypeORM](/docs/typeorm), and
+  [Kysely](/docs/kysely) packages wrap it for their ORMs.
+
+## CLI
+
+The `workhorse` CLI covers setup and operations without writing code:
+
+```bash
+npx workhorse init                              # scaffold config and wiring
+npx workhorse schema install                    # install the schema
+npx workhorse schema status                     # report installed vs. runtime version
+npx workhorse worker --config workhorse.config.js  # run a supervised worker process
+npx workhorse dashboard --port 3000             # serve the operator dashboard
+```
 
 ## Next
 
-- [Enqueue and transactions](/docs/enqueue) — understand producer behavior
-- [Workers](/docs/workers) — understand handler behavior
-- [Queries and timelines](/docs/queries) — understand operator reads
+- [Enqueue and transactions](/docs/enqueue) — producer behavior in depth
+- [Workers](/docs/workers) — handler behavior in depth
+- [Queries and timelines](/docs/queries) — operator reads in depth
 
 ---
 
