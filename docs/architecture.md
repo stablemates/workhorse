@@ -125,7 +125,7 @@ guarantees.
 `createQueueModules` constructs eight receivers. They are `EnqueueContractsModule`,
 `ClaimLeaseFenceModule`, `CheckpointsProgressWaitsModule`, `QueueAdministrationModule`,
 `WorkerRegistryModule`, `RetentionMaintenanceModule`, `CronSchedulesModule`, and
-`OperatorReadsModule`. Six contain no behavior until their matching extraction lands.
+`OperatorReadsModule`. Four contain no behavior until their matching extraction lands.
 
 `EnqueueContractsModule.enqueue` and `enqueueMany` own enqueue serialization, tracing, telemetry,
 and `P1001` conflict translation. `jobAcceptance` selects and validates the current payload
@@ -134,6 +134,15 @@ against the contract version accepted by the claimed job. `validateQueueOptions`
 configuration before `Queue` creates the immutable module context. `Queue.enqueue`,
 `enqueueMany`, `syncSchedules`, and `complete` delegate these operations without changing their
 public signatures. `src/queue.ts` continues to re-export the four public error classes.
+
+`ClaimLeaseFenceModule` owns `cancel`, `claim`, `heartbeat`, `heartbeatStatus`, `expireOwned`,
+`acknowledgeCancel`, `complete`, `fail`, and `recoverExpired`. `Queue` delegates without changing
+its public signatures. `FencedLease` converts a `ClaimedJob` and worker ID into the exact job ID,
+worker ID, and decimal fence token tuple used by every owned SQL transition in that module.
+`complete` invokes the enqueue module's result-contract validation before the fenced transition. `recordRecoveryTelemetry`
+remains shared with `Queue.tick`, which reports the same recovery counters from the combined
+maintenance function. `rowTimestamp` and `nullableRowTimestamp` own PostgreSQL timestamp mapping
+for this module and the row mappers that remain in `Queue`.
 
 `OperatorReadsModule.validateJobListQuery` and `validateJobTimelineQuery` own the validation already
 moved behind the facade. They use `validateJobListQuery`, `validateJobTimelineCursor`, and
