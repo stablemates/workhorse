@@ -6,6 +6,7 @@ apps/site/next-env.d.ts
 .source/
 .env
 .env.*
+!.beans/*
 !.env.example
 !**/.env.example
 *.tgz

@@ -103,9 +103,3 @@ Prose rules for either layer:
 - Say what a thing is for before you say how it works.
 - One meaning per term. `claim`, `fence`, `wait`, `pause`, and `redrive` are each currently
   used as both noun and verb — pick one part of speech per term and stay with it.
-
-Do not write in ASD-STE100 Simplified Technical English, and do not reply in it either. Its
-approved vocabulary excludes most of this domain, and its ban on subordinate clauses turns
-design rationale into a list of flat assertions — the sentence that explains _why_ a
-tradeoff was made is exactly the sentence it breaks. The rules above keep the part of STE
-that helps and drop the part that does not.
