@@ -112,6 +112,21 @@ describe("continuous integration", () => {
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("npm publish --provenance");
   });
+
+  it("benchmarks main on a supported PostgreSQL major under an explicit timeout", async () => {
+    const workflow = await read(".github/workflows/benchmark.yml");
+
+    // Without a ceiling a hung scenario occupies a runner for GitHub's six-hour default, so the
+    // timeout is part of the contract rather than a tuning detail.
+    expect(workflow).toMatch(/^\s*timeout-minutes: \d+$/m);
+    expect(workflow).toContain("branches: [main]");
+    expect(workflow).toContain("--profile smoke");
+    expect(workflow).toContain("--output");
+    expect(workflow).toContain("actions/upload-artifact");
+
+    const image = /image: postgres:(\d+)-alpine/.exec(workflow);
+    expect(SUPPORTED_POSTGRES_MAJORS).toContain(Number(image?.[1]));
+  });
 });
 
 describe("documentation", () => {
