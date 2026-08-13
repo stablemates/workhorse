@@ -2,24 +2,26 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 25. Version 23 is the oldest supported
+The current clean-install protocol is schema version 26. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 25 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 26 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
 `workhorse:schema-migration`. It requires version 23 and creates `workhorse.schema_migration`. It
-records the version 23 baseline and version 24 step. It then replaces the schema-version row with 24. If a concurrent replay acquires the lock after the first migration, it sees version 24 and
-makes no changes.
+records the version 23 baseline and version 24 step. It then replaces the schema-version row with 24.
 
 Migration `0025-make-schedule-occurrence-replay-a-no-op.sql` takes the same advisory lock. It
 requires version 24 and changes `fire_schedule_v1` so a repeated occurrence returns null. It records
-the version 25 step and replaces the schema-version row with 25. If a concurrent replay acquires the
-lock after the first migration, it sees version 25 and makes no changes.
+the version 25 step and replaces the schema-version row with 25.
 
-Versions below 23, versions above 25, gaps, and mixed version rows fail without running a migration.
+Migration `0026-add-dashboard-read-surface.sql` requires version 25. It creates the versioned
+dashboard views and `dashboard_job_estimate_v1`, records the version 26 step, and advances the
+schema-version row to 26. Both later migrations are safe to replay after their target version commits.
+
+Versions below 23, versions above 26, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -812,6 +814,32 @@ Retention health includes the persisted policy, oldest retained timestamps, per-
 
 ## Dashboard package boundary
 
+Core owns the dashboard's relational read contract. The version 1 views expose these exact columns:
+
+- `dashboard_attempt_history_v1`: `attempt_id`, `job_id`, `attempt`, `fence_token`, `worker_id`, `outcome`, `started_at`, `claimed_at`, `finished_at`, `error`, `occurred_at`.
+- `dashboard_concurrency_policy_v1`: `queue_name`.
+- `dashboard_job_checkpoint_v1`: `job_id`, `checkpoint_name`, `checkpoint_value`, `attempt`, `fence_token`, `worker_id`, `created_at`.
+- `dashboard_job_event_v1`: `event_id`, `job_id`, `attempt`, `event_type`, `details`, `occurred_at`.
+- `dashboard_job_outcome_v1`: `job_id`, `state`, `current_attempt`, `run_at`, `result`, `error`, `finished_at`, `updated_at`.
+- `dashboard_job_progress_v1`: `job_id`, `progress_value`, `revision`, `attempt`, `fence_token`, `worker_id`, `created_at`, `updated_at`.
+- `dashboard_job_runtime_v1`: `job_id`, `queue_name`, `state`, `current_attempt`, `fence_token`, `run_at`, `ready_at`, `worker_id`, `acquired_at`, `heartbeat_at`, `expires_at`, `attempt_timeout_at`, `wait_name`, `attempt_started_at`, `cancel_requested_at`, `cancel_requested_by`, `cancel_reason`, `error`, `updated_at`.
+- `dashboard_job_v1`: `id`, `queue_name`, `job_type`, `concurrency_key`, `payload`, `payload_redact_keys`, `result_redact_keys`, `tags`, `max_attempts`, `retry_policy`, `deadline_at`, `execution_timeout_ms`, `created_at`.
+- `dashboard_job_wait_v1`: `job_id`, `wait_name`, `mode`, `duration_ms`, `requested_wake_at`, `wake_at`, `attempt`, `fence_token`, `worker_id`, `created_at`.
+- `dashboard_maintenance_policy_v1`: `singleton`, `timezone`, `partition_preparation_interval_ms`, `terminal_cleanup_interval_ms`, `history_retention_local_time`, `updated_at`.
+- `dashboard_maintenance_state_v1`: `task_name`, `last_started_at`, `last_completed_at`, `last_completed_local_date`.
+- `dashboard_queue_control_v1`: `queue_name`, `paused`.
+- `dashboard_rate_limit_policy_v1`: `queue_name`.
+- `dashboard_retention_policy_v1`: `singleton`, `job_event_retention_days`, `attempt_history_retention_days`.
+- `dashboard_schedule_definition_v1`: `namespace`, `schedule_name`, `cron_expression`, `queue_name`, `job_type`, `enabled`, `revision`, `updated_at`.
+- `dashboard_schedule_occurrence_v1`: `namespace`, `schedule_name`, `occurrence_at`, `fired_at`.
+- `dashboard_worker_registry_v1`: `worker_id`, `hostname`, `pid`, `queue_name`, `concurrency`, `lease_ms`, `heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_task_poll_ms`, `registry_interval_ms`, `active_slots`, `draining`, `paused`, `started_at`, `last_heartbeat_at`.
+
+`dashboard_job_estimate_v1()` returns the planner tuple estimate for the private `job` table. The
+dashboard uses it to choose exact counts or estimates without naming the private relation.
+`stat_buckets_v1`, `redact_top_level_keys_v1`, and the maintenance functions remain the other
+versioned core surfaces used by the dashboard server. A core migration may change private tables
+without a dashboard release when it preserves these view and function contracts.
+
 `@workhorse/dashboard-contract` exports `DashboardCommandOptions`, `RunningDashboard`, and
 `DashboardStandaloneModule<Database>`. The package contains declarations only and imports neither
 `@workhorse/core` nor `@workhorse/dashboard`. Both packages depend on this contract, so neither
@@ -1056,7 +1084,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 25. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 26. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

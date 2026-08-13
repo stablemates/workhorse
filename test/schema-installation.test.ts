@@ -8,6 +8,175 @@ const { pool, queue } = createIntegrationTestContext(import.meta.url);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("schema installation", () => {
+  it("installs the versioned dashboard read surface", async () => {
+    const views = await pool.query<{ table_name: string; columns: string[] }>(`
+      SELECT table_name, json_agg(column_name ORDER BY ordinal_position) AS columns
+        FROM information_schema.views
+        JOIN information_schema.columns USING (table_catalog, table_schema, table_name)
+       WHERE table_schema = 'workhorse'
+         AND table_name LIKE 'dashboard\\_%\\_v1' ESCAPE '\\'
+       GROUP BY table_name
+       ORDER BY table_name
+    `);
+
+    expect(Object.fromEntries(views.rows.map((row) => [row.table_name, row.columns]))).toEqual({
+      dashboard_attempt_history_v1: [
+        "attempt_id",
+        "job_id",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "outcome",
+        "started_at",
+        "claimed_at",
+        "finished_at",
+        "error",
+        "occurred_at",
+      ],
+      dashboard_concurrency_policy_v1: ["queue_name"],
+      dashboard_job_checkpoint_v1: [
+        "job_id",
+        "checkpoint_name",
+        "checkpoint_value",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "created_at",
+      ],
+      dashboard_job_event_v1: [
+        "event_id",
+        "job_id",
+        "attempt",
+        "event_type",
+        "details",
+        "occurred_at",
+      ],
+      dashboard_job_outcome_v1: [
+        "job_id",
+        "state",
+        "current_attempt",
+        "run_at",
+        "result",
+        "error",
+        "finished_at",
+        "updated_at",
+      ],
+      dashboard_job_progress_v1: [
+        "job_id",
+        "progress_value",
+        "revision",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "created_at",
+        "updated_at",
+      ],
+      dashboard_job_runtime_v1: [
+        "job_id",
+        "queue_name",
+        "state",
+        "current_attempt",
+        "fence_token",
+        "run_at",
+        "ready_at",
+        "worker_id",
+        "acquired_at",
+        "heartbeat_at",
+        "expires_at",
+        "attempt_timeout_at",
+        "wait_name",
+        "attempt_started_at",
+        "cancel_requested_at",
+        "cancel_requested_by",
+        "cancel_reason",
+        "error",
+        "updated_at",
+      ],
+      dashboard_job_v1: [
+        "id",
+        "queue_name",
+        "job_type",
+        "concurrency_key",
+        "payload",
+        "payload_redact_keys",
+        "result_redact_keys",
+        "tags",
+        "max_attempts",
+        "retry_policy",
+        "deadline_at",
+        "execution_timeout_ms",
+        "created_at",
+      ],
+      dashboard_job_wait_v1: [
+        "job_id",
+        "wait_name",
+        "mode",
+        "duration_ms",
+        "requested_wake_at",
+        "wake_at",
+        "attempt",
+        "fence_token",
+        "worker_id",
+        "created_at",
+      ],
+      dashboard_maintenance_policy_v1: [
+        "singleton",
+        "timezone",
+        "partition_preparation_interval_ms",
+        "terminal_cleanup_interval_ms",
+        "history_retention_local_time",
+        "updated_at",
+      ],
+      dashboard_maintenance_state_v1: [
+        "task_name",
+        "last_started_at",
+        "last_completed_at",
+        "last_completed_local_date",
+      ],
+      dashboard_queue_control_v1: ["queue_name", "paused"],
+      dashboard_rate_limit_policy_v1: ["queue_name"],
+      dashboard_retention_policy_v1: [
+        "singleton",
+        "job_event_retention_days",
+        "attempt_history_retention_days",
+      ],
+      dashboard_schedule_definition_v1: [
+        "namespace",
+        "schedule_name",
+        "cron_expression",
+        "queue_name",
+        "job_type",
+        "enabled",
+        "revision",
+        "updated_at",
+      ],
+      dashboard_schedule_occurrence_v1: ["namespace", "schedule_name", "occurrence_at", "fired_at"],
+      dashboard_worker_registry_v1: [
+        "worker_id",
+        "hostname",
+        "pid",
+        "queue_name",
+        "concurrency",
+        "lease_ms",
+        "heartbeat_ms",
+        "poll_ms",
+        "maintenance_interval_ms",
+        "maintenance_task_poll_ms",
+        "registry_interval_ms",
+        "active_slots",
+        "draining",
+        "paused",
+        "started_at",
+        "last_heartbeat_at",
+      ],
+    });
+
+    const estimate = await pool.query<{ estimate: string }>(
+      "SELECT estimate::text FROM workhorse.dashboard_job_estimate_v1()",
+    );
+    expect(Number(estimate.rows[0]?.estimate)).toBeGreaterThanOrEqual(-1);
+  });
+
   it("ships a clean-install artifact without upgrade residue", async () => {
     const schema = await readFile(path.join(repository, "sql", "schema.sql"), "utf8");
 
@@ -24,11 +193,11 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v25 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v26 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(25);
+    expect(version.rows[0]?.version).toBe(26);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -37,6 +206,7 @@ describe("schema installation", () => {
       { version: 23, description: "forward migration baseline" },
       { version: 24, description: "add schema migration ledger" },
       { version: 25, description: "make schedule occurrence replay a no-op" },
+      { version: 26, description: "add versioned dashboard read surface" },
     ]);
 
     const maintenanceFunctions = await pool.query<{
