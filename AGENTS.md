@@ -2,10 +2,10 @@
 
 Instructions for coding agents. Everything here is a rule an agent has broken before.
 
-## Use the Linear CLI skills for issue tracking
+## Use the Linear MCP server for issue tracking
 
-Use the applicable `linear-*` skill for every issue-tracking operation. Run the `linear-cli`
-commands prescribed by that skill instead of using another tracker or an interactive client.
+Use the configured Linear MCP server for every issue-tracking operation instead of another
+tracker or an interactive client.
 
 ## Do not run GitHub Actions
 
