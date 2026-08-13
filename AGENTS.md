@@ -9,16 +9,17 @@ tracker or an interactive client.
 
 If no Linear issue exists for the work, create one before starting implementation.
 
-Link every commit for tracked work by putting a Linear magic word before the issue identifier.
-Use `Refs WOR-123: Add lease recovery` by default because `Refs` links without closing the issue.
+Begin every commit subject for tracked work with the Linear issue identifier in square brackets.
+After the subject, add a blank line, the issue URL, another blank line, and a concise description
+of the change and why it was made:
 
-Use `Fixes WOR-123: Add lease recovery` only when the commit completes the issue. Linear moves a
-linked issue to `In Progress` when the commit is pushed and to `Done` when a closing commit reaches
-the default branch.
+```text
+[WOR-123] Add lease recovery
 
-Use `Related to WOR-123: Add lease metrics` when the commit has context relevant to the issue but
-does not implement part of it. Put multiple issue identifiers after one magic word when needed,
-for example `Refs WOR-123, WOR-456: Add lease recovery`.
+https://linear.app/workhorse-run/issue/WOR-123/add-lease-recovery
+
+Recover work after an expired lease so another worker can safely resume it.
+```
 
 ## Do not run GitHub Actions
 
