@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { Worker } from "../src/index.js";
+import { Queue, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -42,7 +42,7 @@ describe("cron schedules", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(24);
+    expect(health.schemaVersion).toBe(25);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -277,6 +277,79 @@ describe("cron schedules", () => {
           "SELECT count(*)::integer AS count FROM workhorse.schedule_occurrence WHERE namespace = 'integration' AND schedule_name = 'hourly-rollup'",
         )
       ).rows[0]?.count,
+    ).toBe(1);
+  });
+
+  it("returns null when a schedule occurrence is replayed after its first fire commits", async () => {
+    await queue.syncSchedules("integration", [
+      {
+        name: "serialized-hourly-rollup",
+        schedule: "0 * * * *",
+        job: { type: "rollup", payload: { scope: "hourly" } },
+      },
+    ]);
+    const [definition] = await queue.schedules(["integration"]);
+    const occurrence = new Date("2026-07-22T14:00:00.000Z");
+
+    const firstId = await queue.fireSchedule(
+      "integration",
+      "serialized-hourly-rollup",
+      definition!.revision,
+      occurrence,
+    );
+    const replayedId = await queue.fireSchedule(
+      "integration",
+      "serialized-hourly-rollup",
+      definition!.revision,
+      occurrence,
+    );
+
+    expect(firstId).not.toBeNull();
+    expect(replayedId).toBeNull();
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
+    ).toBe(1);
+  });
+
+  it("returns null when a schedule occurrence is replayed before its first fire commits", async () => {
+    await queue.syncSchedules("integration", [
+      {
+        name: "overlapping-hourly-rollup",
+        schedule: "0 * * * *",
+        job: { type: "rollup", payload: { scope: "hourly" } },
+      },
+    ]);
+    const [definition] = await queue.schedules(["integration"]);
+    const occurrence = new Date("2026-07-22T15:00:00.000Z");
+    const winnerClient = await pool.connect();
+
+    try {
+      await winnerClient.query("BEGIN");
+      const winnerId = await new Queue(winnerClient).fireSchedule(
+        "integration",
+        "overlapping-hourly-rollup",
+        definition!.revision,
+        occurrence,
+      );
+      const replayedId = await queue.fireSchedule(
+        "integration",
+        "overlapping-hourly-rollup",
+        definition!.revision,
+        occurrence,
+      );
+
+      expect(winnerId).not.toBeNull();
+      expect(replayedId).toBeNull();
+      await winnerClient.query("COMMIT");
+    } catch (error) {
+      await winnerClient.query("ROLLBACK");
+      throw error;
+    } finally {
+      winnerClient.release();
+    }
+
+    expect(
+      (await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).rows[0]?.count,
     ).toBe(1);
   });
 

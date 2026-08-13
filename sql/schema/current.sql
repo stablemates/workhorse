@@ -1778,12 +1778,7 @@ BEGIN
   RETURNING job_id INTO v_job_id;
 
   IF NOT FOUND THEN
-    SELECT occurrence.job_id INTO v_job_id
-      FROM workhorse.schedule_occurrence occurrence
-     WHERE occurrence.namespace = p_namespace
-       AND occurrence.schedule_name = p_schedule_name
-       AND occurrence.occurrence_at = date_trunc('second', p_occurrence_at);
-    RETURN v_job_id;
+    RETURN NULL;
   END IF;
 
   v_job_id := workhorse.enqueue_v1(
@@ -6173,9 +6168,10 @@ $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
   (23, 'forward migration baseline'),
-  (24, 'add schema migration ledger')
+  (24, 'add schema migration ledger'),
+  (25, 'make schedule occurrence replay a no-op')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (24) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (25) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

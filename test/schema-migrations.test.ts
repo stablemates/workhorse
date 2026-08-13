@@ -91,13 +91,14 @@ describe("schema migrations", () => {
   });
 
   it("migrates the supported v23 baseline to the current schema", async () => {
-    expect(await readSchemaVersion(database.pool)).toBe(24);
+    expect(await readSchemaVersion(database.pool)).toBe(25);
     const migrations = await database.pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
     );
     expect(migrations.rows).toEqual([
       { version: 23, description: "forward migration baseline" },
       { version: 24, description: "add schema migration ledger" },
+      { version: 25, description: "make schedule occurrence replay a no-op" },
     ]);
   });
 
@@ -107,13 +108,13 @@ describe("schema migrations", () => {
 
   it("leaves an already-current schema unchanged", async () => {
     const before = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 24",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 25",
     );
 
     await migrateSchema(database.pool);
 
     const after = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 24",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 25",
     );
     expect(after.rows).toEqual(before.rows);
   });
