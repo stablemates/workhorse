@@ -63,8 +63,9 @@ dashboard contracts, and exported types describe the same source revision. The
 [changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) records breaking
 changes and the schema version each release requires.
 
-The dashboard requires the matching core release because its server reads the current schema
-directly. A later versioned read surface can widen that boundary without making an untested claim.
+The dashboard and core may use different patch releases within the same minor line. The dashboard
+server reads core-owned versioned views and functions, so a core patch remains compatible when its
+migration preserves those contracts.
 
 One honest caveat: support proves correctness under the tested matrix. It does not promise a
 throughput level for your database, payloads, handlers, or deployment topology.

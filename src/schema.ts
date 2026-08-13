@@ -7,7 +7,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 25;
+export const WORKHORSE_SCHEMA_VERSION = 26;
 
 const SCHEMA_MIGRATIONS = [
   {
@@ -19,6 +19,11 @@ const SCHEMA_MIGRATIONS = [
     fromVersion: 24,
     toVersion: 25,
     file: "0025-make-schedule-occurrence-replay-a-no-op.sql",
+  },
+  {
+    fromVersion: 25,
+    toVersion: 26,
+    file: "0026-add-dashboard-read-surface.sql",
   },
 ] as const;
 

@@ -83,7 +83,7 @@ export interface DashboardTaskController {
 /**
  * Operator control over the worker fleet.
  *
- * Worker identity and runtime state are read from the durable `workhorse.worker_registry`
+ * Worker identity and runtime state are read through `workhorse.dashboard_worker_registry_v1`
  * relation, so the dashboard reports every live worker whether or not it shares a process with
  * the host application. This controller exists only so the host can wrap the pause mutation in
  * its own audit and authorization; omit it for a read-only deployment.

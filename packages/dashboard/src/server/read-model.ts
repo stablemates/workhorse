@@ -78,7 +78,7 @@ export async function readDashboardSettings(
       SELECT worker_id, queue_name, concurrency, lease_ms, heartbeat_ms, poll_ms,
              maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
              last_heartbeat_at
-        FROM workhorse.worker_registry
+        FROM workhorse.dashboard_worker_registry_v1
        WHERE last_heartbeat_at >= clock_timestamp() - GREATEST(
          interval '30 seconds', registry_interval_ms * 3 * interval '1 millisecond'
        )
@@ -254,7 +254,7 @@ export async function readDashboardTaskCounts(
   database: DashboardDatabase,
 ): Promise<DashboardTaskCounts> {
   const relRows = await database.execute<{ estimate: string | number }>(sql`
-    SELECT reltuples::bigint AS estimate FROM pg_class WHERE oid = 'workhorse.job'::regclass
+    SELECT estimate FROM workhorse.dashboard_job_estimate_v1()
   `);
   const jobEstimate = Number(relRows.rows[0]?.estimate ?? -1);
   // reltuples is -1 until the first vacuum/analyze; treat unknown as small.
@@ -272,14 +272,26 @@ export async function readDashboardTaskCounts(
            count(*) FILTER (WHERE state = 'ready')::integer AS queued_count,
            count(*) FILTER (WHERE state = 'active')::integer AS running_count,
            count(*) FILTER (WHERE current_attempt > 1)::integer AS retried_live_count
-      FROM workhorse.job_runtime
+      FROM workhorse.dashboard_job_runtime_v1
   `);
   const live = expectOneRow(runtimeRows, "the live job runtime counts");
   const [completed, discarded, canceled, retriedTerminal] = await Promise.all([
-    estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'succeeded'`),
-    estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'failed'`),
-    estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE state = 'canceled'`),
-    estimateRows(database, sql`SELECT 1 FROM workhorse.job_outcome WHERE current_attempt > 1`),
+    estimateRows(
+      database,
+      sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state = 'succeeded'`,
+    ),
+    estimateRows(
+      database,
+      sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state = 'failed'`,
+    ),
+    estimateRows(
+      database,
+      sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE state = 'canceled'`,
+    ),
+    estimateRows(
+      database,
+      sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 WHERE current_attempt > 1`,
+    ),
   ]);
 
   return {
@@ -310,9 +322,9 @@ async function readDashboardTaskCountsExact(
     WITH tasks AS (
       SELECT COALESCE(r.state, o.state) AS state,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt
-        FROM workhorse.job j
-        LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-        LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+        FROM workhorse.dashboard_job_v1 j
+        LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+        LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
     )
     SELECT count(*)::integer AS all_count,
            count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
@@ -352,19 +364,19 @@ export async function readDashboardQueues(
       active: number;
     }>(sql`
       WITH known_queues AS (
-        SELECT queue_name FROM workhorse.job
+        SELECT queue_name FROM workhorse.dashboard_job_v1
         UNION
-        SELECT queue_name FROM workhorse.queue_control
+        SELECT queue_name FROM workhorse.dashboard_queue_control_v1
         UNION
-        SELECT queue_name FROM workhorse.concurrency_policy
+        SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
         UNION
-        SELECT queue_name FROM workhorse.rate_limit_policy
+        SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
       ), live_counts AS (
         SELECT queue_name,
                count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled,
                count(*) FILTER (WHERE state = 'ready')::integer AS ready,
                count(*) FILTER (WHERE state = 'active')::integer AS active
-          FROM workhorse.job_runtime
+          FROM workhorse.dashboard_job_runtime_v1
          GROUP BY queue_name
       )
       SELECT known.queue_name AS queue, COALESCE(control.paused, false) AS paused,
@@ -372,12 +384,12 @@ export async function readDashboardQueues(
              COALESCE(live.ready, 0)::integer AS ready,
              COALESCE(live.active, 0)::integer AS active
         FROM known_queues known
-        LEFT JOIN workhorse.queue_control control USING (queue_name)
+        LEFT JOIN workhorse.dashboard_queue_control_v1 control USING (queue_name)
         LEFT JOIN live_counts live USING (queue_name)
        ORDER BY known.queue_name
     `),
     database.execute<{ estimate: string | number }>(sql`
-      SELECT reltuples::bigint AS estimate FROM pg_class WHERE oid = 'workhorse.job'::regclass
+      SELECT estimate FROM workhorse.dashboard_job_estimate_v1()
     `),
     queue.health(),
   ]);
@@ -390,20 +402,20 @@ export async function readDashboardQueues(
         const [succeeded, failed, canceled] = await Promise.all([
           estimateRows(
             database,
-            sql`SELECT 1 FROM workhorse.job_outcome outcome
-                  JOIN workhorse.job job ON job.id = outcome.job_id
+            sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 outcome
+                  JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
                  WHERE job.queue_name = ${row.queue} AND outcome.state = 'succeeded'`,
           ),
           estimateRows(
             database,
-            sql`SELECT 1 FROM workhorse.job_outcome outcome
-                  JOIN workhorse.job job ON job.id = outcome.job_id
+            sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 outcome
+                  JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
                  WHERE job.queue_name = ${row.queue} AND outcome.state = 'failed'`,
           ),
           estimateRows(
             database,
-            sql`SELECT 1 FROM workhorse.job_outcome outcome
-                  JOIN workhorse.job job ON job.id = outcome.job_id
+            sql`SELECT 1 FROM workhorse.dashboard_job_outcome_v1 outcome
+                  JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
                  WHERE job.queue_name = ${row.queue} AND outcome.state = 'canceled'`,
           ),
         ]);
@@ -422,8 +434,8 @@ export async function readDashboardQueues(
              count(*) FILTER (WHERE outcome.state = 'succeeded')::integer AS succeeded,
              count(*) FILTER (WHERE outcome.state = 'failed')::integer AS failed,
              count(*) FILTER (WHERE outcome.state = 'canceled')::integer AS canceled
-        FROM workhorse.job_outcome outcome
-        JOIN workhorse.job job ON job.id = outcome.job_id
+        FROM workhorse.dashboard_job_outcome_v1 outcome
+        JOIN workhorse.dashboard_job_v1 job ON job.id = outcome.job_id
        GROUP BY job.queue_name
     `);
     terminalCounts = new Map(
@@ -493,7 +505,7 @@ export async function readDashboardActivity(
     ? sql`
         LEFT JOIN LATERAL (
           SELECT ah.worker_id
-            FROM workhorse.attempt_history ah
+            FROM workhorse.dashboard_attempt_history_v1 ah
            WHERE ah.job_id = candidate.job_id
            ORDER BY ah.attempt DESC
            LIMIT 1
@@ -516,10 +528,10 @@ export async function readDashboardActivity(
     -- existed. A live runtime row and a terminal outcome row can briefly coexist for one task, so
     -- the candidate set is a UNION and the projection keeps the runtime-wins precedence.
     WITH candidate AS (
-      SELECT r.job_id FROM workhorse.job_runtime r
+      SELECT r.job_id FROM workhorse.dashboard_job_runtime_v1 r
        WHERE r.updated_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
       UNION
-      SELECT o.job_id FROM workhorse.job_outcome o
+      SELECT o.job_id FROM workhorse.dashboard_job_outcome_v1 o
        WHERE o.updated_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
     ), tasks AS (
       SELECT ${groupExpression} AS group_key,
@@ -529,9 +541,9 @@ export async function readDashboardActivity(
              j.tags, j.queue_name AS queue,
              ${workerExpression} AS worker_id
         FROM candidate
-        JOIN workhorse.job j ON j.id = candidate.job_id
-        LEFT JOIN workhorse.job_runtime r ON r.job_id = candidate.job_id
-        LEFT JOIN workhorse.job_outcome o ON o.job_id = candidate.job_id${attemptWorkerJoin}
+        JOIN workhorse.dashboard_job_v1 j ON j.id = candidate.job_id
+        LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = candidate.job_id
+        LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = candidate.job_id${attemptWorkerJoin}
     ), buckets AS (
       SELECT generate_series(
         date_bin(
@@ -622,13 +634,13 @@ export async function readDashboardTasks(
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                COALESCE(r.worker_id, current_wait.worker_id, attempt_worker.worker_id,
                         'unassigned') AS worker_id
-          FROM workhorse.job j
-          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-          LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-          LEFT JOIN workhorse.job_wait current_wait
+          FROM workhorse.dashboard_job_v1 j
+          LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+          LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+          LEFT JOIN workhorse.dashboard_job_wait_v1 current_wait
             ON current_wait.job_id = j.id AND current_wait.wait_name = r.wait_name
           LEFT JOIN LATERAL (
-            SELECT ah.worker_id FROM workhorse.attempt_history ah
+            SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
              WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
           ) attempt_worker ON true
       )
@@ -684,21 +696,21 @@ export async function readDashboardTasks(
                durable_wait.mode AS wait_mode,
                enqueued_event.details AS enqueued_details,
                ARRAY(SELECT checkpoint.checkpoint_name
-                       FROM workhorse.job_checkpoint checkpoint
+                       FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
                       WHERE checkpoint.job_id = j.id
                       ORDER BY checkpoint.checkpoint_name) AS checkpoint_names
-          FROM workhorse.job j
-          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-          LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-          LEFT JOIN workhorse.job_wait durable_wait
+          FROM workhorse.dashboard_job_v1 j
+          LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+          LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+          LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
             ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
           LEFT JOIN LATERAL (
-            SELECT event.details FROM workhorse.job_event event
+            SELECT event.details FROM workhorse.dashboard_job_event_v1 event
              WHERE event.job_id = j.id AND event.event_type = 'enqueued'
              ORDER BY event.occurred_at, event.event_id LIMIT 1
           ) enqueued_event ON true
           LEFT JOIN LATERAL (
-            SELECT ah.worker_id FROM workhorse.attempt_history ah
+            SELECT ah.worker_id FROM workhorse.dashboard_attempt_history_v1 ah
              WHERE ah.job_id = j.id ORDER BY ah.attempt DESC LIMIT 1
           ) attempt_worker ON true
       )
@@ -785,16 +797,16 @@ export async function readDashboardTaskFacets(
   }>(sql`
     WITH configured_workers AS (${configuredWorkerRows}),
     queue_values AS (
-      SELECT queue_name AS value FROM workhorse.job
-      UNION SELECT queue_name FROM workhorse.queue_control
+      SELECT queue_name AS value FROM workhorse.dashboard_job_v1
+      UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
     ), worker_values AS (
       SELECT worker AS value FROM configured_workers
-      UNION SELECT worker_id FROM workhorse.job_runtime WHERE worker_id IS NOT NULL
-      UNION SELECT worker_id FROM workhorse.attempt_history WHERE worker_id IS NOT NULL
+      UNION SELECT worker_id FROM workhorse.dashboard_job_runtime_v1 WHERE worker_id IS NOT NULL
+      UNION SELECT worker_id FROM workhorse.dashboard_attempt_history_v1 WHERE worker_id IS NOT NULL
     ), type_values AS (
-      SELECT DISTINCT job_type AS value FROM workhorse.job
+      SELECT DISTINCT job_type AS value FROM workhorse.dashboard_job_v1
     ), tag_values AS (
-      SELECT DISTINCT unnest(tags) AS value FROM workhorse.job
+      SELECT DISTINCT unnest(tags) AS value FROM workhorse.dashboard_job_v1
     )
     SELECT ARRAY(SELECT value FROM queue_values WHERE value IS NOT NULL ORDER BY value) AS queues,
            ARRAY(SELECT value FROM worker_values WHERE value IS NOT NULL ORDER BY value) AS workers,
@@ -971,10 +983,11 @@ export async function readDashboardCron(
              d.revision::text AS revision, d.updated_at,
              count(o.occurrence_at)::integer AS occurrence_count,
              max(o.fired_at) AS last_fired_at
-        FROM workhorse.schedule_definition d
-        LEFT JOIN workhorse.schedule_occurrence o
+        FROM workhorse.dashboard_schedule_definition_v1 d
+        LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 o
           ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
-       GROUP BY d.namespace, d.schedule_name
+       GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type,
+                d.enabled, d.revision, d.updated_at
        ORDER BY d.namespace, d.schedule_name
        LIMIT 50
     `),
@@ -987,7 +1000,7 @@ export async function readDashboardCron(
     }>(sql`
       SELECT timezone, partition_preparation_interval_ms, terminal_cleanup_interval_ms,
              history_retention_local_time::text, updated_at
-        FROM workhorse.maintenance_policy WHERE singleton
+        FROM workhorse.dashboard_maintenance_policy_v1 WHERE singleton
     `),
     database.execute<{
       task_name: string;
@@ -1017,8 +1030,8 @@ export async function readDashboardCron(
              state.last_started_at IS NOT NULL
                AND (state.last_completed_at IS NULL OR state.last_started_at > state.last_completed_at)
                AS incomplete
-        FROM workhorse.maintenance_state state
-        CROSS JOIN workhorse.maintenance_policy policy
+        FROM workhorse.dashboard_maintenance_state_v1 state
+        CROSS JOIN workhorse.dashboard_maintenance_policy_v1 policy
        WHERE policy.singleton
        ORDER BY state.task_name
     `),
@@ -1431,8 +1444,8 @@ export async function readDashboardSystem(
              percentile_cont(0.99) WITHIN GROUP (
                ORDER BY extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
              ) AS p99_ms
-        FROM workhorse.job_event claimed
-        JOIN workhorse.job_event enqueued ON enqueued.job_id = claimed.job_id
+        FROM workhorse.dashboard_job_event_v1 claimed
+        JOIN workhorse.dashboard_job_event_v1 enqueued ON enqueued.job_id = claimed.job_id
          AND enqueued.event_type = 'enqueued'
          AND enqueued.occurred_at <= claimed.occurred_at
        WHERE claimed.event_type = 'claimed' AND claimed.attempt = 1
@@ -1462,7 +1475,7 @@ export async function readDashboardSystem(
              count(*) FILTER (WHERE state = 'scheduled'
                AND run_at < clock_timestamp() - make_interval(secs => ${dashboardPromotionGraceSeconds}))::integer
                AS due_but_unpromoted
-        FROM workhorse.job_runtime
+        FROM workhorse.dashboard_job_runtime_v1
     `),
     database.execute<{ label: DashboardSystemRetryBucket["label"]; count: number }>(sql`
       SELECT CASE
@@ -1473,7 +1486,7 @@ export async function readDashboardSystem(
                ELSE 'later'
              END AS label,
              count(*)::integer AS count
-        FROM workhorse.job_runtime
+        FROM workhorse.dashboard_job_runtime_v1
        WHERE state = 'scheduled' AND current_attempt > 1
        GROUP BY 1
     `),
@@ -1495,10 +1508,10 @@ export async function readDashboardSystem(
           FROM ${statWindow(windowSeconds)}
          GROUP BY 1
       ), queue_names AS (
-        SELECT queue_name FROM workhorse.job_runtime
-        UNION SELECT queue_name FROM workhorse.queue_control
-        UNION SELECT queue_name FROM workhorse.concurrency_policy
-        UNION SELECT queue_name FROM workhorse.rate_limit_policy
+        SELECT queue_name FROM workhorse.dashboard_job_runtime_v1
+        UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
+        UNION SELECT queue_name FROM workhorse.dashboard_concurrency_policy_v1
+        UNION SELECT queue_name FROM workhorse.dashboard_rate_limit_policy_v1
         UNION SELECT queue_name FROM rolled
       ), runtime AS (
         SELECT queue_name,
@@ -1509,7 +1522,7 @@ export async function readDashboardSystem(
                  AND run_at <= clock_timestamp() + interval '5 minutes')::integer AS due_soon,
                count(*) FILTER (WHERE state = 'active')::integer AS active,
                count(*) FILTER (WHERE state = 'scheduled' AND current_attempt > 1)::integer AS retrying
-          FROM workhorse.job_runtime GROUP BY queue_name
+          FROM workhorse.dashboard_job_runtime_v1 GROUP BY queue_name
       )
       SELECT q.queue_name AS queue, COALESCE(c.paused, false) AS paused,
              COALESCE(r.ready, 0)::integer AS ready, r.oldest_ready_ms,
@@ -1519,13 +1532,13 @@ export async function readDashboardSystem(
              COALESCE(s.enqueued, 0)::integer AS enqueued,
              COALESCE(s.completed, 0)::integer AS completed
         FROM queue_names q
-        LEFT JOIN workhorse.queue_control c USING (queue_name)
+        LEFT JOIN workhorse.dashboard_queue_control_v1 c USING (queue_name)
         LEFT JOIN runtime r USING (queue_name)
         LEFT JOIN rolled s USING (queue_name)
     `),
     database.execute<{ queue: string; type: string; count: number }>(sql`
       SELECT j.queue_name AS queue, j.job_type AS type, count(*)::integer AS count
-        FROM workhorse.job_runtime r JOIN workhorse.job j ON j.id = r.job_id
+        FROM workhorse.dashboard_job_runtime_v1 r JOIN workhorse.dashboard_job_v1 j ON j.id = r.job_id
        WHERE r.state = 'scheduled' AND r.current_attempt > 1
        GROUP BY j.queue_name, j.job_type
        ORDER BY count DESC, j.queue_name, j.job_type
@@ -1722,12 +1735,12 @@ export async function readDashboardWorkers(
     ), fleet(id) AS (
       -- Live workers register themselves, so the fleet is discovered rather than configured. Any
       -- explicitly declared worker is unioned in so an expected-but-never-started worker is visible.
-      SELECT worker_id FROM workhorse.worker_registry
+      SELECT worker_id FROM workhorse.dashboard_worker_registry_v1
       UNION
       SELECT id FROM declared
     ), active AS (
       SELECT worker_id AS id, count(*)::integer AS active_jobs, max(acquired_at) AS last_seen_at
-        FROM workhorse.job_runtime
+        FROM workhorse.dashboard_job_runtime_v1
        WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
        GROUP BY worker_id
     ), recent_history AS (
@@ -1737,7 +1750,7 @@ export async function readDashboardWorkers(
              avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision
                AS average_execution_ms,
              max(finished_at) AS last_seen_at
-        FROM workhorse.attempt_history
+        FROM workhorse.dashboard_attempt_history_v1
        WHERE occurred_at >= clock_timestamp() - interval '1 hour'
          AND finished_at >= clock_timestamp() - interval '1 hour'
          AND worker_id IN (SELECT id FROM fleet)
@@ -1753,7 +1766,7 @@ export async function readDashboardWorkers(
            h.average_execution_ms,
            GREATEST(a.last_seen_at, h.last_seen_at, r.last_heartbeat_at) AS last_seen_at
       FROM fleet f
-      LEFT JOIN workhorse.worker_registry r ON r.worker_id = f.id
+      LEFT JOIN workhorse.dashboard_worker_registry_v1 r ON r.worker_id = f.id
       LEFT JOIN active a ON a.id = f.id
       LEFT JOIN recent_history h ON h.id = f.id
      ORDER BY f.id
@@ -1816,7 +1829,7 @@ export async function readDashboardSnapshot(
         SELECT queue_name AS queue, state, count(*)::integer AS count,
                extract(epoch FROM clock_timestamp() - min(COALESCE(ready_at, run_at))) * 1000
                  AS oldest_ms
-          FROM workhorse.job_runtime
+          FROM workhorse.dashboard_job_runtime_v1
          GROUP BY queue_name, state
          ORDER BY queue_name, state
       `),
@@ -1851,11 +1864,11 @@ export async function readDashboardSnapshot(
                COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
                r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
                enqueued_event.details AS enqueued_details
-          FROM workhorse.job j
-          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-          LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+          FROM workhorse.dashboard_job_v1 j
+          LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+          LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
           LEFT JOIN LATERAL (
-            SELECT event.details FROM workhorse.job_event event
+            SELECT event.details FROM workhorse.dashboard_job_event_v1 event
              WHERE event.job_id = j.id AND event.event_type = 'enqueued'
              ORDER BY event.occurred_at, event.event_id LIMIT 1
           ) enqueued_event ON true
@@ -1879,10 +1892,11 @@ export async function readDashboardSnapshot(
                d.revision::text AS revision, d.updated_at,
                count(o.occurrence_at)::integer AS occurrence_count,
                max(o.fired_at) AS last_fired_at
-          FROM workhorse.schedule_definition d
-          LEFT JOIN workhorse.schedule_occurrence o
+          FROM workhorse.dashboard_schedule_definition_v1 d
+          LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 o
             ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
-         GROUP BY d.namespace, d.schedule_name
+         GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type,
+                  d.enabled, d.revision, d.updated_at
          ORDER BY d.namespace, d.schedule_name
          LIMIT 50
       `),
@@ -1903,19 +1917,19 @@ export async function readDashboardSnapshot(
       }>(sql`
         WITH declared AS (${declaredWorkerRows(configuredWorkers)}
         ), fleet(id) AS (
-          SELECT worker_id FROM workhorse.worker_registry
+          SELECT worker_id FROM workhorse.dashboard_worker_registry_v1
           UNION
           SELECT id FROM declared
         ), observed AS (
           SELECT worker_id AS id, count(*)::integer AS active_jobs, 0::integer AS completed_attempts,
                  max(heartbeat_at) AS last_seen_at
-            FROM workhorse.job_runtime
+            FROM workhorse.dashboard_job_runtime_v1
            WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
            GROUP BY worker_id
           UNION ALL
           SELECT worker_id AS id, 0::integer AS active_jobs,
                  count(*)::integer AS completed_attempts, max(finished_at) AS last_seen_at
-            FROM workhorse.attempt_history
+            FROM workhorse.dashboard_attempt_history_v1
            WHERE occurred_at >= clock_timestamp() - interval '5 minutes'
              AND worker_id IN (SELECT id FROM fleet)
            GROUP BY worker_id
@@ -1929,7 +1943,7 @@ export async function readDashboardSnapshot(
                COALESCE(sum(o.completed_attempts), 0)::integer AS completed_attempts,
                GREATEST(max(o.last_seen_at), r.last_heartbeat_at) AS last_seen_at
           FROM fleet f
-          LEFT JOIN workhorse.worker_registry r ON r.worker_id = f.id
+          LEFT JOIN workhorse.dashboard_worker_registry_v1 r ON r.worker_id = f.id
           LEFT JOIN observed o ON o.id = f.id
          GROUP BY f.id, r.worker_id, r.hostname, r.pid, r.concurrency, r.active_slots, r.draining,
                   r.paused, r.started_at, r.last_heartbeat_at
@@ -1945,8 +1959,8 @@ export async function readDashboardSnapshot(
       }>(sql`
         SELECT j.id, j.queue_name AS queue, j.job_type AS type,
                o.current_attempt AS attempt, o.finished_at, o.error
-          FROM workhorse.job_outcome o
-          JOIN workhorse.job j ON j.id = o.job_id
+          FROM workhorse.dashboard_job_outcome_v1 o
+          JOIN workhorse.dashboard_job_v1 j ON j.id = o.job_id
          WHERE o.state = 'failed'
          ORDER BY o.finished_at DESC, j.id DESC
          LIMIT 50
@@ -1969,7 +1983,7 @@ export async function readDashboardSnapshot(
         ), events AS (
           SELECT date_bin('30 seconds', occurred_at, timestamp with time zone '2000-01-01') AS bucket_start,
                  count(*) FILTER (WHERE event_type = 'enqueued')::integer AS enqueued
-            FROM workhorse.job_event
+            FROM workhorse.dashboard_job_event_v1
            WHERE occurred_at >= clock_timestamp() - interval '2 hours'
            GROUP BY 1
         ), attempts AS (
@@ -1978,13 +1992,13 @@ export async function readDashboardSnapshot(
                  count(*) FILTER (WHERE outcome = 'failed')::integer AS failed,
                  count(*) FILTER (WHERE outcome = 'retry')::integer AS retried,
                  avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision AS average_duration_ms
-            FROM workhorse.attempt_history
+            FROM workhorse.dashboard_attempt_history_v1
            WHERE finished_at >= clock_timestamp() - interval '2 hours'
            GROUP BY 1
         ), active AS (
           SELECT date_bin('30 seconds', acquired_at, timestamp with time zone '2000-01-01') AS bucket_start,
                  count(*)::integer AS active
-            FROM workhorse.job_runtime
+            FROM workhorse.dashboard_job_runtime_v1
            WHERE state = 'active' AND acquired_at >= clock_timestamp() - interval '2 hours'
            GROUP BY 1
         )
@@ -2185,10 +2199,10 @@ export async function readDashboardJobDetail(
              p.attempt AS progress_attempt, p.fence_token::text AS progress_fence_token,
              p.worker_id AS progress_worker_id, p.created_at AS progress_created_at,
              p.updated_at AS progress_updated_at
-        FROM workhorse.job j
-        LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
-        LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-        LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
+        FROM workhorse.dashboard_job_v1 j
+        LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
+        LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
+        LEFT JOIN workhorse.dashboard_job_progress_v1 p ON p.job_id = j.id
        WHERE j.id = ${id}
     `),
     database.execute<{
@@ -2205,7 +2219,7 @@ export async function readDashboardJobDetail(
       SELECT attempt, worker_id, outcome, started_at, claimed_at, finished_at,
              extract(epoch FROM finished_at - claimed_at) * 1000 AS execution_ms,
              extract(epoch FROM finished_at - started_at) * 1000 AS elapsed_ms, error
-        FROM workhorse.attempt_history
+        FROM workhorse.dashboard_attempt_history_v1
        WHERE job_id = ${id}
        ORDER BY attempt, attempt_id
     `),
@@ -2218,7 +2232,7 @@ export async function readDashboardJobDetail(
       created_at: Date | string;
     }>(sql`
       SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text, worker_id, created_at
-        FROM workhorse.job_checkpoint
+        FROM workhorse.dashboard_job_checkpoint_v1
        WHERE job_id = ${id}
       ORDER BY created_at, checkpoint_name
     `),
@@ -2235,7 +2249,7 @@ export async function readDashboardJobDetail(
     }>(sql`
       SELECT wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt,
              fence_token::text, worker_id, created_at
-        FROM workhorse.job_wait
+        FROM workhorse.dashboard_job_wait_v1
        WHERE job_id = ${id}
        ORDER BY created_at, wait_name
     `),
@@ -2247,7 +2261,7 @@ export async function readDashboardJobDetail(
       occurred_at: Date | string;
     }>(sql`
       SELECT event_id::text, attempt, event_type, details, occurred_at
-        FROM workhorse.job_event
+        FROM workhorse.dashboard_job_event_v1
        WHERE job_id = ${id}
       ORDER BY occurred_at, event_id
     `),
@@ -2455,7 +2469,7 @@ export async function readDashboardEvents(
   const jobMatches = (column: DashboardSql) => sql`(
     (${queue}::text IS NULL AND ${jobType}::text IS NULL)
     OR EXISTS (
-      SELECT 1 FROM workhorse.job j
+      SELECT 1 FROM workhorse.dashboard_job_v1 j
        WHERE j.id = ${column}
          AND (${queue}::text IS NULL OR j.queue_name = ${queue})
          AND (${jobType}::text IS NULL OR j.job_type = ${jobType})
@@ -2489,7 +2503,7 @@ export async function readDashboardEvents(
            NULL::timestamptz AS finished_at,
            NULL::jsonb AS error,
            1 AS kind_rank
-      FROM workhorse.job_event event
+      FROM workhorse.dashboard_job_event_v1 event
      WHERE ${eventCondition}
      ORDER BY event.occurred_at DESC, event.event_id DESC
      LIMIT ${reach}
@@ -2508,7 +2522,7 @@ export async function readDashboardEvents(
            history.finished_at,
            history.error,
            0 AS kind_rank
-      FROM workhorse.attempt_history history
+      FROM workhorse.dashboard_attempt_history_v1 history
      WHERE ${attemptCondition}
      ORDER BY history.occurred_at DESC, history.attempt_id DESC
      LIMIT ${reach}
@@ -2530,11 +2544,11 @@ export async function readDashboardEvents(
   const countedEvents =
     kind === "attempt"
       ? sql`0::bigint`
-      : sql`(SELECT count(*) FROM workhorse.job_event event WHERE ${eventCondition})`;
+      : sql`(SELECT count(*) FROM workhorse.dashboard_job_event_v1 event WHERE ${eventCondition})`;
   const countedAttempts =
     kind === "event"
       ? sql`0::bigint`
-      : sql`(SELECT count(*) FROM workhorse.attempt_history history WHERE ${attemptCondition})`;
+      : sql`(SELECT count(*) FROM workhorse.dashboard_attempt_history_v1 history WHERE ${attemptCondition})`;
 
   const [rows, totals, retention] = await Promise.all([
     database.execute<{
@@ -2577,7 +2591,7 @@ export async function readDashboardEvents(
              END AS duration_ms,
              page.error
         FROM page
-        LEFT JOIN workhorse.job job ON job.id = page.job_id
+        LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = page.job_id
        ORDER BY page.occurred_at DESC, page.kind_rank DESC, page.record_id DESC
     `),
     database.execute<{ count: string }>(sql`
@@ -2588,7 +2602,7 @@ export async function readDashboardEvents(
       attempt_history_retention_days: number | null;
     }>(sql`
       SELECT job_event_retention_days, attempt_history_retention_days
-        FROM workhorse.retention_policy
+        FROM workhorse.dashboard_retention_policy_v1
        WHERE singleton
     `),
   ]);
@@ -2652,8 +2666,8 @@ export async function readDashboardEventDetail(
                NULL::timestamptz AS finished_at,
                NULL::text AS duration_ms,
                NULL::jsonb AS error
-          FROM workhorse.job_event event
-          LEFT JOIN workhorse.job job ON job.id = event.job_id
+          FROM workhorse.dashboard_job_event_v1 event
+          LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = event.job_id
          WHERE event.event_id = ${recordId}::bigint
       `
       : sql`
@@ -2674,8 +2688,8 @@ export async function readDashboardEventDetail(
                round(extract(epoch FROM history.finished_at - history.started_at) * 1000)::text
                  AS duration_ms,
                history.error
-          FROM workhorse.attempt_history history
-          LEFT JOIN workhorse.job job ON job.id = history.job_id
+          FROM workhorse.dashboard_attempt_history_v1 history
+          LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = history.job_id
          WHERE history.attempt_id = ${recordId}::bigint
       `;
   const result = await database.execute<{
