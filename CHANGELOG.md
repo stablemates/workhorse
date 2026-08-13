@@ -108,6 +108,9 @@ name the retired instruments.
   typed as `string` are now the vocabulary the router accepts — `events({ types })` takes event
   types and attempt outcomes, exported as `DashboardEventTypeFilter`. Adding a procedure is an edit
   to the router alone.
+- `@workhorse/dashboard`: the `@workhorse/core` peer is pinned to the exact matching release while
+  the server read model queries core-private schema relations. A versioned core-owned dashboard read
+  surface can widen this boundary later.
 
 ### Upgrade notes
 

@@ -48,11 +48,16 @@ optional.
 | `@workhorse/prisma`    | Prisma ORM provider                               | `@workhorse/core`, `@prisma/client` >= 6 and < 7 |
 | `@workhorse/typeorm`   | TypeORM provider                                  | `@workhorse/core`, `typeorm` >= 0.3 and < 2      |
 | `@workhorse/kysely`    | Kysely provider                                   | `@workhorse/core`, `kysely` >= 0.29 and < 0.30   |
-| `@workhorse/dashboard` | Operator dashboard and its framework-neutral host | `@workhorse/core`, `react` 19, `react-dom` 19    |
+| `@workhorse/dashboard` | Operator dashboard and its framework-neutral host | Exact matching `@workhorse/core`, React 19       |
 
-The six published packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
+The seven published packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional package always declares the core version it was released with as a peer range. Mixing
 versions across the set is not supported.
+
+The dashboard narrows that rule to an exact `@workhorse/core` peer. Its server read model currently
+queries private schema relations, so a broad core range would claim compatibility that has not been
+verified. This exact pin is the interim boundary until core ships a versioned dashboard read
+surface.
 
 While the line is `0.x`, any minor release may make a breaking change, including a schema version
 bump. Breaking changes are listed in [`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for
