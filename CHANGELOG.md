@@ -13,7 +13,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v26**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -26,6 +26,8 @@ First published line. Requires **schema v23**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse/core`: database-authoritative maintenance and retention settings with application
   defaults, operator overrides, per-setting provenance, revert operations, and bounded retention
   impact previews.
+- `@workhorse/core`: versioned dashboard read views and a planner-estimate function that isolate
+  the dashboard server from private table changes.
 - `@workhorse/core`: transactionally consistent `Queue.health()` snapshots — one SQL statement
   for every correctness-sensitive value, size-capped history scans with explicit lower-bound
   flags, PostgreSQL estimates separated under `observations`, and caller-overridable health
@@ -108,9 +110,8 @@ name the retired instruments.
   typed as `string` are now the vocabulary the router accepts — `events({ types })` takes event
   types and attempt outcomes, exported as `DashboardEventTypeFilter`. Adding a procedure is an edit
   to the router alone.
-- `@workhorse/dashboard`: the `@workhorse/core` peer is pinned to the exact matching release while
-  the server read model queries core-private schema relations. A versioned core-owned dashboard read
-  surface can widen this boundary later.
+- `@workhorse/dashboard`: the server read model uses core-owned versioned views and functions. Its
+  core peer range now permits independent patch releases within the same minor line.
 
 ### Upgrade notes
 

@@ -79,7 +79,7 @@ describe("published package manifests", () => {
     expect(contractManifest.dependencies).toBeUndefined();
     expect(contractManifest.devDependencies).toEqual({ typescript: "^5.8.3" });
     expect(coreManifest.dependencies?.["@workhorse/dashboard-contract"]).toBe("workspace:*");
-    expect(coreManifest.peerDependencies?.["@workhorse/dashboard"]).toBe("0.1.0");
+    expect(coreManifest.peerDependencies?.["@workhorse/dashboard"]).toBe(">=0.1.0 <0.2.0");
     expect(coreManifest.peerDependenciesMeta?.["@workhorse/dashboard"]?.optional).toBe(true);
     expect(dashboardManifest.dependencies?.["@workhorse/dashboard-contract"]).toBe("workspace:*");
     expect(dashboardManifest.exports?.["./standalone"]).toEqual({
@@ -93,14 +93,22 @@ describe("published package manifests", () => {
     expect(standaloneSource).toContain("DashboardStandaloneModule<Queryable>");
   });
 
-  it("pins the dashboard to the core release whose private schema it reads", async () => {
+  it("allows dashboard and core patch releases to move independently", async () => {
     const dashboardManifest = JSON.parse(await read("packages/dashboard/package.json")) as {
       version?: string;
       peerDependencies?: Record<string, string>;
     };
 
-    expect(dashboardManifest.peerDependencies?.["@workhorse/core"]).toBe(core.version);
+    expect(dashboardManifest.peerDependencies?.["@workhorse/core"]).toBe(">=0.1.0 <0.2.0");
     expect(dashboardManifest.version).toBe(core.version);
+  });
+
+  it("keeps the dashboard read model on versioned core SQL surfaces", async () => {
+    const source = await read("packages/dashboard/src/server/read-model.ts");
+    const references = [...source.matchAll(/workhorse\.([a-z0-9_]+)/g)].map((match) => match[1]);
+
+    expect(references.length).toBeGreaterThan(0);
+    expect(references.filter((reference) => !/_v\d+$/.test(reference ?? ""))).toEqual([]);
   });
 });
 

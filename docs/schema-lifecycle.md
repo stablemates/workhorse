@@ -28,6 +28,10 @@ starting version after taking that lock, and commits one version step atomically
 `0024-add-schema-migration-ledger.sql`, which creates `workhorse.schema_migration` and advances the
 single `workhorse.schema_version` row from 23 to 24.
 
+`0025-make-schedule-occurrence-replay-a-no-op.sql` advances the schema from 24 to 25. The next step,
+`0026-add-dashboard-read-surface.sql`, adds the core-owned versioned dashboard views and
+planner-estimate function, then advances the schema from 25 to 26.
+
 `sql/schema/versions/0023.sql` preserves the supported baseline as a test fixture. It is immutable,
 just like a released migration, and does not ship in the package. `test/schema-migrations.test.ts`
 installs that fixture in one database, applies `migrateSchema(database)`, and compares its
