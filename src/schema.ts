@@ -7,13 +7,18 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 24;
+export const WORKHORSE_SCHEMA_VERSION = 25;
 
 const SCHEMA_MIGRATIONS = [
   {
     fromVersion: 23,
     toVersion: 24,
     file: "0024-add-schema-migration-ledger.sql",
+  },
+  {
+    fromVersion: 24,
+    toVersion: 25,
+    file: "0025-make-schedule-occurrence-replay-a-no-op.sql",
   },
 ] as const;
 

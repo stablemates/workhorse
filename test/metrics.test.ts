@@ -556,17 +556,18 @@ describe("Workhorse OpenTelemetry metrics", () => {
 
   it("counts fired schedules and records their firing lag", async () => {
     const { Queue } = await import("../src/queue.js");
+    let fireCalls = 0;
     const database: Queryable = {
-      query: async <R extends QueryResultRow>() =>
-        queryResult([{ job_id: "job-1" }] as unknown as R[]),
+      query: async <R extends QueryResultRow>() => {
+        fireCalls += 1;
+        return queryResult([{ job_id: fireCalls === 1 ? "job-1" : null }] as unknown as R[]);
+      },
     };
+    const queue = new Queue(database);
+    const occurrence = new Date(Date.now() - 5_000);
 
-    await new Queue(database).fireSchedule(
-      "billing",
-      "daily-invoice",
-      1n,
-      new Date(Date.now() - 5_000),
-    );
+    await queue.fireSchedule("billing", "daily-invoice", 1n, occurrence);
+    await queue.fireSchedule("billing", "daily-invoice", 1n, occurrence);
     await collect();
 
     const attributes = {
