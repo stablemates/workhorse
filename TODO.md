@@ -18,10 +18,24 @@ tests, operational diagnostics, documentation, and benchmark impact are addresse
 
 ## Recommended next sequence
 
+This ordering is informed by the dated competitive snapshot kept outside version control at
+`docs/research/competitive-landscape-2026-08.md` (the `docs/research/` directory is
+intentionally gitignored).
+Priorities are the one remaining table-stakes gap. Batch processing is open as a first-class
+open-source feature on PostgreSQL. The orchestration gate below P3 is satisfied, and every
+durable-execution competitor now leads with agentic workloads built on primitives Workhorse
+already has. The Python and Go SDKs deliberately follow orchestration: they are thin protocol
+clients, so landing dependencies and signals in the versioned SQL contract first means both
+languages bind a stable, complete surface instead of chasing it.
+
 1. **P0-08 Built-in single-admin dashboard authentication**
 2. **P1-05 Priority queues**
-3. **P2-13 Python client and worker SDK**
-4. **P2-14 Go client and worker SDK**
+3. **P1-12 Task batches**
+4. **P1-13 Debounce and throttle**
+5. **P3-01 Job dependencies** and **P3-02 Child jobs and result joining**
+6. **P3-03 Signals and human-in-the-loop wait tokens**
+7. **P2-15 Agentic flows guide and example**
+8. **P2-13 Python client and worker SDK**, then **P2-14 Go client and worker SDK**
 
 The demo, the ORM integration packages, the operator query surface, progress, dead letters,
 deadlines, the durable worker registry, the framework-neutral dashboard host, and the release and
@@ -432,6 +446,43 @@ later integration rather than a prerequisite.
 - [x] Bound names, durations, future horizons, and retained waits, and document restart-from-entry
       semantics without claiming continuation or workflow persistence.
 
+### [ ] P1-12 Task batches
+
+**Depends on:** P0-03, P1-06
+
+Batch processing — several ready jobs delivered to one handler invocation — exists today only as
+a paid tier (BullMQ Pro, River Pro) or a platform primitive (Inngest). No open-source
+PostgreSQL queue offers it. Workhorse already has batch enqueue; this is batch claim.
+
+- [ ] Define batch claim: up to a bounded number of ready jobs of one queue and job type
+      delivered to one handler invocation, with a configured maximum batch size and a bounded
+      linger window before a partial batch dispatches.
+- [ ] Preserve per-job lifecycle: every job in a batch keeps its own identity, lease, fence,
+      heartbeat, retry budget, and independent success, failure, or cancellation outcome.
+- [ ] Keep batch claims on the selective ready indexes and prove claim cost stays proportional
+      to live work.
+- [ ] Define how a batch interacts with priorities, concurrency policies, and rate limits, and
+      document whether a batch consumes one policy slot or one per job.
+- [ ] Benchmark batch claim throughput against serial claims in an operational scenario before
+      making any performance claim.
+
+### [ ] P1-13 Debounce and throttle
+
+**Depends on:** P1-01
+
+Named coalescing primitives on top of the existing idempotency machinery. Inngest, pg-boss,
+Trigger.dev, and DBOS all name these; Workhorse currently only rejects or replays.
+
+- [ ] Add debounce semantics: a repeated key within the window replaces the pending job's
+      payload and either resets or preserves its run time, chosen explicitly by the caller.
+- [ ] Add throttle semantics: at most one accepted job per key per window, with later
+      equivalent requests coalesced into the retained job rather than rejected.
+- [ ] Keep PostgreSQL the owner of window arithmetic and define behavior when the keyed job is
+      already active or terminal.
+- [ ] Report the coalescing outcome in structured enqueue results and lifecycle events.
+- [ ] Cover replace, preserve, coalesce, and concurrent-enqueue races with integration tests
+      and a benchmark scenario.
+
 ## P2: operator and ecosystem experience
 
 ### [x] P2-01 Query and listing API
@@ -664,10 +715,29 @@ transport.
 - [ ] Ship installation, dedicated-worker, transaction, retry, checkpoint, wait, and standalone
       dashboard examples as tested module artifacts.
 
+### [ ] P2-15 Agentic flows guide and example
+
+**Depends on:** P3-01, P3-02, P3-03
+
+Every durable-execution competitor now markets to AI agents on primitives Workhorse already
+ships or has scheduled: checkpoints, durable timer waits, fenced progress, keyed rate limits,
+and — after P3 — dependencies, fan-out/fan-in, and signals. This item is composition and
+documentation, not new SQL.
+
+- [ ] Document an agent loop built from existing primitives: checkpoints for memoized model
+      and tool steps, durable timer waits, signals and human-in-the-loop wait tokens, fenced
+      progress for streaming visibility, and keyed rate limits per external API.
+- [ ] Ship one runnable agent example in the example suite with explicit at-least-once
+      framing. Make no exactly-once, persisted-continuation, or "durable stack" claims.
+- [ ] Follow the documentation rules: guide layer states no numbers, one reference link,
+      every identifier verified against source.
+
 ## P3: orchestration
 
-Do not start orchestration until cancellation, idempotency, concurrency controls, telemetry, and
-operator tooling have stable contracts.
+The original gate — stable cancellation, idempotency, concurrency controls, telemetry, and
+operator tooling — is satisfied as of schema version 26, so P3-01, P3-02, and P3-03 are
+unblocked and pulled into the recommended sequence above. P3-04 remains deferred until the
+three primitives below have shipped and proven their contracts.
 
 ### [ ] P3-01 Job dependencies
 
@@ -687,14 +757,22 @@ operator tooling have stable contracts.
 - [ ] Bound fan-out and result materialization.
 - [ ] Preserve lineage across retry, cancellation, redrive, and retention.
 
-### [ ] P3-03 Signals and durable waits
+### [ ] P3-03 Signals and human-in-the-loop wait tokens
 
-**Depends on:** P3-01, P2-04
+**Depends on:** P3-01, P0-08
 
-- [ ] Add idempotent, authorized signals addressed to a stable waiting execution.
-- [ ] Define signal retention, timeout, cancellation, and duplicate-delivery semantics.
+The former P2-04 dependency is deliberately dropped: authenticated single-admin identity plus
+audited attribution is a sufficient authorization baseline for signals, and premium SSO/RBAC
+refines who may send them later without changing the primitive.
+
+- [ ] Add idempotent, attributed signals addressed to a stable waiting execution.
+- [ ] Add completable wait tokens for human-in-the-loop steps: a handler creates a named
+      token and suspends its lease; an operator or external caller completes it with a
+      bounded payload through the dashboard or API.
+- [ ] Define signal and token retention, timeout, cancellation, and duplicate-delivery
+      semantics.
 - [ ] Keep waiting executions out of ready and active dispatch indexes.
-- [ ] Audit every accepted and rejected signal.
+- [ ] Audit every accepted and rejected signal and token completion.
 
 ### [ ] P3-04 Workflow runtime
 
