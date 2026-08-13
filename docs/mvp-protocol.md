@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 24 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 25 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency. It also supports retry policies,
 checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
@@ -62,7 +62,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 14. `list_jobs_v1` validates exact queue/type/state/creation-time filters, a bounded payload projection, and a filter-bound immutable cursor. It selects at most 1,000 candidates from `job_query` before joining `job` for optional top-level-redacted payload output. Persisted contract keys are always combined with caller projection keys.
 15. `list_job_timeline_v1` merges retained `job_event` and `attempt_history` rows into one latest-first bounded cursor stream. Unknown identities and identities whose history was fully retired both return an empty stream; use point lookup when that distinction matters.
 16. `sync_schedule_definitions_v1` atomically upserts one namespace's desired definitions with accepted contract metadata, increments revisions for material changes, and optionally disables omitted names.
-17. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1` with the stored contract version, limits, and redaction keys; stale revisions return null and duplicate fires return the existing job ID. Canceling its job does not alter the definition or later occurrences.
+17. `fire_schedule_v1` locks an enabled definition matching the expected revision, reserves one occurrence second, and delegates to `enqueue_v1` with the stored contract version, limits, and redaction keys; stale revisions and duplicate fires return null. Canceling its job does not alter the definition or later occurrences.
 18. `sync_retention_policy_v1` stores explicit nullable minimum windows and work bounds, rejecting policies that could delete identity before retained outcome, event, attempt, occurrence, or redrive-lineage attribution.
 19. `sync_concurrency_policies_v1` atomically reconciles one namespace's queue dispatch budgets, rejects conflicting namespace ownership, and prunes omitted policies by default.
 20. `tick_v1` performs bounded due promotion and expired-lease recovery under the `workhorse:tick` advisory lock. Every promoted row emits `promoted`; timer-backed promotion also carries and clears `wait_name` and appends `wait_elapsed`. `prepare_history_partitions_v1`, `retain_history_v1`, and `prune_terminal_storage_v1` own separate due state and advisory locks for partition coverage, daily history retirement, and terminal/idempotency cleanup. Every phase is isolated in an exception subtransaction, and every entry point returns `(phase, rows_affected, duration_ms, skipped_lock, error)` telemetry. Terminal identity pruning skips a redrive source while any retained descendant edge still protects it.

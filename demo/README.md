@@ -28,7 +28,7 @@ packaged bundle through that same host, so the two differ only in where modules 
 The implementation findings and remaining product gaps are recorded in
 [`docs/demo-findings.md`](../docs/demo-findings.md).
 
-The demo installs schema version 24, including daily retained history, split scheduled maintenance,
+The demo installs schema version 25, including daily retained history, split scheduled maintenance,
 a dedicated operator query projection with bounded payload controls and merged timelines,
 scoped enqueue idempotency, cooperative cancellation, absolute deadlines, and per-attempt execution
 timeouts. PostgreSQL also owns a fleet-wide demo dispatch budget with a queue cap and a per-key cap.

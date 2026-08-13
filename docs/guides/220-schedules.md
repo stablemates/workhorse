@@ -39,7 +39,7 @@ Ten workers are running. All ten know the schedule. At 02:00 all ten notice it's
 
 Only one job is created. Each firing writes a durable key built from the namespace, the
 schedule name, and the occurrence second. The first worker to get there claims the key; the
-others find it taken and get back the id of the job that already exists.
+others find it taken and receive no job id, because they didn't create the job.
 
 You don't have to elect a leader or run exactly one scheduler. Any number of workers can
 race and the outcome is one job.

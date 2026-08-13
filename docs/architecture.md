@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 24. Version 23 is the oldest supported
+The current clean-install protocol is schema version 25. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 24 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 25 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -14,7 +14,12 @@ Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory 
 records the version 23 baseline and version 24 step. It then replaces the schema-version row with 24. If a concurrent replay acquires the lock after the first migration, it sees version 24 and
 makes no changes.
 
-Versions below 23, versions above 24, gaps, and mixed version rows fail without running a migration.
+Migration `0025-make-schedule-occurrence-replay-a-no-op.sql` takes the same advisory lock. It
+requires version 24 and changes `fire_schedule_v1` so a repeated occurrence returns null. It records
+the version 25 step and replaces the schema-version row with 25. If a concurrent replay acquires the
+lock after the first migration, it sees version 25 and makes no changes.
+
+Versions below 23, versions above 25, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -579,7 +584,7 @@ performs the global due check and advisory-lock coordination.
 
 `schedule_definition` is the target database's desired-state record for one deployment namespace. It stores validated cron text, a typed Workhorse job definition, and a monotonically increasing revision, never arbitrary SQL. Removed definitions are disabled rather than deleted so occurrence history remains attributable.
 
-`schedule_occurrence` provides one durable key per `(namespace, schedule_name, occurrence_at)` second. `fire_schedule_v1` inserts that key and enqueues through `enqueue_v1` in one transaction. A repeated fire for the same second returns the existing job ID instead of creating another job.
+`schedule_occurrence` provides one durable key per `(namespace, schedule_name, occurrence_at)` second. `fire_schedule_v1` inserts that key and enqueues through `enqueue_v1` in one transaction. A repeated fire for the same second returns null, so only the call that creates the job reports a fire.
 
 Scheduling metadata lives entirely in the target database. Workers evaluate cron expressions in process with `cron-parser` and call revision-fenced `fire_schedule_v1`, `tick_v1`, and the three bounded maintenance tasks. Transaction-scoped advisory locks and persisted due state make concurrent callers no-ops, so schedules fire once and each maintenance task runs once per database cadence regardless of worker count, while any surviving worker keeps schedules alive.
 
@@ -1051,7 +1056,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 24. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 25. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.
