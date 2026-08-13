@@ -9,12 +9,16 @@ tracker or an interactive client.
 
 If no Linear issue exists for the work, create one before starting implementation.
 
-Begin every commit message for Linear-tracked work with the issue identifier in square brackets,
-for example `[WOR-49] Update Linear usage instructions`.
+Link every commit for tracked work by putting a Linear magic word before the issue identifier.
+Use `Refs WOR-123: Add lease recovery` by default because `Refs` links without closing the issue.
 
-When you start a task from `Todo`, move it to `In Progress`. After implementation, verification,
-and code review are complete, move it to `In Review`. Do not move it to `Done` as part of the
-implementation handoff unless the person you are working with asks you to close it.
+Use `Fixes WOR-123: Add lease recovery` only when the commit completes the issue. Linear moves a
+linked issue to `In Progress` when the commit is pushed and to `Done` when a closing commit reaches
+the default branch.
+
+Use `Related to WOR-123: Add lease metrics` when the commit has context relevant to the issue but
+does not implement part of it. Put multiple issue identifiers after one magic word when needed,
+for example `Refs WOR-123, WOR-456: Add lease recovery`.
 
 ## Do not run GitHub Actions
 
