@@ -24,11 +24,11 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v24 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v25 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(24);
+    expect(version.rows[0]?.version).toBe(25);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -36,6 +36,7 @@ describe("schema installation", () => {
     expect(migrations.rows).toEqual([
       { version: 23, description: "forward migration baseline" },
       { version: 24, description: "add schema migration ledger" },
+      { version: 25, description: "make schedule occurrence replay a no-op" },
     ]);
 
     const maintenanceFunctions = await pool.query<{
