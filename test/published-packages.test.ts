@@ -92,6 +92,16 @@ describe("published package manifests", () => {
     expect(coreDashboardSource).not.toContain("interface DashboardServerModule");
     expect(standaloneSource).toContain("DashboardStandaloneModule<Queryable>");
   });
+
+  it("pins the dashboard to the core release whose private schema it reads", async () => {
+    const dashboardManifest = JSON.parse(await read("packages/dashboard/package.json")) as {
+      version?: string;
+      peerDependencies?: Record<string, string>;
+    };
+
+    expect(dashboardManifest.peerDependencies?.["@workhorse/core"]).toBe(core.version);
+    expect(dashboardManifest.version).toBe(core.version);
+  });
 });
 
 describe("ORM adapter entry points", () => {
