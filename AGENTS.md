@@ -7,6 +7,10 @@ Instructions for coding agents. Everything here is a rule an agent has broken be
 Use the configured Linear MCP server for every issue-tracking operation instead of another
 tracker or an interactive client.
 
+When you start a task from `Todo`, move it to `In Progress`. After implementation, verification,
+and code review are complete, move it to `In Review`. Do not move it to `Done` as part of the
+implementation handoff unless the person you are working with asks you to close it.
+
 ## Do not run GitHub Actions
 
 GitHub Actions are intentionally disabled at the repository level while this repository is

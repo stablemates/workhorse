@@ -11,7 +11,9 @@ import {
 } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { deferred, pool, queue } = createIntegrationTestContext(import.meta.url);
+const { deferred, pool, queue, waitForDatabaseCondition } = createIntegrationTestContext(
+  import.meta.url,
+);
 
 describe("claim lease fence", () => {
   it("validates cancellation metadata and idempotently cancels never-started jobs", async () => {
@@ -568,6 +570,7 @@ describe("claim lease fence", () => {
     expect(await worker.runOnce()).toBe(true);
     expect(reasons).toHaveLength(2);
     expect(reasons.every((reason) => reason instanceof ExecutionTimeoutError)).toBe(true);
+    await waitForDatabaseCondition(async () => (await queue.getJob(id))?.state === "failed");
     expect(await queue.getJob(id)).toMatchObject({
       state: "failed",
       currentAttempt: 2,
