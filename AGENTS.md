@@ -62,15 +62,18 @@ Anything spawned outside those scripts still inherits the ambient environment. I
 test fails on a row count that looks slightly off, confirm which database the process actually
 resolved before concluding anything about the test.
 
-## One worktree, one branch
+## One worktree, one branch, one commit
 
 A branch checked out anywhere is locked everywhere: `git checkout main` inside a linked worktree
 makes `main` unavailable in the primary clone until you switch away. Treat each worktree's branch
 as fixed for the life of that worktree.
 
-Integrate from the primary clone or through a pull request — not by checking out `main` inside a
-worktree. To bring a worktree up to date, rebase or merge `origin/main`, which is a
-remote-tracking ref and is never checked out by anyone.
+Keep all changes for a worktree task in one commit. If verification or review requires more edits,
+amend that commit instead of adding follow-up commits.
+
+Integrate from the primary clone, not by checking out `main` inside a worktree. Rebase the worktree
+branch onto `origin/main`, then merge it into `main` with `git merge --ff-only <branch>`. The
+`origin/main` ref is remote-tracking and is never checked out by anyone.
 
 ## Building before testing
 
