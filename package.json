@@ -73,6 +73,7 @@
     "benchmark:competitors": "tsx scripts/with-env.ts tsx src/cli/benchmark-competitors.ts",
     "benchmark:metrics-lifecycle": "tsx scripts/benchmark-metrics-lifecycle.ts",
     "benchmark:retention-strategies": "tsx scripts/with-env.ts tsx scripts/benchmark-retention-strategies.ts",
+    "benchmark:dashboard-read-surface": "tsx scripts/with-env.ts tsx scripts/benchmark-dashboard-read-surface.ts",
     "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin --ignore-pattern apps/site/next-env.d.ts src test benchmarks packages apps demo scripts vitest*.config.ts",
     "lint:fix": "oxlint --fix --import-plugin --vitest-plugin --ignore-pattern apps/site/next-env.d.ts src test benchmarks packages apps demo scripts vitest*.config.ts",
     "format": "oxfmt --write .",

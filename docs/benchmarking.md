@@ -4,6 +4,7 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [`results/2026-08-12-dashboard-read-surface.json`](benchmarks/results/2026-08-12-dashboard-read-surface.json): loaded direct SQL, versioned view, and SQL-function plans for representative dashboard reads, interpreted in [ADR 0027](decisions/0027-keep-versioned-dashboard-views.md).
 - [`results/2026-08-12-retention-strategies.json`](benchmarks/results/2026-08-12-retention-strategies.json): sustained partition-drop against row-delete-and-vacuum retention ladder, interpreted in [ADR 0026](decisions/0026-keep-daily-history-partitions.md).
 - [`results/2026-08-12-schedule-cadence-default.json`](benchmarks/results/2026-08-12-schedule-cadence-default.json): loaded recurring-schedule cadence at the default maintenance interval for a worker, interpreted in [ADR 0025](decisions/0025-worker-schedule-cadence.md).
 - [`results/2026-08-11-metrics-lifecycle.json`](benchmarks/results/2026-08-11-metrics-lifecycle.json): eager against lazy metric instrument lifecycle, per-emission cost and late-provider registration, interpreted in [ADR 0024](decisions/0024-metrics-instrument-lifecycle.md).
