@@ -40,8 +40,9 @@ unrelated application routes.
 The host never installs or migrates schema. It verifies that the installed schema is compatible and
 returns `503` when it is not.
 
-The dashboard reads the private schema shipped by its matching `@workhorse/core` release. Install
-the same version of both packages until core exposes a versioned dashboard read surface.
+The dashboard reads core-owned `workhorse.dashboard_*_v1` views and versioned SQL functions. Core
+schema changes can ship independently when they preserve that surface, so dashboard and core patch
+releases may move separately within the same minor line.
 
 ## Workers do not need to share your process
 

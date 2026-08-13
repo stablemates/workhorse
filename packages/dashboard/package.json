@@ -84,7 +84,7 @@
     "vite": "^7.1.7"
   },
   "peerDependencies": {
-    "@workhorse/core": "0.1.0",
+    "@workhorse/core": ">=0.1.0 <0.2.0",
     "react": ">=19 <20",
     "react-dom": ">=19 <20",
     "vite": ">=6 <9"
