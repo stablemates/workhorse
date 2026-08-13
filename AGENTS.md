@@ -2,10 +2,10 @@
 
 Instructions for coding agents. Everything here is a rule an agent has broken before.
 
-## Use the Epiq MCP for issue tracking
+## Use the Linear CLI skills for issue tracking
 
-Use the Epiq MCP tools to read issues and update their status. The `epiq` executable opens an
-interactive TUI, so do not use it for agent workflows.
+Use the applicable `linear-*` skill for every issue-tracking operation. Run the `linear-cli`
+commands prescribed by that skill instead of using another tracker or an interactive client.
 
 ## Do not run GitHub Actions
 
