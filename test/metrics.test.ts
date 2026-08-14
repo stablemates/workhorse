@@ -192,7 +192,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
       registryIntervalMs: 0,
       statisticsRollupIntervalMs: 0,
     }).handleBatch<{ value: number }, null>("email.batch", { maxSize: 3, lingerMs: 1 }, (items) =>
-      items.map(() => null),
+      items.map(() => ({ status: "succeeded", result: null })),
     );
 
     await worker.runOnce();

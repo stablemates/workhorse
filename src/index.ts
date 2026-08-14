@@ -78,6 +78,7 @@ export {
 export type {
   BatchHandler,
   BatchHandlerItem,
+  BatchHandlerOutcome,
   BatchHandlerOptions,
   Failpoint,
   Handler,
