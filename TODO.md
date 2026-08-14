@@ -284,16 +284,16 @@ The embedded host already accepts an application-owned `authorize` callback, but
 dashboard has no identity provider to delegate to. Give standalone deployments a secure baseline
 without treating one shared administrator as multi-user RBAC.
 
-- [ ] Add an optional single-admin username and password mode configured through environment
+- [x] Add an optional single-admin username and password mode configured through environment
       variables or equivalent explicit server options.
-- [ ] Store only a password hash in production configuration, accept secrets through files where
+- [x] Store only a password hash in production configuration, accept secrets through files where
       container platforms support them, and keep any plaintext-password convenience explicitly
       development-only.
 - [ ] Exchange a successful login for a bounded `Secure`, `HttpOnly`, and explicitly `SameSite`
       session cookie; add logout, expiry, credential rotation, origin checks, and login throttling.
 - [ ] Derive the audit actor from the authenticated server session. Never trust the browser's
       `auditActor` or mutation payload as identity evidence.
-- [ ] Keep host-supplied authorization as an alternative mode for embedded applications that
+- [x] Keep host-supplied authorization as an alternative mode for embedded applications that
       already own sessions. Reject ambiguous configurations that enable both modes.
 - [ ] Publish the authenticated standalone service as a supported container artifact so Python and
       Go users do not need a Node.js application or npm installation to run the dashboard.

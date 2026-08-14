@@ -40,6 +40,11 @@ unrelated application routes.
 The host never installs or migrates schema. It verifies that the installed schema is compatible and
 returns `503` when it is not.
 
+Embedded hosts keep authentication in the application through `authorize`. The standalone CLI can
+instead pass `singleAdmin` credentials, which creates an opaque server-side session and protects
+HTML, assets, and RPC responses. `createDashboardHost` rejects configurations that combine both
+modes.
+
 The dashboard reads core-owned `workhorse.dashboard_*_v1` views and versioned SQL functions. Core
 schema changes can ship independently when they preserve that surface, so dashboard and core patch
 releases may move separately within the same minor line.

@@ -26,9 +26,13 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
       path: "/",
       environment: "standalone",
       auditActor: options.actor,
-      // Binding to loopback is the boundary. There is no session to check, so the console must
-      // never silently authorize a request that arrived from somewhere unexpected.
-      authorize: () => true,
+      ...(options.authentication
+        ? { singleAdmin: options.authentication }
+        : {
+            // The missing credential mode is an explicit local development bypass. The CLI keeps
+            // it on loopback unless an operator deliberately widens the listener.
+            authorize: () => true,
+          }),
       ...controls,
     });
 

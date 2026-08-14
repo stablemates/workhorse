@@ -401,8 +401,33 @@ npx workhorse dashboard --port 3000
 ```
 
 `workhorse dashboard` serves the operator console as its own process against any Workhorse
-database. It binds `127.0.0.1` and is read-only by default, because a standalone server has no
-session to authorize against; `--host` and `--allow-mutations` widen that and say so on startup.
+database. It binds `127.0.0.1` and is read-only by default. Without credentials, that loopback
+listener is an explicit development bypass.
+
+Set `WORKHORSE_DASHBOARD_USERNAME` and `WORKHORSE_DASHBOARD_PASSWORD_HASH` to enable the built-in
+administrator login. Append `_FILE` to either name to load that value from a container secret file.
+Do not set a direct value and its file variant together.
+
+The password hash uses `scrypt-v1$<base64url-salt>$<base64url-digest>`. This command reads the
+password without echoing it and prints a compatible hash:
+
+```bash
+read -rs WORKHORSE_PASSWORD
+printf %s "$WORKHORSE_PASSWORD" | node --input-type=module -e '
+  import { randomBytes, scryptSync } from "node:crypto";
+  let password = "";
+  for await (const chunk of process.stdin) password += chunk;
+  const salt = randomBytes(16);
+  const digest = scryptSync(password, salt, 32, { N: 16384, r: 8, p: 1 });
+  console.log(`scrypt-v1$${salt.toString("base64url")}$${digest.toString("base64url")}`);
+'
+unset WORKHORSE_PASSWORD
+```
+
+The authenticated listener protects the document, assets, and private RPC routes. Sessions expire
+on the server and the browser, while `POST /logout` invalidates a session immediately. Embedded
+applications keep using their own `authorize` callback instead of the built-in credentials. Put a
+remote authenticated listener behind TLS so browsers accept its `Secure` cookie.
 
 `init` detects your ORM and framework from `package.json`, generates a worker configuration, and
 prints the dashboard mount for your framework. Nothing about the mount needs to know where the

@@ -852,6 +852,24 @@ dashboard entry owns `Queue`, `createDashboardOperatorControllers`, `createDashb
 uses `/` as the dashboard path, and enables queue, task, and worker mutations only when
 `options.allowMutations` is true.
 
+`DashboardCommandOptions.authentication` selects the standalone single-admin mode. It contains a
+username, a `scrypt-v1$<base64url-salt>$<base64url-digest>` password hash, and an optional session
+lifetime. Version 1 uses scrypt with `N=16384`, `r=8`, and `p=1`. The salt contains at least 16
+bytes, and the digest contains exactly 32 bytes. Sessions default to 28,800 seconds and accept
+integer lifetimes from 60 through 86,400 seconds.
+
+The server stores only a random 32-byte session token and its expiry. The browser receives the
+token in `__Host-workhorse-dashboard-session` with `Path=/`, `Max-Age`, `Secure`, `HttpOnly`, and
+`SameSite=Strict`. `POST /logout` deletes the server record and expires the cookie. An expired
+server record never authorizes a request, even if a client retains its cookie. Each process retains
+at most 16 sessions. Login removes expired records and evicts the oldest record before exceeding
+that bound.
+
+The CLI reads `WORKHORSE_DASHBOARD_USERNAME` and `WORKHORSE_DASHBOARD_PASSWORD_HASH`. Each value can
+instead come from its `_FILE` variant, with one trailing line ending removed. A direct value and its
+file variant are mutually exclusive, and the username and hash must be configured together.
+`createDashboardHost` accepts either `authorize` or `singleAdmin`, and rejects both or neither.
+
 `src/cli/dashboard.ts` imports only the shared contract. It loads the optional
 `@workhorse/dashboard/standalone` entry and verifies that the module exports
 `startDashboardServer`. The `@workhorse/core` manifest declares `@workhorse/dashboard` as an

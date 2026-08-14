@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { DashboardSingleAdminOptions } from "@workhorse/dashboard-contract";
 import { Pool } from "pg";
 import { installSchema, readSchemaVersion, WORKHORSE_SCHEMA_VERSION } from "../schema.js";
 import { MINIMUM_POSTGRES_MAJOR, readPostgresSupport } from "../support.js";
@@ -25,8 +27,9 @@ Commands:
 
 The database URL is read from --database-url, then WORKHORSE_DATABASE_URL, then DATABASE_URL.
 
-The dashboard binds 127.0.0.1 and is read-only unless told otherwise. It performs no authentication,
-so --host and --allow-mutations publish an unauthenticated control surface and warn when used.
+The dashboard binds 127.0.0.1 and is read-only unless told otherwise. Set
+WORKHORSE_DASHBOARD_USERNAME and WORKHORSE_DASHBOARD_PASSWORD_HASH, or their _FILE variants, to
+enable single-administrator sessions. Remote listeners without credentials warn when used.
 
 The worker configuration must be JavaScript that the current Node.js process can import. Compile
 TypeScript configuration files before invoking the packaged CLI.
@@ -107,6 +110,30 @@ function resolveDatabaseUrl(args: readonly string[]): string {
   return url;
 }
 
+async function dashboardSecret(name: string): Promise<string | undefined> {
+  const direct = process.env[name];
+  const file = process.env[`${name}_FILE`];
+  if (direct !== undefined && file !== undefined) {
+    throw new Error(`Set either ${name} or ${name}_FILE, not both`);
+  }
+  if (direct !== undefined) return direct;
+  if (file === undefined) return undefined;
+  const value = await readFile(file, "utf8");
+  return value.replace(/\r?\n$/, "");
+}
+
+async function resolveDashboardAuthentication(): Promise<DashboardSingleAdminOptions | undefined> {
+  const username = await dashboardSecret("WORKHORSE_DASHBOARD_USERNAME");
+  const passwordHash = await dashboardSecret("WORKHORSE_DASHBOARD_PASSWORD_HASH");
+  if (username === undefined && passwordHash === undefined) return undefined;
+  if (username === undefined || passwordHash === undefined) {
+    throw new Error(
+      "Dashboard authentication requires both WORKHORSE_DASHBOARD_USERNAME and WORKHORSE_DASHBOARD_PASSWORD_HASH",
+    );
+  }
+  return { username, passwordHash };
+}
+
 async function runSchemaCommand(args: readonly string[]): Promise<void> {
   const action = args[0];
   if (action !== "install" && action !== "status") {
@@ -161,10 +188,11 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
   const hostname = valueAfter(args, "--host") ?? "127.0.0.1";
   const allowMutations = args.includes("--allow-mutations");
   const actor = valueAfter(args, "--actor") ?? "workhorse-cli";
+  const authentication = await resolveDashboardAuthentication();
 
-  // The console has no session, header, or identity provider to consult. Anything that widens its
-  // reach past a read-only loopback listener is the operator's explicit decision, said out loud.
-  if (hostname !== "127.0.0.1" && hostname !== "localhost") {
+  // Without configured credentials, anything that widens the local bypass past a read-only
+  // loopback listener is the operator's explicit decision, said out loud.
+  if (!authentication && hostname !== "127.0.0.1" && hostname !== "localhost") {
     process.stderr.write(
       `Warning: binding ${hostname} exposes an unauthenticated dashboard. Put it behind your own authenticated proxy.\n`,
     );
@@ -181,6 +209,7 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
     hostname,
     allowMutations,
     actor,
+    authentication,
   });
   process.stdout.write(
     `Workhorse dashboard on ${running.url} (${allowMutations ? "mutations enabled" : "read-only"})\n`,
