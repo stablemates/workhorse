@@ -4,6 +4,8 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-08-14 priority dispatch analysis](benchmarks/2026-08-14-priority-dispatch-default-analysis.md): strict ordering, FIFO baseline cost, retained-history claim-plan bounds, and explicit starvation under replenished urgent work.
+- [`results/2026-08-14-priority-dispatch-default.json`](benchmarks/results/2026-08-14-priority-dispatch-default.json): default-profile priority dispatch artifact on PostgreSQL 18.
 - [`results/2026-08-12-dashboard-read-surface.json`](benchmarks/results/2026-08-12-dashboard-read-surface.json): loaded direct SQL, versioned view, and SQL-function plans for representative dashboard reads, interpreted in [ADR 0027](decisions/0027-keep-versioned-dashboard-views.md).
 - [`results/2026-08-12-retention-strategies.json`](benchmarks/results/2026-08-12-retention-strategies.json): sustained partition-drop against row-delete-and-vacuum retention ladder, interpreted in [ADR 0026](decisions/0026-keep-daily-history-partitions.md).
 - [`results/2026-08-12-schedule-cadence-default.json`](benchmarks/results/2026-08-12-schedule-cadence-default.json): loaded recurring-schedule cadence at the default maintenance interval for a worker, interpreted in [ADR 0025](decisions/0025-worker-schedule-cadence.md).
@@ -60,6 +62,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `scheduled-promotion-drift`     | bounded promotion batches and due-time drift distribution                                                                                                                                        |
 | `schedule-cadence-jitter`       | recurring fire-delay distribution, worst observed delay, durable occurrence uniqueness, and completed load jobs at the configured maintenance cadence                                            |
 | `heartbeat-fencing`             | accepted heartbeat cost and stale-fence rejection cost                                                                                                                                           |
+| `priority-dispatch`             | FIFO and mixed-priority claim distributions, throughput, retained-history plan bounds, ready-index size, and strict starvation under replenished urgent work                                     |
 | `cancellation-lifecycle`        | immediate/waiting cancellation, active signal/ack, expiry materialization, stale races, truthful history, recurrence, and query timings                                                          |
 | `deadline-timeout-lifecycle`    | pre-claim deadline exclusion, active abort delivery, timeout retry, stale-write fencing, distinct history, and health pressure                                                                   |
 | `dead-letter-redrive-lifecycle` | cold failure cursor paging, side-effect-free preview, audited redrive, exact replay, immutable sources, and retained lineage                                                                     |
@@ -76,6 +79,8 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `telemetry-context`             | equal-cohort enqueue and claiming timings with the OpenTelemetry SDK disabled and enabled, plus export, payload, and index invariants                                                            |
 
 Scenario invariant failures abort the suite. This prevents a fast but semantically incorrect run from being treated as evidence.
+
+`priority-dispatch` compares equal FIFO and mixed-priority cohorts with four concurrent claimers and overlapping handler intervals. It then grows terminal history while holding live ready depth constant. The scenario records claim distributions, throughput, actual `claim_v3` buffer work, and ready-index bytes. A final phase replenishes urgent work before every claim and proves ordinary work remains ready. Its single-host timings describe this run only.
 
 `query-listing-lifecycle` records client-observed page, payload projection, and timeline durations plus
 projection row count and the dedicated operator indexes' measured bytes. These are diagnostic observations,

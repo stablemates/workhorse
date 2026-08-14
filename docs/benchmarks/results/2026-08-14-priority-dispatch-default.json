@@ -1,0 +1,178 @@
+{
+  "configuration": {
+    "comparative": {
+      "churn": {
+        "batchSize": 25,
+        "sampleIntervalMs": 500,
+        "targetJobs": 500,
+        "targetRatePerSecond": 100,
+        "workerConcurrency": 4
+      },
+      "enqueueBatchSize": 25,
+      "jobsPerRun": 100,
+      "leaseMs": 30000,
+      "repetitions": 3,
+      "seed": 1,
+      "workerConcurrency": [
+        1,
+        4,
+        8
+      ]
+    },
+    "operational": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "retryDelayMs": 75,
+      "scenarios": [
+        "priority-dispatch"
+      ],
+      "scheduleDelayMs": 75,
+      "scheduleSamples": 5
+    }
+  },
+  "environment": {
+    "database": "workhorse_bench_workhorse_3813d7c5",
+    "postgresVersion": "PostgreSQL 18.4 (Ubuntu 18.4-1.pgdg24.04+1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "autovacuum_naptime": "60s",
+      "checkpoint_timeout": "300s",
+      "maintenance_work_mem": "65536kB",
+      "max_connections": "100",
+      "max_wal_size": "1024MB",
+      "shared_buffers": "163848kB",
+      "synchronous_commit": "on",
+      "work_mem": "4096kB"
+    }
+  },
+  "generatedAt": "2026-08-14T19:28:02.944Z",
+  "lifecycle": {
+    "options": {
+      "batchSize": 8,
+      "heartbeatCount": 8,
+      "jobCount": 24,
+      "leaseMs": 150,
+      "pruneLimit": 1000,
+      "queuePrefix": "operational",
+      "retryDelayMs": 75,
+      "scenarios": [
+        "priority-dispatch"
+      ],
+      "scheduleDelayMs": 75,
+      "scheduleSamples": 5
+    },
+    "scenarios": [
+      {
+        "assertions": [
+          {
+            "actual": true,
+            "expected": true,
+            "name": "mixed priorities dispatch in strict order with FIFO peers",
+            "passed": true
+          },
+          {
+            "actual": 120,
+            "expected": 120,
+            "name": "terminal history is absent from the live runtime relation",
+            "passed": true
+          },
+          {
+            "actual": 600,
+            "expected": 600,
+            "name": "retained identities exceed live claim rows",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "claim plans record shared buffer work",
+            "passed": true
+          },
+          {
+            "actual": true,
+            "expected": true,
+            "name": "claim buffer work does not scale with retained history",
+            "passed": true
+          },
+          {
+            "actual": 120,
+            "expected": 120,
+            "name": "every replenished flood claim selects high priority",
+            "passed": true
+          },
+          {
+            "actual": 1,
+            "expected": 1,
+            "name": "lower-priority work remains ready throughout sustained high-priority load",
+            "passed": true
+          },
+          {
+            "actual": 0,
+            "expected": 0,
+            "name": "low priority runs when the flood stops",
+            "passed": true
+          }
+        ],
+        "durationMs": 2009.077596,
+        "metrics": {
+          "baselineClaimP50Ms": 1.343140999999946,
+          "baselineClaimP95Ms": 2.116820000000075,
+          "baselineReadyIndexBytes": 32768,
+          "baselineThroughputJobsPerSecond": 1059.7945724228323,
+          "claimPlanExecutionMsAfterHistory": 1.094,
+          "claimPlanExecutionMsBeforeHistory": 1.607,
+          "claimPlanSharedBlocksAfterHistory": 202,
+          "claimPlanSharedBlocksBeforeHistory": 239,
+          "floodHighPriorityClaims": 120,
+          "jobsPerCohort": 120,
+          "liveRuntimeRows": 120,
+          "lowPriorityFloodWaitMs": 428.8584289999999,
+          "mixedClaimP50Ms": 1.350875999999971,
+          "mixedClaimP95Ms": 1.8780290000000832,
+          "mixedReadyIndexBytes": 32768,
+          "mixedThroughputJobsPerSecond": 1123.6672498780622,
+          "readyIndexBytesAfterHistory": 114688,
+          "readyIndexBytesBeforeHistory": 32768,
+          "retainedJobIdentities": 600,
+          "workerConcurrency": 4
+        },
+        "name": "priority-dispatch"
+      }
+    ],
+    "totalDurationMs": 2009.0905899999998
+  },
+  "profile": "default",
+  "provenance": {
+    "command": [
+      "/home/anton/.local/share/mise/installs/node/24.15.0/bin/node",
+      "/home/anton/.codex/worktrees/ef7a/workhorse/src/cli/benchmark.ts",
+      "--",
+      "--suite",
+      "lifecycle",
+      "--profile",
+      "default",
+      "--scenario",
+      "priority-dispatch",
+      "--output",
+      "docs/benchmarks/results/2026-08-14-priority-dispatch-default.json"
+    ],
+    "runtime": {
+      "architecture": "x64",
+      "cpuModel": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+      "logicalCpuCount": 16,
+      "nodeVersion": "v24.15.0",
+      "platform": "linux",
+      "release": "7.0.0-28-generic",
+      "totalMemoryBytes": 29187805184
+    },
+    "source": {
+      "commit": "39ec28058cbcbdf3ec6d7b60ca2801d0e75fd98f",
+      "dirty": false
+    }
+  },
+  "schemaVersion": 3,
+  "suite": "lifecycle"
+}

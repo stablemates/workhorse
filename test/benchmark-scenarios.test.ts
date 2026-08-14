@@ -204,6 +204,37 @@ describe("operational scenario contracts", () => {
       ]),
     );
   });
+
+  it("defines strict-priority cost and starvation evidence", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "priority-dispatch",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/mixed priorities dispatch in strict order/);
+    expect(contract!.invariants.join("\n")).toMatch(/lower-priority work remains ready/);
+    expect(contract!.invariants.join("\n")).toMatch(/lifetime history stays outside/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "baselineClaimP50Ms",
+        "baselineClaimP95Ms",
+        "mixedClaimP50Ms",
+        "mixedClaimP95Ms",
+        "baselineThroughputJobsPerSecond",
+        "mixedThroughputJobsPerSecond",
+        "workerConcurrency",
+        "baselineReadyIndexBytes",
+        "mixedReadyIndexBytes",
+        "readyIndexBytesBeforeHistory",
+        "readyIndexBytesAfterHistory",
+        "claimPlanExecutionMsBeforeHistory",
+        "claimPlanExecutionMsAfterHistory",
+        "claimPlanSharedBlocksBeforeHistory",
+        "claimPlanSharedBlocksAfterHistory",
+        "lowPriorityFloodWaitMs",
+      ]),
+    );
+  });
 });
 
 describe("resolveOperationalScenarioOptions", () => {

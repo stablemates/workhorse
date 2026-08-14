@@ -703,6 +703,8 @@ potentially blocking locks. Without a concurrency policy, it selects the strict-
 `job_runtime_active_queue_key_expiry_idx` and stops when queue capacity is full. With a rate policy,
 it refills the queue bucket from PostgreSQL time and returns null when no queue token exists.
 
+Priority dispatch has no aging or fair-share control. A sustained stream of higher-priority ready work can starve lower-priority rows in the same queue.
+
 If concurrency-key or rate-key limits apply, `claim_v3` inspects at most the first 100 ready rows by
 priority descending, FIFO sequence, and job identity. It selects the earliest candidate whose queue-scoped key has concurrency capacity and
 a rate token. Saturated or throttled candidates remain ready, so later admissible work can proceed
