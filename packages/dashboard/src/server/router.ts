@@ -47,6 +47,7 @@ export interface DashboardRpcContext {
   workerController?: DashboardWorkerController;
   settingsController?: DashboardSettingsController;
   projectDurability?: DashboardDurabilityProjector;
+  authenticatedActor: string;
 }
 
 const procedure = os.$context<DashboardRpcContext>();
@@ -268,8 +269,8 @@ const runTaskNowInput = z.object({
 
 function auditWithOccurredAt<
   TAudit extends { actor: string; reason: string | null; requestId: string },
->(audit: TAudit): TAudit & { occurredAt: string } {
-  return { ...audit, occurredAt: new Date().toISOString() };
+>(audit: TAudit, authenticatedActor: string): TAudit & { occurredAt: string } {
+  return { ...audit, actor: authenticatedActor, occurredAt: new Date().toISOString() };
 }
 
 export const dashboardRouter = {
@@ -358,7 +359,7 @@ export const dashboardRouter = {
       }
       return context.operator.enqueueTest(
         input.kind,
-        auditWithOccurredAt(input.audit),
+        auditWithOccurredAt(input.audit, context.authenticatedActor),
         input.scenario,
       );
     }),
@@ -372,7 +373,7 @@ export const dashboardRouter = {
           input.namespace,
           input.name,
           input.enabled,
-          auditWithOccurredAt(input.audit),
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
     setQueuePaused: procedure.input(setQueuePausedInput).handler(async ({ context, input }) => {
@@ -382,14 +383,17 @@ export const dashboardRouter = {
       return context.queueController.setQueuePaused(
         input.queue,
         input.paused,
-        auditWithOccurredAt(input.audit),
+        auditWithOccurredAt(input.audit, context.authenticatedActor),
       );
     }),
     purgeQueue: procedure.input(purgeQueueInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.queueController?.purgeQueue) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
-      return context.queueController.purgeQueue(input.queue, auditWithOccurredAt(input.audit));
+      return context.queueController.purgeQueue(
+        input.queue,
+        auditWithOccurredAt(input.audit, context.authenticatedActor),
+      );
     }),
     setWorkerPaused: procedure.input(setWorkerPausedInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.workerController?.setWorkerPaused) {
@@ -398,7 +402,7 @@ export const dashboardRouter = {
       return context.workerController.setWorkerPaused(
         input.workerId,
         input.paused,
-        auditWithOccurredAt(input.audit),
+        auditWithOccurredAt(input.audit, context.authenticatedActor),
       );
     }),
     overrideMaintenancePolicy: procedure
@@ -409,7 +413,7 @@ export const dashboardRouter = {
         }
         await context.settingsController.overrideMaintenancePolicy(
           input.definition,
-          auditWithOccurredAt(input.audit),
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
     revertMaintenancePolicy: procedure
@@ -420,7 +424,7 @@ export const dashboardRouter = {
         }
         await context.settingsController.revertMaintenancePolicy(
           input.settings,
-          auditWithOccurredAt(input.audit),
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
     overrideRetentionPolicy: procedure
@@ -431,7 +435,7 @@ export const dashboardRouter = {
         }
         await context.settingsController.overrideRetentionPolicy(
           input.definition,
-          auditWithOccurredAt(input.audit),
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
     revertRetentionPolicy: procedure
@@ -442,7 +446,7 @@ export const dashboardRouter = {
         }
         await context.settingsController.revertRetentionPolicy(
           input.settings,
-          auditWithOccurredAt(input.audit),
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
     runTaskNow: procedure.input(runTaskNowInput).handler(async ({ context, input }) => {
@@ -451,7 +455,7 @@ export const dashboardRouter = {
       }
       const result = await context.taskController.runTaskNow(
         input.id,
-        auditWithOccurredAt(input.audit),
+        auditWithOccurredAt(input.audit, context.authenticatedActor),
       );
       if (result.status === "not_found") {
         throw new ORPCError("NOT_FOUND", { message: "Task not found" });
@@ -469,7 +473,7 @@ export const dashboardRouter = {
       }
       const result = await context.taskController.cancelTask(
         input.id,
-        auditWithOccurredAt(input.audit),
+        auditWithOccurredAt(input.audit, context.authenticatedActor),
       );
       if (result.status === "not_found") {
         throw new ORPCError("NOT_FOUND", { message: "Task not found" });

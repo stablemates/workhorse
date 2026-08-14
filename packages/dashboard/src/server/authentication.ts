@@ -13,7 +13,7 @@ interface ParsedPasswordHash {
 }
 
 interface SingleAdminAuthentication {
-  authorize(request: Request, basePath: string): true | Response;
+  authorize(request: Request, basePath: string): { actor: string } | Response;
   handle(request: Request, loginPath: string, logoutPath: string): Promise<Response | null>;
 }
 
@@ -109,7 +109,9 @@ export function createSingleAdminAuthentication(
       const token = cookieValue(request);
       if (token) {
         const expiresAt = sessions.get(token);
-        if (expiresAt !== undefined && expiresAt > Date.now()) return true;
+        if (expiresAt !== undefined && expiresAt > Date.now()) {
+          return { actor: credentials.username };
+        }
         sessions.delete(token);
       }
       const pathname = new URL(request.url).pathname;

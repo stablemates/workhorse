@@ -6,7 +6,7 @@ export {
   renderDashboardHtml,
 } from "./html.js";
 export type { DashboardRuntimeConfig, RenderDashboardHtmlOptions } from "./html.js";
-export type { DashboardHost, DashboardHostOptions } from "./host.js";
+export type { DashboardHost, DashboardHostOptions, DashboardPrincipal } from "./host.js";
 export { dashboardNodeMiddleware } from "./node.js";
 export type { DashboardNodeMiddleware } from "./node.js";
 export { createDashboardOperatorControllers } from "./operator-controllers.js";

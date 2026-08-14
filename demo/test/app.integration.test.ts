@@ -271,7 +271,11 @@ function dashboardClient(
   return createORPCClient(
     new RPCLink({
       url: "http://demo.test/rpc",
-      fetch: (request) => app.request(request),
+      fetch: (request) => {
+        const forwarded = new Request(request, { headers: new Headers(request.headers) });
+        forwarded.headers.set("origin", "http://demo.test");
+        return app.request(forwarded);
+      },
     }),
   );
 }
@@ -2294,7 +2298,7 @@ describe("Workhorse demo", () => {
       {
         action: "enqueueTest",
         target: "job:success",
-        actor: "operator",
+        actor: "local-demo",
         reason: "smoke enqueue",
         request_id: "audit-enqueue",
         before: null,
@@ -2304,7 +2308,7 @@ describe("Workhorse demo", () => {
       {
         action: "setScheduleEnabled",
         target: `schedule:${DEMO_SCHEDULE_NAMESPACE}:${REPORT_SCHEDULE_NAME}`,
-        actor: "operator",
+        actor: "local-demo",
         reason: "pause reports",
         request_id: "audit-toggle",
         before: { enabled: true },
@@ -2355,7 +2359,7 @@ describe("Workhorse demo", () => {
         {
           action: "setWorkerPaused",
           target: `worker:${workerId}`,
-          actor: "operator",
+          actor: "local-demo",
           reason: "pause one demo worker",
           request_id: "worker-pause",
           before: { paused: false },
@@ -2826,7 +2830,7 @@ describe("Workhorse demo", () => {
       {
         action: "setQueuePaused",
         target: `queue:${queueName}`,
-        actor: "operator",
+        actor: "local-demo",
         reason: "pause queue",
         request_id: "queue-pause",
         before: { paused: false },
@@ -2836,7 +2840,7 @@ describe("Workhorse demo", () => {
       {
         action: "setQueuePaused",
         target: `queue:${queueName}`,
-        actor: "operator",
+        actor: "local-demo",
         reason: "resume queue",
         request_id: "queue-resume",
         before: { paused: true },
@@ -2846,7 +2850,7 @@ describe("Workhorse demo", () => {
       {
         action: "purgeQueue",
         target: `queue:${queueName}`,
-        actor: "operator",
+        actor: "local-demo",
         reason: "clear queue",
         request_id: "queue-purge",
         before: { purgeable_jobs: 2 },
@@ -3323,7 +3327,7 @@ describe("Workhorse demo", () => {
       status: "canceled",
       jobId,
       state: "canceled",
-      requestedBy: "operator",
+      requestedBy: "local-demo",
       reason: "Superseded by a newer request",
     });
     expect(result.finishedAt).toEqual(expect.any(String));
@@ -3432,7 +3436,7 @@ describe("Workhorse demo", () => {
       expect(requested).toMatchObject({
         status: "cancel_requested",
         state: "active",
-        requestedBy: "operator",
+        requestedBy: "local-demo",
         reason: "Runaway task",
       });
       expect(requested.requestedAt).toEqual(expect.any(String));
@@ -3443,7 +3447,7 @@ describe("Workhorse demo", () => {
       const pending = await client.dashboard.jobDetail({ id: enqueued.jobId });
       expect(pending.current.runtime).toMatchObject({
         state: "active",
-        cancellation: { requestedBy: "operator", reason: "Runaway task" },
+        cancellation: { requestedBy: "local-demo", reason: "Runaway task" },
       });
 
       // The handler owns when it stops, so the wait must outlast the whole handler duration.
@@ -3464,7 +3468,7 @@ describe("Workhorse demo", () => {
       );
       expect(events.rows.map((row) => row.event_type)).toEqual(["cancel_requested", "canceled"]);
       expect(events.rows[0]?.details).toMatchObject({
-        requested_by: "operator",
+        requested_by: "local-demo",
         reason: "Runaway task",
       });
       expect(events.rows[1]?.details).toMatchObject({ source: "acknowledged" });

@@ -16,7 +16,6 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
     const queue = new Queue(database);
     const controls = options.allowMutations
       ? createDashboardOperatorControllers({
-          requestedBy: options.actor,
           run: (_action, operation) => operation(queue),
         })
       : { operator: { mode: "read-only" as const } };

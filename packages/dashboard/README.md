@@ -15,7 +15,10 @@ import { createDashboardHost } from "@workhorse/dashboard/server";
 const host = createDashboardHost({
   path: "/workhorse",
   database: pool,
-  authorize: (request) => isAdmin(request),
+  authorize: (request) => {
+    const session = applicationAdminSession(request);
+    return session ? { actor: session.username } : false;
+  },
 });
 ```
 
@@ -44,6 +47,11 @@ Embedded hosts keep authentication in the application through `authorize`. The s
 instead pass `singleAdmin` credentials, which creates an opaque server-side session and protects
 HTML, assets, and RPC responses. `createDashboardHost` rejects configurations that combine both
 modes.
+
+Mutation requests must carry a same-origin `Origin` header. The server replaces browser-provided
+actor text with the single-admin username or the embedded host's verified principal before any
+controller runs. A boolean embedded authorizer remains supported and uses the server-configured
+`auditActor`, which defaults to `dashboard`, so browser input never becomes identity evidence.
 
 The dashboard reads core-owned `workhorse.dashboard_*_v1` views and versioned SQL functions. Core
 schema changes can ship independently when they preserve that surface, so dashboard and core patch

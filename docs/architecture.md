@@ -869,6 +869,17 @@ The CLI reads `WORKHORSE_DASHBOARD_USERNAME` and `WORKHORSE_DASHBOARD_PASSWORD_H
 instead come from its `_FILE` variant, with one trailing line ending removed. A direct value and its
 file variant are mutually exclusive, and the username and hash must be configured together.
 `createDashboardHost` accepts either `authorize` or `singleAdmin`, and rejects both or neither.
+`mutationProcedures` classifies `dashboard.enqueueTest`, `dashboard.setScheduleEnabled`,
+`dashboard.setQueuePaused`, `dashboard.purgeQueue`, `dashboard.setWorkerPaused`,
+`dashboard.overrideMaintenancePolicy`, `dashboard.revertMaintenancePolicy`,
+`dashboard.overrideRetentionPolicy`, `dashboard.revertRetentionPolicy`, `dashboard.runTaskNow`,
+and `dashboard.cancelTask` as private mutations. `rpcProcedure` maps the request path to that set.
+For every match, `rejectCrossOriginMutation` requires an `Origin` header whose parsed origin exactly
+matches the request URL origin. The single-admin session contributes its configured username as
+`DashboardRpcContext.authenticatedActor`. An embedded `authorize` callback may return a
+`DashboardPrincipal` with an `actor`; a compatible boolean `true` result uses the server-owned
+`auditActor`, which defaults to `dashboard`. `auditWithOccurredAt` replaces the parsed browser
+`audit.actor` with that authenticated actor before any operator controller runs.
 
 `src/cli/dashboard.ts` imports only the shared contract. It loads the optional
 `@workhorse/dashboard/standalone` entry and verifies that the module exports

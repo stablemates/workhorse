@@ -256,15 +256,24 @@ datasource db {
     path.join(consumer, "dashboard-auth.mjs"),
     `import assert from "node:assert/strict";
 import { scryptSync } from "node:crypto";
+import { createDashboardClient } from "@workhorse/dashboard/client";
 import { createDashboardHost } from "@workhorse/dashboard/server";
 
 const salt = Buffer.from("packed-dashboard-auth-salt");
 const passwordHash = \`scrypt-v1$\${salt.toString("base64url")}$\${scryptSync("correct horse", salt, 32).toString("base64url")}\`;
 const database = { query: async () => ({ rows: [{ version: 26 }] }) };
+const audits = [];
 const host = createDashboardHost({
   database,
   path: "/",
   singleAdmin: { username: "operator", passwordHash, sessionTtlSeconds: 60 },
+  operator: { mode: "local" },
+  queueController: {
+    setQueuePaused: async (_queue, paused, audit) => {
+      audits.push(audit);
+      return { paused };
+    },
+  },
 });
 
 const protectedResponse = await host.handle(new Request("https://dashboard.test/tasks"));
@@ -274,6 +283,26 @@ const protectedAsset = await host.handle(new Request("https://dashboard.test/ass
 assert.equal(protectedAsset.status, 401);
 const protectedRpc = await host.handle(new Request("https://dashboard.test/rpc/dashboard/meta"));
 assert.equal(protectedRpc.status, 401);
+
+globalThis.window = { location: { origin: "https://dashboard.test" } };
+const realFetch = globalThis.fetch;
+const mutationInput = {
+  queue: "payments",
+  paused: true,
+  audit: { actor: "forged-browser-actor", reason: "deploy", requestId: "request-1" },
+};
+const mutationClient = (headers) => {
+  globalThis.fetch = async (request) => {
+    const forwarded = new Request(request, { headers: new Headers(request.headers) });
+    for (const [name, value] of Object.entries(headers)) forwarded.headers.set(name, value);
+    return await host.handle(forwarded);
+  };
+  return createDashboardClient("/rpc");
+};
+await assert.rejects(
+  () => mutationClient({ origin: "https://dashboard.test" }).setQueuePaused(mutationInput),
+  /Unauthorized/,
+);
 
 const realNow = Date.now;
 Date.now = () => 1_000_000;
@@ -291,6 +320,17 @@ const authenticated = await host.handle(new Request("https://dashboard.test/", {
 }));
 assert.equal(authenticated.status, 302);
 assert.equal(authenticated.headers.get("location"), "/tasks");
+
+await assert.rejects(() => mutationClient({ cookie }).setQueuePaused(mutationInput), /Forbidden/);
+await assert.rejects(
+  () => mutationClient({ cookie, origin: "https://attacker.test" }).setQueuePaused(mutationInput),
+  /Forbidden/,
+);
+assert.equal(audits.length, 0);
+const client = mutationClient({ cookie, origin: "https://dashboard.test" });
+assert.deepEqual(await client.setQueuePaused(mutationInput), { paused: true });
+assert.equal(audits[0].actor, "operator");
+globalThis.fetch = realFetch;
 
 Date.now = () => 1_060_001;
 const expired = await host.handle(new Request("https://dashboard.test/tasks", { headers: { cookie } }));

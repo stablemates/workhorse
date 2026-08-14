@@ -22,9 +22,19 @@ If your application embeds the dashboard, keep its authorization in the host:
 const host = createDashboardHost({
   database: pool,
   path: "/workhorse",
-  authorize: (request) => applicationSessionIsAdmin(request),
+  authorize: (request) => {
+    const session = applicationAdminSession(request);
+    return session ? { actor: session.username } : false;
+  },
 });
 ```
+
+The browser still sends actor text as part of the dashboard wire contract, but the server discards
+it for mutations. A built-in session supplies its configured username. An embedded host supplies
+the principal returned by `authorize`, or its server-configured `auditActor` for a boolean result.
+
+Mutation RPCs also require their `Origin` to match the dashboard request origin. A valid session
+cookie alone cannot authorize a cross-site form or script to change queue state.
 
 Do not configure built-in credentials beside `authorize`. The dashboard rejects that ambiguous
 boundary instead of guessing which identity system owns the request.
