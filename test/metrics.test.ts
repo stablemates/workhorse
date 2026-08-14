@@ -83,8 +83,8 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const database: Queryable = {
       query: async <R extends QueryResultRow>() =>
         queryResult([
-          { ordinal: 1, job_id: "job-1", accepted: true },
-          { ordinal: 2, job_id: "job-2", accepted: true },
+          { ordinal: 1, job_id: "job-1", outcome: "accepted" },
+          { ordinal: 2, job_id: "job-2", outcome: "accepted" },
         ] as unknown as R[]),
     };
     const queue = new Queue(database);
@@ -965,7 +965,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const lateProvider = new MeterProvider({ readers: [lateReader] });
     const database: Queryable = {
       query: async <R extends QueryResultRow>() =>
-        queryResult([{ ordinal: 1, job_id: "job-late", accepted: true }] as unknown as R[]),
+        queryResult([{ ordinal: 1, job_id: "job-late", outcome: "accepted" }] as unknown as R[]),
     };
 
     metrics.disable();

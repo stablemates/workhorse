@@ -6,7 +6,9 @@ import type {
   EnqueueIdempotencyConflictDetails,
   EnqueueIdempotencyConflictField,
   EnqueueOptions,
+  EnqueueOutcome,
   EnqueueRequest,
+  EnqueueResult,
   JobContractVersion,
   Json,
   Queryable,
@@ -366,8 +368,20 @@ export class EnqueueContractsModule extends QueueModule {
     options: EnqueueOptions = {},
     transaction: Queryable = this.context.database,
   ): Promise<string> {
+    return (await this.enqueueWithResult(type, payload, options, transaction)).jobId;
+  }
+
+  async enqueueWithResult<TPayload extends Json>(
+    type: string,
+    payload: TPayload,
+    options: EnqueueOptions = {},
+    transaction: Queryable = this.context.database,
+  ): Promise<EnqueueResult> {
     return (
-      await this.enqueueMany([{ type, payload, options, tags: options.tags }], transaction)
+      await this.enqueueManyWithResults(
+        [{ type, payload, options, tags: options.tags }],
+        transaction,
+      )
     )[0]!;
   }
 
@@ -375,6 +389,13 @@ export class EnqueueContractsModule extends QueueModule {
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.context.database,
   ): Promise<string[]> {
+    return (await this.enqueueManyWithResults(requests, transaction)).map((result) => result.jobId);
+  }
+
+  async enqueueManyWithResults(
+    requests: readonly EnqueueRequest[],
+    transaction: Queryable = this.context.database,
+  ): Promise<EnqueueResult[]> {
     if (requests.length === 0) return [];
     if (requests.length > MAX_ENQUEUE_BATCH_SIZE) {
       throw new RangeError(`enqueueMany accepts at most ${MAX_ENQUEUE_BATCH_SIZE} requests`);
@@ -396,6 +417,14 @@ export class EnqueueContractsModule extends QueueModule {
         const traceContext = injectTraceContext();
         const input = requests.map(({ type, payload, options = {}, tags }) => {
           const idempotency: EnqueueIdempotency | undefined = options.idempotency;
+          if (idempotency !== undefined && options.debounce !== undefined) {
+            throw new TypeError("enqueue options cannot combine idempotency and debounce");
+          }
+          if (options.debounce !== undefined && options.runAt !== undefined) {
+            throw new TypeError(
+              "debounced enqueue uses its PostgreSQL-owned window instead of runAt",
+            );
+          }
           const acceptance = this.jobAcceptance(type, payload);
           return {
             queue: options.queue ?? this.context.defaultQueue,
@@ -404,7 +433,8 @@ export class EnqueueContractsModule extends QueueModule {
             priority: validateJobPriority(options.priority),
             ...acceptance,
             ...(traceContext === null ? {} : { traceContext }),
-            ...(options.runAt === undefined && idempotency !== undefined
+            ...(options.runAt === undefined &&
+            (idempotency !== undefined || options.debounce !== undefined)
               ? {}
               : { runAt: (options.runAt ?? new Date()).toISOString() }),
             deadline: options.deadline?.toISOString() ?? null,
@@ -422,38 +452,60 @@ export class EnqueueContractsModule extends QueueModule {
                     ttlMs: idempotency.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
                   },
                 }),
+            ...(options.debounce === undefined
+              ? {}
+              : {
+                  debounce: {
+                    key: options.debounce.key,
+                    scope: options.debounce.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+                    windowMs: options.debounce.windowMs,
+                    schedule: options.debounce.schedule,
+                  },
+                }),
           };
         });
         try {
           const result = await transaction.query<{
             ordinal: number;
             job_id: string;
-            accepted: boolean;
+            outcome: EnqueueOutcome;
           }>(
-            "SELECT ordinal, job_id, accepted FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
+            "SELECT ordinal, job_id, outcome FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal",
             [JSON.stringify(input)],
           );
-          const jobIds = result.rows.map((row) => row.job_id);
+          const enqueueResults = result.rows.map((row) => ({
+            jobId: row.job_id,
+            outcome: row.outcome,
+          }));
           for (const [index, row] of result.rows.entries()) {
             const request = requests[(row.ordinal ?? index + 1) - 1];
             if (!request) continue;
-            logDebug(
-              row.accepted ? "workhorse.job.enqueued" : "workhorse.job.enqueue_replayed",
-              row.accepted ? "Job enqueued" : "Idempotent enqueue replayed",
-              {
-                "workhorse.job.id": row.job_id,
-                "workhorse.job.type": request.type,
-                "workhorse.queue.name": request.options?.queue ?? this.context.defaultQueue,
-              },
-            );
-            if (!row.accepted) continue;
+            const outcome = row.outcome;
+            const logDetailsByOutcome: Record<
+              EnqueueOutcome,
+              readonly [Parameters<typeof logDebug>[0], string]
+            > = {
+              accepted: ["workhorse.job.enqueued", "Job enqueued"],
+              replayed: ["workhorse.job.enqueue_replayed", "Idempotent enqueue replayed"],
+              replaced: ["workhorse.job.debounced", "Pending job replaced"],
+              non_replaceable: ["workhorse.job.debounce_rejected", "Debounced job not replaceable"],
+            };
+            const [eventName, body] = logDetailsByOutcome[outcome];
+            logDebug(eventName, body, {
+              "workhorse.job.id": row.job_id,
+              "workhorse.job.type": request.type,
+              "workhorse.queue.name": request.options?.queue ?? this.context.defaultQueue,
+            });
+            if (outcome !== "accepted") continue;
             telemetryMetrics.enqueued.add(1, {
               "workhorse.queue.name": request.options?.queue ?? this.context.defaultQueue,
               "workhorse.job.type": request.type,
             });
           }
-          if (jobIds.length === 1) span.setAttribute("workhorse.job.id", jobIds[0]!);
-          return jobIds;
+          if (enqueueResults.length === 1) {
+            span.setAttribute("workhorse.job.id", enqueueResults[0]!.jobId);
+          }
+          return enqueueResults;
         } catch (error) {
           throw enqueueConflict(error) ?? error;
         }

@@ -264,7 +264,11 @@ describe.each(queryableProviders)("$name queryable contract", (provider) => {
 
   it("adapts transactions and closes configured resources once", async () => {
     const execute = vi.fn<Execute>(async () => [
-      { job_id: "00000000-0000-4000-8000-000000000001" },
+      {
+        ordinal: 1,
+        job_id: "00000000-0000-4000-8000-000000000001",
+        outcome: "accepted",
+      },
     ]);
     const close = vi.fn<() => Promise<void>>(async () => undefined);
     const { adapter, transaction } = provider.adapter(execute, close);

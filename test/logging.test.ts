@@ -36,13 +36,13 @@ describe("structured logging", () => {
     records.length = 0;
     const database = {
       async query(sql: string) {
-        if (sql.includes("enqueue_many_v1")) {
+        if (sql.includes("enqueue_many_v2")) {
           return {
             rows: [
               {
                 ordinal: 1,
                 job_id: "00000000-0000-4000-8000-000000000001",
-                accepted: true,
+                outcome: "accepted",
               },
             ],
           };

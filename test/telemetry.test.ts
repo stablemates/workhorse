@@ -70,14 +70,14 @@ describe("OpenTelemetry", () => {
     let acceptedRequest: Record<string, unknown> | undefined;
     const database = queryable(
       vi.fn(async (sql: string, values?: readonly unknown[]) => {
-        if (sql.includes("enqueue_many_v1")) {
+        if (sql.includes("enqueue_many_v2")) {
           acceptedRequest = JSON.parse(values?.[0] as string)[0] as Record<string, unknown>;
           return {
             rows: [
               {
                 ordinal: 1,
                 job_id: "00000000-0000-4000-8000-000000000001",
-                accepted: true,
+                outcome: "accepted",
               },
             ] as never[],
           };
@@ -276,13 +276,13 @@ describe("OpenTelemetry", () => {
     metricExporter.reset();
     const database = queryable(
       vi.fn(async (sql: string) => {
-        expect(sql).toContain("enqueue_many_v1");
+        expect(sql).toContain("enqueue_many_v2");
         return {
           rows: [
             {
               ordinal: 1,
               job_id: "00000000-0000-4000-8000-000000000004",
-              accepted: false,
+              outcome: "replayed",
             },
           ] as never[],
         };
