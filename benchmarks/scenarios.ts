@@ -37,6 +37,7 @@ export const operationalScenarioNames = [
   "scheduled-promotion-drift",
   "schedule-cadence-jitter",
   "heartbeat-fencing",
+  "priority-dispatch",
   "cancellation-lifecycle",
   "deadline-timeout-lifecycle",
   "dead-letter-redrive-lifecycle",
@@ -183,6 +184,37 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "acceptedMeanMs",
       "staleMeanMs",
       "staleOverheadMs",
+    ],
+  },
+  {
+    name: "priority-dispatch",
+    purpose:
+      "Compare strict-priority claims with a FIFO baseline, exercise starvation, and bound claim-path work after retained history grows.",
+    invariants: [
+      "mixed priorities dispatch in strict order while equal-priority jobs retain FIFO order",
+      "lower-priority work remains ready while sustained higher-priority arrivals replenish the queue",
+      "lifetime history stays outside the live runtime relation and actual claim buffer work remains bounded at fixed ready depth",
+    ],
+    metrics: [
+      "jobsPerCohort",
+      "workerConcurrency",
+      "baselineClaimP50Ms",
+      "baselineClaimP95Ms",
+      "mixedClaimP50Ms",
+      "mixedClaimP95Ms",
+      "baselineThroughputJobsPerSecond",
+      "mixedThroughputJobsPerSecond",
+      "baselineReadyIndexBytes",
+      "mixedReadyIndexBytes",
+      "readyIndexBytesBeforeHistory",
+      "readyIndexBytesAfterHistory",
+      "claimPlanExecutionMsBeforeHistory",
+      "claimPlanExecutionMsAfterHistory",
+      "claimPlanSharedBlocksBeforeHistory",
+      "claimPlanSharedBlocksAfterHistory",
+      "retainedJobIdentities",
+      "liveRuntimeRows",
+      "lowPriorityFloodWaitMs",
     ],
   },
   {
@@ -989,6 +1021,271 @@ async function heartbeatFencing(
       staleMeanMs: staleMean,
       staleOverheadMs:
         acceptedMean === null || staleMean === null ? null : staleMean - acceptedMean,
+    },
+    assertions,
+  };
+}
+
+interface ClaimPlanSummary {
+  executionTimeMs: number;
+  sharedBlocks: number;
+}
+
+function summarizeClaimPlan(value: unknown): ClaimPlanSummary {
+  const document = Array.isArray(value) ? value[0] : undefined;
+  const root =
+    document !== null && typeof document === "object" ? (document as Record<string, unknown>) : {};
+  let sharedBlocks = 0;
+  const visit = (node: unknown): void => {
+    if (node === null || typeof node !== "object") return;
+    const record = node as Record<string, unknown>;
+    const nodeSharedBlocks =
+      Number(record["Shared Hit Blocks"] ?? 0) + Number(record["Shared Read Blocks"] ?? 0);
+    if (Number.isFinite(nodeSharedBlocks)) sharedBlocks = Math.max(sharedBlocks, nodeSharedBlocks);
+    const plans = record.Plans;
+    if (Array.isArray(plans)) plans.forEach(visit);
+  };
+  visit(root.Plan);
+  return {
+    executionTimeMs: Number(root["Execution Time"] ?? 0),
+    sharedBlocks,
+  };
+}
+
+async function claimPlan(
+  pool: Queryable,
+  queueName: string,
+  workerId: string,
+): Promise<ClaimPlanSummary> {
+  const result = await pool.query<{ "QUERY PLAN": unknown }>(
+    `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+     SELECT * FROM workhorse.claim_v3($1::text, $2::text, 30000::integer)`,
+    [queueName, workerId],
+  );
+  return summarizeClaimPlan(result.rows[0]?.["QUERY PLAN"]);
+}
+
+async function relationBytes(pool: Queryable, relation: string): Promise<number> {
+  const result = await pool.query<{ bytes: string }>(
+    "SELECT pg_relation_size($1::regclass)::text AS bytes",
+    [relation],
+  );
+  return Number(result.rows[0]?.bytes ?? 0);
+}
+
+async function priorityDispatch(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const assertions: ScenarioAssertion[] = [];
+  const jobsPerCohort = Math.max(5, context.options.jobCount * 5);
+  const historyJobs = jobsPerCohort * 4;
+  const workerConcurrency = 4;
+
+  const runCohort = async (
+    queueName: string,
+    priorities: readonly number[],
+    workerConcurrency: number,
+  ): Promise<{
+    claims: ClaimedJob[];
+    claimDurations: number[];
+    throughputJobsPerSecond: number;
+    readyIndexBytes: number;
+  }> => {
+    const queue = new Queue(context.pool, queueName);
+    for (let offset = 0; offset < priorities.length; offset += 1_000) {
+      await queue.enqueueMany(
+        priorities.slice(offset, offset + 1_000).map((priority, relativeIndex) => ({
+          type: "priority-benchmark",
+          payload: { index: offset + relativeIndex },
+          options: { priority },
+        })),
+      );
+    }
+    const readyIndexBytes = await relationBytes(context.pool, "workhorse.job_runtime_ready_idx");
+    const claims: ClaimedJob[] = [];
+    const claimDurations: number[] = [];
+    const started = context.now();
+    let nextClaim = 0;
+    await Promise.all(
+      Array.from({ length: workerConcurrency }, async (_unused, workerSlot) => {
+        while (true) {
+          const claimIndex = nextClaim;
+          nextClaim += 1;
+          if (claimIndex >= priorities.length) return;
+          const workerId = `${queueName}-worker-${workerSlot}-${claimIndex}`;
+          const [claim, claimMs] = await measured(context.now, () => queue.claim(workerId));
+          if (claim === null) throw new Error(`priority cohort ${queueName} exhausted early`);
+          claims.push(claim);
+          claimDurations.push(claimMs);
+          await context.sleep(1);
+          await queue.complete(claim, workerId, null);
+        }
+      }),
+    );
+    const durationMs = Math.max(0.001, context.now() - started);
+    return {
+      claims,
+      claimDurations,
+      throughputJobsPerSecond: priorities.length / (durationMs / 1_000),
+      readyIndexBytes,
+    };
+  };
+
+  const mixedPriorities = Array.from({ length: jobsPerCohort }, (_unused, index) =>
+    index % 20 === 19 ? 100 : index % 20 >= 16 ? 50 : 0,
+  );
+  const ordering = await runCohort(`${context.queueName}-ordering`, mixedPriorities, 1);
+  const mixedClaimOrder = ordering.claims.map((claim) => ({
+    priority: claim.priority,
+    index: Number((claim.payload as { index: number }).index),
+  }));
+  const expectedMixedOrder = mixedPriorities
+    .map((priority, index) => ({ priority, index }))
+    .sort((left, right) => right.priority - left.priority || left.index - right.index);
+  recordInvariant(
+    assertions,
+    "mixed priorities dispatch in strict order with FIFO peers",
+    jsonEquivalent(mixedClaimOrder, expectedMixedOrder),
+    true,
+  );
+
+  await reset(context.pool);
+  const baselinePriorities = Array.from({ length: jobsPerCohort }, () => 0);
+  const baseline = await runCohort(
+    `${context.queueName}-baseline`,
+    baselinePriorities,
+    workerConcurrency,
+  );
+
+  await reset(context.pool);
+  const mixed = await runCohort(`${context.queueName}-mixed`, mixedPriorities, workerConcurrency);
+
+  await reset(context.pool);
+  const liveQueueName = `${context.queueName}-live`;
+  const seedLiveReady = async (): Promise<void> => {
+    const liveQueue = new Queue(context.pool, liveQueueName);
+    await liveQueue.enqueueMany(
+      Array.from({ length: jobsPerCohort }, (_unused, index) => ({
+        type: "priority-live",
+        payload: { index },
+        options: { priority: index % 2 === 0 ? 100 : 0 },
+      })),
+    );
+  };
+  await seedLiveReady();
+  const readyIndexBytesBeforeHistory = await relationBytes(
+    context.pool,
+    "workhorse.job_runtime_ready_idx",
+  );
+  const planBeforeHistory = await claimPlan(
+    context.pool,
+    liveQueueName,
+    "priority-plan-before-history",
+  );
+  await reset(context.pool);
+  await seedLiveReady();
+  await runCohort(
+    `${context.queueName}-history`,
+    Array.from({ length: historyJobs }, () => 0),
+    workerConcurrency,
+  );
+  await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
+  const readyIndexBytesAfterHistory = await relationBytes(
+    context.pool,
+    "workhorse.job_runtime_ready_idx",
+  );
+  const planAfterHistory = await claimPlan(
+    context.pool,
+    liveQueueName,
+    "priority-plan-after-history",
+  );
+  const retainedJobIdentities = await rowCount(context.pool, "job");
+  const liveRuntimeRows = await rowCount(context.pool, "job_runtime");
+  recordInvariant(
+    assertions,
+    "terminal history is absent from the live runtime relation",
+    liveRuntimeRows,
+    jobsPerCohort,
+  );
+  recordInvariant(
+    assertions,
+    "retained identities exceed live claim rows",
+    retainedJobIdentities,
+    jobsPerCohort + historyJobs,
+  );
+  recordInvariant(
+    assertions,
+    "claim plans record shared buffer work",
+    planBeforeHistory.sharedBlocks > 0 && planAfterHistory.sharedBlocks > 0,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "claim buffer work does not scale with retained history",
+    planAfterHistory.sharedBlocks <= planBeforeHistory.sharedBlocks * 2,
+    true,
+  );
+
+  await reset(context.pool);
+  const floodQueue = new Queue(context.pool, `${context.queueName}-starvation`);
+  await floodQueue.enqueue("low-priority", null, { priority: 0 });
+  const floodStarted = context.now();
+  let highPriorityClaims = 0;
+  for (let index = 0; index < jobsPerCohort; index += 1) {
+    await floodQueue.enqueue("high-priority", { index }, { priority: 100 });
+    const workerId = `priority-flood-worker-${index}`;
+    const claim = await floodQueue.claim(workerId);
+    if (claim?.priority === 100) highPriorityClaims += 1;
+    if (claim !== null) await floodQueue.complete(claim, workerId, null);
+  }
+  const lowDuringFlood = await context.pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM workhorse.job_runtime
+      WHERE queue_name = $1 AND state = 'ready' AND priority = 0`,
+    [`${context.queueName}-starvation`],
+  );
+  const lowPriorityFloodWaitMs = Math.max(0, context.now() - floodStarted);
+  recordInvariant(
+    assertions,
+    "every replenished flood claim selects high priority",
+    highPriorityClaims,
+    jobsPerCohort,
+  );
+  recordInvariant(
+    assertions,
+    "lower-priority work remains ready throughout sustained high-priority load",
+    Number(lowDuringFlood.rows[0]?.count ?? 0),
+    1,
+  );
+  const lowClaim = await floodQueue.claim("priority-low-after-flood");
+  recordInvariant(assertions, "low priority runs when the flood stops", lowClaim?.priority, 0);
+  if (lowClaim !== null) await floodQueue.complete(lowClaim, "priority-low-after-flood", null);
+
+  return {
+    name: "priority-dispatch",
+    durationMs: 0,
+    metrics: {
+      jobsPerCohort,
+      workerConcurrency,
+      baselineClaimP50Ms: percentile(baseline.claimDurations, 0.5),
+      baselineClaimP95Ms: percentile(baseline.claimDurations, 0.95),
+      mixedClaimP50Ms: percentile(mixed.claimDurations, 0.5),
+      mixedClaimP95Ms: percentile(mixed.claimDurations, 0.95),
+      baselineThroughputJobsPerSecond: baseline.throughputJobsPerSecond,
+      mixedThroughputJobsPerSecond: mixed.throughputJobsPerSecond,
+      baselineReadyIndexBytes: baseline.readyIndexBytes,
+      mixedReadyIndexBytes: mixed.readyIndexBytes,
+      readyIndexBytesBeforeHistory,
+      readyIndexBytesAfterHistory,
+      claimPlanExecutionMsBeforeHistory: planBeforeHistory.executionTimeMs,
+      claimPlanExecutionMsAfterHistory: planAfterHistory.executionTimeMs,
+      claimPlanSharedBlocksBeforeHistory: planBeforeHistory.sharedBlocks,
+      claimPlanSharedBlocksAfterHistory: planAfterHistory.sharedBlocks,
+      retainedJobIdentities,
+      liveRuntimeRows,
+      floodHighPriorityClaims: highPriorityClaims,
+      lowPriorityFloodWaitMs,
     },
     assertions,
   };
@@ -3634,6 +3931,7 @@ export const operationalScenarioImplementations: Readonly<
   "scheduled-promotion-drift": scheduledPromotionDrift,
   "schedule-cadence-jitter": scheduleCadenceJitter,
   "heartbeat-fencing": heartbeatFencing,
+  "priority-dispatch": priorityDispatch,
   "cancellation-lifecycle": cancellationLifecycle,
   "deadline-timeout-lifecycle": deadlineTimeoutLifecycle,
   "dead-letter-redrive-lifecycle": deadLetterRedriveLifecycle,

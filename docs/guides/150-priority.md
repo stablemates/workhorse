@@ -4,6 +4,8 @@ Set `EnqueueOptions.priority` when some ready jobs should start before others in
 
 Higher values run first. Jobs with the same value keep their FIFO order. Priority is strict, so a steady stream of urgent work can delay lower-priority jobs.
 
+Workhorse does not age waiting jobs or reserve fair-share capacity across priorities. Use separate queues when lower-priority work needs a guaranteed chance to start.
+
 PostgreSQL stores priority with the stable job identity. Delays, retries, durable waits, and manual promotion keep the same value.
 
 Cancellation changes the job's state, but it does not change priority. Lookup and lifecycle history therefore keep showing the original value.
@@ -36,7 +38,7 @@ await queue.syncSchedules("billing", [
 
 The dashboard shows non-default priority beside each task and the stored value in task details.
 
-Use separate queues when work needs independent capacity or fairness. Priority changes order inside one queue only.
+Priority changes order inside one queue only.
 
 ## Next
 
