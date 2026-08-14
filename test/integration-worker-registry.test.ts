@@ -1223,6 +1223,154 @@ describe("worker registry", () => {
     expect((await queue.getJob<{ total: number }>(id))?.result).toEqual({ total: 5 });
   });
 
+  it("delivers one full priority-ordered batch through the public worker API", async () => {
+    const queueName = `batch-full-${randomUUID()}`;
+    const seen: number[][] = [];
+    const jobs = await Promise.all([
+      queue.enqueue("batch-full", { value: 1 }, { queue: queueName, priority: 10 }),
+      queue.enqueue("batch-full", { value: 2 }, { queue: queueName, priority: 90 }),
+      queue.enqueue("batch-full", { value: 3 }, { queue: queueName, priority: 50 }),
+    ]);
+    const worker = new Worker(queue, {
+      workerId: "batch-full-worker",
+      queue: queueName,
+      concurrency: 3,
+    }).handleBatch<{ value: number }, { value: number }>(
+      "batch-full",
+      { maxSize: 3, lingerMs: 1_000 },
+      (items) => {
+        seen.push(items.map((item) => item.payload.value));
+        return items.map((item) => ({ value: item.payload.value }));
+      },
+    );
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    expect(seen).toEqual([[2, 3, 1]]);
+    await expect(Promise.all(jobs.map((id) => queue.getJob(id)))).resolves.toEqual(
+      jobs.map((id) => expect.objectContaining({ id, state: "succeeded" })),
+    );
+  });
+
+  it("dispatches a partial batch after its linger bound without notification support", async () => {
+    const queueName = `batch-partial-${randomUUID()}`;
+    const batches: number[][] = [];
+    await queue.enqueue("batch-partial", { value: 1 }, { queue: queueName });
+    await queue.enqueue("batch-partial", { value: 2 }, { queue: queueName });
+    const worker = new Worker(queue, {
+      workerId: "batch-partial-worker",
+      queue: queueName,
+      concurrency: 3,
+    }).handleBatch<{ value: number }, null>(
+      "batch-partial",
+      { maxSize: 3, lingerMs: 40 },
+      (items) => {
+        batches.push(items.map((item) => item.payload.value));
+        return items.map(() => null);
+      },
+    );
+
+    const startedAt = Date.now();
+    await expect(worker.runOnce()).resolves.toBe(true);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(25);
+    expect(batches).toEqual([[1, 2]]);
+  });
+
+  it("keeps job types separate while filling batch handlers", async () => {
+    const queueName = `batch-types-${randomUUID()}`;
+    const batches: string[][] = [];
+    for (const [type, value] of [
+      ["batch-a", "a1"],
+      ["batch-b", "b1"],
+      ["batch-a", "a2"],
+      ["batch-b", "b2"],
+    ] as const) {
+      await queue.enqueue(type, { value }, { queue: queueName });
+    }
+    const worker = new Worker(queue, {
+      workerId: "batch-types-worker",
+      queue: queueName,
+      concurrency: 4,
+    })
+      .handleBatch<{ value: string }, null>("batch-a", { maxSize: 2, lingerMs: 100 }, (items) => {
+        batches.push(items.map((item) => item.payload.value));
+        return items.map(() => null);
+      })
+      .handleBatch<{ value: string }, null>("batch-b", { maxSize: 2, lingerMs: 100 }, (items) => {
+        batches.push(items.map((item) => item.payload.value));
+        return items.map(() => null);
+      });
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    expect(batches).toEqual([
+      ["a1", "a2"],
+      ["b1", "b2"],
+    ]);
+  });
+
+  it("does not duplicate batch members under competing workers", async () => {
+    const queueName = `batch-competing-${randomUUID()}`;
+    const handled: number[] = [];
+    const jobIds = await Promise.all(
+      Array.from({ length: 8 }, (_, value) =>
+        queue.enqueue("batch-competing", { value }, { queue: queueName }),
+      ),
+    );
+    const createWorker = (workerId: string) =>
+      new Worker(queue, { workerId, queue: queueName, concurrency: 4 }).handleBatch<
+        { value: number },
+        null
+      >("batch-competing", { maxSize: 4, lingerMs: 20 }, (items) => {
+        handled.push(...items.map((item) => item.payload.value));
+        return items.map(() => null);
+      });
+
+    await expect(
+      Promise.all([
+        createWorker("batch-competitor-a").runOnce(),
+        createWorker("batch-competitor-b").runOnce(),
+      ]),
+    ).resolves.toEqual([true, true]);
+    expect(handled).toHaveLength(8);
+    expect(new Set(handled)).toEqual(new Set(Array.from({ length: 8 }, (_, value) => value)));
+    await expect(Promise.all(jobIds.map((id) => queue.getJob(id)))).resolves.toEqual(
+      jobIds.map((id) => expect.objectContaining({ id, state: "succeeded" })),
+    );
+  });
+
+  it("validates batch size and linger against worker capacity", () => {
+    const worker = new Worker(queue, { concurrency: 2 });
+    expect(() => worker.handleBatch("invalid", { maxSize: 0, lingerMs: 1 }, () => [null])).toThrow(
+      "maxSize must be a safe integer between 1 and 100",
+    );
+    expect(() => worker.handleBatch("invalid", { maxSize: 3, lingerMs: 1 }, () => [null])).toThrow(
+      "maxSize must not exceed worker concurrency",
+    );
+    expect(() => worker.handleBatch("invalid", { maxSize: 2, lingerMs: -1 }, () => [null])).toThrow(
+      "lingerMs must be a safe integer between 0 and 60000",
+    );
+  });
+
+  it("snapshots validated batch configuration at registration", async () => {
+    const queueName = `batch-options-${randomUUID()}`;
+    const options = { maxSize: 2, lingerMs: 100 };
+    const batches: number[][] = [];
+    const worker = new Worker(queue, {
+      workerId: "batch-options-worker",
+      queue: queueName,
+      concurrency: 2,
+    }).handleBatch<{ value: number }, null>("batch-options", options, (items) => {
+      batches.push(items.map((item) => item.payload.value));
+      return items.map(() => null);
+    });
+    options.maxSize = 0;
+    options.lingerMs = 60_001;
+    await queue.enqueue("batch-options", { value: 1 }, { queue: queueName });
+    await queue.enqueue("batch-options", { value: 2 }, { queue: queueName });
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    expect(batches).toEqual([[1, 2]]);
+  });
+
   it.each([
     ["afterClaim", 0, "active"],
     ["beforeHandler", 0, "active"],

@@ -31,6 +31,8 @@ First published line. Requires **schema v27**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse/core`: strict job priority from 0 through 100 across direct, batched, delayed, and
   recurring enqueue, with FIFO order inside each priority and preservation through retries,
   promotion, and redrive.
+- `@workhorse/core`: `Worker.handleBatch` for compatible full and linger-bounded partial batches,
+  with per-job leases, contexts, fencing, priority order, and bounded batch telemetry.
 - `@workhorse/core`: transactionally consistent `Queue.health()` snapshots — one SQL statement
   for every correctness-sensitive value, size-capped history scans with explicit lower-bound
   flags, PostgreSQL estimates separated under `observations`, and caller-overridable health

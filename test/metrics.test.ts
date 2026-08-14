@@ -161,6 +161,59 @@ describe("Workhorse OpenTelemetry metrics", () => {
     ]);
   });
 
+  it("records partial batch dispatch diagnostics", async () => {
+    const { Worker } = await import("../src/worker.js");
+    const jobs: ClaimedJob[] = [1, 2].map((value) => ({
+      id: `batch-job-${value}`,
+      queue: "mail",
+      type: "email.batch",
+      priority: value,
+      payload: { value },
+      contractVersion: null,
+      resultMaxBytes: 1_048_576,
+      redactErrorDetails: false,
+      traceContext: null,
+      attempt: 1,
+      maxAttempts: 3,
+      retryPolicy: null,
+      deadlineAt: null,
+      executionTimeoutMs: null,
+      attemptTimeoutAt: null,
+      fenceToken: BigInt(value),
+      leaseExpiresAt: new Date(Date.now() + 30_000),
+    }));
+    const queue = workerQueue({
+      claim: async () => jobs.shift() ?? null,
+      complete: async () => true,
+    });
+    const worker = new Worker(queue, {
+      queue: "mail",
+      concurrency: 3,
+      registryIntervalMs: 0,
+      statisticsRollupIntervalMs: 0,
+    }).handleBatch<{ value: number }, null>("email.batch", { maxSize: 3, lingerMs: 1 }, (items) =>
+      items.map(() => null),
+    );
+
+    await worker.runOnce();
+    await collect();
+
+    const attributes = {
+      "workhorse.handler.batch.full": false,
+      "workhorse.job.type": "email.batch",
+      "workhorse.queue.name": "mail",
+    };
+    expect(metric("workhorse.handler.batch.size")?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes,
+        value: expect.objectContaining({ count: 1, sum: 2 }),
+      }),
+    ]);
+    expect(metric("workhorse.handler.batch.linger")?.dataPoints).toEqual([
+      expect.objectContaining({ attributes, value: expect.objectContaining({ count: 1 }) }),
+    ]);
+  });
+
   it("records a handler failure scheduled for another attempt as a retry", async () => {
     const { Worker } = await import("../src/worker.js");
     const job: ClaimedJob = {

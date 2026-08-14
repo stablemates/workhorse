@@ -530,6 +530,22 @@ const worker = new Worker(queue, {
 await worker.runOnce();
 ```
 
+Register `handleBatch` when one application call can process several compatible jobs. `maxSize`
+cannot exceed worker concurrency because every member keeps its own active slot, heartbeat, context,
+and fenced settlement. Full batches dispatch immediately; partial batches dispatch when `lingerMs`
+expires even if no notification arrives.
+
+```ts
+new Worker(queue, { concurrency: 20 }).handleBatch(
+  "email",
+  { maxSize: 20, lingerMs: 100 },
+  async (items) => {
+    const deliveries = await provider.sendMany(items.map((item) => item.payload));
+    return deliveries.map((delivery) => ({ providerId: delivery.id }));
+  },
+);
+```
+
 `worker.concurrency` is readonly. `worker.runtimeState()` returns
 `{ concurrency, activeSlots, paused, draining }` for local lifecycle inspection. A claim pass issues
 one claim at a time, starts each claimed job in its own handler slot, never claims beyond the configured
