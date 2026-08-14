@@ -739,10 +739,23 @@ after its first member has waited `lingerMs`; this timer does not depend on `LIS
 
 Every `BatchHandlerItem` retains its payload and `HandlerContext`. The coordinator sorts members by
 priority descending and coordinator arrival order. One invocation contains only the worker's configured
-queue and registered job type. The handler returns one result per member in the same order. A thrown error,
-non-array return, or wrong result count rejects every member. Each existing per-job execution path submits
-that failure under its own fence. `workhorse.handler.batch_dispatched` logs the bounded size, measured
-linger, full/partial flag, queue, type, and worker identity without payloads or job IDs.
+queue and registered job type. The handler returns one `BatchHandlerOutcome` per member in the same order.
+`{ status: "succeeded", result }` submits that member's result. `{ status: "failed", error }` submits that
+member's failure through its persisted retry policy and remaining attempt budget. A thrown error, non-array
+return, wrong outcome count, or invalid outcome rejects every member. Each per-job execution path still
+submits that failure under its own fence.
+
+PostgreSQL admits each member through an independent `claim_v3` call before the process-local rendezvous.
+The batch is not an atomic admission unit. Every admitted member consumes one worker slot, one queue or
+keyed active count, one queue rate token, and one keyed rate token when the matching policy applies. A
+policy can therefore produce a partial batch. Linger time continues to consume each admitted member's
+lease and policy capacity. Priority controls PostgreSQL admission first; the coordinator's sort only orders
+members that were already admitted. The fenced SQL transitions release each member's policy capacity after
+completion, failure, cancellation, expiry, or recovery. A stale fence rejects only its member. `Worker.stop()`
+drains admitted members and their heartbeats but prevents another claim pass.
+
+`workhorse.handler.batch_dispatched` logs the bounded size, measured linger, full/partial flag, queue, type,
+and worker identity without payloads or job IDs.
 
 `pause()` prevents later claims while maintenance and active jobs continue. `resume()` clears the pause and
 makes claims immediately eligible. `stop()` enters draining state, prevents later claims, and allows every

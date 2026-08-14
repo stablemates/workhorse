@@ -10,7 +10,9 @@ Its items arrive in priority order.
 
 The handler receives `BatchHandlerItem` values. Each item includes the original payload and its own `HandlerContext`, so checkpoints, progress, waits, cancellation, and fencing remain attached to the correct job.
 
-Return one result for each item in the same order. If the handler throws or returns the wrong number of results, Workhorse submits the same failure through every member's fenced lifecycle.
+Return one `BatchHandlerOutcome` for each item in the same order. A successful outcome carries that job's result. A failed outcome carries the error for that job's retry policy.
+
+If the handler itself throws or returns an invalid outcome list, Workhorse submits the failure for every member. Each member still uses its own fence and retry budget.
 
 ```ts
 new Worker(queue, { concurrency: workerCapacity }).handleBatch(
@@ -21,12 +23,23 @@ new Worker(queue, { concurrency: workerCapacity }).handleBatch(
   },
   async (items) => {
     const deliveries = await emailProvider.sendMany(items.map((item) => item.payload));
-    return deliveries.map((delivery) => ({ providerId: delivery.id }));
+    return deliveries.map((delivery) =>
+      delivery.error
+        ? { status: "failed", error: delivery.error }
+        : {
+            status: "succeeded",
+            result: { providerId: delivery.id },
+          },
+    );
   },
 );
 ```
 
 Batch capacity cannot exceed the worker's job concurrency because every member still occupies one active slot. Full groups dispatch immediately, while partial groups dispatch when their linger ends.
+
+PostgreSQL admits jobs one at a time before they enter the group. Priority, queue limits, keyed limits, and rate limits can therefore leave a partial batch waiting for its linger.
+
+Cancellation, timeouts, lost leases, and shutdown remain per-job decisions. One member can be canceled or lose its fence while peers complete normally.
 
 ## Next
 

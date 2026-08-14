@@ -110,13 +110,18 @@ export interface BatchHandlerItem<TPayload = Json> {
   context: HandlerContext<TPayload>;
 }
 
+/** The handler result for one independently settled member of a batch. */
+export type BatchHandlerOutcome<TResult extends Json = Json> =
+  | { status: "succeeded"; result: TResult }
+  | { status: "failed"; error: unknown };
+
 /**
- * A compatible group of jobs from one queue and job type. Results correspond by array position;
- * throwing or returning the wrong result count fails every member through its own fenced lifecycle.
+ * A compatible group of jobs from one queue and job type. Outcomes correspond by array position;
+ * throwing or returning an invalid outcome list fails every member through its own fenced lifecycle.
  */
 export type BatchHandler<TPayload = Json, TResult extends Json = Json> = (
   items: readonly BatchHandlerItem<TPayload>[],
-) => Promise<readonly TResult[]> | readonly TResult[];
+) => Promise<readonly BatchHandlerOutcome<TResult>[]> | readonly BatchHandlerOutcome<TResult>[];
 
 export interface BatchHandlerOptions {
   /** Maximum jobs delivered in one invocation. It cannot exceed the worker's job concurrency. */
@@ -520,13 +525,28 @@ export class Worker {
 
       void Promise.resolve()
         .then(() => handler(batch.map(({ item }) => item)))
-        .then((results) => {
-          if (!Array.isArray(results) || results.length !== batch.length) {
+        .then((outcomes) => {
+          if (!Array.isArray(outcomes) || outcomes.length !== batch.length) {
             throw new Error(
-              `Batch handler for ${type} returned ${Array.isArray(results) ? results.length : "a non-array value"} results for ${batch.length} jobs`,
+              `Batch handler for ${type} returned ${Array.isArray(outcomes) ? outcomes.length : "a non-array value"} outcomes for ${batch.length} jobs`,
             );
           }
-          for (const [index, member] of batch.entries()) member.resolve(results[index] as TResult);
+          const invalidIndex = outcomes.findIndex((outcome) => {
+            if (typeof outcome !== "object" || outcome === null) return true;
+            if (outcome.status === "succeeded") return !Object.hasOwn(outcome, "result");
+            if (outcome.status === "failed") return !Object.hasOwn(outcome, "error");
+            return true;
+          });
+          if (invalidIndex !== -1) {
+            throw new Error(
+              `Batch handler for ${type} returned an invalid outcome at index ${invalidIndex}`,
+            );
+          }
+          for (const [index, member] of batch.entries()) {
+            const outcome = outcomes[index]!;
+            if (outcome.status === "succeeded") member.resolve(outcome.result);
+            else member.reject(outcome.error);
+          }
         })
         .catch((error: unknown) => {
           for (const member of batch) member.reject(error);

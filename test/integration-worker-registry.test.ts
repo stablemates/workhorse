@@ -1240,7 +1240,10 @@ describe("worker registry", () => {
       { maxSize: 3, lingerMs: 1_000 },
       (items) => {
         seen.push(items.map((item) => item.payload.value));
-        return items.map((item) => ({ value: item.payload.value }));
+        return items.map((item) => ({
+          status: "succeeded" as const,
+          result: { value: item.payload.value },
+        }));
       },
     );
 
@@ -1249,6 +1252,397 @@ describe("worker registry", () => {
     await expect(Promise.all(jobs.map((id) => queue.getJob(id)))).resolves.toEqual(
       jobs.map((id) => expect.objectContaining({ id, state: "succeeded" })),
     );
+  });
+
+  it("settles mixed batch outcomes through independent retry budgets", async () => {
+    const queueName = `batch-mixed-${randomUUID()}`;
+    const succeededId = await queue.enqueue(
+      "batch-mixed",
+      { outcome: "succeed" },
+      { queue: queueName },
+    );
+    const retriedId = await queue.enqueue(
+      "batch-mixed",
+      { outcome: "retry" },
+      { queue: queueName, maxAttempts: 2 },
+    );
+    const failedId = await queue.enqueue(
+      "batch-mixed",
+      { outcome: "fail" },
+      { queue: queueName, maxAttempts: 1 },
+    );
+    const worker = new Worker(queue, {
+      workerId: "batch-mixed-worker",
+      queue: queueName,
+      concurrency: 3,
+      retryDelayMs: 0,
+    }).handleBatch<{ outcome: string }, { attempt: number }>(
+      "batch-mixed",
+      { maxSize: 3, lingerMs: 100 },
+      (items) =>
+        items.map(({ payload, context }) =>
+          payload.outcome === "succeed" || context.job.attempt > 1
+            ? {
+                status: "succeeded" as const,
+                result: { attempt: context.job.attempt },
+              }
+            : {
+                status: "failed" as const,
+                error: new Error(`${payload.outcome} on attempt ${context.job.attempt}`),
+              },
+        ),
+    );
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(queue.getJob<{ attempt: number }>(succeededId)).resolves.toMatchObject({
+      state: "succeeded",
+      currentAttempt: 1,
+      result: { attempt: 1 },
+    });
+    await expect(queue.getJob(retriedId)).resolves.toMatchObject({
+      state: "ready",
+      currentAttempt: 2,
+    });
+    await expect(queue.getJob(failedId)).resolves.toMatchObject({
+      state: "failed",
+      currentAttempt: 1,
+    });
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(queue.getJob<{ attempt: number }>(retriedId)).resolves.toMatchObject({
+      state: "succeeded",
+      currentAttempt: 2,
+      result: { attempt: 2 },
+    });
+    await expect(queue.getJob(failedId)).resolves.toMatchObject({
+      state: "failed",
+      currentAttempt: 1,
+    });
+    const attemptCounts = await pool.query<{ job_id: string; attempt_count: string }>(
+      `SELECT job_id, count(*)::text AS attempt_count
+         FROM workhorse.attempt_history
+        WHERE job_id = ANY($1::uuid[])
+        GROUP BY job_id`,
+      [[succeededId, retriedId, failedId]],
+    );
+    expect(
+      Object.fromEntries(attemptCounts.rows.map((row) => [row.job_id, row.attempt_count])),
+    ).toEqual({
+      [succeededId]: "1",
+      [retriedId]: "2",
+      [failedId]: "1",
+    });
+  });
+
+  it("applies a batch-level handler failure to every member independently", async () => {
+    const queueName = `batch-handler-failure-${randomUUID()}`;
+    const jobIds = await Promise.all(
+      [1, 2].map((value) =>
+        queue.enqueue("batch-handler-failure", { value }, { queue: queueName, maxAttempts: 1 }),
+      ),
+    );
+    const worker = new Worker(queue, {
+      workerId: "batch-handler-failure-worker",
+      queue: queueName,
+      concurrency: 2,
+    }).handleBatch("batch-handler-failure", { maxSize: 2, lingerMs: 100 }, () => {
+      throw new Error("provider batch failed");
+    });
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(Promise.all(jobIds.map((id) => queue.getJob(id)))).resolves.toEqual(
+      jobIds.map(() =>
+        expect.objectContaining({
+          state: "failed",
+          currentAttempt: 1,
+          error: expect.objectContaining({ message: "provider batch failed" }),
+        }),
+      ),
+    );
+  });
+
+  it("rejects every member when the handler omits an outcome payload", async () => {
+    const queueName = `batch-invalid-outcome-${randomUUID()}`;
+    const jobIds = await Promise.all(
+      [1, 2].map((value) =>
+        queue.enqueue("batch-invalid-outcome", { value }, { queue: queueName, maxAttempts: 1 }),
+      ),
+    );
+    const worker = new Worker(queue, {
+      workerId: "batch-invalid-outcome-worker",
+      queue: queueName,
+      concurrency: 2,
+    }).handleBatch(
+      "batch-invalid-outcome",
+      { maxSize: 2, lingerMs: 100 },
+      (items) => items.map(() => ({ status: "succeeded" })) as never,
+    );
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(Promise.all(jobIds.map((id) => queue.getJob(id)))).resolves.toEqual(
+      jobIds.map(() =>
+        expect.objectContaining({
+          state: "failed",
+          error: expect.objectContaining({ message: expect.stringContaining("invalid outcome") }),
+        }),
+      ),
+    );
+  });
+
+  it("recovers and fences one lost batch member without corrupting its peer", async () => {
+    const queueName = `batch-isolation-${randomUUID()}`;
+    const staleId = await queue.enqueue(
+      "batch-isolation",
+      { outcome: "stale" },
+      { queue: queueName, maxAttempts: 2 },
+    );
+    const succeededId = await queue.enqueue(
+      "batch-isolation",
+      { outcome: "succeed" },
+      { queue: queueName },
+    );
+    const workerId = "batch-isolation-worker";
+    const heartbeatStatus = queue.heartbeatStatus.bind(queue);
+    const heartbeat = vi
+      .spyOn(queue, "heartbeatStatus")
+      .mockImplementation((job, owner, leaseMs) =>
+        job.id === staleId ? Promise.resolve("accepted") : heartbeatStatus(job, owner, leaseMs),
+      );
+    const worker = new Worker(queue, {
+      workerId,
+      queue: queueName,
+      concurrency: 2,
+      leaseMs: 100,
+      heartbeatMs: 20,
+    }).handleBatch<{ outcome: string }, { source: string }>(
+      "batch-isolation",
+      { maxSize: 2, lingerMs: 100 },
+      async (items) => {
+        const stale = items.find(({ payload }) => payload.outcome === "stale")!;
+        await sleep(140);
+        await expect(queue.recoverExpired(100, 0)).resolves.toBe(1);
+        const reclaimed = await queue.claim("batch-isolation-reclaimer", {
+          queue: queueName,
+          leaseMs: 1_000,
+        });
+        expect(reclaimed).toMatchObject({ id: staleId, attempt: 2 });
+        expect(reclaimed!.fenceToken).toBeGreaterThan(stale.context.job.fenceToken);
+        await expect(
+          queue.complete(reclaimed!, "batch-isolation-reclaimer", { source: "reclaimed" }),
+        ).resolves.toBe(true);
+        return items.map(() => ({
+          status: "succeeded" as const,
+          result: { source: "handler" },
+        }));
+      },
+    );
+
+    try {
+      await expect(worker.runOnce()).resolves.toBe(true);
+      await expect(queue.getJob<{ source: string }>(staleId)).resolves.toMatchObject({
+        state: "succeeded",
+        currentAttempt: 2,
+        result: { source: "reclaimed" },
+      });
+      await expect(queue.getJob<{ source: string }>(succeededId)).resolves.toMatchObject({
+        state: "succeeded",
+        currentAttempt: 1,
+        result: { source: "handler" },
+        error: null,
+      });
+    } finally {
+      heartbeat.mockRestore();
+    }
+  });
+
+  it("cancels one active batch member without canceling its peer", async () => {
+    const queueName = `batch-cancel-${randomUUID()}`;
+    const canceledId = await queue.enqueue(
+      "batch-cancel",
+      { outcome: "cancel" },
+      { queue: queueName },
+    );
+    const succeededId = await queue.enqueue(
+      "batch-cancel",
+      { outcome: "succeed" },
+      { queue: queueName },
+    );
+    const worker = new Worker(queue, {
+      workerId: "batch-cancel-worker",
+      queue: queueName,
+      concurrency: 2,
+      leaseMs: 1_000,
+      heartbeatMs: 20,
+    }).handleBatch<{ outcome: string }, null>(
+      "batch-cancel",
+      { maxSize: 2, lingerMs: 100 },
+      async (items) => {
+        const canceled = items.find(({ payload }) => payload.outcome === "cancel")!;
+        await queue.cancel(canceled.context.job.id, { requestedBy: "batch-test" });
+        await vi.waitFor(() => expect(canceled.context.signal.aborted).toBe(true));
+        return items.map(() => ({ status: "succeeded", result: null }));
+      },
+    );
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(queue.getJob(canceledId)).resolves.toMatchObject({ state: "canceled" });
+    await expect(queue.getJob(succeededId)).resolves.toMatchObject({
+      state: "succeeded",
+      error: null,
+    });
+  });
+
+  it("expires one batch member without timing out its peer", async () => {
+    const queueName = `batch-timeout-${randomUUID()}`;
+    const timedOutId = await queue.enqueue(
+      "batch-timeout",
+      { duration: "short" },
+      { queue: queueName, executionTimeoutMs: 20, maxAttempts: 1 },
+    );
+    const succeededId = await queue.enqueue(
+      "batch-timeout",
+      { duration: "long" },
+      { queue: queueName, executionTimeoutMs: 1_000 },
+    );
+    const worker = new Worker(queue, {
+      workerId: "batch-timeout-worker",
+      queue: queueName,
+      concurrency: 2,
+    }).handleBatch<{ duration: string }, null>(
+      "batch-timeout",
+      { maxSize: 2, lingerMs: 100 },
+      async (items) => {
+        await sleep(50);
+        return items.map(() => ({ status: "succeeded", result: null }));
+      },
+    );
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(queue.getJob(timedOutId)).resolves.toMatchObject({ state: "failed" });
+    await expect(queue.getJob(succeededId)).resolves.toMatchObject({ state: "succeeded" });
+  });
+
+  it("expires one batch member's deadline without failing its peer", async () => {
+    const queueName = `batch-deadline-${randomUUID()}`;
+    const deadlineId = await queue.enqueue(
+      "batch-deadline",
+      { deadline: true },
+      { queue: queueName, deadline: new Date(Date.now() + 200), maxAttempts: 1 },
+    );
+    const succeededId = await queue.enqueue(
+      "batch-deadline",
+      { deadline: false },
+      { queue: queueName },
+    );
+    const worker = new Worker(queue, {
+      workerId: "batch-deadline-worker",
+      queue: queueName,
+      concurrency: 2,
+    }).handleBatch<{ deadline: boolean }, null>(
+      "batch-deadline",
+      { maxSize: 2, lingerMs: 100 },
+      async (items) => {
+        await sleep(250);
+        return items.map(() => ({ status: "succeeded", result: null }));
+      },
+    );
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(queue.getJob(deadlineId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({ name: "DeadlineExceeded" }),
+    });
+    await expect(queue.getJob(succeededId)).resolves.toMatchObject({ state: "succeeded" });
+  });
+
+  it("admits and accounts for policy-limited batch members one job at a time", async () => {
+    const queueName = `batch-policy-${randomUUID()}`;
+    await queue.syncConcurrencyPolicies("batch-policy-test", [
+      { queue: queueName, maxActive: 2, maxActivePerKey: 1 },
+    ]);
+    await queue.syncRateLimitPolicies("batch-policy-test", [
+      {
+        queue: queueName,
+        rate: { limit: 2, intervalMs: 100, burst: 2 },
+        perKey: { limit: 1, intervalMs: 100, burst: 1 },
+      },
+    ]);
+    for (const [value, priority, concurrencyKey] of [
+      [1, 100, "shared"],
+      [2, 90, "shared"],
+      [3, 80, "other"],
+      [4, 70, null],
+    ] as const) {
+      await queue.enqueue(
+        "batch-policy",
+        { value },
+        {
+          queue: queueName,
+          priority,
+          ...(concurrencyKey === null ? {} : { concurrencyKey }),
+        },
+      );
+    }
+    const batches: number[][] = [];
+    const worker = new Worker(queue, {
+      workerId: "batch-policy-worker",
+      queue: queueName,
+      concurrency: 4,
+      pollMs: 10,
+    }).handleBatch<{ value: number }, null>(
+      "batch-policy",
+      { maxSize: 4, lingerMs: 20 },
+      (items) => {
+        batches.push(items.map(({ payload }) => payload.value));
+        return items.map(() => ({ status: "succeeded", result: null }));
+      },
+    );
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(worker.runOnce()).resolves.toBe(false);
+    await sleep(120);
+    await expect(worker.runOnce()).resolves.toBe(true);
+    expect(batches).toEqual([
+      [1, 3],
+      [2, 4],
+    ]);
+  });
+
+  it("drains an active batch without claiming another member", async () => {
+    const queueName = `batch-drain-${randomUUID()}`;
+    const jobIds = await Promise.all(
+      [1, 2, 3].map((value) => queue.enqueue("batch-drain", { value }, { queue: queueName })),
+    );
+    const entered = deferred();
+    const release = deferred();
+    const worker = new Worker(queue, {
+      workerId: "batch-drain-worker",
+      queue: queueName,
+      concurrency: 2,
+      pollMs: 10,
+      registryIntervalMs: 0,
+    }).handleBatch<{ value: number }, null>(
+      "batch-drain",
+      { maxSize: 2, lingerMs: 100 },
+      async (items) => {
+        entered.resolve();
+        await release.promise;
+        return items.map(() => ({ status: "succeeded", result: null }));
+      },
+    );
+
+    const running = worker.run();
+    await entered.promise;
+    worker.stop();
+    expect(worker.runtimeState()).toMatchObject({ activeSlots: 2, draining: true });
+    release.resolve();
+    await running;
+
+    const states = (await Promise.all(jobIds.map((id) => queue.getJob(id)))).map(
+      (job) => job?.state,
+    );
+    expect(states.filter((state) => state === "succeeded")).toHaveLength(2);
+    expect(states.filter((state) => state === "ready")).toHaveLength(1);
   });
 
   it("dispatches a partial batch after its linger bound without notification support", async () => {
@@ -1265,7 +1659,7 @@ describe("worker registry", () => {
       { maxSize: 3, lingerMs: 40 },
       (items) => {
         batches.push(items.map((item) => item.payload.value));
-        return items.map(() => null);
+        return items.map(() => ({ status: "succeeded", result: null }));
       },
     );
 
@@ -1293,11 +1687,11 @@ describe("worker registry", () => {
     })
       .handleBatch<{ value: string }, null>("batch-a", { maxSize: 2, lingerMs: 100 }, (items) => {
         batches.push(items.map((item) => item.payload.value));
-        return items.map(() => null);
+        return items.map(() => ({ status: "succeeded", result: null }));
       })
       .handleBatch<{ value: string }, null>("batch-b", { maxSize: 2, lingerMs: 100 }, (items) => {
         batches.push(items.map((item) => item.payload.value));
-        return items.map(() => null);
+        return items.map(() => ({ status: "succeeded", result: null }));
       });
 
     await expect(worker.runOnce()).resolves.toBe(true);
@@ -1321,7 +1715,7 @@ describe("worker registry", () => {
         null
       >("batch-competing", { maxSize: 4, lingerMs: 20 }, (items) => {
         handled.push(...items.map((item) => item.payload.value));
-        return items.map(() => null);
+        return items.map(() => ({ status: "succeeded", result: null }));
       });
 
     await expect(
@@ -1339,15 +1733,21 @@ describe("worker registry", () => {
 
   it("validates batch size and linger against worker capacity", () => {
     const worker = new Worker(queue, { concurrency: 2 });
-    expect(() => worker.handleBatch("invalid", { maxSize: 0, lingerMs: 1 }, () => [null])).toThrow(
-      "maxSize must be a safe integer between 1 and 100",
-    );
-    expect(() => worker.handleBatch("invalid", { maxSize: 3, lingerMs: 1 }, () => [null])).toThrow(
-      "maxSize must not exceed worker concurrency",
-    );
-    expect(() => worker.handleBatch("invalid", { maxSize: 2, lingerMs: -1 }, () => [null])).toThrow(
-      "lingerMs must be a safe integer between 0 and 60000",
-    );
+    expect(() =>
+      worker.handleBatch("invalid", { maxSize: 0, lingerMs: 1 }, () => [
+        { status: "succeeded", result: null },
+      ]),
+    ).toThrow("maxSize must be a safe integer between 1 and 100");
+    expect(() =>
+      worker.handleBatch("invalid", { maxSize: 3, lingerMs: 1 }, () => [
+        { status: "succeeded", result: null },
+      ]),
+    ).toThrow("maxSize must not exceed worker concurrency");
+    expect(() =>
+      worker.handleBatch("invalid", { maxSize: 2, lingerMs: -1 }, () => [
+        { status: "succeeded", result: null },
+      ]),
+    ).toThrow("lingerMs must be a safe integer between 0 and 60000");
   });
 
   it("snapshots validated batch configuration at registration", async () => {
@@ -1360,7 +1760,7 @@ describe("worker registry", () => {
       concurrency: 2,
     }).handleBatch<{ value: number }, null>("batch-options", options, (items) => {
       batches.push(items.map((item) => item.payload.value));
-      return items.map(() => null);
+      return items.map(() => ({ status: "succeeded", result: null }));
     });
     options.maxSize = 0;
     options.lingerMs = 60_001;

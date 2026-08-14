@@ -541,10 +541,18 @@ new Worker(queue, { concurrency: 20 }).handleBatch(
   { maxSize: 20, lingerMs: 100 },
   async (items) => {
     const deliveries = await provider.sendMany(items.map((item) => item.payload));
-    return deliveries.map((delivery) => ({ providerId: delivery.id }));
+    return deliveries.map((delivery) =>
+      delivery.error
+        ? { status: "failed", error: delivery.error }
+        : { status: "succeeded", result: { providerId: delivery.id } },
+    );
   },
 );
 ```
+
+Each positional `BatchHandlerOutcome` settles only its matching job. PostgreSQL applies retries,
+cancellation, timeouts, leases, queue or keyed concurrency, and rate limits per job, so policy pressure
+can dispatch a partial batch and one failed or stale member does not change its peers.
 
 `worker.concurrency` is readonly. `worker.runtimeState()` returns
 `{ concurrency, activeSlots, paused, draining }` for local lifecycle inspection. A claim pass issues
