@@ -275,6 +275,30 @@ or scheduled jobs releases their bindings.
 This deduplicates durable enqueue acceptance only. Handler delivery and external effects remain at least
 once and still require provider idempotency, an outbox/inbox, or compensation.
 
+### Keyed debounce
+
+`options.debounce` keeps one scheduled job per scoped key and replaces its payload while it remains
+pending. PostgreSQL owns the window clock and serializes concurrent callers. Choose `reset` to start
+a fresh window on replacement or `preserve` to keep the first run time:
+
+```ts
+const result = await queue.enqueueWithResult(
+  "search.reindex",
+  { documentId, revision },
+  {
+    debounce: {
+      key: documentId,
+      scope: "search-index",
+      windowMs: 5_000,
+      schedule: "reset",
+    },
+  },
+);
+```
+
+The structured result reports `accepted`, `replaced`, or `non_replaceable`. Active and terminal jobs
+are never rewritten, and an elapsed pending job remains protected until promotion or purge resolves it.
+
 ### Persisted retry policies
 
 Schema version 12 accepts an optional `retryPolicy` on enqueue requests and recurring schedule job
@@ -459,7 +483,7 @@ prints the dashboard mount for your framework. Nothing about the mount needs to 
 workers run: they register themselves in PostgreSQL.
 
 Schema installation is clean-database only. Existing databases at the supported version 23 baseline
-advance through immutable ordered steps by calling `migrateSchema` before version 27 processes start.
+advance through immutable ordered steps by calling `migrateSchema` before version 28 processes start.
 
 ## Minimal usage
 

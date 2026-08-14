@@ -294,7 +294,7 @@ describe("enqueue contracts", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v27 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v28 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -651,7 +651,12 @@ describe("enqueue contracts", () => {
     const transaction: Queryable = {
       async query() {
         serialized = JSON.parse(String(arguments[1]?.[0])) as Array<Record<string, unknown>>;
-        return { rows: [{ job_id: "unkeyed" }, { job_id: "keyed" }] } as never;
+        return {
+          rows: [
+            { ordinal: 1, job_id: "unkeyed", outcome: "accepted" },
+            { ordinal: 2, job_id: "keyed", outcome: "replayed" },
+          ],
+        } as never;
       },
     };
     await queue.enqueueMany(
@@ -776,6 +781,317 @@ describe("enqueue contracts", () => {
         )`,
       ),
     ).rejects.toThrow(/requires a string key/);
+  });
+
+  it("replaces a pending debounced job and explicitly resets or preserves its run time", async () => {
+    const reset = { key: "reset", scope: "debounce", windowMs: 60_000, schedule: "reset" } as const;
+    const accepted = await queue.enqueueWithResult(
+      "debounced-reset",
+      { revision: 1 },
+      { debounce: reset },
+    );
+    const acceptedSnapshot = await queue.getJob(accepted.jobId);
+
+    await sleep(10);
+    const equivalent = await queue.enqueueWithResult(
+      "debounced-reset",
+      { revision: 1 },
+      { debounce: reset },
+    );
+    const equivalentSnapshot = await queue.getJob(equivalent.jobId);
+
+    await sleep(10);
+    const replaced = await queue.enqueueWithResult(
+      "debounced-reset",
+      { revision: 2 },
+      {
+        debounce: reset,
+        maxAttempts: 4,
+        retryPolicy: { type: "fixed", delayMs: 250 },
+        tags: ["material-change"],
+      },
+    );
+    const replacedSnapshot = await queue.getJob(replaced.jobId);
+
+    expect(accepted).toMatchObject({ outcome: "accepted" });
+    expect(equivalent).toEqual({ jobId: accepted.jobId, outcome: "replaced" });
+    expect(equivalentSnapshot).toMatchObject({
+      id: accepted.jobId,
+      payload: { revision: 1 },
+    });
+    expect(equivalentSnapshot!.runAt.getTime()).toBeGreaterThan(acceptedSnapshot!.runAt.getTime());
+    expect(replaced).toEqual({ jobId: accepted.jobId, outcome: "replaced" });
+    expect(replacedSnapshot).toMatchObject({
+      id: accepted.jobId,
+      state: "scheduled",
+      payload: { revision: 2 },
+      maxAttempts: 4,
+      retryPolicy: { type: "fixed", delayMs: 250 },
+      tags: ["material-change"],
+    });
+    expect(replacedSnapshot!.runAt.getTime()).toBeGreaterThan(equivalentSnapshot!.runAt.getTime());
+
+    const preserve = {
+      key: "preserve",
+      scope: "debounce",
+      windowMs: 60_000,
+      schedule: "preserve",
+    } as const;
+    const preservedAccepted = await queue.enqueueWithResult(
+      "debounced-preserve",
+      { revision: 1 },
+      { debounce: preserve },
+    );
+    const originalRunAt = (await queue.getJob(preservedAccepted.jobId))!.runAt;
+    await sleep(10);
+    const preservedReplacement = await queue.enqueueWithResult(
+      "debounced-preserve",
+      { revision: 2 },
+      { debounce: preserve },
+    );
+
+    expect(preservedReplacement).toEqual({
+      jobId: preservedAccepted.jobId,
+      outcome: "replaced",
+    });
+    expect((await queue.getJob(preservedAccepted.jobId))!.runAt).toEqual(originalRunAt);
+    const timeline = await queue.getJobTimeline(accepted.jobId);
+    expect(
+      timeline.items.filter((item) => item.kind === "event" && item.eventType === "debounced"),
+    ).toHaveLength(2);
+    expect(timeline.items).toContainEqual(
+      expect.objectContaining({ kind: "event", eventType: "enqueued" }),
+    );
+  });
+
+  it("returns non-replaceable outcomes for active, terminal, and elapsed pending jobs", async () => {
+    const debounce = {
+      key: "lifecycle",
+      scope: "debounce",
+      windowMs: 60_000,
+      schedule: "reset",
+    } as const;
+    const accepted = await queue.enqueueWithResult(
+      "debounce-lifecycle",
+      { revision: 1 },
+      { debounce },
+    );
+    await expect(queue.runTaskNow(accepted.jobId)).resolves.toMatchObject({ status: "released" });
+    const claimed = await queue.claim("debounce-lifecycle-worker");
+    expect(claimed).toMatchObject({ id: accepted.jobId, payload: { revision: 1 } });
+
+    await expect(
+      queue.enqueueWithResult("debounce-lifecycle", { revision: 2 }, { debounce }),
+    ).resolves.toEqual({ jobId: accepted.jobId, outcome: "non_replaceable" });
+    await expect(queue.complete(claimed!, "debounce-lifecycle-worker", { ok: true })).resolves.toBe(
+      true,
+    );
+    await expect(
+      queue.enqueueWithResult("debounce-lifecycle", { revision: 3 }, { debounce }),
+    ).resolves.toEqual({ jobId: accepted.jobId, outcome: "non_replaceable" });
+    await expect(queue.getJob(accepted.jobId)).resolves.toMatchObject({
+      state: "succeeded",
+      payload: { revision: 1 },
+    });
+
+    const elapsed = {
+      key: "elapsed",
+      scope: "debounce",
+      windowMs: 1,
+      schedule: "reset",
+    } as const;
+    const elapsedAccepted = await queue.enqueueWithResult(
+      "debounce-elapsed",
+      { revision: 1 },
+      { debounce: elapsed },
+    );
+    await sleep(10);
+    await expect(
+      queue.enqueueWithResult("debounce-elapsed", { revision: 2 }, { debounce: elapsed }),
+    ).resolves.toEqual({ jobId: elapsedAccepted.jobId, outcome: "non_replaceable" });
+  });
+
+  it("accepts a fresh debounced job after the retained job is purged", async () => {
+    const queueName = "debounce-purge";
+    const debounce = { key: "purged", windowMs: 60_000, schedule: "reset" } as const;
+    const first = await queue.enqueueWithResult(
+      "debounce-purged",
+      { revision: 1 },
+      { queue: queueName, debounce },
+    );
+    await expect(queue.purgeQueue(queueName)).resolves.toBe(1);
+    const second = await queue.enqueueWithResult(
+      "debounce-purged",
+      { revision: 2 },
+      { queue: queueName, debounce },
+    );
+    expect(second).toMatchObject({ outcome: "accepted" });
+    expect(second.jobId).not.toBe(first.jobId);
+  });
+
+  it.each(["active", "terminal"] as const)(
+    "accepts a fresh debounced job after an expired %s identity",
+    async (lifecycle) => {
+      const debounce = {
+        key: lifecycle,
+        scope: "debounce-expired-lifecycle",
+        windowMs: 1,
+        schedule: "reset",
+      } as const;
+      const first = await queue.enqueueWithResult(
+        "debounce-expired-lifecycle",
+        { revision: 1 },
+        { debounce },
+      );
+      await expect(queue.runTaskNow(first.jobId)).resolves.toMatchObject({
+        status: expect.stringMatching(/^(released|already_ready)$/),
+      });
+      const claimed = await queue.claim(`debounce-expired-${lifecycle}-worker`);
+      expect(claimed).toMatchObject({ id: first.jobId });
+      let completed: boolean | undefined;
+      if (lifecycle === "terminal") {
+        completed = await queue.complete(claimed!, `debounce-expired-${lifecycle}-worker`, {
+          ok: true,
+        });
+      }
+      expect(completed).toBe(lifecycle === "terminal" ? true : undefined);
+      await sleep(10);
+
+      const second = await queue.enqueueWithResult(
+        "debounce-expired-lifecycle",
+        { revision: 2 },
+        { debounce },
+      );
+
+      expect(second).toMatchObject({ outcome: "accepted" });
+      expect(second.jobId).not.toBe(first.jobId);
+    },
+  );
+
+  it.each(["claim", "cancel"] as const)(
+    "serializes a concurrent %s before deciding whether a pending job is replaceable",
+    async (transition) => {
+      const debounce = {
+        key: transition,
+        scope: "debounce-transition-race",
+        windowMs: 60_000,
+        schedule: "reset",
+      } as const;
+      const accepted = await queue.enqueueWithResult(
+        "debounce-transition-race",
+        { revision: 1 },
+        { debounce },
+      );
+      if (transition === "claim") {
+        await queue.runTaskNow(accepted.jobId);
+      }
+
+      const transitionClient = await pool.connect();
+      try {
+        await transitionClient.query("BEGIN");
+        await transitionClient.query(
+          "SELECT 1 FROM workhorse.job_runtime WHERE job_id = $1 FOR UPDATE",
+          [accepted.jobId],
+        );
+        const replacement = queue.enqueueWithResult(
+          "debounce-transition-race",
+          { revision: 2 },
+          { debounce },
+        );
+        await sleep(25);
+        if (transition === "claim") {
+          await transitionClient.query(
+            "SELECT job_id FROM workhorse.claim_v3('default', 'debounce-race-worker', 30000)",
+          );
+        } else {
+          await transitionClient.query(
+            "SELECT status FROM workhorse.cancel_v1($1::uuid, NULL, 'debounce race')",
+            [accepted.jobId],
+          );
+        }
+        await transitionClient.query("COMMIT");
+
+        await expect(replacement).resolves.toEqual({
+          jobId: accepted.jobId,
+          outcome: "non_replaceable",
+        });
+      } finally {
+        await transitionClient.query("ROLLBACK").catch(() => undefined);
+        transitionClient.release();
+      }
+
+      await expect(queue.getJob(accepted.jobId)).resolves.toMatchObject({
+        state: transition === "claim" ? "active" : "canceled",
+        payload: { revision: 1 },
+      });
+    },
+  );
+
+  it("serializes concurrent debounce replacements to one pending identity", async () => {
+    const debounce = {
+      key: "concurrent",
+      scope: "debounce-race",
+      windowMs: 60_000,
+      schedule: "reset",
+    } as const;
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, revision) =>
+        queue.enqueueWithResult("debounce-race", { revision }, { debounce }),
+      ),
+    );
+    expect(new Set(results.map((result) => result.jobId)).size).toBe(1);
+    expect(results.filter((result) => result.outcome === "accepted")).toHaveLength(1);
+    expect(results.filter((result) => result.outcome === "replaced")).toHaveLength(11);
+    await expect(queue.getJob(results[0]!.jobId)).resolves.toMatchObject({ state: "scheduled" });
+  });
+
+  it("validates debounce bounds and keeps mixed batches atomic", async () => {
+    const base = { key: "bounded", windowMs: 1, schedule: "reset" } as const;
+    await expect(
+      queue.enqueueWithResult("debounce-bounds", {}, { debounce: base }),
+    ).resolves.toMatchObject({
+      outcome: "accepted",
+    });
+    for (const debounce of [
+      { ...base, key: "" },
+      { ...base, scope: "é".repeat(129) },
+      { ...base, windowMs: 0 },
+      { ...base, windowMs: 1.5 },
+      { ...base, schedule: "later" },
+    ]) {
+      await expect(
+        queue.enqueueWithResult("debounce-bounds", {}, { debounce: debounce as never }),
+      ).rejects.toThrow(/debounce/);
+    }
+    await expect(
+      queue.enqueueWithResult(
+        "debounce-bounds",
+        {},
+        {
+          debounce: base,
+          idempotency: { key: "combined" },
+        },
+      ),
+    ).rejects.toThrow(/cannot combine/);
+
+    const before = await pool.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM workhorse.job",
+    );
+    await expect(
+      queue.enqueueManyWithResults([
+        {
+          type: "debounce-batch",
+          payload: { valid: true },
+          options: {
+            debounce: { key: "batch", scope: "debounce", windowMs: 60_000, schedule: "reset" },
+          },
+        },
+        { type: "", payload: {} },
+      ]),
+    ).rejects.toThrow(/non-empty queue\/type/);
+    await expect(
+      pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.job"),
+    ).resolves.toMatchObject({ rows: before.rows });
   });
 
   it("serializes concurrent exact replays through the scoped unique index", async () => {

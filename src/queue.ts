@@ -15,6 +15,7 @@ import type {
   DeadLetterQuery,
   EnqueueOptions,
   EnqueueRequest,
+  EnqueueResult,
   ExpireOwnedStatus,
   JobListPage,
   JobListQuery,
@@ -167,11 +168,27 @@ export class Queue {
     return this.modules.enqueueContracts.enqueue(type, payload, options, transaction);
   }
 
+  async enqueueWithResult<TPayload extends Json>(
+    type: string,
+    payload: TPayload,
+    options: EnqueueOptions = {},
+    transaction: Queryable = this.database,
+  ): Promise<EnqueueResult> {
+    return this.modules.enqueueContracts.enqueueWithResult(type, payload, options, transaction);
+  }
+
   async enqueueMany(
     requests: readonly EnqueueRequest[],
     transaction: Queryable = this.database,
   ): Promise<string[]> {
     return this.modules.enqueueContracts.enqueueMany(requests, transaction);
+  }
+
+  async enqueueManyWithResults(
+    requests: readonly EnqueueRequest[],
+    transaction: Queryable = this.database,
+  ): Promise<EnqueueResult[]> {
+    return this.modules.enqueueContracts.enqueueManyWithResults(requests, transaction);
   }
 
   async promote(limit = 100): Promise<number> {

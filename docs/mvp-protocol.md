@@ -1,7 +1,7 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 27 protocol reference. The clean-install schema stores bounded
-W3C trace metadata and supports scoped enqueue idempotency. It also supports retry policies,
+This is the compact schema version 28 protocol reference. The clean-install schema stores bounded
+W3C trace metadata and supports scoped enqueue idempotency plus keyed debounce. It also supports retry policies,
 checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
 and per-minute statistics complete the protocol.
@@ -46,6 +46,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 ## Atomic transitions
 
 1. `enqueue_many_v1` validates up to 1,000 JSONB requests against one timestamp, including canonical payload size, contract version, and redaction metadata, then returns `(ordinal, job_id, accepted)`. Keyed requests first acquire deterministic sorted scoped-ownership locks, while acceptance side effects remain in caller ordinal order. New requests set `accepted` and insert `job`, `job_runtime`, and one `enqueued` event; exact replays clear `accepted` and return the retained job ID before durable, FIFO, or notification side effects; mismatches abort the whole statement with structured safe conflict details. `enqueue_v1` delegates to it.
+   `enqueue_many_v2` returns `accepted`, `replayed`, `replaced`, or `non_replaceable`. `enqueue_debounce_v1` derives the window from PostgreSQL time, replaces only pending definitions, and records `debounced` or `debounce_rejected` evidence under the same scoped-key lock.
 2. `promote_v1` locks a bounded due set with `SKIP LOCKED`, updates scheduled runtime rows to ready, assigns sequences, and appends events.
 3. `claim_v3` locks the queue's concurrency and rate-limit policies, checks unexpired active capacity, and refills PostgreSQL-time token buckets. It selects one concurrency- and rate-admissible row from a bounded priority-ordered window, then changes that runtime to active and consumes its queue and key tokens in the same transaction. Higher priorities run first, with FIFO ordering among peers. The update records worker, fence, heartbeat, lease expiry, and the current attempt's execution-timeout budget. The function returns raw payload, priority, the accepted contract version, result limit, and error-redaction flag, then appends the claim event.
 4. `heartbeat_v2` returns ownership status for the exact active generation and extends only accepted leases. The clean-install schema omits the retired boolean `heartbeat_v1` function.
@@ -81,7 +82,7 @@ The target starts ready at attempt one with source queue, type, payload, accepte
 
 ## Batch enqueue contract
 
-`Queue.enqueueMany(requests, transaction?)` accepts at most **1,000 requests**. Each request contains `queue`, `type`, `payload`, optional ISO-8601 `runAt`, `maxAttempts`, optional `retryPolicy`, tags, and optional `idempotency: { key, scope?, ttlMs? }`.
+`Queue.enqueueMany(requests, transaction?)` accepts at most **1,000 requests**. Each request contains `queue`, `type`, `payload`, optional ISO-8601 `runAt`, `maxAttempts`, optional `retryPolicy`, tags, and either optional `idempotency: { key, scope?, ttlMs? }` or `debounce: { key, scope?, windowMs, schedule }`. `enqueue_many_v2` returns structured acceptance, replay, replacement, and non-replaceable outcomes while preserving statement atomicity.
 
 - Scope defaults to `default`; TTL defaults to 86,400,000 ms (24 hours).
 - Key length is 1 through 512 UTF-8 bytes; scope length is 1 through 256 UTF-8 bytes; TTL is an integer from 1 through 31,536,000,000 ms (365 days).

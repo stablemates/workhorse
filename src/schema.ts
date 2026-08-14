@@ -7,7 +7,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 27;
+export const WORKHORSE_SCHEMA_VERSION = 28;
 
 const SCHEMA_MIGRATIONS = [
   {
@@ -29,6 +29,11 @@ const SCHEMA_MIGRATIONS = [
     fromVersion: 26,
     toVersion: 27,
     file: "0027-add-job-priority.sql",
+  },
+  {
+    fromVersion: 27,
+    toVersion: 28,
+    file: "0028-add-keyed-debounce-enqueue.sql",
   },
 ] as const;
 

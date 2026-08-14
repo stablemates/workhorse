@@ -33,6 +33,8 @@ single `workhorse.schema_version` row from 23 to 24.
 planner-estimate function, then advances the schema from 25 to 26. Migration
 `0027-add-job-priority.sql` adds strict-priority dispatch and advances the schema from 26 to 27.
 
+`0028-add-keyed-debounce-enqueue.sql` adds keyed debounce and advances the schema from 27 to 28.
+
 `sql/schema/versions/0023.sql` preserves the supported baseline as a test fixture. It is immutable,
 just like a released migration, and does not ship in the package. `test/schema-migrations.test.ts`
 installs that fixture in one database, applies `migrateSchema(database)`, and compares its
