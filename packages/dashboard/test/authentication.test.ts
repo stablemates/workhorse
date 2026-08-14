@@ -15,12 +15,15 @@ const database = {
   query: async () => ({ rows: [{ version: 27 }] }),
 } as unknown as Queryable;
 
-async function login(host: ReturnType<typeof createDashboardHost>): Promise<Response> {
+async function login(
+  host: ReturnType<typeof createDashboardHost>,
+  password = "correct horse",
+): Promise<Response> {
   const response = await host.handle(
     new Request("https://dashboard.test/login", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ username: "operator", password: "correct horse" }),
+      body: new URLSearchParams({ username: "operator", password }),
     }),
   );
   if (!response) throw new Error("Dashboard did not own its login route");
@@ -44,6 +47,26 @@ function mutationClient(
 }
 
 describe("dashboard single-admin authentication", () => {
+  it("requires a bounded absolute cutoff when a previous password is configured", () => {
+    expect(() =>
+      createDashboardHost({
+        database,
+        singleAdmin: { username: "operator", passwordHash, previousPasswordHash: passwordHash },
+      }),
+    ).toThrow("previous password hash and expiry");
+    expect(() =>
+      createDashboardHost({
+        database,
+        singleAdmin: {
+          username: "operator",
+          passwordHash,
+          previousPasswordHash: passwordHash,
+          previousPasswordHashExpiresAt: "tomorrow",
+        },
+      }),
+    ).toThrow("ISO 8601 timestamp");
+  });
+
   it("rejects a host that combines application authorization with built-in credentials", () => {
     expect(() =>
       createDashboardHost({
@@ -161,6 +184,86 @@ describe("dashboard single-admin authentication", () => {
 
       expect(application?.status).toBe(302);
       expect(application?.headers.get("location")).toBe("/login");
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("bounds a previous password and every session created with it by the rotation cutoff", async () => {
+    const previousSalt = Buffer.from("workhorse-previous-auth-salt");
+    const previousPasswordHash = `scrypt-v1$${previousSalt.toString("base64url")}$${scryptSync("previous horse", previousSalt, 32).toString("base64url")}`;
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      const host = createDashboardHost({
+        database,
+        path: "/",
+        singleAdmin: {
+          username: "operator",
+          passwordHash,
+          previousPasswordHash,
+          previousPasswordHashExpiresAt: new Date(1_030_000).toISOString(),
+        },
+      });
+      const previousLogin = await login(host, "previous horse");
+      const previousCookie = (previousLogin.headers.get("set-cookie") ?? "").split(";", 1)[0];
+      const currentLogin = await login(host);
+      const currentCookie = (currentLogin.headers.get("set-cookie") ?? "").split(";", 1)[0];
+
+      expect(previousLogin.headers.get("set-cookie")).toContain("Max-Age=30");
+      now.mockReturnValue(1_030_001);
+
+      expect((await login(host, "previous horse")).status).toBe(401);
+      const previousSession = await host.handle(
+        new Request("https://dashboard.test/tasks", { headers: { cookie: previousCookie } }),
+      );
+      const currentSession = await host.handle(
+        new Request("https://dashboard.test/", { headers: { cookie: currentCookie } }),
+      );
+      expect(previousSession?.headers.get("location")).toBe("/login");
+      expect(currentSession?.headers.get("location")).toBe("/tasks");
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("throttles repeated login failures in a deterministic bounded window", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      const host = createDashboardHost({
+        database,
+        path: "/",
+        singleAdmin: { username: "operator", passwordHash },
+      });
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        expect((await login(host, "wrong password")).status).toBe(401);
+      }
+      const throttled = await login(host);
+      expect(throttled.status).toBe(429);
+      expect(throttled.headers.get("retry-after")).toBe("60");
+
+      now.mockReturnValue(1_060_001);
+      expect((await login(host)).status).toBe(303);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("reserves throttle capacity before concurrent password checks begin", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      const host = createDashboardHost({
+        database,
+        path: "/",
+        singleAdmin: { username: "operator", passwordHash },
+      });
+
+      const responses = await Promise.all(
+        Array.from({ length: 6 }, () => login(host, "wrong password")),
+      );
+      expect(responses.map(({ status }) => status).toSorted()).toEqual([
+        401, 401, 401, 401, 401, 429,
+      ]);
     } finally {
       now.mockRestore();
     }

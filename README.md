@@ -429,6 +429,31 @@ on the server and the browser, while `POST /logout` invalidates a session immedi
 applications keep using their own `authorize` callback instead of the built-in credentials. Put a
 remote authenticated listener behind TLS so browsers accept its `Secure` cookie.
 
+For a rolling credential change, set `WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH` and
+`WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH_EXPIRES_AT` beside the new current hash. The expiry is
+an absolute ISO timestamp. The previous password and its sessions stop working at that cutoff.
+Repeated login failures are throttled process-wide.
+
+The unauthenticated development bypass refuses remotely reachable TCP listeners. Use `--socket`
+for a local Unix socket, or configure authentication for TCP. Behind a TLS-terminating proxy, set
+`WORKHORSE_DASHBOARD_PUBLIC_ORIGIN` to the exact browser-visible HTTPS origin. The server ignores
+forwarded protocol headers.
+
+Build the supported standalone image from the release-shaped package tarballs:
+
+```bash
+docker build -f Dockerfile.dashboard -t workhorse-dashboard .
+docker run --rm -p 3000:3000 \
+  -e DATABASE_URL \
+  -e WORKHORSE_DASHBOARD_USERNAME \
+  -e WORKHORSE_DASHBOARD_PASSWORD_HASH \
+  -e WORKHORSE_DASHBOARD_PUBLIC_ORIGIN=https://workhorse.example \
+  workhorse-dashboard
+```
+
+The container runs read-only as a non-root user. Mount secret files and use the matching `_FILE`
+variables instead of environment values when your container platform supports file-backed secrets.
+
 `init` detects your ORM and framework from `package.json`, generates a worker configuration, and
 prints the dashboard mount for your framework. Nothing about the mount needs to know where the
 workers run: they register themselves in PostgreSQL.

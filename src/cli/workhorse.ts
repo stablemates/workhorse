@@ -13,7 +13,7 @@ import { initializeProject } from "./init.js";
 
 const USAGE = `Usage:
   workhorse init [--dir <path>] [--force]
-  workhorse dashboard [--port <port>] [--host <interface>] [--allow-mutations] [--actor <name>]
+  workhorse dashboard [--port <port>] [--host <interface>] [--socket <path>] [--public-origin <origin>] [--allow-mutations] [--actor <name>]
   workhorse schema install [--database-url <url>]
   workhorse schema status [--database-url <url>]
   workhorse worker --config <compiled-module> [--shutdown-timeout-ms <milliseconds>]
@@ -29,7 +29,8 @@ The database URL is read from --database-url, then WORKHORSE_DATABASE_URL, then 
 
 The dashboard binds 127.0.0.1 and is read-only unless told otherwise. Set
 WORKHORSE_DASHBOARD_USERNAME and WORKHORSE_DASHBOARD_PASSWORD_HASH, or their _FILE variants, to
-enable single-administrator sessions. Remote listeners without credentials warn when used.
+enable single-administrator sessions. Unauthenticated listeners are limited to loopback or a Unix
+socket. A remote authenticated listener requires WORKHORSE_DASHBOARD_PUBLIC_ORIGIN with HTTPS.
 
 The worker configuration must be JavaScript that the current Node.js process can import. Compile
 TypeScript configuration files before invoking the packaged CLI.
@@ -125,13 +126,34 @@ async function dashboardSecret(name: string): Promise<string | undefined> {
 async function resolveDashboardAuthentication(): Promise<DashboardSingleAdminOptions | undefined> {
   const username = await dashboardSecret("WORKHORSE_DASHBOARD_USERNAME");
   const passwordHash = await dashboardSecret("WORKHORSE_DASHBOARD_PASSWORD_HASH");
-  if (username === undefined && passwordHash === undefined) return undefined;
+  const previousPasswordHash = await dashboardSecret("WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH");
+  const previousPasswordHashExpiresAt = await dashboardSecret(
+    "WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH_EXPIRES_AT",
+  );
+  if (
+    username === undefined &&
+    passwordHash === undefined &&
+    previousPasswordHash === undefined &&
+    previousPasswordHashExpiresAt === undefined
+  ) {
+    return undefined;
+  }
   if (username === undefined || passwordHash === undefined) {
     throw new Error(
       "Dashboard authentication requires both WORKHORSE_DASHBOARD_USERNAME and WORKHORSE_DASHBOARD_PASSWORD_HASH",
     );
   }
-  return { username, passwordHash };
+  if (Boolean(previousPasswordHash) !== Boolean(previousPasswordHashExpiresAt)) {
+    throw new Error(
+      "Dashboard credential rotation requires both WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH and WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH_EXPIRES_AT",
+    );
+  }
+  return {
+    username,
+    passwordHash,
+    previousPasswordHash,
+    previousPasswordHashExpiresAt,
+  };
 }
 
 async function runSchemaCommand(args: readonly string[]): Promise<void> {
@@ -186,17 +208,16 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
   const portValue = valueAfter(args, "--port");
   const port = portValue === undefined ? 3000 : parsePositiveInteger(portValue, "--port");
   const hostname = valueAfter(args, "--host") ?? "127.0.0.1";
+  const socketPath = valueAfter(args, "--socket");
+  if (socketPath && (args.includes("--host") || args.includes("--port"))) {
+    throw new Error("--socket cannot be combined with --host or --port");
+  }
+  const publicOrigin =
+    valueAfter(args, "--public-origin") ?? process.env.WORKHORSE_DASHBOARD_PUBLIC_ORIGIN;
   const allowMutations = args.includes("--allow-mutations");
   const actor = valueAfter(args, "--actor") ?? "workhorse-cli";
   const authentication = await resolveDashboardAuthentication();
 
-  // Without configured credentials, anything that widens the local bypass past a read-only
-  // loopback listener is the operator's explicit decision, said out loud.
-  if (!authentication && hostname !== "127.0.0.1" && hostname !== "localhost") {
-    process.stderr.write(
-      `Warning: binding ${hostname} exposes an unauthenticated dashboard. Put it behind your own authenticated proxy.\n`,
-    );
-  }
   if (allowMutations) {
     process.stderr.write(
       `Warning: mutations are enabled and attributed to "${actor}". Attribution is not authorization.\n`,
@@ -207,6 +228,8 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
   const running = await startDashboardServer(pool, {
     port,
     hostname,
+    socketPath,
+    publicOrigin,
     allowMutations,
     actor,
     authentication,

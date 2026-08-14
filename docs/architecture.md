@@ -864,12 +864,27 @@ lifetime. Version 1 uses scrypt with `N=16384`, `r=8`, and `p=1`. The salt conta
 bytes, and the digest contains exactly 32 bytes. Sessions default to 28,800 seconds and accept
 integer lifetimes from 60 through 86,400 seconds.
 
+`previousPasswordHash` and `previousPasswordHashExpiresAt` form one optional rotation pair. The
+expiry is an absolute ISO 8601 timestamp. Before that timestamp, either hash can authenticate. A
+session created with the previous hash expires at the earlier of the configured session lifetime
+and the rotation timestamp. At and after the timestamp, the previous hash and every session it
+created fail authentication. The CLI maps the pair from
+`WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH` and
+`WORKHORSE_DASHBOARD_PREVIOUS_PASSWORD_HASH_EXPIRES_AT`, including their `_FILE` variants.
+
 The server stores only a random 32-byte session token and its expiry. The browser receives the
 token in `__Host-workhorse-dashboard-session` with `Path=/`, `Max-Age`, `Secure`, `HttpOnly`, and
 `SameSite=Strict`. `POST /logout` deletes the server record and expires the cookie. An expired
 server record never authorizes a request, even if a client retains its cookie. Each process retains
 at most 16 sessions. Login removes expired records and evicts the oldest record before exceeding
 that bound.
+
+Single-admin authentication retains at most five login reservations in a rolling 60-second window.
+Each form submission reserves capacity before scrypt begins, so concurrent requests cannot bypass
+the bound. Invalid submissions retain their reservations and return the generic `401` response.
+Further submissions return `429` with `Retry-After` until the oldest reservation leaves the window.
+A successful login clears the reservations. The limit is process-wide because the mode has one
+configured administrator and does not trust caller-supplied forwarding headers as client identity.
 
 The CLI reads `WORKHORSE_DASHBOARD_USERNAME` and `WORKHORSE_DASHBOARD_PASSWORD_HASH`. Each value can
 instead come from its `_FILE` variant, with one trailing line ending removed. A direct value and its
@@ -886,6 +901,26 @@ matches the request URL origin. The single-admin session contributes its configu
 `DashboardPrincipal` with an `actor`; a compatible boolean `true` result uses the server-owned
 `auditActor`, which defaults to `dashboard`. `auditWithOccurredAt` replaces the parsed browser
 `audit.actor` with that authenticated actor before any operator controller runs.
+
+`DashboardCommandOptions.socketPath` selects a Unix socket instead of `hostname` and `port`. The
+unauthenticated development bypass accepts only an address in `127.0.0.0/8`, `::1`, or a Unix
+socket. A remotely reachable TCP listener without authentication fails before `listen`.
+An unauthenticated loopback or Unix-socket listener also rejects a non-loopback `publicOrigin`, so
+an explicit proxy configuration cannot publish the development bypass.
+An authenticated remote TCP listener also requires `publicOrigin`; its protocol must be HTTPS.
+`dashboardNodeMiddleware` ignores `Forwarded` and `X-Forwarded-*` when it constructs the Fetch
+request URL. If `publicOrigin` is configured, that canonical HTTP or HTTPS origin supplies the
+scheme and authority instead. This keeps Secure-cookie and same-origin mutation policy independent
+of untrusted proxy headers. The CLI maps `--socket`, `--public-origin`, and
+`WORKHORSE_DASHBOARD_PUBLIC_ORIGIN` to those options.
+
+`Dockerfile.dashboard` builds the core, dashboard contract, and dashboard package tarballs, then
+installs those release-shaped artifacts with production dependencies into a Node 24 Alpine image.
+The image runs as the `node` user, exposes port 3000, binds `0.0.0.0`, and starts the read-only
+dashboard command. Its startup contract requires `DATABASE_URL` or `WORKHORSE_DATABASE_URL`, both
+single-admin credential values, and an HTTPS `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN`. The packed test
+asserts that the image consumes the generated tarball names and starts the installed standalone
+CLI through the same remote-listener contract.
 
 `src/cli/dashboard.ts` imports only the shared contract. It loads the optional
 `@workhorse/dashboard/standalone` entry and verifies that the module exports
