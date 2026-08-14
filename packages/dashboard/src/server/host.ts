@@ -2,9 +2,11 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { SeverityNumber, logs } from "@opentelemetry/api-logs";
 import { RPCHandler } from "@orpc/server/fetch";
+import type { DashboardSingleAdminOptions } from "@workhorse/dashboard-contract";
 import { assertSchemaCompatible, Queue, type Queryable } from "@workhorse/core";
 import type { MaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
+import { createSingleAdminAuthentication } from "./authentication.js";
 import { renderDashboardHtml } from "./html.js";
 import { dashboardRouter } from "./router.js";
 import { dashboardDatabase } from "./sql.js";
@@ -56,7 +58,9 @@ export interface DashboardHostOptions {
     transformHtml(url: string, html: string): Promise<string>;
   };
   /** Must explicitly authorize every dashboard, RPC, and asset request. */
-  authorize(request: Request): boolean | Response | Promise<boolean | Response>;
+  authorize?: (request: Request) => boolean | Response | Promise<boolean | Response>;
+  /** Standalone single-administrator credentials. Mutually exclusive with `authorize`. */
+  singleAdmin?: DashboardSingleAdminOptions;
 }
 
 export interface DashboardHost {
@@ -134,7 +138,13 @@ function logRpcRequest(procedure: string, durationMs: number, statusCode: number
  * into `handle`, and fall through to their own routing when it resolves to `null`.
  */
 export function createDashboardHost(options: DashboardHostOptions): DashboardHost {
+  if (Boolean(options.authorize) === Boolean(options.singleAdmin)) {
+    throw new TypeError("Configure exactly one dashboard authorization mode");
+  }
   const path = normalizeDashboardPath(options.path ?? "/workhorse");
+  const singleAdmin = options.singleAdmin
+    ? createSingleAdminAuthentication(options.singleAdmin)
+    : undefined;
   const assets = dashboardAssetsDirectory();
   const rpc = new RPCHandler(dashboardRouter);
   const database = dashboardDatabase(options.database);
@@ -192,7 +202,16 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       const pathname = url.pathname;
       if (!owns(pathname)) return null;
 
-      const authorization = await options.authorize(request);
+      const authenticationResponse = await singleAdmin?.handle(
+        request,
+        `${path}/login`,
+        `${path}/logout`,
+      );
+      if (authenticationResponse) return authenticationResponse;
+
+      const authorization = options.authorize
+        ? await options.authorize(request)
+        : (singleAdmin?.authorize(request, path) ?? false);
       if (authorization instanceof Response) return authorization;
       if (!authorization) {
         return Response.json({ error: "Forbidden" }, { status: 403 });

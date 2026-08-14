@@ -214,6 +214,10 @@ const standaloneOptions: DashboardCommandOptions = {
   hostname: "127.0.0.1",
   allowMutations: false,
   actor: "packed-test",
+  authentication: {
+    username: "operator",
+    passwordHash: "scrypt-v1$c2FsdC1sb25nLWVub3VnaA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  },
 };
 void nodeMiddleware;
 void standaloneStart;
@@ -248,6 +252,68 @@ datasource db {
     path.join(consumer, "integration.mjs"),
     await readFile(path.join(repository, "test", "fixtures", "packed-consumer.mjs"), "utf8"),
   );
+  await writeFile(
+    path.join(consumer, "dashboard-auth.mjs"),
+    `import assert from "node:assert/strict";
+import { scryptSync } from "node:crypto";
+import { createDashboardHost } from "@workhorse/dashboard/server";
+
+const salt = Buffer.from("packed-dashboard-auth-salt");
+const passwordHash = \`scrypt-v1$\${salt.toString("base64url")}$\${scryptSync("correct horse", salt, 32).toString("base64url")}\`;
+const database = { query: async () => ({ rows: [{ version: 26 }] }) };
+const host = createDashboardHost({
+  database,
+  path: "/",
+  singleAdmin: { username: "operator", passwordHash, sessionTtlSeconds: 60 },
+});
+
+const protectedResponse = await host.handle(new Request("https://dashboard.test/tasks"));
+assert.equal(protectedResponse.status, 302);
+assert.equal(protectedResponse.headers.get("location"), "/login");
+const protectedAsset = await host.handle(new Request("https://dashboard.test/assets/index.js"));
+assert.equal(protectedAsset.status, 401);
+const protectedRpc = await host.handle(new Request("https://dashboard.test/rpc/dashboard/meta"));
+assert.equal(protectedRpc.status, 401);
+
+const realNow = Date.now;
+Date.now = () => 1_000_000;
+const login = await host.handle(new Request("https://dashboard.test/login", {
+  method: "POST",
+  headers: { "content-type": "application/x-www-form-urlencoded" },
+  body: new URLSearchParams({ username: "operator", password: "correct horse" }),
+}));
+assert.equal(login.status, 303);
+const setCookie = login.headers.get("set-cookie");
+assert.match(setCookie, /HttpOnly; Secure; SameSite=Strict$/);
+const cookie = setCookie.split(";", 1)[0];
+const authenticated = await host.handle(new Request("https://dashboard.test/", {
+  headers: { cookie },
+}));
+assert.equal(authenticated.status, 302);
+assert.equal(authenticated.headers.get("location"), "/tasks");
+
+Date.now = () => 1_060_001;
+const expired = await host.handle(new Request("https://dashboard.test/tasks", { headers: { cookie } }));
+assert.equal(expired.status, 302);
+
+Date.now = realNow;
+const secondLogin = await host.handle(new Request("https://dashboard.test/login", {
+  method: "POST",
+  headers: { "content-type": "application/x-www-form-urlencoded" },
+  body: new URLSearchParams({ username: "operator", password: "correct horse" }),
+}));
+const secondCookie = secondLogin.headers.get("set-cookie").split(";", 1)[0];
+const logout = await host.handle(new Request("https://dashboard.test/logout", {
+  method: "POST",
+  headers: { cookie: secondCookie },
+}));
+assert.equal(logout.status, 303);
+const loggedOut = await host.handle(new Request("https://dashboard.test/tasks", {
+  headers: { cookie: secondCookie },
+}));
+assert.equal(loggedOut.status, 302);
+`,
+  );
 
   await run("pnpm", ["install", "--ignore-scripts", "--frozen-lockfile=false"], consumer);
   await run("pnpm", ["exec", "prisma", "generate", "--schema", "prisma/schema.prisma"], consumer);
@@ -261,6 +327,7 @@ datasource db {
     throw new Error("The packed Workhorse CLI did not expose worker command help");
   }
   await run("node", ["integration.mjs"], consumer);
+  await run("node", ["dashboard-auth.mjs"], consumer);
   process.stdout.write("Packed core, ORM providers, and dashboard consumer tests passed.\n");
 } finally {
   await rm(scratch, { recursive: true, force: true });

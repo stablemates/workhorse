@@ -1,3 +1,12 @@
+/** Optional single-administrator authentication for the standalone listener. */
+export interface DashboardSingleAdminOptions {
+  username: string;
+  /** Versioned password hash; plaintext passwords are never accepted as server configuration. */
+  passwordHash: string;
+  /** Session lifetime in seconds. Defaults to eight hours. */
+  sessionTtlSeconds?: number;
+}
+
 /** Options accepted by the standalone dashboard process owned by the Workhorse CLI. */
 export interface DashboardCommandOptions {
   port: number;
@@ -7,6 +16,8 @@ export interface DashboardCommandOptions {
   allowMutations: boolean;
   /** Attribution recorded on mutations. Never authorization. */
   actor: string;
+  /** Omit only for an explicit local development bypass. */
+  authentication?: DashboardSingleAdminOptions;
 }
 
 /** A standalone dashboard listener whose database connection remains owned by its caller. */
