@@ -380,7 +380,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
   deadline_at timestamptz CHECK (deadline_at IS NULL OR isfinite(deadline_at)),
   execution_timeout_ms bigint CHECK (execution_timeout_ms BETWEEN 1 AND 31536000000),
   CHECK (octet_length(payload::text) <= payload_max_bytes),
-  created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  priority integer NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 100)
 );
 -- GIN indexes array elements so overlap and containment tag filters avoid scanning every job row.
 CREATE INDEX IF NOT EXISTS job_tags_gin_idx ON workhorse.job USING gin (tags);
@@ -503,6 +504,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
     previous_retry_delay_ms BETWEEN 0 AND 31536000000
   ),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  priority integer NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 100),
   CHECK (wait_name IS NULL OR (wait_name <> '' AND char_length(wait_name) <= 200)),
   CHECK (
     (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
@@ -527,7 +529,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
   )
 ) WITH (fillfactor = 70);
 CREATE INDEX IF NOT EXISTS job_runtime_ready_idx
-  ON workhorse.job_runtime (queue_name, sequence, job_id) WHERE state = 'ready';
+  ON workhorse.job_runtime (queue_name, priority DESC, sequence, job_id) WHERE state = 'ready';
 CREATE INDEX IF NOT EXISTS job_runtime_ready_age_idx
   ON workhorse.job_runtime (ready_at, job_id) WHERE state = 'ready';
 CREATE INDEX IF NOT EXISTS job_runtime_scheduled_idx
@@ -999,6 +1001,7 @@ CREATE TABLE IF NOT EXISTS workhorse.schedule_definition (
   enabled boolean NOT NULL DEFAULT true,
   revision bigint NOT NULL DEFAULT 1 CHECK (revision > 0),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  priority integer NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 100),
   PRIMARY KEY (namespace, schedule_name)
 );
 -- One durable row per supplied occurrence second prevents workers from enqueueing the same cron
@@ -1664,6 +1667,8 @@ BEGIN
         OR COALESCE(definition->>'queue', '') = ''
         OR COALESCE(definition->>'type', '') = ''
         OR COALESCE((definition->>'maxAttempts')::integer, 25) NOT BETWEEN 1 AND 100
+        OR COALESCE((definition->>'priority')::numeric, 0) <> trunc(COALESCE((definition->>'priority')::numeric, 0))
+        OR COALESCE((definition->>'priority')::numeric, 0) NOT BETWEEN 0 AND 100
         OR (definition->>'concurrencyKey' IS NOT NULL AND (
           definition->>'concurrencyKey' = '' OR octet_length(definition->>'concurrencyKey') > 256
         ))
@@ -1683,12 +1688,13 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:schedules:' || p_namespace, 0));
 
   INSERT INTO workhorse.schedule_definition AS existing(
-    namespace, schedule_name, cron_expression, queue_name, job_type, concurrency_key, payload,
+    namespace, schedule_name, cron_expression, queue_name, job_type, concurrency_key, priority, payload,
     contract_version, payload_max_bytes, result_max_bytes, payload_redact_keys, result_redact_keys,
     max_attempts, retry_policy, enabled
   )
   SELECT p_namespace, definition->>'name', definition->>'schedule', definition->>'queue',
          definition->>'type', definition->>'concurrencyKey',
+         COALESCE((definition->>'priority')::integer, 0),
          COALESCE(definition->'payload', 'null'::jsonb),
          definition->>'contractVersion',
          COALESCE((definition->>'payloadMaxBytes')::integer, 1048576),
@@ -1706,13 +1712,13 @@ BEGIN
   ON CONFLICT (namespace, schedule_name) DO UPDATE
     SET revision = existing.revision + CASE WHEN ROW(
           existing.cron_expression, existing.queue_name, existing.job_type,
-          existing.concurrency_key, existing.payload,
+          existing.concurrency_key, existing.priority, existing.payload,
           existing.contract_version, existing.payload_max_bytes, existing.result_max_bytes,
           existing.payload_redact_keys, existing.result_redact_keys,
           existing.max_attempts, existing.retry_policy, existing.enabled
         ) IS DISTINCT FROM ROW(
           EXCLUDED.cron_expression, EXCLUDED.queue_name, EXCLUDED.job_type,
-          EXCLUDED.concurrency_key, EXCLUDED.payload,
+          EXCLUDED.concurrency_key, EXCLUDED.priority, EXCLUDED.payload,
           EXCLUDED.contract_version, EXCLUDED.payload_max_bytes, EXCLUDED.result_max_bytes,
           EXCLUDED.payload_redact_keys, EXCLUDED.result_redact_keys,
           EXCLUDED.max_attempts, EXCLUDED.retry_policy, EXCLUDED.enabled
@@ -1721,6 +1727,7 @@ BEGIN
         queue_name = EXCLUDED.queue_name,
         job_type = EXCLUDED.job_type,
         concurrency_key = EXCLUDED.concurrency_key,
+        priority = EXCLUDED.priority,
         payload = EXCLUDED.payload,
         contract_version = EXCLUDED.contract_version,
         payload_max_bytes = EXCLUDED.payload_max_bytes,
@@ -1796,7 +1803,8 @@ BEGIN
     v_definition.result_max_bytes,
     v_definition.payload_redact_keys,
     v_definition.result_redact_keys,
-    v_definition.concurrency_key
+    v_definition.concurrency_key,
+    v_definition.priority
   );
   UPDATE workhorse.schedule_occurrence occurrence
      SET job_id = v_job_id
@@ -2190,6 +2198,7 @@ DECLARE
   v_queue_name text;
   v_job_type text;
   v_concurrency_key text;
+  v_priority numeric;
   v_payload jsonb;
   v_contract_version text;
   v_payload_max_bytes numeric;
@@ -2282,6 +2291,7 @@ BEGIN
     v_queue_name := v_request->>'queue';
     v_job_type := v_request->>'type';
     v_concurrency_key := v_request->>'concurrencyKey';
+    v_priority := COALESCE((v_request->>'priority')::numeric, 0);
     v_payload := COALESCE(v_request->'payload', 'null'::jsonb);
     v_contract_version := v_request->>'contractVersion';
     v_payload_max_bytes := COALESCE((v_request->>'payloadMaxBytes')::numeric, 1048576);
@@ -2340,6 +2350,9 @@ BEGIN
       v_concurrency_key = '' OR octet_length(v_concurrency_key) > 256
     ) THEN
       RAISE EXCEPTION 'concurrencyKey must contain between 1 and 256 UTF-8 bytes';
+    END IF;
+    IF v_priority <> trunc(v_priority) OR v_priority NOT BETWEEN 0 AND 100 THEN
+      RAISE EXCEPTION 'priority must be an integer between 0 and 100';
     END IF;
     IF COALESCE(v_queue_name, '') = '' OR COALESCE(v_job_type, '') = ''
        OR jsonb_typeof(COALESCE(v_request->'tags', '[]'::jsonb)) <> 'array'
@@ -2426,6 +2439,7 @@ BEGIN
         'queue', v_queue_name,
         'type', v_job_type,
         'payload', v_payload,
+        'priority', v_priority,
         'concurrencyKey', to_jsonb(v_concurrency_key),
         'contractVersion', to_jsonb(v_contract_version),
         'payloadMaxBytes', v_payload_max_bytes,
@@ -2496,22 +2510,22 @@ BEGIN
 
     IF v_is_new THEN
       INSERT INTO workhorse.job(
-        id, queue_name, job_type, concurrency_key, payload, contract_version,
+        id, queue_name, job_type, concurrency_key, priority, payload, contract_version,
         payload_max_bytes, result_max_bytes,
         payload_redact_keys, result_redact_keys, trace_context, tags, max_attempts, retry_policy,
         deadline_at, execution_timeout_ms
       ) VALUES (
-        job_id, v_queue_name, v_job_type, v_concurrency_key, v_payload, v_contract_version,
+        job_id, v_queue_name, v_job_type, v_concurrency_key, v_priority::integer, v_payload, v_contract_version,
         v_payload_max_bytes::integer, v_result_max_bytes::integer,
         v_payload_redact_keys, v_result_redact_keys, v_trace_context, v_tags,
         v_max_attempts, v_retry_policy,
         v_deadline_at, v_execution_timeout_ms::bigint
       );
       INSERT INTO workhorse.job_runtime(
-        job_id, queue_name, concurrency_key, state, current_attempt, run_at, ready_at, sequence,
+        job_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
         deadline_at
       ) VALUES (
-        job_id, v_queue_name, v_concurrency_key, v_state, 1, v_run_at,
+        job_id, v_queue_name, v_concurrency_key, v_priority::integer, v_state, 1, v_run_at,
         CASE WHEN v_state = 'ready' THEN v_now END,
         CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
         v_deadline_at
@@ -2522,6 +2536,7 @@ BEGIN
           'enqueued',
           jsonb_build_object(
             'state', v_state,
+            'priority', v_priority,
             'run_at', v_run_at,
             'deadline_at', v_deadline_at,
             'execution_timeout_ms', v_execution_timeout_ms
@@ -2568,7 +2583,8 @@ CREATE OR REPLACE FUNCTION workhorse.enqueue_v1(
   p_result_max_bytes integer DEFAULT 1048576,
   p_payload_redact_keys text[] DEFAULT '{}',
   p_result_redact_keys text[] DEFAULT '{}',
-  p_concurrency_key text DEFAULT NULL
+  p_concurrency_key text DEFAULT NULL,
+  p_priority integer DEFAULT 0
 ) RETURNS uuid
 LANGUAGE sql
 AS $$
@@ -2579,17 +2595,18 @@ AS $$
     'payloadMaxBytes', p_payload_max_bytes, 'resultMaxBytes', p_result_max_bytes,
     'sensitivePayloadKeys', to_jsonb(COALESCE(p_payload_redact_keys, '{}')),
     'sensitiveResultKeys', to_jsonb(COALESCE(p_result_redact_keys, '{}')),
-    'concurrencyKey', to_jsonb(p_concurrency_key)
+    'concurrencyKey', to_jsonb(p_concurrency_key), 'priority', p_priority
   ))) ORDER BY ordinal LIMIT 1;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.list_dead_letters_v1(
+CREATE OR REPLACE FUNCTION workhorse.list_dead_letters_v2(
   p_filter jsonb DEFAULT '{}'::jsonb,
   p_limit integer DEFAULT 100,
   p_cursor_finished_at timestamptz DEFAULT NULL,
   p_cursor_job_id uuid DEFAULT NULL
 ) RETURNS TABLE (
-  job_id uuid, queue_name text, job_type text, concurrency_key text, payload jsonb, tags text[],
+  job_id uuid, queue_name text, job_type text, concurrency_key text, priority integer,
+  payload jsonb, tags text[],
   current_attempt integer, max_attempts integer, retry_policy jsonb,
   deadline_at timestamptz, execution_timeout_ms bigint, error jsonb,
   finished_at timestamptz, redrive_count integer, has_more boolean,
@@ -2658,7 +2675,7 @@ BEGIN
 
   RETURN QUERY
   WITH candidates AS MATERIALIZED (
-    SELECT job.id, job.queue_name, job.job_type, job.concurrency_key,
+    SELECT job.id, job.queue_name, job.job_type, job.concurrency_key, job.priority,
            workhorse.redact_top_level_keys_v1(job.payload, job.payload_redact_keys) AS payload,
            job.tags,
            outcome.current_attempt, job.max_attempts, job.retry_policy,
@@ -2681,7 +2698,7 @@ BEGIN
      LIMIT p_limit + 1
   )
   SELECT candidate.id, candidate.queue_name, candidate.job_type, candidate.concurrency_key,
-         candidate.payload, candidate.tags,
+         candidate.priority, candidate.payload, candidate.tags,
          candidate.current_attempt, candidate.max_attempts, candidate.retry_policy,
          candidate.deadline_at, candidate.execution_timeout_ms, candidate.error,
          candidate.finished_at, candidate.redrive_count,
@@ -2793,22 +2810,22 @@ BEGIN
 
   target_job_id := gen_random_uuid();
   INSERT INTO workhorse.job(
-    id, queue_name, job_type, concurrency_key, payload, contract_version,
+    id, queue_name, job_type, concurrency_key, priority, payload, contract_version,
     payload_max_bytes, result_max_bytes,
     payload_redact_keys, result_redact_keys, tags, max_attempts, retry_policy,
     deadline_at, execution_timeout_ms
   ) VALUES (
-    target_job_id, v_job.queue_name, v_job.job_type, v_job.concurrency_key,
+    target_job_id, v_job.queue_name, v_job.job_type, v_job.concurrency_key, v_job.priority,
     v_job.payload, v_job.contract_version,
     v_job.payload_max_bytes, v_job.result_max_bytes,
     v_job.payload_redact_keys, v_job.result_redact_keys, v_job.tags,
     v_job.max_attempts, v_job.retry_policy, NULL, v_job.execution_timeout_ms
   );
   INSERT INTO workhorse.job_runtime(
-    job_id, queue_name, concurrency_key, state, current_attempt, run_at, ready_at, sequence,
+    job_id, queue_name, concurrency_key, priority, state, current_attempt, run_at, ready_at, sequence,
     deadline_at
   ) VALUES (
-    target_job_id, v_job.queue_name, v_job.concurrency_key, 'ready', 1, v_now, v_now,
+    target_job_id, v_job.queue_name, v_job.concurrency_key, v_job.priority, 'ready', 1, v_now, v_now,
     nextval('workhorse.ready_sequence_seq'), NULL
   );
   INSERT INTO workhorse.job_redrive(
@@ -2837,7 +2854,7 @@ BEGIN
       'request_id_digest', v_request_id_digest,
       'request_id_length', v_request_id_length,
       'requested_by', p_requested_by, 'reason', p_reason, 'requested_at', v_now,
-      'state', 'ready'
+      'state', 'ready', 'priority', v_job.priority
     ));
   PERFORM pg_notify('workhorse_jobs', v_job.queue_name);
   RETURN QUERY VALUES (
@@ -3342,14 +3359,14 @@ $$;
 
 -- Policy-aware claim. Governed queues serialize the short admission transaction through policy
 -- rows, count only unexpired active leases, refill durable rate tokens from PostgreSQL time, and
--- inspect at most the oldest 100 ready rows. Concurrency remains a dispatch budget rather than a
+-- inspect at most the highest-priority 100 ready rows. Concurrency remains a dispatch budget rather than a
 -- guarantee that expired handler code has stopped executing.
-CREATE OR REPLACE FUNCTION workhorse.claim_v2(
+CREATE OR REPLACE FUNCTION workhorse.claim_v3(
   p_queue_name text,
   p_worker_id text,
   p_lease_ms integer DEFAULT 30000
 ) RETURNS TABLE (
-  job_id uuid, job_type text, payload jsonb, contract_version text, result_max_bytes integer,
+  job_id uuid, job_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer,
   redact_error_details boolean,
   trace_context jsonb,
   attempt integer, max_attempts integer,
@@ -3429,7 +3446,7 @@ BEGIN
 
   v_fence := nextval('workhorse.fence_token_seq');
   WITH ready_window AS MATERIALIZED (
-    SELECT runtime.job_id, runtime.concurrency_key, runtime.sequence
+    SELECT runtime.job_id, runtime.concurrency_key, runtime.priority, runtime.sequence
       FROM workhorse.job_runtime runtime
       JOIN workhorse.job job ON job.id = runtime.job_id
      WHERE runtime.state = 'ready' AND runtime.queue_name = p_queue_name
@@ -3440,7 +3457,7 @@ BEGIN
          SELECT 1 FROM workhorse.queue_control control
           WHERE control.queue_name = p_queue_name AND control.paused
        )
-     ORDER BY runtime.sequence, runtime.job_id
+     ORDER BY runtime.priority DESC, runtime.sequence, runtime.job_id
      FOR UPDATE OF runtime SKIP LOCKED
      LIMIT CASE
        WHEN v_policy.queue_name IS NULL AND v_rate_policy.per_key_limit IS NULL THEN 1
@@ -3466,7 +3483,7 @@ BEGIN
              AND active.expires_at > v_now
         ) < v_policy.max_active_per_key
      ) AND keyed_rate.allowed
-     ORDER BY ready.sequence, ready.job_id
+     ORDER BY ready.priority DESC, ready.sequence, ready.job_id
      LIMIT 1
   )
   UPDATE workhorse.job_runtime runtime
@@ -3499,7 +3516,7 @@ BEGIN
     VALUES (v_runtime.job_id, v_runtime.current_attempt, 'claimed',
       jsonb_build_object('worker_id', p_worker_id, 'fence_token', v_fence::text, 'expires_at', v_expires));
   RETURN QUERY
-    SELECT job.id, job.job_type, job.payload, job.contract_version, job.result_max_bytes,
+    SELECT job.id, job.job_type, job.priority, job.payload, job.contract_version, job.result_max_bytes,
            cardinality(job.payload_redact_keys) > 0 OR cardinality(job.result_redact_keys) > 0,
            job.trace_context,
            v_runtime.current_attempt, job.max_attempts,
@@ -5786,7 +5803,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.list_jobs_v1(
+CREATE OR REPLACE FUNCTION workhorse.list_jobs_v2(
   p_filter jsonb,
   p_limit integer,
   p_cursor_created_at timestamptz,
@@ -5798,6 +5815,7 @@ CREATE OR REPLACE FUNCTION workhorse.list_jobs_v1(
   queue_name text,
   job_type text,
   concurrency_key text,
+  priority integer,
   tags text[],
   state text,
   current_attempt integer,
@@ -6000,6 +6018,7 @@ BEGIN
     page.queue_name,
     page.job_type,
     job.concurrency_key,
+    job.priority,
     job.tags,
     page.state,
     page.current_attempt,
@@ -6040,7 +6059,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.list_job_timeline_v1(
+CREATE OR REPLACE FUNCTION workhorse.list_job_timeline_v2(
   p_job_id uuid,
   p_limit integer,
   p_cursor_occurred_at timestamptz,
@@ -6050,6 +6069,7 @@ CREATE OR REPLACE FUNCTION workhorse.list_job_timeline_v1(
   kind text,
   record_id bigint,
   job_id uuid,
+  priority integer,
   occurred_at timestamptz,
   attempt integer,
   event_type text,
@@ -6149,6 +6169,7 @@ BEGIN
     page.kind,
     page.record_id,
     page.job_id,
+    job.priority,
     page.occurred_at,
     page.attempt,
     page.event_type,
@@ -6163,6 +6184,7 @@ BEGIN
     page_meta.has_more,
     page.occurred_at
   FROM page
+  JOIN workhorse.job job ON job.id = page.job_id
   CROSS JOIN page_meta
   ORDER BY page.occurred_at DESC, page.kind_rank DESC, page.record_id DESC;
 END;
@@ -6194,7 +6216,7 @@ CREATE OR REPLACE VIEW workhorse.dashboard_job_runtime_v1 AS
 CREATE OR REPLACE VIEW workhorse.dashboard_job_v1 AS
   SELECT id, queue_name, job_type, concurrency_key, payload, payload_redact_keys,
          result_redact_keys, tags, max_attempts, retry_policy, deadline_at, execution_timeout_ms,
-         created_at FROM workhorse.job;
+         created_at, priority FROM workhorse.job;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_wait_v1 AS
   SELECT job_id, wait_name, mode, duration_ms, requested_wake_at, wake_at, attempt, fence_token,
          worker_id, created_at FROM workhorse.job_wait;
@@ -6213,7 +6235,7 @@ CREATE OR REPLACE VIEW workhorse.dashboard_retention_policy_v1 AS
     FROM workhorse.retention_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_definition_v1 AS
   SELECT namespace, schedule_name, cron_expression, queue_name, job_type, enabled, revision,
-         updated_at FROM workhorse.schedule_definition;
+         updated_at, priority FROM workhorse.schedule_definition;
 CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
   SELECT namespace, schedule_name, occurrence_at, fired_at FROM workhorse.schedule_occurrence;
 CREATE OR REPLACE VIEW workhorse.dashboard_worker_registry_v1 AS
@@ -6234,9 +6256,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (23, 'forward migration baseline'),
   (24, 'add schema migration ledger'),
   (25, 'make schedule occurrence replay a no-op'),
-  (26, 'add versioned dashboard read surface')
+  (26, 'add versioned dashboard read surface'),
+  (27, 'add strict-priority job dispatch')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (26) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (27) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

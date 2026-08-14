@@ -30,7 +30,8 @@ single `workhorse.schema_version` row from 23 to 24.
 
 `0025-make-schedule-occurrence-replay-a-no-op.sql` advances the schema from 24 to 25. The next step,
 `0026-add-dashboard-read-surface.sql`, adds the core-owned versioned dashboard views and
-planner-estimate function, then advances the schema from 25 to 26.
+planner-estimate function, then advances the schema from 25 to 26. Migration
+`0027-add-job-priority.sql` adds strict-priority dispatch and advances the schema from 26 to 27.
 
 `sql/schema/versions/0023.sql` preserves the supported baseline as a test fixture. It is immutable,
 just like a released migration, and does not ship in the package. `test/schema-migrations.test.ts`

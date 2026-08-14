@@ -50,6 +50,7 @@ type DeadLetterRow = {
   queue_name: string;
   job_type: string;
   concurrency_key: string | null;
+  priority: number;
   payload: Json;
   tags: string[];
   current_attempt: number;
@@ -69,6 +70,7 @@ type JobListRow = {
   queue_name: string;
   job_type: string;
   concurrency_key: string | null;
+  priority: number;
   tags: string[];
   state: JobState;
   current_attempt: number;
@@ -93,6 +95,7 @@ type JobListRow = {
 type JobTimelineRow = {
   kind: JobTimelineEntry["kind"];
   record_id: string;
+  priority: number;
   attempt: number | null;
   event_type: string | null;
   details: Json | null;
@@ -264,6 +267,7 @@ function deadLetter(row: DeadLetterRow): DeadLetter {
     queue: row.queue_name,
     type: row.job_type,
     concurrencyKey: row.concurrency_key,
+    priority: row.priority,
     payload: row.payload,
     tags: row.tags,
     currentAttempt: row.current_attempt,
@@ -297,6 +301,7 @@ function jobListItem(row: JobListRow): JobListItem {
     queue: row.queue_name,
     type: row.job_type,
     concurrencyKey: row.concurrency_key,
+    priority: row.priority,
     tags: row.tags,
     state: row.state,
     currentAttempt: row.current_attempt,
@@ -319,12 +324,13 @@ function jobListItem(row: JobListRow): JobListItem {
 function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
   const base = {
     recordId: row.record_id,
+    priority: row.priority,
     attempt: row.attempt,
     occurredAt: rowTimestamp(row.occurred_at, "occurred_at"),
   };
   if (row.kind === "event") {
     if (row.event_type === null || row.details === null) {
-      throw new Error("list_job_timeline_v1 returned an incomplete event row");
+      throw new Error("list_job_timeline_v2 returned an incomplete event row");
     }
     return { ...base, kind: "event", eventType: row.event_type, details: row.details };
   }
@@ -337,7 +343,7 @@ function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
     row.claimed_at === null ||
     row.finished_at === null
   ) {
-    throw new Error("list_job_timeline_v1 returned an incomplete attempt row");
+    throw new Error("list_job_timeline_v2 returned an incomplete attempt row");
   }
   return {
     ...base,
@@ -550,12 +556,12 @@ export class OperatorReadsModule extends QueueModule {
   async listJobs(query: JobListQuery = {}): Promise<JobListPage> {
     const { limit, cursor, payloadProjection } = this.validateJobListQuery(query);
     const result = await this.context.database.query<JobListRow>(
-      `SELECT job_id, queue_name, job_type, concurrency_key, tags, state, current_attempt, max_attempts,
+      `SELECT job_id, queue_name, job_type, concurrency_key, priority, tags, state, current_attempt, max_attempts,
               retry_policy, deadline_at, execution_timeout_ms::text AS execution_timeout_ms,
               run_at, cancel_requested_at, cancel_requested_by, cancel_reason, created_at,
               updated_at, payload, payload_status, payload_bytes, has_more,
               cursor_created_at::text AS cursor_created_at, cursor_signature
-         FROM workhorse.list_jobs_v1(
+         FROM workhorse.list_jobs_v2(
            $1::jsonb, $2::integer, $3::timestamptz, $4::uuid, $5::text, $6::jsonb
          )`,
       [
@@ -586,11 +592,11 @@ export class OperatorReadsModule extends QueueModule {
     const { limit, cursor } = this.validateJobTimelineQuery(jobId, query.limit, query.cursor);
 
     const result = await this.context.database.query<JobTimelineRow>(
-      `SELECT kind, record_id::text AS record_id, attempt, event_type, details,
+      `SELECT kind, record_id::text AS record_id, priority, attempt, event_type, details,
               fence_token::text AS fence_token, worker_id, outcome, started_at, claimed_at,
               finished_at, error, occurred_at, has_more,
               cursor_occurred_at::text AS cursor_occurred_at
-         FROM workhorse.list_job_timeline_v1(
+         FROM workhorse.list_job_timeline_v2(
            $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::bigint
          )`,
       [jobId, limit, cursor?.occurredAt ?? null, cursor?.kind ?? null, cursor?.recordId ?? null],
@@ -619,7 +625,7 @@ export class OperatorReadsModule extends QueueModule {
       );
     }
     const result = await this.context.database.query<DeadLetterRow>(
-      "SELECT * FROM workhorse.list_dead_letters_v1($1::jsonb, $2::integer, $3::timestamptz, $4::uuid)",
+      "SELECT * FROM workhorse.list_dead_letters_v2($1::jsonb, $2::integer, $3::timestamptz, $4::uuid)",
       [
         JSON.stringify(deadLetterFilter(query)),
         limit,
@@ -743,6 +749,7 @@ export class OperatorReadsModule extends QueueModule {
       queue_name: string;
       job_type: string;
       concurrency_key: string | null;
+      priority: number;
       payload: Json;
       contract_version: string | null;
       tags: string[];
@@ -769,7 +776,7 @@ export class OperatorReadsModule extends QueueModule {
       created_at: Date;
       updated_at: Date;
     }>(
-      `SELECT j.id, j.queue_name, j.job_type, j.concurrency_key,
+      `SELECT j.id, j.queue_name, j.job_type, j.concurrency_key, j.priority,
               workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
               j.contract_version, j.tags, j.retry_policy,
               j.deadline_at, j.execution_timeout_ms::text,
@@ -799,6 +806,7 @@ export class OperatorReadsModule extends QueueModule {
       queue: row.queue_name,
       type: row.job_type,
       concurrencyKey: row.concurrency_key,
+      priority: row.priority,
       payload: row.payload,
       contractVersion: row.contract_version,
       tags: row.tags,

@@ -260,6 +260,7 @@ describe("enqueue contracts", () => {
         schedule: "0 * * * *",
         job: {
           type: "contract.scheduled",
+          priority: 75,
           payload: { kind: "scheduled", token: "schedule-secret" },
         },
       },
@@ -275,9 +276,11 @@ describe("enqueue contracts", () => {
     await expect(contractedQueue.claim("scheduled-contract-worker")).resolves.toMatchObject({
       id,
       contractVersion: "schedule-current",
+      priority: 75,
       payload: { kind: "scheduled", token: "schedule-secret" },
     });
     await expect(contractedQueue.getJob(id!)).resolves.toMatchObject({
+      priority: 75,
       payload: { kind: "scheduled" },
     });
     expect((await contractedQueue.getJob(id!))?.payload).not.toHaveProperty("token");
@@ -291,7 +294,7 @@ describe("enqueue contracts", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v26 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v27 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -324,6 +327,49 @@ describe("enqueue contracts", () => {
       "SELECT job_id, event_type FROM workhorse.job_event WHERE event_type = 'enqueued' ORDER BY event_id",
     );
     expect(events.rows).toEqual(ids.map((jobId) => ({ job_id: jobId, event_type: "enqueued" })));
+  });
+
+  it("persists bounded priority and claims higher priorities before FIFO peers", async () => {
+    const ids = await queue.enqueueMany([
+      { type: "normal", payload: { order: 1 } },
+      { type: "urgent-first", payload: { order: 2 }, options: { priority: 100 } },
+      { type: "urgent-second", payload: { order: 3 }, options: { priority: 100 } },
+      { type: "background", payload: { order: 4 }, options: { priority: 1 } },
+    ]);
+
+    await expect(queue.getJob(ids[1]!)).resolves.toMatchObject({ priority: 100 });
+    await expect(queue.listJobs({ limit: 10 })).resolves.toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: ids[0], priority: 0 }),
+        expect.objectContaining({ id: ids[1], priority: 100 }),
+      ]),
+    });
+    await expect(queue.claim("priority-worker-1")).resolves.toMatchObject({
+      id: ids[1],
+      priority: 100,
+    });
+    await expect(queue.claim("priority-worker-2")).resolves.toMatchObject({
+      id: ids[2],
+      priority: 100,
+    });
+    await expect(queue.claim("priority-worker-3")).resolves.toMatchObject({
+      id: ids[3],
+      priority: 1,
+    });
+    await expect(queue.claim("priority-worker-4")).resolves.toMatchObject({
+      id: ids[0],
+      priority: 0,
+    });
+
+    await expect(queue.enqueue("invalid-low-priority", null, { priority: -1 })).rejects.toThrow(
+      "priority must be an integer between 0 and 100",
+    );
+    await expect(queue.enqueue("invalid-high-priority", null, { priority: 101 })).rejects.toThrow(
+      "priority must be an integer between 0 and 100",
+    );
+    await expect(
+      queue.enqueue("invalid-decimal-priority", null, { priority: 1.5 }),
+    ).rejects.toThrow("priority must be an integer between 0 and 100");
   });
 
   it("replays an equivalent scoped key without duplicate job, event, FIFO, or notify effects", async () => {

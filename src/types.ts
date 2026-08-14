@@ -89,6 +89,7 @@ export type EnqueueIdempotencyConflictField =
   | "queue"
   | "type"
   | "payload"
+  | "priority"
   | "concurrencyKey"
   | "contractVersion"
   | "payloadMaxBytes"
@@ -119,6 +120,8 @@ export interface EnqueueIdempotencyConflictDetails {
 /** Options persisted as part of the accepted job definition or initial dispatch projection. */
 export interface EnqueueOptions {
   queue?: string;
+  /** Dispatch rank from 0 through 100. Higher values are claimed first. */
+  priority?: number;
   /** Queue-scoped application group used by durable concurrency admission. */
   concurrencyKey?: string;
   runAt?: Date;
@@ -198,6 +201,8 @@ export interface EnqueueRequest<TPayload extends Json = Json> {
  * identity allocation, and notification work inside one PostgreSQL transaction.
  */
 export const MAX_ENQUEUE_BATCH_SIZE = 1_000;
+/** Highest accepted job priority. Priority zero is the default. */
+export const MAX_JOB_PRIORITY = 100;
 /** Default namespace for enqueue idempotency keys whose caller omits an explicit scope. */
 export const DEFAULT_IDEMPOTENCY_SCOPE = "default";
 /** Default enqueue idempotency retention window (24 hours). */
@@ -303,6 +308,7 @@ export interface DeadLetter {
   queue: string;
   type: string;
   concurrencyKey: string | null;
+  priority: number;
   payload: Json;
   tags: string[];
   currentAttempt: number;
@@ -358,6 +364,7 @@ export interface JobListItem {
   queue: string;
   type: string;
   concurrencyKey: string | null;
+  priority: number;
   tags: string[];
   state: JobState;
   currentAttempt: number;
@@ -399,6 +406,7 @@ export interface JobTimelineQuery {
 
 interface JobTimelineEntryBase {
   recordId: string;
+  priority: number;
   attempt: number | null;
   occurredAt: Date;
 }
@@ -508,6 +516,8 @@ export interface ClaimedJob<TPayload = Json> {
   /** Queue from which PostgreSQL granted this attempt. */
   queue: string;
   type: string;
+  /** Immutable dispatch rank. Higher values are claimed first. */
+  priority: number;
   payload: TPayload;
   /** Contract version captured when PostgreSQL accepted this job, or null for an uncontracted job. */
   contractVersion: string | null;
@@ -587,6 +597,7 @@ export interface JobSnapshot<TResult = Json> {
   queue: string;
   type: string;
   concurrencyKey: string | null;
+  priority: number;
   payload: Json;
   contractVersion: string | null;
   tags: string[];

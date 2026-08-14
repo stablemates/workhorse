@@ -275,6 +275,7 @@ export interface DashboardJobRow extends Record<string, unknown> {
   id: string;
   queue: string;
   type: string;
+  priority: number;
   state: string;
   attempt: number;
   maxAttempts: number;
@@ -320,6 +321,8 @@ export interface DashboardScheduleRow {
   cron: string;
   queue: string | null;
   type: string;
+  /** User-task dispatch priority. System maintenance rows have no queue priority. */
+  priority: number | null;
   enabled: boolean;
   active: boolean;
   revision: string;
@@ -790,6 +793,7 @@ export interface DashboardJobDetail {
     id: string;
     queue: string;
     type: string;
+    priority: number;
     state: string;
     createdAt: string;
     /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */

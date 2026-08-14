@@ -82,7 +82,7 @@ describe("OpenTelemetry", () => {
             ] as never[],
           };
         }
-        if (sql.includes("claim_v2")) {
+        if (sql.includes("claim_v3")) {
           return {
             rows: [
               {
@@ -188,7 +188,7 @@ describe("OpenTelemetry", () => {
         ) {
           return { rows: [] };
         }
-        if (sql.includes("claim_v2")) {
+        if (sql.includes("claim_v3")) {
           if (claimed) return { rows: [] };
           claimed = true;
           return {
@@ -325,7 +325,7 @@ describe("OpenTelemetry", () => {
         ) {
           return { rows: [] };
         }
-        if (sql.includes("claim_v2")) {
+        if (sql.includes("claim_v3")) {
           if (claimed) return { rows: [] };
           claimed = true;
           return {
@@ -457,6 +457,7 @@ describe("OpenTelemetry", () => {
       id: "00000000-0000-4000-8000-000000000003",
       queue: "mail",
       type: "mail.send",
+      priority: 0,
       payload: { recipient: "reader@example.com" },
       contractVersion: null,
       resultMaxBytes: 1_048_576,

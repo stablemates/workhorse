@@ -651,6 +651,7 @@ export async function readDashboardTasks(
       id: string;
       queue: string;
       type: string;
+      priority: number;
       state: string;
       attempt: number;
       max_attempts: number;
@@ -676,7 +677,7 @@ export async function readDashboardTasks(
       enqueued_details: unknown;
     }>(sql`
       WITH tasks AS (
-        SELECT j.id, j.queue_name AS queue, j.job_type AS type,
+        SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.payload, j.tags,
@@ -741,6 +742,7 @@ export async function readDashboardTasks(
         id: row.id,
         queue: row.queue,
         type: row.type,
+        priority: row.priority,
         state: row.state,
         attempt: row.attempt,
         maxAttempts: row.max_attempts,
@@ -879,6 +881,7 @@ function systemMaintenanceSchedules(
       cron: `every ${cadences.tickIntervalMs}ms`,
       queue: null,
       type: "workhorse.tick_v1",
+      priority: null,
       enabled: true,
       active: true,
       revision: "1",
@@ -903,6 +906,7 @@ function systemMaintenanceSchedules(
       cron: `every ${policy.partitionPreparationIntervalMs}ms`,
       queue: null,
       type: "workhorse.prepare_history_partitions_v1",
+      priority: null,
       enabled: true,
       active: true,
       revision: "1",
@@ -923,6 +927,7 @@ function systemMaintenanceSchedules(
       cron: `daily at ${policy.historyRetentionLocalTime} ${policy.timezone}`,
       queue: null,
       type: "workhorse.retain_history_v1",
+      priority: null,
       enabled: true,
       active: true,
       revision: "1",
@@ -945,6 +950,7 @@ function systemMaintenanceSchedules(
       cron: `every ${policy.terminalCleanupIntervalMs}ms`,
       queue: null,
       type: "workhorse.prune_terminal_storage_v1",
+      priority: null,
       enabled: true,
       active: true,
       revision: "1",
@@ -972,6 +978,7 @@ export async function readDashboardCron(
       cron: string;
       queue: string;
       type: string;
+      priority: number;
       enabled: boolean;
       revision: string;
       updated_at: Date | string;
@@ -979,14 +986,14 @@ export async function readDashboardCron(
       last_fired_at: Date | string | null;
     }>(sql`
       SELECT d.namespace, d.schedule_name AS name, d.cron_expression AS cron,
-             d.queue_name AS queue, d.job_type AS type, d.enabled,
+             d.queue_name AS queue, d.job_type AS type, d.priority, d.enabled,
              d.revision::text AS revision, d.updated_at,
              count(o.occurrence_at)::integer AS occurrence_count,
              max(o.fired_at) AS last_fired_at
         FROM workhorse.dashboard_schedule_definition_v1 d
         LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 o
           ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
-       GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type,
+       GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type, d.priority,
                 d.enabled, d.revision, d.updated_at
        ORDER BY d.namespace, d.schedule_name
        LIMIT 50
@@ -1073,6 +1080,7 @@ export async function readDashboardCron(
           cron: row.cron,
           queue: row.queue,
           type: row.type,
+          priority: row.priority,
           enabled: row.enabled,
           active: row.enabled,
           revision: row.revision,
@@ -1837,6 +1845,7 @@ export async function readDashboardSnapshot(
         id: string;
         queue: string;
         type: string;
+        priority: number;
         state: string;
         attempt: number;
         max_attempts: number;
@@ -1853,7 +1862,7 @@ export async function readDashboardSnapshot(
         cancel_reason: string | null;
         enqueued_details: unknown;
       }>(sql`
-        SELECT j.id, j.queue_name AS queue, j.job_type AS type,
+        SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                j.max_attempts, j.retry_policy, j.payload,
@@ -1881,6 +1890,7 @@ export async function readDashboardSnapshot(
         cron: string;
         queue: string;
         type: string;
+        priority: number;
         enabled: boolean;
         revision: string;
         updated_at: Date | string;
@@ -1888,14 +1898,14 @@ export async function readDashboardSnapshot(
         last_fired_at: Date | string | null;
       }>(sql`
         SELECT d.namespace, d.schedule_name AS name, d.cron_expression AS cron,
-               d.queue_name AS queue, d.job_type AS type, d.enabled,
+               d.queue_name AS queue, d.job_type AS type, d.priority, d.enabled,
                d.revision::text AS revision, d.updated_at,
                count(o.occurrence_at)::integer AS occurrence_count,
                max(o.fired_at) AS last_fired_at
           FROM workhorse.dashboard_schedule_definition_v1 d
           LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 o
             ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
-         GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type,
+         GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type, d.priority,
                   d.enabled, d.revision, d.updated_at
          ORDER BY d.namespace, d.schedule_name
          LIMIT 50
@@ -2031,6 +2041,7 @@ export async function readDashboardSnapshot(
       id: row.id,
       queue: row.queue,
       type: row.type,
+      priority: row.priority,
       state: row.state,
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
@@ -2069,6 +2080,7 @@ export async function readDashboardSnapshot(
         cron: row.cron,
         queue: row.queue,
         type: row.type,
+        priority: row.priority,
         enabled: row.enabled,
         active: row.enabled,
         revision: row.revision,
@@ -2147,6 +2159,7 @@ export async function readDashboardJobDetail(
       id: string;
       queue: string;
       type: string;
+      priority: number;
       payload: unknown;
       max_attempts: number;
       retry_policy: RetryPolicy | null;
@@ -2183,7 +2196,7 @@ export async function readDashboardJobDetail(
       progress_created_at: Date | string | null;
       progress_updated_at: Date | string | null;
     }>(sql`
-      SELECT j.id, j.queue_name AS queue, j.job_type AS type,
+      SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
              j.max_attempts,
              j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.concurrency_key, j.created_at,
@@ -2305,6 +2318,7 @@ export async function readDashboardJobDetail(
       id: job.id,
       queue: job.queue,
       type: job.type,
+      priority: job.priority,
       state,
       createdAt: toIso(job.created_at),
       retryPolicy: job.retry_policy,

@@ -13,7 +13,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v26**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v27**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -28,6 +28,9 @@ First published line. Requires **schema v26**, Node.js **22 or 24**, PostgreSQL 
   impact previews.
 - `@workhorse/core`: versioned dashboard read views and a planner-estimate function that isolate
   the dashboard server from private table changes.
+- `@workhorse/core`: strict job priority from 0 through 100 across direct, batched, delayed, and
+  recurring enqueue, with FIFO order inside each priority and preservation through retries,
+  promotion, and redrive.
 - `@workhorse/core`: transactionally consistent `Queue.health()` snapshots — one SQL statement
   for every correctness-sensitive value, size-capped history scans with explicit lower-bound
   flags, PostgreSQL estimates separated under `observations`, and caller-overridable health

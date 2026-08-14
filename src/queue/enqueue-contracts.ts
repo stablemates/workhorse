@@ -18,6 +18,7 @@ import {
   DEFAULT_JOB_VALUE_MAX_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
   MAX_JOB_CONTRACT_SENSITIVE_KEYS,
+  MAX_JOB_PRIORITY,
   MAX_JOB_VALUE_MAX_BYTES,
 } from "../types.js";
 import { QueueModule } from "./module-context.js";
@@ -97,6 +98,7 @@ const enqueueConflictFields = new Set<EnqueueIdempotencyConflictField>([
   "queue",
   "type",
   "payload",
+  "priority",
   "concurrencyKey",
   "contractVersion",
   "payloadMaxBytes",
@@ -197,6 +199,14 @@ function validateValueLimit(value: number | undefined, field: string): number | 
   if (value === undefined) return undefined;
   if (!Number.isSafeInteger(value) || value < 1 || value > MAX_JOB_VALUE_MAX_BYTES) {
     throw new RangeError(`${field} must be an integer between 1 and ${MAX_JOB_VALUE_MAX_BYTES}`);
+  }
+  return value;
+}
+
+export function validateJobPriority(value: number | undefined): number {
+  if (value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || value < 0 || value > MAX_JOB_PRIORITY) {
+    throw new RangeError(`priority must be an integer between 0 and ${MAX_JOB_PRIORITY}`);
   }
   return value;
 }
@@ -391,6 +401,7 @@ export class EnqueueContractsModule extends QueueModule {
             queue: options.queue ?? this.context.defaultQueue,
             type,
             payload,
+            priority: validateJobPriority(options.priority),
             ...acceptance,
             ...(traceContext === null ? {} : { traceContext }),
             ...(options.runAt === undefined && idempotency !== undefined

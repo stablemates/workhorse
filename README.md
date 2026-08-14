@@ -434,7 +434,7 @@ prints the dashboard mount for your framework. Nothing about the mount needs to 
 workers run: they register themselves in PostgreSQL.
 
 Schema installation is clean-database only. Existing databases at the supported version 23 baseline
-advance through immutable ordered steps by calling `migrateSchema` before version 26 processes start.
+advance through immutable ordered steps by calling `migrateSchema` before version 27 processes start.
 
 ## Minimal usage
 

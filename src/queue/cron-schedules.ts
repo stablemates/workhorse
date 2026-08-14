@@ -2,13 +2,15 @@ import { CronExpressionParser } from "cron-parser";
 import { expectOneRow } from "../errors.js";
 import { logDebug, logInfo, recordScheduleFired, withSpan } from "../telemetry.js";
 import type { Json, RetryPolicy } from "../types.js";
-import type { EnqueueContractsModule } from "./enqueue-contracts.js";
+import { validateJobPriority, type EnqueueContractsModule } from "./enqueue-contracts.js";
 import { QueueModule, type QueueModuleContext } from "./module-context.js";
 
 export interface ScheduleJobDefinition {
   type: string;
   payload: Json;
   queue?: string;
+  /** Dispatch rank from 0 through 100. Higher values are claimed first. */
+  priority?: number;
   concurrencyKey?: string;
   maxAttempts?: number;
   retryPolicy?: RetryPolicy;
@@ -58,6 +60,7 @@ export class CronSchedulesModule extends QueueModule {
       schedule: definition.schedule,
       enabled: definition.enabled ?? true,
       queue: definition.job.queue ?? this.context.defaultQueue,
+      priority: validateJobPriority(definition.job.priority),
       concurrencyKey: definition.job.concurrencyKey ?? null,
       type: definition.job.type,
       payload: definition.job.payload,

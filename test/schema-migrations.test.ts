@@ -91,7 +91,7 @@ describe("schema migrations", () => {
   });
 
   it("migrates the supported v23 baseline to the current schema", async () => {
-    expect(await readSchemaVersion(database.pool)).toBe(26);
+    expect(await readSchemaVersion(database.pool)).toBe(27);
     const migrations = await database.pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
     );
@@ -100,6 +100,7 @@ describe("schema migrations", () => {
       { version: 24, description: "add schema migration ledger" },
       { version: 25, description: "make schedule occurrence replay a no-op" },
       { version: 26, description: "add versioned dashboard read surface" },
+      { version: 27, description: "add strict-priority job dispatch" },
     ]);
   });
 
@@ -109,14 +110,26 @@ describe("schema migrations", () => {
 
   it("leaves an already-current schema unchanged", async () => {
     const before = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 26",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 27",
     );
 
     await migrateSchema(database.pool);
 
     const after = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 26",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 27",
     );
     expect(after.rows).toEqual(before.rows);
+  });
+
+  it("safely replays the latest migration after its target version commits", async () => {
+    const migration = await readFile(
+      path.join(repository, "sql", "migrations", "0027-add-job-priority.sql"),
+      "utf8",
+    );
+
+    await database.pool.query(migration);
+
+    expect(await readSchemaVersion(database.pool)).toBe(27);
+    expect(await dumpNormalizedSchema(database.databaseUrl)).toBe(cleanInstallSchema);
   });
 });

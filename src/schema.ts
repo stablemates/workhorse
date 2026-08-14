@@ -7,7 +7,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 26;
+export const WORKHORSE_SCHEMA_VERSION = 27;
 
 const SCHEMA_MIGRATIONS = [
   {
@@ -24,6 +24,11 @@ const SCHEMA_MIGRATIONS = [
     fromVersion: 25,
     toVersion: 26,
     file: "0026-add-dashboard-read-surface.sql",
+  },
+  {
+    fromVersion: 26,
+    toVersion: 27,
+    file: "0027-add-job-priority.sql",
   },
 ] as const;
 

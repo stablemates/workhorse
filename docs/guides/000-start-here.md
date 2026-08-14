@@ -33,6 +33,7 @@ How a job behaves once it's executing.
 | [120 Cancellation](120-cancellation.md)                     | Stopping a job is a request, not a kill                    |
 | [130 Durable waits](130-durable-waits.md)                   | Sleeping for an hour without holding a worker slot         |
 | [140 Deadlines and timeouts](140-deadlines-and-timeouts.md) | Two different clocks, and which one you want               |
+| [150 Priority](150-priority.md)                             | Running urgent work before ordinary FIFO jobs              |
 
 ## Getting work in
 

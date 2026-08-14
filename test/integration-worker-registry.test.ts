@@ -553,6 +553,7 @@ describe("worker registry", () => {
     "settles successful siblings and recovers a concurrent crash with maxAttempts $maxAttempts",
     async ({ maxAttempts, expectedState, expectedAttempt }) => {
       const siblingsStarted = deferred();
+      const crashObserved = deferred();
       const releaseSiblings = deferred();
       const startedSiblings = new Set<number>();
       let crashedClaim:
@@ -580,6 +581,7 @@ describe("worker registry", () => {
               fenceToken: job.fenceToken,
               leaseExpiresAt: job.leaseExpiresAt,
             };
+            crashObserved.resolve();
           }
           return shouldCrash;
         },
@@ -591,7 +593,7 @@ describe("worker registry", () => {
       });
 
       const run = worker.runOnce();
-      await siblingsStarted.promise;
+      await Promise.all([siblingsStarted.promise, crashObserved.promise]);
       expect(crashedClaim).toBeDefined();
       const crash = crashedClaim!;
       expect(crash).toMatchObject({ id: crashedId, attempt: 1 });

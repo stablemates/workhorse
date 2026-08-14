@@ -5,7 +5,7 @@ guarantees it, because almost every other rule in Workhorse depends on it.
 
 ## Claiming a job
 
-When a worker is free, it calls `claim_v2`. That picks an admissible ready job in the queue and
+When a worker is free, it calls `claim_v3`. That picks an admissible ready job in the queue and
 stamps the `job_runtime` row with three things:
 
 - **the worker's id** — who owns it
