@@ -9,19 +9,43 @@ export type DashboardNodeMiddleware = (
   next: (error?: unknown) => void,
 ) => void;
 
-const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
-
-function requestUrl(request: IncomingMessage): string {
-  const host = request.headers.host ?? "localhost";
-  const encrypted = "encrypted" in request.socket && Boolean(request.socket.encrypted);
-  const forwarded = request.headers["x-forwarded-proto"];
-  const protocol =
-    (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim() ??
-    (encrypted ? "https" : "http");
-  return new URL(request.url ?? "/", `${protocol}://${host}`).toString();
+export interface DashboardNodeMiddlewareOptions {
+  /** Exact browser-visible origin. Configure this instead of trusting forwarded headers. */
+  publicOrigin?: string;
 }
 
-function fetchRequest(request: IncomingMessage): Request {
+const BODYLESS_METHODS = new Set(["GET", "HEAD"]);
+
+/** Validate and canonicalize one browser-visible dashboard origin. */
+export function normalizeDashboardPublicOrigin(input: string): string {
+  const url = new URL(input);
+  if (
+    url.origin === "null" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new TypeError("Dashboard public origin must contain only an HTTP or HTTPS origin");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new TypeError("Dashboard public origin must use HTTP or HTTPS");
+  }
+  return url.origin;
+}
+
+function requestUrl(request: IncomingMessage, publicOrigin?: string): string {
+  const target = new URL(request.url ?? "/", "http://workhorse.invalid");
+  const path = `${target.pathname}${target.search}`;
+  if (publicOrigin) return new URL(path, `${publicOrigin}/`).toString();
+  const host = request.headers.host ?? "localhost";
+  const encrypted = "encrypted" in request.socket && Boolean(request.socket.encrypted);
+  const protocol = encrypted ? "https" : "http";
+  return new URL(path, `${protocol}://${host}`).toString();
+}
+
+function fetchRequest(request: IncomingMessage, publicOrigin?: string): Request {
   const controller = new AbortController();
   request.once("aborted", () => controller.abort());
   request.once("close", () => controller.abort());
@@ -39,7 +63,7 @@ function fetchRequest(request: IncomingMessage): Request {
     init.body = Readable.toWeb(request) as ReadableStream<Uint8Array>;
     init.duplex = "half";
   }
-  return new Request(requestUrl(request), init);
+  return new Request(requestUrl(request, publicOrigin), init);
 }
 
 async function writeResponse(result: Response, response: ServerResponse): Promise<void> {
@@ -78,11 +102,17 @@ async function writeResponse(result: Response, response: ServerResponse): Promis
  * Requests the host does not own are passed to `next()` untouched, so the dashboard never takes
  * over unrelated application routes.
  */
-export function dashboardNodeMiddleware(host: DashboardHost): DashboardNodeMiddleware {
+export function dashboardNodeMiddleware(
+  host: DashboardHost,
+  options: DashboardNodeMiddlewareOptions = {},
+): DashboardNodeMiddleware {
+  const publicOrigin = options.publicOrigin
+    ? normalizeDashboardPublicOrigin(options.publicOrigin)
+    : undefined;
   return (request, response, next) => {
     let fetchRequestValue: Request;
     try {
-      fetchRequestValue = fetchRequest(request);
+      fetchRequestValue = fetchRequest(request, publicOrigin);
     } catch (error) {
       next(error);
       return;

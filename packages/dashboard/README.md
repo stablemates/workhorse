@@ -53,6 +53,11 @@ actor text with the single-admin username or the embedded host's verified princi
 controller runs. A boolean embedded authorizer remains supported and uses the server-configured
 `auditActor`, which defaults to `dashboard`, so browser input never becomes identity evidence.
 
+The Node middleware ignores forwarded protocol headers. A standalone service behind a TLS proxy
+must pass its exact browser-visible `publicOrigin`; that origin then owns Secure-cookie and
+same-origin decisions. An unauthenticated standalone listener is accepted only on loopback or a
+Unix socket.
+
 The dashboard reads core-owned `workhorse.dashboard_*_v1` views and versioned SQL functions. Core
 schema changes can ship independently when they preserve that surface, so dashboard and core patch
 releases may move separately within the same minor line.

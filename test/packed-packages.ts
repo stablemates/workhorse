@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -18,6 +19,32 @@ async function run(command: string, args: string[], cwd = repository): Promise<s
   });
   if (stderr.trim()) process.stderr.write(stderr);
   return stdout;
+}
+
+async function availablePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+async function waitForContainer(port: number, containerId: string): Promise<Response> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/login`);
+      if (response.status === 200) return response;
+    } catch {
+      // The listener is not ready yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const logs = await run("docker", ["logs", containerId]);
+  throw new Error(`Packed dashboard container did not start: ${logs}`);
 }
 
 async function filesBelow(directory: string): Promise<string[]> {
@@ -57,6 +84,16 @@ try {
   };
   const coreTarball = tarballFor("@workhorse/core");
   const dashboardTarball = tarballFor("@workhorse/dashboard");
+  const dashboardContainer = await readFile(path.join(repository, "Dockerfile.dashboard"), "utf8");
+  for (const artifact of [
+    "workhorse-core.tgz",
+    "workhorse-dashboard.tgz",
+    "workhorse-dashboard-contract.tgz",
+  ]) {
+    if (!dashboardContainer.includes(`/artifacts/${artifact}`)) {
+      throw new Error(`Dashboard container does not install packed artifact ${artifact}`);
+    }
+  }
   const extracted = path.join(scratch, "core");
   await mkdir(extracted);
   await run("tar", ["-xzf", coreTarball, "-C", extracted]);
@@ -354,6 +391,70 @@ const loggedOut = await host.handle(new Request("https://dashboard.test/tasks", 
 assert.equal(loggedOut.status, 302);
 `,
   );
+  await writeFile(
+    path.join(consumer, "dashboard-standalone.mjs"),
+    `import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { scryptSync } from "node:crypto";
+import { createServer } from "node:net";
+
+const portServer = createServer();
+await new Promise((resolve, reject) => {
+  portServer.once("error", reject);
+  portServer.listen(0, "127.0.0.1", resolve);
+});
+const address = portServer.address();
+const port = typeof address === "object" && address ? address.port : 0;
+await new Promise((resolve) => portServer.close(resolve));
+
+const salt = Buffer.from("packed-standalone-auth-salt");
+const passwordHash = \`scrypt-v1$\${salt.toString("base64url")}$\${scryptSync("correct horse", salt, 32).toString("base64url")}\`;
+const child = spawn(process.execPath, [
+  "node_modules/@workhorse/core/dist/src/cli/workhorse.js",
+  "dashboard",
+  "--database-url",
+  "postgres://unused:unused@127.0.0.1:1/unused",
+  "--host",
+  "0.0.0.0",
+  "--port",
+  String(port),
+], {
+  env: {
+    ...process.env,
+    WORKHORSE_DASHBOARD_USERNAME: "operator",
+    WORKHORSE_DASHBOARD_PASSWORD_HASH: passwordHash,
+    WORKHORSE_DASHBOARD_PUBLIC_ORIGIN: "https://dashboard.example",
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+
+let output = "";
+try {
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Packed dashboard did not start: " + output)), 5_000);
+    child.stdout.setEncoding("utf8").on("data", (chunk) => {
+      output += chunk;
+      if (!output.includes("Workhorse dashboard on")) return;
+      clearTimeout(timeout);
+      resolve();
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (output += chunk));
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      reject(new Error("Packed dashboard exited with " + code + ": " + output));
+    });
+  });
+  const protectedResponse = await fetch("http://127.0.0.1:" + port + "/tasks", { redirect: "manual" });
+  assert.equal(protectedResponse.status, 302);
+  assert.equal(protectedResponse.headers.get("location"), "/login");
+  const loginResponse = await fetch("http://127.0.0.1:" + port + "/login");
+  assert.equal(loginResponse.status, 200);
+  assert.match(await loginResponse.text(), /Sign in/);
+} finally {
+  child.kill("SIGKILL");
+}
+`,
+  );
 
   await run("pnpm", ["install", "--ignore-scripts", "--frozen-lockfile=false"], consumer);
   await run("pnpm", ["exec", "prisma", "generate", "--schema", "prisma/schema.prisma"], consumer);
@@ -368,6 +469,54 @@ assert.equal(loggedOut.status, 302);
   }
   await run("node", ["integration.mjs"], consumer);
   await run("node", ["dashboard-auth.mjs"], consumer);
+  await run("node", ["dashboard-standalone.mjs"], consumer);
+
+  const image = `workhorse-dashboard-packed-test:${process.pid}`;
+  const containerName = `workhorse-dashboard-packed-${process.pid}`;
+  let containerId: string | undefined;
+  try {
+    await run("docker", ["build", "-f", "Dockerfile.dashboard", "-t", image, "."]);
+    const port = await availablePort();
+    containerId = (
+      await run("docker", [
+        "run",
+        "--rm",
+        "-d",
+        "--name",
+        containerName,
+        "-p",
+        `127.0.0.1:${port}:3000`,
+        "-e",
+        "DATABASE_URL=postgres://unused:unused@127.0.0.1:1/unused",
+        "-e",
+        "WORKHORSE_DASHBOARD_USERNAME=operator",
+        "-e",
+        "WORKHORSE_DASHBOARD_PASSWORD_HASH=scrypt-v1$d29ya2hvcnNlLWF1dGgtc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "-e",
+        "WORKHORSE_DASHBOARD_PUBLIC_ORIGIN=https://dashboard.example",
+        image,
+      ])
+    ).trim();
+    const loginResponse = await waitForContainer(port, containerId);
+    if (!(await loginResponse.text()).includes("Sign in")) {
+      throw new Error("Packed dashboard container did not serve the login page");
+    }
+    const protectedResponse = await fetch(`http://127.0.0.1:${port}/tasks`, {
+      redirect: "manual",
+    });
+    if (
+      protectedResponse.status !== 302 ||
+      protectedResponse.headers.get("location") !== "/login"
+    ) {
+      throw new Error("Packed dashboard container did not protect the application route");
+    }
+    if ((await run("docker", ["exec", containerId, "id", "-u"])).trim() === "0") {
+      throw new Error("Packed dashboard container must not run as root");
+    }
+  } finally {
+    if (containerId) await exec("docker", ["stop", containerId]).catch(() => undefined);
+    await exec("docker", ["image", "rm", image]).catch(() => undefined);
+  }
   process.stdout.write("Packed core, ORM providers, and dashboard consumer tests passed.\n");
 } finally {
   await rm(scratch, { recursive: true, force: true });

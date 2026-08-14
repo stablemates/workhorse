@@ -53,6 +53,41 @@ afterEach(async () => {
 });
 
 describe("workhorse dashboard authentication", () => {
+  it("refuses an unauthenticated remote listener", async () => {
+    const child = spawn(
+      process.execPath,
+      [
+        tsxCli,
+        path.join(repository, "src/cli/workhorse.ts"),
+        "dashboard",
+        "--database-url",
+        "postgres://unused:unused@127.0.0.1:1/unused",
+        "--host",
+        "0.0.0.0",
+      ],
+      {
+        cwd: repository,
+        env: {
+          ...process.env,
+          WORKHORSE_DASHBOARD_USERNAME: undefined,
+          WORKHORSE_DASHBOARD_PASSWORD_HASH: undefined,
+          WORKHORSE_DASHBOARD_USERNAME_FILE: undefined,
+          WORKHORSE_DASHBOARD_PASSWORD_HASH_FILE: undefined,
+          WORKHORSE_DASHBOARD_PUBLIC_ORIGIN: undefined,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    children.add(child);
+    let output = "";
+    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
+    const code = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+
+    expect(code).toBe(1);
+    expect(output).toMatch(/unauthenticated.*loopback|loopback.*unauthenticated/i);
+  });
+
   it("loads container secret files and protects the standalone listener", async () => {
     const scratch = await mkdtemp(path.join(tmpdir(), "workhorse-dashboard-auth-"));
     scratchRoots.push(scratch);

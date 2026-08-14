@@ -3,6 +3,10 @@ export interface DashboardSingleAdminOptions {
   username: string;
   /** Versioned password hash; plaintext passwords are never accepted as server configuration. */
   passwordHash: string;
+  /** Previous password hash accepted only until `previousPasswordHashExpiresAt`. */
+  previousPasswordHash?: string;
+  /** Absolute ISO 8601 cutoff for the previous password and sessions created with it. */
+  previousPasswordHashExpiresAt?: string;
   /** Session lifetime in seconds. Defaults to eight hours. */
   sessionTtlSeconds?: number;
 }
@@ -12,6 +16,10 @@ export interface DashboardCommandOptions {
   port: number;
   /** Interface to bind. Defaults to loopback so the console is not published by accident. */
   hostname: string;
+  /** Unix socket path. When present, the listener ignores `hostname` and `port`. */
+  socketPath?: string;
+  /** External origin used behind a proxy. Remote authenticated listeners require HTTPS. */
+  publicOrigin?: string;
   /** Enables operator mutations. Off by default; a standalone server has nobody to delegate to. */
   allowMutations: boolean;
   /** Server-owned attribution for the explicit unauthenticated loopback development bypass. */

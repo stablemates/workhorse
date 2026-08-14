@@ -1,0 +1,36 @@
+FROM node:24-alpine AS build
+
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
+
+WORKDIR /workhorse
+COPY . .
+RUN pnpm install --frozen-lockfile
+RUN pnpm build:core && pnpm --filter @workhorse/dashboard build
+RUN mkdir /artifacts \
+  && pnpm --silent pack --pack-destination /artifacts \
+  && mv /artifacts/workhorse-core-*.tgz /artifacts/workhorse-core.tgz \
+  && pnpm --silent --dir packages/dashboard-contract pack --pack-destination /artifacts \
+  && mv /artifacts/workhorse-dashboard-contract-*.tgz /artifacts/workhorse-dashboard-contract.tgz \
+  && pnpm --silent --dir packages/dashboard pack --pack-destination /artifacts \
+  && mv /artifacts/workhorse-dashboard-[0-9]*.tgz /artifacts/workhorse-dashboard.tgz
+
+FROM node:24-alpine AS production-dependencies
+
+WORKDIR /opt/workhorse
+COPY --from=build /artifacts/ /artifacts/
+RUN npm install --omit=dev --ignore-scripts \
+  /artifacts/workhorse-core.tgz \
+  /artifacts/workhorse-dashboard-contract.tgz \
+  /artifacts/workhorse-dashboard.tgz
+
+FROM node:24-alpine AS runtime
+
+ENV NODE_ENV=production
+WORKDIR /opt/workhorse
+COPY --from=production-dependencies --chown=node:node /opt/workhorse/ ./
+
+USER node
+EXPOSE 3000
+CMD ["node", "node_modules/@workhorse/core/dist/src/cli/workhorse.js", "dashboard", "--host", "0.0.0.0", "--port", "3000"]

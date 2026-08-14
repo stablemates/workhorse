@@ -5,11 +5,18 @@ const SESSION_COOKIE = "__Host-workhorse-dashboard-session";
 const DEFAULT_SESSION_TTL_SECONDS = 8 * 60 * 60;
 const MAX_LOGIN_BODY_BYTES = 4_096;
 const MAX_SERVER_SESSIONS = 16;
+const MAX_FAILED_LOGINS = 5;
+const FAILED_LOGIN_WINDOW_MS = 60_000;
 const SCRYPT_OPTIONS = { N: 16_384, r: 8, p: 1, maxmem: 32 * 1_024 * 1_024 } as const;
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 interface ParsedPasswordHash {
   salt: Buffer;
   digest: Buffer;
+}
+
+interface SessionRecord {
+  expiresAt: number;
 }
 
 interface SingleAdminAuthentication {
@@ -80,6 +87,24 @@ export function createSingleAdminAuthentication(
     throw new TypeError("Dashboard administrator username must contain 1 through 256 characters");
   }
   const parsedHash = parsePasswordHash(credentials.passwordHash);
+  if (
+    Boolean(credentials.previousPasswordHash) !== Boolean(credentials.previousPasswordHashExpiresAt)
+  ) {
+    throw new TypeError("Dashboard previous password hash and expiry must be configured together");
+  }
+  const previousHash = credentials.previousPasswordHash
+    ? parsePasswordHash(credentials.previousPasswordHash)
+    : undefined;
+  const previousHashExpiresAt = credentials.previousPasswordHashExpiresAt
+    ? Date.parse(credentials.previousPasswordHashExpiresAt)
+    : undefined;
+  if (
+    previousHashExpiresAt !== undefined &&
+    (!ISO_TIMESTAMP.test(credentials.previousPasswordHashExpiresAt ?? "") ||
+      !Number.isFinite(previousHashExpiresAt))
+  ) {
+    throw new TypeError("Dashboard previous password hash expiry must be an ISO 8601 timestamp");
+  }
   const sessionTtlSeconds = credentials.sessionTtlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;
   if (
     !Number.isInteger(sessionTtlSeconds) ||
@@ -90,26 +115,44 @@ export function createSingleAdminAuthentication(
       "Dashboard session lifetime must be an integer from 60 through 86400 seconds",
     );
   }
-  const sessions = new Map<string, number>();
+  const sessions = new Map<string, SessionRecord>();
+  const failedLogins: number[] = [];
 
   function deleteExpiredSessions(now: number): void {
-    for (const [token, expiresAt] of sessions) {
-      if (expiresAt <= now) sessions.delete(token);
+    for (const [token, session] of sessions) {
+      if (session.expiresAt <= now) sessions.delete(token);
     }
   }
 
-  async function passwordMatches(password: string): Promise<boolean> {
-    if (password.length > 1_024) return false;
+  function deleteOldLoginFailures(now: number): void {
+    while ((failedLogins[0] ?? Number.POSITIVE_INFINITY) <= now - FAILED_LOGIN_WINDOW_MS) {
+      failedLogins.shift();
+    }
+  }
+
+  async function passwordExpiry(password: string, now: number): Promise<number | undefined> {
+    if (password.length > 1_024) return undefined;
     const candidate = await derivePassword(password, parsedHash.salt, parsedHash.digest.length);
-    return timingSafeEqual(candidate, parsedHash.digest);
+    if (timingSafeEqual(candidate, parsedHash.digest)) return Number.POSITIVE_INFINITY;
+    if (!previousHash || previousHashExpiresAt === undefined || previousHashExpiresAt <= now) {
+      return undefined;
+    }
+    const previousCandidate = await derivePassword(
+      password,
+      previousHash.salt,
+      previousHash.digest.length,
+    );
+    return timingSafeEqual(previousCandidate, previousHash.digest)
+      ? previousHashExpiresAt
+      : undefined;
   }
 
   return {
     authorize(request, basePath) {
       const token = cookieValue(request);
       if (token) {
-        const expiresAt = sessions.get(token);
-        if (expiresAt !== undefined && expiresAt > Date.now()) {
+        const session = sessions.get(token);
+        if (session !== undefined && session.expiresAt > Date.now()) {
           return { actor: credentials.username };
         }
         sessions.delete(token);
@@ -160,11 +203,27 @@ export function createSingleAdminAuthentication(
       const form = new URLSearchParams(body);
       const username = form.get("username") ?? "";
       const password = form.get("password") ?? "";
-      const validPassword = await passwordMatches(password);
-      if (username !== credentials.username || !validPassword)
-        return htmlResponse(loginPage(true), 401);
-
       const now = Date.now();
+      deleteOldLoginFailures(now);
+      if (failedLogins.length >= MAX_FAILED_LOGINS) {
+        const retryAfter = Math.max(
+          1,
+          Math.ceil(((failedLogins[0] ?? now) + FAILED_LOGIN_WINDOW_MS - now) / 1_000),
+        );
+        return new Response(null, {
+          status: 429,
+          headers: { "retry-after": String(retryAfter), "cache-control": "no-store" },
+        });
+      }
+      // Reserve capacity before scrypt yields. Concurrent submissions cannot all observe the same
+      // spare slot and create an unbounded password-hashing burst.
+      failedLogins.push(now);
+      const credentialExpiresAt = await passwordExpiry(password, now);
+      if (username !== credentials.username || credentialExpiresAt === undefined) {
+        return htmlResponse(loginPage(true), 401);
+      }
+      failedLogins.length = 0;
+
       deleteExpiredSessions(now);
       while (sessions.size >= MAX_SERVER_SESSIONS) {
         const oldestToken = sessions.keys().next().value as string | undefined;
@@ -172,12 +231,14 @@ export function createSingleAdminAuthentication(
         sessions.delete(oldestToken);
       }
       const token = randomBytes(32).toString("base64url");
-      sessions.set(token, now + sessionTtlSeconds * 1_000);
+      const expiresAt = Math.min(now + sessionTtlSeconds * 1_000, credentialExpiresAt);
+      const maxAge = Math.ceil((expiresAt - now) / 1_000);
+      sessions.set(token, { expiresAt });
       return new Response(null, {
         status: 303,
         headers: {
           location: "/",
-          "set-cookie": `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${sessionTtlSeconds}; HttpOnly; Secure; SameSite=Strict`,
+          "set-cookie": `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Strict`,
           "cache-control": "no-store",
         },
       });

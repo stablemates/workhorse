@@ -13,6 +13,12 @@ to the TLS-protected server, which compares it without storing the plaintext val
 A successful login creates an opaque cookie backed by server memory. The cookie cannot reveal the
 password, and deleting the server record ends the session even if a browser retains it.
 
+Repeated failures temporarily pause login processing. The server owns this limit and does not trust
+proxy headers to decide who shares it.
+
+For a rolling password change, configure the new hash as current and the old hash as previous with
+an absolute cutoff. The old password and every session it created stop working at that cutoff.
+
 Send a `POST` request to `/logout` to end the current session. Expired sessions return to the login
 page and cannot read dashboard HTML, browser assets, or private RPC responses.
 
@@ -35,6 +41,12 @@ the principal returned by `authorize`, or its server-configured `auditActor` for
 
 Mutation RPCs also require their `Origin` to match the dashboard request origin. A valid session
 cookie alone cannot authorize a cross-site form or script to change queue state.
+
+If a proxy terminates TLS, configure the browser-visible public origin. The server ignores forwarded
+protocol headers, so a proxy cannot silently change cookie or same-origin decisions.
+
+Without credentials, the standalone development bypass binds only to loopback or a Unix socket.
+Remote listeners require authentication and a secure public origin.
 
 Do not configure built-in credentials beside `authorize`. The dashboard rejects that ambiguous
 boundary instead of guessing which identity system owns the request.

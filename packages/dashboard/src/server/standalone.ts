@@ -1,8 +1,9 @@
 import { createServer } from "node:http";
+import { isIP } from "node:net";
 import type { DashboardStandaloneModule } from "@workhorse/dashboard-contract";
 import { Queue, type Queryable } from "@workhorse/core";
 import { createDashboardHost } from "./host.js";
-import { dashboardNodeMiddleware } from "./node.js";
+import { dashboardNodeMiddleware, normalizeDashboardPublicOrigin } from "./node.js";
 import { createDashboardOperatorControllers } from "./operator-controllers.js";
 
 /**
@@ -11,8 +12,44 @@ import { createDashboardOperatorControllers } from "./operator-controllers.js";
  * The caller owns the database connection and its shutdown. This module owns the HTTP listener and
  * the dashboard implementation, so core only depends on the small standalone contract.
  */
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const family = isIP(normalized);
+  if (family === 4) return normalized.startsWith("127.");
+  return family === 6 && normalized === "::1";
+}
+
 export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDashboardServer"] =
   async (database, options) => {
+    const publicOrigin = options.publicOrigin
+      ? normalizeDashboardPublicOrigin(options.publicOrigin)
+      : undefined;
+    const tcpListener = !options.socketPath;
+    const loopbackListener = tcpListener && isLoopbackHostname(options.hostname);
+    if (!options.authentication && tcpListener && !loopbackListener) {
+      throw new TypeError(
+        "The unauthenticated dashboard development bypass requires a loopback listener or Unix socket",
+      );
+    }
+    if (publicOrigin) {
+      const origin = new URL(publicOrigin);
+      if (!options.authentication && !isLoopbackHostname(origin.hostname)) {
+        throw new TypeError(
+          "The unauthenticated dashboard development bypass cannot use a remote public origin",
+        );
+      }
+      if (
+        origin.protocol !== "https:" &&
+        (!isLoopbackHostname(origin.hostname) || (tcpListener && !loopbackListener))
+      ) {
+        throw new TypeError("A remote dashboard requires an HTTPS public origin");
+      }
+    }
+    if (options.authentication && tcpListener && !loopbackListener && !publicOrigin) {
+      throw new TypeError(
+        "An authenticated remote dashboard requires an explicit HTTPS public origin",
+      );
+    }
     const queue = new Queue(database);
     const controls = options.allowMutations
       ? createDashboardOperatorControllers({
@@ -35,7 +72,7 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
       ...controls,
     });
 
-    const middleware = dashboardNodeMiddleware(host);
+    const middleware = dashboardNodeMiddleware(host, { publicOrigin });
     const server = createServer((request, response) => {
       middleware(request, response, () => {
         response.statusCode = 404;
@@ -45,16 +82,22 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
 
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(options.port, options.hostname, () => {
+      const onListening = (): void => {
         server.removeListener("error", reject);
         resolve();
-      });
+      };
+      if (options.socketPath) server.listen(options.socketPath, onListening);
+      else server.listen(options.port, options.hostname, onListening);
     });
 
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : options.port;
     return {
-      url: `http://${options.hostname}:${port}`,
+      url:
+        publicOrigin ??
+        (options.socketPath
+          ? `unix://${options.socketPath}`
+          : `http://${options.hostname}:${port}`),
       close: () =>
         new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
