@@ -16,6 +16,38 @@ const { deferred, pool, queue, waitForDatabaseCondition } = createIntegrationTes
 );
 
 describe("claim lease fence", () => {
+  it("preserves strict priority through promotion and retry under competing claims", async () => {
+    const queueName = `priority-${randomUUID()}`;
+    const low = await queue.enqueue("low", null, { queue: queueName, priority: 10 });
+    const scheduledHigh = await queue.enqueue("scheduled-high", null, {
+      queue: queueName,
+      priority: 90,
+      runAt: new Date(Date.now() + 20),
+    });
+    await sleep(30);
+    await queue.promote();
+
+    const promoted = await queue.claim("priority-promoted", { queue: queueName });
+    expect(promoted).toMatchObject({ id: scheduledHigh, priority: 90 });
+    expect(await queue.fail(promoted!, "priority-promoted", new Error("retry priority"), 0)).toBe(
+      "ready",
+    );
+
+    const highPeers = await queue.enqueueMany([
+      { type: "high-peer-a", payload: null, options: { queue: queueName, priority: 80 } },
+      { type: "high-peer-b", payload: null, options: { queue: queueName, priority: 80 } },
+    ]);
+    const claims = await Promise.all([
+      queue.claim("priority-competitor-a", { queue: queueName }),
+      queue.claim("priority-competitor-b", { queue: queueName }),
+    ]);
+    expect(claims.map((claim) => claim?.id)).toEqual(
+      expect.arrayContaining([scheduledHigh, highPeers[0]]),
+    );
+    expect(claims.every((claim) => claim !== null && claim.priority >= 80)).toBe(true);
+    await expect(queue.getJob(low)).resolves.toMatchObject({ state: "ready", priority: 10 });
+  });
+
   it("validates cancellation metadata and idempotently cancels never-started jobs", async () => {
     const readyId = await queue.enqueue("cancel-ready", { value: 1 });
     await expect(queue.cancel(readyId, { requestedBy: "" })).rejects.toThrow(
@@ -1450,7 +1482,7 @@ describe("claim lease fence", () => {
 
       const readyPlan = (
         await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
-          SELECT runtime.job_id, runtime.concurrency_key, runtime.sequence
+          SELECT runtime.job_id, runtime.concurrency_key, runtime.priority, runtime.sequence
             FROM workhorse.job_runtime runtime
             JOIN workhorse.job job ON job.id = runtime.job_id
            WHERE runtime.state = 'ready'
@@ -1458,7 +1490,7 @@ describe("claim lease fence", () => {
              AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
              AND (job.execution_timeout_ms IS NULL
                OR runtime.execution_used_ms < job.execution_timeout_ms)
-           ORDER BY runtime.sequence, runtime.job_id
+           ORDER BY runtime.priority DESC, runtime.sequence, runtime.job_id
            LIMIT 100
            FOR UPDATE OF runtime SKIP LOCKED`)
       ).rows

@@ -106,6 +106,7 @@ describe("schema installation", () => {
         "deadline_at",
         "execution_timeout_ms",
         "created_at",
+        "priority",
       ],
       dashboard_job_wait_v1: [
         "job_id",
@@ -149,6 +150,7 @@ describe("schema installation", () => {
         "enabled",
         "revision",
         "updated_at",
+        "priority",
       ],
       dashboard_schedule_occurrence_v1: ["namespace", "schedule_name", "occurrence_at", "fired_at"],
       dashboard_worker_registry_v1: [
@@ -193,11 +195,11 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v26 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v27 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(26);
+    expect(version.rows[0]?.version).toBe(27);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -207,6 +209,7 @@ describe("schema installation", () => {
       { version: 24, description: "add schema migration ledger" },
       { version: 25, description: "make schedule occurrence replay a no-op" },
       { version: 26, description: "add versioned dashboard read surface" },
+      { version: 27, description: "add strict-priority job dispatch" },
     ]);
 
     const maintenanceFunctions = await pool.query<{

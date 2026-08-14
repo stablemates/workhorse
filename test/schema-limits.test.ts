@@ -15,6 +15,7 @@ import {
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
   MAX_JOB_CONTRACT_SENSITIVE_KEYS,
+  MAX_JOB_PRIORITY,
   MAX_JOB_QUERY_PAGE_SIZE,
   MAX_JOB_QUERY_PAYLOAD_BYTES,
   MAX_JOB_QUERY_REDACT_KEYS,
@@ -64,6 +65,17 @@ const rules: readonly LimitRule[] = [
     patterns: [
       new RegExp(
         String.raw`v_count > (\d+)${gap}RAISE EXCEPTION 'enqueue batch exceeds maximum size of (\d+)'`,
+        "g",
+      ),
+    ],
+  },
+  {
+    constant: "MAX_JOB_PRIORITY",
+    value: MAX_JOB_PRIORITY,
+    bounds: "dispatch priority accepted for one job",
+    patterns: [
+      new RegExp(
+        String.raw`v_priority NOT BETWEEN 0 AND (\d+)${gap}RAISE EXCEPTION 'priority must be an integer between 0 and (\d+)'`,
         "g",
       ),
     ],

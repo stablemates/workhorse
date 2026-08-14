@@ -26,6 +26,7 @@ import { nullableRowTimestamp, rowTimestamp } from "./row-mapping.js";
 type ClaimRow = {
   job_id: string;
   job_type: string;
+  priority: number;
   payload: Json;
   contract_version: string | null;
   result_max_bytes: number;
@@ -164,10 +165,10 @@ export class ClaimLeaseFenceModule extends QueueModule {
     const queueName = options.queue ?? this.context.defaultQueue;
     const startedAt = performance.now();
     return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
-      // claim_v2 commits ownership before returning the payload. Handler code must run only after
+      // claim_v3 commits ownership before returning the payload. Handler code must run only after
       // this query resolves so no row lock or claim transaction spans user code.
       const result = await this.context.database.query<ClaimRow>(
-        "SELECT * FROM workhorse.claim_v2($1::text, $2::text, $3::integer)",
+        "SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
         [queueName, workerId, options.leaseMs ?? 30_000],
       );
       const row = result.rows[0];
@@ -196,6 +197,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
         id: row.job_id,
         queue: queueName,
         type: row.job_type,
+        priority: row.priority,
         payload: row.payload as TPayload,
         contractVersion: row.contract_version,
         resultMaxBytes: row.result_max_bytes,

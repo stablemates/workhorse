@@ -42,7 +42,7 @@ describe("cron schedules", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(26);
+    expect(health.schemaVersion).toBe(27);
     expect(health.counts).toEqual({
       scheduled: 0,
       ready: 1,
@@ -189,6 +189,21 @@ describe("cron schedules", () => {
         .rows[0]?.count,
     ).toBe(0);
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 1.5, -1, 101])(
+    "rejects invalid recurring priority %s before serialization",
+    async (priority) => {
+      await expect(
+        queue.syncSchedules("invalid-priority", [
+          {
+            name: "invalid-priority",
+            schedule: "0 * * * *",
+            job: { type: "invalid-priority", payload: null, priority },
+          },
+        ]),
+      ).rejects.toThrow("priority must be an integer between 0 and 100");
+    },
+  );
 
   it("lets workers coordinate recurring occurrences without duplicate jobs", async () => {
     await queue.syncSchedules("integration", [

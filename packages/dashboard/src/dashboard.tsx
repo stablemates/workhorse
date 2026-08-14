@@ -2623,6 +2623,17 @@ function TasksPage({
                             Keyed
                           </Badge>
                         ) : null}
+                        {job.priority > 0 ? (
+                          <Badge
+                            size="xs"
+                            variant="light"
+                            color="orange"
+                            tt="none"
+                            title={`Priority ${job.priority}; higher-priority ready tasks are claimed first.`}
+                          >
+                            P{job.priority}
+                          </Badge>
+                        ) : null}
                         {job.tags.map((tag) =>
                           tag === "durable-checkpoint" ? null : (
                             <Badge key={tag} size="xs" variant="light" color="gray" tt="none">
@@ -2759,6 +2770,7 @@ function CronPage({
                       <Table.Td>
                         <Text size="sm" c="dimmed">
                           {schedule.queue ?? "system"}
+                          {schedule.priority === null ? "" : ` · Priority ${schedule.priority}`}
                         </Text>
                       </Table.Td>
                       <Table.Td>
@@ -6327,6 +6339,17 @@ function DashboardContent({
               </Group>
               <Code fz="xs">{selectedJob.identity.id}</Code>
               <RetryPolicyLine job={selectedJob} />
+              <Group gap="xs" mt="sm" align="baseline">
+                <Text c="dimmed" size="xs" fw={600}>
+                  Priority
+                </Text>
+                <Badge size="xs" variant="light" color="orange" tt="none">
+                  {selectedJob.identity.priority}
+                </Badge>
+                <Text c="dimmed" size="xs">
+                  Higher values are claimed first; equal values keep FIFO order.
+                </Text>
+              </Group>
               <TimingPolicyLine job={selectedJob} />
               <ConcurrencyPolicyLine job={selectedJob} />
             </Box>
