@@ -47,14 +47,15 @@ How a job behaves once it's executing.
 
 ## Operating the system
 
-|                                           |                                                              |
-| ----------------------------------------- | ------------------------------------------------------------ |
-| [310 Workers](310-workers.md)             | The processes that run your jobs, and how they shut down     |
-| [320 Statistics](320-statistics.md)       | Counting things without melting the database                 |
-| [330 Retention](330-retention.md)         | Deleting old data without losing the audit trail             |
-| [340 Redrive](340-redrive.md)             | Running a job again after it has given up                    |
-| [350 Observability](350-observability.md) | Exporting bounded process metrics and database-wide gauges   |
-| [360 Queue health](360-queue-health.md)   | One consistent snapshot, and when it says something is wrong |
+|                                             |                                                              |
+| ------------------------------------------- | ------------------------------------------------------------ |
+| [310 Workers](310-workers.md)               | The processes that run your jobs, and how they shut down     |
+| [315 Batch handlers](315-batch-handlers.md) | Processing compatible jobs in one application call           |
+| [320 Statistics](320-statistics.md)         | Counting things without melting the database                 |
+| [330 Retention](330-retention.md)           | Deleting old data without losing the audit trail             |
+| [340 Redrive](340-redrive.md)               | Running a job again after it has given up                    |
+| [350 Observability](350-observability.md)   | Exporting bounded process metrics and database-wide gauges   |
+| [360 Queue health](360-queue-health.md)     | One consistent snapshot, and when it says something is wrong |
 
 ## Adding a guide
 

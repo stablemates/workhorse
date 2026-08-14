@@ -53,6 +53,7 @@ function lazyLogger(): Pick<Logger, "emit"> {
 const telemetryLogger = lazyLogger();
 
 type WorkhorseLogEvent =
+  | "workhorse.handler.batch_dispatched"
   | "workhorse.handler.finished"
   | "workhorse.handler.registered"
   | "workhorse.handler.signal_swallowed"
@@ -222,6 +223,14 @@ export const telemetryMetrics = {
   }),
   handlerRuntime: lazyCounter("workhorse.handler.runtime", {
     description: "Cumulative handler execution time",
+    unit: "ms",
+  }),
+  handlerBatchSize: lazyHistogram("workhorse.handler.batch.size", {
+    description: "Jobs delivered in one batch handler invocation",
+    unit: "{job}",
+  }),
+  handlerBatchLinger: lazyHistogram("workhorse.handler.batch.linger", {
+    description: "Time from the first batch member arriving until dispatch",
     unit: "ms",
   }),
   maintenanceDrift: lazyHistogram("workhorse.maintenance.drift", {

@@ -104,6 +104,27 @@ export type Handler<TPayload = Json, TResult extends Json = Json> = (
   context: HandlerContext<TPayload>,
 ) => Promise<TResult> | TResult;
 
+/** One independently leased job delivered to a shared batch-handler invocation. */
+export interface BatchHandlerItem<TPayload = Json> {
+  payload: TPayload;
+  context: HandlerContext<TPayload>;
+}
+
+/**
+ * A compatible group of jobs from one queue and job type. Results correspond by array position;
+ * throwing or returning the wrong result count fails every member through its own fenced lifecycle.
+ */
+export type BatchHandler<TPayload = Json, TResult extends Json = Json> = (
+  items: readonly BatchHandlerItem<TPayload>[],
+) => Promise<readonly TResult[]> | readonly TResult[];
+
+export interface BatchHandlerOptions {
+  /** Maximum jobs delivered in one invocation. It cannot exceed the worker's job concurrency. */
+  maxSize: number;
+  /** Maximum time after the first member arrives before a partial batch dispatches. */
+  lingerMs: number;
+}
+
 export type WorkerMaintenanceLoop = "tick" | "statistics_rollup" | "background_tasks";
 
 export interface WorkerMaintenanceTelemetry extends MaintenancePhaseResult {
@@ -425,6 +446,116 @@ export class Worker {
     this.handlers.set(type, handler as unknown as Handler);
     logDebug("workhorse.handler.registered", "Job handler registered", {
       "workhorse.job.type": type,
+      "workhorse.worker.id": this.workerId,
+    });
+    return this;
+  }
+
+  handleBatch<TPayload extends Json = Json, TResult extends Json = Json>(
+    type: string,
+    options: BatchHandlerOptions,
+    handler: BatchHandler<TPayload, TResult>,
+  ): this {
+    if (!Number.isSafeInteger(options.maxSize) || options.maxSize < 1 || options.maxSize > 100) {
+      throw new Error("maxSize must be a safe integer between 1 and 100");
+    }
+    if (options.maxSize > this.concurrency) {
+      throw new Error("maxSize must not exceed worker concurrency");
+    }
+    if (
+      !Number.isSafeInteger(options.lingerMs) ||
+      options.lingerMs < 0 ||
+      options.lingerMs > 60_000
+    ) {
+      throw new Error("lingerMs must be a safe integer between 0 and 60000");
+    }
+    const maxSize = options.maxSize;
+    const lingerMs = options.lingerMs;
+
+    type PendingItem = {
+      arrivalOrder: number;
+      arrivedAt: number;
+      priority: number;
+      item: BatchHandlerItem<TPayload>;
+      resolve: (result: TResult) => void;
+      reject: (error: unknown) => void;
+    };
+    let pending: PendingItem[] = [];
+    let lingerTimer: ReturnType<typeof setTimeout> | undefined;
+    let nextArrival = 0;
+
+    const dispatch = (): void => {
+      if (pending.length === 0) return;
+      if (lingerTimer !== undefined) {
+        clearTimeout(lingerTimer);
+        lingerTimer = undefined;
+      }
+      const batch: PendingItem[] = [];
+      for (const member of pending.splice(0, maxSize)) {
+        const insertionIndex = batch.findIndex(
+          (candidate) =>
+            candidate.priority < member.priority ||
+            (candidate.priority === member.priority &&
+              candidate.arrivalOrder > member.arrivalOrder),
+        );
+        if (insertionIndex === -1) batch.push(member);
+        else batch.splice(insertionIndex, 0, member);
+      }
+      const full = batch.length === maxSize;
+      const firstArrivedAt = Math.min(...batch.map((member) => member.arrivedAt));
+      const actualLingerMs = Math.max(0, performance.now() - firstArrivedAt);
+      const attributes = {
+        "workhorse.queue.name": this.queueName,
+        "workhorse.job.type": type,
+        "workhorse.handler.batch.full": full,
+      };
+      telemetryMetrics.handlerBatchSize.record(batch.length, attributes);
+      telemetryMetrics.handlerBatchLinger.record(actualLingerMs, attributes);
+      logInfo("workhorse.handler.batch_dispatched", "Job batch dispatched", {
+        ...attributes,
+        "workhorse.handler.batch.size": batch.length,
+        "workhorse.handler.batch.linger_ms": actualLingerMs,
+        "workhorse.worker.id": this.workerId,
+      });
+
+      void Promise.resolve()
+        .then(() => handler(batch.map(({ item }) => item)))
+        .then((results) => {
+          if (!Array.isArray(results) || results.length !== batch.length) {
+            throw new Error(
+              `Batch handler for ${type} returned ${Array.isArray(results) ? results.length : "a non-array value"} results for ${batch.length} jobs`,
+            );
+          }
+          for (const [index, member] of batch.entries()) member.resolve(results[index] as TResult);
+        })
+        .catch((error: unknown) => {
+          for (const member of batch) member.reject(error);
+        });
+    };
+
+    const adapter: Handler<TPayload, TResult> = (payload, context) =>
+      new Promise<TResult>((resolve, reject) => {
+        pending.push({
+          arrivalOrder: nextArrival,
+          arrivedAt: performance.now(),
+          priority: context.job.priority,
+          item: { payload, context },
+          resolve,
+          reject,
+        });
+        nextArrival += 1;
+        if (pending.length >= maxSize || lingerMs === 0) {
+          dispatch();
+        } else if (lingerTimer === undefined) {
+          lingerTimer = setTimeout(dispatch, lingerMs);
+        }
+      });
+
+    this.handlers.set(type, adapter as unknown as Handler);
+    logDebug("workhorse.handler.registered", "Batch job handler registered", {
+      "workhorse.job.type": type,
+      "workhorse.handler.batch.max_size": maxSize,
+      "workhorse.handler.batch.linger_ms": lingerMs,
       "workhorse.worker.id": this.workerId,
     });
     return this;

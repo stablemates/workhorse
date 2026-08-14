@@ -655,6 +655,8 @@ Queue and worker operations emit these synchronous instruments:
 | `workhorse.handler.executions`       | counter, `{execution}`  | One worker handler activation, by queue, job type, and `workhorse.handler.outcome`. Outcomes are `succeeded`, `retry`, `failed`, `canceled`, `deadline_exceeded`, `timeout`, `lease_lost`, and `suspended`.                   |
 | `workhorse.handler.duration`         | histogram, `ms`         | Wall-clock duration of the same activation, with the same attributes. An activation that ends without a recorded outcome reports `unknown`. Durable wait suspension closes an activation without closing its logical attempt. |
 | `workhorse.handler.runtime`          | counter, `ms`           | Cumulative handler execution time by queue and job type.                                                                                                                                                                      |
+| `workhorse.handler.batch.size`       | histogram, `{job}`      | Jobs delivered in one `BatchHandler` invocation, by queue, job type, and bounded full/partial flag.                                                                                                                           |
+| `workhorse.handler.batch.linger`     | histogram, `ms`         | Time from the first member reaching its coordinator until batch dispatch, with the same attributes.                                                                                                                           |
 | `workhorse.claim.duration`           | histogram, `ms`         | `claim_v3` latency, by queue and the bounded `workhorse.claim.result` values `claimed` and `empty`.                                                                                                                           |
 | `workhorse.leases.expired`           | counter, `{lease}`      | Leases recovered by `recover_expired_v1`; zero-result passes emit nothing.                                                                                                                                                    |
 | `workhorse.schedule.fired`           | counter, `{occurrence}` | One `fire_schedule_v1` call that returns a job ID, by schedule namespace and name.                                                                                                                                            |
@@ -728,6 +730,19 @@ per-job handler task; the fill loop stops when all free slots are occupied or th
 This bounds claim and connection pressure without serializing user handlers. A handler slot remains active
 through completion, retry/failure handling, or durable-wait suspension, and every active job owns its own
 heartbeat timer, abort controller, fence checks, and final transition.
+
+`Worker.handleBatch(type, { maxSize, lingerMs }, handler)` registers one `BatchHandler` for a job
+type. `maxSize` is a safe integer from 1 through 100 and cannot exceed `WorkerOptions.concurrency`.
+`lingerMs` is a safe integer from 0 through 60,000. Jobs in ordinary active slots rendezvous in the
+type's process-local coordinator. A full group dispatches immediately. A partial group dispatches
+after its first member has waited `lingerMs`; this timer does not depend on `LISTEN` notifications.
+
+Every `BatchHandlerItem` retains its payload and `HandlerContext`. The coordinator sorts members by
+priority descending and coordinator arrival order. One invocation contains only the worker's configured
+queue and registered job type. The handler returns one result per member in the same order. A thrown error,
+non-array return, or wrong result count rejects every member. Each existing per-job execution path submits
+that failure under its own fence. `workhorse.handler.batch_dispatched` logs the bounded size, measured
+linger, full/partial flag, queue, type, and worker identity without payloads or job IDs.
 
 `pause()` prevents later claims while maintenance and active jobs continue. `resume()` clears the pause and
 makes claims immediately eligible. `stop()` enters draining state, prevents later claims, and allows every

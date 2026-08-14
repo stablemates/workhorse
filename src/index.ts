@@ -76,6 +76,9 @@ export {
   Worker,
 } from "./worker.js";
 export type {
+  BatchHandler,
+  BatchHandlerItem,
+  BatchHandlerOptions,
   Failpoint,
   Handler,
   HandlerContext,
