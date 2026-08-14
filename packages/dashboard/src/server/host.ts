@@ -58,9 +58,16 @@ export interface DashboardHostOptions {
     transformHtml(url: string, html: string): Promise<string>;
   };
   /** Must explicitly authorize every dashboard, RPC, and asset request. */
-  authorize?: (request: Request) => boolean | Response | Promise<boolean | Response>;
+  authorize?: (
+    request: Request,
+  ) => boolean | DashboardPrincipal | Response | Promise<boolean | DashboardPrincipal | Response>;
   /** Standalone single-administrator credentials. Mutually exclusive with `authorize`. */
   singleAdmin?: DashboardSingleAdminOptions;
+}
+
+/** Identity established by the embedded application's server-side authorization boundary. */
+export interface DashboardPrincipal {
+  actor: string;
 }
 
 export interface DashboardHost {
@@ -88,6 +95,19 @@ const contentTypes: Readonly<Record<string, string>> = {
 };
 
 const SLOW_RPC_REQUEST_MS = 1_000;
+const mutationProcedures = new Set([
+  "dashboard.enqueueTest",
+  "dashboard.setScheduleEnabled",
+  "dashboard.setQueuePaused",
+  "dashboard.purgeQueue",
+  "dashboard.setWorkerPaused",
+  "dashboard.overrideMaintenancePolicy",
+  "dashboard.revertMaintenancePolicy",
+  "dashboard.overrideRetentionPolicy",
+  "dashboard.revertRetentionPolicy",
+  "dashboard.runTaskNow",
+  "dashboard.cancelTask",
+]);
 const rpcLogRecords = {
   completed: {
     severityNumber: SeverityNumber.DEBUG,
@@ -125,6 +145,22 @@ function logRpcRequest(procedure: string, durationMs: number, statusCode: number
       "workhorse.dashboard.rpc.duration_ms": durationMs,
     },
   });
+}
+
+function rpcProcedure(pathname: string, prefix: string): string {
+  return pathname.slice(prefix.length).split("/").filter(Boolean).join(".");
+}
+
+function rejectCrossOriginMutation(request: Request): Response | null {
+  const origin = request.headers.get("origin");
+  if (origin) {
+    try {
+      if (new URL(origin).origin === new URL(request.url).origin) return null;
+    } catch {
+      // A malformed Origin is never evidence that the request came from this dashboard.
+    }
+  }
+  return Response.json({ error: "A same-origin mutation request is required" }, { status: 403 });
 }
 
 /**
@@ -216,6 +252,10 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       if (!authorization) {
         return Response.json({ error: "Forbidden" }, { status: 403 });
       }
+      const authenticatedActor =
+        typeof authorization === "object"
+          ? authorization.actor
+          : (options.auditActor ?? "dashboard");
 
       compatibility ??= assertSchemaCompatible(options.database);
       try {
@@ -230,6 +270,11 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
 
       if (pathname === `${path}/rpc` || pathname.startsWith(`${path}/rpc/`)) {
         const rpcPrefix = `${path}/rpc`;
+        const procedure = rpcProcedure(pathname, rpcPrefix);
+        if (mutationProcedures.has(procedure)) {
+          const rejection = rejectCrossOriginMutation(request);
+          if (rejection) return rejection;
+        }
         const startedAt = performance.now();
         const { response } = await rpc.handle(request, {
           prefix: rpcPrefix as `/${string}`,
@@ -246,10 +291,10 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
             workerController: options.workerController,
             settingsController: options.settingsController,
             projectDurability: options.projectDurability,
+            authenticatedActor,
           },
         });
         if (response) {
-          const procedure = pathname.slice(rpcPrefix.length).split("/").filter(Boolean).join(".");
           logRpcRequest(procedure, performance.now() - startedAt, response.status);
         }
         return response ?? null;

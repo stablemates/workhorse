@@ -9,6 +9,7 @@ function context(overrides: Partial<DashboardRpcContext> = {}): DashboardRpcCont
     queue: {} as DashboardRpcContext["queue"],
     configuredWorkers: [],
     environment: "test",
+    authenticatedActor: "operator",
     maintenanceLoops: { tickIntervalMs: 1_000 },
     operator: { mode: "read-only" },
     ...overrides,

@@ -14,7 +14,7 @@ export interface DashboardCommandOptions {
   hostname: string;
   /** Enables operator mutations. Off by default; a standalone server has nobody to delegate to. */
   allowMutations: boolean;
-  /** Attribution recorded on mutations. Never authorization. */
+  /** Server-owned attribution for the explicit unauthenticated loopback development bypass. */
   actor: string;
   /** Omit only for an explicit local development bypass. */
   authentication?: DashboardSingleAdminOptions;

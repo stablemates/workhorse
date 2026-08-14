@@ -1,7 +1,12 @@
 import { scryptSync } from "node:crypto";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import type { RouterClient } from "@orpc/server";
 import type { Queryable } from "@workhorse/core";
 import { describe, expect, it, vi } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
+import type { DashboardRouter } from "../src/server/router.js";
+import type { DashboardAuditContext } from "../src/server/types.js";
 
 const salt = Buffer.from("workhorse-auth-test-salt");
 const passwordHash = `scrypt-v1$${salt.toString("base64url")}$${scryptSync("correct horse", salt, 32).toString("base64url")}`;
@@ -20,6 +25,22 @@ async function login(host: ReturnType<typeof createDashboardHost>): Promise<Resp
   );
   if (!response) throw new Error("Dashboard did not own its login route");
   return response;
+}
+
+function mutationClient(
+  host: ReturnType<typeof createDashboardHost>,
+  headers: HeadersInit,
+): RouterClient<DashboardRouter> {
+  return createORPCClient(
+    new RPCLink({
+      url: "https://dashboard.test/rpc",
+      fetch: async (request) => {
+        const forwarded = new Request(request, { headers: new Headers(request.headers) });
+        for (const [name, value] of new Headers(headers)) forwarded.headers.set(name, value);
+        return (await host.handle(forwarded)) ?? new Response(null, { status: 404 });
+      },
+    }),
+  );
 }
 
 describe("dashboard single-admin authentication", () => {
@@ -168,5 +189,85 @@ describe("dashboard single-admin authentication", () => {
     expect(oldest?.headers.get("location")).toBe("/login");
     expect(newest?.status).toBe(302);
     expect(newest?.headers.get("location")).toBe("/tasks");
+  });
+
+  it("requires a same-origin session mutation and replaces forged browser attribution", async () => {
+    const audits: DashboardAuditContext[] = [];
+    const host = createDashboardHost({
+      database,
+      path: "/",
+      singleAdmin: { username: "operator", passwordHash },
+      operator: { mode: "local" },
+      queueController: {
+        setQueuePaused: async (_queue, paused, audit) => {
+          audits.push(audit);
+          return { paused };
+        },
+      },
+    });
+    const loginResponse = await login(host);
+    const cookie = (loginResponse.headers.get("set-cookie") ?? "").split(";", 1)[0];
+    const input = {
+      queue: "payments",
+      paused: true,
+      audit: { actor: "forged-browser-actor", reason: "deploy", requestId: "request-1" },
+    };
+
+    await expect(mutationClient(host, { cookie }).dashboard.setQueuePaused(input)).rejects.toThrow(
+      /Forbidden|same-origin/i,
+    );
+    await expect(
+      mutationClient(host, { cookie, origin: "https://attacker.test" }).dashboard.setQueuePaused(
+        input,
+      ),
+    ).rejects.toThrow(/Forbidden|same-origin/i);
+    await expect(
+      mutationClient(host, { cookie, origin: "https://dashboard.test" }).dashboard.setQueuePaused(
+        input,
+      ),
+    ).resolves.toEqual({ paused: true });
+
+    expect(audits).toEqual([
+      expect.objectContaining({
+        actor: "operator",
+        reason: "deploy",
+        requestId: "request-1",
+        occurredAt: expect.any(String),
+      }),
+    ]);
+  });
+
+  it("preserves embedded authorization while deriving audit identity on the server", async () => {
+    const audits: DashboardAuditContext[] = [];
+    const host = createDashboardHost({
+      database,
+      path: "/workhorse",
+      authorize: () => ({ actor: "application-admin" }),
+      operator: { mode: "local" },
+      queueController: {
+        setQueuePaused: async (_queue, paused, audit) => {
+          audits.push(audit);
+          return { paused };
+        },
+      },
+    });
+    const client = createORPCClient<RouterClient<DashboardRouter>>(
+      new RPCLink({
+        url: "https://dashboard.test/workhorse/rpc",
+        fetch: async (request) => {
+          const forwarded = new Request(request, { headers: new Headers(request.headers) });
+          forwarded.headers.set("origin", "https://dashboard.test");
+          return (await host.handle(forwarded)) ?? new Response(null, { status: 404 });
+        },
+      }),
+    );
+
+    await client.dashboard.setQueuePaused({
+      queue: "payments",
+      paused: false,
+      audit: { actor: "forged-browser-actor", reason: "deploy", requestId: "request-2" },
+    });
+
+    expect(audits[0]?.actor).toBe("application-admin");
   });
 });
