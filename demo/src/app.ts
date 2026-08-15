@@ -804,6 +804,19 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
             target = `job:${action.jobId}`;
             break;
           }
+          case "signalTask":
+          case "completeHumanWait": {
+            const rows = await transaction.execute<{ state: string | null }>(sql`
+              SELECT COALESCE(r.state, o.state) AS state
+                FROM workhorse.job j
+                LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
+                LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+               WHERE j.id = ${action.jobId}
+            `);
+            before = { state: rows.rows[0]?.state ?? null, name: action.name };
+            target = `job:${action.jobId}`;
+            break;
+          }
           case "setWorkerPaused": {
             const rows = await transaction.execute<{ paused: boolean }>(sql`
               SELECT paused FROM workhorse.worker_registry
