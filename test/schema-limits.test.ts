@@ -23,6 +23,7 @@ import {
   MAX_PROGRESS_VALUE_BYTES,
   MAX_REDRIVE_BATCH_SIZE,
   MAX_REDRIVE_REQUEST_ID_BYTES,
+  MAX_THROTTLE_WINDOW_MS,
   MAX_WAIT_DURATION_MS,
   MIN_PROGRESS_UPDATE_INTERVAL_MS,
 } from "../src/types.js";
@@ -121,6 +122,17 @@ const rules: readonly LimitRule[] = [
     patterns: [
       new RegExp(
         String.raw`v_ttl_ms NOT BETWEEN 1 AND (\d+)${gap}RAISE EXCEPTION 'idempotency ttlMs must be an integer between 1 and (\d+)'`,
+        "g",
+      ),
+    ],
+  },
+  {
+    constant: "MAX_THROTTLE_WINDOW_MS",
+    value: MAX_THROTTLE_WINDOW_MS,
+    bounds: "keyed throttle acceptance window",
+    patterns: [
+      new RegExp(
+        String.raw`v_window_ms NOT BETWEEN 1 AND (\d+)${gap}RAISE EXCEPTION 'throttle windowMs must be an integer between 1 and (\d+)'`,
         "g",
       ),
     ],

@@ -41,6 +41,7 @@ How a job behaves once it's executing.
 | ------------------------------------------------------- | ---------------------------------------------------- |
 | [210 Enqueue idempotency](210-enqueue-idempotency.md)   | Stopping the double-click from creating two jobs     |
 | [215 Keyed debounce](215-debounce.md)                   | Replacing pending work while updates keep arriving   |
+| [217 Keyed throttle](217-throttle.md)                   | Reusing one accepted job during a busy window        |
 | [220 Schedules](220-schedules.md)                       | Recurring jobs on cron, without a scheduler process  |
 | [230 Payload contracts](230-payload-contracts.md)       | Rejecting malformed data and hiding sensitive fields |
 | [240 Concurrency policies](240-concurrency-policies.md) | Limiting active work across the whole worker fleet   |

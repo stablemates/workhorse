@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 28. Version 23 is the oldest supported
+The current clean-install protocol is schema version 29. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 28 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 29 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -26,9 +26,14 @@ the ready index and affected SQL contracts. It records version 27 and advances t
 
 Migration `0028-add-keyed-debounce-enqueue.sql` requires version 27. It adds the coalescing mode to
 enqueue key ownership plus `enqueue_debounce_v1` and `enqueue_many_v2`. It records version 28 and
-advances the schema-version row. Every migration is safe to replay after its target version commits.
+advances the schema-version row.
 
-Versions below 23, versions above 28, gaps, and mixed version rows fail without running a migration.
+Migration `0029-add-keyed-throttle-enqueue.sql` requires version 28. It extends coalescing key
+ownership with `throttle`, adds `enqueue_throttle_v1`, and updates `enqueue_many_v2`. It records
+version 29 and advances the schema-version row. Every migration is safe to replay after its target
+version commits.
+
+Versions below 23, versions above 29, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -620,9 +625,9 @@ stateDiagram-v2
 
 `enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority and persisted retry policies. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, job_id, accepted)` for each input; `accepted` is true only when the statement created the durable job. One statement inserts `job`, `job_runtime`, and `enqueued` events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
 
-`enqueue_many_v2` preserves that contract and returns `(ordinal, job_id, outcome)`. Ordinary requests map `accepted` to `accepted` or `replayed` and stay on the set-based `enqueue_many_v1` path. A batch containing `debounce` requests locks every scoped idempotency or debounce key in bytewise order before processing requests in caller order. This keeps mixed batches atomic and prevents overlapping batches from reversing key-lock order.
+`enqueue_many_v2` preserves that contract and returns `(ordinal, job_id, outcome)`. Ordinary requests map `accepted` to `accepted` or `replayed` and stay on the set-based `enqueue_many_v1` path. A batch containing `debounce` or `throttle` requests locks every scoped idempotency, debounce, or throttle key in bytewise order before processing requests in caller order. This keeps mixed batches atomic and prevents overlapping batches from reversing key-lock order.
 
-`Queue.enqueueWithResult` and `Queue.enqueueManyWithResults` expose `EnqueueResult`, whose `outcome` is `accepted`, `replayed`, `replaced`, or `non_replaceable`. `Queue.enqueue` and `Queue.enqueueMany` preserve their string-ID return values by projecting the same structured results.
+`Queue.enqueueWithResult` and `Queue.enqueueManyWithResults` expose `EnqueueResult`, whose `outcome` is `accepted`, `replayed`, `replaced`, `non_replaceable`, or `coalesced`. `Queue.enqueue` and `Queue.enqueueMany` preserve their string-ID return values by projecting the same structured results.
 
 #### Keyed debounce
 
@@ -633,6 +638,14 @@ stateDiagram-v2
 If the retained runtime is `scheduled` or `ready`, PostgreSQL validates the replacement through `enqueue_many_v1`. The key window must still be active. PostgreSQL then updates the accepted job definition and runtime atomically. `reset` derives a new run time and key expiry from the statement clock. `preserve` retains both. The stable job ID and current attempt remain unchanged. A `debounced` event records the safe key preview and digest, schedule policy, window, expiry, prior request digest, and replacement request digest.
 
 An active runtime, terminal outcome, incompatible idempotency key, or elapsed-but-still-pending runtime returns `non_replaceable` without changing the accepted definition. PostgreSQL appends `debounce_rejected` with a bounded reason. If the key window elapsed after the old job became active or terminal, a new pending identity can be accepted. Queue purge removes the key before the job identity, so a purged key can also accept fresh work. These rules preserve one runtime or outcome for every accepted identity and prevent promotion lag from creating two pending jobs for one elapsed key.
+
+#### Keyed throttle
+
+`EnqueueOptions.throttle` contains `key`, optional `scope`, and `windowMs`. Keys and scopes share the idempotency limits of 512 and 256 UTF-8 bytes. `windowMs` is an integer from 1 through 31,536,000,000. A request cannot combine `throttle` with `idempotency` or `debounce`. It may supply `runAt`; explicit scheduling remains material to request equivalence.
+
+`enqueue_throttle_v1` hashes the scoped key, takes the shared transaction advisory lock, and converts the throttle window into the `enqueue_many_v1` idempotency retention contract. PostgreSQL stores `coalescing_mode = 'throttle'` and derives expiry from `clock_timestamp() + windowMs`. The first request returns `accepted`. An equivalent request before expiry returns the retained job ID with `coalesced` and creates no job, runtime, event, ready sequence, or notification effect.
+
+Payload, queue, type, priority, scheduling, retry, contract, tag, deadline, timeout, or window changes before expiry raise `EnqueueIdempotencyConflictError`. Coalescing remains valid while the retained job is ready, scheduled, active, or terminal because throttle controls acceptance rather than execution. After expiry, a new request accepts a new stable identity even if the prior identity remains retained. Queue purge removes a pending job's binding and also permits a new acceptance. A retained key cannot change among idempotency, debounce, and throttle modes before expiry.
 
 ### Promotion
 
@@ -1199,7 +1212,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 28. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 29. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

@@ -96,8 +96,18 @@ export interface EnqueueDebounce {
   schedule: "reset" | "preserve";
 }
 
+/** PostgreSQL-owned keyed throttle window for one accepted job. */
+export interface EnqueueThrottle {
+  /** Caller-chosen key, unique within `scope` while the throttle window remains active. */
+  key: string;
+  /** Caller namespace. Omitted values use {@link DEFAULT_IDEMPOTENCY_SCOPE}. */
+  scope?: string;
+  /** Acceptance window measured from PostgreSQL's clock. */
+  windowMs: number;
+}
+
 /** PostgreSQL's durable disposition for one enqueue request. */
-export type EnqueueOutcome = "accepted" | "replayed" | "replaced" | "non_replaceable";
+export type EnqueueOutcome = "accepted" | "replayed" | "replaced" | "non_replaceable" | "coalesced";
 
 /** Stable identity plus the durable disposition of one enqueue request. */
 export interface EnqueueResult {
@@ -156,6 +166,8 @@ export interface EnqueueOptions {
   idempotency?: EnqueueIdempotency;
   /** Replace one still-pending keyed job during a PostgreSQL-owned window. */
   debounce?: EnqueueDebounce;
+  /** Accept at most one equivalent job per PostgreSQL-owned window. */
+  throttle?: EnqueueThrottle;
 }
 
 /** One queue's deployment-synchronized concurrency budget. */
@@ -238,6 +250,8 @@ export const MAX_IDEMPOTENCY_SCOPE_BYTES = 256;
 export const MAX_IDEMPOTENCY_TTL_MS = 31_536_000_000;
 /** Maximum keyed debounce window (365 days). */
 export const MAX_DEBOUNCE_WINDOW_MS = 31_536_000_000;
+/** Maximum keyed throttle window (365 days). */
+export const MAX_THROTTLE_WINDOW_MS = 31_536_000_000;
 /** Maximum PostgreSQL canonical JSONB text size accepted for one durable checkpoint value. */
 export const MAX_CHECKPOINT_VALUE_BYTES = 1_048_576;
 /** Maximum PostgreSQL canonical JSONB text size accepted for latest mutable job progress. */

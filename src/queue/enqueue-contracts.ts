@@ -417,8 +417,13 @@ export class EnqueueContractsModule extends QueueModule {
         const traceContext = injectTraceContext();
         const input = requests.map(({ type, payload, options = {}, tags }) => {
           const idempotency: EnqueueIdempotency | undefined = options.idempotency;
-          if (idempotency !== undefined && options.debounce !== undefined) {
-            throw new TypeError("enqueue options cannot combine idempotency and debounce");
+          const coalescingModes = [idempotency, options.debounce, options.throttle].filter(
+            (mode) => mode !== undefined,
+          );
+          if (coalescingModes.length > 1) {
+            throw new TypeError(
+              "enqueue options cannot combine idempotency, debounce, or throttle",
+            );
           }
           if (options.debounce !== undefined && options.runAt !== undefined) {
             throw new TypeError(
@@ -434,7 +439,9 @@ export class EnqueueContractsModule extends QueueModule {
             ...acceptance,
             ...(traceContext === null ? {} : { traceContext }),
             ...(options.runAt === undefined &&
-            (idempotency !== undefined || options.debounce !== undefined)
+            (idempotency !== undefined ||
+              options.debounce !== undefined ||
+              options.throttle !== undefined)
               ? {}
               : { runAt: (options.runAt ?? new Date()).toISOString() }),
             deadline: options.deadline?.toISOString() ?? null,
@@ -460,6 +467,15 @@ export class EnqueueContractsModule extends QueueModule {
                     scope: options.debounce.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
                     windowMs: options.debounce.windowMs,
                     schedule: options.debounce.schedule,
+                  },
+                }),
+            ...(options.throttle === undefined
+              ? {}
+              : {
+                  throttle: {
+                    key: options.throttle.key,
+                    scope: options.throttle.scope ?? DEFAULT_IDEMPOTENCY_SCOPE,
+                    windowMs: options.throttle.windowMs,
                   },
                 }),
           };
@@ -489,6 +505,7 @@ export class EnqueueContractsModule extends QueueModule {
               replayed: ["workhorse.job.enqueue_replayed", "Idempotent enqueue replayed"],
               replaced: ["workhorse.job.debounced", "Pending job replaced"],
               non_replaceable: ["workhorse.job.debounce_rejected", "Debounced job not replaceable"],
+              coalesced: ["workhorse.job.throttled", "Throttled enqueue coalesced"],
             };
             const [eventName, body] = logDetailsByOutcome[outcome];
             logDebug(eventName, body, {
