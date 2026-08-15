@@ -220,7 +220,7 @@ describe("health snapshots", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(34);
+    expect(health.schemaVersion).toBe(35);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -245,6 +245,12 @@ describe("health snapshots", () => {
         dependencyPendingEdges: 0,
         dependencyFailedResolutions: 0,
         dependencyCountsCapped: false,
+        childWaitingParents: 0,
+        childPendingChildren: 0,
+        childUnjoinedResults: 0,
+        childFailedParents: 0,
+        childCanceledParents: 0,
+        childCountsCapped: false,
         oldestReadyAgeMs: expect.any(Number),
         concurrencyLimit: null,
         concurrencyActive: 0,

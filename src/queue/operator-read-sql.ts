@@ -96,6 +96,86 @@ export const RATE_LIMIT_STATUS_SQL = `
     ) pressure
    ORDER BY policy.queue_name LIMIT 100`;
 
+/** Build the bounded child-orchestration samples shared by global health and per-queue metrics. */
+export function childPressureSamplesSql(queueNameExpression?: string): string {
+  const parentJoin = queueNameExpression
+    ? "JOIN workhorse.job_query parent ON parent.job_id = edge.parent_job_id"
+    : "";
+  const outcomeParentJoin = queueNameExpression
+    ? "JOIN workhorse.job_query parent ON parent.job_id = outcome.job_id"
+    : "";
+  const runtimeQueue = queueNameExpression
+    ? `runtime.queue_name = ${queueNameExpression} AND `
+    : "";
+  const parentQueue = queueNameExpression ? `parent.queue_name = ${queueNameExpression} AND ` : "";
+  return `
+    SELECT
+      (SELECT count(*) FROM (
+        SELECT 1 FROM workhorse.job_runtime runtime
+         WHERE ${runtimeQueue}runtime.state = 'blocked'
+           AND EXISTS (
+             SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = runtime.job_id
+           )
+         LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+      ) sampled_waiting) AS waiting_parents,
+      (SELECT count(*) FROM (
+        SELECT 1 FROM workhorse.job_child edge
+        ${parentJoin}
+         WHERE ${parentQueue}edge.joined_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM workhorse.job_outcome outcome WHERE outcome.job_id = edge.child_job_id
+           )
+         LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+      ) sampled_pending) AS pending_children,
+      (SELECT count(*) FROM (
+        SELECT 1 FROM workhorse.job_child edge
+        ${parentJoin}
+         JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
+        WHERE ${parentQueue}edge.joined_at IS NULL AND outcome.state = 'succeeded'
+         LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+      ) sampled_unjoined) AS unjoined_results,
+      (SELECT count(*) FROM (
+        SELECT 1 FROM workhorse.job_outcome outcome
+        ${outcomeParentJoin}
+         WHERE ${parentQueue}outcome.state = 'failed'
+           AND outcome.error->>'name' = 'DependencyFailed'
+           AND EXISTS (
+             SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = outcome.job_id
+           )
+         LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+      ) sampled_failed) AS failed_parents,
+      (SELECT count(*) FROM (
+        SELECT 1 FROM workhorse.job_outcome outcome
+        ${outcomeParentJoin}
+         WHERE ${parentQueue}outcome.state = 'canceled'
+           AND outcome.error->>'name' = 'DependencyCanceled'
+           AND EXISTS (
+             SELECT 1 FROM workhorse.job_child edge WHERE edge.parent_job_id = outcome.job_id
+           )
+         LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+      ) sampled_canceled) AS canceled_parents`;
+}
+
+/** Project capped child-orchestration samples into the shared health and metric columns. */
+export function childPressureProjectionSql(sourceAlias: string): string {
+  return `LEAST(${sourceAlias}.waiting_parents, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS child_waiting_parents,
+           LEAST(${sourceAlias}.pending_children, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS child_pending_children,
+           LEAST(${sourceAlias}.unjoined_results, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS child_unjoined_results,
+           LEAST(${sourceAlias}.failed_parents, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS child_failed_parents,
+           LEAST(${sourceAlias}.canceled_parents, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS child_canceled_parents,
+           ${sourceAlias}.waiting_parents > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             OR ${sourceAlias}.pending_children > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             OR ${sourceAlias}.unjoined_results > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             OR ${sourceAlias}.failed_parents > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             OR ${sourceAlias}.canceled_parents > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             AS child_counts_capped`;
+}
+
 // One statement means one MVCC snapshot: every correctness-sensitive health value is read at the
 // same instant, so counts, depths, watermarks, and policy pressure can never contradict each
 // other. PostgreSQL planner/collector estimates deliberately stay out of this statement; they are
@@ -336,6 +416,9 @@ export const HEALTH_SNAPSHOT_SQL = `
              LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
           ) sampled_failed) AS failed_resolutions
       ) samples
+  ), children AS (
+    SELECT ${childPressureProjectionSql("samples")}
+      FROM (${childPressureSamplesSql()}) samples
   ), rollup AS (
     SELECT state.rolled_up_through,
            GREATEST(0, extract(epoch FROM clock_timestamp() - state.rolled_up_through) * 1000)
@@ -427,7 +510,7 @@ export const HEALTH_SNAPSHOT_SQL = `
   )
   SELECT now() AS captured_at,
          installed.schema_version,
-         depth.*, terminal.*, dependencies.*, retention.*, rollup.*,
+         depth.*, terminal.*, dependencies.*, children.*, retention.*, rollup.*,
          (SELECT COALESCE(jsonb_agg(to_jsonb(c.*) ORDER BY c.queue_name), '[]'::jsonb)
             FROM concurrency c) AS concurrency_policies,
          (SELECT COALESCE(jsonb_agg(to_jsonb(r.*) ORDER BY r.queue_name), '[]'::jsonb)
@@ -438,5 +521,6 @@ export const HEALTH_SNAPSHOT_SQL = `
     CROSS JOIN depth
     CROSS JOIN terminal
     CROSS JOIN dependencies
+    CROSS JOIN children
     CROSS JOIN retention
     CROSS JOIN rollup`;

@@ -410,10 +410,10 @@ CREATE INDEX IF NOT EXISTS job_dependency_prerequisite_pending_idx
   ON workhorse.job_dependency (prerequisite_job_id, dependent_job_id)
   WHERE released_at IS NULL;
 
--- Immutable named child edges support bounded fan-out. Each child owns edge lifetime, while the
--- restricted parent reference keeps retained lineage explainable until every child is pruned.
+-- Immutable named child edges support bounded fan-out. The parent owns edge lifetime. Retention
+-- only removes it after every child is terminal and outside the configured evidence windows.
 CREATE TABLE IF NOT EXISTS workhorse.job_child (
-  parent_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE RESTRICT,
+  parent_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
   child_job_id uuid NOT NULL UNIQUE REFERENCES workhorse.job(id) ON DELETE CASCADE,
   child_name text NOT NULL CHECK (child_name <> '' AND char_length(child_name) <= 200),
   request_fingerprint jsonb NOT NULL,
@@ -424,6 +424,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job_child (
   CHECK (parent_job_id <> child_job_id),
   CHECK (joined_at IS NULL OR joined_at >= created_at)
 );
+CREATE INDEX IF NOT EXISTS job_child_unjoined_idx
+  ON workhorse.job_child (parent_job_id, child_job_id) WHERE joined_at IS NULL;
 CREATE OR REPLACE FUNCTION workhorse.validate_job_dependency_v1()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -715,6 +717,9 @@ CREATE INDEX IF NOT EXISTS job_outcome_failed_finished_idx
 CREATE INDEX IF NOT EXISTS job_outcome_dependency_failed_idx
   ON workhorse.job_outcome (job_id)
   WHERE state = 'failed' AND error->>'name' = 'DependencyFailed';
+CREATE INDEX IF NOT EXISTS job_outcome_dependency_canceled_idx
+  ON workhorse.job_outcome (job_id)
+  WHERE state = 'canceled' AND error->>'name' = 'DependencyCanceled';
 -- Operator activity views ask which tasks changed inside a trailing window. Without this they have
 -- to start from every job that ever existed; with it they start from the window. updated_at is
 -- stamped once when the row is written, so this never costs a heartbeat a HOT update the way the
@@ -887,6 +892,70 @@ CREATE TABLE IF NOT EXISTS workhorse.job_redrive (
 );
 CREATE INDEX IF NOT EXISTS job_redrive_source_time_idx
   ON workhorse.job_redrive (source_job_id, requested_at, target_job_id);
+
+CREATE OR REPLACE FUNCTION workhorse.redrive_lineage_v1(
+  p_job_id uuid,
+  p_limit integer
+) RETURNS TABLE (
+  source_job_id uuid,
+  target_job_id uuid,
+  requested_by text,
+  reason text,
+  request_id_preview text,
+  request_id_digest text,
+  request_id_length integer,
+  source_state text,
+  target_initial_state text,
+  requested_at timestamptz
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  v_frontier uuid[] := ARRAY[p_job_id];
+  v_seen_nodes uuid[] := ARRAY[p_job_id];
+  v_seen_edges uuid[] := '{}'::uuid[];
+  v_node uuid;
+  v_neighbor uuid;
+  v_edge record;
+  v_count integer := 0;
+BEGIN
+  IF p_job_id IS NULL THEN RAISE EXCEPTION 'lineage job identity is required'; END IF;
+  IF p_limit NOT BETWEEN 1 AND 1001 THEN
+    RAISE EXCEPTION 'redrive lineage limit must be between 1 and 1001';
+  END IF;
+
+  WHILE cardinality(v_frontier) > 0 AND v_count < p_limit LOOP
+    v_node := v_frontier[1];
+    v_frontier := COALESCE(v_frontier[2:cardinality(v_frontier)], '{}'::uuid[]);
+    FOR v_edge IN
+      SELECT edge.*
+        FROM workhorse.job_redrive edge
+       WHERE (edge.source_job_id = v_node OR edge.target_job_id = v_node)
+         AND NOT edge.target_job_id = ANY(v_seen_edges)
+       ORDER BY edge.requested_at, edge.source_job_id, edge.target_job_id
+       LIMIT p_limit - v_count
+    LOOP
+      v_seen_edges := array_append(v_seen_edges, v_edge.target_job_id);
+      v_count := v_count + 1;
+      v_neighbor := CASE WHEN v_edge.source_job_id = v_node
+        THEN v_edge.target_job_id ELSE v_edge.source_job_id END;
+      IF NOT v_neighbor = ANY(v_seen_nodes) THEN
+        v_seen_nodes := array_append(v_seen_nodes, v_neighbor);
+        v_frontier := array_append(v_frontier, v_neighbor);
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  RETURN QUERY
+    SELECT edge.source_job_id, edge.target_job_id, edge.requested_by, edge.reason,
+           edge.request_id_preview, edge.request_id_digest, edge.request_id_length,
+           edge.source_state, edge.target_initial_state, edge.requested_at
+      FROM workhorse.job_redrive edge
+     WHERE edge.target_job_id = ANY(v_seen_edges)
+     ORDER BY array_position(v_seen_edges, edge.target_job_id);
+END;
+$$;
 
 -- Append-only lifecycle audit.
 CREATE TABLE IF NOT EXISTS workhorse.job_event (
@@ -6411,6 +6480,20 @@ BEGIN
              SELECT 1 FROM workhorse.job_dependency dependency
               WHERE dependency.prerequisite_job_id = candidate.id
            )
+       AND NOT EXISTS (
+             SELECT 1
+               FROM workhorse.job_child edge
+               JOIN workhorse.job child ON child.id = edge.child_job_id
+               LEFT JOIN workhorse.job_outcome child_outcome
+                 ON child_outcome.job_id = edge.child_job_id
+              WHERE edge.parent_job_id = candidate.id
+                AND (
+                  child_outcome.job_id IS NULL
+                  OR child.created_at >= p_identity_before
+                  OR child_outcome.finished_at >= p_outcome_before
+                  OR child_outcome.history_through_at >= p_history_before
+                )
+           )
      ORDER BY candidate.finished_at, candidate.id
      LIMIT p_limit
   )
@@ -7596,6 +7679,10 @@ CREATE OR REPLACE VIEW workhorse.dashboard_job_dependency_v1 AS
 CREATE OR REPLACE VIEW workhorse.dashboard_job_child_v1 AS
   SELECT parent_job_id, child_job_id, child_name, created_at, joined_at
     FROM workhorse.job_child;
+CREATE OR REPLACE VIEW workhorse.dashboard_job_redrive_v1 AS
+  SELECT source_job_id, target_job_id, request_id_preview, request_id_digest, request_id_length,
+         requested_by, reason, source_state, target_initial_state, requested_at
+    FROM workhorse.job_redrive;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_event_v1 AS
   SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM workhorse.job_event;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_outcome_v1 AS
@@ -7660,9 +7747,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (31, 'add fan-in dependency policies'),
   (32, 'index dependency failure operations'),
   (33, 'add single linked child jobs'),
-  (34, 'add bounded child fan-out and joins')
+  (34, 'add bounded child fan-out and joins'),
+  (35, 'preserve child lineage through lifecycle changes')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (34) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (35) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

@@ -842,6 +842,23 @@ export interface DashboardJobDetail {
       type: string;
       createdAt: string;
       joinedAt: string | null;
+      outcomeState: "succeeded" | "failed" | "canceled" | null;
+      error: unknown;
+    }>;
+    truncated: boolean;
+  };
+  redriveLineage: {
+    records: Array<{
+      sourceJobId: string;
+      targetJobId: string;
+      requestedBy: string;
+      reason: string;
+      requestIdPreview: string;
+      requestIdDigest: string;
+      requestIdLength: number;
+      sourceState: "failed";
+      targetInitialState: "ready";
+      requestedAt: string;
     }>;
     truncated: boolean;
   };
