@@ -6193,7 +6193,11 @@ BEGIN
     INSERT INTO workhorse.job_event(job_id, event_type, details)
       VALUES (v_runtime.job_id, 'dependency_released', jsonb_build_object(
         'prerequisite_job_id', p_prerequisite_job_id, 'state', v_runtime.state,
-        'reason', 'prerequisite_succeeded'
+        'reason', CASE p_prerequisite_state
+          WHEN 'succeeded' THEN 'prerequisite_succeeded'
+          WHEN 'failed' THEN 'prerequisite_failed_policy'
+          WHEN 'canceled' THEN 'prerequisite_canceled_policy'
+        END
       ));
     v_count := v_count + 1;
     IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now THEN
@@ -8636,9 +8640,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (35, 'preserve child lineage through lifecycle changes'),
   (36, 'add idempotent signals to waiting executions'),
   (37, 'add completable human wait tokens'),
-  (38, 'harden signal and human wait lifecycles')
+  (38, 'harden signal and human wait lifecycles'),
+  (39, 'fix dependency release event reasons')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (38) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (39) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )
