@@ -112,6 +112,11 @@ export interface HandlerContext<TPayload = Json> {
   sleepUntil(name: string, wakeAt: Date): Promise<void>;
   /** Suspend until one idempotent external delivery supplies this named signal payload. */
   waitForSignal<TPayload extends Json = Json>(name: string): Promise<TPayload>;
+  /** Suspend until an operator completes this named human decision with a bounded result. */
+  waitForHuman<TContext extends Json, TResult extends Json = Json>(
+    name: string,
+    context: TContext,
+  ): Promise<TResult>;
   /** Create or replay one named child and return its retained successful result after resumption. */
   runChild<TChildPayload extends Json, TResult extends Json = Json>(
     name: string,
@@ -216,6 +221,12 @@ export interface WorkerQueueApi {
     workerId: string,
     name: string,
   ): Promise<WaitForSignalResult<TPayload>>;
+  waitForHuman<TContext extends Json, TResult extends Json = Json>(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+    context: TContext,
+  ): Promise<import("./queue/human-waits.js").WaitForHumanResult<TResult>>;
   createChild<TPayload extends Json, TResult extends Json = Json>(
     parent: ClaimedJob<unknown>,
     workerId: string,
@@ -1085,6 +1096,45 @@ export class Worker {
           if (inFlightSignals.get(name) === execution) inFlightSignals.delete(name);
         }
       };
+      const inFlightHumanWaits = new Map<string, { context: Json; execution: Promise<Json> }>();
+      const waitForHuman: HandlerContext["waitForHuman"] = async <
+        TContext extends Json,
+        TResult extends Json = Json,
+      >(
+        name: string,
+        context: TContext,
+      ): Promise<TResult> => {
+        const pending = inFlightHumanWaits.get(name);
+        if (pending) {
+          if (JSON.stringify(pending.context) !== JSON.stringify(context)) {
+            throw new Error(`Human wait ${name} is already in flight with different context`);
+          }
+          return (await pending.execution) as TResult;
+        }
+        const execution = (async (): Promise<TResult> => {
+          if (controller.signal.aborted) {
+            throw controller.signal.reason ?? new Error("Job lease was lost");
+          }
+          const token = await this.queue.waitForHuman<TContext, TResult>(
+            job,
+            this.workerId,
+            name,
+            context,
+          );
+          if (token.status === "waiting" && arbiter.submit("suspended_for_wait")) {
+            controller.abort(DURABLE_WAIT_SUSPENSION);
+            throw DURABLE_WAIT_SUSPENSION;
+          }
+          return token.result as TResult;
+        })();
+        inFlightHumanWaits.set(name, { context, execution });
+        try {
+          return await execution;
+        } finally {
+          const currentWait = inFlightHumanWaits.get(name);
+          if (currentWait?.execution === execution) inFlightHumanWaits.delete(name);
+        }
+      };
       const inFlightChildren = new Map<string, { request: unknown; execution: Promise<Json> }>();
       const runChild: HandlerContext["runChild"] = <
         TChildPayload extends Json,
@@ -1174,6 +1224,7 @@ export class Worker {
         sleep: durableSleep,
         sleepUntil,
         waitForSignal,
+        waitForHuman,
         runChild,
         runChildren,
       });

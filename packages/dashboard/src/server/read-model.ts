@@ -13,6 +13,7 @@ import {
   DashboardEventsPage,
   DashboardEventsWindow,
   DashboardJobDetail,
+  DashboardHumanWaitPage,
   DashboardQueuesPage,
   DashboardRateLimitPolicySummary,
   DashboardRetentionCategory,
@@ -53,6 +54,40 @@ function toIso(value: Date | string): string {
 
 function toIsoOrNull(value: Date | string | null): string | null {
   return value ? toIso(value) : null;
+}
+
+export async function readDashboardHumanWaits(
+  database: DashboardDatabase,
+  canComplete: boolean,
+): Promise<DashboardHumanWaitPage> {
+  const result = await database.execute<{
+    job_id: string;
+    queue_name: string;
+    job_type: string;
+    token_name: string;
+    context: unknown;
+    attempt: number;
+    created_at: Date | string;
+  }>(sql`
+    SELECT job_id, queue_name, job_type, token_name, context, attempt, created_at
+      FROM workhorse.dashboard_human_wait_v1
+     WHERE completed_at IS NULL
+     ORDER BY created_at, job_id, token_name
+     LIMIT 100
+  `);
+  return {
+    capturedAt: new Date().toISOString(),
+    canComplete,
+    waits: result.rows.map((wait) => ({
+      jobId: wait.job_id,
+      queue: wait.queue_name,
+      jobType: wait.job_type,
+      name: wait.token_name,
+      context: wait.context,
+      attempt: Number(wait.attempt),
+      createdAt: toIso(wait.created_at),
+    })),
+  };
 }
 
 export async function readDashboardSettings(
@@ -153,6 +188,7 @@ function operatorPolicy(
       "purgeQueue",
       "setWorkerPaused",
       "cancelTask",
+      "completeHumanWait",
       ...(canManageSettings
         ? ([
             "overrideMaintenancePolicy",

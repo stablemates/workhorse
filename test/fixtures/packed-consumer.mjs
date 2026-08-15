@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "@workhorse/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
-import { installSchema, startWorkerProcess } from "@workhorse/core";
+import { installSchema, startWorkerProcess, Worker } from "@workhorse/core";
 import { Pool } from "pg";
 
 const databaseUrl =
@@ -62,6 +62,25 @@ const translated = await drizzleQueryable(db)
 assert.ok(translated instanceof DrizzleQueryError);
 assert.equal(translated.code, "42P01");
 assert.ok(translated.cause);
+
+const humanWaitJob = await adapter.queue.enqueue("packed.human-wait", {});
+const humanWaitWorker = new Worker(adapter.queue, { workerId: "packed-human-wait" }).handle(
+  "packed.human-wait",
+  async (_payload, context) =>
+    context.waitForHuman("review", { prompt: "Approve the packed contract?" }),
+);
+assert.equal(await humanWaitWorker.runOnce(), true);
+assert.equal((await adapter.queue.getJob(humanWaitJob)).state, "scheduled");
+const packedCompletion = await adapter.queue.completeHumanWait(
+  humanWaitJob,
+  "review",
+  { approved: true },
+  { idempotencyKey: "packed-completion", completedBy: "packed-operator" },
+);
+assert.equal(packedCompletion.status, "completed");
+assert.equal(packedCompletion.completedBy, "packed-operator");
+assert.equal(await humanWaitWorker.runOnce(), true);
+assert.deepEqual((await adapter.queue.getJob(humanWaitJob)).result, { approved: true });
 
 let handlerStartedResolve;
 const handlerStarted = new Promise((resolve) => {

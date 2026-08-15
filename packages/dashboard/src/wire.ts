@@ -665,7 +665,11 @@ export type DashboardJobEventType =
   | "signal_waiting"
   | "signal_received"
   | "signal_replayed"
-  | "signal_rejected";
+  | "signal_rejected"
+  | "human_wait_created"
+  | "human_wait_completed"
+  | "human_wait_replayed"
+  | "human_wait_rejected";
 
 /** Terminal outcomes `workhorse.attempt_history` records, constrained by a CHECK in the schema. */
 export type DashboardAttemptOutcome =
@@ -962,6 +966,8 @@ export interface DashboardSnapshot {
       | "purgeQueue"
       | "setWorkerPaused"
       | "cancelTask"
+      | "signalTask"
+      | "completeHumanWait"
       | "overrideMaintenancePolicy"
       | "revertMaintenancePolicy"
       | "overrideRetentionPolicy"
@@ -980,4 +986,20 @@ export interface DashboardSnapshot {
     buckets: DashboardMetricBucket[];
   };
   health: Awaited<ReturnType<Queue["health"]>>;
+}
+
+export interface DashboardHumanWaitRow {
+  jobId: string;
+  queue: string;
+  jobType: string;
+  name: string;
+  context: unknown;
+  attempt: number;
+  createdAt: string;
+}
+
+export interface DashboardHumanWaitPage {
+  capturedAt: string;
+  canComplete: boolean;
+  waits: DashboardHumanWaitRow[];
 }

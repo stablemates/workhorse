@@ -13,7 +13,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v36**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v37**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -40,6 +40,8 @@ First published line. Requires **schema v36**, Node.js **22 or 24**, PostgreSQL 
   detail expose bounded orchestration evidence.
 - `@workhorse/core`: named signal waits release worker leases, and application or authenticated
   dashboard callers can deliver bounded payloads exactly once at the waiting-state transition.
+- `@workhorse/core`: named human waits retain bounded decision context, release worker leases, and
+  resume once after an application or authenticated dashboard operator supplies a bounded result.
 - `@workhorse/core`: `Worker.handleBatch` for compatible full and linger-bounded partial batches,
   with explicit per-job success or failure outcomes, independent retries, leases, contexts, fencing,
   cancellation, timeout handling, policy accounting, priority order, and bounded batch telemetry.
