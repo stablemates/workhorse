@@ -1,0 +1,38 @@
+[
+  {
+    "id": "keyed-enqueue-request",
+    "application": {
+      "type": "protocol.serialization",
+      "payload": { "account": "acct-1", "active": true },
+      "options": {
+        "queue": "protocol-contract",
+        "priority": 70,
+        "concurrencyKey": "acct-1",
+        "maxAttempts": 3,
+        "retryPolicy": { "type": "fixed", "delayMs": 25 },
+        "tags": ["conformance"],
+        "idempotency": { "scope": "protocol", "key": "serialize", "ttlMs": 60000 }
+      }
+    },
+    "postgres": {
+      "queue": "protocol-contract",
+      "type": "protocol.serialization",
+      "payload": { "account": "acct-1", "active": true },
+      "priority": 70,
+      "contractVersion": null,
+      "payloadMaxBytes": 1048576,
+      "resultMaxBytes": 1048576,
+      "sensitivePayloadKeys": [],
+      "sensitiveResultKeys": [],
+      "deadline": null,
+      "concurrencyKey": "acct-1",
+      "executionTimeoutMs": null,
+      "maxAttempts": 3,
+      "retryPolicy": { "type": "fixed", "delayMs": 25 },
+      "prerequisiteJobId": null,
+      "dependencies": null,
+      "tags": ["conformance"],
+      "idempotency": { "scope": "protocol", "key": "serialize", "ttlMs": 60000 }
+    }
+  }
+]

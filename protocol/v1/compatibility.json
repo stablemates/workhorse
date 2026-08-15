@@ -1,0 +1,48 @@
+[
+  {
+    "id": "current",
+    "installedSchemaVersion": 39,
+    "clientProtocolVersion": 1,
+    "compatible": true
+  },
+  {
+    "id": "schema-not-installed",
+    "installedSchemaVersion": null,
+    "clientProtocolVersion": 1,
+    "compatible": false,
+    "refusalCode": "schema-not-installed",
+    "refusal": "Refuse every mutation because workhorse.schema_version cannot be read."
+  },
+  {
+    "id": "schema-too-old",
+    "installedSchemaVersion": 38,
+    "clientProtocolVersion": 1,
+    "compatible": false,
+    "refusalCode": "schema-too-old",
+    "refusal": "Refuse every mutation until the database is migrated."
+  },
+  {
+    "id": "schema-too-new",
+    "installedSchemaVersion": 40,
+    "clientProtocolVersion": 1,
+    "compatible": false,
+    "refusalCode": "schema-too-new",
+    "refusal": "Refuse every mutation until the client supports the installed schema."
+  },
+  {
+    "id": "client-protocol-too-old",
+    "installedSchemaVersion": 39,
+    "clientProtocolVersion": 0,
+    "compatible": false,
+    "refusalCode": "client-protocol-too-old",
+    "refusal": "Refuse every mutation because the client protocol is below the supported range."
+  },
+  {
+    "id": "client-protocol-too-new",
+    "installedSchemaVersion": 39,
+    "clientProtocolVersion": 2,
+    "compatible": false,
+    "refusalCode": "client-protocol-too-new",
+    "refusal": "Refuse every mutation because the client protocol is outside the supported range."
+  }
+]

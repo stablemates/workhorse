@@ -78,6 +78,42 @@ Versions below 23, versions above 39, gaps, and mixed version rows fail without 
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
+## SQL protocol conformance
+
+`protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 1. It accepts installed
+schema version 39 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
+older, current, or newer installed schema from the client's protocol version. Every incompatible
+case requires refusal before a mutating function runs.
+
+`protocol/v1/scenarios.json` executes raw versioned PostgreSQL functions and versioned dashboard
+views. It covers enqueue, claim, heartbeat, completion, failure, cancellation, retry, checkpoint,
+timer boundaries, coalescing, dependencies, child jobs, signals, and human decisions. Exact JSON
+surrounds typed placeholders for UUIDs, timestamps, and integers. Captured values preserve identity
+and fence relationships across later steps. Structured errors pin SQLSTATE, message, canonical
+JSON detail, and deterministic digests.
+
+`protocol/v1/runtime.json` defines batch behavior above the SQL protocol. It pins priority order,
+positional outcomes, retries, terminal failures, and independent attempt state. The TypeScript
+suite runs it through `Worker`; Python and Go runtimes must run the same fixture.
+
+`protocol/v1/requests.json` maps public enqueue inputs to exact PostgreSQL JSON. The TypeScript
+suite runs each mapping through `Queue.enqueueMany`, then compares its positional SQL parameter to
+the fixture.
+
+`scripts/verify-sql-protocol.ts` interprets the language-neutral files. It reads
+`workhorse.schema_version` and rejects incompatible schema or client protocol versions before a
+scenario can mutate the database. The clean-install and forward-migration suites both run the
+interpreter. The suite also pins every TypeScript function call's projection, casts, argument
+order, and arity. A clean-schema, migration, TypeScript-call, or fixture change therefore fails the
+same conformance command.
+
+PostgreSQL owns canonical JSONB values, enqueue outcomes, claim selection, leases, fence tokens,
+retry timing, lifecycle transitions, checkpoints, waits, dependency resolution, child lineage,
+signal delivery, human completion, and structured SQL errors. Each language runtime validates
+local arguments, registers handlers, bounds concurrency, and sends heartbeats. It attaches polling
+or notifications, delivers cancellation locally, emits telemetry, maps errors, and drains during
+shutdown. Batch handlers remain a runtime feature assembled from jobs with separate fence tokens.
+
 This page is the precise reference. For the ideas it assumes — leases and fence tokens,
 at-least-once delivery, cooperative cancellation, the runtime/outcome split — start with
 [`guides/000-start-here.md`](guides/000-start-here.md).

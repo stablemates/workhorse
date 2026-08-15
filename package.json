@@ -59,6 +59,7 @@
     "test:database": "pnpm test:prepare && tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts",
     "test:database:changed": "pnpm test:prepare && tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs related --run --passWithNoTests --config vitest.database.config.ts",
     "test:schema": "pnpm schema:check && pnpm test:prepare && tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run test/schema-limits.test.ts test/schema-installation.test.ts test/schema-migrations.test.ts",
+    "test:protocol": "pnpm test:prepare && tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs run --config vitest.database.config.ts test/sql-protocol-conformance.test.ts test/schema-migrations.test.ts",
     "schema:generate": "tsx scripts/generate-clean-schema.ts",
     "schema:check": "tsx scripts/generate-clean-schema.ts --check",
     "test:changed": "pnpm test:prepare && tsx scripts/with-env.ts node node_modules/vitest/vitest.mjs related --run --passWithNoTests --config vitest.unit.config.ts",
