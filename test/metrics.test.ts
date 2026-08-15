@@ -108,6 +108,83 @@ describe("Workhorse OpenTelemetry metrics", () => {
         value: 2,
       }),
     ]);
+    expect(metric("workhorse.jobs.enqueue.outcomes")?.dataPoints).toEqual([
+      expect.objectContaining({
+        attributes: {
+          "workhorse.enqueue.outcome": "accepted",
+          "workhorse.queue.name": "mail",
+        },
+        value: 2,
+      }),
+    ]);
+  });
+
+  it("counts every enqueue outcome by queue without keyed-request attributes", async () => {
+    const { Queue } = await import("../src/queue.js");
+    const outcomes = ["accepted", "replayed", "replaced", "non_replaceable", "coalesced"] as const;
+    const database: Queryable = {
+      query: async <R extends QueryResultRow>() =>
+        queryResult(
+          outcomes.map((outcome, index) => ({
+            ordinal: index + 1,
+            job_id: `job-${index + 1}`,
+            outcome,
+          })) as unknown as R[],
+        ),
+    };
+    const queue = new Queue(database);
+
+    await queue.enqueueManyWithResults([
+      { type: "email.accepted", payload: null, options: { queue: "mail" } },
+      {
+        type: "email.replayed",
+        payload: null,
+        options: {
+          queue: "mail",
+          idempotency: { key: "secret-replayed", scope: "customer-42" },
+        },
+      },
+      ...(["replaced", "non_replaceable"] as const).map((outcome) => ({
+        type: `email.${outcome}`,
+        payload: null,
+        options: {
+          queue: "mail",
+          debounce: {
+            key: `secret-${outcome}`,
+            scope: "customer-42",
+            windowMs: 1_000,
+            schedule: "reset" as const,
+          },
+        },
+      })),
+      {
+        type: "email.coalesced",
+        payload: null,
+        options: {
+          queue: "mail",
+          throttle: { key: "secret-coalesced", scope: "customer-42", windowMs: 1_000 },
+        },
+      },
+    ]);
+    await collect();
+
+    expect(metric("workhorse.jobs.enqueue.outcomes")?.dataPoints).toEqual(
+      outcomes.map((outcome) =>
+        expect.objectContaining({
+          attributes: {
+            "workhorse.enqueue.outcome": outcome,
+            "workhorse.queue.name": "mail",
+          },
+          value: 1,
+        }),
+      ),
+    );
+    expect(JSON.stringify(metric("workhorse.jobs.enqueue.outcomes")?.dataPoints)).not.toContain(
+      "secret-",
+    );
+    expect(JSON.stringify(metric("workhorse.jobs.enqueue.outcomes")?.dataPoints)).not.toContain(
+      "customer-42",
+    );
   });
 
   it("records worker executions by bounded outcome with their duration", async () => {

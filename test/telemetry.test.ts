@@ -149,6 +149,7 @@ describe("OpenTelemetry", () => {
       "workhorse.queue.name": "mail",
       "workhorse.job.type": "mail.send",
       "workhorse.enqueue.count": 1,
+      "workhorse.enqueue.outcome": "accepted",
     });
     expect(JSON.stringify(enqueueSpan?.attributes)).not.toContain("trace-secret");
 
@@ -273,6 +274,7 @@ describe("OpenTelemetry", () => {
   });
 
   it("does not count an idempotent replay as a newly enqueued job", async () => {
+    spanExporter.reset();
     metricExporter.reset();
     const database = queryable(
       vi.fn(async (sql: string) => {
@@ -296,6 +298,9 @@ describe("OpenTelemetry", () => {
         idempotency: { key: "same-request" },
       },
     );
+    expect(
+      spanExporter.getFinishedSpans().find((span) => span.name === "workhorse.enqueue")?.attributes,
+    ).toMatchObject({ "workhorse.enqueue.outcome": "replayed" });
     await meterProvider.forceFlush();
 
     const enqueuedMetric = metricExporter

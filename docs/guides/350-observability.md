@@ -44,6 +44,10 @@ Use `workhorse.jobs.enqueued` and `workhorse.jobs.claimed` to see whether work e
 ready queue. If enqueue continues while claim stops, compare `workhorse.queue.paused`, worker
 capacity, and the age of the oldest ready job.
 
+Use `workhorse.jobs.enqueue.outcomes` to compare `accepted`, `replayed`, `replaced`,
+`non_replaceable`, and `coalesced` requests by queue. The metric omits keyed-request material, so
+coalescing rates remain visible without exposing or multiplying time series by keys.
+
 Use `workhorse.handler.executions` for outcomes and `workhorse.handler.duration` for handler
 latency. Both carry the same bounded outcome attribute. A rising retry or lease-loss rate points to
 different problems than terminal failures, so that attribute keeps those paths separate without

@@ -199,6 +199,10 @@ export const telemetryMetrics = {
     description: "Jobs accepted for durable execution",
     unit: "{job}",
   }),
+  enqueueOutcomes: lazyCounter("workhorse.jobs.enqueue.outcomes", {
+    description: "Enqueue requests by PostgreSQL acceptance outcome",
+    unit: "{request}",
+  }),
   claimed: lazyCounter("workhorse.jobs.claimed", {
     description: "Jobs claimed for handler execution",
     unit: "{job}",
