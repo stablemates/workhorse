@@ -1,5 +1,5 @@
 import { totalDepthSelect } from "../queue-depth.js";
-import { HEALTH_HISTORY_SCAN_LIMIT } from "../types.js";
+import { DEPENDENCY_OPERATIONS_SCAN_LIMIT, HEALTH_HISTORY_SCAN_LIMIT } from "../types.js";
 
 // The rate-limit status projection is shared verbatim between rateLimitStatuses() and the health
 // snapshot statement so the two surfaces can never disagree about throttle semantics. $1 is the
@@ -309,6 +309,33 @@ export const HEALTH_SNAPSHOT_SQL = `
              AS statistics_lag_ms,
            eligible.*, default_rows.*
       FROM policy CROSS JOIN boundaries CROSS JOIN eligible CROSS JOIN default_rows
+  ), dependencies AS (
+    SELECT LEAST(blocked_jobs, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS dependency_blocked_jobs,
+           LEAST(pending_edges, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS dependency_pending_edges,
+           LEAST(failed_resolutions, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS dependency_failed_resolutions,
+           blocked_jobs > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             OR pending_edges > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             OR failed_resolutions > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             AS dependency_counts_capped
+      FROM (
+        SELECT
+          (SELECT count(*) FROM (
+            SELECT 1 FROM workhorse.job_runtime WHERE state = 'blocked'
+             LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+          ) sampled_blocked) AS blocked_jobs,
+          (SELECT count(*) FROM (
+            SELECT 1 FROM workhorse.job_dependency WHERE released_at IS NULL
+             LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+          ) sampled_pending) AS pending_edges,
+          (SELECT count(*) FROM (
+            SELECT 1 FROM workhorse.job_outcome
+             WHERE state = 'failed' AND error->>'name' = 'DependencyFailed'
+             LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+          ) sampled_failed) AS failed_resolutions
+      ) samples
   ), rollup AS (
     SELECT state.rolled_up_through,
            GREATEST(0, extract(epoch FROM clock_timestamp() - state.rolled_up_through) * 1000)
@@ -400,7 +427,7 @@ export const HEALTH_SNAPSHOT_SQL = `
   )
   SELECT now() AS captured_at,
          installed.schema_version,
-         depth.*, terminal.*, retention.*, rollup.*,
+         depth.*, terminal.*, dependencies.*, retention.*, rollup.*,
          (SELECT COALESCE(jsonb_agg(to_jsonb(c.*) ORDER BY c.queue_name), '[]'::jsonb)
             FROM concurrency c) AS concurrency_policies,
          (SELECT COALESCE(jsonb_agg(to_jsonb(r.*) ORDER BY r.queue_name), '[]'::jsonb)
@@ -410,5 +437,6 @@ export const HEALTH_SNAPSHOT_SQL = `
     FROM installed
     CROSS JOIN depth
     CROSS JOIN terminal
+    CROSS JOIN dependencies
     CROSS JOIN retention
     CROSS JOIN rollup`;

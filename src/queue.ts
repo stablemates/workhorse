@@ -13,6 +13,7 @@ import type {
   DeadLetterFilter,
   DeadLetterPage,
   DeadLetterQuery,
+  DependencyLineage,
   EnqueueOptions,
   EnqueueRequest,
   EnqueueResult,
@@ -45,6 +46,7 @@ import type {
   WorkerRegistration,
   WorkerRegistryEntry,
 } from "./types.js";
+import { MAX_JOB_QUERY_PAGE_SIZE } from "./types.js";
 import { logInfo, type QueueMetricSnapshot } from "./telemetry.js";
 import {
   subscribeToJobNotifications,
@@ -474,6 +476,13 @@ export class Queue {
 
   async getRedriveLineage(jobId: string, limit = MAX_REDRIVE_BATCH_SIZE): Promise<RedriveLineage> {
     return this.modules.operatorReads.getRedriveLineage(jobId, limit);
+  }
+
+  async getDependencyLineage(
+    jobId: string,
+    limit = MAX_JOB_QUERY_PAGE_SIZE,
+  ): Promise<DependencyLineage> {
+    return this.modules.operatorReads.getDependencyLineage(jobId, limit);
   }
 
   async claim<TPayload = Json>(

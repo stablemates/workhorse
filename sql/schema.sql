@@ -698,6 +698,9 @@ CREATE INDEX IF NOT EXISTS job_outcome_retention_idx
 -- supports dead-letter keyset scans without adding failed work to any runtime dispatch index.
 CREATE INDEX IF NOT EXISTS job_outcome_failed_finished_idx
   ON workhorse.job_outcome (finished_at DESC, job_id DESC) WHERE state = 'failed';
+CREATE INDEX IF NOT EXISTS job_outcome_dependency_failed_idx
+  ON workhorse.job_outcome (job_id)
+  WHERE state = 'failed' AND error->>'name' = 'DependencyFailed';
 -- Operator activity views ask which tasks changed inside a trailing window. Without this they have
 -- to start from every job that ever existed; with it they start from the window. updated_at is
 -- stamped once when the row is written, so this never costs a heartbeat a HOT update the way the
@@ -7152,9 +7155,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (28, 'add keyed debounce enqueue'),
   (29, 'add keyed throttle enqueue'),
   (30, 'add one-prerequisite job dependencies'),
-  (31, 'add fan-in dependency policies')
+  (31, 'add fan-in dependency policies'),
+  (32, 'index dependency failure operations')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (31) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (32) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

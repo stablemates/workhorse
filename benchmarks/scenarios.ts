@@ -48,6 +48,7 @@ export const operationalScenarioNames = [
   "retry-paths",
   "idempotent-ingress",
   "coalescing-ingress",
+  "dependency-operations",
   "retention-pruning",
   "health-snapshot",
   "worker-concurrency",
@@ -439,6 +440,30 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "debounceResetCleanupMs",
       "debouncePreserveCleanupMs",
       "throttleCleanupMs",
+    ],
+  },
+  {
+    name: "dependency-operations",
+    purpose:
+      "Measure fan-in release and cancellation while proving claim work stays bounded as terminal history grows.",
+    invariants: [
+      "fan-in releases once after every prerequisite resolves",
+      "cancellation applies its declared terminal dependency policy",
+      "claim buffer work stays bounded after retained terminal history grows",
+      "health reports no blocked dependency after both cohorts settle",
+    ],
+    metrics: [
+      "fanIn",
+      "fanInReleaseMs",
+      "cancellationResolutionMs",
+      "claimPlanExecutionMsBeforeHistory",
+      "claimPlanExecutionMsAfterHistory",
+      "claimPlanSharedBlocksBeforeHistory",
+      "claimPlanSharedBlocksAfterHistory",
+      "retainedJobIdentities",
+      "historyJobs",
+      "dependencyReleaseEvents",
+      "dependencyFailedResolutions",
     ],
   },
   {
@@ -3326,6 +3351,135 @@ async function coalescingIngress(
   return { name: "coalescing-ingress", durationMs: 0, metrics, assertions };
 }
 
+async function dependencyOperations(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  await reset(context.pool);
+  const queue = new Queue(context.pool, context.queueName);
+  const assertions: ScenarioAssertion[] = [];
+  const fanIn = Math.max(2, Math.min(context.options.jobCount, 100));
+  const prerequisiteIds = await queue.enqueueMany(
+    Array.from({ length: fanIn }, (_, index) => ({
+      type: "dependency-prerequisite",
+      payload: { index },
+    })),
+  );
+  const dependentId = await queue.enqueue("dependency-dependent", null, {
+    dependencies: {
+      prerequisiteJobIds: prerequisiteIds,
+      onSuccess: "release",
+      onFailure: "fail",
+      onCancellation: "cancel",
+    },
+  });
+  const [, fanInReleaseMs] = await measured(context.now, async () => {
+    for (let index = 0; index < fanIn; index += 1) {
+      const workerId = `dependency-fan-in-${index}`;
+      const prerequisite = await queue.claim(workerId);
+      if (prerequisite === null) throw new Error("dependency fan-in exhausted early");
+      await queue.complete(prerequisite, workerId, null);
+    }
+  });
+  recordInvariant(
+    assertions,
+    "fan-in releases once after every prerequisite resolves",
+    (await queue.getJob(dependentId))?.state,
+    "ready",
+  );
+  const dependencyReleaseEvents = (await queue.getJobTimeline(dependentId)).items.filter(
+    (entry) => entry.kind === "event" && entry.eventType === "dependency_released",
+  ).length;
+  recordInvariant(assertions, "fan-in records one release transition", dependencyReleaseEvents, 1);
+
+  const cancellationPrerequisiteId = await queue.enqueue("dependency-cancel-prerequisite", null);
+  const canceledDependentId = await queue.enqueue("dependency-cancel-dependent", null, {
+    dependencies: {
+      prerequisiteJobIds: [cancellationPrerequisiteId],
+      onSuccess: "release",
+      onFailure: "fail",
+      onCancellation: "cancel",
+    },
+  });
+  const [, cancellationResolutionMs] = await measured(context.now, () =>
+    queue.cancel(cancellationPrerequisiteId, { requestedBy: "dependency-operations" }),
+  );
+  recordInvariant(
+    assertions,
+    "cancellation applies its declared terminal dependency policy",
+    (await queue.getJob(canceledDependentId))?.state,
+    "canceled",
+  );
+
+  const beforeQueueName = `${context.queueName}-plan-before`;
+  const beforeQueue = new Queue(context.pool, beforeQueueName);
+  await beforeQueue.enqueue("dependency-plan-ready", null);
+  await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
+  const claimPlanBeforeHistory = await claimPlan(
+    context.pool,
+    beforeQueueName,
+    "dependency-plan-before",
+  );
+
+  const historyJobs = Math.max(1_000, context.options.jobCount * 100);
+  const historyQueueName = `${context.queueName}-history`;
+  const historyQueue = new Queue(context.pool, historyQueueName);
+  await historyQueue.enqueueMany(
+    Array.from({ length: historyJobs }, (_, index) => ({
+      type: "dependency-plan-history",
+      payload: { index },
+    })),
+  );
+  for (let index = 0; index < historyJobs; index += 1) {
+    const workerId = `dependency-history-${index}`;
+    const job = await historyQueue.claim(workerId);
+    if (job === null) throw new Error("dependency claim-plan history exhausted early");
+    await historyQueue.complete(job, workerId, null);
+  }
+
+  const afterQueueName = `${context.queueName}-plan-after`;
+  const afterQueue = new Queue(context.pool, afterQueueName);
+  await afterQueue.enqueue("dependency-plan-ready", null);
+  await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
+  const claimPlanAfterHistory = await claimPlan(
+    context.pool,
+    afterQueueName,
+    "dependency-plan-after",
+  );
+  recordInvariant(
+    assertions,
+    "claim buffer work stays bounded after retained terminal history grows",
+    claimPlanAfterHistory.sharedBlocks <= claimPlanBeforeHistory.sharedBlocks * 2 + 8,
+    true,
+  );
+
+  const health = await queue.health();
+  recordInvariant(
+    assertions,
+    "health reports no blocked dependency after both cohorts settle",
+    health.dependencies.blockedJobs,
+    0,
+  );
+  const retainedJobIdentities = await rowCount(context.pool, "job");
+  return {
+    name: "dependency-operations",
+    durationMs: 0,
+    metrics: {
+      fanIn,
+      fanInReleaseMs,
+      cancellationResolutionMs,
+      claimPlanExecutionMsBeforeHistory: claimPlanBeforeHistory.executionTimeMs,
+      claimPlanExecutionMsAfterHistory: claimPlanAfterHistory.executionTimeMs,
+      claimPlanSharedBlocksBeforeHistory: claimPlanBeforeHistory.sharedBlocks,
+      claimPlanSharedBlocksAfterHistory: claimPlanAfterHistory.sharedBlocks,
+      retainedJobIdentities,
+      historyJobs,
+      dependencyReleaseEvents,
+      dependencyFailedResolutions: health.dependencies.failedResolutions,
+    },
+    assertions,
+  };
+}
+
 async function retentionPruning(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
@@ -4901,6 +5055,7 @@ export const operationalScenarioImplementations: Readonly<
   "retry-paths": retryPaths,
   "idempotent-ingress": idempotentIngress,
   "coalescing-ingress": coalescingIngress,
+  "dependency-operations": dependencyOperations,
   "retention-pruning": retentionPruning,
   "health-snapshot": healthSnapshot,
   "worker-concurrency": workerConcurrency,

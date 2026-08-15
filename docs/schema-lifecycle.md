@@ -34,6 +34,7 @@ planner-estimate function, then advances the schema from 25 to 26. Migration
 `0027-add-job-priority.sql` adds strict-priority dispatch and advances the schema from 26 to 27.
 `0030-add-job-dependencies.sql` adds success-only prerequisite dispatch and advances the schema from 29 to 30.
 `0031-add-fan-in-dependency-policies.sql` adds bounded fan-in and terminal policies, advancing the schema from 30 to 31.
+`0032-index-dependency-failures.sql` adds the dependency-failure operations index and advances the schema from 31 to 32.
 
 `0028-add-keyed-debounce-enqueue.sql` adds keyed debounce and advances the schema from 27 to 28.
 

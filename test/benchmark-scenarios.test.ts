@@ -310,6 +310,28 @@ describe("operational scenario contracts", () => {
     );
     expect(contract!.purpose.toLowerCase()).not.toMatch(/exactly once|faster|latency target|sla/);
   });
+
+  it("defines dependency operations evidence across fan-in, cancellation, and retained history", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "dependency-operations",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/fan-in/);
+    expect(contract!.invariants.join("\n")).toMatch(/cancellation/);
+    expect(contract!.invariants.join("\n")).toMatch(/retained terminal history/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "fanInReleaseMs",
+        "cancellationResolutionMs",
+        "claimPlanSharedBlocksBeforeHistory",
+        "claimPlanSharedBlocksAfterHistory",
+        "retainedJobIdentities",
+        "historyJobs",
+        "dependencyReleaseEvents",
+      ]),
+    );
+  });
 });
 
 describe("resolveOperationalScenarioOptions", () => {

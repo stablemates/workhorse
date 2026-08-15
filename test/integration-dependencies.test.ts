@@ -7,6 +7,99 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("job dependencies", () => {
+  it("reports bounded prerequisite and dependent lineage with release evidence", async () => {
+    const firstId = await queue.enqueue("lineage-first", null);
+    const secondId = await queue.enqueue("lineage-second", null);
+    const dependentId = await queue.enqueue("lineage-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [firstId, secondId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+
+    await expect(queue.getDependencyLineage(firstId)).resolves.toEqual({
+      records: [
+        {
+          dependentJobId: dependentId,
+          prerequisiteJobId: firstId,
+          onSuccess: "release",
+          onFailure: "fail",
+          onCancellation: "cancel",
+          createdAt: expect.any(Date),
+          releasedAt: null,
+          resolution: null,
+        },
+      ],
+      truncated: false,
+    });
+    await expect(readDashboardJobDetail(dashboardDatabase(pool), firstId)).resolves.toMatchObject({
+      dependencyLineage: {
+        records: [
+          expect.objectContaining({
+            dependentJobId: dependentId,
+            prerequisiteJobId: firstId,
+            onFailure: "fail",
+            releasedAt: null,
+          }),
+        ],
+        truncated: false,
+      },
+    });
+
+    const first = await queue.claim("lineage-first-worker");
+    expect(first?.id).toBe(firstId);
+    expect(await queue.complete(first!, "lineage-first-worker", null)).toBe(true);
+
+    const dependentLineage = await queue.getDependencyLineage(dependentId);
+    expect(dependentLineage.records).toContainEqual(
+      expect.objectContaining({
+        dependentJobId: dependentId,
+        prerequisiteJobId: firstId,
+        releasedAt: expect.any(Date),
+        resolution: "release",
+      }),
+    );
+    await expect(queue.getDependencyLineage(dependentId, 1)).resolves.toMatchObject({
+      records: [expect.any(Object)],
+      truncated: true,
+    });
+  });
+
+  it("exposes blocked depth, pending edges, and policy failures through health", async () => {
+    const blockedPrerequisiteId = await queue.enqueue("health-blocked-prerequisite", null);
+    await queue.enqueue("health-blocked-dependent", null, {
+      prerequisiteJobId: blockedPrerequisiteId,
+    });
+    const failingPrerequisiteId = await queue.enqueue("health-failing-prerequisite", null, {
+      maxAttempts: 1,
+    });
+    await queue.enqueue("health-failed-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [failingPrerequisiteId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const first = await queue.claim("health-dependency-worker-1");
+    const second = await queue.claim("health-dependency-worker-2");
+    expect(first?.id).toBe(blockedPrerequisiteId);
+    expect(second?.id).toBe(failingPrerequisiteId);
+    expect(
+      await queue.fail(second!, "health-dependency-worker-2", new Error("expected failure")),
+    ).toBe("failed");
+
+    const health = await queue.health();
+    expect(health.dependencies).toEqual({
+      blockedJobs: 1,
+      pendingEdges: 1,
+      failedResolutions: 1,
+      capped: false,
+    });
+  });
+
   it("releases fan-in only after every prerequisite succeeds", async () => {
     const firstId = await queue.enqueue("fan-in-first", null);
     const secondId = await queue.enqueue("fan-in-second", null);

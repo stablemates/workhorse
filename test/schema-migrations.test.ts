@@ -105,6 +105,7 @@ describe("schema migrations", () => {
       { version: 29, description: "add keyed throttle enqueue" },
       { version: 30, description: "add one-prerequisite job dependencies" },
       { version: 31, description: "add fan-in dependency policies" },
+      { version: 32, description: "index dependency failure operations" },
     ]);
   });
 
@@ -114,20 +115,20 @@ describe("schema migrations", () => {
 
   it("leaves an already-current schema unchanged", async () => {
     const before = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 31",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 32",
     );
 
     await migrateSchema(database.pool);
 
     const after = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 31",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 32",
     );
     expect(after.rows).toEqual(before.rows);
   });
 
   it("safely replays the latest migration after its target version commits", async () => {
     const migration = await readFile(
-      path.join(repository, "sql", "migrations", "0031-add-fan-in-dependency-policies.sql"),
+      path.join(repository, "sql", "migrations", "0032-index-dependency-failures.sql"),
       "utf8",
     );
 

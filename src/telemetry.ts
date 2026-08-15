@@ -372,6 +372,10 @@ export interface QueueMetricSnapshot {
   readyDepth: number;
   scheduledDepth: number;
   activeLeases: number;
+  dependencyBlockedDepth: number;
+  dependencyPendingEdges: number;
+  dependencyFailedResolutions: number;
+  dependencyCountsCapped: boolean;
   oldestReadyAgeMs: number | null;
   concurrencyLimit: number | null;
   concurrencyActive: number;
@@ -397,6 +401,22 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
     description: "Age of the oldest ready job",
     unit: "ms",
   });
+  const dependencyBlocked = activeMeter.createObservableGauge(
+    "workhorse.queue.dependencies.blocked",
+    { description: "Jobs waiting for prerequisite policy resolution", unit: "{job}" },
+  );
+  const dependencyPending = activeMeter.createObservableGauge(
+    "workhorse.queue.dependencies.pending_edges",
+    { description: "Unresolved prerequisite edges", unit: "{edge}" },
+  );
+  const dependencyFailed = activeMeter.createObservableGauge(
+    "workhorse.queue.dependencies.failed_resolutions",
+    { description: "Retained jobs failed by dependency policy", unit: "{job}" },
+  );
+  const dependencyCapped = activeMeter.createObservableGauge(
+    "workhorse.queue.dependencies.capped",
+    { description: "Whether dependency pressure values reached their scan limit", unit: "1" },
+  );
   const concurrencyLimit = activeMeter.createObservableGauge("workhorse.queue.concurrency.limit", {
     description: "Configured queue concurrency limit",
     unit: "{job}",
@@ -431,6 +451,10 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
   const instruments = [
     queueDepth,
     oldestReadyAge,
+    dependencyBlocked,
+    dependencyPending,
+    dependencyFailed,
+    dependencyCapped,
     concurrencyLimit,
     concurrencyActive,
     concurrencyBlocked,
@@ -457,6 +481,10 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
       if (snapshot.oldestReadyAgeMs !== null) {
         result.observe(oldestReadyAge, snapshot.oldestReadyAgeMs, queueAttribute);
       }
+      result.observe(dependencyBlocked, snapshot.dependencyBlockedDepth, queueAttribute);
+      result.observe(dependencyPending, snapshot.dependencyPendingEdges, queueAttribute);
+      result.observe(dependencyFailed, snapshot.dependencyFailedResolutions, queueAttribute);
+      result.observe(dependencyCapped, snapshot.dependencyCountsCapped ? 1 : 0, queueAttribute);
       if (snapshot.concurrencyLimit !== null) {
         result.observe(concurrencyLimit, snapshot.concurrencyLimit, queueAttribute);
         result.observe(concurrencyActive, snapshot.concurrencyActive, queueAttribute);

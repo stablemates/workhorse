@@ -10,6 +10,8 @@ import type {
   DeadLetterFilter,
   DeadLetterPage,
   DeadLetterQuery,
+  DependencyLineage,
+  DependencyLineageRecord,
   JobListFilter,
   JobListItem,
   JobListPage,
@@ -33,7 +35,11 @@ import type {
   RedriveResult,
   RetryPolicy,
 } from "../types.js";
-import { MAX_JOB_QUERY_PAGE_SIZE, MAX_REDRIVE_BATCH_SIZE } from "../types.js";
+import {
+  DEPENDENCY_OPERATIONS_SCAN_LIMIT,
+  MAX_JOB_QUERY_PAGE_SIZE,
+  MAX_REDRIVE_BATCH_SIZE,
+} from "../types.js";
 import { progressRecord } from "./checkpoints-progress-waits.js";
 import {
   validateJobListQuery,
@@ -209,6 +215,10 @@ type HealthSnapshotRow = RetentionPolicyRow & {
   failed_count: string;
   canceled_count: string;
   terminal_counts_capped: boolean;
+  dependency_blocked_jobs: string;
+  dependency_pending_edges: string;
+  dependency_failed_resolutions: string;
+  dependency_counts_capped: boolean;
   oldest_job_identity_at: Date | string | null;
   oldest_terminal_outcome_at: Date | string | null;
   oldest_job_event_at: Date | string | null;
@@ -779,6 +789,49 @@ export class OperatorReadsModule extends QueueModule {
     };
   }
 
+  async getDependencyLineage(
+    jobId: string,
+    requestedLimit = MAX_JOB_QUERY_PAGE_SIZE,
+  ): Promise<DependencyLineage> {
+    const limit = validatePageLimit(
+      requestedLimit,
+      MAX_JOB_QUERY_PAGE_SIZE,
+      MAX_JOB_QUERY_PAGE_SIZE,
+      "getDependencyLineage limit",
+    );
+    const result = await this.context.database.query<{
+      dependent_job_id: string;
+      prerequisite_job_id: string;
+      on_success: DependencyLineageRecord["onSuccess"];
+      on_failure: DependencyLineageRecord["onFailure"];
+      on_cancellation: DependencyLineageRecord["onCancellation"];
+      created_at: Date | string;
+      released_at: Date | string | null;
+      resolution: DependencyLineageRecord["resolution"];
+    }>(
+      `SELECT dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation,
+              created_at, released_at, resolution
+         FROM workhorse.job_dependency
+        WHERE dependent_job_id = $1::uuid OR prerequisite_job_id = $1::uuid
+        ORDER BY dependent_job_id, prerequisite_job_id
+        LIMIT $2::integer`,
+      [jobId, limit + 1],
+    );
+    return {
+      records: result.rows.slice(0, limit).map((row) => ({
+        dependentJobId: row.dependent_job_id,
+        prerequisiteJobId: row.prerequisite_job_id,
+        onSuccess: row.on_success,
+        onFailure: row.on_failure,
+        onCancellation: row.on_cancellation,
+        createdAt: rowTimestamp(row.created_at, "created_at"),
+        releasedAt: nullableRowTimestamp(row.released_at, "released_at"),
+        resolution: row.resolution,
+      })),
+      truncated: result.rows.length > limit,
+    };
+  }
+
   async getJob<TResult = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
     // A job exists in exactly one lifecycle relation: runtime while live, outcome when terminal.
     const result = await this.context.database.query<{
@@ -990,6 +1043,12 @@ export class OperatorReadsModule extends QueueModule {
       nextWakeAt: nullableHealthTimestamp(row.next_wake_at),
       activeLeases: Number(row.active),
       expiredLeases: Number(row.expired),
+      dependencies: {
+        blockedJobs: Number(row.dependency_blocked_jobs),
+        pendingEdges: Number(row.dependency_pending_edges),
+        failedResolutions: Number(row.dependency_failed_resolutions),
+        capped: row.dependency_counts_capped,
+      },
       oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
       deadlinePressure: {
         pending: Number(row.pending_deadlines),
@@ -1108,6 +1167,10 @@ export class OperatorReadsModule extends QueueModule {
         max_active: number | null;
         concurrency_active: string;
         blocked_ready: string;
+        dependency_blocked: string;
+        dependency_pending_edges: string;
+        dependency_failed_resolutions: string;
+        dependency_counts_capped: boolean;
       }>(
         `WITH queue_names AS (
          SELECT $1::text AS queue_name
@@ -1116,6 +1179,9 @@ export class OperatorReadsModule extends QueueModule {
          UNION SELECT queue_name FROM workhorse.concurrency_policy
          UNION SELECT queue_name FROM workhorse.rate_limit_policy
          UNION SELECT queue_name FROM workhorse.worker_registry
+         UNION SELECT query.queue_name FROM workhorse.job_query query
+          JOIN workhorse.job_outcome outcome ON outcome.job_id = query.job_id
+         WHERE outcome.state = 'failed' AND outcome.error->>'name' = 'DependencyFailed'
        ), usage AS (
          ${perQueueDepthSelect(
            ["ready", "scheduled", "active", "concurrency_active", "oldest_ready_age_ms"],
@@ -1123,7 +1189,17 @@ export class OperatorReadsModule extends QueueModule {
          )}
        )
        SELECT usage.*, policy.max_active,
-              COALESCE(blocked.blocked_ready, 0)::text AS blocked_ready
+              COALESCE(blocked.blocked_ready, 0)::text AS blocked_ready,
+              LEAST(dependencies.blocked_jobs, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+                AS dependency_blocked,
+              LEAST(dependencies.pending_edges, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+                AS dependency_pending_edges,
+              LEAST(dependencies.failed_resolutions, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+               AS dependency_failed_resolutions,
+             dependencies.blocked_jobs > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+               OR dependencies.pending_edges > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+               OR dependencies.failed_resolutions > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+               AS dependency_counts_capped
          FROM usage
          LEFT JOIN workhorse.concurrency_policy policy ON policy.queue_name = usage.queue_name
          LEFT JOIN LATERAL (
@@ -1147,6 +1223,29 @@ export class OperatorReadsModule extends QueueModule {
                 ORDER BY ready.sequence, ready.job_id LIMIT 100
              ) sample
          ) blocked ON policy.queue_name IS NOT NULL
+         CROSS JOIN LATERAL (
+           SELECT
+             (SELECT count(*) FROM (
+               SELECT 1 FROM workhorse.job_runtime runtime
+                WHERE runtime.queue_name = usage.queue_name AND runtime.state = 'blocked'
+                LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+             ) sampled_blocked)
+               AS blocked_jobs,
+             (SELECT count(*) FROM (
+               SELECT 1 FROM workhorse.job_dependency edge
+                JOIN workhorse.job_runtime runtime ON runtime.job_id = edge.dependent_job_id
+               WHERE runtime.queue_name = usage.queue_name AND edge.released_at IS NULL
+               LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+             ) sampled_pending)
+               AS pending_edges,
+             (SELECT count(*) FROM (
+               SELECT 1 FROM workhorse.job_outcome outcome
+                JOIN workhorse.job_query query ON query.job_id = outcome.job_id
+               WHERE query.queue_name = usage.queue_name AND outcome.state = 'failed'
+                 AND outcome.error->>'name' = 'DependencyFailed'
+               LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+             ) sampled_failed) AS failed_resolutions
+         ) dependencies
         ORDER BY usage.queue_name`,
         [this.context.defaultQueue],
       ),
@@ -1160,6 +1259,10 @@ export class OperatorReadsModule extends QueueModule {
         readyDepth: Number(row.ready),
         scheduledDepth: Number(row.scheduled),
         activeLeases: Number(row.active),
+        dependencyBlockedDepth: Number(row.dependency_blocked),
+        dependencyPendingEdges: Number(row.dependency_pending_edges),
+        dependencyFailedResolutions: Number(row.dependency_failed_resolutions),
+        dependencyCountsCapped: row.dependency_counts_capped,
         oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
         concurrencyLimit: row.max_active,
         concurrencyActive: Number(row.concurrency_active),

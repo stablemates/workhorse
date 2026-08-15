@@ -1399,26 +1399,63 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
 
 /** The immutable prerequisite edge and its current release state. */
 export function DependencyLine({ job }: { job: DashboardJobDetail }) {
-  if (job.identity.prerequisiteJobIds.length === 0) return null;
+  if (job.identity.prerequisiteJobIds.length === 0 && job.dependencyLineage.records.length === 0)
+    return null;
   const blocked = job.identity.blockedReason === "prerequisite_pending";
   const summary = blocked
     ? "Blocked until every prerequisite satisfies the dependency policy"
     : job.identity.dependencyReleasedAt === null
       ? "Dependency recorded"
       : `Released ${formatRelative(job.identity.dependencyReleasedAt)}`;
+  const dependentIds = [
+    ...new Set(
+      job.dependencyLineage.records
+        .filter((edge) => edge.prerequisiteJobId === job.identity.id)
+        .map((edge) => edge.dependentJobId),
+    ),
+  ];
   return (
-    <Group gap="xs" mt="sm" align="baseline" wrap="wrap">
-      <Text c="dimmed" size="xs" fw={600}>
-        {job.identity.prerequisiteJobIds.length === 1 ? "Prerequisite" : "Prerequisites"}
-      </Text>
-      <Code fz="xs">{job.identity.prerequisiteJobIds.join(", ")}</Code>
-      <Badge size="xs" variant="light" color={blocked ? "yellow" : "teal"} tt="none">
-        {blocked ? "blocked" : "released"}
-      </Badge>
-      <Text c="dimmed" size="xs">
-        {summary}
-      </Text>
-    </Group>
+    <Stack gap={4} mt="sm">
+      {job.identity.prerequisiteJobIds.length > 0 ? (
+        <Group gap="xs" align="baseline" wrap="wrap">
+          <Text c="dimmed" size="xs" fw={600}>
+            {job.identity.prerequisiteJobIds.length === 1 ? "Prerequisite" : "Prerequisites"}
+          </Text>
+          <Code fz="xs">{job.identity.prerequisiteJobIds.join(", ")}</Code>
+          <Badge size="xs" variant="light" color={blocked ? "yellow" : "teal"} tt="none">
+            {blocked ? "blocked" : "released"}
+          </Badge>
+          <Text c="dimmed" size="xs">
+            {summary}
+          </Text>
+        </Group>
+      ) : null}
+      {dependentIds.length > 0 ? (
+        <Group gap="xs" align="baseline" wrap="wrap">
+          <Text c="dimmed" size="xs" fw={600}>
+            {dependentIds.length === 1 ? "Dependent" : "Dependents"}
+          </Text>
+          <Code fz="xs">{dependentIds.join(", ")}</Code>
+        </Group>
+      ) : null}
+      {job.dependencyLineage.records.map((edge) => (
+        <Text c="dimmed" size="xs" key={`${edge.dependentJobId}:${edge.prerequisiteJobId}`}>
+          {edge.dependentJobId === job.identity.id
+            ? `Prerequisite ${edge.prerequisiteJobId}`
+            : `Dependent ${edge.dependentJobId}`}
+          : success: {edge.onSuccess}, failure: {edge.onFailure}, cancellation:{" "}
+          {edge.onCancellation}
+          {edge.releasedAt === null
+            ? " · pending"
+            : ` · resolved as ${edge.resolution} ${formatRelative(edge.releasedAt)}`}
+        </Text>
+      ))}
+      {job.dependencyLineage.truncated ? (
+        <Text c="dimmed" size="xs">
+          Additional dependency edges are omitted.
+        </Text>
+      ) : null}
+    </Stack>
   );
 }
 
