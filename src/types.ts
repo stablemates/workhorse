@@ -255,6 +255,8 @@ export interface EnqueueRequest<TPayload extends Json = Json> {
 export const MAX_ENQUEUE_BATCH_SIZE = 1_000;
 /** Maximum prerequisite edges accepted for one dependent job. */
 export const MAX_JOB_DEPENDENCIES = 100;
+/** Maximum dependent edges accepted for one prerequisite job. */
+export const MAX_JOB_DEPENDENTS = 100;
 /** Highest accepted job priority. Priority zero is the default. */
 export const MAX_JOB_PRIORITY = 100;
 /** Default namespace for enqueue idempotency keys whose caller omits an explicit scope. */

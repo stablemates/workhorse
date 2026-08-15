@@ -2,6 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { readDashboardJobDetail } from "../packages/dashboard/src/server/read-model.js";
 import { dashboardDatabase } from "../packages/dashboard/src/server/sql.js";
+import { MAX_JOB_DEPENDENTS } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -100,6 +101,42 @@ describe("job dependencies", () => {
     });
   });
 
+  it("uses diagnostic partial indexes for dependency health counts", async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL enable_seqscan = off");
+      const blockedPlan = (
+        await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
+          SELECT 1 FROM workhorse.job_runtime runtime
+           WHERE runtime.queue_name = 'dependency-health'
+             AND runtime.state = 'blocked'
+           LIMIT 10001`)
+      ).rows
+        .map((row) => row["QUERY PLAN"])
+        .join("\n");
+      const pendingPlan = (
+        await client.query<{ "QUERY PLAN": string }>(`EXPLAIN (COSTS OFF)
+          SELECT 1 FROM workhorse.job_runtime runtime
+          JOIN workhorse.job_dependency edge ON edge.dependent_job_id = runtime.job_id
+           WHERE runtime.queue_name = 'dependency-health'
+             AND runtime.state = 'blocked'
+             AND edge.released_at IS NULL
+           LIMIT 10001`)
+      ).rows
+        .map((row) => row["QUERY PLAN"])
+        .join("\n");
+
+      expect(blockedPlan).toContain("job_runtime_blocked_queue_idx");
+      expect(pendingPlan).toContain("job_runtime_blocked_queue_idx");
+      expect(pendingPlan).toContain("job_dependency_dependent_pending_idx");
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+  });
+
   it("releases fan-in only after every prerequisite succeeds", async () => {
     const firstId = await queue.enqueue("fan-in-first", null);
     const secondId = await queue.enqueue("fan-in-second", null);
@@ -128,6 +165,49 @@ describe("job dependencies", () => {
     expect(second?.id).toBe(secondId);
     expect(await queue.complete(second!, "fan-in-second-worker", null)).toBe(true);
     await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
+  });
+
+  it("bounds each prerequisite to 100 dependent jobs", async () => {
+    const prerequisiteId = await queue.enqueue("fan-out-prerequisite", null);
+    const dependentIds = await queue.enqueueMany(
+      Array.from({ length: MAX_JOB_DEPENDENTS }, (_unused, index) => ({
+        type: "fan-out-dependent",
+        payload: { index },
+        options: { prerequisiteJobId: prerequisiteId },
+      })),
+    );
+
+    expect(dependentIds).toHaveLength(MAX_JOB_DEPENDENTS);
+    await expect(
+      queue.enqueue("fan-out-overflow", null, { prerequisiteJobId: prerequisiteId }),
+    ).rejects.toThrow(`a job accepts at most ${MAX_JOB_DEPENDENTS} dependent jobs`);
+    const lineage = await queue.getDependencyLineage(prerequisiteId);
+    expect(lineage.records).toHaveLength(MAX_JOB_DEPENDENTS);
+    expect(lineage.truncated).toBe(false);
+  });
+
+  it("bounds one settlement cascade to 100 unresolved descendants", async () => {
+    const rootId = await queue.enqueue("cascade-root", null);
+    let prerequisiteId = rootId;
+    for (let index = 0; index < MAX_JOB_DEPENDENTS; index += 1) {
+      prerequisiteId = await queue.enqueue(
+        "cascade-dependent",
+        { index },
+        {
+          prerequisiteJobId: prerequisiteId,
+        },
+      );
+    }
+
+    await expect(
+      queue.enqueue("cascade-overflow", null, { prerequisiteJobId: prerequisiteId }),
+    ).rejects.toThrow(
+      `a job accepts at most ${MAX_JOB_DEPENDENTS} unresolved transitive dependent jobs`,
+    );
+    await expect(
+      queue.cancel(rootId, { requestedBy: "cascade-bound-test" }),
+    ).resolves.toMatchObject({ status: "canceled" });
+    await expect(queue.getJob(prerequisiteId)).resolves.toMatchObject({ state: "canceled" });
   });
 
   it("fails a dependent when a prerequisite failure selects the fail policy", async () => {

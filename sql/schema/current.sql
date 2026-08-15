@@ -407,6 +407,11 @@ CREATE TABLE IF NOT EXISTS workhorse.job_dependency (
 CREATE INDEX IF NOT EXISTS job_dependency_prerequisite_pending_idx
   ON workhorse.job_dependency (prerequisite_job_id, dependent_job_id)
   WHERE released_at IS NULL;
+CREATE INDEX IF NOT EXISTS job_dependency_prerequisite_idx
+  ON workhorse.job_dependency (prerequisite_job_id, dependent_job_id);
+CREATE INDEX IF NOT EXISTS job_dependency_dependent_pending_idx
+  ON workhorse.job_dependency (dependent_job_id, prerequisite_job_id)
+  WHERE released_at IS NULL;
 
 -- Immutable named child edges support bounded fan-out. The parent owns edge lifetime. Retention
 -- only removes it after every child is terminal and outside the configured evidence windows.
@@ -430,6 +435,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_cycle uuid[];
+  v_fan_out_root uuid;
 BEGIN
   -- Serialize graph mutations so two transactions cannot create opposite edges from snapshots that
   -- cannot see each other. Ordinary lifecycle resolution never needs this lock.
@@ -470,6 +476,45 @@ BEGIN
      WHERE dependency.dependent_job_id = NEW.dependent_job_id
   ) >= 100 THEN
     RAISE EXCEPTION 'a job accepts at most 100 prerequisite dependencies';
+  END IF;
+  IF (
+    SELECT count(*) FROM workhorse.job_dependency dependency
+     WHERE dependency.prerequisite_job_id = NEW.prerequisite_job_id
+  ) >= 100 THEN
+    RAISE EXCEPTION 'a job accepts at most 100 dependent jobs';
+  END IF;
+  IF NEW.released_at IS NULL THEN
+    WITH RECURSIVE graph(prerequisite_job_id, dependent_job_id) AS (
+      SELECT dependency.prerequisite_job_id, dependency.dependent_job_id
+        FROM workhorse.job_dependency dependency
+       WHERE dependency.released_at IS NULL
+      UNION
+      SELECT NEW.prerequisite_job_id, NEW.dependent_job_id
+    ), affected(root_job_id) AS (
+      SELECT NEW.prerequisite_job_id
+      UNION
+      SELECT graph.prerequisite_job_id
+        FROM affected
+        JOIN graph ON graph.dependent_job_id = affected.root_job_id
+    ), reachable(root_job_id, dependent_job_id) AS (
+      SELECT affected.root_job_id, graph.dependent_job_id
+        FROM affected
+        JOIN graph ON graph.prerequisite_job_id = affected.root_job_id
+      UNION
+      SELECT reachable.root_job_id, graph.dependent_job_id
+        FROM reachable
+        JOIN graph ON graph.prerequisite_job_id = reachable.dependent_job_id
+    )
+    SELECT reachable.root_job_id INTO v_fan_out_root
+      FROM reachable
+     GROUP BY reachable.root_job_id
+    HAVING count(*) > 100
+     ORDER BY reachable.root_job_id
+     LIMIT 1;
+    IF v_fan_out_root IS NOT NULL THEN
+      RAISE EXCEPTION
+        'a job accepts at most 100 unresolved transitive dependent jobs';
+    END IF;
   END IF;
   IF EXISTS (
     SELECT 1 FROM workhorse.job_dependency dependency
@@ -673,6 +718,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
 ) WITH (fillfactor = 70);
 CREATE INDEX IF NOT EXISTS job_runtime_ready_idx
   ON workhorse.job_runtime (queue_name, priority DESC, sequence, job_id) WHERE state = 'ready';
+CREATE INDEX IF NOT EXISTS job_runtime_blocked_queue_idx
+  ON workhorse.job_runtime (queue_name, job_id) WHERE state = 'blocked';
 CREATE INDEX IF NOT EXISTS job_runtime_ready_age_idx
   ON workhorse.job_runtime (ready_at, job_id) WHERE state = 'ready';
 CREATE INDEX IF NOT EXISTS job_runtime_scheduled_idx
@@ -8641,9 +8688,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (36, 'add idempotent signals to waiting executions'),
   (37, 'add completable human wait tokens'),
   (38, 'harden signal and human wait lifecycles'),
-  (39, 'fix dependency release event reasons')
+  (39, 'fix dependency release event reasons'),
+  (40, 'bound dependency fan-out and index dependency health')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (39) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (40) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

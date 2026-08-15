@@ -52,7 +52,14 @@ cannot see it because blocked work is absent from their indexes.
 
 Use `Queue.getDependencyLineage(jobId)` when you need both directions. It returns edges where the
 job is a prerequisite or a dependent, including each policy, resolution, and release time. The
-result says when more edges exist beyond the bounded response.
+result says when more edges exist beyond a caller-selected response limit. Each job accepts a
+bounded number of prerequisites and dependents, so the default response covers its complete direct
+lineage without a continuation cursor.
+
+PostgreSQL rejects a new edge when its prerequisite already owns the maximum number of retained
+dependents. This keeps the direct work of settling that prerequisite bounded inside the worker's
+transaction. PostgreSQL also bounds the unresolved downstream graph, so failure and cancellation
+cannot cascade through unlimited work in that transaction.
 
 ## When the prerequisite succeeds
 
