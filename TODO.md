@@ -739,14 +739,14 @@ operator tooling — is satisfied as of schema version 26, so P3-01, P3-02, and 
 unblocked and pulled into the recommended sequence above. P3-04 remains deferred until the
 three primitives below have shipped and proven their contracts.
 
-### [ ] P3-01 Job dependencies
+### [x] P3-01 Job dependencies
 
 **Depends on:** P1-01, P1-02, P1-06, P2-01
 
 - [x] Model dependency edges without putting blocked jobs in ready dispatch indexes.
 - [x] Atomically release dependents when prerequisites reach accepted terminal states.
 - [x] Define failure, cancellation, fan-in, and dependency-cycle behavior.
-- [ ] Expose dependency state and lineage through query APIs.
+- [x] Expose dependency state and lineage through query APIs.
 
 ### [ ] P3-02 Child jobs and result joining
 

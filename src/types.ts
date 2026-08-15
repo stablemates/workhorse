@@ -291,6 +291,8 @@ export const MAX_REDRIVE_BATCH_SIZE = 1_000;
 export const MAX_REDRIVE_REQUEST_ID_BYTES = 512;
 /** Maximum jobs or timeline entries returned by one keyset-paginated query. */
 export const MAX_JOB_QUERY_PAGE_SIZE = 1_000;
+/** Maximum rows inspected for each dependency pressure fact in one health or telemetry read. */
+export const DEPENDENCY_OPERATIONS_SCAN_LIMIT = 10_000;
 /** Default maximum encoded payload size included by an explicit list projection. */
 export const DEFAULT_JOB_QUERY_PAYLOAD_BYTES = 16_384;
 /** Maximum encoded payload size accepted by a list projection. */
@@ -569,6 +571,24 @@ export interface RedriveLineageRecord {
 
 export interface RedriveLineage {
   records: RedriveLineageRecord[];
+  truncated: boolean;
+}
+
+/** One retained prerequisite edge, including the policy decision PostgreSQL recorded. */
+export interface DependencyLineageRecord {
+  dependentJobId: string;
+  prerequisiteJobId: string;
+  onSuccess: DependencyTerminalPolicy;
+  onFailure: DependencyTerminalPolicy;
+  onCancellation: DependencyTerminalPolicy;
+  createdAt: Date;
+  releasedAt: Date | null;
+  resolution: DependencyTerminalPolicy | null;
+}
+
+/** Bounded edges where the requested job is either the prerequisite or the dependent. */
+export interface DependencyLineage {
+  records: DependencyLineageRecord[];
   truncated: boolean;
 }
 
@@ -916,6 +936,14 @@ export interface QueueHealth {
   nextWakeAt: Date | null;
   activeLeases: number;
   expiredLeases: number;
+  /** Dependency pressure and retained policy-selected failure outcomes. */
+  dependencies: {
+    blockedJobs: number;
+    pendingEdges: number;
+    failedResolutions: number;
+    /** True when at least one value is a lower bound at the operations scan limit. */
+    capped: boolean;
+  };
   oldestReadyAgeMs: number | null;
   /** Pressure from absolute deadlines among live runtimes. */
   deadlinePressure: {

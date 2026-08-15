@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 31 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 32 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency, keyed debounce, keyed throttle, and
 fan-in job dependencies with terminal policies. It also supports retry policies,
 checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter

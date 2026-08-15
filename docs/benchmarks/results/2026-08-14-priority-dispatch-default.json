@@ -13,11 +13,7 @@
       "leaseMs": 30000,
       "repetitions": 3,
       "seed": 1,
-      "workerConcurrency": [
-        1,
-        4,
-        8
-      ]
+      "workerConcurrency": [1, 4, 8]
     },
     "operational": {
       "batchSize": 8,
@@ -26,9 +22,7 @@
       "leaseMs": 150,
       "pruneLimit": 1000,
       "retryDelayMs": 75,
-      "scenarios": [
-        "priority-dispatch"
-      ],
+      "scenarios": ["priority-dispatch"],
       "scheduleDelayMs": 75,
       "scheduleSamples": 5
     }
@@ -58,9 +52,7 @@
       "pruneLimit": 1000,
       "queuePrefix": "operational",
       "retryDelayMs": 75,
-      "scenarios": [
-        "priority-dispatch"
-      ],
+      "scenarios": ["priority-dispatch"],
       "scheduleDelayMs": 75,
       "scheduleSamples": 5
     },

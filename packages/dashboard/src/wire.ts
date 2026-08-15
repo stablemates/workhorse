@@ -821,6 +821,19 @@ export interface DashboardJobDetail {
     /** Why this task remains blocked. Null after release and for independent tasks. */
     blockedReason: "prerequisite_pending" | null;
   };
+  dependencyLineage: {
+    records: Array<{
+      dependentJobId: string;
+      prerequisiteJobId: string;
+      onSuccess: "release" | "cancel" | "fail";
+      onFailure: "release" | "cancel" | "fail";
+      onCancellation: "release" | "cancel" | "fail";
+      createdAt: string;
+      releasedAt: string | null;
+      resolution: "release" | "cancel" | "fail" | null;
+    }>;
+    truncated: boolean;
+  };
   /**
    * The queue's admission budget as it stands now, not a snapshot of the policy this task ran
    * under. Workhorse stores no per-task snapshot, so a finished task's line must be read as

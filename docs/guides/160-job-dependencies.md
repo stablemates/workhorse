@@ -50,6 +50,10 @@ cannot see it because blocked work is absent from their indexes.
 `Queue.getJob` and `Queue.listJobs` return its `prerequisiteJobIds` and `dependencyPolicy`. They also return
 `blockedReason: "prerequisite_pending"` while it remains blocked.
 
+Use `Queue.getDependencyLineage(jobId)` when you need both directions. It returns edges where the
+job is a prerequisite or a dependent, including each policy, resolution, and release time. The
+result says when more edges exist beyond the bounded response.
+
 ## When the prerequisite succeeds
 
 PostgreSQL records each success and satisfies its edge in the same database transaction. The
@@ -75,6 +79,20 @@ order.
 
 You can cancel a blocked dependent through `Queue.cancel`. PostgreSQL removes its runtime without
 changing the prerequisite.
+
+## Operating dependencies
+
+The dashboard task detail shows prerequisites and dependents with the policy and retained release
+evidence. This lets an operator explain why work remains blocked or why PostgreSQL released,
+canceled, or failed it.
+
+`Queue.health()` reports blocked jobs, pending edges, and retained failures selected by dependency
+policy. OpenTelemetry exports the same pressure by queue without job ids, prerequisite ids, or
+other unbounded labels.
+
+Retention keeps a prerequisite identity while a dependent edge still needs it. Once the dependent
+identity expires, PostgreSQL can remove the edge and later remove the prerequisite, so lineage
+never outlives the identities it explains.
 
 ## Next
 

@@ -7,7 +7,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 31;
+export const WORKHORSE_SCHEMA_VERSION = 32;
 
 const SCHEMA_MIGRATIONS = [
   {
@@ -49,6 +49,11 @@ const SCHEMA_MIGRATIONS = [
     fromVersion: 30,
     toVersion: 31,
     file: "0031-add-fan-in-dependency-policies.sql",
+  },
+  {
+    fromVersion: 31,
+    toVersion: 32,
+    file: "0032-index-dependency-failures.sql",
   },
 ] as const;
 

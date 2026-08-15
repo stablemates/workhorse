@@ -509,6 +509,10 @@ describe("OpenTelemetry", () => {
           readyDepth: 7,
           scheduledDepth: 3,
           activeLeases: 2,
+          dependencyBlockedDepth: 8,
+          dependencyPendingEdges: 9,
+          dependencyFailedResolutions: 3,
+          dependencyCountsCapped: false,
           oldestReadyAgeMs: 1_250,
           concurrencyLimit: 5,
           concurrencyActive: 2,
@@ -523,6 +527,10 @@ describe("OpenTelemetry", () => {
           readyDepth: 1,
           scheduledDepth: 0,
           activeLeases: 4,
+          dependencyBlockedDepth: 0,
+          dependencyPendingEdges: 0,
+          dependencyFailedResolutions: 0,
+          dependencyCountsCapped: true,
           oldestReadyAgeMs: 250,
           concurrencyLimit: null,
           concurrencyActive: 0,
@@ -548,6 +556,18 @@ describe("OpenTelemetry", () => {
     );
     const concurrencyLimit = metricsData.find(
       (metric) => metric.descriptor.name === "workhorse.queue.concurrency.limit",
+    );
+    const dependencyBlocked = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.dependencies.blocked",
+    );
+    const dependencyPending = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.dependencies.pending_edges",
+    );
+    const dependencyFailed = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.dependencies.failed_resolutions",
+    );
+    const dependencyCapped = metricsData.find(
+      (metric) => metric.descriptor.name === "workhorse.queue.dependencies.capped",
     );
     const concurrencyActive = metricsData.find(
       (metric) => metric.descriptor.name === "workhorse.queue.concurrency.active",
@@ -586,6 +606,21 @@ describe("OpenTelemetry", () => {
         value: 1_250,
         attributes: { "workhorse.queue.name": "mail" },
       }),
+    );
+    expect(dependencyBlocked?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 8, attributes: { "workhorse.queue.name": "mail" } }),
+    );
+    expect(dependencyPending?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 9, attributes: { "workhorse.queue.name": "mail" } }),
+    );
+    expect(dependencyFailed?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 3, attributes: { "workhorse.queue.name": "mail" } }),
+    );
+    expect(dependencyCapped?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 0, attributes: { "workhorse.queue.name": "mail" } }),
+    );
+    expect(dependencyCapped?.dataPoints).toContainEqual(
+      expect.objectContaining({ value: 1, attributes: { "workhorse.queue.name": "billing" } }),
     );
     expect(concurrencyLimit?.dataPoints).toContainEqual(
       expect.objectContaining({

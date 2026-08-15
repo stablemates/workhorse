@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 31. Version 23 is the oldest supported
+The current clean-install protocol is schema version 32. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 31 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 32 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -40,7 +40,11 @@ Migration `0031-add-fan-in-dependency-policies.sql` requires version 30. It adds
 terminal policies, serialized cycle rejection, and outcome-driven resolution. It records version
 31 and advances the schema row.
 
-Versions below 23, versions above 31, gaps, and mixed version rows fail without running a migration.
+Migration `0032-index-dependency-failures.sql` requires version 31. It adds the partial terminal
+outcome index used by dependency health and telemetry reads. It records version 32 and advances
+the schema row.
+
+Versions below 23, versions above 32, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -396,7 +400,9 @@ At most 100 immutable prerequisite edges per dependent job. The primary key is `
 
 `validate_job_dependency_v1` takes the transaction-scoped dependency-graph advisory lock before every edge insert. Its recursive reachability check rejects direct and transitive cycles with SQLSTATE `P1002`. The JSON detail contains `dependentJobId`, `prerequisiteJobId`, at most 101 `cycleJobIds`, and `truncated`. The trigger also enforces the 100-edge bound for SQL callers.
 
-`Queue.getJob` and `Queue.listJobs` expose sorted `prerequisiteJobIds`, `dependencyPolicy`, the compatible singular `prerequisiteJobId` when exactly one edge exists, and `blockedReason`. `dashboard_job_dependency_v1` exposes every retained edge and both policies.
+`Queue.getJob` and `Queue.listJobs` expose sorted `prerequisiteJobIds`, `dependencyPolicy`, the compatible singular `prerequisiteJobId` when exactly one edge exists, and `blockedReason`. `Queue.getDependencyLineage(jobId, limit)` returns at most 1,000 edges where the identity is either the prerequisite or dependent. Each `DependencyLineageRecord` contains both identities, all three terminal policies, `createdAt`, nullable `releasedAt`, and nullable `resolution`; the result sets `truncated` when another edge exists. `dashboard_job_dependency_v1` exposes the same retained edge evidence to the bounded dashboard task-detail read.
+
+`Queue.health().dependencies` reports blocked jobs, pending edges, and retained `DependencyFailed` outcomes. Each count scans at most 10,001 matching rows, returns at most 10,000, and sets `capped` when any value is a lower bound. The failure count uses `job_outcome_dependency_failed_idx`, so it scales with matching outcomes instead of all terminal history. `Queue.queueMetricSnapshot()` splits the same bounded facts by queue and exposes `dependencyCountsCapped`. `registerQueueMetrics()` exports them as `workhorse.queue.dependencies.blocked`, `workhorse.queue.dependencies.pending_edges`, `workhorse.queue.dependencies.failed_resolutions`, and `workhorse.queue.dependencies.capped`; the only attribute is `workhorse.queue.name`.
 
 The ownership relation stores scope and full key hash, never the raw key. The initial `enqueued` event, UI projections, and errors expose only a bounded key preview plus 12-hex key digest; exact replay appends no event. Structured conflicts additionally carry full SHA-256 stored and rejected request digests. Expired ownership can be replaced by a new request. Housekeeping prunes expired bindings before terminal job identity, and purging ready or scheduled jobs releases their bindings with the job.
 
@@ -1128,6 +1134,10 @@ rather than on an emission path:
 - `workhorse.queue.concurrency.limit` is the queue's configured active-job limit.
 - `workhorse.queue.concurrency.active` counts active rows with unexpired leases in governed queues.
 - `workhorse.queue.concurrency.blocked_ready` reports bounded ready work that policy admission rejects.
+- `workhorse.queue.dependencies.blocked`, `workhorse.queue.dependencies.pending_edges`, and
+  `workhorse.queue.dependencies.failed_resolutions` report bounded dependency pressure by queue.
+  `workhorse.queue.dependencies.capped` reports lower-bound samples. None uses stable job identities
+  as attributes.
 - `workhorse.queue.rate_limit.configured`, `workhorse.queue.rate_limit.available_tokens`,
   `workhorse.queue.rate_limit.throttled_ready`, and
   `workhorse.queue.rate_limit.next_eligible_delay` report rate-policy state for governed queues.
@@ -1238,7 +1248,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 31. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 32. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

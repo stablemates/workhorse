@@ -16,7 +16,7 @@ const provider: LoggerProvider = {
 };
 
 const database = {
-  query: async () => ({ rows: [{ version: 31 }] }),
+  query: async () => ({ rows: [{ version: 32 }] }),
 } as unknown as Queryable;
 
 function dashboardClient(): RouterClient<DashboardRouter> {

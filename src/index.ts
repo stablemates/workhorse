@@ -118,6 +118,8 @@ export type {
   DeadLetterFilter,
   DeadLetterPage,
   DeadLetterQuery,
+  DependencyLineage,
+  DependencyLineageRecord,
   DependencyTerminalPolicy,
   EnqueueIdempotency,
   EnqueueDebounce,
@@ -185,6 +187,7 @@ export type {
   WorkerRegistryEntry,
 } from "./types.js";
 export {
+  DEPENDENCY_OPERATIONS_SCAN_LIMIT,
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
   DEFAULT_JOB_QUERY_PAYLOAD_BYTES,
