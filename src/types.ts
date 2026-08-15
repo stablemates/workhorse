@@ -431,6 +431,8 @@ export interface JobListItem {
   prerequisiteJobIds: string[];
   dependencyPolicy: Omit<JobDependencies, "prerequisiteJobIds"> | null;
   blockedReason: "prerequisite_pending" | null;
+  parentJobId: string | null;
+  childJobIds: string[];
   currentAttempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;
@@ -592,6 +594,34 @@ export interface DependencyLineage {
   truncated: boolean;
 }
 
+/** One immutable parent-to-child edge created by a fenced handler activation. */
+export interface ChildJob<TResult extends Json = Json> {
+  parentJobId: string;
+  childJobId: string;
+  name: string;
+  type: string;
+  createdAt: Date;
+  joinedAt: Date | null;
+  result: TResult | null;
+}
+
+/** Enqueue fields accepted for one linked child. Its parent supplies idempotency and dependency. */
+export type ChildJobOptions = Omit<
+  EnqueueOptions,
+  "idempotency" | "debounce" | "throttle" | "prerequisiteJobId" | "dependencies"
+>;
+
+/** PostgreSQL's decision when a handler creates or replays its single named child. */
+export type CreateChildResult<TResult extends Json = Json> =
+  | { status: "created"; child: ChildJob<TResult> }
+  | { status: "completed"; child: ChildJob<TResult> };
+
+/** Bounded edges where the requested job is either the parent or the child. */
+export interface ChildLineage {
+  records: Omit<ChildJob, "result">[];
+  truncated: boolean;
+}
+
 export interface ClaimedJob<TPayload = Json> {
   /** Stable job identity across all attempts. */
   id: string;
@@ -695,6 +725,8 @@ export interface JobSnapshot<TResult = Json> {
   prerequisiteJobIds: string[];
   dependencyPolicy: Omit<JobDependencies, "prerequisiteJobIds"> | null;
   blockedReason: "prerequisite_pending" | null;
+  parentJobId: string | null;
+  childJobIds: string[];
   currentAttempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;

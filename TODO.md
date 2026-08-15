@@ -752,7 +752,7 @@ three primitives below have shipped and proven their contracts.
 
 **Depends on:** P3-01
 
-- [ ] Allow a handler transaction to create linked child jobs.
+- [x] Allow a handler transaction to create linked child jobs.
 - [ ] Define parent completion behavior for zero, one, or many children.
 - [ ] Bound fan-out and result materialization.
 - [ ] Preserve lineage across retry, cancellation, redrive, and retention.

@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 32. Version 23 is the oldest supported
+The current clean-install protocol is schema version 33. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 32 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 33 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -44,7 +44,11 @@ Migration `0032-index-dependency-failures.sql` requires version 31. It adds the 
 outcome index used by dependency health and telemetry reads. It records version 32 and advances
 the schema row.
 
-Versions below 23, versions above 32, gaps, and mixed version rows fail without running a migration.
+Migration `0033-add-single-child-jobs.sql` requires version 32. It adds immutable parent-child
+lineage, fenced child creation and suspension, result joining, and the dashboard read view. It
+records version 33 and advances the schema row.
+
+Versions below 23, versions above 33, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -403,6 +407,40 @@ At most 100 immutable prerequisite edges per dependent job. The primary key is `
 `Queue.getJob` and `Queue.listJobs` expose sorted `prerequisiteJobIds`, `dependencyPolicy`, the compatible singular `prerequisiteJobId` when exactly one edge exists, and `blockedReason`. `Queue.getDependencyLineage(jobId, limit)` returns at most 1,000 edges where the identity is either the prerequisite or dependent. Each `DependencyLineageRecord` contains both identities, all three terminal policies, `createdAt`, nullable `releasedAt`, and nullable `resolution`; the result sets `truncated` when another edge exists. `dashboard_job_dependency_v1` exposes the same retained edge evidence to the bounded dashboard task-detail read.
 
 `Queue.health().dependencies` reports blocked jobs, pending edges, and retained `DependencyFailed` outcomes. Each count scans at most 10,001 matching rows, returns at most 10,000, and sets `capped` when any value is a lower bound. The failure count uses `job_outcome_dependency_failed_idx`, so it scales with matching outcomes instead of all terminal history. `Queue.queueMetricSnapshot()` splits the same bounded facts by queue and exposes `dependencyCountsCapped`. `registerQueueMetrics()` exports them as `workhorse.queue.dependencies.blocked`, `workhorse.queue.dependencies.pending_edges`, `workhorse.queue.dependencies.failed_resolutions`, and `workhorse.queue.dependencies.capped`; the only attribute is `workhorse.queue.name`.
+
+### `job_child`
+
+One immutable row links a parent identity to its single named child. The primary key is
+`(parent_job_id, child_name)`, `child_job_id` is unique, and `job_child_parent_one_idx` enforces one
+child per parent. Names contain 1 through 200 characters. `request_fingerprint` stores the complete
+normalized child request for replay comparison. `created_at` records creation, while nullable
+`joined_at` records the first accepted result read.
+
+`create_child_v1(parent_job_id, worker_id, fence_token, child_name, request)` locks and validates
+the exact active, unexpired parent generation. It calls `enqueue_many_v2`, inserts `job_child`, and
+adds a `job_dependency` edge from parent to child with success `release`, failure `fail`, and
+cancellation `cancel`. It then moves the parent from active to blocked and clears ownership in the
+same transaction. A rollback removes the child, lineage, dependency, events, and suspension.
+Coalescing and additional dependency options are rejected for child requests.
+
+`HandlerContext.runChild(name, type, payload, options)` calls the fenced transition and suspends
+the handler without consuming its logical attempt. Child success releases the parent through the
+dependency resolver. The next claim has a new fence, restarts the handler from entry, and returns
+the retained result when `runChild` replays. `child_created`, `parent_linked`, and the first
+`child_joined` record the lifecycle. A later parent retry reads the same result without creating
+another child or appending another join event. A handler that creates no child completes through
+the ordinary completion path.
+
+Child failure fails the parent, while child cancellation cancels it. Canceling a blocked parent
+does not cancel the child, and a later child outcome cannot resurrect that terminal parent.
+`ChildLeaseLostError`, `ChildConflictError`, and `ChildLimitExceededError` distinguish stale
+ownership, a changed replay, and an attempted second child.
+
+`Queue.getJob` and `Queue.listJobs` expose `parentJobId` and sorted `childJobIds`.
+`Queue.getChildLineage(jobId, limit)` returns at most 1,000 edges in either direction and reports
+truncation. `dashboard_job_child_v1` gives the dashboard the same lineage. The restricted parent
+foreign key preserves a parent while its child exists; pruning the child cascades the edge and
+makes the parent eligible under its ordinary retention policy.
 
 The ownership relation stores scope and full key hash, never the raw key. The initial `enqueued` event, UI projections, and errors expose only a bounded key preview plus 12-hex key digest; exact replay appends no event. Structured conflicts additionally carry full SHA-256 stored and rejected request digests. Expired ownership can be replaced by a new request. Housekeeping prunes expired bindings before terminal job identity, and purging ready or scheduled jobs releases their bindings with the job.
 
@@ -1248,7 +1286,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 32. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 33. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

@@ -1,4 +1,5 @@
 import { CheckpointsProgressWaitsModule } from "./checkpoints-progress-waits.js";
+import { ChildJobsModule } from "./child-jobs.js";
 import { ClaimLeaseFenceModule } from "./claim-lease-fence.js";
 import { CronSchedulesModule } from "./cron-schedules.js";
 import { EnqueueContractsModule } from "./enqueue-contracts.js";
@@ -12,6 +13,7 @@ export interface QueueModules {
   readonly enqueueContracts: EnqueueContractsModule;
   readonly claimLeaseFence: ClaimLeaseFenceModule;
   readonly checkpointsProgressWaits: CheckpointsProgressWaitsModule;
+  readonly childJobs: ChildJobsModule;
   readonly queueAdministration: QueueAdministrationModule;
   readonly workerRegistry: WorkerRegistryModule;
   readonly retentionMaintenance: RetentionMaintenanceModule;
@@ -25,6 +27,7 @@ export function createQueueModules(context: QueueModuleContext): QueueModules {
     enqueueContracts,
     claimLeaseFence: new ClaimLeaseFenceModule(context),
     checkpointsProgressWaits: new CheckpointsProgressWaitsModule(context),
+    childJobs: new ChildJobsModule(context, enqueueContracts),
     queueAdministration: new QueueAdministrationModule(context),
     workerRegistry: new WorkerRegistryModule(context),
     retentionMaintenance: new RetentionMaintenanceModule(context),

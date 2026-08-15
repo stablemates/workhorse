@@ -97,8 +97,8 @@ never outlives the identities it explains.
 ## Next
 
 - [150-priority.md](150-priority.md) — how released work competes for dispatch
+- [170-child-jobs.md](170-child-jobs.md) — how a handler delegates and joins durable work
 - [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — how repeated enqueue requests behave
-- [330-retention.md](330-retention.md) — why the prerequisite identity stays retained
 
 ---
 

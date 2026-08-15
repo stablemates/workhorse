@@ -43,6 +43,13 @@ describe("schema installation", () => {
         "worker_id",
         "created_at",
       ],
+      dashboard_job_child_v1: [
+        "parent_job_id",
+        "child_job_id",
+        "child_name",
+        "created_at",
+        "joined_at",
+      ],
       dashboard_job_dependency_v1: [
         "dependent_job_id",
         "prerequisite_job_id",
@@ -205,11 +212,11 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v32 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v33 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(32);
+    expect(version.rows[0]?.version).toBe(33);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -225,6 +232,7 @@ describe("schema installation", () => {
       { version: 30, description: "add one-prerequisite job dependencies" },
       { version: 31, description: "add fan-in dependency policies" },
       { version: 32, description: "index dependency failure operations" },
+      { version: 33, description: "add single linked child jobs" },
     ]);
 
     const maintenanceFunctions = await pool.query<{

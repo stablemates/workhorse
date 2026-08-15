@@ -5,6 +5,7 @@ import { logInfo, recordRedrive, type QueueMetricSnapshot } from "../telemetry.j
 import type {
   BulkRedriveOptions,
   BulkRedrivePage,
+  ChildLineage,
   ConcurrencyPolicy,
   DeadLetter,
   DeadLetterFilter,
@@ -85,6 +86,8 @@ type JobListRow = {
   dependency_on_failure: "release" | "cancel" | "fail" | null;
   dependency_on_cancellation: "release" | "cancel" | "fail" | null;
   blocked_reason: "prerequisite_pending" | null;
+  parent_job_id: string | null;
+  child_job_ids: string[];
   current_attempt: number;
   max_attempts: number;
   retry_policy: RetryPolicy | null;
@@ -332,6 +335,8 @@ function jobListItem(row: JobListRow): JobListItem {
             onCancellation: row.dependency_on_cancellation!,
           },
     blockedReason: row.blocked_reason,
+    parentJobId: row.parent_job_id,
+    childJobIds: row.child_job_ids,
     currentAttempt: row.current_attempt,
     maxAttempts: row.max_attempts,
     retryPolicy: row.retry_policy,
@@ -590,6 +595,7 @@ export class OperatorReadsModule extends QueueModule {
               dependency.on_failure AS dependency_on_failure,
               dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN listed.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
+              parent_edge.parent_job_id, children.child_job_ids,
               listed.current_attempt, listed.max_attempts, listed.retry_policy,
               listed.deadline_at,
               listed.execution_timeout_ms::text AS execution_timeout_ms,
@@ -610,7 +616,13 @@ export class OperatorReadsModule extends QueueModule {
                   min(edge.on_cancellation) AS on_cancellation
              FROM workhorse.job_dependency edge
             WHERE edge.dependent_job_id = listed.job_id
-         ) dependency ON true`,
+         ) dependency ON true
+         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = listed.job_id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
+                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
+             FROM workhorse.job_child edge WHERE edge.parent_job_id = listed.job_id
+         ) children ON true`,
       [
         JSON.stringify(jobListFilter(query)),
         limit,
@@ -832,6 +844,46 @@ export class OperatorReadsModule extends QueueModule {
     };
   }
 
+  async getChildLineage(
+    jobId: string,
+    requestedLimit = MAX_JOB_QUERY_PAGE_SIZE,
+  ): Promise<ChildLineage> {
+    const limit = validatePageLimit(
+      requestedLimit,
+      MAX_JOB_QUERY_PAGE_SIZE,
+      MAX_JOB_QUERY_PAGE_SIZE,
+      "getChildLineage limit",
+    );
+    const result = await this.context.database.query<{
+      parent_job_id: string;
+      child_job_id: string;
+      child_name: string;
+      child_type: string;
+      created_at: Date | string;
+      joined_at: Date | string | null;
+    }>(
+      `SELECT edge.parent_job_id, edge.child_job_id, edge.child_name,
+              child.job_type AS child_type, edge.created_at, edge.joined_at
+         FROM workhorse.job_child edge
+         JOIN workhorse.job child ON child.id = edge.child_job_id
+        WHERE edge.parent_job_id = $1::uuid OR edge.child_job_id = $1::uuid
+        ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id
+        LIMIT $2::integer`,
+      [jobId, limit + 1],
+    );
+    return {
+      records: result.rows.slice(0, limit).map((row) => ({
+        parentJobId: row.parent_job_id,
+        childJobId: row.child_job_id,
+        name: row.child_name,
+        type: row.child_type,
+        createdAt: rowTimestamp(row.created_at, "created_at"),
+        joinedAt: nullableRowTimestamp(row.joined_at, "joined_at"),
+      })),
+      truncated: result.rows.length > limit,
+    };
+  }
+
   async getJob<TResult = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
     // A job exists in exactly one lifecycle relation: runtime while live, outcome when terminal.
     const result = await this.context.database.query<{
@@ -850,6 +902,8 @@ export class OperatorReadsModule extends QueueModule {
       dependency_on_failure: "release" | "cancel" | "fail" | null;
       dependency_on_cancellation: "release" | "cancel" | "fail" | null;
       blocked_reason: "prerequisite_pending" | null;
+      parent_job_id: string | null;
+      child_job_ids: string[];
       current_attempt: number;
       max_attempts: number;
       retry_policy: RetryPolicy | null;
@@ -883,6 +937,7 @@ export class OperatorReadsModule extends QueueModule {
               dependency.on_failure AS dependency_on_failure,
               dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
+              parent_edge.parent_job_id, children.child_job_ids,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
               COALESCE(r.run_at, o.run_at) AS run_at,
@@ -908,6 +963,12 @@ export class OperatorReadsModule extends QueueModule {
              FROM workhorse.job_dependency edge
             WHERE edge.dependent_job_id = j.id
          ) dependency ON true
+         LEFT JOIN workhorse.job_child parent_edge ON parent_edge.child_job_id = j.id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(array_agg(edge.child_job_id ORDER BY edge.child_job_id)
+                    FILTER (WHERE edge.child_job_id IS NOT NULL), '{}') AS child_job_ids
+             FROM workhorse.job_child edge WHERE edge.parent_job_id = j.id
+         ) children ON true
          LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
         WHERE j.id = $1::uuid`,
       [id],
@@ -935,6 +996,8 @@ export class OperatorReadsModule extends QueueModule {
               onCancellation: row.dependency_on_cancellation!,
             },
       blockedReason: row.blocked_reason,
+      parentJobId: row.parent_job_id,
+      childJobIds: row.child_job_ids,
       currentAttempt: row.current_attempt,
       maxAttempts: row.max_attempts,
       retryPolicy: row.retry_policy,

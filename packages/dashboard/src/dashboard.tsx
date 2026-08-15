@@ -1459,6 +1459,34 @@ export function DependencyLine({ job }: { job: DashboardJobDetail }) {
   );
 }
 
+/** The immutable parent-child edge and whether the parent has consumed the child result. */
+export function ChildLine({ job }: { job: DashboardJobDetail }) {
+  if (job.childLineage.records.length === 0) return null;
+  return (
+    <Stack gap={4} mt="sm">
+      {job.childLineage.records.map((edge) => {
+        const isParent = edge.parentJobId === job.identity.id;
+        return (
+          <Group gap="xs" align="baseline" wrap="wrap" key={`${edge.parentJobId}:${edge.name}`}>
+            <Text c="dimmed" size="xs" fw={600}>
+              {isParent ? "Child" : "Parent"}
+            </Text>
+            <Code fz="xs">{isParent ? edge.childJobId : edge.parentJobId}</Code>
+            <Text c="dimmed" size="xs">
+              {edge.name} · {edge.type} · {edge.joinedAt === null ? "waiting" : "joined"}
+            </Text>
+          </Group>
+        );
+      })}
+      {job.childLineage.truncated ? (
+        <Text c="dimmed" size="xs">
+          Additional child edges are omitted.
+        </Text>
+      ) : null}
+    </Stack>
+  );
+}
+
 /**
  * Queue admission context for the selected task.
  *
@@ -6402,6 +6430,7 @@ function DashboardContent({
               <Code fz="xs">{selectedJob.identity.id}</Code>
               <RetryPolicyLine job={selectedJob} />
               <DependencyLine job={selectedJob} />
+              <ChildLine job={selectedJob} />
               <Group gap="xs" mt="sm" align="baseline">
                 <Text c="dimmed" size="xs" fw={600}>
                   Priority
