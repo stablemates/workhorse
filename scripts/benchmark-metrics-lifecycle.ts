@@ -2,11 +2,11 @@
 /**
  * Runs the metric instrument lifecycle microbenchmark and prints its JSON report.
  *
- * This benchmark needs no database. See benchmarks/metrics-lifecycle.ts and ADR 0024.
+ * This benchmark needs no database. See typescript/core/benchmarks/metrics-lifecycle.ts and ADR 0024.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { runMetricsLifecycleBenchmark } from "../benchmarks/metrics-lifecycle.js";
+import { runMetricsLifecycleBenchmark } from "../typescript/core/benchmarks/metrics-lifecycle.js";
 
 const help = `Workhorse metric lifecycle benchmark
 

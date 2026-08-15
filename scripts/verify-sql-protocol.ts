@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Queryable } from "../src/types.js";
+import type { Queryable } from "../typescript/core/src/types.js";
 
 type JsonScalar = boolean | number | string | null;
 type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };

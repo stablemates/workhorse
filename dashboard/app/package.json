@@ -1,0 +1,96 @@
+{
+  "name": "@workhorse/dashboard-app",
+  "private": true,
+  "description": "Shared operator dashboard application for Workhorse",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "dashboard/app"
+  },
+  "files": [
+    "browser",
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/library/index.d.ts",
+      "import": "./dist/library/index.js"
+    },
+    "./wire": {
+      "types": "./dist/library/wire.d.ts",
+      "import": "./dist/library/wire.js"
+    },
+    "./presentation": {
+      "types": "./dist/library/presentation.d.ts",
+      "import": "./dist/library/presentation.js"
+    },
+    "./styles.css": "./dist/library/styles.css",
+    "./server": {
+      "types": "./dist/library/server.d.ts",
+      "import": "./dist/library/server.js"
+    },
+    "./standalone": {
+      "types": "./dist/library/standalone.d.ts",
+      "import": "./dist/library/standalone.js"
+    },
+    "./client": {
+      "types": "./dist/library/client.d.ts",
+      "import": "./dist/library/client.js"
+    },
+    "./dev": {
+      "types": "./dist/library/dev.d.ts",
+      "import": "./dist/library/dev.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && cp -R src/assets dist/library/assets && vite build",
+    "build:dev": "pnpm build:library",
+    "build:library": "rm -rf dist/library && tsc -p tsconfig.json && cp src/styles.css dist/library/styles.css && cp -R src/assets dist/library/assets",
+    "dev": "vite",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
+  },
+  "dependencies": {
+    "@mantine/charts": "^8.3.18",
+    "@mantine/core": "^8.3.14",
+    "@mantine/hooks": "^8.3.14",
+    "@mantine/notifications": "^8.3.18",
+    "@phosphor-icons/react": "^2.1.10",
+    "@workhorse/dashboard-server": "workspace:*",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "@orpc/client": "^1.14.8",
+    "@types/node": "^24.1.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "@workhorse/core": "workspace:*",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-grab": "^0.1.50",
+    "typescript": "^5.8.3",
+    "vite": "^7.1.7",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "@workhorse/core": ">=0.1.0 <0.2.0",
+    "react": ">=19 <20",
+    "react-dom": ">=19 <20",
+    "vite": ">=6 <9"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

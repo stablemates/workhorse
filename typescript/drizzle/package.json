@@ -1,0 +1,48 @@
+{
+  "name": "@workhorse/drizzle",
+  "version": "0.1.0",
+  "description": "Drizzle ORM provider for Workhorse",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "typescript/drizzle"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:dev": "pnpm build",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5",
+    "@workhorse/core": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.16.3"
+  },
+  "peerDependencies": {
+    "@workhorse/core": ">=0.1.0 <1",
+    "drizzle-orm": ">=0.45.0 <1",
+    "pg": ">=8.13 <9"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

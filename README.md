@@ -17,7 +17,7 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/worker-processes.md`](docs/worker-processes.md): dedicated production worker CLI, signal and drain semantics, probes, deployment examples, concurrency findings, and topology guidance.
 - [`docs/rolling-statistics.md`](docs/rolling-statistics.md): per-minute operator aggregates, bucket schema and grain semantics, the rollup watermark and its retention interlock, the stitched read path, mergeable wait histograms, and current limits.
 - [`docs/demo-findings.md`](docs/demo-findings.md): API, packaging, documentation, and developer-experience gaps found by the end-to-end demo.
-- [`demo/README.md`](demo/README.md): interactive Workhorse demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
+- [`typescript/demo/README.md`](typescript/demo/README.md): interactive Workhorse demo covering transactional enqueue, workers, retries, failures, recurring jobs, and operational inspection.
 - [`docs/decisions/0009-enqueue-idempotency-keys.md`](docs/decisions/0009-enqueue-idempotency-keys.md): scoped enqueue-key ownership, request equivalence, safe diagnostics, expiry, and cleanup.
 - [`docs/decisions/0010-cooperative-job-cancellation.md`](docs/decisions/0010-cooperative-job-cancellation.md): cooperative delivery, exact-fence acknowledgement, race ownership, truthful history, recurring behavior, and non-goals.
 - [`docs/decisions/0017-durable-worker-registry.md`](docs/decisions/0017-durable-worker-registry.md): fleet registration, split row ownership, process-scoped operator pause, identity versus placement, and non-goals.
@@ -360,6 +360,11 @@ Requirements: Node.js **>= 22**, pnpm, and PostgreSQL **15 or newer**. No Postgr
 required. CI runs the full suite against every combination of Node.js 22, 24 and PostgreSQL 15, 16,
 17, 18; see [`docs/compatibility.md`](docs/compatibility.md) for what that support boundary does and
 does not promise.
+
+The repository keeps language implementations under `typescript/`, `python/`, and `go/`. Shared
+contracts and product artifacts remain at the root: PostgreSQL under `sql/`, protocol fixtures under
+`protocol/`, the operator application under `dashboard/app`, and the documentation site under
+`site/`.
 
 ```bash
 pnpm install

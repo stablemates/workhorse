@@ -1,7 +1,7 @@
 packages:
-  - packages/*
-  - apps/*
-  - demo
+  - typescript/*
+  - dashboard/*
+  - site
 
 onlyBuiltDependencies:
   - lefthook

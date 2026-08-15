@@ -20,7 +20,7 @@ retention metadata, so its overhead must be measured rather than attributed to p
 
 ## Measurement
 
-`benchmarks/retention-strategies.ts` creates two isolated synthetic schemas with the same indexed
+`typescript/core/benchmarks/retention-strategies.ts` creates two isolated synthetic schemas with the same indexed
 ready queue, history row shape, and parent-existence trigger. The partition design creates one
 paired `job_event` and `attempt_history` generation per churn cycle and drops both expired children
 in one statement. The row design stores both histories in indexed tables, deletes the expired rows,

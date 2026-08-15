@@ -16,7 +16,7 @@ the old plans, but a core schema change still requires a coordinated dashboard r
 
 ## Measurement
 
-`benchmarks/dashboard-read-surface.ts` recreates the dedicated benchmark database, installs the
+`typescript/core/benchmarks/dashboard-read-surface.ts` recreates the dedicated benchmark database, installs the
 current schema, and loads 100,000 jobs. The dataset contains 20,000 live runtime rows, 80,000
 terminal outcomes, 200,000 events, 80,000 attempt rows, 2,000 waits, and 10,000 checkpoints.
 PostgreSQL analyzes every relation before measurement.

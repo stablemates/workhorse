@@ -156,7 +156,7 @@ Workers run the pass on `WorkerOptions.statisticsRollupIntervalMs`:
 
 ## Dashboard read path
 
-`packages/dashboard/src/server/rolling-stats.ts` provides the query fragments:
+`typescript/dashboard-server/src/server/rolling-stats.ts` provides the query fragments:
 
 | Export                                     | Purpose                                                        |
 | ------------------------------------------ | -------------------------------------------------------------- |
@@ -245,16 +245,16 @@ Two defects surfaced only under this benchmark, both fixed:
 
 ## Testing
 
-| Test                                                                            | Asserts                                                             |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `test/integration.test.ts` — "materializes closed minutes"                      | Grain separation, error capture, and convergence on repeated passes |
-| `test/integration.test.ts` — "stitches materialized buckets"                    | A window is correct before _and_ after materialization              |
-| `test/integration.test.ts` — "folds statistics beyond the group limit"          | Overflow folds into `__other__` and totals are preserved            |
-| `test/integration.test.ts` — "reports rollup progress through health"           | `lagMs` and `lastRunAt`                                             |
-| `test/integration.test.ts` — "refuses to delete raw history past the watermark" | The retention interlock, held and then released                     |
-| `test/integration.test.ts` — "prunes statistics buckets on their own policy"    | Independent window, and that it is not bound by the identity chain  |
-| `test/integration.test.ts` — "bounds statistics pruning by the rows per pass"   | Per-pass deletion cap                                               |
-| `test/integration.test.ts` — "reports history size with daily partitions"       | Partition trees folded into their parent in health                  |
+| Test                                                                                            | Asserts                                                             |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `typescript/core/test/integration.test.ts` — "materializes closed minutes"                      | Grain separation, error capture, and convergence on repeated passes |
+| `typescript/core/test/integration.test.ts` — "stitches materialized buckets"                    | A window is correct before _and_ after materialization              |
+| `typescript/core/test/integration.test.ts` — "folds statistics beyond the group limit"          | Overflow folds into `__other__` and totals are preserved            |
+| `typescript/core/test/integration.test.ts` — "reports rollup progress through health"           | `lagMs` and `lastRunAt`                                             |
+| `typescript/core/test/integration.test.ts` — "refuses to delete raw history past the watermark" | The retention interlock, held and then released                     |
+| `typescript/core/test/integration.test.ts` — "prunes statistics buckets on their own policy"    | Independent window, and that it is not bound by the identity chain  |
+| `typescript/core/test/integration.test.ts` — "bounds statistics pruning by the rows per pass"   | Per-pass deletion cap                                               |
+| `typescript/core/test/integration.test.ts` — "reports history size with daily partitions"       | Partition trees folded into their parent in health                  |
 
 ## Limits and open work
 

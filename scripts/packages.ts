@@ -4,11 +4,12 @@ import path from "node:path";
 /**
  * The published-package list, derived rather than declared.
  *
- * Every workspace package under `packages/` that is not private is published, packed, built, and
- * version-checked. Restating that set by hand is how a new package silently misses a release, so
- * this module reads it from the filesystem and everything that needs the list asks here:
- * `test/packed-packages.ts`, `test/support-matrix.test.ts`, `.github/workflows/release.yml`, and
- * the build scripts through the `packages/*` filter. `test/published-packages.test.ts` fails when
+ * Every publishable workspace package is packed, built, and version-checked. Restating that set by
+ * hand is how a new package silently misses a release, so this module derives the TypeScript
+ * packages from their workspace locations:
+ * `typescript/core/test/packed-packages.ts`, `typescript/core/test/support-matrix.test.ts`,
+ * `.github/workflows/release.yml`, and the build scripts through the `typescript/*` filter.
+ * `typescript/core/test/published-packages.test.ts` fails when
  * a consumer restates the list instead.
  */
 
@@ -18,9 +19,9 @@ export const repositoryRoot = path.resolve(import.meta.dirname, "..");
 export interface PublishedPackage {
   /** Package name as npm knows it, for example `@workhorse/dashboard`. */
   readonly name: string;
-  /** Directory name under `packages/`, for example `dashboard`. */
+  /** Directory name under `typescript/`, for example `dashboard-server`. */
   readonly directory: string;
-  /** Path from the repository root, for example `packages/dashboard`. */
+  /** Path from the repository root, for example `typescript/dashboard-server`. */
   readonly location: string;
   /** Path from the repository root to the manifest. */
   readonly manifest: string;
@@ -69,20 +70,22 @@ async function describe(relativePath: string, directory: string): Promise<Publis
   };
 }
 
-/** `@workhorse/core`, which lives at the repository root rather than under `packages/`. */
+/** `@workhorse/core`, which lives at `typescript/core`. */
 export async function corePackage(): Promise<PublishedPackage> {
-  return describe("package.json", ".");
+  return describe("typescript/core/package.json", "core");
 }
 
-/** The publishable packages under `packages/`, in directory order. */
+/** Publishable workspace packages other than core, in build order. */
 export async function workspacePackages(): Promise<readonly PublishedPackage[]> {
-  const entries = await readdir(path.join(repositoryRoot, "packages"), { withFileTypes: true });
-  const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  const entries = await readdir(path.join(repositoryRoot, "typescript"), { withFileTypes: true });
+  const directories = entries
+    .filter((entry) => entry.isDirectory() && entry.name !== "core")
+    .map((entry) => entry.name);
   // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 target lacks Array#toSorted().
   directories.sort();
   const described = await Promise.all(
     directories.map(async (directory) => {
-      const relativePath = `packages/${directory}/package.json`;
+      const relativePath = `typescript/${directory}/package.json`;
       const manifest = await readWorkspaceManifest(relativePath);
       if (!manifest) return undefined;
       return manifest.private === true ? undefined : await describe(relativePath, directory);
@@ -94,7 +97,7 @@ export async function workspacePackages(): Promise<readonly PublishedPackage[]> 
 /**
  * Every published package, core first.
  *
- * Order matters to the release: the packages under `packages/` declare `@workhorse/core` as a
+ * Order matters to the release: the packages under `typescript/` declare `@workhorse/core` as a
  * peer, so a failed core publish must not leave dependents pointing at a version nobody can
  * install.
  */
@@ -102,8 +105,8 @@ export async function publishedPackages(): Promise<readonly PublishedPackage[]> 
   return [await corePackage(), ...(await workspacePackages())];
 }
 
-// Run directly to print the `packages/` directory names, one per line, for shell consumers such as
-// the release workflow. Core is deliberately absent: it packs and publishes on its own line.
+// Run directly to print the publishable `typescript/` directory names, one per line, for shell
+// consumers such as the release workflow. Core is deliberately absent and publishes first.
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
   for (const entry of await workspacePackages()) process.stdout.write(`${entry.directory}\n`);
 }

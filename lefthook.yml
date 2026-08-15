@@ -5,7 +5,7 @@ pre-commit:
     - name: test changed scope
       run: pnpm test:changed {staged_files}
     - name: test changed database scope
-      glob: "{src/**,benchmarks/**,packages/*/src/**,demo/src/**,demo/test/app.integration.test.ts,packages/*/test/integration.test.ts,test/support/**,test/benchmark-conventional.test.ts,test/integration-*.test.ts,test/isolation-canary-*.test.ts,test/schema-installation.test.ts}"
+      glob: "{typescript/*/src/**,typescript/core/benchmarks/**,typescript/demo/test/app.integration.test.ts,typescript/*/test/integration.test.ts,typescript/core/test/support/**,typescript/core/test/benchmark-conventional.test.ts,typescript/core/test/integration-*.test.ts,typescript/core/test/isolation-canary-*.test.ts,typescript/core/test/schema-installation.test.ts}"
       run: pnpm build && pnpm test:database:changed {staged_files}
     - name: test database scope after SQL changes
       glob: "sql/**"

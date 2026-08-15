@@ -8,12 +8,16 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "outDir": "dist",
+    "outDir": "typescript/core/dist",
     "rootDir": ".",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src/**/*.ts", "benchmarks/**/*.ts", "test/**/*.ts"]
+  "include": [
+    "typescript/core/src/**/*.ts",
+    "typescript/core/benchmarks/**/*.ts",
+    "typescript/core/test/**/*.ts"
+  ]
 }

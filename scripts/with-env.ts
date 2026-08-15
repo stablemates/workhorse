@@ -19,7 +19,10 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { localDatabasePurposes, localDatabaseEnvironmentVariable } from "../src/local-database.js";
+import {
+  localDatabaseEnvironmentVariable,
+  localDatabasePurposes,
+} from "../typescript/core/src/local-database.js";
 import { readEnvironment } from "./environment-file.js";
 
 /** Variables this repository provisions per worktree, and so is entitled to overwrite. */

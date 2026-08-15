@@ -5,7 +5,8 @@ It orders design and architecture improvements so that each step reduces risk fo
 It adds no features. Where a decision is performance-sensitive, a benchmark gate decides it,
 per the existing rule: benchmark evidence comes before performance claims.
 
-Findings come from a full sweep of `src/`, `sql/`, `packages/`, `test/`, `scripts/`, and CI
+Findings come from a full sweep of `typescript/core/src/`, `sql/`, `typescript/`,
+`typescript/core/test/`, `scripts/`, and CI
 on 2026-08-11, at schema version 23. Line references are to that snapshot; verify them before
 editing, but the named identifiers stay greppable after drift.
 
@@ -20,7 +21,7 @@ and the existing benchmark asset to extend.
 - Build safety nets — test structure, drift checks, benchmark trend lines — before cutting
   the large modules.
 - If a change touches the enqueue, claim, or complete path, the read model, or telemetry,
-  the pull request must attach a before/after self-run of `benchmarks/comparative.ts`.
+  the pull request must attach a before/after self-run of `typescript/core/benchmarks/comparative.ts`.
 - An evidence-gated item ends in a written verdict: an ADR in `docs/decisions/` that records
   the measured numbers and the decision, even when the decision is "keep the current design".
 - No item may block or conflict with the open features in `TODO.md` (P0-08 dashboard auth,
@@ -37,11 +38,11 @@ and the existing benchmark asset to extend.
 
 **Today.** Core has two instrumentation layers that both fire on the same code paths:
 
-- `src/metrics.ts` (342 lines): eager module-scope instruments named `workhorse.job.*`,
+- `typescript/core/src/metrics.ts` (342 lines): eager module-scope instruments named `workhorse.job.*`,
   helpers `recordEnqueuedJobs`, `recordClaimedJob`, and the polling class
   `WorkhorseMetricsObserver` whose `collectOnce()` runs its own depth SQL at
   `metrics.ts:263-298`.
-- `src/telemetry.ts` (373 lines): lazy, provider-change-aware instruments named
+- `typescript/core/src/telemetry.ts` (373 lines): lazy, provider-change-aware instruments named
   `workhorse.jobs.*` under `telemetryMetrics`, plus `registerQueueMetrics` observable gauges
   fed by `Queue.queueMetricSnapshot()` (`queue.ts:3875-3961`).
 
@@ -56,15 +57,15 @@ removed.
 **Change.** Merge into one instrumentation module with one naming scheme. Audit every
 `record*` and `telemetryMetrics.*` call site in `queue.ts` and `worker.ts`; each event must
 be emitted exactly once. Collapse the three depth implementations into one query with one
-owner. Delete the losing module and its exports from `src/index.ts`.
+owner. Delete the losing module and its exports from `typescript/core/src/index.ts`.
 
 **Done when** a grep for the losing metric-name prefix returns nothing; each lifecycle event
 increments exactly one instrument (assert via an in-memory MeterProvider in
-`test/telemetry.test.ts` / `test/metrics.test.ts`, which already fabricate `QueryResult`
+`typescript/core/test/telemetry.test.ts` / `typescript/core/test/metrics.test.ts`, which already fabricate `QueryResult`
 fixtures); the public export surface change is noted in `CHANGELOG.md`.
 
 **Benchmark gate.** Run a throughput scenario with telemetry on and off, before and after,
-capturing overhead through `benchmarks/telemetry.ts`. The eager pattern (`metrics.ts`) and
+capturing overhead through `typescript/core/benchmarks/telemetry.ts`. The eager pattern (`metrics.ts`) and
 the lazy pattern (`telemetry.ts`) are competing lifecycle strategies; the overhead
 measurement picks the survivor, not aesthetics.
 
@@ -74,19 +75,19 @@ measurement picks the survivor, not aesthetics.
 
 **Today.** `vitest.config.ts` sets `fileParallelism: false` and
 `sequence: { concurrent: false }`, so all 52 test files (~20,800 lines) run one at a time.
-The cause: every database-backed file — `test/integration.test.ts`,
-`test/benchmark-conventional.test.ts`, `test/local-database.test.ts`, the four
-`packages/*/test/integration.test.ts`, and `demo/test/app.integration.test.ts` — runs
+The cause: every database-backed file — `typescript/core/test/integration.test.ts`,
+`typescript/core/test/benchmark-conventional.test.ts`, `typescript/core/test/local-database.test.ts`, the four
+`typescript/*/test/integration.test.ts`, and `typescript/demo/test/app.integration.test.ts` — runs
 `DROP SCHEMA IF EXISTS workhorse CASCADE; installSchema(pool)` against the _same_ database
-resolved by `localDatabaseUrl("test")` from `src/local-database.ts`. Roughly 40 files never
+resolved by `localDatabaseUrl("test")` from `typescript/core/src/local-database.ts`. Roughly 40 files never
 touch PostgreSQL and still pay the serialization cost. The setup preamble (pool creation,
 `assertLocalDatabasePurpose`, schema install) and the `beforeEach` TRUNCATE lists are
 copy-pasted across six files with divergent table sets — the root file truncates 17 tables
-and restarts `workhorse.fence_token_seq` (`test/integration.test.ts:122`); the adapter files
+and restarts `workhorse.fence_token_seq` (`typescript/core/test/integration.test.ts:122`); the adapter files
 truncate 8. A table added to `sql/schema.sql` leaks state silently until every list is
 updated by hand.
 
-**Change.** Build `test/support/db.ts` owning: pool creation with the purpose guard; schema
+**Change.** Build `typescript/core/test/support/db.ts` owning: pool creation with the purpose guard; schema
 install; per-file isolation (dedicated schema or database per test file — pick one mechanism
 and document it in the module header); and a truncation helper that derives the table list
 from `information_schema.tables WHERE table_schema = 'workhorse'` so it cannot drift. Port
@@ -97,13 +98,13 @@ files immediately, and for database files once isolated.
 cross-file state-leak canary test proves isolation; suite wall-clock before/after is recorded
 in the pull request; adding a table to `sql/schema.sql` requires no test-harness edit.
 
-### 0.3 Split `test/integration.test.ts` along the future `Queue` seams
+### 0.3 Split `typescript/core/test/integration.test.ts` along the future `Queue` seams
 
 **Scope:** M. **Depends on:** 0.2. **Unblocks:** 1.2.
 
 **Today.** The file holds 8,876 lines and 208 `it()` blocks under two top-level `describe`
 blocks, so no subset is targetable with `-t` and `test:integration` runs everything.
-`src/queue.ts` is exercised almost solely through this file. A latent footgun: an
+`typescript/core/src/queue.ts` is exercised almost solely through this file. A latent footgun: an
 `afterAll(pool.end())` sits at line 418, lexically before a `describe` at line 421 that still
 uses the pool — legal under vitest hook scoping, but a trap in a file this long.
 
@@ -115,8 +116,8 @@ snapshots. Use the 0.2 harness for each. If a test does not fit any seam cleanly
 signal the seam is wrong — adjust the 1.2 plan, not the test. Add coverage tooling
 (`@vitest/coverage-v8`) and record a baseline; the repo currently has none.
 
-**Done when** no test file under `test/` exceeds ~1,500 lines; each domain file runs green in
-isolation; a coverage baseline for `src/` is checked into the pull request description.
+**Done when** no test file under `typescript/core/test/` exceeds ~1,500 lines; each domain file runs green in
+isolation; a coverage baseline for `typescript/core/src/` is checked into the pull request description.
 
 ### 0.4 Drift checks and build/CI hygiene
 
@@ -125,13 +126,13 @@ review of every Phase 1 refactor.
 
 A bundle of mechanical fixes. Each is independent; land them in any order.
 
-- **TS↔SQL limit parity.** `src/types.ts` exports 22 limit constants; several repeat as
+- **TS↔SQL limit parity.** `typescript/core/src/types.ts` exports 22 limit constants; several repeat as
   literals in `sql/schema.sql` with no check — `MAX_CHECKPOINT_VALUE_BYTES = 1_048_576`
   (`types.ts:212`) vs `schema.sql:424` and `:4184`; `MAX_PROGRESS_VALUE_BYTES = 65_536`
   (`types.ts:214`) vs `schema.sql:439` and `:4282`; default payload/result caps `1048576` at
   `schema.sql:380-381`, `:1714-1715`, `:2314-2315`. Add a unit test that parses
-  `sql/schema.sql` for the named constants and asserts parity. `test/support-matrix.test.ts`
-  (which asserts `.github/workflows/ci.yml` agrees with `src/support.ts`) is the pattern to
+  `sql/schema.sql` for the named constants and asserts parity. `typescript/core/test/support-matrix.test.ts`
+  (which asserts `.github/workflows/ci.yml` agrees with `typescript/core/src/support.ts`) is the pattern to
   copy.
 - **Shared helpers in core.** One camel-to-snake mapping table — it is copy-pasted at
   `queue.ts:2008-2020`, `:2036-2048`, `:2190-2195`, and in `syncMaintenancePolicy`. One
@@ -140,10 +141,10 @@ A bundle of mechanical fixes. Each is independent; land them in any order.
   untranslated. A common `WorkhorseError` base for the 15 exported error classes so callers
   can `instanceof` one type. An `expectOneRow()` helper replacing the 31 `result.rows[0]!`
   non-null assertions.
-- **Single-source lists.** `build:runtime` uses `--filter './packages/*'` while
+- **Single-source lists.** `build:runtime` uses the package inventory under `typescript/` while
   `build:runtime:dev` names the five packages individually — a new package silently misses
   the dev build. The packed-tarball list `dashboard drizzle prisma typeorm kysely` is spelled
-  three ways: `test/packed-packages.ts` plus two bash loops in
+  three ways: `typescript/core/test/packed-packages.ts` plus two bash loops in
   `.github/workflows/release.yml`. Competitor versions (pg-boss `12.26.2`,
   graphile-worker `0.17.3`) live in both `package.json` devDependencies and the hardcoded
   `version:` fields in `benchmarks/targets/*.ts` with nothing asserting agreement. Give each
@@ -191,10 +192,10 @@ short section in `docs/benchmarking.md` explains how to read the trend.
 P2-13/P2-14 SDK authors need.
 
 **Today.** The adapter contract is `WorkhorseAdapter<TTransaction>` built by
-`createWorkhorseAdapter` in `src/adapter.ts` (53 lines — the one clean seam), but that
+`createWorkhorseAdapter` in `typescript/core/src/adapter.ts` (53 lines — the one clean seam), but that
 factory covers only the last ~12 lines of each ORM package. The four packages
-(`packages/drizzle` 525 lines, `prisma` 341, `typeorm` 294, `kysely` 292) each re-implement
-five blocks in `src/index.ts`: an options interface (identical field-for-field), an
+(`typescript/drizzle` 525 lines, `prisma` 341, `typeorm` 294, `kysely` 292) each re-implement
+five blocks in `typescript/core/src/index.ts`: an options interface (identical field-for-field), an
 `XQueryError` class (byte-identical apart from the vendor noun), `databaseErrorCode(error)`,
 a `xQueryable()` wrapper with an identical `QueryResult` shim
 (`{ command: "", rowCount, oid: 0, fields: [], rows }`) and an identical notification-pool
@@ -217,17 +218,17 @@ ORM package becomes ~30 lines of glue plus anything genuinely dialect-specific. 
 four test suites with one parameterized conformance suite (on the 0.2 harness) that runs
 against built packages, not the source tree.
 
-**Done when** each `packages/*/src/index.ts` is under ~50 lines; the conformance suite covers
-error-code extraction for each driver's real error shapes; no `packages/*` test imports from
+**Done when** each `typescript/*/src/index.ts` is under ~50 lines; the conformance suite covers
+error-code extraction for each driver's real error shapes; no `typescript/*` test imports from
 `../../../src`; a written "what an adapter must guarantee" section lands in
 `docs/architecture.md`.
 
-### 1.2 Decompose `src/queue.ts` behind a stable facade
+### 1.2 Decompose `typescript/core/src/queue.ts` behind a stable facade
 
 **Scope:** L. **Depends on:** 0.1 (metrics code out of queue.ts), 0.3 (tests split along the
 same seams), 0.4 (error/mapping helpers exist). **Unblocks:** P1-05, 2.1, reviewability.
 
-**Today.** `src/queue.ts` is 3,964 lines: the `Queue` class (~2,570 lines, ~80 public
+**Today.** `typescript/core/src/queue.ts` is 3,964 lines: the `Queue` class (~2,570 lines, ~80 public
 methods) plus 15 error classes, ~20 row types, row mappers, and validators. The class doc at
 `queue.ts:1383-1387` promises a "thin TypeScript facade"; `health()` alone is ~624 lines
 (`queue.ts:3251-3874`) containing ~254 lines of inline SQL with eight concurrent queries
@@ -251,7 +252,7 @@ one concern per pull request, each landing green against the 0.3 test files. P1-
 queues then modifies a small claim module instead of a 3,964-line file.
 
 **Done when** `queue.ts` is under ~600 lines of pure delegation; each internal module has a
-matching 0.3 test file; the public API surface (checked via `src/index.ts` exports and the
+matching 0.3 test file; the public API surface (checked via `typescript/core/src/index.ts` exports and the
 packed-package test) is unchanged.
 
 **Benchmark gate.** Before/after `comparative.ts` self-run on enqueue, claim, and complete.
@@ -290,7 +291,7 @@ lease expiry; cancellation arriving during a durable wait.
 swallowed-suspension case is covered by a test and produces a documented warning; one loop
 taxonomy remains.
 
-**Benchmark gate.** The durable-wait scenario in `benchmarks/scenarios.ts`: suspension and
+**Benchmark gate.** The durable-wait scenario in `typescript/core/benchmarks/scenarios.ts`: suspension and
 resume latency must not regress.
 
 ### 1.4 A `Worker`-to-`Queue` interface seam
@@ -324,11 +325,11 @@ carries in-place `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` (`schema.sql:377-383
 `:1022`), `DROP FUNCTION IF EXISTS` prologues for every retired signature
 (`:1768`, `:2585-2590`, `:2883-2886`, `:3381`, `:3459`), and dead versions kept for
 compatibility (`claim_v1` at `:3382` while only `claim_v2` is called; `heartbeat_v1` at
-`:3947` delegating to `heartbeat_v2`). Meanwhile `src/schema.ts:36-73` executes the whole
+`:3947` delegating to `heartbeat_v2`). Meanwhile `typescript/core/src/schema.ts:36-73` executes the whole
 file in one shot, refuses any existing schema that does not already match
 `WORKHORSE_SCHEMA_VERSION = 23`, and its own comment says production callers must not treat
 it as an upgrade mechanism. The legacy-relation poison markers (`job_current`, `ready_job`,
-`scheduled_job`, `lease`) are duplicated in `src/schema.ts:51-54` and inside the health SQL
+`scheduled_job`, `lease`) are duplicated in `typescript/core/src/schema.ts:51-54` and inside the health SQL
 at `queue.ts:3366-3373`.
 
 **Change.** Restructure into: (a) a generated clean-install artifact with retired functions
@@ -356,7 +357,7 @@ The open question is jitter and worst-case delay, not safety. ADRs 0002 (pg_cron
 and 0003 (worker-owned scheduler) record the original reasoning.
 
 **Change — the benchmark decides existence, not just validation.** Add a schedule-fire
-scenario to `benchmarks/scenarios.ts`: hundreds of schedules, loaded workers, capturing
+scenario to `typescript/core/benchmarks/scenarios.ts`: hundreds of schedules, loaded workers, capturing
 fire-time jitter and worst-case delay through the telemetry capture. If jitter is acceptable
 under load, do not move cadence to SQL — write the ADR that SQL owns dedup and the process
 owns cadence, and close the question. If unacceptable, move next-occurrence computation into
@@ -388,14 +389,14 @@ machinery pays for itself only above a history-volume threshold that has never b
 measured. Below the threshold, plain history tables with row-wise `DELETE` and autovacuum
 are operationally simpler and adequate.
 
-**Benchmark gate.** Extend `benchmarks/comparative.ts` and `benchmarks/conventional.ts` with
+**Benchmark gate.** Extend `typescript/core/benchmarks/comparative.ts` and `typescript/core/benchmarks/conventional.ts` with
 a sustained churn-plus-retention scenario — millions of jobs of steady enqueue/claim/complete
 with retention active — comparing (a) partition-drop retention against (b) row-wise delete
 with autovacuum on the existing single-lifetime-table baseline in
 `sql/benchmark-conventional.sql` (schema `workhorse_benchmark_conventional`, built for
 exactly this comparison). Measure: claim p50/p99 _over elapsed time_, because bloat shows up
 late, not early; WAL volume per job; table and index bloat; vacuum duration and frequency;
-and the per-insert cost of the history parent-identity trigger. `benchmarks/telemetry.ts`
+and the per-insert cost of the history parent-identity trigger. `typescript/core/benchmarks/telemetry.ts`
 already captures WAL LSN deltas, `pg_stat_io`, and relation sizes.
 
 Decision rules: if delete-plus-vacuum holds claim p99 at the product's target scale,
@@ -415,18 +416,18 @@ an explicit "proven, keep" verdict.
 **Scope:** M. **Depends on:** nothing outside the dashboard. **Unblocks:** P0-08 directly.
 
 **Today.** One API surface is defined three times by hand: the ~200-line `DashboardClient`
-interface (~25 methods) in `packages/dashboard/src/client.ts`; the oRPC router in
-`packages/dashboard/src/server/router.ts` (439 lines); and the return shapes in
+interface (~25 methods) in `typescript/dashboard-server/src/client.ts`; the oRPC router in
+`typescript/dashboard-server/src/server/router.ts` (439 lines); and the return shapes in
 `server/read-model.ts`. `model.ts` (1,570 lines, 86 exports) fuses wire DTOs, presentation
 formatters (`describeRetryPolicy`, `formatIdempotencyWindow`, `describeCancelOutcome`), and
 enum tables, and is imported by both server and browser. The operator controllers (the seven
 interfaces in `server/types.ts`) are implemented twice: `standaloneControllers()` in
-`src/cli/dashboard.ts:69-121` and `createLocalQueueController` etc. in
-`demo/src/app.ts:698-880`, same method set, same `Queue` calls, differing only in audit
+`typescript/core/src/cli/dashboard.ts:69-121` and `createLocalQueueController` etc. in
+`typescript/demo/src/app.ts:698-880`, same method set, same `Queue` calls, differing only in audit
 plumbing. The core→dashboard edge is hidden from the type-checker by a string-concatenated
-dynamic import: `["@workhorse", "dashboard/server"].join("/")` at `src/cli/dashboard.ts:52`,
+dynamic import: `["@workhorse", "dashboard/server"].join("/")` at `typescript/core/src/cli/dashboard.ts:52`,
 with a hand-written structural stand-in for the module's types at `:32-40`; only
-`test/packed-packages.ts` keeps it honest.
+`typescript/core/test/packed-packages.ts` keeps it honest.
 
 **Change.** Derive the client types from the router by oRPC type inference and delete the
 hand-written `DashboardClient`. Split `model.ts` into `wire.ts` (DTOs, shared) and
@@ -436,7 +437,7 @@ import hack with an honest small package boundary (a `@workhorse/dashboard-contr
 `server-embed` package) so the cycle disappears rather than hides. Do this before P0-08:
 auth changes the router surface, and today that is a three-place hand-synced change.
 
-**Done when** the surface has one definition; `grep -r 'join("/")' src/cli` returns nothing;
+**Done when** the surface has one definition; `grep -r 'join("/")' typescript/core/src/cli` returns nothing;
 CLI and demo share one controller module; P0-08 can add an authed route by editing only the
 router.
 
@@ -474,7 +475,7 @@ functions, or keep direct SQL with the narrowed pin. Evidence decides.
 
 **Scope:** M, spread over time. **Depends on:** 3.1 helps. This is a rule, not a project.
 
-**Today.** `packages/dashboard/src/dashboard.tsx` is 6,447 lines with ~120 top-level
+**Today.** `dashboard/app/src/dashboard.tsx` is 6,447 lines with ~120 top-level
 declarations: every page (`TasksPage:2326`, `CronPage:2694`, `QueuesPage:2805`,
 `SystemPage:3532`, `EventsPage:4188`, `WorkersPage:4531`, `SettingsPage:4835`), every
 widget, the date/byte/duration formatters, a module-global timezone store, and the 873-line

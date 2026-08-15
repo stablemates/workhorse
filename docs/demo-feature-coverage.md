@@ -39,6 +39,6 @@ Operational capabilities are demonstrated through their own surfaces rather than
 - indexes, notification hints, dedicated worker CLI behavior, bounds, and validation remain integration-test
   and benchmark concerns.
 
-The catalog is declared in `demo/src/feature-showcase.ts`. Seed orchestration and the generic handler live in
-`demo/src/app.ts`, while `demo/test/app.integration.test.ts` verifies the three-per-family invariant, schedule
+The catalog is declared in `typescript/demo/src/feature-showcase.ts`. Seed orchestration and the generic handler live in
+`typescript/demo/src/app.ts`, while `typescript/demo/test/app.integration.test.ts` verifies the three-per-family invariant, schedule
 sync, idempotent startup, redrive artifacts, and dashboard discoverability.
