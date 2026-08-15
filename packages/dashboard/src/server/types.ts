@@ -1,11 +1,13 @@
 import type {
   CancelStatus,
+  Json,
   JobState,
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
   RetentionPolicyDefinition,
   RetentionPolicySetting,
 } from "@workhorse/core";
+import type { SendSignalStatus } from "@workhorse/core";
 import type {
   DashboardDemoJobKind,
   DashboardDemoScenario,
@@ -72,12 +74,28 @@ export interface DashboardRunNowResult {
   runAt: string | null;
 }
 
+export interface DashboardSignalTaskResult {
+  status: SendSignalStatus;
+  jobId: string;
+  name: string;
+  payload: Json | null;
+  deliveredAt: string | null;
+  deliveredBy: string | null;
+}
+
 export interface DashboardTaskController {
   runTaskNow?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardRunNowResult>;
   cancelTask?: (
     jobId: string,
     audit: DashboardCancellationAuditContext,
   ) => Promise<DashboardCancelTaskResult>;
+  signalTask?: (
+    jobId: string,
+    name: string,
+    payload: Json,
+    idempotencyKey: string,
+    audit: DashboardAuditContext,
+  ) => Promise<DashboardSignalTaskResult>;
 }
 
 /**

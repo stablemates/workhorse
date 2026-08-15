@@ -34,15 +34,27 @@ const DEPTH_METRICS = {
   sleeping: (r: string) =>
     `count(${r}.job_id) FILTER (
        WHERE ${r}.state = 'scheduled' AND ${r}.wait_name IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM workhorse.job_wait timer
+            WHERE timer.job_id = ${r}.job_id AND timer.wait_name = ${r}.wait_name
+         )
      )::text`,
   overdue_waits: (r: string) =>
     `count(${r}.job_id) FILTER (
        WHERE ${r}.state = 'scheduled' AND ${r}.wait_name IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM workhorse.job_wait timer
+            WHERE timer.job_id = ${r}.job_id AND timer.wait_name = ${r}.wait_name
+         )
          AND ${r}.run_at <= clock_timestamp()
      )::text`,
   next_wake_at: (r: string) =>
     `min(${r}.run_at) FILTER (
        WHERE ${r}.state = 'scheduled' AND ${r}.wait_name IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM workhorse.job_wait timer
+            WHERE timer.job_id = ${r}.job_id AND timer.wait_name = ${r}.wait_name
+         )
      )`,
   oldest_ready_age_ms: (r: string) =>
     `extract(epoch FROM clock_timestamp() - min(${r}.ready_at) FILTER (

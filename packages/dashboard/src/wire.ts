@@ -661,7 +661,11 @@ export type DashboardJobEventType =
   | "execution_timed_out"
   | "redriven"
   | "redrive_created"
-  | "wait_elapsed";
+  | "wait_elapsed"
+  | "signal_waiting"
+  | "signal_received"
+  | "signal_replayed"
+  | "signal_rejected";
 
 /** Terminal outcomes `workhorse.attempt_history` records, constrained by a CHECK in the schema. */
 export type DashboardAttemptOutcome =

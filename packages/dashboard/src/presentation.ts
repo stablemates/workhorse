@@ -25,6 +25,10 @@ const jobEventTypes = [
   "redriven",
   "redrive_created",
   "wait_elapsed",
+  "signal_waiting",
+  "signal_received",
+  "signal_replayed",
+  "signal_rejected",
 ] as const;
 export const dashboardJobEventTypes: CompleteDashboardOptions<
   DashboardJobEventType,

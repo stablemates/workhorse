@@ -7,7 +7,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 35;
+export const WORKHORSE_SCHEMA_VERSION = 36;
 
 const SCHEMA_MIGRATIONS = [
   {
@@ -69,6 +69,11 @@ const SCHEMA_MIGRATIONS = [
     fromVersion: 34,
     toVersion: 35,
     file: "0035-preserve-child-lineage.sql",
+  },
+  {
+    fromVersion: 35,
+    toVersion: 36,
+    file: "0036-add-idempotent-signals.sql",
   },
 ] as const;
 

@@ -78,6 +78,7 @@ type WorkhorseLogEvent =
   | "workhorse.job.progress_updated"
   | "workhorse.job.redrive_processed"
   | "workhorse.job.run_now_requested"
+  | "workhorse.job.signal_processed"
   | "workhorse.job.wait_processed"
   | "workhorse.jobs.promoted"
   | "workhorse.jobs.redrive_processed"

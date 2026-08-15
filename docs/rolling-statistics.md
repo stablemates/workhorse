@@ -2,7 +2,7 @@
 
 Workhorse answers every operator time window — throughput charts, error rates, per-queue drain, wait percentiles, failing task types — from **per-minute aggregates derived from raw history**, rather than from scans over the history itself.
 
-This document records the problem, the design, the schema, the read path, the operational contract, and the limits of the implementation retained in schema version 35.
+This document records the problem, the design, the schema, the read path, the operational contract, and the limits of the implementation retained in schema version 36.
 
 ## Why
 

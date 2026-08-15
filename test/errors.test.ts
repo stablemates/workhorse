@@ -10,6 +10,9 @@ import {
   CheckpointConflictError,
   ChildConflictError,
   JobValueSizeLimitError,
+  SignalIdempotencyConflictError,
+  SignalWaitLeaseLostError,
+  SignalWaitLimitExceededError,
   WaitLimitExceededError,
 } from "../src/queue.js";
 import { CancellationRequestedError, ExecutionTimeoutError } from "../src/worker.js";
@@ -29,6 +32,9 @@ describe("WorkhorseError", () => {
   it.each([
     ["CheckpointConflictError", new CheckpointConflictError("job", "checkpoint")],
     ["ChildConflictError", new ChildConflictError("job", "child")],
+    ["SignalIdempotencyConflictError", new SignalIdempotencyConflictError("job", "signal")],
+    ["SignalWaitLeaseLostError", new SignalWaitLeaseLostError("job", "signal")],
+    ["SignalWaitLimitExceededError", new SignalWaitLimitExceededError("job")],
     ["WaitLimitExceededError", new WaitLimitExceededError("job")],
     ["JobValueSizeLimitError", new JobValueSizeLimitError("type", "payload", 2, 1)],
     ["CancellationRequestedError", new CancellationRequestedError("job")],
