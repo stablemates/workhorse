@@ -54,6 +54,7 @@ import {
   Prohibit,
   Pulse,
   Robot,
+  UserFocus,
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
@@ -75,6 +76,7 @@ import {
 import type {
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
+  Json,
   RetentionPolicySetting,
   RetryPolicy,
 } from "@workhorse/core";
@@ -104,6 +106,7 @@ import type {
   DashboardEventsWindow,
   DashboardJobDetail,
   DashboardJobRow,
+  DashboardHumanWaitPage,
   DashboardQueuesPage,
   DashboardStorageRelation,
   DashboardSystemPage,
@@ -283,7 +286,15 @@ function activityChartKey(group: string): string {
   return group.replaceAll(".", "_");
 }
 
-type PageRoute = "/tasks" | "/events" | "/cron" | "/queues" | "/system" | "/workers" | "/settings";
+type PageRoute =
+  | "/tasks"
+  | "/human-waits"
+  | "/events"
+  | "/cron"
+  | "/queues"
+  | "/system"
+  | "/workers"
+  | "/settings";
 type DemoJobKind =
   | "success"
   | "retry"
@@ -295,6 +306,7 @@ type DemoJobKind =
 type DurableDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
+  | { route: "/human-waits"; value: DashboardHumanWaitPage }
   | { route: "/events"; value: DashboardEventsPage }
   | { route: "/cron"; value: DashboardCronPage }
   | { route: "/queues"; value: DashboardQueuesPage }
@@ -308,6 +320,7 @@ type LoadState =
 
 const pageRoutes = new Set<PageRoute>([
   "/tasks",
+  "/human-waits",
   "/events",
   "/cron",
   "/queues",
@@ -5313,6 +5326,129 @@ export function SettingsPage({
   );
 }
 
+function HumanWaitsPage({
+  data,
+  auditActor,
+  reload,
+}: {
+  data: DashboardHumanWaitPage;
+  auditActor: string;
+  reload: () => Promise<void>;
+}) {
+  const client = useDashboardClient();
+  const [results, setResults] = useState<Record<string, string>>({});
+  const [completing, setCompleting] = useState<string | null>(null);
+
+  const complete = async (jobId: string, name: string) => {
+    const key = `${jobId}:${name}`;
+    let result: Json;
+    try {
+      result = JSON.parse(results[key] ?? "");
+    } catch {
+      notifyDashboard({
+        title: "Result is not valid JSON",
+        message: "Enter the bounded JSON value the waiting handler should receive.",
+        tone: "failure",
+      });
+      return;
+    }
+    setCompleting(key);
+    try {
+      const completion = await client.completeHumanWait({
+        id: jobId,
+        name,
+        result,
+        idempotencyKey: crypto.randomUUID(),
+        audit: {
+          actor: auditActor,
+          reason: `Complete human wait ${name} from the dashboard`,
+          requestId: crypto.randomUUID(),
+        },
+      });
+      notifyDashboard({
+        title: completion.status === "completed" ? "Wait completed" : "Wait unchanged",
+        message: `${name}: ${completion.status}`,
+        tone: completion.status === "completed" ? "success" : "neutral",
+      });
+      await reload();
+    } catch (cause) {
+      notifyFailure("Wait not completed", cause, "Workhorse rejected the human wait result");
+    } finally {
+      setCompleting(null);
+    }
+  };
+
+  return (
+    <Stack gap="lg">
+      <Box>
+        <Title order={2}>Human waits</Title>
+        <Text c="dimmed" size="sm">
+          Decisions waiting for an authenticated operator. The first accepted result resumes the
+          handler and remains the audit record.
+        </Text>
+      </Box>
+      {data.waits.length === 0 ? (
+        <Paper withBorder p="xl">
+          <Text c="dimmed">No jobs are waiting for a human decision.</Text>
+        </Paper>
+      ) : (
+        data.waits.map((wait) => {
+          const key = `${wait.jobId}:${wait.name}`;
+          return (
+            <Paper withBorder p="lg" key={key}>
+              <Stack gap="sm">
+                <Group justify="space-between" align="flex-start">
+                  <Box>
+                    <Text fw={700}>{wait.name}</Text>
+                    <Text size="sm">
+                      {wait.jobType} · {wait.queue} · attempt {wait.attempt}
+                    </Text>
+                    <Code fz="xs">{wait.jobId}</Code>
+                  </Box>
+                  <Text c="dimmed" size="xs">
+                    {formatExact(wait.createdAt)}
+                  </Text>
+                </Group>
+                <Box>
+                  <Text c="dimmed" fw={600} size="xs" mb={4}>
+                    Decision context
+                  </Text>
+                  <Code block>{JSON.stringify(wait.context, null, 2)}</Code>
+                </Box>
+                <Group align="flex-end" wrap="nowrap">
+                  <TextInput
+                    label="Result (JSON)"
+                    placeholder='{"approved":true}'
+                    value={results[key] ?? ""}
+                    disabled={!data.canComplete}
+                    onChange={(event) =>
+                      setResults((current) => ({ ...current, [key]: event.currentTarget.value }))
+                    }
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    disabled={!data.canComplete || !(results[key] ?? "").trim()}
+                    loading={completing === key}
+                    onClick={() => void complete(wait.jobId, wait.name)}
+                  >
+                    Complete
+                  </Button>
+                </Group>
+                {!data.canComplete ? (
+                  <Text c="dimmed" size="xs">
+                    This dashboard is read-only, so it can inspect decisions but cannot complete
+                    them.
+                  </Text>
+                ) : null}
+              </Stack>
+            </Paper>
+          );
+        })
+      )}
+    </Stack>
+  );
+}
+
 const refreshStorageKey = "workhorse-auto-refresh";
 
 function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
@@ -5323,6 +5459,7 @@ function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
 }
 
 function routeTitle(route: PageRoute): string {
+  if (route === "/human-waits") return "human waits";
   if (route === "/events") return "events";
   if (route === "/cron") return "schedules";
   if (route === "/queues") return "queues";
@@ -5525,6 +5662,8 @@ function useDashboardController(
               pageSize: listing.pageSize,
             }),
           };
+        } else if (route === "/human-waits") {
+          data = { route: "/human-waits", value: await client.humanWaits() };
         } else if (route === "/events") {
           const events = eventsRef.current;
           data = {
@@ -6116,6 +6255,10 @@ function useDashboardController(
         runTaskNow={runTaskNow}
       />
     );
+  } else if (loadState.data?.route === "/human-waits") {
+    content = (
+      <HumanWaitsPage data={loadState.data.value} auditActor={auditActor} reload={loadPage} />
+    );
   } else if (loadState.data?.route === "/events") {
     content = (
       <EventsPage
@@ -6392,6 +6535,15 @@ function DashboardContent({
             <Text c="dimmed" fw={600} size="xs" px="sm" mb={4}>
               Operations
             </Text>
+            <NavLink
+              component="a"
+              href={mountedHref(basePath, "/human-waits")}
+              active={location.route === "/human-waits"}
+              label="Human waits"
+              leftSection={<UserFocus size={18} />}
+              variant="light"
+              onClick={(event) => handleLink(event, "/human-waits")}
+            />
             <NavLink
               component="a"
               href={mountedHref(basePath, "/events")}

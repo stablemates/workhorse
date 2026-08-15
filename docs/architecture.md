@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 36. Version 23 is the oldest supported
+The current clean-install protocol is schema version 37. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 36 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 37 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -60,7 +60,11 @@ Migration `0036-add-idempotent-signals.sql` requires version 35. It adds retaine
 waits, fenced lease release, and idempotent attributed delivery. It records version 36 and advances
 the schema row.
 
-Versions below 23, versions above 36, gaps, and mixed version rows fail without running a migration.
+Migration `0037-add-human-wait-tokens.sql` requires version 36. It adds retained human decision
+context, authenticated idempotent completion, and the actionable dashboard projection. It records
+version 37 and advances the schema row.
+
+Versions below 23, versions above 37, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -586,6 +590,26 @@ calls the same queue operation. `signal_waiting`, `signal_received`, `signal_rep
 `signal_rejected` events retain bounded lifecycle evidence. Events include the actor and a short
 key digest but never the raw key or payload.
 
+### `job_human_wait`
+
+One named human decision per stable job identity. `wait_for_human_v1` accepts the exact active job,
+worker, fence generation, name, and operator context. Names are limited to 200 characters. Context
+and completion results are each limited to 65,536 bytes of canonical JSONB text. One job retains at
+most 1,000 human decisions.
+
+`complete_human_wait_v1` accepts the job identity, token name, result, idempotency key, and trusted
+actor. Keys are limited to 512 UTF-8 bytes and actors to 200 characters. The function retains only
+the SHA-256 key hash, request fingerprint, first result, actor, and completion time. An equal retry
+returns `duplicate`; a changed same-key request raises `HumanWaitIdempotencyConflictError`; another
+key returns `already_completed`. Early and stale requests return bounded statuses without changing
+dispatch state.
+
+`HandlerContext.waitForHuman(name, context)` suspends and returns the retained result after replay.
+`Queue.completeHumanWait` is the application completion surface. The dashboard lists at most 100
+actionable rows from `dashboard_human_wait_v1`, validates result JSON, and derives `completedBy` from
+the authenticated principal. `human_wait_created`, `human_wait_completed`, `human_wait_replayed`,
+and `human_wait_rejected` retain value-free lifecycle evidence.
+
 ### `retention_policy`
 
 One singleton row is the target database's authoritative retention policy. Its effective typed
@@ -873,6 +897,14 @@ it retains the request and changes runtime to ready with a fresh FIFO sequence b
 workers. Competing deliveries serialize at this transition. Cancellation, deadline materialization,
 or another lifecycle transition makes an undelivered row stale. A delivered row remains replayable
 through later handler retries and follows parent-job retention.
+
+### Human decision suspension
+
+`wait_for_human_v1` serializes on the stable job and token name, validates the active fence, stores
+bounded decision context, and parks the runtime without closing the logical attempt. A replay must
+provide equal JSON context. `complete_human_wait_v1` serializes competing operator results, retains
+the first accepted completion, moves the runtime to ready, and notifies workers in the same
+transaction. The handler restarts from entry and receives that retained result at the named wait.
 
 ### Claim
 
@@ -1387,7 +1419,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 36. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 37. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

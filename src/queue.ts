@@ -108,6 +108,17 @@ import {
   type WaitForSignalResult,
   type WaitForSignalStatus,
 } from "./queue/signals.js";
+import {
+  HumanWaitConflictError,
+  HumanWaitIdempotencyConflictError,
+  HumanWaitLeaseLostError,
+  HumanWaitLimitExceededError,
+  type CompleteHumanWaitRequest,
+  type CompleteHumanWaitResult,
+  type CompleteHumanWaitStatus,
+  type WaitForHumanResult,
+  type WaitForHumanStatus,
+} from "./queue/human-waits.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -131,6 +142,10 @@ export {
   SignalIdempotencyConflictError,
   SignalWaitLeaseLostError,
   SignalWaitLimitExceededError,
+  HumanWaitConflictError,
+  HumanWaitIdempotencyConflictError,
+  HumanWaitLeaseLostError,
+  HumanWaitLimitExceededError,
 };
 export type {
   ScheduleWaitRequest,
@@ -140,6 +155,11 @@ export type {
   SendSignalStatus,
   WaitForSignalResult,
   WaitForSignalStatus,
+  CompleteHumanWaitRequest,
+  CompleteHumanWaitResult,
+  CompleteHumanWaitStatus,
+  WaitForHumanResult,
+  WaitForHumanStatus,
 };
 export type { ScheduleDefinition, ScheduleJobDefinition, StoredSchedule };
 import { nullableRowTimestamp } from "./queue/row-mapping.js";
@@ -620,6 +640,24 @@ export class Queue {
     request: SendSignalRequest,
   ): Promise<SendSignalResult<TPayload>> {
     return this.modules.signals.sendSignal(jobId, name, payload, request);
+  }
+
+  async waitForHuman<TContext extends Json, TResult extends Json = Json>(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+    context: TContext,
+  ): Promise<WaitForHumanResult<TResult>> {
+    return this.modules.humanWaits.waitForHuman<TContext, TResult>(job, workerId, name, context);
+  }
+
+  async completeHumanWait<TResult extends Json>(
+    jobId: string,
+    name: string,
+    result: TResult,
+    request: CompleteHumanWaitRequest,
+  ): Promise<CompleteHumanWaitResult<TResult>> {
+    return this.modules.humanWaits.completeHumanWait(jobId, name, result, request);
   }
 
   async createChild<TPayload extends Json, TResult extends Json = Json>(

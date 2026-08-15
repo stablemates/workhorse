@@ -8,6 +8,7 @@ import type {
   RetentionPolicySetting,
 } from "@workhorse/core";
 import type { SendSignalStatus } from "@workhorse/core";
+import type { CompleteHumanWaitStatus } from "@workhorse/core";
 import type {
   DashboardDemoJobKind,
   DashboardDemoScenario,
@@ -83,6 +84,15 @@ export interface DashboardSignalTaskResult {
   deliveredBy: string | null;
 }
 
+export interface DashboardCompleteHumanWaitResult {
+  status: CompleteHumanWaitStatus;
+  jobId: string;
+  name: string;
+  result: Json | null;
+  completedAt: string | null;
+  completedBy: string | null;
+}
+
 export interface DashboardTaskController {
   runTaskNow?: (jobId: string, audit: DashboardAuditContext) => Promise<DashboardRunNowResult>;
   cancelTask?: (
@@ -96,6 +106,13 @@ export interface DashboardTaskController {
     idempotencyKey: string,
     audit: DashboardAuditContext,
   ) => Promise<DashboardSignalTaskResult>;
+  completeHumanWait?: (
+    jobId: string,
+    name: string,
+    result: Json,
+    idempotencyKey: string,
+    audit: DashboardAuditContext,
+  ) => Promise<DashboardCompleteHumanWaitResult>;
 }
 
 /**

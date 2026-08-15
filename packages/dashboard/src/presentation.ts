@@ -29,6 +29,10 @@ const jobEventTypes = [
   "signal_received",
   "signal_replayed",
   "signal_rejected",
+  "human_wait_created",
+  "human_wait_completed",
+  "human_wait_replayed",
+  "human_wait_rejected",
 ] as const;
 export const dashboardJobEventTypes: CompleteDashboardOptions<
   DashboardJobEventType,

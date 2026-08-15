@@ -32,6 +32,14 @@ describe("shared dashboard operator controllers", () => {
         deliveredAt: new Date("2026-08-12T12:02:00.000Z"),
         deliveredBy: "configured-operator",
       }),
+      completeHumanWait: vi.fn<() => Promise<unknown>>().mockResolvedValue({
+        status: "completed",
+        jobId: "job-1",
+        name: "review",
+        result: { approved: true },
+        completedAt: new Date("2026-08-12T12:03:00.000Z"),
+        completedBy: "configured-operator",
+      }),
       setWorkerPaused: vi.fn<() => Promise<{ paused: boolean }>>().mockResolvedValue({
         paused: true,
       }),
@@ -79,6 +87,18 @@ describe("shared dashboard operator controllers", () => {
       deliveredAt: "2026-08-12T12:02:00.000Z",
     });
     await expect(
+      controllers.taskController.completeHumanWait?.(
+        "job-1",
+        "review",
+        { approved: true },
+        "request-2",
+        audit,
+      ),
+    ).resolves.toMatchObject({
+      status: "completed",
+      completedAt: "2026-08-12T12:03:00.000Z",
+    });
+    await expect(
       controllers.workerController.setWorkerPaused?.("worker-1", true, audit),
     ).resolves.toEqual({ paused: true });
 
@@ -89,6 +109,7 @@ describe("shared dashboard operator controllers", () => {
       "runTaskNow",
       "cancelTask",
       "signalTask",
+      "completeHumanWait",
       "setWorkerPaused",
     ]);
     expect(queue.pauseQueue).toHaveBeenCalledWith("critical");
@@ -105,6 +126,12 @@ describe("shared dashboard operator controllers", () => {
         idempotencyKey: "request-1",
         requestedBy: "configured-operator",
       },
+    );
+    expect(queue.completeHumanWait).toHaveBeenCalledWith(
+      "job-1",
+      "review",
+      { approved: true },
+      { idempotencyKey: "request-2", completedBy: "configured-operator" },
     );
     expect(queue.setWorkerPaused).toHaveBeenCalledWith("worker-1", true, {
       requestedBy: "configured-operator",

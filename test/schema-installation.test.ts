@@ -34,6 +34,17 @@ describe("schema installation", () => {
         "occurred_at",
       ],
       dashboard_concurrency_policy_v1: ["queue_name"],
+      dashboard_human_wait_v1: [
+        "job_id",
+        "queue_name",
+        "job_type",
+        "token_name",
+        "context",
+        "attempt",
+        "created_at",
+        "completed_at",
+        "completed_by",
+      ],
       dashboard_job_checkpoint_v1: [
         "job_id",
         "checkpoint_name",
@@ -224,11 +235,11 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v36 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v37 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(36);
+    expect(version.rows[0]?.version).toBe(37);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -248,6 +259,7 @@ describe("schema installation", () => {
       { version: 34, description: "add bounded child fan-out and joins" },
       { version: 35, description: "preserve child lineage through lifecycle changes" },
       { version: 36, description: "add idempotent signals to waiting executions" },
+      { version: 37, description: "add completable human wait tokens" },
     ]);
 
     const maintenanceFunctions = await pool.query<{

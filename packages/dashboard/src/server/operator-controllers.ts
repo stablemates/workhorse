@@ -27,6 +27,14 @@ export type DashboardOperatorAction =
       audit: DashboardAuditContext;
     }
   | {
+      kind: "completeHumanWait";
+      jobId: string;
+      name: string;
+      result: Json;
+      idempotencyKey: string;
+      audit: DashboardAuditContext;
+    }
+  | {
       kind: "setWorkerPaused";
       workerId: string;
       paused: boolean;
@@ -120,6 +128,17 @@ export function createDashboardOperatorControllers(
               ...result,
               deliveredAt: isoTimestamp(result.deliveredAt),
             };
+          },
+        ),
+      completeHumanWait: (jobId, name, result, idempotencyKey, audit) =>
+        options.run(
+          { kind: "completeHumanWait", jobId, name, result, idempotencyKey, audit },
+          async (queue) => {
+            const completed = await queue.completeHumanWait(jobId, name, result, {
+              idempotencyKey,
+              completedBy: requestedBy(audit),
+            });
+            return { ...completed, completedAt: isoTimestamp(completed.completedAt) };
           },
         ),
     },

@@ -25,6 +25,7 @@ import {
   readDashboardEvents,
   readDashboardEventDetail,
   readDashboardJobDetail,
+  readDashboardHumanWaits,
   readDashboardQueues,
   readDashboardSystem,
   readDashboardTaskFacets,
@@ -125,6 +126,10 @@ const eventTypeValues = [
   "signal_received",
   "signal_replayed",
   "signal_rejected",
+  "human_wait_created",
+  "human_wait_completed",
+  "human_wait_replayed",
+  "human_wait_rejected",
   "retry",
   "deadline_exceeded",
   "timeout",
@@ -277,6 +282,13 @@ const signalTaskInput = z.object({
   idempotencyKey: z.string().min(1).max(512),
   audit: auditSchema,
 });
+const completeHumanWaitInput = z.object({
+  id: z.uuid(),
+  name: z.string().trim().min(1).max(200),
+  result: z.json(),
+  idempotencyKey: z.string().min(1).max(512),
+  audit: auditSchema,
+});
 
 function auditWithOccurredAt<
   TAudit extends { actor: string; reason: string | null; requestId: string },
@@ -364,6 +376,12 @@ export const dashboardRouter = {
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       return detail;
     }),
+    humanWaits: procedure.handler(({ context }) =>
+      readDashboardHumanWaits(
+        context.database,
+        context.operator.mode === "local" && Boolean(context.taskController?.completeHumanWait),
+      ),
+    ),
     enqueueTest: procedure.input(enqueueTestInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.operator.enqueueTest) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
@@ -507,6 +525,24 @@ export const dashboardRouter = {
       }
       return result;
     }),
+    completeHumanWait: procedure
+      .input(completeHumanWaitInput)
+      .handler(async ({ context, input }) => {
+        if (context.operator.mode !== "local" || !context.taskController?.completeHumanWait) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        const result = await context.taskController.completeHumanWait(
+          input.id,
+          input.name,
+          input.result,
+          input.idempotencyKey,
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
+        );
+        if (result.status === "not_found") {
+          throw new ORPCError("NOT_FOUND", { message: "Task not found" });
+        }
+        return result;
+      }),
   },
 };
 

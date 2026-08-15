@@ -766,7 +766,7 @@ audited attribution is a sufficient authorization baseline for signals, and prem
 refines who may send them later without changing the primitive.
 
 - [ ] Add idempotent, attributed signals addressed to a stable waiting execution.
-- [ ] Add completable wait tokens for human-in-the-loop steps: a handler creates a named
+- [x] Add completable wait tokens for human-in-the-loop steps: a handler creates a named
       token and suspends its lease; an operator or external caller completes it with a
       bounded payload through the dashboard or API.
 - [ ] Define signal and token retention, timeout, cancellation, and duplicate-delivery

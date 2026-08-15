@@ -108,6 +108,7 @@ const mutationProcedures = new Set([
   "dashboard.runTaskNow",
   "dashboard.cancelTask",
   "dashboard.signalTask",
+  "dashboard.completeHumanWait",
 ]);
 const rpcLogRecords = {
   completed: {
