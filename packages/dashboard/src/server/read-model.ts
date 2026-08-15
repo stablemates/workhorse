@@ -2154,7 +2154,7 @@ export async function readDashboardJobDetail(
   projectDurability: DashboardDurabilityProjector = () => null,
   queue?: Queue,
 ): Promise<DashboardJobDetail | null> {
-  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows, dependencyRows] =
+  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows, dependencyRows, childRows] =
     await Promise.all([
       database.execute<{
         id: string;
@@ -2320,6 +2320,22 @@ export async function readDashboardJobDetail(
        ORDER BY dependent_job_id, prerequisite_job_id
        LIMIT 101
     `),
+      database.execute<{
+        parent_job_id: string;
+        child_job_id: string;
+        child_name: string;
+        child_type: string;
+        created_at: Date | string;
+        joined_at: Date | string | null;
+      }>(sql`
+      SELECT edge.parent_job_id, edge.child_job_id, edge.child_name,
+             child.job_type AS child_type, edge.created_at, edge.joined_at
+        FROM workhorse.dashboard_job_child_v1 edge
+        JOIN workhorse.dashboard_job_v1 child ON child.id = edge.child_job_id
+       WHERE edge.parent_job_id = ${id} OR edge.child_job_id = ${id}
+       ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id
+       LIMIT 101
+    `),
     ]);
 
   const job = jobRows.rows[0];
@@ -2397,6 +2413,17 @@ export async function readDashboardJobDetail(
         resolution: edge.resolution,
       })),
       truncated: dependencyRows.rows.length > 100,
+    },
+    childLineage: {
+      records: childRows.rows.slice(0, 100).map((edge) => ({
+        parentJobId: edge.parent_job_id,
+        childJobId: edge.child_job_id,
+        name: edge.child_name,
+        type: edge.child_type,
+        createdAt: toIso(edge.created_at),
+        joinedAt: toIsoOrNull(edge.joined_at),
+      })),
+      truncated: childRows.rows.length > 100,
     },
     // The queue's policy as it stands now, sent for every task including finished ones. Workhorse
     // stores no per-task policy snapshot, so the drawer labels this as current rather than

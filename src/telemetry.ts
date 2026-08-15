@@ -61,6 +61,7 @@ type WorkhorseLogEvent =
   | "workhorse.job.cancellation_acknowledged"
   | "workhorse.job.cancellation_processed"
   | "workhorse.job.checkpoint_saved"
+  | "workhorse.job.child_processed"
   | "workhorse.job.debounce_rejected"
   | "workhorse.job.debounced"
   | "workhorse.job.claimed"

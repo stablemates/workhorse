@@ -56,6 +56,7 @@ const workerQueueDefaults: WorkerQueueApi = {
   updateProgress: unsupportedWorkerQueueOperation,
   listWaits: unsupportedWorkerQueueOperation,
   scheduleWait: unsupportedWorkerQueueOperation,
+  createChild: unsupportedWorkerQueueOperation,
   complete: unsupportedWorkerQueueOperation,
   fail: unsupportedWorkerQueueOperation,
   tick: async () => [],

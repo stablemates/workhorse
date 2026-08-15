@@ -834,6 +834,17 @@ export interface DashboardJobDetail {
     }>;
     truncated: boolean;
   };
+  childLineage: {
+    records: Array<{
+      parentJobId: string;
+      childJobId: string;
+      name: string;
+      type: string;
+      createdAt: string;
+      joinedAt: string | null;
+    }>;
+    truncated: boolean;
+  };
   /**
    * The queue's admission budget as it stands now, not a snapshot of the policy this task ran
    * under. Workhorse stores no per-task snapshot, so a finished task's line must be read as

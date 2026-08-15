@@ -12,7 +12,7 @@ const salt = Buffer.from("workhorse-auth-test-salt");
 const passwordHash = `scrypt-v1$${salt.toString("base64url")}$${scryptSync("correct horse", salt, 32).toString("base64url")}`;
 
 const database = {
-  query: async () => ({ rows: [{ version: 32 }] }),
+  query: async () => ({ rows: [{ version: 33 }] }),
 } as unknown as Queryable;
 
 async function login(

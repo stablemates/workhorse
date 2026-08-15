@@ -1,10 +1,12 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
+import { isDeepStrictEqual } from "node:util";
 import { CronExpressionParser } from "cron-parser";
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { WorkhorseError } from "./errors.js";
 import { errorForTelemetry, type FailureStatus } from "./queue/claim-lease-fence.js";
+import { ChildConflictError } from "./queue/child-jobs.js";
 import { jitterDuration } from "./notifications.js";
 import type { JobNotificationSubscription } from "./notifications.js";
 import type {
@@ -27,7 +29,9 @@ import {
   type JobExecutionOutcome,
 } from "./telemetry.js";
 import type {
+  ChildJobOptions,
   ClaimedJob,
+  CreateChildResult,
   ExpireOwnedStatus,
   JobCheckpoint,
   JobProgress,
@@ -38,6 +42,7 @@ import type {
 } from "./types.js";
 
 const DURABLE_WAIT_SUSPENSION = Symbol("workhorse.durableWaitSuspension");
+const CHILD_JOB_SUSPENSION = Symbol("workhorse.childJobSuspension");
 const DEFAULT_POLL_MS = 250;
 const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
 
@@ -48,7 +53,8 @@ type AttemptOutcome =
   | "deadline_exceeded"
   | "attempt_timeout"
   | "cancelled"
-  | "suspended_for_wait";
+  | "suspended_for_wait"
+  | "suspended_for_child";
 
 class AttemptOutcomeArbiter {
   private accepted: AttemptOutcome | undefined;
@@ -65,6 +71,10 @@ class AttemptOutcomeArbiter {
 
   is(outcome: AttemptOutcome): boolean {
     return this.accepted === outcome;
+  }
+
+  isSuspended(): boolean {
+    return this.is("suspended_for_wait") || this.is("suspended_for_child");
   }
 }
 
@@ -97,6 +107,13 @@ export interface HandlerContext<TPayload = Json> {
   sleep(name: string, durationMs: number): Promise<void>;
   /** Suspend this job without consuming its logical attempt until the absolute target is due. */
   sleepUntil(name: string, wakeAt: Date): Promise<void>;
+  /** Create or replay one named child and return its retained successful result after resumption. */
+  runChild<TChildPayload extends Json, TResult extends Json = Json>(
+    name: string,
+    type: string,
+    payload: TChildPayload,
+    options?: ChildJobOptions,
+  ): Promise<TResult>;
 }
 
 export type Handler<TPayload = Json, TResult extends Json = Json> = (
@@ -185,6 +202,14 @@ export interface WorkerQueueApi {
     name: string,
     request: ScheduleWaitRequest,
   ): Promise<ScheduleWaitResult>;
+  createChild<TPayload extends Json, TResult extends Json = Json>(
+    parent: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+    type: string,
+    payload: TPayload,
+    options?: ChildJobOptions,
+  ): Promise<CreateChildResult<TResult>>;
   complete<TResult extends Json>(
     job: ClaimedJob<unknown>,
     workerId: string,
@@ -1017,6 +1042,53 @@ export class Worker {
         scheduleWait(name, { durationMs });
       const sleepUntil: HandlerContext["sleepUntil"] = (name, wakeAt) =>
         scheduleWait(name, { wakeAt });
+      const inFlightChildren = new Map<
+        string,
+        { request: unknown; execution: Promise<Json> }
+      >();
+      const runChild: HandlerContext["runChild"] = <
+        TChildPayload extends Json,
+        TResult extends Json = Json,
+      >(
+        name: string,
+        type: string,
+        payload: TChildPayload,
+        options?: ChildJobOptions,
+      ): Promise<TResult> => {
+        const request = structuredClone({ type, payload, options: options ?? {} });
+        const pending = inFlightChildren.get(name);
+        if (pending) {
+          if (!isDeepStrictEqual(pending.request, request)) {
+            return Promise.reject(new ChildConflictError(job.id, name));
+          }
+          return pending.execution as Promise<TResult>;
+        }
+        const execution = (async (): Promise<TResult> => {
+          if (controller.signal.aborted) {
+            throw controller.signal.reason ?? new Error("Job lease was lost");
+          }
+          const processed = await this.queue.createChild<TChildPayload, TResult>(
+            job,
+            this.workerId,
+            name,
+            type,
+            payload,
+            options,
+          );
+          if (processed.status === "created" && arbiter.submit("suspended_for_child")) {
+            controller.abort(CHILD_JOB_SUSPENSION);
+            throw CHILD_JOB_SUSPENSION;
+          }
+          return processed.child.result as TResult;
+        })();
+        inFlightChildren.set(name, { request, execution: execution as Promise<Json> });
+        void execution
+          .finally(() => {
+            if (inFlightChildren.get(name)?.execution === execution) inFlightChildren.delete(name);
+          })
+          .catch(() => undefined);
+        return execution;
+      };
       const result = await handler(job.payload, {
         job,
         signal: controller.signal,
@@ -1027,9 +1099,10 @@ export class Worker {
         checkpoint,
         sleep: durableSleep,
         sleepUntil,
+        runChild,
       });
       await this.inject("afterHandler", job);
-      if (arbiter.is("suspended_for_wait")) {
+      if (arbiter.isSuspended()) {
         logWarn("workhorse.handler.signal_swallowed", "Job handler swallowed its abort signal", {
           ...jobSpanAttributes(job),
           "workhorse.queue.name": this.queueName,
@@ -1066,7 +1139,7 @@ export class Worker {
       recordExecution("succeeded");
       await this.inject("afterComplete", job);
     } catch (error) {
-      if (arbiter.is("suspended_for_wait")) {
+      if (arbiter.isSuspended()) {
         span.setAttribute("workhorse.handler.outcome", "suspended");
         recordExecution("suspended");
         return;

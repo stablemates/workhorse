@@ -8,6 +8,7 @@ import {
 } from "../src/errors.js";
 import {
   CheckpointConflictError,
+  ChildConflictError,
   JobValueSizeLimitError,
   WaitLimitExceededError,
 } from "../src/queue.js";
@@ -27,6 +28,7 @@ class AdapterError extends Error {
 describe("WorkhorseError", () => {
   it.each([
     ["CheckpointConflictError", new CheckpointConflictError("job", "checkpoint")],
+    ["ChildConflictError", new ChildConflictError("job", "child")],
     ["WaitLimitExceededError", new WaitLimitExceededError("job")],
     ["JobValueSizeLimitError", new JobValueSizeLimitError("type", "payload", 2, 1)],
     ["CancellationRequestedError", new CancellationRequestedError("job")],

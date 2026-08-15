@@ -1,9 +1,9 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 32 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 33 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency, keyed debounce, keyed throttle, and
-fan-in job dependencies with terminal policies. It also supports retry policies,
-checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
+fan-in job dependencies with terminal policies. It also supports retry policies, single linked
+child joins, checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
 and per-minute statistics complete the protocol.
 
@@ -17,6 +17,7 @@ and per-minute statistics complete the protocol.
 | `job_checkpoint`      | Immutable named handler restart boundaries                                 | Insert once per job and checkpoint name under a fenced active lease                   |
 | `job_progress`        | Latest bounded mutable operational progress                                | Fenced replace, at most once per 100 ms for changed values from one generation        |
 | `job_wait`            | Immutable named timer restart boundaries                                   | Insert once per job and wait name under a fenced active lease                         |
+| `job_child`           | Immutable parent-child lineage and named child replay                      | Insert once through fenced child creation; mark joined after successful result replay |
 | `job_outcome`         | Terminal success, failure, or cancellation                                 | Insert once after runtime deletion                                                    |
 | `job_query`           | Bounded operator lifecycle projection                                      | Trigger-synchronized on meaningful lifecycle changes; heartbeat-independent           |
 | `job_redrive`         | Audited source-to-target redrive lineage and request replay evidence       | Insert once per accepted source/request identity                                      |

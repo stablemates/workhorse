@@ -2,9 +2,12 @@ import { expectOneRow } from "./errors.js";
 import type {
   BulkRedrivePage,
   BulkRedriveOptions,
+  ChildLineage,
+  ChildJobOptions,
   CancellationRequest,
   CancelResult,
   ClaimedJob,
+  CreateChildResult,
   ConcurrencyPolicy,
   ConcurrencyPolicyDefinition,
   RateLimitPolicy,
@@ -87,12 +90,20 @@ import type {
   StoredSchedule,
 } from "./queue/cron-schedules.js";
 import type { MaintenancePhaseResult } from "./queue/retention-maintenance.js";
+import {
+  ChildConflictError,
+  ChildLeaseLostError,
+  ChildLimitExceededError,
+} from "./queue/child-jobs.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
 export {
   CheckpointConflictError,
   CheckpointLeaseLostError,
+  ChildConflictError,
+  ChildLeaseLostError,
+  ChildLimitExceededError,
   EnqueueIdempotencyConflictError,
   JobContractUnavailableError,
   JobContractValidationError,
@@ -485,6 +496,10 @@ export class Queue {
     return this.modules.operatorReads.getDependencyLineage(jobId, limit);
   }
 
+  async getChildLineage(jobId: string, limit = MAX_JOB_QUERY_PAGE_SIZE): Promise<ChildLineage> {
+    return this.modules.operatorReads.getChildLineage(jobId, limit);
+  }
+
   async claim<TPayload = Json>(
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
@@ -563,6 +578,17 @@ export class Queue {
     request: ScheduleWaitRequest,
   ): Promise<ScheduleWaitResult> {
     return this.modules.checkpointsProgressWaits.scheduleWait(job, workerId, name, request);
+  }
+
+  async createChild<TPayload extends Json, TResult extends Json = Json>(
+    parent: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+    type: string,
+    payload: TPayload,
+    options: ChildJobOptions = {},
+  ): Promise<CreateChildResult<TResult>> {
+    return this.modules.childJobs.createChild(parent, workerId, name, type, payload, options);
   }
 
   async complete<TResult extends Json>(

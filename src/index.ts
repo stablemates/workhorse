@@ -45,6 +45,9 @@ export type { QueueMetricSnapshot, QueueMetricSource } from "./telemetry.js";
 export {
   CheckpointConflictError,
   CheckpointLeaseLostError,
+  ChildConflictError,
+  ChildLeaseLostError,
+  ChildLimitExceededError,
   EnqueueIdempotencyConflictError,
   JobContractValidationError,
   JobContractUnavailableError,
@@ -102,6 +105,9 @@ export type {
 } from "./worker-process.js";
 export type {
   ClaimedJob,
+  ChildJob,
+  ChildLineage,
+  CreateChildResult,
   BulkRedriveOptions,
   BulkRedrivePage,
   CancellationRequest,
