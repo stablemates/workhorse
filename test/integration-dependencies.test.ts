@@ -223,6 +223,62 @@ describe("job dependencies", () => {
     await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
   });
 
+  it("records why each terminal prerequisite policy released a dependent", async () => {
+    const releaseReason = async (dependentId: string): Promise<string | undefined> => {
+      const evidence = await pool.query<{ reason: string }>(
+        `SELECT details->>'reason' AS reason
+           FROM workhorse.job_event
+          WHERE job_id = $1 AND event_type = 'dependency_released'`,
+        [dependentId],
+      );
+      return evidence.rows[0]?.reason;
+    };
+
+    const succeededId = await queue.enqueue("release-reason-success", null);
+    const succeededDependentId = await queue.enqueue("release-reason-success-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [succeededId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const succeeded = await queue.claim("release-reason-success-worker");
+    expect(succeeded?.id).toBe(succeededId);
+    expect(await queue.complete(succeeded!, "release-reason-success-worker", null)).toBe(true);
+    await expect(releaseReason(succeededDependentId)).resolves.toBe("prerequisite_succeeded");
+    await expect(queue.cancel(succeededDependentId)).resolves.toMatchObject({ status: "canceled" });
+
+    const failedId = await queue.enqueue("release-reason-failure", null, { maxAttempts: 1 });
+    const failedDependentId = await queue.enqueue("release-reason-failure-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [failedId],
+        onSuccess: "release",
+        onFailure: "release",
+        onCancellation: "cancel",
+      },
+    });
+    const failed = await queue.claim("release-reason-failure-worker");
+    expect(failed?.id).toBe(failedId);
+    expect(await queue.fail(failed!, "release-reason-failure-worker", new Error("expected"))).toBe(
+      "failed",
+    );
+    await expect(releaseReason(failedDependentId)).resolves.toBe("prerequisite_failed_policy");
+    await expect(queue.cancel(failedDependentId)).resolves.toMatchObject({ status: "canceled" });
+
+    const canceledId = await queue.enqueue("release-reason-cancellation", null);
+    const canceledDependentId = await queue.enqueue("release-reason-cancellation-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [canceledId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "release",
+      },
+    });
+    await expect(queue.cancel(canceledId)).resolves.toMatchObject({ status: "canceled" });
+    await expect(releaseReason(canceledDependentId)).resolves.toBe("prerequisite_canceled_policy");
+  });
+
   it("applies policy to prerequisites which are terminal before enqueue", async () => {
     const prerequisiteId = await queue.enqueue("already-failed-prerequisite", null, {
       maxAttempts: 1,

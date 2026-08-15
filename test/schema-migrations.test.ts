@@ -112,6 +112,7 @@ describe("schema migrations", () => {
       { version: 36, description: "add idempotent signals to waiting executions" },
       { version: 37, description: "add completable human wait tokens" },
       { version: 38, description: "harden signal and human wait lifecycles" },
+      { version: 39, description: "fix dependency release event reasons" },
     ]);
   });
 
@@ -121,20 +122,20 @@ describe("schema migrations", () => {
 
   it("leaves an already-current schema unchanged", async () => {
     const before = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 38",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 39",
     );
 
     await migrateSchema(database.pool);
 
     const after = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 38",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 39",
     );
     expect(after.rows).toEqual(before.rows);
   });
 
   it("safely replays the latest migration after its target version commits", async () => {
     const migration = await readFile(
-      path.join(repository, "sql", "migrations", "0038-harden-signal-human-waits.sql"),
+      path.join(repository, "sql", "migrations", "0039-fix-dependency-release-reasons.sql"),
       "utf8",
     );
 
