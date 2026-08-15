@@ -299,6 +299,29 @@ const result = await queue.enqueueWithResult(
 The structured result reports `accepted`, `replaced`, or `non_replaceable`. Active and terminal jobs
 are never rewritten, and an elapsed pending job remains protected until promotion or purge resolves it.
 
+### Keyed throttle
+
+`options.throttle` accepts at most one equivalent job per scoped key and PostgreSQL-owned window.
+Later equivalent requests return the retained job with a `coalesced` outcome, without another event,
+FIFO placement, or notification:
+
+```ts
+const result = await queue.enqueueWithResult(
+  "email.digest",
+  { accountId },
+  {
+    throttle: {
+      key: accountId,
+      scope: "digest",
+      windowMs: 60_000,
+    },
+  },
+);
+```
+
+A material change during the retained window raises `EnqueueIdempotencyConflictError`. Active and
+terminal jobs still coalesce until expiry because throttle controls acceptance, not execution.
+
 ### Persisted retry policies
 
 Schema version 12 accepts an optional `retryPolicy` on enqueue requests and recurring schedule job
@@ -483,7 +506,7 @@ prints the dashboard mount for your framework. Nothing about the mount needs to 
 workers run: they register themselves in PostgreSQL.
 
 Schema installation is clean-database only. Existing databases at the supported version 23 baseline
-advance through immutable ordered steps by calling `migrateSchema` before version 28 processes start.
+advance through immutable ordered steps by calling `migrateSchema` before version 29 processes start.
 
 ## Minimal usage
 

@@ -10,6 +10,7 @@ import {
   MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
+  MAX_THROTTLE_WINDOW_MS,
   JobContractValidationError,
   Queue,
   type Queryable,
@@ -294,7 +295,7 @@ describe("enqueue contracts", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v28 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v29 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -1092,6 +1093,347 @@ describe("enqueue contracts", () => {
     await expect(
       pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.job"),
     ).resolves.toMatchObject({ rows: before.rows });
+  });
+
+  it("coalesces an equivalent throttled request into one accepted job", async () => {
+    const throttle = { key: "account-42", scope: "email-digest", windowMs: 60_000 };
+
+    const accepted = await queue.enqueueWithResult("digest.send", { accountId: 42 }, { throttle });
+    const coalesced = await queue.enqueueWithResult("digest.send", { accountId: 42 }, { throttle });
+
+    expect(accepted).toMatchObject({ outcome: "accepted" });
+    expect(coalesced).toEqual({ jobId: accepted.jobId, outcome: "coalesced" });
+    await expect(
+      pool.query<{ jobs: number; enqueued_events: number }>(
+        `SELECT
+           (SELECT count(*)::integer FROM workhorse.job) AS jobs,
+           (SELECT count(*)::integer FROM workhorse.job_event WHERE event_type = 'enqueued')
+             AS enqueued_events`,
+      ),
+    ).resolves.toMatchObject({ rows: [{ jobs: 1, enqueued_events: 1 }] });
+  });
+
+  it("coalesces throttled work without another FIFO placement or notification", async () => {
+    const queueName = "throttle-effects";
+    const throttle = { key: "effects", scope: "throttle", windowMs: 60_000 };
+    const listener = await pool.connect();
+    const notifications: string[] = [];
+    listener.on("notification", (message) => notifications.push(message.payload ?? ""));
+    try {
+      await listener.query("LISTEN workhorse_jobs");
+      const accepted = await queue.enqueueWithResult(
+        "throttle-effects",
+        {},
+        { queue: queueName, throttle },
+      );
+      const sequence = await pool.query<{ sequence: string }>(
+        "SELECT sequence::text FROM workhorse.job_runtime WHERE job_id = $1",
+        [accepted.jobId],
+      );
+      const sequenceState = await pool.query<{ last_value: string; is_called: boolean }>(
+        "SELECT last_value::text, is_called FROM workhorse.ready_sequence_seq",
+      );
+      await expect(
+        queue.enqueueWithResult("throttle-effects", {}, { queue: queueName, throttle }),
+      ).resolves.toEqual({ jobId: accepted.jobId, outcome: "coalesced" });
+      await sleep(50);
+
+      await expect(
+        pool.query<{ sequence: string }>(
+          "SELECT sequence::text FROM workhorse.job_runtime WHERE job_id = $1",
+          [accepted.jobId],
+        ),
+      ).resolves.toMatchObject({ rows: sequence.rows });
+      await expect(
+        pool.query<{ last_value: string; is_called: boolean }>(
+          "SELECT last_value::text, is_called FROM workhorse.ready_sequence_seq",
+        ),
+      ).resolves.toMatchObject({ rows: sequenceState.rows });
+      expect(notifications.filter((payload) => payload === queueName)).toHaveLength(1);
+    } finally {
+      await listener.query("UNLISTEN workhorse_jobs");
+      listener.release();
+    }
+  });
+
+  it("rejects a materially different throttled request inside the retained window", async () => {
+    const throttle = { key: "material", scope: "throttle", windowMs: 60_000 };
+    const accepted = await queue.enqueueWithResult(
+      "throttle-material",
+      { revision: 1 },
+      { priority: 25, throttle },
+    );
+
+    await expect(
+      queue.enqueueWithResult("throttle-material", { revision: 2 }, { priority: 25, throttle }),
+    ).rejects.toMatchObject({
+      existingJobId: accepted.jobId,
+      conflictingFields: ["payload"],
+    });
+    await expect(queue.getJob(accepted.jobId)).resolves.toMatchObject({
+      payload: { revision: 1 },
+      priority: 25,
+    });
+  });
+
+  it("coalesces active and terminal jobs until the throttle window expires", async () => {
+    const throttle = { key: "lifecycle", scope: "throttle", windowMs: 60_000 };
+    const accepted = await queue.enqueueWithResult("throttle-lifecycle", {}, { throttle });
+    const claimed = await queue.claim("throttle-lifecycle-worker");
+    expect(claimed).toMatchObject({ id: accepted.jobId });
+    await expect(queue.enqueueWithResult("throttle-lifecycle", {}, { throttle })).resolves.toEqual({
+      jobId: accepted.jobId,
+      outcome: "coalesced",
+    });
+    await expect(queue.complete(claimed!, "throttle-lifecycle-worker", null)).resolves.toBe(true);
+    await expect(queue.enqueueWithResult("throttle-lifecycle", {}, { throttle })).resolves.toEqual({
+      jobId: accepted.jobId,
+      outcome: "coalesced",
+    });
+  });
+
+  it("accepts fresh throttled work after window expiry or purge", async () => {
+    const expiredThrottle = { key: "expired", scope: "throttle", windowMs: 1 };
+    const expiredFirst = await queue.enqueueWithResult(
+      "throttle-expired",
+      {},
+      { throttle: expiredThrottle },
+    );
+    await sleep(10);
+    const expiredSecond = await queue.enqueueWithResult(
+      "throttle-expired",
+      {},
+      { throttle: expiredThrottle },
+    );
+    expect(expiredSecond).toMatchObject({ outcome: "accepted" });
+    expect(expiredSecond.jobId).not.toBe(expiredFirst.jobId);
+
+    const queueName = "throttle-purge";
+    const purgeThrottle = { key: "purged", scope: "throttle", windowMs: 60_000 };
+    const purgedFirst = await queue.enqueueWithResult(
+      "throttle-purged",
+      {},
+      { queue: queueName, throttle: purgeThrottle },
+    );
+    await expect(queue.purgeQueue(queueName)).resolves.toBe(1);
+    const purgedSecond = await queue.enqueueWithResult(
+      "throttle-purged",
+      {},
+      { queue: queueName, throttle: purgeThrottle },
+    );
+    expect(purgedSecond).toMatchObject({ outcome: "accepted" });
+    expect(purgedSecond.jobId).not.toBe(purgedFirst.jobId);
+  });
+
+  it("keeps throttled batches and caller-owned transactions atomic", async () => {
+    const throttle = { key: "batch", scope: "throttle", windowMs: 60_000 };
+    const results = await queue.enqueueManyWithResults([
+      { type: "throttle-batch", payload: { stable: true }, options: { throttle } },
+      { type: "throttle-batch", payload: { stable: true }, options: { throttle } },
+      { type: "ordinary-batch", payload: {} },
+    ]);
+    expect(results).toEqual([
+      { jobId: results[0]!.jobId, outcome: "accepted" },
+      { jobId: results[0]!.jobId, outcome: "coalesced" },
+      { jobId: results[2]!.jobId, outcome: "accepted" },
+    ]);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const rolledBack = await queue.enqueueWithResult(
+        "throttle-transaction",
+        {},
+        { throttle: { key: "rollback", scope: "throttle", windowMs: 60_000 } },
+        client,
+      );
+      await client.query("ROLLBACK");
+      await expect(queue.getJob(rolledBack.jobId)).resolves.toBeNull();
+    } finally {
+      client.release();
+    }
+
+    const before = await pool.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM workhorse.job",
+    );
+    await expect(
+      queue.enqueueManyWithResults([
+        {
+          type: "throttle-atomic",
+          payload: { stable: true },
+          options: {
+            throttle: { key: "atomic", scope: "throttle", windowMs: 60_000 },
+          },
+        },
+        { type: "", payload: {} },
+      ]),
+    ).rejects.toThrow(/non-empty queue\/type/);
+    await expect(
+      pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.job"),
+    ).resolves.toMatchObject({ rows: before.rows });
+
+    const crossModeKey = "batch-cross-mode";
+    await expect(
+      queue.enqueueManyWithResults([
+        {
+          type: "throttle-cross-mode",
+          payload: {},
+          options: {
+            throttle: { key: crossModeKey, scope: "throttle", windowMs: 60_000 },
+          },
+        },
+        {
+          type: "throttle-cross-mode",
+          payload: {},
+          options: {
+            idempotency: { key: crossModeKey, scope: "throttle", ttlMs: 60_000 },
+          },
+        },
+      ]),
+    ).rejects.toThrow(/incompatible coalescing modes/);
+    await expect(
+      pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.job"),
+    ).resolves.toMatchObject({ rows: before.rows });
+  });
+
+  it("serializes concurrent throttled requests to one accepted identity", async () => {
+    const throttle = { key: "concurrent", scope: "throttle-race", windowMs: 60_000 };
+    const results = await Promise.all(
+      Array.from({ length: 12 }, () =>
+        queue.enqueueWithResult("throttle-race", { stable: true }, { throttle }),
+      ),
+    );
+    expect(new Set(results.map((result) => result.jobId)).size).toBe(1);
+    expect(results.filter((result) => result.outcome === "accepted")).toHaveLength(1);
+    expect(results.filter((result) => result.outcome === "coalesced")).toHaveLength(11);
+  });
+
+  it("validates throttle bounds and keeps key modes incompatible", async () => {
+    const throttle = { key: "bounded", scope: "throttle-mode", windowMs: 60_000 };
+    await expect(queue.enqueueWithResult("throttle-mode", {}, { throttle })).resolves.toMatchObject(
+      { outcome: "accepted" },
+    );
+    await expect(
+      queue.enqueueWithResult(
+        "throttle-mode",
+        {},
+        { idempotency: { key: throttle.key, scope: throttle.scope, ttlMs: throttle.windowMs } },
+      ),
+    ).rejects.toThrow(/incompatible coalescing mode/);
+    const idempotencyFirst = {
+      key: "idempotency-first",
+      scope: "throttle-mode",
+      ttlMs: 60_000,
+    };
+    await queue.enqueue("throttle-mode", {}, { idempotency: idempotencyFirst });
+    await expect(
+      queue.enqueueWithResult(
+        "throttle-mode",
+        {},
+        {
+          throttle: {
+            key: idempotencyFirst.key,
+            scope: idempotencyFirst.scope,
+            windowMs: idempotencyFirst.ttlMs,
+          },
+        },
+      ),
+    ).rejects.toThrow(/incompatible coalescing mode/);
+    for (const invalid of [
+      { ...throttle, key: "" },
+      { ...throttle, scope: "é".repeat(129) },
+      { ...throttle, windowMs: 0 },
+      { ...throttle, windowMs: 1.5 },
+      { ...throttle, windowMs: MAX_THROTTLE_WINDOW_MS + 1 },
+    ]) {
+      await expect(
+        queue.enqueueWithResult("throttle-bounds", {}, { throttle: invalid }),
+      ).rejects.toThrow(/throttle/);
+    }
+    await expect(
+      queue.enqueueWithResult(
+        "throttle-combined",
+        {},
+        { throttle, idempotency: { key: "combined" } },
+      ),
+    ).rejects.toThrow(/cannot combine/);
+    await expect(
+      pool.query("SELECT * FROM workhorse.enqueue_many_v2($1::jsonb)", [
+        JSON.stringify([
+          {
+            debounce: { key: "direct-debounce", windowMs: 60_000, schedule: "reset" },
+            throttle: { key: "direct-throttle", windowMs: 60_000 },
+          },
+        ]),
+      ]),
+    ).rejects.toThrow(/cannot combine/);
+
+    const ordinalThrottle = {
+      key: "ordinal-conflict",
+      scope: "throttle-ordinal",
+      windowMs: 60_000,
+    };
+    await queue.enqueueWithResult(
+      "throttle-ordinal",
+      { version: 1 },
+      { throttle: ordinalThrottle },
+    );
+    await expect(
+      queue.enqueueMany([
+        { type: "throttle-before-conflict", payload: {} },
+        {
+          type: "throttle-ordinal",
+          payload: { version: 2 },
+          options: { throttle: ordinalThrottle },
+        },
+      ]),
+    ).rejects.toMatchObject({ name: "EnqueueIdempotencyConflictError", ordinal: 2 });
+
+    const ordinalIdempotency = {
+      key: "ordinal-idempotency-conflict",
+      scope: "throttle-ordinal",
+      ttlMs: 60_000,
+    };
+    await queue.enqueue("idempotency-ordinal", { version: 1 }, { idempotency: ordinalIdempotency });
+    await expect(
+      queue.enqueueMany([
+        {
+          type: "throttle-ordinal",
+          payload: { version: 1 },
+          options: { throttle: ordinalThrottle },
+        },
+        {
+          type: "idempotency-ordinal",
+          payload: { version: 2 },
+          options: { idempotency: ordinalIdempotency },
+        },
+      ]),
+    ).rejects.toMatchObject({ name: "EnqueueIdempotencyConflictError", ordinal: 2 });
+  });
+
+  it("serializes concurrent throttle and idempotency modes for one key", async () => {
+    for (let index = 0; index < 8; index += 1) {
+      const key = `cross-mode-${index}`;
+      const scope = "throttle-mode-race";
+      const results = await Promise.allSettled([
+        queue.enqueueWithResult(
+          "throttle-mode-race",
+          { stable: true },
+          { throttle: { key, scope, windowMs: 60_000 } },
+        ),
+        queue.enqueueWithResult(
+          "throttle-mode-race",
+          { stable: true },
+          { idempotency: { key, scope, ttlMs: 60_000 } },
+        ),
+      ]);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+      expect(
+        results.find((result): result is PromiseRejectedResult => result.status === "rejected")
+          ?.reason,
+      ).toMatchObject({ message: expect.stringMatching(/incompatible coalescing mode/) });
+    }
   });
 
   it("serializes concurrent exact replays through the scoped unique index", async () => {

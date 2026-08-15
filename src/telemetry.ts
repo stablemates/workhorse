@@ -68,6 +68,7 @@ type WorkhorseLogEvent =
   | "workhorse.job.completion_rejected"
   | "workhorse.job.enqueue_replayed"
   | "workhorse.job.enqueued"
+  | "workhorse.job.throttled"
   | "workhorse.job.execution_finished"
   | "workhorse.job.failure_processed"
   | "workhorse.job.heartbeat_accepted"

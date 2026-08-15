@@ -13,7 +13,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v27**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v29**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -31,6 +31,8 @@ First published line. Requires **schema v27**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse/core`: strict job priority from 0 through 100 across direct, batched, delayed, and
   recurring enqueue, with FIFO order inside each priority and preservation through retries,
   promotion, and redrive.
+- `@workhorse/core`: PostgreSQL-owned keyed debounce and throttle windows with structured enqueue
+  outcomes, atomic batch and transaction behavior, and shared safe key diagnostics.
 - `@workhorse/core`: `Worker.handleBatch` for compatible full and linger-bounded partial batches,
   with explicit per-job success or failure outcomes, independent retries, leases, contexts, fencing,
   cancellation, timeout handling, policy accounting, priority order, and bounded batch telemetry.
