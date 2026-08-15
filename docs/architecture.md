@@ -645,6 +645,8 @@ stateDiagram-v2
 
 `Queue.enqueueWithResult` and `Queue.enqueueManyWithResults` expose `EnqueueResult`, whose `outcome` is `accepted`, `replayed`, `replaced`, `non_replaceable`, or `coalesced`. `Queue.enqueue` and `Queue.enqueueMany` preserve their string-ID return values by projecting the same structured results.
 
+Idempotency replays one materially equivalent request and rejects a conflicting reuse. Debounce replaces one pending definition while arrivals continue. Throttle reuses one accepted identity without changing it. These contracts serialize acceptance in PostgreSQL, but they do not make handler effects exactly once. A handler can repeat after a lost lease or process failure, so external effects still require their own idempotency boundary.
+
 #### Keyed debounce
 
 `EnqueueOptions.debounce` contains `key`, optional `scope`, `windowMs`, and `schedule`. Keys and scopes share the idempotency limits of 512 and 256 UTF-8 bytes. `windowMs` is an integer from 1 through 31,536,000,000. `schedule` is `reset` or `preserve`. A request with `debounce` cannot also supply `idempotency` or `runAt`. PostgreSQL derives the initial run time from `clock_timestamp() + windowMs`.

@@ -466,21 +466,21 @@ PostgreSQL queue offers it. Workhorse already has batch enqueue; this is batch c
 - [x] Benchmark batch claim throughput against serial claims in an operational scenario before
       making any performance claim.
 
-### [ ] P1-13 Debounce and throttle
+### [x] P1-13 Debounce and throttle
 
 **Depends on:** P1-01
 
 Named coalescing primitives on top of the existing idempotency machinery. Inngest, pg-boss,
 Trigger.dev, and DBOS all name these; Workhorse currently only rejects or replays.
 
-- [ ] Add debounce semantics: a repeated key within the window replaces the pending job's
+- [x] Add debounce semantics: a repeated key within the window replaces the pending job's
       payload and either resets or preserves its run time, chosen explicitly by the caller.
-- [ ] Add throttle semantics: at most one accepted job per key per window, with later
+- [x] Add throttle semantics: at most one accepted job per key per window, with later
       equivalent requests coalesced into the retained job rather than rejected.
-- [ ] Keep PostgreSQL the owner of window arithmetic and define behavior when the keyed job is
+- [x] Keep PostgreSQL the owner of window arithmetic and define behavior when the keyed job is
       already active or terminal.
-- [ ] Report the coalescing outcome in structured enqueue results and lifecycle events.
-- [ ] Cover replace, preserve, coalesce, and concurrent-enqueue races with integration tests
+- [x] Report the coalescing outcome in structured enqueue results and lifecycle events.
+- [x] Cover replace, preserve, coalesce, and concurrent-enqueue races with integration tests
       and a benchmark scenario.
 
 ## P2: operator and ecosystem experience

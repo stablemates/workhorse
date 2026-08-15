@@ -4,6 +4,8 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-08-14 coalescing ingress analysis](benchmarks/2026-08-14-coalescing-ingress-default-analysis.md): concurrent idempotency, debounce, and throttle cohorts with lifecycle, notification, index, and cleanup evidence.
+- [`results/2026-08-14-coalescing-ingress-default.json`](benchmarks/results/2026-08-14-coalescing-ingress-default.json): default-profile coalescing ingress artifact on PostgreSQL 18.
 - [2026-08-14 batch dispatch analysis](benchmarks/2026-08-14-batch-dispatch-default-analysis.md): serial and batched handler cohorts, full and partial dispatch, policy accounting, mixed outcomes, and isolated lease recovery.
 - [`results/2026-08-14-batch-dispatch-default.json`](benchmarks/results/2026-08-14-batch-dispatch-default.json): default-profile batch dispatch artifact on PostgreSQL 18.
 - [2026-08-14 priority dispatch analysis](benchmarks/2026-08-14-priority-dispatch-default-analysis.md): strict ordering, FIFO baseline cost, retained-history claim-plan bounds, and explicit starvation under replenished urgent work.
@@ -74,6 +76,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `lease-expiry-recovery`         | recovery latency, new attempt/fence, and stale completion rejection                                                                                                                              |
 | `retry-paths`                   | overrides; fixed/exponential/jitter selection and provenance; deterministic replay; promotion and exhaustion; versioned contract validation and redaction timings                                |
 | `idempotent-ingress`            | exact replay, conflict rollback, same-batch duplicates, expiry reuse, and full transition timings/invariants                                                                                     |
+| `coalescing-ingress`            | concurrent idempotent replay, debounce reset/preserve, throttle coalescing, durable effects, notifications, key-index size, and purge cost                                                       |
 | `retention-pruning`             | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                                                                                   |
 | `health-snapshot`               | single-statement snapshot latency, capped-scan flags, and machine-readable critical status reasons                                                                                               |
 | `worker-concurrency`            | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants |
@@ -108,6 +111,13 @@ hard invariants verify stable replay identity; no duplicate job, binding, event,
 whole-batch conflict rollback; duplicate result ordering alongside unchanged unkeyed behavior; and transfer
 of scoped ownership after expiry. These are full SQL transition timings. No latency or overhead number is
 claimed until a benchmark artifact containing this scenario is recorded.
+
+`coalescing-ingress` runs concurrent requests across bounded key sets for idempotency, debounce with
+reset and preserve scheduling, and throttle. It records per-request p50/p95, retained-key index
+size, ready notifications, and pending-job purge cost. Hard invariants compare structured outcomes
+with accepted identities, live runtimes, FIFO placement, and lifecycle events. The scenario proves
+serialization and durable bookkeeping for the sampled traffic. It does not prove exactly-once
+handler effects, production latency, or a generally faster coalescing mode.
 
 `cancellation-lifecycle` records client-observed full-transition timings for immediate ready,
 scheduled, and durable-wait cancellation; active request, repeated request, exact-fence settlement,
