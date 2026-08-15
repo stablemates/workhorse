@@ -270,6 +270,46 @@ describe("operational scenario contracts", () => {
     );
     expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|speedup|production throughput/);
   });
+
+  it("defines comparative coalescing-ingress evidence without an exactly-once claim", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "coalescing-ingress",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/reset and preserve scheduling/);
+    expect(contract!.invariants.join("\n")).toMatch(
+      /concurrent acceptance races, replacements, and replays/,
+    );
+    expect(contract!.invariants.join("\n")).toMatch(/structured outcomes and lifecycle events/);
+    expect(contract!.invariants.join("\n")).toMatch(/notification and FIFO effects/);
+    expect(contract!.invariants.join("\n")).toMatch(/purge removes every retained key/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "idempotentEnqueueP50Ms",
+        "idempotentEnqueueP95Ms",
+        "debounceResetEnqueueP50Ms",
+        "debounceResetEnqueueP95Ms",
+        "debouncePreserveEnqueueP50Ms",
+        "debouncePreserveEnqueueP95Ms",
+        "throttleEnqueueP50Ms",
+        "throttleEnqueueP95Ms",
+        "idempotentKeyIndexBytes",
+        "debounceResetKeyIndexBytes",
+        "debouncePreserveKeyIndexBytes",
+        "throttleKeyIndexBytes",
+        "idempotentNotifications",
+        "debounceResetNotifications",
+        "debouncePreserveNotifications",
+        "throttleNotifications",
+        "idempotentCleanupMs",
+        "debounceResetCleanupMs",
+        "debouncePreserveCleanupMs",
+        "throttleCleanupMs",
+      ]),
+    );
+    expect(contract!.purpose.toLowerCase()).not.toMatch(/exactly once|faster|latency target|sla/);
+  });
 });
 
 describe("resolveOperationalScenarioOptions", () => {

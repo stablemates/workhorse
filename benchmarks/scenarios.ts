@@ -19,7 +19,7 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import type { QueryResult, QueryResultRow } from "pg";
+import type { Notification, PoolClient, QueryResult, QueryResultRow } from "pg";
 import {
   CancellationRequestedError,
   DeadlineExceededError,
@@ -47,6 +47,7 @@ export const operationalScenarioNames = [
   "lease-expiry-recovery",
   "retry-paths",
   "idempotent-ingress",
+  "coalescing-ingress",
   "retention-pruning",
   "health-snapshot",
   "worker-concurrency",
@@ -402,6 +403,42 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "bindings",
       "events",
       "runtimes",
+    ],
+  },
+  {
+    name: "coalescing-ingress",
+    purpose:
+      "Compare bounded keyed debounce and throttle contention with idempotent enqueue while recording durable effects and operating cost.",
+    invariants: [
+      "debounce replacement covers reset and preserve scheduling with one pending identity per key",
+      "concurrent acceptance races, replacements, and replays return the expected structured outcome for every request",
+      "structured outcomes and lifecycle events agree with the retained job definition and runtime",
+      "coalesced work adds no duplicate notification and FIFO effects",
+      "purge removes every retained key and pending job after each cohort",
+    ],
+    metrics: [
+      "requestsPerCohort",
+      "keysPerCohort",
+      "idempotentEnqueueP50Ms",
+      "idempotentEnqueueP95Ms",
+      "debounceResetEnqueueP50Ms",
+      "debounceResetEnqueueP95Ms",
+      "debouncePreserveEnqueueP50Ms",
+      "debouncePreserveEnqueueP95Ms",
+      "throttleEnqueueP50Ms",
+      "throttleEnqueueP95Ms",
+      "idempotentKeyIndexBytes",
+      "debounceResetKeyIndexBytes",
+      "debouncePreserveKeyIndexBytes",
+      "throttleKeyIndexBytes",
+      "idempotentNotifications",
+      "debounceResetNotifications",
+      "debouncePreserveNotifications",
+      "throttleNotifications",
+      "idempotentCleanupMs",
+      "debounceResetCleanupMs",
+      "debouncePreserveCleanupMs",
+      "throttleCleanupMs",
     ],
   },
   {
@@ -2963,6 +3000,332 @@ async function idempotentIngress(
   };
 }
 
+async function coalescingIngress(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  const assertions: ScenarioAssertion[] = [];
+  const metrics: Record<string, ScenarioMetric> = {};
+  const keysPerCohort = Math.max(2, Math.min(context.options.batchSize, context.options.jobCount));
+  const repeatsPerKey = Math.max(2, Math.ceil(context.options.jobCount / keysPerCohort));
+  const requestsPerCohort = keysPerCohort * (repeatsPerKey + 1);
+  type CohortMode = "debounce-preserve" | "debounce-reset" | "idempotent" | "throttle";
+
+  const runCohort = async (mode: CohortMode) => {
+    await reset(context.pool);
+    const cohortQueueName = `${context.queueName}-${mode}`;
+    const queue = new Queue(context.pool, cohortQueueName);
+    const database = context.pool as Queryable & { connect?: () => Promise<PoolClient> };
+    if (database.connect === undefined) {
+      throw new Error("coalescing benchmark requires a PostgreSQL pool with LISTEN support");
+    }
+    const listener = await database.connect();
+    const notifications: string[] = [];
+    const onNotification = (message: Notification) => {
+      if (message.payload === cohortQueueName) notifications.push(message.payload);
+    };
+    listener.on("notification", onNotification);
+    await listener.query("LISTEN workhorse_jobs");
+
+    const enqueue = (keyIndex: number, revision: number) => {
+      const key = `key-${keyIndex}`;
+      if (mode === "idempotent") {
+        return queue.enqueueWithResult(
+          "coalescing-ingress",
+          { key: keyIndex },
+          { idempotency: { key, scope: mode, ttlMs: 60_000 } },
+        );
+      }
+      if (mode === "throttle") {
+        return queue.enqueueWithResult(
+          "coalescing-ingress",
+          { key: keyIndex },
+          { throttle: { key, scope: mode, windowMs: 60_000 } },
+        );
+      }
+      return queue.enqueueWithResult(
+        "coalescing-ingress",
+        { key: keyIndex, revision },
+        {
+          debounce: {
+            key,
+            scope: mode,
+            windowMs: 60_000,
+            schedule: mode === "debounce-reset" ? "reset" : "preserve",
+          },
+        },
+      );
+    };
+
+    try {
+      const requests = await Promise.all(
+        Array.from({ length: repeatsPerKey + 1 }, (_, revision) =>
+          Array.from({ length: keysPerCohort }, async (_unused, keyIndex) => {
+            const [result, durationMs] = await measured(context.now, () =>
+              enqueue(keyIndex, revision),
+            );
+            return { durationMs, keyIndex, result };
+          }),
+        ).flat(),
+      );
+      const results = requests.map(({ result }) => result);
+      const durationsMs = requests.map(({ durationMs }) => durationMs);
+      const accepted = Array.from({ length: keysPerCohort }, (_, keyIndex) =>
+        requests.find(
+          (request) => request.keyIndex === keyIndex && request.result.outcome === "accepted",
+        ),
+      );
+      if (accepted.some((request) => request === undefined)) {
+        throw new Error(`${mode} acceptance race did not retain one seed per key`);
+      }
+      const finalSnapshots = await Promise.all(
+        accepted.map((request) => queue.getJob(request!.result.jobId)),
+      );
+      const state = (
+        await context.pool.query<{
+          bindings: number;
+          debounced_events: number;
+          enqueued_events: number;
+          fifo_placements: number;
+          jobs: number;
+          runtimes: number;
+        }>(
+          `SELECT
+             (SELECT count(*)::integer FROM workhorse.job WHERE queue_name = $1) AS jobs,
+             (SELECT count(*)::integer FROM workhorse.job_runtime WHERE queue_name = $1)
+               AS runtimes,
+             (SELECT count(*)::integer
+                FROM workhorse.enqueue_idempotency identity
+                JOIN workhorse.job ON job.id = identity.job_id
+               WHERE job.queue_name = $1) AS bindings,
+             (SELECT count(*)::integer
+                FROM workhorse.job_runtime
+               WHERE queue_name = $1 AND sequence IS NOT NULL) AS fifo_placements,
+             (SELECT count(*)::integer
+                FROM workhorse.job_event event
+                JOIN workhorse.job ON job.id = event.job_id
+               WHERE job.queue_name = $1 AND event.event_type = 'enqueued') AS enqueued_events,
+             (SELECT count(*)::integer
+                FROM workhorse.job_event event
+                JOIN workhorse.job ON job.id = event.job_id
+               WHERE job.queue_name = $1 AND event.event_type = 'debounced') AS debounced_events`,
+          [cohortQueueName],
+        )
+      ).rows[0]!;
+      const indexSize = await context.pool.query<{ bytes: string }>(
+        "SELECT pg_indexes_size('workhorse.enqueue_idempotency'::regclass)::text AS bytes",
+      );
+      const debounceEvents = await context.pool.query<{
+        job_id: string;
+        request_digest: string;
+        stored_request_digest: string;
+      }>(
+        `SELECT event.job_id, event.details->>'stored_request_digest' AS stored_request_digest,
+                event.details->>'request_digest' AS request_digest
+           FROM workhorse.job_event event
+           JOIN workhorse.job ON job.id = event.job_id
+          WHERE job.queue_name = $1 AND event.event_type = 'debounced'
+          ORDER BY event.event_id`,
+        [cohortQueueName],
+      );
+      const retainedDigests = await context.pool.query<{ job_id: string; request_digest: string }>(
+        `SELECT identity.job_id,
+                workhorse.sha256_hex_v1(identity.request_fingerprint::text) AS request_digest
+           FROM workhorse.enqueue_idempotency identity
+           JOIN workhorse.job ON job.id = identity.job_id
+          WHERE job.queue_name = $1`,
+        [cohortQueueName],
+      );
+      const expectedRepeatOutcome =
+        mode === "idempotent" ? "replayed" : mode === "throttle" ? "coalesced" : "replaced";
+      const expectedFifoPlacements = mode.startsWith("debounce") ? 0 : keysPerCohort;
+      const expectedNotifications = mode.startsWith("debounce") ? 0 : keysPerCohort;
+      await listener.query("SELECT 1");
+      if (expectedNotifications > 0) {
+        await waitFor(
+          () => notifications.length === expectedNotifications,
+          `${mode} accepted-job notifications`,
+        );
+      }
+      const retainedPayloadsValid = finalSnapshots.every((snapshot, keyIndex) => {
+        if (snapshot?.payload === null || typeof snapshot?.payload !== "object") return false;
+        const payload = snapshot.payload as { key?: unknown; revision?: unknown };
+        if (payload.key !== keyIndex) return false;
+        return mode.startsWith("debounce")
+          ? Number.isInteger(payload.revision) &&
+              Number(payload.revision) >= 0 &&
+              Number(payload.revision) <= repeatsPerKey
+          : payload.revision === undefined;
+      });
+      const resultsStayOnAcceptedIdentity = requests.every(
+        ({ keyIndex, result }) => result.jobId === accepted[keyIndex]!.result.jobId,
+      );
+      const eventDigestChainsMatch = accepted.every((request) => {
+        const events = debounceEvents.rows.filter(
+          (event) => event.job_id === request!.result.jobId,
+        );
+        if (!mode.startsWith("debounce")) return events.length === 0;
+        if (events.length !== repeatsPerKey) return false;
+        for (let index = 1; index < events.length; index += 1) {
+          if (events[index]!.stored_request_digest !== events[index - 1]!.request_digest) {
+            return false;
+          }
+        }
+        const retained = retainedDigests.rows.find(
+          (digest) => digest.job_id === request!.result.jobId,
+        );
+        return retained?.request_digest === events.at(-1)?.request_digest;
+      });
+
+      recordInvariant(
+        assertions,
+        `${mode} accepts one identity per key`,
+        results.filter(({ outcome }) => outcome === "accepted").length,
+        keysPerCohort,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} returns its structured repeated outcome`,
+        results.filter(({ outcome }) => outcome === expectedRepeatOutcome).length,
+        keysPerCohort * repeatsPerKey,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} concurrent acceptance race retains one identity`,
+        resultsStayOnAcceptedIdentity,
+        true,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} keeps one durable job per key`,
+        state.jobs,
+        keysPerCohort,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} keeps one live runtime per key`,
+        state.runtimes,
+        keysPerCohort,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} keeps one retained binding per key`,
+        state.bindings,
+        keysPerCohort,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} appends one acceptance event per key`,
+        state.enqueued_events,
+        keysPerCohort,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} lifecycle replacement events match outcomes`,
+        state.debounced_events,
+        mode.startsWith("debounce") ? keysPerCohort * repeatsPerKey : 0,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} event digest chain matches retained state`,
+        eventDigestChainsMatch,
+        true,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} retains a submitted payload`,
+        retainedPayloadsValid,
+        true,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} preserves expected FIFO effects`,
+        state.fifo_placements,
+        expectedFifoPlacements,
+      );
+      recordInvariant(
+        assertions,
+        `${mode} preserves expected notification effects`,
+        notifications.length,
+        expectedNotifications,
+      );
+      const [purged, cleanupMs] = await measured(context.now, () =>
+        queue.purgeQueue(cohortQueueName),
+      );
+      const cleanupState = (
+        await context.pool.query<{ bindings: number; jobs: number }>(
+          `SELECT
+             (SELECT count(*)::integer FROM workhorse.job WHERE queue_name = $1) AS jobs,
+             (SELECT count(*)::integer
+                FROM workhorse.enqueue_idempotency
+               WHERE job_id = ANY($2::uuid[])) AS bindings`,
+          [cohortQueueName, accepted.map((request) => request!.result.jobId)],
+        )
+      ).rows[0]!;
+      recordInvariant(assertions, `${mode} purge removes every pending job`, purged, keysPerCohort);
+      recordInvariant(
+        assertions,
+        `${mode} purge leaves no job or retained key`,
+        cleanupState,
+        { bindings: 0, jobs: 0 },
+        jsonEquivalent,
+      );
+
+      if (mode.startsWith("debounce")) {
+        const scheduleAccepted = await enqueue(0, 0);
+        const initialRunAt = (await queue.getJob(scheduleAccepted.jobId))!.runAt;
+        await context.sleep(1);
+        await enqueue(0, 1);
+        const replacedRunAt = (await queue.getJob(scheduleAccepted.jobId))!.runAt;
+        recordInvariant(
+          assertions,
+          `${mode} ${mode === "debounce-reset" ? "resets" : "preserves"} its schedule`,
+          replacedRunAt.getTime(),
+          initialRunAt.getTime(),
+          (actual, expected) =>
+            mode === "debounce-reset"
+              ? Number(actual) > Number(expected)
+              : Number(actual) === Number(expected),
+        );
+        recordInvariant(
+          assertions,
+          `${mode} removes its schedule-check identity`,
+          await queue.purgeQueue(cohortQueueName),
+          1,
+        );
+      }
+
+      return {
+        cleanupMs,
+        durationsMs,
+        indexBytes: Number(indexSize.rows[0]?.bytes ?? 0),
+        notifications: notifications.length,
+      };
+    } finally {
+      await listener.query("UNLISTEN workhorse_jobs");
+      listener.off("notification", onNotification);
+      listener.release();
+    }
+  };
+
+  const cohorts = {
+    idempotent: await runCohort("idempotent"),
+    debounceReset: await runCohort("debounce-reset"),
+    debouncePreserve: await runCohort("debounce-preserve"),
+    throttle: await runCohort("throttle"),
+  };
+  metrics.requestsPerCohort = requestsPerCohort;
+  metrics.keysPerCohort = keysPerCohort;
+  for (const [prefix, cohort] of Object.entries(cohorts)) {
+    metrics[`${prefix}EnqueueP50Ms`] = percentile(cohort.durationsMs, 0.5);
+    metrics[`${prefix}EnqueueP95Ms`] = percentile(cohort.durationsMs, 0.95);
+    metrics[`${prefix}KeyIndexBytes`] = cohort.indexBytes;
+    metrics[`${prefix}Notifications`] = cohort.notifications;
+    metrics[`${prefix}CleanupMs`] = cohort.cleanupMs;
+  }
+
+  return { name: "coalescing-ingress", durationMs: 0, metrics, assertions };
+}
+
 async function retentionPruning(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
@@ -4537,6 +4900,7 @@ export const operationalScenarioImplementations: Readonly<
   "lease-expiry-recovery": leaseExpiryRecovery,
   "retry-paths": retryPaths,
   "idempotent-ingress": idempotentIngress,
+  "coalescing-ingress": coalescingIngress,
   "retention-pruning": retentionPruning,
   "health-snapshot": healthSnapshot,
   "worker-concurrency": workerConcurrency,
