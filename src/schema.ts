@@ -7,7 +7,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 34;
+export const WORKHORSE_SCHEMA_VERSION = 35;
 
 const SCHEMA_MIGRATIONS = [
   {
@@ -64,6 +64,11 @@ const SCHEMA_MIGRATIONS = [
     fromVersion: 33,
     toVersion: 34,
     file: "0034-add-child-fan-out.sql",
+  },
+  {
+    fromVersion: 34,
+    toVersion: 35,
+    file: "0035-preserve-child-lineage.sql",
   },
 ] as const;
 

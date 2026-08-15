@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 34. Version 23 is the oldest supported
+The current clean-install protocol is schema version 35. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 34 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 35 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -52,7 +52,11 @@ Migration `0034-add-child-fan-out.sql` requires version 33. It removes the singl
 set-created edges, and adds bounded transactional child-set creation and joining. It records
 version 34 and advances the schema row.
 
-Versions below 23, versions above 34, gaps, and mixed version rows fail without running a migration.
+Migration `0035-preserve-child-lineage.sql` requires version 34. It makes the parent own child-edge
+lifetime, prevents terminal pruning while any child is live or within an evidence window, and adds
+the bounded dashboard redrive-lineage view. It records version 35 and advances the schema row.
+
+Versions below 23, versions above 35, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -466,9 +470,15 @@ ownership, a changed replay, and an oversized child set. The single-child functi
 
 `Queue.getJob` and `Queue.listJobs` expose `parentJobId` and sorted `childJobIds`.
 `Queue.getChildLineage(jobId, limit)` returns at most 1,000 edges in either direction and reports
-truncation. `dashboard_job_child_v1` gives the dashboard the same lineage. The restricted parent
-foreign key preserves a parent while its child exists; pruning the child cascades the edge and
-makes the parent eligible under its ordinary retention policy.
+truncation. Each record includes the child's terminal state and bounded error when available.
+`dashboard_job_child_v1` gives the dashboard the same lineage. The parent owns edge
+lifetime. `prune_terminal_jobs_v1` refuses to prune it while any linked child is live or has not
+crossed the identity, outcome, and history cutoffs. Parent deletion then removes dependency and
+child edges atomically, so the next pass can reclaim children without a foreign-key cycle.
+
+`Queue.health().children` reports waiting parents, live children, unjoined successful results, and
+retained parents that child policy failed or canceled. Each count scans at most 10,001 matching
+rows, returns at most 10,000, and sets `capped` when any value is a lower bound.
 
 The ownership relation stores scope and full key hash, never the raw key. The initial `enqueued` event, UI projections, and errors expose only a bounded key preview plus 12-hex key digest; exact replay appends no event. Structured conflicts additionally carry full SHA-256 stored and rejected request digests. Expired ownership can be replaced by a new request. Housekeeping prunes expired bindings before terminal job identity, and purging ready or scheduled jobs releases their bindings with the job.
 
@@ -964,7 +974,14 @@ PostgreSQL starts another attempt.
 
 `Queue.getJob(id)` joins immutable `job` to both lifecycle relations and coalesces the one that exists, preserving `retryPolicy` plus cancellation-request metadata for active work.
 
-`Queue.health()` reads every correctness-sensitive value in one SQL statement, so a single MVCC snapshot covers all of it: the verified `schemaVersion`; state counts; ready, scheduled, sleeping, active, and expired-active depths; overdue durable waits and `nextWakeAt`; deadline and execution-timeout pressure; `overdueScheduled` and `oldestOverdueScheduledAgeMs` for promotion lag; retention boundaries and per-category lag; the rollup watermark; bounded concurrency and rate-limit pressure; and `historyPartitionDays`, the catalog existence of the UTC-daily `job_event` and `attempt_history` partitions for today plus three days. `capturedAt` is `now()` of that statement. The singleton CTEs inside it carry `LIMIT 1` planner hints; without them the cross-join row estimate trips JIT compilation and one snapshot costs roughly a second instead of milliseconds.
+`Queue.health()` reads every correctness-sensitive value in one statement. One MVCC snapshot
+covers the verified schema version, state counts, and dispatch depths. It also covers dependency,
+child, deadline, timeout, promotion, concurrency, rate-limit, rollup, and retention pressure.
+`historyPartitionDays` reports whether each required daily history partition exists. `capturedAt`
+is PostgreSQL's transaction timestamp for the statement.
+
+Singleton CTEs carry `LIMIT 1` planner hints. Without them, PostgreSQL's row estimates trigger JIT
+compilation and add roughly one second to each snapshot.
 
 Snapshot cost tracks live work, not lifetime history. Live-state counts and depths come from `job_runtime` and are exact. Terminal state counts stop scanning `job_outcome` at `HEALTH_HISTORY_SCAN_LIMIT` (100,000) rows, and the `job_stat_bucket` count stops at the same cap; `terminalCountsCapped` and `statistics.bucketsCapped` mark capped values as lower bounds that are exact until the cap. The rate-limit block reuses the identical SQL as `Queue.rateLimitStatuses()`, so the two surfaces cannot disagree about throttle semantics.
 
@@ -981,6 +998,8 @@ Core owns the dashboard's relational read contract. The version 1 views expose t
 - `dashboard_attempt_history_v1`: `attempt_id`, `job_id`, `attempt`, `fence_token`, `worker_id`, `outcome`, `started_at`, `claimed_at`, `finished_at`, `error`, `occurred_at`.
 - `dashboard_concurrency_policy_v1`: `queue_name`.
 - `dashboard_job_checkpoint_v1`: `job_id`, `checkpoint_name`, `checkpoint_value`, `attempt`, `fence_token`, `worker_id`, `created_at`.
+- `dashboard_job_child_v1`: `parent_job_id`, `child_job_id`, `child_name`, `created_at`, `joined_at`.
+- `dashboard_job_redrive_v1`: `source_job_id`, `target_job_id`, `request_id_preview`, `request_id_digest`, `request_id_length`, `requested_by`, `reason`, `source_state`, `target_initial_state`, `requested_at`.
 - `dashboard_job_event_v1`: `event_id`, `job_id`, `attempt`, `event_type`, `details`, `occurred_at`.
 - `dashboard_job_outcome_v1`: `job_id`, `state`, `current_attempt`, `run_at`, `result`, `error`, `finished_at`, `updated_at`.
 - `dashboard_job_progress_v1`: `job_id`, `progress_value`, `revision`, `attempt`, `fence_token`, `worker_id`, `created_at`, `updated_at`.
@@ -998,7 +1017,17 @@ Core owns the dashboard's relational read contract. The version 1 views expose t
 
 `dashboard_job_estimate_v1()` returns the planner tuple estimate for the private `job` table. The
 dashboard uses it to choose exact counts or estimates without naming the private relation.
-`stat_buckets_v1`, `redact_top_level_keys_v1`, and the maintenance functions remain the other
+`redrive_lineage_v1(p_job_id uuid, p_limit integer)` accepts `p_limit` from 1 through 1,001. It
+traverses and returns at most that many edges. Deterministic breadth-first order makes every
+smaller response a prefix of a larger response. It returns:
+
+- identity columns `source_job_id` and `target_job_id`;
+- audit columns `requested_by`, `reason`, and `requested_at`;
+- request evidence columns `request_id_preview`, `request_id_digest`, and `request_id_length`;
+- state columns `source_state` and `target_initial_state`.
+
+`stat_buckets_v1`,
+`redact_top_level_keys_v1`, and the maintenance functions remain the other
 versioned core surfaces used by the dashboard server. A core migration may change private tables
 without a dashboard release when it preserves these view and function contracts.
 
@@ -1204,6 +1233,10 @@ rather than on an emission path:
   `workhorse.queue.dependencies.failed_resolutions` report bounded dependency pressure by queue.
   `workhorse.queue.dependencies.capped` reports lower-bound samples. None uses stable job identities
   as attributes.
+- `workhorse.queue.children.waiting_parents`, `workhorse.queue.children.pending`,
+  `workhorse.queue.children.unjoined_results`, `workhorse.queue.children.failed_parents`, and
+  `workhorse.queue.children.canceled_parents` report bounded child orchestration by parent queue.
+  `workhorse.queue.children.capped` reports lower-bound samples.
 - `workhorse.queue.rate_limit.configured`, `workhorse.queue.rate_limit.available_tokens`,
   `workhorse.queue.rate_limit.throttled_ready`, and
   `workhorse.queue.rate_limit.next_eligible_delay` report rate-policy state for governed queues.
@@ -1314,7 +1347,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 34. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 35. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

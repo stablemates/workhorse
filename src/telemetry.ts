@@ -377,6 +377,12 @@ export interface QueueMetricSnapshot {
   dependencyPendingEdges: number;
   dependencyFailedResolutions: number;
   dependencyCountsCapped: boolean;
+  childWaitingParents: number;
+  childPendingChildren: number;
+  childUnjoinedResults: number;
+  childFailedParents: number;
+  childCanceledParents: number;
+  childCountsCapped: boolean;
   oldestReadyAgeMs: number | null;
   concurrencyLimit: number | null;
   concurrencyActive: number;
@@ -418,6 +424,39 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
     "workhorse.queue.dependencies.capped",
     { description: "Whether dependency pressure values reached their scan limit", unit: "1" },
   );
+  const childWaiting = activeMeter.createObservableGauge(
+    "workhorse.queue.children.waiting_parents",
+    {
+      description: "Parents suspended while linked children settle",
+      unit: "{job}",
+    },
+  );
+  const childPending = activeMeter.createObservableGauge("workhorse.queue.children.pending", {
+    description: "Linked children without a terminal outcome",
+    unit: "{job}",
+  });
+  const childUnjoined = activeMeter.createObservableGauge(
+    "workhorse.queue.children.unjoined_results",
+    {
+      description: "Successful child results not yet consumed by their parent",
+      unit: "{result}",
+    },
+  );
+  const childFailed = activeMeter.createObservableGauge("workhorse.queue.children.failed_parents", {
+    description: "Retained parents failed by linked child policy",
+    unit: "{job}",
+  });
+  const childCanceled = activeMeter.createObservableGauge(
+    "workhorse.queue.children.canceled_parents",
+    {
+      description: "Retained parents canceled by linked child policy",
+      unit: "{job}",
+    },
+  );
+  const childCapped = activeMeter.createObservableGauge("workhorse.queue.children.capped", {
+    description: "Whether child orchestration values reached their scan limit",
+    unit: "1",
+  });
   const concurrencyLimit = activeMeter.createObservableGauge("workhorse.queue.concurrency.limit", {
     description: "Configured queue concurrency limit",
     unit: "{job}",
@@ -456,6 +495,12 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
     dependencyPending,
     dependencyFailed,
     dependencyCapped,
+    childWaiting,
+    childPending,
+    childUnjoined,
+    childFailed,
+    childCanceled,
+    childCapped,
     concurrencyLimit,
     concurrencyActive,
     concurrencyBlocked,
@@ -486,6 +531,12 @@ export function registerQueueMetrics(source: QueueMetricSource): () => void {
       result.observe(dependencyPending, snapshot.dependencyPendingEdges, queueAttribute);
       result.observe(dependencyFailed, snapshot.dependencyFailedResolutions, queueAttribute);
       result.observe(dependencyCapped, snapshot.dependencyCountsCapped ? 1 : 0, queueAttribute);
+      result.observe(childWaiting, snapshot.childWaitingParents, queueAttribute);
+      result.observe(childPending, snapshot.childPendingChildren, queueAttribute);
+      result.observe(childUnjoined, snapshot.childUnjoinedResults, queueAttribute);
+      result.observe(childFailed, snapshot.childFailedParents, queueAttribute);
+      result.observe(childCanceled, snapshot.childCanceledParents, queueAttribute);
+      result.observe(childCapped, snapshot.childCountsCapped ? 1 : 0, queueAttribute);
       if (snapshot.concurrencyLimit !== null) {
         result.observe(concurrencyLimit, snapshot.concurrencyLimit, queueAttribute);
         result.observe(concurrencyActive, snapshot.concurrencyActive, queueAttribute);

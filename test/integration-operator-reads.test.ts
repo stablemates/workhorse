@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { installSchema, RedriveIdempotencyConflictError } from "../src/index.js";
+import { readDashboardJobDetail } from "../packages/dashboard/src/server/read-model.js";
+import { dashboardDatabase } from "../packages/dashboard/src/server/sql.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { createFailedJob, pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -702,11 +704,64 @@ describe("operator reads", () => {
     });
     expect(await queue.getRedriveLineage(second.targetJobId!)).toMatchObject({
       records: [
-        { sourceJobId: source, targetJobId: first.targetJobId },
         { sourceJobId: first.targetJobId, targetJobId: second.targetJobId },
+        { sourceJobId: source, targetJobId: first.targetJobId },
       ],
       truncated: false,
     });
+  });
+
+  it("keeps bounded branching lineage as a shared core and dashboard prefix", async () => {
+    const source = await createFailedJob({
+      type: "branching-lineage-source",
+      queueName: "branching-lineage",
+    });
+    const first = await queue.redrive(source, {
+      requestedBy: "lineage-operator",
+      reason: "first branch",
+      requestId: "lineage-first-branch",
+    });
+    const second = await queue.redrive(source, {
+      requestedBy: "lineage-operator",
+      reason: "second branch",
+      requestId: "lineage-second-branch",
+    });
+    const firstTarget = await queue.claim("branching-lineage-worker", {
+      queue: "branching-lineage",
+    });
+    expect(firstTarget?.id).toBe(first.targetJobId);
+    expect(
+      await queue.fail(firstTarget!, "branching-lineage-worker", new Error("branch failed")),
+    ).toBe("failed");
+    const descendant = await queue.redrive(first.targetJobId!, {
+      requestedBy: "lineage-operator",
+      reason: "branch descendant",
+      requestId: "lineage-branch-descendant",
+    });
+    await pool.query(
+      `UPDATE workhorse.job_redrive
+          SET requested_at = CASE target_job_id
+            WHEN $1::uuid THEN clock_timestamp() - interval '3 minutes'
+            WHEN $2::uuid THEN clock_timestamp() - interval '2 minutes'
+            ELSE clock_timestamp() - interval '4 minutes'
+          END
+        WHERE target_job_id = ANY($3::uuid[])`,
+      [
+        first.targetJobId,
+        second.targetJobId,
+        [first.targetJobId, second.targetJobId, descendant.targetJobId],
+      ],
+    );
+
+    const bounded = await queue.getRedriveLineage(source, 2);
+    const dashboard = await readDashboardJobDetail(dashboardDatabase(pool), source);
+    expect(bounded.truncated).toBe(true);
+    expect(dashboard?.redriveLineage.records.slice(0, 2)).toMatchObject(
+      bounded.records.map((edge) => ({
+        sourceJobId: edge.sourceJobId,
+        targetJobId: edge.targetJobId,
+      })),
+    );
   });
 
   it("protects redrive sources until descendant targets are pruned", async () => {

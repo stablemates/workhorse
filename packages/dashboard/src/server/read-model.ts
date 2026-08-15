@@ -2154,55 +2154,63 @@ export async function readDashboardJobDetail(
   projectDurability: DashboardDurabilityProjector = () => null,
   queue?: Queue,
 ): Promise<DashboardJobDetail | null> {
-  const [jobRows, attemptRows, checkpointRows, waitRows, eventRows, dependencyRows, childRows] =
-    await Promise.all([
-      database.execute<{
-        id: string;
-        queue: string;
-        type: string;
-        priority: number;
-        payload: unknown;
-        max_attempts: number;
-        retry_policy: RetryPolicy | null;
-        deadline_at: Date | string | null;
-        execution_timeout_ms: string | number | null;
-        concurrency_key: string | null;
-        prerequisite_job_id: string | null;
-        prerequisite_job_ids: string[];
-        dependency_on_success: "release" | "cancel" | "fail" | null;
-        dependency_on_failure: "release" | "cancel" | "fail" | null;
-        dependency_on_cancellation: "release" | "cancel" | "fail" | null;
-        dependency_released_at: Date | string | null;
-        created_at: Date | string;
-        runtime_state: string | null;
-        runtime_attempt: number | null;
-        run_at: Date | string | null;
-        ready_at: Date | string | null;
-        worker_id: string | null;
-        heartbeat_at: Date | string | null;
-        fence_token: string;
-        acquired_at: Date | string | null;
-        expires_at: Date | string | null;
-        wait_name: string | null;
-        attempt_started_at: Date | string | null;
-        attempt_timeout_at: Date | string | null;
-        cancel_requested_at: Date | string | null;
-        cancel_requested_by: string | null;
-        cancel_reason: string | null;
-        runtime_error: unknown;
-        outcome_state: string | null;
-        outcome_attempt: number | null;
-        finished_at: Date | string | null;
-        result: unknown;
-        outcome_error: unknown;
-        progress_value: unknown;
-        progress_revision: string | null;
-        progress_attempt: number | null;
-        progress_fence_token: string | null;
-        progress_worker_id: string | null;
-        progress_created_at: Date | string | null;
-        progress_updated_at: Date | string | null;
-      }>(sql`
+  const [
+    jobRows,
+    attemptRows,
+    checkpointRows,
+    waitRows,
+    eventRows,
+    dependencyRows,
+    childRows,
+    redriveRows,
+  ] = await Promise.all([
+    database.execute<{
+      id: string;
+      queue: string;
+      type: string;
+      priority: number;
+      payload: unknown;
+      max_attempts: number;
+      retry_policy: RetryPolicy | null;
+      deadline_at: Date | string | null;
+      execution_timeout_ms: string | number | null;
+      concurrency_key: string | null;
+      prerequisite_job_id: string | null;
+      prerequisite_job_ids: string[];
+      dependency_on_success: "release" | "cancel" | "fail" | null;
+      dependency_on_failure: "release" | "cancel" | "fail" | null;
+      dependency_on_cancellation: "release" | "cancel" | "fail" | null;
+      dependency_released_at: Date | string | null;
+      created_at: Date | string;
+      runtime_state: string | null;
+      runtime_attempt: number | null;
+      run_at: Date | string | null;
+      ready_at: Date | string | null;
+      worker_id: string | null;
+      heartbeat_at: Date | string | null;
+      fence_token: string;
+      acquired_at: Date | string | null;
+      expires_at: Date | string | null;
+      wait_name: string | null;
+      attempt_started_at: Date | string | null;
+      attempt_timeout_at: Date | string | null;
+      cancel_requested_at: Date | string | null;
+      cancel_requested_by: string | null;
+      cancel_reason: string | null;
+      runtime_error: unknown;
+      outcome_state: string | null;
+      outcome_attempt: number | null;
+      finished_at: Date | string | null;
+      result: unknown;
+      outcome_error: unknown;
+      progress_value: unknown;
+      progress_revision: string | null;
+      progress_attempt: number | null;
+      progress_fence_token: string | null;
+      progress_worker_id: string | null;
+      progress_created_at: Date | string | null;
+      progress_updated_at: Date | string | null;
+    }>(sql`
       SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
              j.max_attempts,
@@ -2243,17 +2251,17 @@ export async function readDashboardJobDetail(
         ) dependency ON true
        WHERE j.id = ${id}
     `),
-      database.execute<{
-        attempt: number;
-        worker_id: string;
-        outcome: string;
-        started_at: Date | string;
-        claimed_at: Date | string;
-        finished_at: Date | string;
-        execution_ms: number;
-        elapsed_ms: number;
-        error: unknown;
-      }>(sql`
+    database.execute<{
+      attempt: number;
+      worker_id: string;
+      outcome: string;
+      started_at: Date | string;
+      claimed_at: Date | string;
+      finished_at: Date | string;
+      execution_ms: number;
+      elapsed_ms: number;
+      error: unknown;
+    }>(sql`
       SELECT attempt, worker_id, outcome, started_at, claimed_at, finished_at,
              extract(epoch FROM finished_at - claimed_at) * 1000 AS execution_ms,
              extract(epoch FROM finished_at - started_at) * 1000 AS elapsed_ms, error
@@ -2261,58 +2269,58 @@ export async function readDashboardJobDetail(
        WHERE job_id = ${id}
        ORDER BY attempt, attempt_id
     `),
-      database.execute<{
-        checkpoint_name: string;
-        checkpoint_value: unknown;
-        attempt: number;
-        fence_token: string;
-        worker_id: string;
-        created_at: Date | string;
-      }>(sql`
+    database.execute<{
+      checkpoint_name: string;
+      checkpoint_value: unknown;
+      attempt: number;
+      fence_token: string;
+      worker_id: string;
+      created_at: Date | string;
+    }>(sql`
       SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text, worker_id, created_at
         FROM workhorse.dashboard_job_checkpoint_v1
        WHERE job_id = ${id}
       ORDER BY created_at, checkpoint_name
     `),
-      database.execute<{
-        wait_name: string;
-        mode: "relative" | "absolute";
-        duration_ms: string | null;
-        requested_wake_at: Date | string | null;
-        wake_at: Date | string;
-        attempt: number;
-        fence_token: string;
-        worker_id: string;
-        created_at: Date | string;
-      }>(sql`
+    database.execute<{
+      wait_name: string;
+      mode: "relative" | "absolute";
+      duration_ms: string | null;
+      requested_wake_at: Date | string | null;
+      wake_at: Date | string;
+      attempt: number;
+      fence_token: string;
+      worker_id: string;
+      created_at: Date | string;
+    }>(sql`
       SELECT wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt,
              fence_token::text, worker_id, created_at
         FROM workhorse.dashboard_job_wait_v1
        WHERE job_id = ${id}
        ORDER BY created_at, wait_name
     `),
-      database.execute<{
-        event_id: string;
-        attempt: number | null;
-        event_type: string;
-        details: unknown;
-        occurred_at: Date | string;
-      }>(sql`
+    database.execute<{
+      event_id: string;
+      attempt: number | null;
+      event_type: string;
+      details: unknown;
+      occurred_at: Date | string;
+    }>(sql`
       SELECT event_id::text, attempt, event_type, details, occurred_at
         FROM workhorse.dashboard_job_event_v1
        WHERE job_id = ${id}
       ORDER BY occurred_at, event_id
     `),
-      database.execute<{
-        dependent_job_id: string;
-        prerequisite_job_id: string;
-        on_success: "release" | "cancel" | "fail";
-        on_failure: "release" | "cancel" | "fail";
-        on_cancellation: "release" | "cancel" | "fail";
-        created_at: Date | string;
-        released_at: Date | string | null;
-        resolution: "release" | "cancel" | "fail" | null;
-      }>(sql`
+    database.execute<{
+      dependent_job_id: string;
+      prerequisite_job_id: string;
+      on_success: "release" | "cancel" | "fail";
+      on_failure: "release" | "cancel" | "fail";
+      on_cancellation: "release" | "cancel" | "fail";
+      created_at: Date | string;
+      released_at: Date | string | null;
+      resolution: "release" | "cancel" | "fail" | null;
+    }>(sql`
       SELECT dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation,
              created_at, released_at, resolution
         FROM workhorse.dashboard_job_dependency_v1
@@ -2320,23 +2328,44 @@ export async function readDashboardJobDetail(
        ORDER BY dependent_job_id, prerequisite_job_id
        LIMIT 101
     `),
-      database.execute<{
-        parent_job_id: string;
-        child_job_id: string;
-        child_name: string;
-        child_type: string;
-        created_at: Date | string;
-        joined_at: Date | string | null;
-      }>(sql`
+    database.execute<{
+      parent_job_id: string;
+      child_job_id: string;
+      child_name: string;
+      child_type: string;
+      created_at: Date | string;
+      joined_at: Date | string | null;
+      outcome_state: "succeeded" | "failed" | "canceled" | null;
+      outcome_error: unknown;
+    }>(sql`
       SELECT edge.parent_job_id, edge.child_job_id, edge.child_name,
-             child.job_type AS child_type, edge.created_at, edge.joined_at
+             child.job_type AS child_type, edge.created_at, edge.joined_at,
+             outcome.state AS outcome_state, outcome.error AS outcome_error
         FROM workhorse.dashboard_job_child_v1 edge
         JOIN workhorse.dashboard_job_v1 child ON child.id = edge.child_job_id
+        LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome ON outcome.job_id = edge.child_job_id
        WHERE edge.parent_job_id = ${id} OR edge.child_job_id = ${id}
        ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id
        LIMIT 101
     `),
-    ]);
+    database.execute<{
+      source_job_id: string;
+      target_job_id: string;
+      request_id_preview: string;
+      request_id_digest: string;
+      request_id_length: number;
+      requested_by: string;
+      reason: string;
+      source_state: "failed";
+      target_initial_state: "ready";
+      requested_at: Date | string;
+    }>(sql`
+      SELECT source_job_id, target_job_id, request_id_preview, request_id_digest,
+             request_id_length, requested_by, reason, source_state, target_initial_state,
+             requested_at
+        FROM workhorse.redrive_lineage_v1(${id}, 101)
+    `),
+  ]);
 
   const job = jobRows.rows[0];
   if (!job) return null;
@@ -2422,8 +2451,25 @@ export async function readDashboardJobDetail(
         type: edge.child_type,
         createdAt: toIso(edge.created_at),
         joinedAt: toIsoOrNull(edge.joined_at),
+        outcomeState: edge.outcome_state,
+        error: edge.outcome_error,
       })),
       truncated: childRows.rows.length > 100,
+    },
+    redriveLineage: {
+      records: redriveRows.rows.slice(0, 100).map((edge) => ({
+        sourceJobId: edge.source_job_id,
+        targetJobId: edge.target_job_id,
+        requestedBy: edge.requested_by,
+        reason: edge.reason,
+        requestIdPreview: edge.request_id_preview,
+        requestIdDigest: edge.request_id_digest,
+        requestIdLength: edge.request_id_length,
+        sourceState: edge.source_state,
+        targetInitialState: edge.target_initial_state,
+        requestedAt: toIso(edge.requested_at),
+      })),
+      truncated: redriveRows.rows.length > 100,
     },
     // The queue's policy as it stands now, sent for every task including finished ones. Workhorse
     // stores no per-task policy snapshot, so the drawer labels this as current rather than

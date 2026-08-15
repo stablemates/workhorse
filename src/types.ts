@@ -631,7 +631,12 @@ export type CreateChildrenResult<TResult extends Record<string, Json> = Record<s
 
 /** Bounded edges where the requested job is either the parent or the child. */
 export interface ChildLineage {
-  records: Omit<ChildJob, "result">[];
+  records: Array<
+    Omit<ChildJob, "result"> & {
+      outcomeState: "succeeded" | "failed" | "canceled" | null;
+      error: Json | null;
+    }
+  >;
   truncated: boolean;
 }
 
@@ -986,6 +991,16 @@ export interface QueueHealth {
     blockedJobs: number;
     pendingEdges: number;
     failedResolutions: number;
+    /** True when at least one value is a lower bound at the operations scan limit. */
+    capped: boolean;
+  };
+  /** Parent-child orchestration pressure and retained policy-selected terminal evidence. */
+  children: {
+    waitingParents: number;
+    pendingChildren: number;
+    unjoinedResults: number;
+    failedParents: number;
+    canceledParents: number;
     /** True when at least one value is a lower bound at the operations scan limit. */
     capped: boolean;
   };

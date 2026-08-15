@@ -35,6 +35,9 @@ First published line. Requires **schema v34**, Node.js **22 or 24**, PostgreSQL 
   outcomes, atomic batch and transaction behavior, and shared safe key diagnostics.
 - `@workhorse/core`: bounded dependency fan-in with terminal policies, plus fenced child creation
   and result joining through `HandlerContext.runChild` and `HandlerContext.runChildren`.
+- `@workhorse/core`: child lineage survives retry and cancellation, redrive keeps the source tree
+  immutable, retention avoids parent-child cleanup cycles, and health, metrics, and dashboard
+  detail expose bounded orchestration evidence.
 - `@workhorse/core`: `Worker.handleBatch` for compatible full and linger-bounded partial batches,
   with explicit per-job success or failure outcomes, independent retries, leases, contexts, fencing,
   cancellation, timeout handling, policy accounting, priority order, and bounded batch telemetry.

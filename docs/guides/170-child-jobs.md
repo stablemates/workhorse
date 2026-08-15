@@ -62,6 +62,18 @@ PostgreSQL cancels the parent unless another child failure takes precedence.
 Canceling a blocked parent leaves the child independent. A later child outcome cannot return that
 terminal parent to dispatch.
 
+Canceling an active child first requests cooperative cancellation. The parent remains blocked until
+the child acknowledges it, then PostgreSQL cancels the parent once. Canceling a child that already
+finished returns its terminal state and leaves the parent-child record unchanged.
+
+Retry keeps the same parent identity, so it reuses the same child names, results, and join evidence.
+Redrive creates a fresh parent identity instead. The dashboard shows the redrive link beside the
+original child tree, and the fresh parent starts without copied child relationships.
+
+Retention keeps the parent-child record while either side still needs it. A live child protects its
+terminal parent, and cleanup removes the old tree only after every linked outcome has crossed its
+configured evidence window.
+
 `Queue.getJob` and `Queue.listJobs` expose `parentJobId` and `childJobIds`. Use
 `Queue.getChildLineage(jobId)` for retained edges in either direction. The dashboard task detail
 shows the same parent, child, name, type, and join state.
@@ -70,7 +82,7 @@ shows the same parent, child, name, type, and join state.
 
 - [030-delivery-guarantees.md](030-delivery-guarantees.md) — make replayed parent work safe
 - [120-cancellation.md](120-cancellation.md) — stop a waiting parent or active child
-- [160-job-dependencies.md](160-job-dependencies.md) — the release policy behind child completion
+- [340-redrive.md](340-redrive.md) — why a fresh execution starts a new child tree
 
 ---
 

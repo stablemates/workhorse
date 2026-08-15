@@ -33,6 +33,25 @@ async function renderDependency(
   );
 }
 
+async function renderRedrive(
+  redriveLineage: DashboardJobDetail["redriveLineage"],
+  id = "selected-job",
+): Promise<string> {
+  const { RedriveLine } = await import("./dashboard.js");
+  const job = { identity: { id }, redriveLineage } as DashboardJobDetail;
+  return renderToStaticMarkup(
+    createElement(MantineProvider, null, createElement(RedriveLine, { job })),
+  );
+}
+
+async function renderChild(childLineage: DashboardJobDetail["childLineage"]): Promise<string> {
+  const { ChildLine } = await import("./dashboard.js");
+  const job = { identity: { id: "parent-job" }, childLineage } as DashboardJobDetail;
+  return renderToStaticMarkup(
+    createElement(MantineProvider, null, createElement(ChildLine, { job })),
+  );
+}
+
 describe("task dependency detail", () => {
   it("shows the prerequisite identity and blocked reason", async () => {
     const html = await renderDependency({
@@ -97,5 +116,63 @@ describe("task dependency detail", () => {
 
   it("renders nothing for an independent task", async () => {
     await expect(renderDependency({})).resolves.not.toContain("Prerequisite");
+  });
+});
+
+describe("task redrive detail", () => {
+  const lineage: DashboardJobDetail["redriveLineage"] = {
+    records: [
+      {
+        sourceJobId: "selected-job",
+        targetJobId: "fresh-job",
+        requestedBy: "operator",
+        reason: "dependency repaired",
+        requestIdPreview: "request",
+        requestIdDigest: "0123456789ab",
+        requestIdLength: 7,
+        sourceState: "failed",
+        targetInitialState: "ready",
+        requestedAt: "2026-08-15T12:00:00.000Z",
+      },
+    ],
+    truncated: false,
+  };
+
+  it("shows the fresh identity and operator attribution from the failed source", async () => {
+    const html = await renderRedrive(lineage);
+    expect(html).toContain("Redrive");
+    expect(html).toContain("fresh-job");
+    expect(html).toContain("operator");
+    expect(html).toContain("dependency repaired");
+  });
+
+  it("shows the immutable source from the fresh target", async () => {
+    const html = await renderRedrive(lineage, "fresh-job");
+    expect(html).toContain("Redriven from");
+    expect(html).toContain("selected-job");
+  });
+});
+
+describe("task child detail", () => {
+  it("shows terminal child failure evidence instead of calling it waiting", async () => {
+    const html = await renderChild({
+      records: [
+        {
+          parentJobId: "parent-job",
+          childJobId: "failed-child",
+          name: "charge",
+          type: "payments.charge",
+          createdAt: "2026-08-15T12:00:00.000Z",
+          joinedAt: null,
+          outcomeState: "failed",
+          error: { name: "PaymentDeclined", message: "card declined" },
+        },
+      ],
+      truncated: false,
+    });
+    expect(html).toContain("failed-child");
+    expect(html).toContain("failed");
+    expect(html).toContain("PaymentDeclined");
+    expect(html).not.toContain("waiting");
   });
 });

@@ -748,14 +748,14 @@ three primitives below have shipped and proven their contracts.
 - [x] Define failure, cancellation, fan-in, and dependency-cycle behavior.
 - [x] Expose dependency state and lineage through query APIs.
 
-### [ ] P3-02 Child jobs and result joining
+### [x] P3-02 Child jobs and result joining
 
 **Depends on:** P3-01
 
 - [x] Allow a handler transaction to create linked child jobs.
 - [x] Define parent completion behavior for zero, one, or many children.
 - [x] Bound fan-out and result materialization.
-- [ ] Preserve lineage across retry, cancellation, redrive, and retention.
+- [x] Preserve lineage across retry, cancellation, redrive, and retention.
 
 ### [ ] P3-03 Signals and human-in-the-loop wait tokens
 

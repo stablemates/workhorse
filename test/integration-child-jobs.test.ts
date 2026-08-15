@@ -697,6 +697,204 @@ describe("child jobs", () => {
     await expect(queue.getJob(parentId)).resolves.toMatchObject({ state: "canceled" });
   });
 
+  it("settles active-child cancellation once and leaves terminal descendants unchanged", async () => {
+    const activeParentId = await queue.enqueue("active-cancel-parent", null);
+    const activeParent = await queue.claim("active-cancel-parent-worker");
+    const activeCreated = await queue.createChild(
+      activeParent!,
+      "active-cancel-parent-worker",
+      "child",
+      "active-cancel-child",
+      null,
+    );
+    const activeChild = await queue.claim("active-cancel-child-worker");
+    expect(activeChild?.id).toBe(activeCreated.child.childJobId);
+
+    await expect(queue.cancel(activeChild!.id, { requestedBy: "operator" })).resolves.toMatchObject(
+      {
+        status: "cancel_requested",
+      },
+    );
+    await expect(queue.getJob(activeParentId)).resolves.toMatchObject({ state: "blocked" });
+    expect(await queue.acknowledgeCancel(activeChild!, "active-cancel-child-worker")).toBe(true);
+    await expect(queue.getJob(activeParentId)).resolves.toMatchObject({ state: "canceled" });
+
+    const terminalParentId = await queue.enqueue("terminal-cancel-parent", null);
+    const terminalParent = await queue.claim("terminal-cancel-parent-worker");
+    const terminalCreated = await queue.createChild(
+      terminalParent!,
+      "terminal-cancel-parent-worker",
+      "child",
+      "terminal-cancel-child",
+      null,
+    );
+    const terminalChild = await queue.claim("terminal-cancel-child-worker");
+    expect(await queue.complete(terminalChild!, "terminal-cancel-child-worker", { value: 1 })).toBe(
+      true,
+    );
+    await expect(
+      queue.cancel(terminalCreated.child.childJobId, { requestedBy: "operator" }),
+    ).resolves.toMatchObject({ status: "already_terminal", state: "succeeded" });
+    await expect(queue.getJob(terminalParentId)).resolves.toMatchObject({ state: "ready" });
+  });
+
+  it("retains a canceled parent while its child is live and later reclaims the expired tree", async () => {
+    const parentId = await queue.enqueue("retained-cancel-parent", null);
+    const parent = await queue.claim("retained-cancel-parent-worker");
+    const created = await queue.createChild(
+      parent!,
+      "retained-cancel-parent-worker",
+      "child",
+      "retained-cancel-child",
+      null,
+    );
+    await queue.cancel(parentId, { requestedBy: "operator" });
+    const expiredAt = new Date("2020-01-01T00:00:00.000Z");
+    await pool.query("UPDATE workhorse.job SET created_at = $2 WHERE id = ANY($1::uuid[])", [
+      [parentId, created.child.childJobId],
+      expiredAt,
+    ]);
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = $2, history_through_at = $2
+        WHERE job_id = $1::uuid`,
+      [parentId, expiredAt],
+    );
+
+    await expect(
+      pool.query("SELECT workhorse.prune_terminal_jobs_v1($1, $1, $1, 100) AS count", [
+        new Date("2021-01-01T00:00:00.000Z"),
+      ]),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+    await expect(queue.getChildLineage(parentId)).resolves.toMatchObject({
+      records: [expect.objectContaining({ childJobId: created.child.childJobId })],
+    });
+
+    expect((await queue.cancel(created.child.childJobId)).status).toBe("canceled");
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = $2, history_through_at = $2
+        WHERE job_id = $1::uuid`,
+      [created.child.childJobId, expiredAt],
+    );
+    const firstPass = await pool.query<{ count: number }>(
+      "SELECT workhorse.prune_terminal_jobs_v1($1, $1, $1, 100) AS count",
+      [new Date("2021-01-01T00:00:00.000Z")],
+    );
+    const secondPass = await pool.query<{ count: number }>(
+      "SELECT workhorse.prune_terminal_jobs_v1($1, $1, $1, 100) AS count",
+      [new Date("2021-01-01T00:00:00.000Z")],
+    );
+    expect(firstPass.rows[0]!.count + secondPass.rows[0]!.count).toBe(2);
+    await expect(queue.getJob(parentId)).resolves.toBeNull();
+    await expect(queue.getJob(created.child.childJobId)).resolves.toBeNull();
+  });
+
+  it("redrives a failed parent into a fresh identity without rewriting its child tree", async () => {
+    const parentId = await queue.enqueue("redriven-child-parent", null, { maxAttempts: 1 });
+    const parent = await queue.claim("redriven-child-parent-worker");
+    const created = await queue.createChild(
+      parent!,
+      "redriven-child-parent-worker",
+      "child",
+      "redriven-child",
+      null,
+      { maxAttempts: 1 },
+    );
+    const child = await queue.claim("redriven-child-worker");
+    expect(await queue.fail(child!, "redriven-child-worker", new Error("child failed"))).toBe(
+      "failed",
+    );
+    await expect(queue.getJob(parentId)).resolves.toMatchObject({ state: "failed" });
+
+    const redrive = await queue.redrive(parentId, {
+      requestedBy: "operator",
+      reason: "child dependency repaired",
+      requestId: `child-parent-redrive-${parentId}`,
+    });
+    expect(redrive.status).toBe("redriven");
+    const targetId = redrive.targetJobId!;
+    await expect(queue.getChildLineage(parentId)).resolves.toMatchObject({
+      records: [expect.objectContaining({ childJobId: created.child.childJobId })],
+    });
+    await expect(queue.getChildLineage(targetId)).resolves.toEqual({
+      records: [],
+      truncated: false,
+    });
+    await expect(queue.getRedriveLineage(parentId)).resolves.toMatchObject({
+      records: [expect.objectContaining({ sourceJobId: parentId, targetJobId: targetId })],
+      truncated: false,
+    });
+    await expect(readDashboardJobDetail(dashboardDatabase(pool), parentId)).resolves.toMatchObject({
+      childLineage: {
+        records: [expect.objectContaining({ childJobId: created.child.childJobId })],
+      },
+      redriveLineage: {
+        records: [expect.objectContaining({ sourceJobId: parentId, targetJobId: targetId })],
+        truncated: false,
+      },
+    });
+    await expect(readDashboardJobDetail(dashboardDatabase(pool), targetId)).resolves.toMatchObject({
+      childLineage: { records: [], truncated: false },
+      redriveLineage: {
+        records: [expect.objectContaining({ sourceJobId: parentId, targetJobId: targetId })],
+        truncated: false,
+      },
+    });
+  });
+
+  it("reports bounded child pressure and retained failure evidence by parent queue", async () => {
+    const parentId = await queue.enqueue("observed-child-parent", null, {
+      queue: "observed-parents",
+    });
+    const parent = await queue.claim("observed-child-parent-worker", {
+      queue: "observed-parents",
+    });
+    await queue.createChildren(parent!, "observed-child-parent-worker", [
+      { name: "success", type: "observed-child", payload: null, options: { maxAttempts: 1 } },
+      { name: "failure", type: "observed-child", payload: null, options: { maxAttempts: 1 } },
+    ]);
+    await expect(queue.health()).resolves.toMatchObject({
+      children: {
+        waitingParents: 1,
+        pendingChildren: 2,
+        unjoinedResults: 0,
+        failedParents: 0,
+        canceledParents: 0,
+        capped: false,
+      },
+    });
+
+    const first = await queue.claim("observed-child-worker");
+    expect(await queue.complete(first!, "observed-child-worker", { value: 1 })).toBe(true);
+    const second = await queue.claim("observed-child-worker");
+    expect(await queue.fail(second!, "observed-child-worker", new Error("failed"))).toBe("failed");
+    await expect(queue.getJob(parentId)).resolves.toMatchObject({ state: "failed" });
+    await expect(queue.health()).resolves.toMatchObject({
+      children: {
+        waitingParents: 0,
+        pendingChildren: 0,
+        unjoinedResults: 1,
+        failedParents: 1,
+        canceledParents: 0,
+        capped: false,
+      },
+    });
+    await expect(queue.queueMetricSnapshot()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          queue: "observed-parents",
+          childWaitingParents: 0,
+          childPendingChildren: 0,
+          childUnjoinedResults: 1,
+          childFailedParents: 1,
+          childCanceledParents: 0,
+          childCountsCapped: false,
+        }),
+      ]),
+    );
+  });
+
   it("replays the same child and rejects changed or second-child requests", async () => {
     const parentId = await queue.enqueue("duplicate-parent", null);
     const firstParent = await queue.claim("duplicate-parent-worker");
@@ -757,5 +955,13 @@ describe("child jobs", () => {
     }
     expect(childOutcome).toBe(childState);
     await expect(queue.getJob(parentId)).resolves.toMatchObject({ state: parentState });
+    await expect(queue.getChildLineage(parentId)).resolves.toMatchObject({
+      records: [expect.objectContaining({ outcomeState: childState, error: expect.anything() })],
+    });
+    await expect(readDashboardJobDetail(dashboardDatabase(pool), parentId)).resolves.toMatchObject({
+      childLineage: {
+        records: [expect.objectContaining({ outcomeState: childState, error: expect.anything() })],
+      },
+    });
   });
 });

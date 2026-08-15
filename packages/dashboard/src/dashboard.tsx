@@ -1466,6 +1466,12 @@ export function ChildLine({ job }: { job: DashboardJobDetail }) {
     <Stack gap={4} mt="sm">
       {job.childLineage.records.map((edge) => {
         const isParent = edge.parentJobId === job.identity.id;
+        const state =
+          edge.joinedAt !== null
+            ? "joined"
+            : edge.outcomeState === "succeeded"
+              ? "result ready"
+              : (edge.outcomeState ?? "waiting");
         return (
           <Group gap="xs" align="baseline" wrap="wrap" key={`${edge.parentJobId}:${edge.name}`}>
             <Text c="dimmed" size="xs" fw={600}>
@@ -1473,14 +1479,48 @@ export function ChildLine({ job }: { job: DashboardJobDetail }) {
             </Text>
             <Code fz="xs">{isParent ? edge.childJobId : edge.parentJobId}</Code>
             <Text c="dimmed" size="xs">
-              {edge.name} · {edge.type} · {edge.joinedAt === null ? "waiting" : "joined"}
+              {edge.name} · {edge.type} · {state}
             </Text>
+            {edge.error === null ? null : <Code fz="xs">{JSON.stringify(edge.error)}</Code>}
           </Group>
         );
       })}
       {job.childLineage.truncated ? (
         <Text c="dimmed" size="xs">
           Additional child edges are omitted.
+        </Text>
+      ) : null}
+    </Stack>
+  );
+}
+
+/** Fresh execution identities linked to the immutable failed source they replay. */
+export function RedriveLine({ job }: { job: DashboardJobDetail }) {
+  if (job.redriveLineage.records.length === 0) return null;
+  return (
+    <Stack gap={4} mt="sm">
+      {job.redriveLineage.records.map((edge) => {
+        const isSource = edge.sourceJobId === job.identity.id;
+        return (
+          <Group
+            gap="xs"
+            align="baseline"
+            wrap="wrap"
+            key={`${edge.sourceJobId}:${edge.targetJobId}`}
+          >
+            <Text c="dimmed" size="xs" fw={600}>
+              {isSource ? "Redrive" : "Redriven from"}
+            </Text>
+            <Code fz="xs">{isSource ? edge.targetJobId : edge.sourceJobId}</Code>
+            <Text c="dimmed" size="xs">
+              {edge.requestedBy} · {edge.reason} · {formatRelative(edge.requestedAt)}
+            </Text>
+          </Group>
+        );
+      })}
+      {job.redriveLineage.truncated ? (
+        <Text c="dimmed" size="xs">
+          Additional redrive edges are omitted.
         </Text>
       ) : null}
     </Stack>
@@ -6431,6 +6471,7 @@ function DashboardContent({
               <RetryPolicyLine job={selectedJob} />
               <DependencyLine job={selectedJob} />
               <ChildLine job={selectedJob} />
+              <RedriveLine job={selectedJob} />
               <Group gap="xs" mt="sm" align="baseline">
                 <Text c="dimmed" size="xs" fw={600}>
                   Priority

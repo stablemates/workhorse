@@ -182,9 +182,14 @@ export type RateLimitStatusRow = RateLimitPolicyRow & {
   policy_set_capped: boolean;
 };
 
-import { HEALTH_SNAPSHOT_SQL, RATE_LIMIT_STATUS_SQL } from "./operator-read-sql.js";
+import {
+  HEALTH_SNAPSHOT_SQL,
+  RATE_LIMIT_STATUS_SQL,
+  childPressureProjectionSql,
+  childPressureSamplesSql,
+} from "./operator-read-sql.js";
 
-// Adapters such as Drizzle// Adapters such as Drizzle can hand back timestamptz columns as raw strings rather than pg's
+// Adapters such as Drizzle can hand back timestamptz columns as raw strings rather than pg's
 // parsed Dates, so every snapshot timestamp is normalized before it reaches callers.
 function healthTimestamp(value: Date | string): Date {
   return value instanceof Date ? value : new Date(value);
@@ -222,6 +227,12 @@ type HealthSnapshotRow = RetentionPolicyRow & {
   dependency_pending_edges: string;
   dependency_failed_resolutions: string;
   dependency_counts_capped: boolean;
+  child_waiting_parents: string;
+  child_pending_children: string;
+  child_unjoined_results: string;
+  child_failed_parents: string;
+  child_canceled_parents: string;
+  child_counts_capped: boolean;
   oldest_job_identity_at: Date | string | null;
   oldest_terminal_outcome_at: Date | string | null;
   oldest_job_event_at: Date | string | null;
@@ -778,21 +789,7 @@ export class OperatorReadsModule extends QueueModule {
       );
     }
     const result = await this.context.database.query<RedriveLineageRow>(
-      `WITH RECURSIVE connected_edges AS (
-         SELECT edge.* FROM workhorse.job_redrive edge
-          WHERE edge.source_job_id = $1::uuid OR edge.target_job_id = $1::uuid
-         UNION
-         SELECT edge.*
-           FROM connected_edges connected
-           JOIN workhorse.job_redrive edge
-             ON edge.source_job_id IN (connected.source_job_id, connected.target_job_id)
-             OR edge.target_job_id IN (connected.source_job_id, connected.target_job_id)
-       )
-       SELECT bounded.source_job_id, bounded.target_job_id, bounded.requested_by, bounded.reason,
-              bounded.request_id_preview, bounded.request_id_digest, bounded.request_id_length,
-              bounded.source_state, bounded.target_initial_state, bounded.requested_at
-         FROM (SELECT * FROM connected_edges LIMIT $2::integer) bounded
-        ORDER BY bounded.requested_at, bounded.source_job_id, bounded.target_job_id`,
+      "SELECT * FROM workhorse.redrive_lineage_v1($1::uuid, $2::integer)",
       [jobId, limit + 1],
     );
     return {
@@ -861,11 +858,15 @@ export class OperatorReadsModule extends QueueModule {
       child_type: string;
       created_at: Date | string;
       joined_at: Date | string | null;
+      outcome_state: "succeeded" | "failed" | "canceled" | null;
+      outcome_error: Json | null;
     }>(
       `SELECT edge.parent_job_id, edge.child_job_id, edge.child_name,
-              child.job_type AS child_type, edge.created_at, edge.joined_at
+              child.job_type AS child_type, edge.created_at, edge.joined_at,
+              outcome.state AS outcome_state, outcome.error AS outcome_error
          FROM workhorse.job_child edge
          JOIN workhorse.job child ON child.id = edge.child_job_id
+         LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
         WHERE edge.parent_job_id = $1::uuid OR edge.child_job_id = $1::uuid
         ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id
         LIMIT $2::integer`,
@@ -879,6 +880,8 @@ export class OperatorReadsModule extends QueueModule {
         type: row.child_type,
         createdAt: rowTimestamp(row.created_at, "created_at"),
         joinedAt: nullableRowTimestamp(row.joined_at, "joined_at"),
+        outcomeState: row.outcome_state,
+        error: row.outcome_error,
       })),
       truncated: result.rows.length > limit,
     };
@@ -1112,6 +1115,14 @@ export class OperatorReadsModule extends QueueModule {
         failedResolutions: Number(row.dependency_failed_resolutions),
         capped: row.dependency_counts_capped,
       },
+      children: {
+        waitingParents: Number(row.child_waiting_parents),
+        pendingChildren: Number(row.child_pending_children),
+        unjoinedResults: Number(row.child_unjoined_results),
+        failedParents: Number(row.child_failed_parents),
+        canceledParents: Number(row.child_canceled_parents),
+        capped: row.child_counts_capped,
+      },
       oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
       deadlinePressure: {
         pending: Number(row.pending_deadlines),
@@ -1234,6 +1245,12 @@ export class OperatorReadsModule extends QueueModule {
         dependency_pending_edges: string;
         dependency_failed_resolutions: string;
         dependency_counts_capped: boolean;
+        child_waiting_parents: string;
+        child_pending_children: string;
+        child_unjoined_results: string;
+        child_failed_parents: string;
+        child_canceled_parents: string;
+        child_counts_capped: boolean;
       }>(
         `WITH queue_names AS (
          SELECT $1::text AS queue_name
@@ -1245,6 +1262,8 @@ export class OperatorReadsModule extends QueueModule {
          UNION SELECT query.queue_name FROM workhorse.job_query query
           JOIN workhorse.job_outcome outcome ON outcome.job_id = query.job_id
          WHERE outcome.state = 'failed' AND outcome.error->>'name' = 'DependencyFailed'
+         UNION SELECT query.queue_name FROM workhorse.job_query query
+          JOIN workhorse.job_child edge ON edge.parent_job_id = query.job_id
        ), usage AS (
          ${perQueueDepthSelect(
            ["ready", "scheduled", "active", "concurrency_active", "oldest_ready_age_ms"],
@@ -1262,7 +1281,8 @@ export class OperatorReadsModule extends QueueModule {
              dependencies.blocked_jobs > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
                OR dependencies.pending_edges > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
                OR dependencies.failed_resolutions > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
-               AS dependency_counts_capped
+               AS dependency_counts_capped,
+              ${childPressureProjectionSql("children")}
          FROM usage
          LEFT JOIN workhorse.concurrency_policy policy ON policy.queue_name = usage.queue_name
          LEFT JOIN LATERAL (
@@ -1309,6 +1329,9 @@ export class OperatorReadsModule extends QueueModule {
                LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
              ) sampled_failed) AS failed_resolutions
          ) dependencies
+         CROSS JOIN LATERAL (
+           ${childPressureSamplesSql("usage.queue_name")}
+         ) children
         ORDER BY usage.queue_name`,
         [this.context.defaultQueue],
       ),
@@ -1326,6 +1349,12 @@ export class OperatorReadsModule extends QueueModule {
         dependencyPendingEdges: Number(row.dependency_pending_edges),
         dependencyFailedResolutions: Number(row.dependency_failed_resolutions),
         dependencyCountsCapped: row.dependency_counts_capped,
+        childWaitingParents: Number(row.child_waiting_parents),
+        childPendingChildren: Number(row.child_pending_children),
+        childUnjoinedResults: Number(row.child_unjoined_results),
+        childFailedParents: Number(row.child_failed_parents),
+        childCanceledParents: Number(row.child_canceled_parents),
+        childCountsCapped: row.child_counts_capped,
         oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
         concurrencyLimit: row.max_active,
         concurrencyActive: Number(row.concurrency_active),
