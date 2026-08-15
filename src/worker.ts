@@ -852,6 +852,12 @@ export class Worker {
     };
     const controller = new AbortController();
     const arbiter = new AttemptOutcomeArbiter();
+    const suspend = (outcome: "suspended_for_wait" | "suspended_for_child"): never => {
+      const reason =
+        outcome === "suspended_for_wait" ? DURABLE_WAIT_SUSPENSION : CHILD_JOB_SUSPENSION;
+      if (arbiter.submit(outcome)) controller.abort(reason);
+      throw reason;
+    };
     // Each job owns an independent self-scheduling heartbeat. The next delay starts only after the
     // previous query settles, so a slow database call cannot overlap another heartbeat for this job.
     let heartbeatTimer: NodeJS.Timeout | undefined;
@@ -1083,9 +1089,8 @@ export class Worker {
             throw controller.signal.reason ?? new Error("Job lease was lost");
           }
           const signal = await this.queue.waitForSignal<TPayload>(job, this.workerId, name);
-          if (signal.status === "waiting" && arbiter.submit("suspended_for_wait")) {
-            controller.abort(DURABLE_WAIT_SUSPENSION);
-            throw DURABLE_WAIT_SUSPENSION;
+          if (signal.status === "waiting") {
+            suspend("suspended_for_wait");
           }
           return signal.payload as TPayload;
         })();
@@ -1121,9 +1126,8 @@ export class Worker {
             name,
             context,
           );
-          if (token.status === "waiting" && arbiter.submit("suspended_for_wait")) {
-            controller.abort(DURABLE_WAIT_SUSPENSION);
-            throw DURABLE_WAIT_SUSPENSION;
+          if (token.status === "waiting") {
+            suspend("suspended_for_wait");
           }
           return token.result as TResult;
         })();
@@ -1165,9 +1169,8 @@ export class Worker {
             payload,
             options,
           );
-          if (processed.status === "created" && arbiter.submit("suspended_for_child")) {
-            controller.abort(CHILD_JOB_SUSPENSION);
-            throw CHILD_JOB_SUSPENSION;
+          if (processed.status === "created") {
+            suspend("suspended_for_child");
           }
           return processed.child.result as TResult;
         })();
@@ -1200,8 +1203,7 @@ export class Worker {
           }
           const processed = await this.queue.createChildren<TResult>(job, this.workerId, children);
           if (processed.status === "created") {
-            if (arbiter.submit("suspended_for_child")) controller.abort(CHILD_JOB_SUSPENSION);
-            throw CHILD_JOB_SUSPENSION;
+            return suspend("suspended_for_child");
           }
           return processed.results;
         })();
