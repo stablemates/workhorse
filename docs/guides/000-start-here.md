@@ -34,6 +34,7 @@ How a job behaves once it's executing.
 | [130 Durable waits](130-durable-waits.md)                   | Sleeping for an hour without holding a worker slot         |
 | [140 Deadlines and timeouts](140-deadlines-and-timeouts.md) | Two different clocks, and which one you want               |
 | [150 Priority](150-priority.md)                             | Running urgent work before ordinary FIFO jobs              |
+| [180 Agentic flow](180-agentic-flow.md)                     | Composing durable boundaries into a replay-safe agent loop |
 
 ## Getting work in
 

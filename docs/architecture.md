@@ -1410,6 +1410,61 @@ Workhorse provides durable at-least-once execution. Enqueue idempotency can make
 
 Schedule occurrence deduplication prevents duplicate enqueue for one occurrence second. The worker's in-process scheduler supplies the planned occurrence slot as the key, and a per-occurrence advisory lock plus the durable key make concurrent workers racing the same fire converge on one job. This does not change handler delivery semantics: a scheduled job can still execute more than once after a worker crash.
 
+## Agentic flow example
+
+`examples/agentic-flow.mjs` composes the public SQL-backed primitives without adding a workflow
+runtime. `pnpm example:agentic-flow` builds the publishable packages, loads this worktree's
+`DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 38 with
+`assertSchemaCompatible`, and runs the example as a package consumer. The controller advances the
+two `Worker` instances through `Worker.runOnce` and reads completion through `Queue.getJob`.
+`test/packed-packages.ts`
+copies the same source into a scratch project, installs the packed `@workhorse/core` tarball, and
+requires a succeeded result plus the terminal progress stage.
+
+The parent uses type `agent.loop` on queue `agentic-flow`. Its payload contains `conversationId` and
+`prompt`, and `Queue.enqueue` uses `EnqueueOptions.idempotency.key` with the default scope and value
+`agentic-flow:<conversationId>`. The `plan` and `final-response` checkpoints retain model results.
+Each model call receives a provider key derived from the stable job ID and checkpoint name. A
+checkpoint value above 1,048,576 bytes of canonical JSONB text is rejected by
+`save_checkpoint_v1`, but the provider effect is still at least once because the process can fail
+before that function commits.
+
+`HandlerContext.runChildren` creates the `research` and `calculate` children as type `agent.tool` on
+queue `agentic-tools`. Both use the conversation ID as `concurrencyKey`. Each child checkpoints its
+external result as `tool-call` and derives its provider key from its own stable job ID. The set uses
+the version 1 all-success policy. `create_children_v1` enforces the 100-child parent limit and rejects
+a joined object that exceeds the parent's persisted `result_max_bytes`.
+
+`Queue.syncRateLimitPolicies` reconciles queue `agentic-tools` under namespace
+`agentic-flow-example`. Its queue bucket adds 100 starts per 1,000 milliseconds with burst 100. Its
+per-key bucket adds 10 starts per 1,000 milliseconds with burst 10.
+`sync_rate_limit_policies_v1` accepts limits and bursts from 1 through 1,000,000, intervals from 1
+through 86,400,000 milliseconds, and at most 10,000 unique queue definitions per call.
+
+After the child join, `HandlerContext.sleep("model-cooldown", cooldownMs)` creates a durable timer;
+`createAgenticWorkers` and `runAgenticFlowExample` default `cooldownMs` to 10 milliseconds.
+`schedule_wait_v1` accepts names through 200 characters, durations through 31,536,000,000
+milliseconds, and at most 1,000 timer names per stable job. Replay then declares
+`HandlerContext.waitForSignal("approval")`. The controller delivers `{ approved: true }` through
+`Queue.sendSignal` with `SendSignalRequest.idempotencyKey` value
+`agentic-flow:<conversationId>:approval` and `SendSignalRequest.requestedBy` value
+`agentic-flow-example`. `send_signal_v1` accepts payloads through 65,536 bytes, keys through 512 UTF-8
+bytes, and actors and names through 200 characters. `wait_for_signal_v1` accepts at most 1,000 signal
+names per job. PostgreSQL closes an undelivered signal after seven days or at the job's earlier
+deadline.
+
+Progress moves monotonically through `planned`, `tools-complete`, `awaiting-approval`, and
+`finalizing`. `reportProgress` reads `HandlerContext.getProgress` before
+`HandlerContext.setProgress`, so replay never regresses the latest projection and performs at most
+one changed write per fence generation. `update_progress_v1` rejects values above 65,536 bytes of
+canonical JSONB text and changed writes less than 100 milliseconds apart under one fence.
+
+Every child join, timer, and signal resumes by claiming the same logical attempt with a new fence
+and invoking the parent handler from its entry point. The example depends only on immutable
+checkpoint and child results plus the latest progress projection. It does not persist a JavaScript
+continuation or stack, and it does not strengthen Workhorse's at-least-once external-effect
+contract.
+
 ## Deployment synchronization
 
 `Queue.syncSchedules(namespace, definitions, { prune })` is a desired-state reconciler:
