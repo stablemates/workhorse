@@ -134,6 +134,7 @@ export type EnqueueIdempotencyConflictField =
   | "maxAttempts"
   | "retryPolicy"
   | "prerequisiteJobId"
+  | "dependencies"
   | "ttlMs";
 
 /** Safe diagnostics for a materially different replay. The raw idempotency key is never exposed. */
@@ -171,6 +172,19 @@ export interface EnqueueOptions {
   throttle?: EnqueueThrottle;
   /** Stable job identity that must succeed before this job can enter dispatch. */
   prerequisiteJobId?: string;
+  /** Bounded fan-in and the terminal outcomes accepted from each prerequisite. */
+  dependencies?: JobDependencies;
+}
+
+/** What a dependent does when one prerequisite reaches a non-success terminal state. */
+export type DependencyTerminalPolicy = "release" | "cancel" | "fail";
+
+/** A bounded set of prerequisites which must all satisfy their declared terminal policy. */
+export interface JobDependencies {
+  prerequisiteJobIds: readonly string[];
+  onSuccess: DependencyTerminalPolicy;
+  onFailure: DependencyTerminalPolicy;
+  onCancellation: DependencyTerminalPolicy;
 }
 
 /** One queue's deployment-synchronized concurrency budget. */
@@ -239,6 +253,8 @@ export interface EnqueueRequest<TPayload extends Json = Json> {
  * identity allocation, and notification work inside one PostgreSQL transaction.
  */
 export const MAX_ENQUEUE_BATCH_SIZE = 1_000;
+/** Maximum prerequisite edges accepted for one dependent job. */
+export const MAX_JOB_DEPENDENCIES = 100;
 /** Highest accepted job priority. Priority zero is the default. */
 export const MAX_JOB_PRIORITY = 100;
 /** Default namespace for enqueue idempotency keys whose caller omits an explicit scope. */
@@ -410,6 +426,8 @@ export interface JobListItem {
   tags: string[];
   state: JobState;
   prerequisiteJobId: string | null;
+  prerequisiteJobIds: string[];
+  dependencyPolicy: Omit<JobDependencies, "prerequisiteJobIds"> | null;
   blockedReason: "prerequisite_pending" | null;
   currentAttempt: number;
   maxAttempts: number;
@@ -654,6 +672,8 @@ export interface JobSnapshot<TResult = Json> {
   tags: string[];
   state: JobState;
   prerequisiteJobId: string | null;
+  prerequisiteJobIds: string[];
+  dependencyPolicy: Omit<JobDependencies, "prerequisiteJobIds"> | null;
   blockedReason: "prerequisite_pending" | null;
   currentAttempt: number;
   maxAttempts: number;

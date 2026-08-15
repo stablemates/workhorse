@@ -388,19 +388,93 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
 CREATE INDEX IF NOT EXISTS job_tags_gin_idx ON workhorse.job USING gin (tags);
 CREATE INDEX IF NOT EXISTS job_created_retention_idx ON workhorse.job (created_at, id);
 
--- One immutable prerequisite edge per dependent. The prerequisite reference deliberately restricts
--- identity pruning so retention cannot strand blocked work or erase released lineage.
+-- Bounded immutable prerequisite edges. Prerequisite references deliberately restrict identity
+-- pruning so retention cannot strand blocked work or erase released lineage.
 CREATE TABLE IF NOT EXISTS workhorse.job_dependency (
-  dependent_job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  dependent_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
   prerequisite_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE RESTRICT,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   released_at timestamptz,
+  on_failure text NOT NULL CHECK (on_failure IN ('release', 'cancel', 'fail')),
+  on_cancellation text NOT NULL CHECK (on_cancellation IN ('release', 'cancel', 'fail')),
+  on_success text NOT NULL CHECK (on_success IN ('release', 'cancel', 'fail')),
+  resolution text CHECK (resolution IN ('release', 'cancel', 'fail')),
+  PRIMARY KEY (dependent_job_id, prerequisite_job_id),
   CHECK (dependent_job_id <> prerequisite_job_id),
-  CHECK (released_at IS NULL OR released_at >= created_at)
+  CHECK (
+    (released_at IS NULL AND resolution IS NULL)
+    OR (released_at >= created_at AND resolution IS NOT NULL)
+  )
 );
 CREATE INDEX IF NOT EXISTS job_dependency_prerequisite_pending_idx
   ON workhorse.job_dependency (prerequisite_job_id, dependent_job_id)
   WHERE released_at IS NULL;
+
+CREATE OR REPLACE FUNCTION workhorse.validate_job_dependency_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_cycle uuid[];
+BEGIN
+  -- Serialize graph mutations so two transactions cannot create opposite edges from snapshots that
+  -- cannot see each other. Ordinary lifecycle resolution never needs this lock.
+  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:job-dependency-graph', 0));
+  IF NEW.dependent_job_id = NEW.prerequisite_job_id THEN
+    v_cycle := ARRAY[NEW.dependent_job_id, NEW.prerequisite_job_id];
+  ELSE
+    WITH RECURSIVE reachable(job_id, path) AS (
+      SELECT NEW.prerequisite_job_id, ARRAY[NEW.dependent_job_id, NEW.prerequisite_job_id]
+      UNION ALL
+      SELECT edge.prerequisite_job_id, reachable.path || edge.prerequisite_job_id
+        FROM reachable
+        JOIN workhorse.job_dependency edge ON edge.dependent_job_id = reachable.job_id
+       WHERE (
+         edge.prerequisite_job_id = NEW.dependent_job_id
+         OR NOT edge.prerequisite_job_id = ANY(reachable.path)
+       )
+         AND reachable.job_id <> NEW.dependent_job_id
+    )
+    SELECT path INTO v_cycle FROM reachable
+     WHERE job_id = NEW.dependent_job_id
+     ORDER BY cardinality(path)
+     LIMIT 1;
+  END IF;
+  IF v_cycle IS NOT NULL THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P1002',
+      MESSAGE = 'dependency cycle rejected',
+      DETAIL = jsonb_build_object(
+        'dependentJobId', NEW.dependent_job_id,
+        'prerequisiteJobId', NEW.prerequisite_job_id,
+        'cycleJobIds', to_jsonb(v_cycle[1:101]),
+        'truncated', cardinality(v_cycle) > 101
+      )::text;
+  END IF;
+  IF (
+    SELECT count(*) FROM workhorse.job_dependency dependency
+     WHERE dependency.dependent_job_id = NEW.dependent_job_id
+  ) >= 100 THEN
+    RAISE EXCEPTION 'a job accepts at most 100 prerequisite dependencies';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM workhorse.job_dependency dependency
+     WHERE dependency.dependent_job_id = NEW.dependent_job_id
+       AND (
+         dependency.on_success <> NEW.on_success
+         OR dependency.on_failure <> NEW.on_failure
+         OR dependency.on_cancellation <> NEW.on_cancellation
+       )
+  ) THEN
+    RAISE EXCEPTION 'every dependency edge for one job must use the same outcome policies';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER job_dependency_validate_insert
+  BEFORE INSERT ON workhorse.job_dependency
+  FOR EACH ROW EXECUTE FUNCTION workhorse.validate_job_dependency_v1();
 
 -- PostgreSQL owns enqueue deduplication. The deferred reference lets enqueue reserve a scoped key
 -- through the unique index before creating any job, event, FIFO, or notification side effects.
@@ -612,7 +686,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_outcome (
     OR (
       state = 'failed' AND (
         fence_token > 0
-        OR (fence_token = 0 AND error->>'name' = 'DeadlineExceeded')
+        OR (fence_token = 0 AND error->>'name' IN ('DeadlineExceeded', 'DependencyFailed'))
       )
     )
     OR (state = 'canceled' AND error IS NOT NULL)
@@ -2234,8 +2308,17 @@ DECLARE
   v_retry_policy jsonb;
   v_deadline_at timestamptz;
   v_execution_timeout_ms numeric;
+  v_dependencies jsonb;
+  v_prerequisite_job_ids uuid[];
   v_prerequisite_job_id uuid;
-  v_prerequisite_succeeded boolean;
+  v_on_success text;
+  v_on_failure text;
+  v_on_cancellation text;
+  v_pending_prerequisites integer;
+  v_terminal_prerequisite_id uuid;
+  v_terminal_prerequisite_state text;
+  v_terminal_action text;
+  v_terminal record;
   v_state text;
   v_idempotency jsonb;
   v_key text;
@@ -2417,23 +2500,83 @@ BEGIN
        AND jsonb_typeof(v_request->'prerequisiteJobId') <> 'string' THEN
       RAISE EXCEPTION 'prerequisiteJobId must be a UUID string or null';
     END IF;
-    v_prerequisite_job_id := NULLIF(v_request->>'prerequisiteJobId', '')::uuid;
-    v_prerequisite_succeeded := false;
-    IF v_prerequisite_job_id IS NOT NULL THEN
-      PERFORM 1 FROM workhorse.job prerequisite
-       WHERE prerequisite.id = v_prerequisite_job_id FOR UPDATE;
-      IF NOT FOUND THEN RAISE EXCEPTION 'prerequisite job does not exist'; END IF;
-      SELECT outcome.state = 'succeeded' INTO v_prerequisite_succeeded
-        FROM workhorse.job_outcome outcome
-       WHERE outcome.job_id = v_prerequisite_job_id;
-      IF NOT FOUND THEN
-        v_prerequisite_succeeded := false;
-      ELSIF NOT v_prerequisite_succeeded THEN
-        RAISE EXCEPTION 'prerequisite job is already terminal without success';
-      END IF;
+    v_dependencies := v_request->'dependencies';
+    IF v_request->>'prerequisiteJobId' IS NOT NULL
+       AND v_dependencies IS NOT NULL AND v_dependencies <> 'null'::jsonb THEN
+      RAISE EXCEPTION 'prerequisiteJobId and dependencies cannot be combined';
     END IF;
+    IF v_dependencies IS NOT NULL AND v_dependencies <> 'null'::jsonb THEN
+      IF jsonb_typeof(v_dependencies) <> 'object'
+         OR v_dependencies - ARRAY['prerequisiteJobIds', 'onSuccess', 'onFailure', 'onCancellation'] <> '{}'::jsonb
+         OR jsonb_typeof(v_dependencies->'prerequisiteJobIds') <> 'array'
+         OR jsonb_array_length(v_dependencies->'prerequisiteJobIds') NOT BETWEEN 1 AND 100
+         OR v_dependencies->>'onSuccess' NOT IN ('release', 'cancel', 'fail')
+         OR v_dependencies->>'onFailure' NOT IN ('release', 'cancel', 'fail')
+         OR v_dependencies->>'onCancellation' NOT IN ('release', 'cancel', 'fail')
+         OR EXISTS (
+           SELECT 1 FROM jsonb_array_elements(v_dependencies->'prerequisiteJobIds') item
+            WHERE jsonb_typeof(item) <> 'string'
+         ) THEN
+        RAISE EXCEPTION 'dependencies requires 1 to 100 UUID strings and release, cancel, or fail outcome policies';
+      END IF;
+      v_prerequisite_job_ids := ARRAY(
+        SELECT value::uuid
+          FROM jsonb_array_elements_text(v_dependencies->'prerequisiteJobIds') value
+         ORDER BY value::uuid
+      );
+      v_on_success := v_dependencies->>'onSuccess';
+      v_on_failure := v_dependencies->>'onFailure';
+      v_on_cancellation := v_dependencies->>'onCancellation';
+    ELSIF v_request->>'prerequisiteJobId' IS NOT NULL THEN
+      v_prerequisite_job_ids := ARRAY[(v_request->>'prerequisiteJobId')::uuid];
+      v_on_success := 'release';
+      v_on_failure := 'fail';
+      v_on_cancellation := 'cancel';
+    ELSE
+      v_prerequisite_job_ids := '{}';
+      v_on_success := 'release';
+      v_on_failure := 'fail';
+      v_on_cancellation := 'cancel';
+    END IF;
+    v_prerequisite_job_id := CASE
+      WHEN v_dependencies IS NULL OR v_dependencies = 'null'::jsonb
+        THEN NULLIF(v_request->>'prerequisiteJobId', '')::uuid
+      ELSE NULL
+    END;
+    IF cardinality(v_prerequisite_job_ids) <> (
+      SELECT count(DISTINCT prerequisite_id) FROM unnest(v_prerequisite_job_ids) prerequisite_id
+    ) THEN
+      RAISE EXCEPTION 'dependency prerequisiteJobIds must be unique';
+    END IF;
+    PERFORM 1 FROM workhorse.job prerequisite
+     WHERE prerequisite.id = ANY(v_prerequisite_job_ids)
+     ORDER BY prerequisite.id FOR UPDATE;
+    GET DIAGNOSTICS v_pending_prerequisites = ROW_COUNT;
+    IF v_pending_prerequisites <> cardinality(v_prerequisite_job_ids) THEN
+      RAISE EXCEPTION 'prerequisite job does not exist';
+    END IF;
+    SELECT count(*)::integer INTO v_pending_prerequisites
+      FROM unnest(v_prerequisite_job_ids) prerequisite_id
+      LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = prerequisite_id
+     WHERE outcome.job_id IS NULL;
+    SELECT outcome.job_id, outcome.state, action.policy_action
+      INTO v_terminal_prerequisite_id, v_terminal_prerequisite_state, v_terminal_action
+      FROM workhorse.job_outcome outcome
+      CROSS JOIN LATERAL (
+        SELECT CASE outcome.state
+          WHEN 'succeeded' THEN v_on_success
+          WHEN 'failed' THEN v_on_failure
+          WHEN 'canceled' THEN v_on_cancellation
+          ELSE 'release'
+        END AS policy_action
+      ) action
+     WHERE outcome.job_id = ANY(v_prerequisite_job_ids)
+       AND action.policy_action IN ('fail', 'cancel')
+     ORDER BY CASE action.policy_action WHEN 'fail' THEN 0 ELSE 1 END, outcome.job_id
+     LIMIT 1;
     v_state := CASE
-      WHEN v_prerequisite_job_id IS NOT NULL AND NOT v_prerequisite_succeeded THEN 'blocked'
+      WHEN v_terminal_action IS NOT NULL THEN 'blocked'
+      WHEN v_pending_prerequisites > 0 THEN 'blocked'
       WHEN v_run_at <= v_now THEN 'ready'
       ELSE 'scheduled'
     END;
@@ -2503,6 +2646,14 @@ BEGIN
         'maxAttempts', v_max_attempts,
         'retryPolicy', v_retry_policy,
         'prerequisiteJobId', to_jsonb(v_prerequisite_job_id),
+        'dependencies', CASE WHEN v_dependencies IS NULL OR v_dependencies = 'null'::jsonb
+          THEN 'null'::jsonb ELSE
+          jsonb_build_object(
+            'prerequisiteJobIds', to_jsonb(v_prerequisite_job_ids),
+            'onSuccess', v_on_success,
+            'onFailure', v_on_failure,
+            'onCancellation', v_on_cancellation
+          ) END,
         'ttlMs', v_ttl_ms
       );
       v_request_digest := workhorse.sha256_hex_v1(v_fingerprint::text);
@@ -2579,26 +2730,70 @@ BEGIN
         CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
         v_deadline_at
       );
-      IF v_prerequisite_job_id IS NOT NULL THEN
+      FOREACH v_prerequisite_job_id IN ARRAY v_prerequisite_job_ids LOOP
         INSERT INTO workhorse.job_dependency(
-          dependent_job_id, prerequisite_job_id, created_at, released_at
+          dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation,
+          created_at, released_at, resolution
         ) VALUES (
-          job_id, v_prerequisite_job_id, v_now,
-          CASE WHEN v_prerequisite_succeeded THEN v_now END
+          job_id, v_prerequisite_job_id, v_on_success, v_on_failure, v_on_cancellation, v_now,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM workhorse.job_outcome outcome
+             WHERE outcome.job_id = v_prerequisite_job_id
+               AND (
+                 (outcome.state = 'succeeded' AND v_on_success = 'release')
+                 OR (outcome.state = 'failed' AND v_on_failure = 'release')
+                 OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
+               )
+          ) THEN v_now END,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM workhorse.job_outcome outcome
+             WHERE outcome.job_id = v_prerequisite_job_id
+               AND (
+                 (outcome.state = 'succeeded' AND v_on_success = 'release')
+                 OR (outcome.state = 'failed' AND v_on_failure = 'release')
+                 OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
+               )
+          ) THEN 'release' END
         );
         INSERT INTO workhorse.job_event(job_id, event_type, details)
           VALUES (
             job_id,
-            CASE WHEN v_prerequisite_succeeded
+            CASE WHEN EXISTS (
+              SELECT 1 FROM workhorse.job_outcome outcome
+               WHERE outcome.job_id = v_prerequisite_job_id
+                 AND (
+                   (outcome.state = 'succeeded' AND v_on_success = 'release')
+                   OR (outcome.state = 'failed' AND v_on_failure = 'release')
+                   OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
+                 )
+            )
               THEN 'dependency_released' ELSE 'dependency_blocked' END,
             jsonb_build_object(
               'prerequisite_job_id', v_prerequisite_job_id,
               'state', v_state,
-              'reason', CASE WHEN v_prerequisite_succeeded
-                THEN 'prerequisite_already_succeeded' ELSE 'prerequisite_pending' END
+              'reason', COALESCE((
+                SELECT CASE outcome.state
+                  WHEN 'succeeded' THEN 'prerequisite_already_succeeded'
+                  ELSE 'prerequisite_terminal_policy'
+                END
+                  FROM workhorse.job_outcome outcome
+                 WHERE outcome.job_id = v_prerequisite_job_id
+                   AND (
+                     (outcome.state = 'succeeded' AND v_on_success = 'release')
+                     OR (outcome.state = 'failed' AND v_on_failure = 'release')
+                     OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
+                   )
+              ), 'prerequisite_pending')
             )
           );
-      END IF;
+      END LOOP;
+      FOR v_terminal IN
+        SELECT outcome.job_id, outcome.state FROM workhorse.job_outcome outcome
+         WHERE outcome.job_id = ANY(v_prerequisite_job_ids)
+         ORDER BY outcome.job_id
+      LOOP
+        PERFORM workhorse.resolve_dependents_v1(v_terminal.job_id, v_terminal.state);
+      END LOOP;
       INSERT INTO workhorse.job_event(job_id, event_type, details)
         VALUES (
           job_id,
@@ -5036,10 +5231,12 @@ BEGIN
 END;
 $$;
 
--- Release every pending dependent in the same transaction that materializes prerequisite success.
--- The dependency-row lock and blocked-state predicate make release evidence and dispatch effects
--- exactly once even when stale workers repeat completion.
-CREATE OR REPLACE FUNCTION workhorse.release_dependents_v1(p_prerequisite_job_id uuid)
+-- Resolve every pending edge in the same transaction that materializes a prerequisite outcome.
+-- Dependents lock in identity order, so concurrent fan-in outcomes serialize at the one state
+-- transition boundary without repeating terminal evidence, FIFO allocation, or notifications.
+CREATE OR REPLACE FUNCTION workhorse.resolve_dependents_v1(
+  p_prerequisite_job_id uuid, p_prerequisite_state text
+)
 RETURNS integer
 LANGUAGE plpgsql
 AS $$
@@ -5048,16 +5245,71 @@ DECLARE
   v_runtime workhorse.job_runtime%ROWTYPE;
   v_now timestamptz := clock_timestamp();
   v_count integer := 0;
+  v_action text;
+  v_final_action text;
+  v_error jsonb;
 BEGIN
+  IF p_prerequisite_state NOT IN ('succeeded', 'failed', 'canceled') THEN
+    RAISE EXCEPTION 'prerequisite state must be succeeded, failed, or canceled';
+  END IF;
   FOR v_dependency IN
     SELECT dependency.* FROM workhorse.job_dependency dependency
      WHERE dependency.prerequisite_job_id = p_prerequisite_job_id
        AND dependency.released_at IS NULL
      ORDER BY dependency.dependent_job_id FOR UPDATE
   LOOP
-    UPDATE workhorse.job_dependency dependency SET released_at = v_now
+    SELECT * INTO v_runtime FROM workhorse.job_runtime runtime
+     WHERE runtime.job_id = v_dependency.dependent_job_id FOR UPDATE;
+    IF NOT FOUND OR v_runtime.state <> 'blocked' THEN CONTINUE; END IF;
+    v_action := CASE p_prerequisite_state
+      WHEN 'succeeded' THEN v_dependency.on_success
+      WHEN 'failed' THEN v_dependency.on_failure
+      WHEN 'canceled' THEN v_dependency.on_cancellation
+    END;
+    UPDATE workhorse.job_dependency dependency
+       SET released_at = v_now, resolution = v_action
      WHERE dependency.dependent_job_id = v_dependency.dependent_job_id
+       AND dependency.prerequisite_job_id = p_prerequisite_job_id
        AND dependency.released_at IS NULL;
+    IF EXISTS (
+      SELECT 1 FROM workhorse.job_dependency dependency
+       WHERE dependency.dependent_job_id = v_dependency.dependent_job_id
+         AND dependency.released_at IS NULL
+    ) THEN CONTINUE; END IF;
+    SELECT resolution INTO STRICT v_final_action
+      FROM workhorse.job_dependency dependency
+     WHERE dependency.dependent_job_id = v_dependency.dependent_job_id
+     ORDER BY CASE resolution WHEN 'fail' THEN 0 WHEN 'cancel' THEN 1 ELSE 2 END
+     LIMIT 1;
+    IF v_final_action IN ('fail', 'cancel') THEN
+      v_error := jsonb_build_object(
+        'name', CASE WHEN v_final_action = 'fail' THEN 'DependencyFailed' ELSE 'DependencyCanceled' END,
+        'message', CASE WHEN v_final_action = 'fail'
+          THEN 'a prerequisite reached a terminal outcome rejected by dependency policy'
+          ELSE 'a prerequisite reached a terminal outcome that canceled its dependent' END,
+        'prerequisite_job_id', p_prerequisite_job_id,
+        'prerequisite_state', p_prerequisite_state,
+        'policy_action', v_final_action
+      );
+      DELETE FROM workhorse.job_runtime runtime
+       WHERE runtime.job_id = v_dependency.dependent_job_id AND runtime.state = 'blocked';
+      IF NOT FOUND THEN CONTINUE; END IF;
+      INSERT INTO workhorse.job_outcome(
+        job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at
+      ) VALUES (
+        v_dependency.dependent_job_id,
+        CASE WHEN v_final_action = 'fail' THEN 'failed' ELSE 'canceled' END,
+        v_runtime.current_attempt, 0, v_runtime.run_at, v_error, v_now, v_now
+      );
+      INSERT INTO workhorse.job_event(job_id, event_type, details)
+        VALUES (
+          v_dependency.dependent_job_id,
+          CASE WHEN v_final_action = 'fail' THEN 'dependency_failed' ELSE 'dependency_canceled' END,
+          v_error
+        );
+      v_count := v_count + 1;
+      CONTINUE;
+    END IF;
     UPDATE workhorse.job_runtime runtime
        SET state = CASE WHEN runtime.run_at <= v_now THEN 'ready' ELSE 'scheduled' END,
            ready_at = CASE WHEN runtime.run_at <= v_now THEN v_now END,
@@ -5083,6 +5335,27 @@ BEGIN
   RETURN v_count;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION workhorse.release_dependents_v1(p_prerequisite_job_id uuid)
+RETURNS integer
+LANGUAGE sql
+AS $$
+  SELECT workhorse.resolve_dependents_v1(p_prerequisite_job_id, 'succeeded');
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.resolve_job_outcome_dependencies_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM workhorse.resolve_dependents_v1(NEW.job_id, NEW.state);
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER job_outcome_resolve_dependencies_insert
+  AFTER INSERT ON workhorse.job_outcome
+  FOR EACH ROW EXECUTE FUNCTION workhorse.resolve_job_outcome_dependencies_v1();
 
 CREATE OR REPLACE FUNCTION workhorse.complete_v1(
   p_job_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb DEFAULT 'null'::jsonb
@@ -5126,7 +5399,6 @@ BEGIN
   );
   INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
     VALUES (p_job_id, v_runtime.current_attempt, 'succeeded', jsonb_build_object('fence_token', p_fence_token::text));
-  PERFORM workhorse.release_dependents_v1(p_job_id);
   RETURN true;
 END;
 $$;
@@ -6816,7 +7088,8 @@ CREATE OR REPLACE VIEW workhorse.dashboard_job_checkpoint_v1 AS
   SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id, created_at
     FROM workhorse.job_checkpoint;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_dependency_v1 AS
-  SELECT dependent_job_id, prerequisite_job_id, created_at, released_at
+  SELECT dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation,
+         created_at, released_at, resolution
     FROM workhorse.job_dependency;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_event_v1 AS
   SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM workhorse.job_event;
@@ -6878,9 +7151,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (27, 'add strict-priority job dispatch'),
   (28, 'add keyed debounce enqueue'),
   (29, 'add keyed throttle enqueue'),
-  (30, 'add one-prerequisite job dependencies')
+  (30, 'add one-prerequisite job dependencies'),
+  (31, 'add fan-in dependency policies')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (30) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (31) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )
