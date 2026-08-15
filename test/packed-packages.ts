@@ -290,6 +290,10 @@ datasource db {
     await readFile(path.join(repository, "test", "fixtures", "packed-consumer.mjs"), "utf8"),
   );
   await writeFile(
+    path.join(consumer, "agentic-flow.mjs"),
+    await readFile(path.join(repository, "examples", "agentic-flow.mjs"), "utf8"),
+  );
+  await writeFile(
     path.join(consumer, "dashboard-auth.mjs"),
     `import assert from "node:assert/strict";
 import { scryptSync } from "node:crypto";
@@ -468,6 +472,13 @@ try {
     throw new Error("The packed Workhorse CLI did not expose worker command help");
   }
   await run("node", ["integration.mjs"], consumer);
+  const agenticFlow = JSON.parse(await run("node", ["agentic-flow.mjs"], consumer)) as {
+    result?: { status?: string };
+    progress?: { stage?: string };
+  };
+  if (agenticFlow.result?.status !== "completed" || agenticFlow.progress?.stage !== "finalizing") {
+    throw new Error("The packed agentic flow did not complete its durable lifecycle");
+  }
   await run("node", ["dashboard-auth.mjs"], consumer);
   await run("node", ["dashboard-standalone.mjs"], consumer);
 
