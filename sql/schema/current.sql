@@ -408,8 +408,8 @@ CREATE INDEX IF NOT EXISTS job_dependency_prerequisite_pending_idx
   ON workhorse.job_dependency (prerequisite_job_id, dependent_job_id)
   WHERE released_at IS NULL;
 
--- One immutable named child for the first child-job protocol. The child owns edge lifetime, while
--- the restricted parent reference keeps retained lineage explainable until the child is pruned.
+-- Immutable named child edges support bounded fan-out. Each child owns edge lifetime, while the
+-- restricted parent reference keeps retained lineage explainable until every child is pruned.
 CREATE TABLE IF NOT EXISTS workhorse.job_child (
   parent_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE RESTRICT,
   child_job_id uuid NOT NULL UNIQUE REFERENCES workhorse.job(id) ON DELETE CASCADE,
@@ -417,13 +417,11 @@ CREATE TABLE IF NOT EXISTS workhorse.job_child (
   request_fingerprint jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   joined_at timestamptz,
+  created_as_set boolean NOT NULL DEFAULT false,
   PRIMARY KEY (parent_job_id, child_name),
   CHECK (parent_job_id <> child_job_id),
   CHECK (joined_at IS NULL OR joined_at >= created_at)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS job_child_parent_one_idx
-  ON workhorse.job_child (parent_job_id);
-
 CREATE OR REPLACE FUNCTION workhorse.validate_job_dependency_v1()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -5433,6 +5431,301 @@ BEGIN
 END;
 $$;
 
+DO $migration$
+BEGIN
+  IF to_regprocedure('workhorse.create_single_child_v1(uuid,text,bigint,text,jsonb)') IS NULL THEN
+    ALTER FUNCTION workhorse.create_child_v1(uuid, text, bigint, text, jsonb)
+      RENAME TO create_single_child_v1;
+  END IF;
+END;
+$migration$;
+
+CREATE OR REPLACE FUNCTION workhorse.create_child_v1(
+  p_parent_job_id uuid,
+  p_worker_id text,
+  p_fence_token bigint,
+  p_child_name text,
+  p_request jsonb
+) RETURNS TABLE (
+  status text,
+  child_job_id uuid,
+  child_type text,
+  created_at timestamptz,
+  joined_at timestamptz,
+  result jsonb
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM workhorse.job_child edge
+     WHERE edge.parent_job_id = p_parent_job_id AND edge.created_as_set
+  ) THEN
+    RETURN QUERY VALUES (
+      'limit_exceeded'::text, NULL::uuid, NULL::text, NULL::timestamptz,
+      NULL::timestamptz, NULL::jsonb
+    );
+    RETURN;
+  END IF;
+  RETURN QUERY
+    SELECT single.status, single.child_job_id, single.child_type, single.created_at,
+           single.joined_at, single.result
+      FROM workhorse.create_single_child_v1(
+        p_parent_job_id, p_worker_id, p_fence_token, p_child_name, p_request
+      ) single;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.create_children_v1(
+  p_parent_job_id uuid,
+  p_worker_id text,
+  p_fence_token bigint,
+  p_children jsonb
+) RETURNS TABLE (
+  status text,
+  children jsonb,
+  results jsonb,
+  result_bytes integer,
+  result_limit_bytes integer
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_item record;
+  v_enqueue record;
+  v_existing_count integer;
+  v_result_limit integer;
+  v_children jsonb := '[]'::jsonb;
+  v_results jsonb := '{}'::jsonb;
+  v_result_bytes integer := 2;
+  v_now timestamptz;
+  v_had_unjoined boolean;
+BEGIN
+  IF p_children IS NULL OR jsonb_typeof(p_children) <> 'array' THEN
+    RAISE EXCEPTION 'children must be a JSON array';
+  END IF;
+  IF jsonb_array_length(p_children) > 100 THEN
+    RETURN QUERY VALUES (
+      'limit_exceeded'::text, NULL::jsonb, NULL::jsonb, NULL::integer, NULL::integer
+    );
+    RETURN;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(p_children) input(item)
+     WHERE jsonb_typeof(item) <> 'object'
+       OR jsonb_typeof(item->'name') <> 'string'
+       OR item->>'name' = '' OR char_length(item->>'name') > 200
+       OR jsonb_typeof(item->'request') <> 'object'
+  ) THEN
+    RAISE EXCEPTION 'each child requires a valid name and request object';
+  END IF;
+  IF EXISTS (
+    SELECT item->>'name' FROM jsonb_array_elements(p_children) input(item)
+     GROUP BY item->>'name' HAVING count(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'child names must be unique';
+  END IF;
+
+  SELECT runtime.* INTO v_runtime
+    FROM workhorse.job_runtime runtime
+    JOIN workhorse.job job ON job.id = runtime.job_id
+   WHERE runtime.job_id = p_parent_job_id
+     AND runtime.state = 'active'
+     AND runtime.worker_id = p_worker_id
+     AND runtime.fence_token = p_fence_token
+   FOR UPDATE OF runtime;
+  IF FOUND THEN
+    SELECT job.result_max_bytes INTO STRICT v_result_limit
+      FROM workhorse.job job WHERE job.id = p_parent_job_id;
+  END IF;
+  v_now := clock_timestamp();
+  IF NOT FOUND OR v_runtime.expires_at <= v_now
+     OR (v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now)
+     OR (v_runtime.attempt_timeout_at IS NOT NULL AND v_runtime.attempt_timeout_at <= v_now)
+     OR v_runtime.cancel_requested_at IS NOT NULL THEN
+    RETURN QUERY VALUES (
+      'stale'::text, NULL::jsonb, NULL::jsonb, NULL::integer, v_result_limit
+    );
+    RETURN;
+  END IF;
+
+  PERFORM 1 FROM workhorse.job_child edge
+   WHERE edge.parent_job_id = p_parent_job_id
+   ORDER BY edge.child_name FOR UPDATE;
+  SELECT count(*)::integer INTO v_existing_count FROM workhorse.job_child edge
+   WHERE edge.parent_job_id = p_parent_job_id;
+
+  IF jsonb_array_length(p_children) = 0 THEN
+    IF v_existing_count > 0 THEN
+      RETURN QUERY VALUES (
+        'conflict'::text, NULL::jsonb, NULL::jsonb, NULL::integer, v_result_limit
+      );
+    ELSIF 2 > v_result_limit THEN
+      RETURN QUERY VALUES (
+        'result_too_large'::text, NULL::jsonb, NULL::jsonb, 2, v_result_limit
+      );
+    ELSE
+      RETURN QUERY VALUES ('completed'::text, '[]'::jsonb, '{}'::jsonb, 2, v_result_limit);
+    END IF;
+    RETURN;
+  END IF;
+
+  IF v_existing_count > 0 THEN
+    IF v_existing_count <> jsonb_array_length(p_children) OR EXISTS (
+      SELECT 1 FROM jsonb_array_elements(p_children) input(item)
+      LEFT JOIN workhorse.job_child edge
+        ON edge.parent_job_id = p_parent_job_id AND edge.child_name = item->>'name'
+      WHERE edge.child_job_id IS NULL OR edge.request_fingerprint <> item->'request'
+    ) OR EXISTS (
+      SELECT 1 FROM workhorse.job_child edge
+       WHERE edge.parent_job_id = p_parent_job_id AND NOT edge.created_as_set
+    ) THEN
+      RETURN QUERY VALUES (
+        'conflict'::text, NULL::jsonb, NULL::jsonb, NULL::integer, v_result_limit
+      );
+      RETURN;
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM workhorse.job_child edge
+      LEFT JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id
+       WHERE edge.parent_job_id = p_parent_job_id
+         AND (outcome.job_id IS NULL OR outcome.state <> 'succeeded')
+    ) THEN
+      RETURN QUERY VALUES (
+        'stale'::text, NULL::jsonb, NULL::jsonb, NULL::integer, v_result_limit
+      );
+      RETURN;
+    END IF;
+
+    SELECT jsonb_object_agg(edge.child_name, outcome.result),
+           jsonb_agg(jsonb_build_object(
+             'childJobId', edge.child_job_id,
+             'name', edge.child_name,
+             'type', job.job_type,
+             'createdAt', edge.created_at,
+             'joinedAt', COALESCE(edge.joined_at, v_now),
+             'result', outcome.result
+           ) ORDER BY input.ordinality),
+           bool_or(edge.joined_at IS NULL)
+      INTO v_results, v_children, v_had_unjoined
+      FROM jsonb_array_elements(p_children) WITH ORDINALITY input(item, ordinality)
+      JOIN workhorse.job_child edge
+        ON edge.parent_job_id = p_parent_job_id AND edge.child_name = input.item->>'name'
+      JOIN workhorse.job job ON job.id = edge.child_job_id
+      JOIN workhorse.job_outcome outcome ON outcome.job_id = edge.child_job_id;
+    v_result_bytes := octet_length(v_results::text);
+    IF v_result_bytes > v_result_limit THEN
+      RETURN QUERY VALUES (
+        'result_too_large'::text, NULL::jsonb, NULL::jsonb, v_result_bytes, v_result_limit
+      );
+      RETURN;
+    END IF;
+    IF v_had_unjoined THEN
+      UPDATE workhorse.job_child edge SET joined_at = v_now
+       WHERE edge.parent_job_id = p_parent_job_id AND edge.joined_at IS NULL;
+      INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+        VALUES (
+          p_parent_job_id, v_runtime.current_attempt, 'children_joined',
+          jsonb_build_object(
+            'child_count', v_existing_count,
+            'names', (SELECT jsonb_agg(item->>'name' ORDER BY ordinality)
+              FROM jsonb_array_elements(p_children) WITH ORDINALITY input(item, ordinality)),
+            'fence_token', p_fence_token::text,
+            'result_bytes', v_result_bytes
+          )
+        );
+    END IF;
+    RETURN QUERY VALUES (
+      'completed'::text, v_children, v_results, v_result_bytes, v_result_limit
+    );
+    RETURN;
+  END IF;
+
+  BEGIN
+    FOR v_item IN
+      SELECT item, ordinality::integer AS ordinal
+        FROM jsonb_array_elements(p_children) WITH ORDINALITY input(item, ordinality)
+       ORDER BY ordinality
+    LOOP
+      SELECT * INTO v_enqueue
+        FROM workhorse.enqueue_many_v2(jsonb_build_array(v_item.item->'request'));
+      IF v_enqueue.outcome <> 'accepted' THEN
+        RAISE EXCEPTION 'child enqueue must create one new job';
+      END IF;
+      INSERT INTO workhorse.job_child(
+        parent_job_id, child_job_id, child_name, request_fingerprint, created_at, created_as_set
+      ) VALUES (
+        p_parent_job_id, v_enqueue.job_id, v_item.item->>'name', v_item.item->'request', v_now, true
+      );
+      INSERT INTO workhorse.job_dependency(
+        dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation, created_at
+      ) VALUES (
+        p_parent_job_id, v_enqueue.job_id, 'release', 'fail', 'cancel', v_now
+      );
+      INSERT INTO workhorse.job_event(job_id, event_type, details)
+        VALUES (
+          v_enqueue.job_id, 'parent_linked',
+          jsonb_build_object('parent_job_id', p_parent_job_id, 'name', v_item.item->>'name')
+        );
+    END LOOP;
+
+    UPDATE workhorse.job_runtime runtime
+       SET state = 'blocked', fence_token = 0, ready_at = NULL, sequence = NULL,
+           worker_id = NULL, acquired_at = NULL, heartbeat_at = NULL, expires_at = NULL,
+           wait_name = NULL, attempt_started_at = NULL,
+           execution_used_ms = LEAST(
+             31536000000,
+             runtime.execution_used_ms + GREATEST(
+               0, floor(extract(epoch FROM v_now - runtime.acquired_at) * 1000)::bigint
+             )
+           ),
+           attempt_timeout_at = NULL, error = NULL, updated_at = v_now
+     WHERE runtime.job_id = p_parent_job_id
+       AND runtime.state = 'active'
+       AND runtime.worker_id = p_worker_id
+       AND runtime.fence_token = p_fence_token
+       AND runtime.expires_at > clock_timestamp()
+       AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
+       AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > clock_timestamp());
+    IF NOT FOUND THEN
+      RAISE EXCEPTION USING ERRCODE = 'P1004', MESSAGE = 'child creation lost the parent lease';
+    END IF;
+
+    SELECT jsonb_agg(jsonb_build_object(
+             'childJobId', edge.child_job_id,
+             'name', edge.child_name,
+             'type', job.job_type,
+             'createdAt', edge.created_at,
+             'joinedAt', edge.joined_at
+           ) ORDER BY input.ordinality)
+      INTO v_children
+      FROM jsonb_array_elements(p_children) WITH ORDINALITY input(item, ordinality)
+      JOIN workhorse.job_child edge
+        ON edge.parent_job_id = p_parent_job_id AND edge.child_name = input.item->>'name'
+      JOIN workhorse.job job ON job.id = edge.child_job_id;
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_parent_job_id, v_runtime.current_attempt, 'children_created',
+        jsonb_build_object(
+          'child_count', jsonb_array_length(p_children),
+          'names', (SELECT jsonb_agg(item->>'name' ORDER BY ordinality)
+            FROM jsonb_array_elements(p_children) WITH ORDINALITY input(item, ordinality)),
+          'fence_token', p_fence_token::text
+        )
+      );
+    RETURN QUERY VALUES (
+      'created'::text, v_children, NULL::jsonb, NULL::integer, v_result_limit
+    );
+  EXCEPTION
+    WHEN SQLSTATE 'P1004' THEN
+      RETURN QUERY VALUES (
+        'stale'::text, NULL::jsonb, NULL::jsonb, NULL::integer, v_result_limit
+      );
+  END;
+END;
+$$;
+
 -- Resolve every pending edge in the same transaction that materializes a prerequisite outcome.
 -- Dependents lock in identity order, so concurrent fan-in outcomes serialize at the one state
 -- transition boundary without repeating terminal evidence, FIFO allocation, or notifications.
@@ -5449,6 +5742,8 @@ DECLARE
   v_count integer := 0;
   v_action text;
   v_final_action text;
+  v_final_prerequisite_job_id uuid;
+  v_final_prerequisite_state text;
   v_error jsonb;
 BEGIN
   IF p_prerequisite_state NOT IN ('succeeded', 'failed', 'canceled') THEN
@@ -5478,10 +5773,13 @@ BEGIN
        WHERE dependency.dependent_job_id = v_dependency.dependent_job_id
          AND dependency.released_at IS NULL
     ) THEN CONTINUE; END IF;
-    SELECT resolution INTO STRICT v_final_action
+    SELECT dependency.resolution, dependency.prerequisite_job_id, outcome.state
+      INTO STRICT v_final_action, v_final_prerequisite_job_id, v_final_prerequisite_state
       FROM workhorse.job_dependency dependency
+      JOIN workhorse.job_outcome outcome ON outcome.job_id = dependency.prerequisite_job_id
      WHERE dependency.dependent_job_id = v_dependency.dependent_job_id
-     ORDER BY CASE resolution WHEN 'fail' THEN 0 WHEN 'cancel' THEN 1 ELSE 2 END
+     ORDER BY CASE dependency.resolution WHEN 'fail' THEN 0 WHEN 'cancel' THEN 1 ELSE 2 END,
+              dependency.prerequisite_job_id
      LIMIT 1;
     IF v_final_action IN ('fail', 'cancel') THEN
       v_error := jsonb_build_object(
@@ -5489,8 +5787,8 @@ BEGIN
         'message', CASE WHEN v_final_action = 'fail'
           THEN 'a prerequisite reached a terminal outcome rejected by dependency policy'
           ELSE 'a prerequisite reached a terminal outcome that canceled its dependent' END,
-        'prerequisite_job_id', p_prerequisite_job_id,
-        'prerequisite_state', p_prerequisite_state,
+        'prerequisite_job_id', v_final_prerequisite_job_id,
+        'prerequisite_state', v_final_prerequisite_state,
         'policy_action', v_final_action
       );
       DELETE FROM workhorse.job_runtime runtime
@@ -7359,9 +7657,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (30, 'add one-prerequisite job dependencies'),
   (31, 'add fan-in dependency policies'),
   (32, 'index dependency failure operations'),
-  (33, 'add single linked child jobs')
+  (33, 'add single linked child jobs'),
+  (34, 'add bounded child fan-out and joins')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (33) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (34) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

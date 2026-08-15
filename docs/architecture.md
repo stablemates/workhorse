@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 33. Version 23 is the oldest supported
+The current clean-install protocol is schema version 34. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 33 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 34 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -48,7 +48,11 @@ Migration `0033-add-single-child-jobs.sql` requires version 32. It adds immutabl
 lineage, fenced child creation and suspension, result joining, and the dashboard read view. It
 records version 33 and advances the schema row.
 
-Versions below 23, versions above 33, gaps, and mixed version rows fail without running a migration.
+Migration `0034-add-child-fan-out.sql` requires version 33. It removes the single-child index, marks
+set-created edges, and adds bounded transactional child-set creation and joining. It records
+version 34 and advances the schema row.
+
+Versions below 23, versions above 34, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -170,10 +174,10 @@ guarantees.
 `Queryable`, default queue name, and validated `QueueOptions`. Every internal module extends
 `QueueModule`, which retains that context for relocated behavior.
 
-`createQueueModules` constructs eight receivers. They are `EnqueueContractsModule`,
+`createQueueModules` constructs nine receivers. They are `EnqueueContractsModule`,
 `ClaimLeaseFenceModule`, `CheckpointsProgressWaitsModule`, `QueueAdministrationModule`,
 `WorkerRegistryModule`, `RetentionMaintenanceModule`, `CronSchedulesModule`, and
-`OperatorReadsModule`. Four contain no behavior until their matching extraction lands.
+`OperatorReadsModule`, plus `ChildJobsModule` for fenced child creation and joining.
 
 `EnqueueContractsModule.enqueue` and `enqueueMany` own enqueue serialization, tracing, telemetry,
 and `P1001` conflict translation. `jobAcceptance` selects and validates the current payload
@@ -410,11 +414,12 @@ At most 100 immutable prerequisite edges per dependent job. The primary key is `
 
 ### `job_child`
 
-One immutable row links a parent identity to its single named child. The primary key is
-`(parent_job_id, child_name)`, `child_job_id` is unique, and `job_child_parent_one_idx` enforces one
-child per parent. Names contain 1 through 200 characters. `request_fingerprint` stores the complete
-normalized child request for replay comparison. `created_at` records creation, while nullable
-`joined_at` records the first accepted result read.
+One immutable row links a parent identity to each named child. The primary key is
+`(parent_job_id, child_name)`, and `child_job_id` is unique. One parent may own at most 100 children.
+Names contain 1 through 200 characters. `request_fingerprint` stores the complete normalized child
+request for replay comparison. `created_as_set` distinguishes `runChildren` edges from the
+compatible single-child contract. `created_at` records creation, while nullable `joined_at`
+records the first accepted result read.
 
 `create_child_v1(parent_job_id, worker_id, fence_token, child_name, request)` locks and validates
 the exact active, unexpired parent generation. It calls `enqueue_many_v2`, inserts `job_child`, and
@@ -422,6 +427,10 @@ adds a `job_dependency` edge from parent to child with success `release`, failur
 cancellation `cancel`. It then moves the parent from active to blocked and clears ownership in the
 same transaction. A rollback removes the child, lineage, dependency, events, and suspension.
 Coalescing and additional dependency options are rejected for child requests.
+
+Migration 0034 retains that implementation as `create_single_child_v1`. The public
+`create_child_v1` wrapper rejects any `created_as_set` edge before it delegates, which keeps the
+single-child replay contract compatible without letting it consume a child-set replay.
 
 `HandlerContext.runChild(name, type, payload, options)` calls the fenced transition and suspends
 the handler without consuming its logical attempt. Child success releases the parent through the
@@ -431,10 +440,29 @@ the retained result when `runChild` replays. `child_created`, `parent_linked`, a
 another child or appending another join event. A handler that creates no child completes through
 the ordinary completion path.
 
+`create_children_v1(parent_job_id, worker_id, fence_token, children)` accepts zero through 100
+unique named requests. A non-empty first call creates every child and dependency edge before it
+moves the parent to blocked. Replay requires the exact names and normalized requests. It returns a
+JSON object keyed by child name only after every child succeeds. The object may not exceed the
+parent job's `result_max_bytes`; an oversized join returns `result_too_large` without copying the
+object to the client. `children_created` and `children_joined` each append once per set.
+
+The version 1 set policy requires every child to succeed. Each edge declares success `release`,
+failure `fail`, and cancellation `cancel`. If more than one rejected outcome exists, failure takes
+precedence over cancellation, then prerequisite identity breaks ties. Terminal evidence names the
+prerequisite whose resolution selected the parent outcome, regardless of settlement order.
+
+`HandlerContext.runChildren(children)` exposes that transition. Zero children return `{}` without
+suspension. Any child failure fails the parent after all edges resolve. Cancellation cancels the
+parent unless failure takes precedence. Retry and duplicate dependency wakeups reuse the same
+edges and results without appending another join event. `ChildResultLimitExceededError` reports
+the measured and configured aggregate result sizes.
+
 Child failure fails the parent, while child cancellation cancels it. Canceling a blocked parent
 does not cancel the child, and a later child outcome cannot resurrect that terminal parent.
 `ChildLeaseLostError`, `ChildConflictError`, and `ChildLimitExceededError` distinguish stale
-ownership, a changed replay, and an attempted second child.
+ownership, a changed replay, and an oversized child set. The single-child function returns
+`limit_exceeded` when any set-created edge exists, so callers cannot mix the two replay contracts.
 
 `Queue.getJob` and `Queue.listJobs` expose `parentJobId` and sorted `childJobIds`.
 `Queue.getChildLineage(jobId, limit)` returns at most 1,000 edges in either direction and reports
@@ -1286,7 +1314,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 33. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 34. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

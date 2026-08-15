@@ -29,19 +29,35 @@ worker claims it with a new fence. Workhorse restarts the handler from its entry
 The repeated `runChild` call recognizes the same name and request. It returns the child result
 instead of creating another job.
 
+Use `HandlerContext.runChildren` when the delegated work can run in parallel. It creates the named
+set in one transaction and returns successful results under the same names:
+
+```ts
+const results = await ctx.runChildren<{
+  fraud: { accepted: boolean };
+  inventory: { reserved: boolean };
+}>([
+  { name: "fraud", type: "orders.check-fraud", payload: { orderId } },
+  { name: "inventory", type: "orders.reserve", payload: { orderId } },
+]);
+```
+
+An empty set returns immediately. A non-empty set suspends the parent once, and PostgreSQL releases
+it only after every child reaches a terminal state. The set joins only when every child succeeds.
+
 ## Keep work before the child replay-safe
 
 Code before `runChild` runs again after the parent resumes. Use ordinary idempotency or
 `HandlerContext.checkpoint` when repeating that work would cause an unwanted external effect.
 
-Changing the child payload, type, or options under the same name raises `ChildConflictError`.
-Exceeding the bounded child set raises `ChildLimitExceededError`. Fan-out and multi-result joining
-are separate capabilities.
+Changing a child name, payload, type, option, or set membership on replay raises
+`ChildConflictError`. Exceeding the bounded child set raises `ChildLimitExceededError`. If the
+joined object exceeds the parent's result contract, `ChildResultLimitExceededError` rejects it.
 
 ## Failure, cancellation, and lookup
 
-If the child fails, PostgreSQL fails the parent through its dependency policy. If the child is
-canceled, PostgreSQL cancels the parent.
+If any child fails, PostgreSQL fails the parent after the set settles. If any child is canceled,
+PostgreSQL cancels the parent unless another child failure takes precedence.
 
 Canceling a blocked parent leaves the child independent. A later child outcome cannot return that
 terminal parent to dispatch.

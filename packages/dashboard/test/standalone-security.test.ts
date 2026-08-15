@@ -6,7 +6,7 @@ import type { Queryable } from "@workhorse/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDashboardServer } from "../src/server/standalone.js";
 
-const database = { query: async () => ({ rows: [{ version: 33 }] }) } as Queryable;
+const database = { query: async () => ({ rows: [{ version: 34 }] }) } as Queryable;
 const scratchRoots: string[] = [];
 
 afterEach(async () => {

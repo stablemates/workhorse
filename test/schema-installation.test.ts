@@ -212,11 +212,11 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v33 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v34 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(33);
+    expect(version.rows[0]?.version).toBe(34);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -233,6 +233,7 @@ describe("schema installation", () => {
       { version: 31, description: "add fan-in dependency policies" },
       { version: 32, description: "index dependency failure operations" },
       { version: 33, description: "add single linked child jobs" },
+      { version: 34, description: "add bounded child fan-out and joins" },
     ]);
 
     const maintenanceFunctions = await pool.query<{

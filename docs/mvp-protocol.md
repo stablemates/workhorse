@@ -1,9 +1,9 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 33 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 34 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency, keyed debounce, keyed throttle, and
-fan-in job dependencies with terminal policies. It also supports retry policies, single linked
-child joins, checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
+fan-in job dependencies with terminal policies. It also supports retry policies, bounded linked
+child fan-out and joins, checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
 redrive. Operator projections, bounded payload controls, lifecycle timelines, automated retention,
 and per-minute statistics complete the protocol.
 
@@ -57,6 +57,7 @@ FIFO sequence is globally monotonic. Enqueue allocates ready sequences in input 
 7. `save_checkpoint_v1` locks the matching unexpired active generation and inserts one immutable named JSON result plus a `checkpoint_saved` event. Repeated equal values return the stored checkpoint; different values conflict; cancellation-requested or stale owners are rejected.
    7b. `update_progress_v1` locks and revalidates the matching active generation, replaces one 64-KiB latest-value projection, increments its revision, and appends value-free `progress_updated` telemetry. Identical values are no-ops; changed values from one fence are limited to one every 100 milliseconds.
 8. `schedule_wait_v1` locks and revalidates the matching active generation, inserts at most one named relative or absolute timer definition, and either returns an elapsed boundary or changes runtime to wait-marked scheduled state without incrementing the attempt. Relative replay is first-write-wins; absolute target or mode changes conflict; cancellation-requested or stale owners are rejected; each job is limited to 1,000 names.
+   `create_child_v1` provides the compatible single-child transition. `create_children_v1` accepts up to 100 unique named requests, creates their jobs and dependency edges transactionally, and changes the parent from active to blocked once. Exact replay joins successful results by name under the parent's result-size limit. A failed child fails the parent after the set settles; cancellation cancels it unless failure takes precedence.
 9. `fail_v1` locks the matching active generation. A cancellation request returns `cancel_requested`. Otherwise retry asks PostgreSQL to select the persisted policy delay, CAS-updates the same runtime, increments attempt, persists any next jitter state, clears wait continuation metadata, and requeues ready or scheduled. Exhaustion deletes runtime and inserts failed outcome.
 10. `recover_expired_v1` locks expired active runtimes in bounded batches. Requested rows materialize canceled without retry; other rows perform policy selection and attempt increment/requeue or terminal failure with observed fence and expiry guards.
 11. `complete_v1` checks the persisted canonical result-size limit, then deletes only the matching unexpired active runtime with no cancellation request and inserts succeeded outcome, closed attempt history, and event atomically. `Queue.complete` first applies the accepted version's result validator.

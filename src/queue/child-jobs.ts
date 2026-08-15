@@ -3,8 +3,10 @@ import { logInfo } from "../telemetry.js";
 import type {
   ChildJob,
   ChildJobOptions,
+  ChildJobRequest,
   ClaimedJob,
   CreateChildResult,
+  CreateChildrenResult,
   EnqueueOptions,
   Json,
 } from "../types.js";
@@ -20,6 +22,21 @@ interface CreateChildRow {
   created_at: Date | string | null;
   joined_at: Date | string | null;
   result: Json | null;
+}
+
+interface CreateChildrenRow {
+  status: string;
+  children: Array<{
+    childJobId: string;
+    name: string;
+    type: string;
+    createdAt: string;
+    joinedAt: string | null;
+    result?: Json;
+  }> | null;
+  results: Record<string, Json> | null;
+  result_bytes: number | null;
+  result_limit_bytes: number | null;
 }
 
 export class ChildLeaseLostError extends WorkhorseError {
@@ -41,8 +58,19 @@ export class ChildConflictError extends WorkhorseError {
 
 export class ChildLimitExceededError extends WorkhorseError {
   constructor(readonly parentJobId: string) {
-    super(`Job ${parentJobId} already has its one supported child`);
+    super(`Job ${parentJobId} exceeds the supported child limit`);
     this.name = "ChildLimitExceededError";
+  }
+}
+
+export class ChildResultLimitExceededError extends WorkhorseError {
+  constructor(
+    readonly parentJobId: string,
+    readonly resultBytes: number,
+    readonly resultLimitBytes: number,
+  ) {
+    super(`Joined child results for job ${parentJobId} exceed its configured size limit`);
+    this.name = "ChildResultLimitExceededError";
   }
 }
 
@@ -65,7 +93,13 @@ function childRecord<TResult extends Json>(
   };
 }
 
-/** Owns fenced child creation and single-result joining behind the Queue facade. */
+function validateChildName(name: string): void {
+  if (typeof name !== "string" || name.length < 1 || [...name].length > 200) {
+    throw new TypeError("Child name must contain 1 to 200 characters");
+  }
+}
+
+/** Owns fenced child creation and result joining behind the Queue facade. */
 export class ChildJobsModule extends QueueModule {
   constructor(
     context: QueueModuleContext,
@@ -74,20 +108,12 @@ export class ChildJobsModule extends QueueModule {
     super(context);
   }
 
-  async createChild<TPayload extends Json, TResult extends Json = Json>(
+  private childRequest<TPayload extends Json>(
     parent: ClaimedJob<unknown>,
-    workerId: string,
-    name: string,
     type: string,
     payload: TPayload,
-    options: ChildJobOptions = {},
-  ): Promise<CreateChildResult<TResult>> {
-    if (typeof name !== "string" || name.length < 1 || [...name].length > 200) {
-      throw new TypeError("Child name must contain 1 to 200 characters");
-    }
-    if (typeof workerId !== "string" || workerId.length === 0) {
-      throw new TypeError("Worker ID must be a non-empty string");
-    }
+    options: ChildJobOptions,
+  ): Record<string, unknown> {
     const unsafe = options as EnqueueOptions;
     if (
       unsafe.idempotency !== undefined ||
@@ -98,16 +124,14 @@ export class ChildJobsModule extends QueueModule {
     ) {
       throw new TypeError("Child jobs cannot use coalescing or dependency enqueue options");
     }
-
     const acceptance = this.enqueueContracts.jobAcceptance(type, payload);
-    const traceContext = parent.traceContext;
-    const request = {
+    return {
       queue: options.queue ?? this.context.defaultQueue,
       type,
       payload,
       priority: validateJobPriority(options.priority),
       ...acceptance,
-      ...(traceContext === null ? {} : { traceContext }),
+      ...(parent.traceContext === null ? {} : { traceContext: parent.traceContext }),
       ...(options.runAt === undefined ? {} : { runAt: options.runAt.toISOString() }),
       deadline: options.deadline?.toISOString() ?? null,
       concurrencyKey: options.concurrencyKey ?? null,
@@ -118,6 +142,21 @@ export class ChildJobsModule extends QueueModule {
       dependencies: null,
       tags: options.tags ?? [],
     };
+  }
+
+  async createChild<TPayload extends Json, TResult extends Json = Json>(
+    parent: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+    type: string,
+    payload: TPayload,
+    options: ChildJobOptions = {},
+  ): Promise<CreateChildResult<TResult>> {
+    validateChildName(name);
+    if (typeof workerId !== "string" || workerId.length === 0) {
+      throw new TypeError("Worker ID must be a non-empty string");
+    }
+    const request = this.childRequest(parent, type, payload, options);
     const result = await this.context.database.query<CreateChildRow>(
       `SELECT status, child_job_id, child_type, created_at, joined_at, result
          FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
@@ -137,5 +176,64 @@ export class ChildJobsModule extends QueueModule {
       "workhorse.worker.id": workerId,
     });
     return { status: row.status, child: childRecord<TResult>(parent.id, name, row) };
+  }
+
+  async createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
+    parent: ClaimedJob<unknown>,
+    workerId: string,
+    children: readonly ChildJobRequest[],
+  ): Promise<CreateChildrenResult<TResult>> {
+    if (!Array.isArray(children)) throw new TypeError("Children must be an array");
+    if (typeof workerId !== "string" || workerId.length === 0) {
+      throw new TypeError("Worker ID must be a non-empty string");
+    }
+    if (children.length > 100) throw new ChildLimitExceededError(parent.id);
+    const names = new Set<string>();
+    const requests = children.map(({ name, type, payload, options = {} }) => {
+      validateChildName(name);
+      if (names.has(name)) throw new TypeError("Child names must be unique");
+      names.add(name);
+      return {
+        name,
+        request: this.childRequest(parent, type, payload, options),
+      };
+    });
+    const result = await this.context.database.query<CreateChildrenRow>(
+      `SELECT status, children, results, result_bytes, result_limit_bytes
+         FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
+      [parent.id, workerId, parent.fenceToken.toString(), JSON.stringify(requests)],
+    );
+    const row = expectOneRow(result, "workhorse.create_children_v1");
+    if (row.status === "stale") throw new ChildLeaseLostError(parent.id);
+    if (row.status === "conflict") throw new ChildConflictError(parent.id, "child set");
+    if (row.status === "limit_exceeded") throw new ChildLimitExceededError(parent.id);
+    if (row.status === "result_too_large") {
+      throw new ChildResultLimitExceededError(
+        parent.id,
+        row.result_bytes ?? 0,
+        row.result_limit_bytes ?? 0,
+      );
+    }
+    if ((row.status !== "created" && row.status !== "completed") || row.children === null) {
+      throw new Error(`Unexpected child-set status: ${row.status}`);
+    }
+    const mapped = row.children.map((child) => ({
+      parentJobId: parent.id,
+      childJobId: child.childJobId,
+      name: child.name,
+      type: child.type,
+      createdAt: new Date(child.createdAt),
+      joinedAt: child.joinedAt === null ? null : new Date(child.joinedAt),
+      result: child.result ?? null,
+    }));
+    logInfo("workhorse.job.child_processed", "Child set processed", {
+      "workhorse.job.id": parent.id,
+      "workhorse.child.count": mapped.length,
+      "workhorse.child.status": row.status,
+      "workhorse.worker.id": workerId,
+    });
+    return row.status === "created"
+      ? { status: "created", children: mapped }
+      : { status: "completed", children: mapped, results: (row.results ?? {}) as TResult };
   }
 }
