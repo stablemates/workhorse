@@ -7,6 +7,7 @@ export const databaseTestFiles = [
   "test/benchmark-conventional.test.ts",
   "test/integration-*.test.ts",
   "test/isolation-canary-*.test.ts",
+  "test/sql-protocol-conformance.test.ts",
   "test/schema-installation.test.ts",
   "test/schema-migrations.test.ts",
 ];

@@ -1,0 +1,25 @@
+[
+  {
+    "id": "priority-ordered-mixed-batch",
+    "covers": ["batch-handling"],
+    "jobType": "protocol.batch",
+    "concurrency": 3,
+    "batchMaxSize": 3,
+    "jobs": [
+      { "key": "succeed", "priority": 90, "maxAttempts": 1, "outcome": "succeed" },
+      { "key": "retry", "priority": 50, "maxAttempts": 2, "outcome": "retry" },
+      { "key": "fail", "priority": 10, "maxAttempts": 1, "outcome": "fail" }
+    ],
+    "expectedHandlerOrder": ["succeed", "retry", "fail"],
+    "expectedAfterFirstRun": {
+      "succeed": { "state": "succeeded", "attempt": 1 },
+      "retry": { "state": "ready", "attempt": 2 },
+      "fail": { "state": "failed", "attempt": 1 }
+    },
+    "expectedAfterSecondRun": {
+      "succeed": { "state": "succeeded", "attempt": 1 },
+      "retry": { "state": "succeeded", "attempt": 2 },
+      "fail": { "state": "failed", "attempt": 1 }
+    }
+  }
+]

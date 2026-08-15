@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { verifySqlProtocolFixtures } from "../scripts/verify-sql-protocol.js";
 import {
   migrateSchema,
   readSchemaVersion,
@@ -118,6 +119,17 @@ describe("schema migrations", () => {
 
   it("produces the same schema through clean installation and forward migration", async () => {
     expect(await dumpNormalizedSchema(database.databaseUrl)).toBe(cleanInstallSchema);
+  });
+
+  it("satisfies the SQL protocol fixtures after forward migration", async () => {
+    const report = await verifySqlProtocolFixtures(database.pool, repository);
+    expect(report.coverage).toEqual(
+      new Set(
+        report.manifest.coverage.filter(
+          (capability) => !report.manifest.runtimeCoverage.includes(capability),
+        ),
+      ),
+    );
   });
 
   it("leaves an already-current schema unchanged", async () => {

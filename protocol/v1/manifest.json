@@ -1,0 +1,106 @@
+{
+  "formatVersion": 1,
+  "protocolVersion": 1,
+  "schema": {
+    "installedVersion": 39,
+    "minimumVersion": 39,
+    "maximumVersion": 39
+  },
+  "supportedClientProtocol": {
+    "minimumVersion": 1,
+    "maximumVersion": 1
+  },
+  "coverage": [
+    "enqueue",
+    "claim",
+    "heartbeat",
+    "completion",
+    "failure",
+    "cancellation",
+    "retry",
+    "checkpoint",
+    "timer-wait",
+    "batch-handling",
+    "coalescing",
+    "dependencies",
+    "children",
+    "signals",
+    "human-tokens"
+  ],
+  "runtimeCoverage": ["batch-handling"],
+  "functions": [
+    {
+      "name": "enqueue_many_v2",
+      "arity": 1,
+      "contract": "SELECT ordinal, job_id, outcome FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal"
+    },
+    {
+      "name": "claim_v3",
+      "arity": 3,
+      "contract": "SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)"
+    },
+    {
+      "name": "heartbeat_v2",
+      "arity": 4,
+      "contract": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
+    },
+    {
+      "name": "complete_v1",
+      "arity": 4,
+      "contract": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted"
+    },
+    {
+      "name": "fail_v1",
+      "arity": 5,
+      "contract": "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state"
+    },
+    {
+      "name": "cancel_v1",
+      "arity": 3,
+      "contract": "SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)"
+    },
+    {
+      "name": "save_checkpoint_v1",
+      "arity": 5,
+      "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
+    },
+    {
+      "name": "schedule_wait_v1",
+      "arity": 6,
+      "contract": "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)"
+    },
+    {
+      "name": "create_children_v1",
+      "arity": 4,
+      "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)"
+    },
+    {
+      "name": "wait_for_signal_v1",
+      "arity": 4,
+      "contract": "SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text)"
+    },
+    {
+      "name": "send_signal_v1",
+      "arity": 5,
+      "contract": "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"
+    },
+    {
+      "name": "wait_for_human_v1",
+      "arity": 5,
+      "contract": "SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
+    },
+    {
+      "name": "complete_human_wait_v1",
+      "arity": 5,
+      "contract": "SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"
+    }
+  ],
+  "typescriptContractSources": [
+    "src/queue/enqueue-contracts.ts",
+    "src/queue/claim-lease-fence.ts",
+    "src/queue/checkpoints-progress-waits.ts",
+    "src/queue/child-jobs.ts",
+    "src/queue/signals.ts",
+    "src/queue/human-waits.ts"
+  ]
+}

@@ -1,0 +1,607 @@
+[
+  {
+    "id": "successful-batch-lifecycle",
+    "steps": [
+      {
+        "id": "enqueue-batch",
+        "covers": ["enqueue"],
+        "sql": "SELECT jsonb_build_object('ordinal', ordinal, 'jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal",
+        "parameters": [
+          [
+            { "queue": "protocol-batch", "type": "protocol.first", "payload": { "index": 1 } },
+            { "queue": "protocol-batch", "type": "protocol.second", "payload": { "index": 2 } }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            { "value": { "jobId": { "$type": "uuid" }, "ordinal": 1, "outcome": "accepted" } },
+            { "value": { "jobId": { "$type": "uuid" }, "ordinal": 2, "outcome": "accepted" } }
+          ]
+        },
+        "capture": { "successfulJob": "0.value.jobId" }
+      },
+      {
+        "id": "claim",
+        "covers": ["claim"],
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'jobType', job_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+        "parameters": ["protocol-batch", "protocol-success", 30000],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fenceToken": { "$type": "integer" },
+                "jobId": { "$ref": "successfulJob" },
+                "jobType": "protocol.first",
+                "payload": { "index": 1 }
+              }
+            }
+          ]
+        },
+        "capture": { "successfulFence": "0.value.fenceToken" }
+      },
+      {
+        "id": "heartbeat",
+        "covers": ["heartbeat"],
+        "sql": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
+        "parameters": [
+          { "$ref": "successfulJob" },
+          "protocol-success",
+          { "$ref": "successfulFence" },
+          30000
+        ],
+        "expect": { "rows": [{ "status": "accepted" }] }
+      },
+      {
+        "id": "checkpoint",
+        "covers": ["checkpoint"],
+        "sql": "SELECT jsonb_build_object('status', status, 'value', checkpoint_value, 'attempt', attempt, 'fenceToken', fence_token, 'workerId', worker_id) AS value FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+        "parameters": [
+          { "$ref": "successfulJob" },
+          "protocol-success",
+          { "$ref": "successfulFence" },
+          "prepared",
+          { "answer": 42 }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fenceToken": { "$ref": "successfulFence" },
+                "status": "saved",
+                "value": { "answer": 42 },
+                "workerId": "protocol-success"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "complete",
+        "covers": ["completion"],
+        "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
+        "parameters": [
+          { "$ref": "successfulJob" },
+          "protocol-success",
+          { "$ref": "successfulFence" },
+          { "ok": true }
+        ],
+        "expect": { "rows": [{ "accepted": true }] }
+      },
+      {
+        "id": "completed-transition",
+        "sql": "SELECT jsonb_build_object('state', state, 'result', result, 'attempt', current_attempt) AS value FROM workhorse.dashboard_job_outcome_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "successfulJob" }],
+        "expect": {
+          "rows": [{ "value": { "attempt": 1, "result": { "ok": true }, "state": "succeeded" } }]
+        }
+      }
+    ]
+  },
+  {
+    "id": "retry-and-terminal-failure",
+    "steps": [
+      {
+        "id": "enqueue",
+        "sql": "SELECT jsonb_build_object('jobId', workhorse.enqueue_v1($1, $2, $3::jsonb, clock_timestamp(), $4)) AS value",
+        "parameters": ["protocol-retry", "protocol.retry", { "attempt": 1 }, 2],
+        "expect": { "rows": [{ "value": { "jobId": { "$type": "uuid" } } }] },
+        "capture": { "retryJob": "0.value.jobId" }
+      },
+      {
+        "id": "claim-first",
+        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v3($1, $2, 30000)",
+        "parameters": ["protocol-retry", "protocol-retry-worker"],
+        "expect": { "rows": [{ "value": { "attempt": 1, "fenceToken": { "$type": "integer" } } }] },
+        "capture": { "retryFenceOne": "0.value.fenceToken" }
+      },
+      {
+        "id": "fail-for-retry",
+        "covers": ["failure", "retry"],
+        "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
+        "parameters": [
+          { "$ref": "retryJob" },
+          "protocol-retry-worker",
+          { "$ref": "retryFenceOne" },
+          { "name": "TransientError", "message": "try again" }
+        ],
+        "expect": { "rows": [{ "state": "ready" }] }
+      },
+      {
+        "id": "claim-second",
+        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v3($1, $2, 30000)",
+        "parameters": ["protocol-retry", "protocol-retry-worker"],
+        "expect": { "rows": [{ "value": { "attempt": 2, "fenceToken": { "$type": "integer" } } }] },
+        "capture": { "retryFenceTwo": "0.value.fenceToken" }
+      },
+      {
+        "id": "terminal-failure",
+        "sql": "SELECT workhorse.fail_v1($1::uuid, $2, $3::bigint, $4::jsonb, 0) AS state",
+        "parameters": [
+          { "$ref": "retryJob" },
+          "protocol-retry-worker",
+          { "$ref": "retryFenceTwo" },
+          { "name": "PermanentError", "message": "stop" }
+        ],
+        "expect": { "rows": [{ "state": "failed" }] }
+      },
+      {
+        "id": "failed-transition",
+        "sql": "SELECT jsonb_build_object('state', state, 'attempt', current_attempt, 'error', error) AS value FROM workhorse.dashboard_job_outcome_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "retryJob" }],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 2,
+                "error": { "message": "stop", "name": "PermanentError" },
+                "state": "failed"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "cancellation",
+    "steps": [
+      {
+        "id": "enqueue",
+        "sql": "SELECT jsonb_build_object('jobId', workhorse.enqueue_v1($1, $2, '{}'::jsonb)) AS value",
+        "parameters": ["protocol-cancel", "protocol.cancel"],
+        "expect": { "rows": [{ "value": { "jobId": { "$type": "uuid" } } }] },
+        "capture": { "cancelJob": "0.value.jobId" }
+      },
+      {
+        "id": "cancel",
+        "covers": ["cancellation"],
+        "sql": "SELECT jsonb_build_object('status', status, 'state', state, 'requestedBy', requested_by, 'reason', reason) AS value FROM workhorse.cancel_v1($1::uuid, $2, $3)",
+        "parameters": [{ "$ref": "cancelJob" }, "protocol-operator", "fixture"],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "reason": "fixture",
+                "requestedBy": "protocol-operator",
+                "state": "canceled",
+                "status": "canceled"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "timer-wait",
+    "steps": [
+      {
+        "id": "enqueue-and-claim",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": ["protocol-timer", "protocol.timer", "protocol-timer-worker"],
+        "expect": {
+          "rows": [
+            { "value": { "fenceToken": { "$type": "integer" }, "jobId": { "$type": "uuid" } } }
+          ]
+        },
+        "capture": { "timerJob": "0.value.jobId", "timerFence": "0.value.fenceToken" }
+      },
+      {
+        "id": "schedule",
+        "covers": ["timer-wait"],
+        "sql": "SELECT jsonb_build_object('status', status, 'name', wait_name, 'mode', mode, 'durationMs', duration_ms, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.schedule_wait_v1($1::uuid, $2, $3::bigint, $4, $5::bigint, NULL)",
+        "parameters": [
+          { "$ref": "timerJob" },
+          "protocol-timer-worker",
+          { "$ref": "timerFence" },
+          "pause",
+          60000
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "durationMs": 60000,
+                "fenceToken": { "$ref": "timerFence" },
+                "mode": "relative",
+                "name": "pause",
+                "status": "scheduled"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "scheduled-transition",
+        "sql": "SELECT jsonb_build_object('state', state, 'waitName', wait_name) AS value FROM workhorse.dashboard_job_runtime_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "timerJob" }],
+        "expect": { "rows": [{ "value": { "state": "scheduled", "waitName": "pause" } }] }
+      }
+    ]
+  },
+  {
+    "id": "coalescing-and-structured-errors",
+    "steps": [
+      {
+        "id": "debounce-accepted",
+        "covers": ["coalescing"],
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-coalesce",
+              "type": "protocol.debounce",
+              "payload": { "version": 1 },
+              "debounce": {
+                "scope": "protocol",
+                "key": "debounce",
+                "windowMs": 60000,
+                "schedule": "reset"
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [{ "value": { "jobId": { "$type": "uuid" }, "outcome": "accepted" } }]
+        },
+        "capture": { "debounceJob": "0.value.jobId" }
+      },
+      {
+        "id": "debounce-replaced",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-coalesce",
+              "type": "protocol.debounce",
+              "payload": { "version": 2 },
+              "debounce": {
+                "scope": "protocol",
+                "key": "debounce",
+                "windowMs": 60000,
+                "schedule": "reset"
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [{ "value": { "jobId": { "$ref": "debounceJob" }, "outcome": "replaced" } }]
+        }
+      },
+      {
+        "id": "throttle-accepted",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-coalesce",
+              "type": "protocol.throttle",
+              "payload": { "version": 1 },
+              "throttle": { "scope": "protocol", "key": "throttle", "windowMs": 60000 }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [{ "value": { "jobId": { "$type": "uuid" }, "outcome": "accepted" } }]
+        },
+        "capture": { "throttleJob": "0.value.jobId" }
+      },
+      {
+        "id": "throttle-coalesced",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-coalesce",
+              "type": "protocol.throttle",
+              "payload": { "version": 1 },
+              "throttle": { "scope": "protocol", "key": "throttle", "windowMs": 60000 }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [{ "value": { "jobId": { "$ref": "throttleJob" }, "outcome": "coalesced" } }]
+        }
+      },
+      {
+        "id": "idempotency-accepted",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-errors",
+              "type": "protocol.error",
+              "payload": { "version": 1 },
+              "idempotency": { "scope": "protocol", "key": "protocol-conflict", "ttlMs": 60000 }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [{ "value": { "jobId": { "$type": "uuid" }, "outcome": "accepted" } }]
+        },
+        "capture": { "conflictJob": "0.value.jobId" }
+      },
+      {
+        "id": "idempotency-conflict",
+        "sql": "SELECT * FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-errors",
+              "type": "protocol.error",
+              "payload": { "version": 2 },
+              "idempotency": { "scope": "protocol", "key": "protocol-conflict", "ttlMs": 60000 }
+            }
+          ]
+        ],
+        "error": {
+          "code": "P1001",
+          "message": "enqueue idempotency conflict with a retained request",
+          "detail": {
+            "conflictingFields": ["payload"],
+            "existingJobId": { "$ref": "conflictJob" },
+            "keyDigest": "b0fd606eefe8",
+            "keyLength": 17,
+            "keyPreview": "protocol…lict",
+            "ordinal": 1,
+            "rejectedRequestDigest": "c3046e4f0ccb776826dea7961f72b629d44e09430c0029c713360cb37dff248b",
+            "scope": "protocol",
+            "storedRequestDigest": "d9b8cd4f7630f1e5a1de41e6e73089924961fddfbe0e9a0b839f5bf039501d3f"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "dependencies",
+    "steps": [
+      {
+        "id": "enqueue-prerequisite",
+        "sql": "SELECT jsonb_build_object('jobId', workhorse.enqueue_v1($1, $2, '{}'::jsonb)) AS value",
+        "parameters": ["protocol-dependency", "protocol.prerequisite"],
+        "expect": { "rows": [{ "value": { "jobId": { "$type": "uuid" } } }] },
+        "capture": { "prerequisiteJob": "0.value.jobId" }
+      },
+      {
+        "id": "enqueue-dependent",
+        "covers": ["dependencies"],
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-dependency",
+              "type": "protocol.dependent",
+              "payload": {},
+              "prerequisiteJobId": { "$ref": "prerequisiteJob" }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [{ "value": { "jobId": { "$type": "uuid" }, "outcome": "accepted" } }]
+        },
+        "capture": { "dependentJob": "0.value.jobId" }
+      },
+      {
+        "id": "blocked-transition",
+        "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_job_runtime_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "dependentJob" }],
+        "expect": { "rows": [{ "value": { "state": "blocked" } }] }
+      },
+      {
+        "id": "complete-prerequisite",
+        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v3($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, '{}'::jsonb) AS accepted FROM claimed",
+        "parameters": ["protocol-dependency", "protocol-dependency-worker"],
+        "expect": { "rows": [{ "accepted": true }] }
+      },
+      {
+        "id": "released-transition",
+        "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_job_runtime_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "dependentJob" }],
+        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+      }
+    ]
+  },
+  {
+    "id": "children",
+    "steps": [
+      {
+        "id": "enqueue-and-claim-parent",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": ["protocol-parent", "protocol.parent", "protocol-parent-worker"],
+        "expect": {
+          "rows": [
+            { "value": { "fenceToken": { "$type": "integer" }, "jobId": { "$type": "uuid" } } }
+          ]
+        },
+        "capture": { "parentJob": "0.value.jobId", "parentFence": "0.value.fenceToken" }
+      },
+      {
+        "id": "create-child",
+        "covers": ["children"],
+        "sql": "SELECT jsonb_build_object('status', status, 'children', children) AS value FROM workhorse.create_children_v1($1::uuid, $2, $3::bigint, $4::jsonb)",
+        "parameters": [
+          { "$ref": "parentJob" },
+          "protocol-parent-worker",
+          { "$ref": "parentFence" },
+          [
+            {
+              "name": "only",
+              "request": {
+                "queue": "protocol-child",
+                "type": "protocol.child",
+                "payload": { "value": 7 }
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "children": [
+                  {
+                    "childJobId": { "$type": "uuid" },
+                    "createdAt": { "$type": "timestamp" },
+                    "joinedAt": null,
+                    "name": "only",
+                    "type": "protocol.child"
+                  }
+                ],
+                "status": "created"
+              }
+            }
+          ]
+        },
+        "capture": { "childJob": "0.value.children.0.childJobId" }
+      },
+      {
+        "id": "complete-child",
+        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v3($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, $3::jsonb) AS accepted FROM claimed",
+        "parameters": ["protocol-child", "protocol-child-worker", { "value": 7 }],
+        "expect": { "rows": [{ "accepted": true }] }
+      },
+      {
+        "id": "parent-released",
+        "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_job_runtime_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "parentJob" }],
+        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+      }
+    ]
+  },
+  {
+    "id": "signals",
+    "steps": [
+      {
+        "id": "enqueue-and-claim",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": ["protocol-signal", "protocol.signal", "protocol-signal-worker"],
+        "expect": {
+          "rows": [
+            { "value": { "fenceToken": { "$type": "integer" }, "jobId": { "$type": "uuid" } } }
+          ]
+        },
+        "capture": { "signalJob": "0.value.jobId", "signalFence": "0.value.fenceToken" }
+      },
+      {
+        "id": "wait",
+        "covers": ["signals"],
+        "sql": "SELECT jsonb_build_object('status', status, 'payload', payload) AS value FROM workhorse.wait_for_signal_v1($1::uuid, $2, $3::bigint, $4)",
+        "parameters": [
+          { "$ref": "signalJob" },
+          "protocol-signal-worker",
+          { "$ref": "signalFence" },
+          "approval"
+        ],
+        "expect": { "rows": [{ "value": { "payload": null, "status": "waiting" } }] }
+      },
+      {
+        "id": "send",
+        "sql": "SELECT jsonb_build_object('status', status, 'payload', payload, 'requestedBy', delivered_by) AS value FROM workhorse.send_signal_v1($1::uuid, $2, $3::jsonb, $4, $5)",
+        "parameters": [
+          { "$ref": "signalJob" },
+          "approval",
+          { "approved": true },
+          "signal-request",
+          "protocol-service"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "payload": { "approved": true },
+                "requestedBy": "protocol-service",
+                "status": "delivered"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "ready-transition",
+        "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_job_runtime_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "signalJob" }],
+        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+      }
+    ]
+  },
+  {
+    "id": "human-tokens",
+    "steps": [
+      {
+        "id": "enqueue-and-claim",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": ["protocol-human", "protocol.human", "protocol-human-worker"],
+        "expect": {
+          "rows": [
+            { "value": { "fenceToken": { "$type": "integer" }, "jobId": { "$type": "uuid" } } }
+          ]
+        },
+        "capture": { "humanJob": "0.value.jobId", "humanFence": "0.value.fenceToken" }
+      },
+      {
+        "id": "wait",
+        "covers": ["human-tokens"],
+        "sql": "SELECT jsonb_build_object('status', status, 'result', result) AS value FROM workhorse.wait_for_human_v1($1::uuid, $2, $3::bigint, $4, $5::jsonb)",
+        "parameters": [
+          { "$ref": "humanJob" },
+          "protocol-human-worker",
+          { "$ref": "humanFence" },
+          "review",
+          { "question": "Ship?" }
+        ],
+        "expect": { "rows": [{ "value": { "result": null, "status": "waiting" } }] }
+      },
+      {
+        "id": "complete",
+        "sql": "SELECT jsonb_build_object('status', status, 'result', result, 'completedBy', completed_by) AS value FROM workhorse.complete_human_wait_v1($1::uuid, $2, $3::jsonb, $4, $5)",
+        "parameters": [
+          { "$ref": "humanJob" },
+          "review",
+          { "approved": true },
+          "human-request",
+          "protocol-operator"
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "completedBy": "protocol-operator",
+                "result": { "approved": true },
+                "status": "completed"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "ready-transition",
+        "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_job_runtime_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "humanJob" }],
+        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+      }
+    ]
+  }
+]
