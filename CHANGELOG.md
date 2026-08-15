@@ -13,7 +13,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v37**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v40**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -33,6 +33,9 @@ First published line. Requires **schema v37**, Node.js **22 or 24**, PostgreSQL 
   promotion, and redrive.
 - `@workhorse/core`: PostgreSQL-owned keyed debounce and throttle windows with structured enqueue
   outcomes, atomic batch and transaction behavior, and shared safe key diagnostics.
+- `@workhorse/core`: durable dependency edges keep jobs blocked until every prerequisite satisfies
+  its fan-in terminal policy. Bounded lineage and job queries expose those edges, while health
+  snapshots and per-queue telemetry report dependency pressure.
 - `@workhorse/core`: bounded dependency fan-in with terminal policies, plus fenced child creation
   and result joining through `HandlerContext.runChild` and `HandlerContext.runChildren`.
 - `@workhorse/core`: child lineage survives retry and cancellation, redrive keeps the source tree
