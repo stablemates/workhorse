@@ -64,7 +64,6 @@ import { durableDemoScenarios } from "../src/durable-demo.js";
 import {
   DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT,
   DEMO_FEATURE_SHOWCASE_FAMILIES,
-  DEMO_FEATURE_SHOWCASE_JOB_TYPE,
   DEMO_FEATURE_SHOWCASE_SOURCE,
 } from "../src/feature-showcase.js";
 import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/wire";
@@ -370,6 +369,34 @@ async function waitForRegisteredFleet(
 }
 
 describe("Workhorse demo", () => {
+  it("migrates legacy showcase jobs to their family task types", async () => {
+    const queue = new Queue(pool, { defaultQueue: DEMO_QUEUE });
+    const jobIds = await Promise.all(
+      DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) =>
+        queue.enqueue("demo.feature-showcase", {
+          source: DEMO_FEATURE_SHOWCASE_SOURCE,
+          family: family.key,
+        }),
+      ),
+    );
+
+    await installDemoSchema(database);
+
+    expect(
+      await pool.query(
+        `SELECT payload->>'family' AS family, job_type
+           FROM workhorse.job
+          WHERE id = ANY($1::uuid[])
+          ORDER BY payload->>'family'`,
+        [jobIds],
+      ),
+    ).toMatchObject({
+      rows: [...DEMO_FEATURE_SHOWCASE_FAMILIES]
+        .toSorted((left, right) => left.key.localeCompare(right.key))
+        .map((family) => ({ family: family.key, job_type: family.jobType })),
+    });
+  });
+
   it("uses a conservative worker polling interval for the demo", () => {
     expect(DEMO_WORKER_POLL_MS).toBe(15_000);
     expect(DEMO_LONG_RUNNING_MS).toBe(20_000);
@@ -411,7 +438,7 @@ describe("Workhorse demo", () => {
         ...DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => ({
           schedule_name: family.scheduleName,
           cron_expression: family.schedule,
-          job_type: DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+          job_type: family.jobType,
           enabled: true,
         })).toSorted((left, right) => left.schedule_name.localeCompare(right.schedule_name)),
       ],
@@ -453,17 +480,18 @@ describe("Workhorse demo", () => {
     expect(
       await pool.query(
         `SELECT payload->>'family' AS family,
+                job_type,
                 count(DISTINCT payload->>'scenario')::integer AS scenarios
            FROM workhorse.job
-          WHERE job_type = $1 AND payload->>'source' = $2
-          GROUP BY payload->>'family'
+          WHERE payload->>'source' = $1
+          GROUP BY payload->>'family', job_type
           ORDER BY payload->>'family'`,
-        [DEMO_FEATURE_SHOWCASE_JOB_TYPE, DEMO_FEATURE_SHOWCASE_SOURCE],
+        [DEMO_FEATURE_SHOWCASE_SOURCE],
       ),
     ).toMatchObject({
       rows: [...DEMO_FEATURE_SHOWCASE_FAMILIES]
         .toSorted((left, right) => left.key.localeCompare(right.key))
-        .map((family) => ({ family: family.key, scenarios: 3 })),
+        .map((family) => ({ family: family.key, job_type: family.jobType, scenarios: 3 })),
     });
     expect(DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT).toBe(24);
     expect(
@@ -471,10 +499,9 @@ describe("Workhorse demo", () => {
         `SELECT count(*)::integer AS count
            FROM workhorse.job job
            JOIN workhorse.job_outcome outcome ON outcome.job_id = job.id
-          WHERE job.job_type = $1
+          WHERE job.job_type = 'demo.cancellation'
             AND job.payload->>'family' = 'cancellation'
             AND outcome.state = 'canceled'`,
-        [DEMO_FEATURE_SHOWCASE_JOB_TYPE],
       ),
     ).toMatchObject({ rows: [{ count: 2 }] });
     expect(
@@ -868,9 +895,9 @@ describe("Workhorse demo", () => {
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "task" }),
     ).resolves.toMatchObject({
       groups: [
+        "demo.cancellation",
+        "demo.dead-letter-redrive",
         "demo.durable-pipeline",
-        "demo.feature-showcase",
-        "demo.long-running",
         "demo.recurring",
         "demo.report",
         "email.digest",

@@ -1,7 +1,6 @@
 import type { Json, RetryPolicy } from "@workhorse/core";
 
 export const DEMO_FEATURE_SHOWCASE_SEED_NAME = "feature-showcase-v1";
-export const DEMO_FEATURE_SHOWCASE_JOB_TYPE = "demo.feature-showcase";
 export const DEMO_FEATURE_SHOWCASE_SOURCE = "feature-showcase-seed";
 export const DEMO_FEATURE_RECURRING_SOURCE = "feature-showcase-recurring";
 
@@ -65,6 +64,15 @@ export interface DemoFeatureExample {
 
 export interface DemoFeatureShowcaseFamily {
   key: DemoFeatureFamily;
+  jobType:
+    | "demo.ingress-routing"
+    | "demo.retry-policy"
+    | "demo.durable-checkpoint"
+    | "demo.durable-wait"
+    | "demo.progress-reporting"
+    | "demo.timing-control"
+    | "demo.cancellation"
+    | "demo.dead-letter-redrive";
   title: string;
   description: string;
   scheduleName: string;
@@ -79,6 +87,7 @@ const fastFixedRetry: RetryPolicy = { type: "fixed", delayMs: 250 };
 export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[] = [
   {
     key: "ingress-routing",
+    jobType: "demo.ingress-routing",
     title: "Ingress and routing",
     description: "Immediate, delayed, tagged, and idempotent acceptance paths.",
     scheduleName: "showcase.ingress-routing",
@@ -110,6 +119,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "retry-policies",
+    jobType: "demo.retry-policy",
     title: "Retry policies",
     description: "Fixed, exponential, and decorrelated-jitter outcomes.",
     scheduleName: "showcase.retry-policies",
@@ -150,6 +160,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "durable-checkpoints",
+    jobType: "demo.durable-checkpoint",
     title: "Durable checkpoints",
     description: "Single, replayed, and multi-stage restart boundaries.",
     scheduleName: "showcase.durable-checkpoints",
@@ -184,6 +195,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "durable-waits",
+    jobType: "demo.durable-wait",
     title: "Durable waits",
     description: "Lease-releasing waits with replay and retry variation.",
     scheduleName: "showcase.durable-waits",
@@ -218,6 +230,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "progress",
+    jobType: "demo.progress-reporting",
     title: "Mutable progress",
     description: "Latest-value progress across success, retry, and failure.",
     scheduleName: "showcase.progress",
@@ -253,6 +266,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "timing-controls",
+    jobType: "demo.timing-control",
     title: "Deadlines and execution timeouts",
     description: "Expired, timed-out, and comfortably completed work.",
     scheduleName: "showcase.timing-controls",
@@ -291,6 +305,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "cancellation",
+    jobType: "demo.cancellation",
     title: "Cancellation",
     description: "Immediate ready, future scheduled, and cooperative active cancellation.",
     scheduleName: "showcase.cancellation",
@@ -323,6 +338,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
   },
   {
     key: "dead-letters-redrive",
+    jobType: "demo.dead-letter-redrive",
     title: "Dead letters and redrive",
     description: "Unredriven failure, successful redrive, and idempotent redrive replay.",
     scheduleName: "showcase.dead-letters-redrive",

@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
   CancellationRequestedError,
   MIN_PROGRESS_UPDATE_INTERVAL_MS,
+  type Handler,
   type Queue,
   type Worker,
 } from "@workhorse/core";
@@ -17,7 +18,7 @@ import {
 } from "./durable-demo.js";
 import { orders } from "./schema.js";
 import {
-  DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+  DEMO_FEATURE_SHOWCASE_FAMILIES,
   demoFeatureRecurringVariant,
   type DemoFeatureBehavior,
   type DemoFeaturePayload,
@@ -210,7 +211,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
   worker.handle<{ source: string }>(RECURRING_JOB_TYPE, async ({ source }, { job }) => {
     return { source, recurring: true, attempt: job.attempt };
   });
-  worker.handle<DemoFeaturePayload>(DEMO_FEATURE_SHOWCASE_JOB_TYPE, async (payload, context) => {
+  const featureShowcaseHandler: Handler<DemoFeaturePayload> = async (payload, context) => {
     const variant =
       payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
     const behavior: DemoFeatureBehavior =
@@ -288,7 +289,10 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
       outcome: context.job.attempt > 1 ? "recovered" : "succeeded",
       attempt: context.job.attempt,
     };
-  });
+  };
+  for (const family of DEMO_FEATURE_SHOWCASE_FAMILIES) {
+    worker.handle(family.jobType, featureShowcaseHandler);
+  }
   worker.handle<{ report: string; source: string }>(REPORT_JOB_TYPE, async (payload) => {
     return { ...payload, generated: true };
   });

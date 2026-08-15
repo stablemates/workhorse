@@ -5,16 +5,16 @@ exactly three idempotently seeded one-off scenarios and one namespaced recurring
 dashboard populated with useful contrasts without pretending that every infrastructure capability is a job
 outcome.
 
-| Feature family           | Three startup scenarios                                                     | Recurring variation                                     |
-| ------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Ingress and routing      | immediate tagged work, future delivery, idempotent acceptance               | success, retry/recovery, or terminal failure            |
-| Retry policies           | fixed recovery, exponential recovery, jitter exhaustion                     | success, recovery, or exhausted retry budget            |
-| Durable checkpoints      | single artifact, replay after retry, three-stage work                       | one to three checkpoints plus mixed outcomes            |
-| Durable waits            | short cooldown, longer embargo, wait then retry                             | different wait durations plus mixed outcomes            |
-| Progress                 | successful progress, progress through retry, progress before failure        | latest progress ending in success, recovery, or failure |
-| Timing controls          | expired deadline, execution timeout, completion within both budgets         | varied execution duration and outcome                   |
-| Cancellation             | ready cancellation, scheduled cancellation, cooperative active cancellation | success, cooperative cancellation, or failure           |
-| Dead letters and redrive | terminal failure, successful redrive, idempotent redrive replay             | success, retry/recovery, or terminal failure            |
+| Feature family           | Task type                  | Three startup scenarios                                                     | Recurring variation                                     |
+| ------------------------ | -------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Ingress and routing      | `demo.ingress-routing`     | immediate tagged work, future delivery, idempotent acceptance               | success, retry/recovery, or terminal failure            |
+| Retry policies           | `demo.retry-policy`        | fixed recovery, exponential recovery, jitter exhaustion                     | success, recovery, or exhausted retry budget            |
+| Durable checkpoints      | `demo.durable-checkpoint`  | single artifact, replay after retry, three-stage work                       | one to three checkpoints plus mixed outcomes            |
+| Durable waits            | `demo.durable-wait`        | short cooldown, longer embargo, wait then retry                             | different wait durations plus mixed outcomes            |
+| Progress                 | `demo.progress-reporting`  | successful progress, progress through retry, progress before failure        | latest progress ending in success, recovery, or failure |
+| Timing controls          | `demo.timing-control`      | expired deadline, execution timeout, completion within both budgets         | varied execution duration and outcome                   |
+| Cancellation             | `demo.cancellation`        | ready cancellation, scheduled cancellation, cooperative active cancellation | success, cooperative cancellation, or failure           |
+| Dead letters and redrive | `demo.dead-letter-redrive` | terminal failure, successful redrive, idempotent redrive replay             | success, retry/recovery, or terminal failure            |
 
 All recurring definitions fire once per minute. Their immutable job identity selects a stable variant for
 that occurrence, so retries preserve one scenario while later occurrences naturally rotate through different

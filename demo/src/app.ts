@@ -28,7 +28,6 @@ import {
 import {
   DEMO_FEATURE_RECURRING_SOURCE,
   DEMO_FEATURE_SHOWCASE_FAMILIES,
-  DEMO_FEATURE_SHOWCASE_JOB_TYPE,
   DEMO_FEATURE_SHOWCASE_SEED_NAME,
   DEMO_FEATURE_SHOWCASE_SOURCE,
   type DemoFeaturePayload,
@@ -456,7 +455,7 @@ function featureShowcaseSchedules(enabledByName: ReadonlyMap<string, boolean>) {
     schedule: family.schedule,
     enabled: enabledByName.get(family.scheduleName) ?? true,
     job: {
-      type: DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+      type: family.jobType,
       queue: DEMO_QUEUE,
       payload: {
         source: DEMO_FEATURE_RECURRING_SOURCE,
@@ -472,6 +471,26 @@ function featureShowcaseSchedules(enabledByName: ReadonlyMap<string, boolean>) {
       retryPolicy: family.recurringRetryPolicy,
     },
   }));
+}
+
+async function migrateLegacyFeatureShowcaseJobTypes(database: DemoDatabase): Promise<void> {
+  const featureJobTypeByFamilyJson = JSON.stringify(
+    Object.fromEntries(
+      DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => [family.key, family.jobType]),
+    ),
+  );
+  await database.execute(sql`
+    UPDATE workhorse.job AS job
+       SET job_type = mapping.replacement_type
+      FROM jsonb_each_text(${featureJobTypeByFamilyJson}::jsonb)
+        AS mapping(family, replacement_type)
+     WHERE job.job_type = 'demo.feature-showcase'
+       AND job.payload->>'source' IN (
+         ${DEMO_FEATURE_SHOWCASE_SOURCE},
+         ${DEMO_FEATURE_RECURRING_SOURCE}
+       )
+       AND job.payload->>'family' = mapping.family
+  `);
 }
 
 export async function installDemoSchema(database: DemoDatabase): Promise<void> {
@@ -523,6 +542,7 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS workhorse_demo_audit_request_id_idx
     ON public.workhorse_demo_audit (request_id)
   `);
+  await migrateLegacyFeatureShowcaseJobTypes(database);
 }
 
 export async function syncDemoSchedules(database: Pool): Promise<void> {
@@ -1115,11 +1135,7 @@ export async function seedDemoData(database: DemoDatabase) {
         if (example.seedTransition) {
           const queue = `showcase-${example.scenario}`;
           const isolated = createDrizzleAdapter(transaction, { defaultQueue: queue });
-          const sourceJobId = await isolated.queue.enqueue(
-            DEMO_FEATURE_SHOWCASE_JOB_TYPE,
-            payload,
-            enqueueOptions,
-          );
+          const sourceJobId = await isolated.queue.enqueue(family.jobType, payload, enqueueOptions);
           jobIds.push(sourceJobId);
           const workerId = `showcase-seed-${example.scenario}`;
           const claimed = await isolated.queue.claim(workerId, { queue });
@@ -1162,15 +1178,11 @@ export async function seedDemoData(database: DemoDatabase) {
           continue;
         }
 
-        const jobId = await workhorse.queue.enqueue(
-          DEMO_FEATURE_SHOWCASE_JOB_TYPE,
-          payload,
-          enqueueOptions,
-        );
+        const jobId = await workhorse.queue.enqueue(family.jobType, payload, enqueueOptions);
         jobIds.push(jobId);
         if (example.idempotencyKey) {
           const replayedJobId = await workhorse.queue.enqueue(
-            DEMO_FEATURE_SHOWCASE_JOB_TYPE,
+            family.jobType,
             payload,
             enqueueOptions,
           );
