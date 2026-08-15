@@ -808,7 +808,15 @@ export interface DashboardJobDetail {
     concurrencyKey: string | null;
     /** Stable prerequisite identity, or null when this task has no dependency. */
     prerequisiteJobId: string | null;
-    /** When PostgreSQL released the dependency edge after prerequisite success. */
+    /** Stable prerequisite identities in deterministic order. */
+    prerequisiteJobIds: string[];
+    /** Terminal outcome policy shared by every prerequisite edge. */
+    dependencyPolicy: {
+      onSuccess: "release" | "cancel" | "fail";
+      onFailure: "release" | "cancel" | "fail";
+      onCancellation: "release" | "cancel" | "fail";
+    } | null;
+    /** When PostgreSQL satisfied the final dependency edge. */
     dependencyReleasedAt: string | null;
     /** Why this task remains blocked. Null after release and for independent tasks. */
     blockedReason: "prerequisite_pending" | null;

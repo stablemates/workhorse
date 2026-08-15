@@ -74,6 +74,10 @@ type JobListRow = {
   tags: string[];
   state: JobState;
   prerequisite_job_id: string | null;
+  prerequisite_job_ids: string[];
+  dependency_on_success: "release" | "cancel" | "fail" | null;
+  dependency_on_failure: "release" | "cancel" | "fail" | null;
+  dependency_on_cancellation: "release" | "cancel" | "fail" | null;
   blocked_reason: "prerequisite_pending" | null;
   current_attempt: number;
   max_attempts: number;
@@ -308,6 +312,15 @@ function jobListItem(row: JobListRow): JobListItem {
     tags: row.tags,
     state: row.state,
     prerequisiteJobId: row.prerequisite_job_id,
+    prerequisiteJobIds: row.prerequisite_job_ids,
+    dependencyPolicy:
+      row.dependency_on_failure === null
+        ? null
+        : {
+            onSuccess: row.dependency_on_success!,
+            onFailure: row.dependency_on_failure,
+            onCancellation: row.dependency_on_cancellation!,
+          },
     blockedReason: row.blocked_reason,
     currentAttempt: row.current_attempt,
     maxAttempts: row.max_attempts,
@@ -563,6 +576,9 @@ export class OperatorReadsModule extends QueueModule {
     const result = await this.context.database.query<JobListRow>(
       `SELECT listed.job_id, listed.queue_name, listed.job_type, listed.concurrency_key,
               listed.priority, listed.tags, listed.state, dependency.prerequisite_job_id,
+              dependency.prerequisite_job_ids, dependency.on_success AS dependency_on_success,
+              dependency.on_failure AS dependency_on_failure,
+              dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN listed.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
               listed.current_attempt, listed.max_attempts, listed.retry_policy,
               listed.deadline_at,
@@ -574,8 +590,17 @@ export class OperatorReadsModule extends QueueModule {
          FROM workhorse.list_jobs_v2(
            $1::jsonb, $2::integer, $3::timestamptz, $4::uuid, $5::text, $6::jsonb
          ) listed
-         LEFT JOIN workhorse.job_dependency dependency
-           ON dependency.dependent_job_id = listed.job_id`,
+         LEFT JOIN LATERAL (
+           SELECT CASE WHEN count(*) = 1
+                    THEN (array_agg(edge.prerequisite_job_id))[1] END AS prerequisite_job_id,
+                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
+                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}') AS prerequisite_job_ids,
+                  min(edge.on_success) AS on_success,
+                  min(edge.on_failure) AS on_failure,
+                  min(edge.on_cancellation) AS on_cancellation
+             FROM workhorse.job_dependency edge
+            WHERE edge.dependent_job_id = listed.job_id
+         ) dependency ON true`,
       [
         JSON.stringify(jobListFilter(query)),
         limit,
@@ -767,6 +792,10 @@ export class OperatorReadsModule extends QueueModule {
       tags: string[];
       state: JobSnapshot["state"];
       prerequisite_job_id: string | null;
+      prerequisite_job_ids: string[];
+      dependency_on_success: "release" | "cancel" | "fail" | null;
+      dependency_on_failure: "release" | "cancel" | "fail" | null;
+      dependency_on_cancellation: "release" | "cancel" | "fail" | null;
       blocked_reason: "prerequisite_pending" | null;
       current_attempt: number;
       max_attempts: number;
@@ -796,6 +825,10 @@ export class OperatorReadsModule extends QueueModule {
               j.deadline_at, j.execution_timeout_ms::text,
               COALESCE(r.state, o.state) AS state,
               dependency.prerequisite_job_id,
+              dependency.prerequisite_job_ids,
+              dependency.on_success AS dependency_on_success,
+              dependency.on_failure AS dependency_on_failure,
+              dependency.on_cancellation AS dependency_on_cancellation,
               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
@@ -811,7 +844,17 @@ export class OperatorReadsModule extends QueueModule {
          FROM workhorse.job j
          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
          LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
-         LEFT JOIN workhorse.job_dependency dependency ON dependency.dependent_job_id = j.id
+         LEFT JOIN LATERAL (
+           SELECT CASE WHEN count(*) = 1
+                    THEN (array_agg(edge.prerequisite_job_id))[1] END AS prerequisite_job_id,
+                  COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
+                    FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}') AS prerequisite_job_ids,
+                  min(edge.on_success) AS on_success,
+                  min(edge.on_failure) AS on_failure,
+                  min(edge.on_cancellation) AS on_cancellation
+             FROM workhorse.job_dependency edge
+            WHERE edge.dependent_job_id = j.id
+         ) dependency ON true
          LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
         WHERE j.id = $1::uuid`,
       [id],
@@ -829,6 +872,15 @@ export class OperatorReadsModule extends QueueModule {
       tags: row.tags,
       state: row.state,
       prerequisiteJobId: row.prerequisite_job_id,
+      prerequisiteJobIds: row.prerequisite_job_ids,
+      dependencyPolicy:
+        row.dependency_on_failure === null
+          ? null
+          : {
+              onSuccess: row.dependency_on_success!,
+              onFailure: row.dependency_on_failure,
+              onCancellation: row.dependency_on_cancellation!,
+            },
       blockedReason: row.blocked_reason,
       currentAttempt: row.current_attempt,
       maxAttempts: row.max_attempts,

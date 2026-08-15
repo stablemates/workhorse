@@ -1399,19 +1399,19 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
 
 /** The immutable prerequisite edge and its current release state. */
 export function DependencyLine({ job }: { job: DashboardJobDetail }) {
-  if (job.identity.prerequisiteJobId === null) return null;
+  if (job.identity.prerequisiteJobIds.length === 0) return null;
   const blocked = job.identity.blockedReason === "prerequisite_pending";
   const summary = blocked
-    ? "Blocked until this prerequisite succeeds"
+    ? "Blocked until every prerequisite satisfies the dependency policy"
     : job.identity.dependencyReleasedAt === null
       ? "Dependency recorded"
       : `Released ${formatRelative(job.identity.dependencyReleasedAt)}`;
   return (
     <Group gap="xs" mt="sm" align="baseline" wrap="wrap">
       <Text c="dimmed" size="xs" fw={600}>
-        Prerequisite
+        {job.identity.prerequisiteJobIds.length === 1 ? "Prerequisite" : "Prerequisites"}
       </Text>
-      <Code fz="xs">{job.identity.prerequisiteJobId}</Code>
+      <Code fz="xs">{job.identity.prerequisiteJobIds.join(", ")}</Code>
       <Badge size="xs" variant="light" color={blocked ? "yellow" : "teal"} tt="none">
         {blocked ? "blocked" : "released"}
       </Badge>

@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 30. Version 23 is the oldest supported
+The current clean-install protocol is schema version 31. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 30 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 31 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -36,7 +36,11 @@ Migration `0030-add-job-dependencies.sql` requires version 29. It adds the block
 one-prerequisite edge, release transition, and operator projection. It records version 30 and
 advances the schema row.
 
-Versions below 23, versions above 30, gaps, and mixed version rows fail without running a migration.
+Migration `0031-add-fan-in-dependency-policies.sql` requires version 30. It adds bounded fan-in,
+terminal policies, serialized cycle rejection, and outcome-driven resolution. It records version
+31 and advances the schema row.
+
+Versions below 23, versions above 31, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -380,15 +384,19 @@ Insert-only identity, routing, payload, priority, retry budget, normalized optio
 
 PostgreSQL-owned scoped enqueue ownership, separate from stable job identity and dispatch. The primary key `(idempotency_scope, idempotency_key_hash)` serializes competing callers through one scoped unique owner. The hash is the full SHA-256 of the scope/key ownership input; raw keys are never persisted. Scope defaults to `default`; TTL defaults to 24 hours; keys are 1 through 512 UTF-8 bytes; scopes are 1 through 256 UTF-8 bytes; and TTL is an integer from 1 millisecond through 365 days.
 
-The stored canonical fingerprint covers queue, concurrency key, priority, type, payload, contract version, both size limits, both redaction-key sets, sorted tags, `maxAttempts`, normalized `retryPolicy`, `prerequisiteJobId`, TTL, and explicitly supplied `runAt`. An omitted `runAt` stays omitted for keyed immediate ingress instead of capturing the classification timestamp. Exact replay returns the bound job ID before job, dependency, event, runtime, FIFO-sequence, or notification side effects. A mismatch raises a structured conflict and aborts the whole statement or caller transaction. Requests without `options.idempotency` bypass this relation and retain the prior always-create behavior.
+The stored canonical fingerprint covers queue, concurrency key, priority, type, payload, contract version, both size limits, both redaction-key sets, sorted tags, `maxAttempts`, normalized `retryPolicy`, `prerequisiteJobId`, normalized `dependencies`, TTL, and explicitly supplied `runAt`. An omitted `runAt` stays omitted for keyed immediate ingress instead of capturing the classification timestamp. Exact replay returns the bound job ID before job, dependency, event, runtime, FIFO-sequence, or notification side effects. A mismatch raises a structured conflict and aborts the whole statement or caller transaction. Requests without `options.idempotency` bypass this relation and retain the prior always-create behavior.
 
 ### `job_dependency`
 
-One immutable prerequisite edge per dependent job. `dependent_job_id` is the primary key and cascades when that job identity is removed. `prerequisite_job_id` references the stable prerequisite identity with deletion restricted, so retention cannot strand a blocked dependent or erase released lineage. `created_at` records acceptance and nullable `released_at` records the prerequisite-success transaction.
+At most 100 immutable prerequisite edges per dependent job. The primary key is `(dependent_job_id, prerequisite_job_id)`. `dependent_job_id` cascades when that job identity is removed. `prerequisite_job_id` restricts deletion, so retention cannot strand blocked work or erase released lineage. `on_success`, `on_failure`, and `on_cancellation` each contain `release`, `cancel`, or `fail`. `created_at` records acceptance. Nullable `released_at` records when the prerequisite outcome resolved, and `resolution` records the selected action.
 
-`EnqueueOptions.prerequisiteJobId` accepts an existing stable identity. `enqueue_many_v1` locks and validates that identity inside the caller's transaction. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`; an already-succeeded prerequisite records an immediately released edge and creates the ordinary ready or scheduled runtime. A failed or canceled prerequisite is rejected until terminal dependency policies define another outcome.
+`EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteJobId` remains the compatible success-oriented shorthand. `enqueue_many_v1` sorts and locks every prerequisite identity inside the caller's transaction. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
 
-`release_dependents_v1` locks pending edges in dependent identity order. It stamps `released_at`, moves each matching blocked runtime to ready or scheduled according to its persisted `run_at`, appends `dependency_released`, and notifies each queue that gained ready work. `complete_v1` invokes it after inserting the prerequisite's succeeded outcome and event, so success and every dependent release commit atomically. The pending-edge predicate and blocked-runtime predicate make repeated or competing completion unable to repeat release evidence, FIFO allocation, or notification effects. `Queue.getJob` and `Queue.listJobs` expose `prerequisiteJobId` plus `blockedReason`; `dashboard_job_dependency_v1` exposes the retained edge to operator reads.
+`resolve_job_outcome_dependencies_v1` runs after every `job_outcome` insert and calls `resolve_dependents_v1`. That function locks dependents in identity order and records each edge's `released_at` plus `resolution`. The dependent stays blocked until every edge resolves. It then chooses `fail`, `cancel`, or `release` by fixed precedence. Release moves the blocked runtime to ready or scheduled, appends one `dependency_released`, and notifies a queue that gained ready work. Failure or cancellation removes the runtime and inserts a synthetic terminal outcome with `DependencyFailed` or `DependencyCanceled`. The outcome trigger applies the same policy recursively to downstream jobs. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once.
+
+`validate_job_dependency_v1` takes the transaction-scoped dependency-graph advisory lock before every edge insert. Its recursive reachability check rejects direct and transitive cycles with SQLSTATE `P1002`. The JSON detail contains `dependentJobId`, `prerequisiteJobId`, at most 101 `cycleJobIds`, and `truncated`. The trigger also enforces the 100-edge bound for SQL callers.
+
+`Queue.getJob` and `Queue.listJobs` expose sorted `prerequisiteJobIds`, `dependencyPolicy`, the compatible singular `prerequisiteJobId` when exactly one edge exists, and `blockedReason`. `dashboard_job_dependency_v1` exposes every retained edge and both policies.
 
 The ownership relation stores scope and full key hash, never the raw key. The initial `enqueued` event, UI projections, and errors expose only a bounded key preview plus 12-hex key digest; exact replay appends no event. Structured conflicts additionally carry full SHA-256 stored and rejected request digests. Expired ownership can be replaced by a new request. Housekeeping prunes expired bindings before terminal job identity, and purging ready or scheduled jobs releases their bindings with the job.
 
@@ -639,7 +647,7 @@ stateDiagram-v2
 
 ### Enqueue
 
-`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority, persisted retry policies, and one `prerequisiteJobId`. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, job_id, accepted)` for each input; `accepted` is true only when the statement created the durable job. One statement inserts `job`, optional `job_dependency`, `job_runtime`, and acceptance events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
+`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority, persisted retry policies, and up to 100 dependency identities. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, job_id, accepted)` for each input; `accepted` is true only when the statement created the durable job. One statement inserts `job`, optional `job_dependency` edges, `job_runtime` or a policy-selected terminal outcome, and acceptance events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
 
 `enqueue_many_v2` preserves that contract and returns `(ordinal, job_id, outcome)`. Ordinary requests map `accepted` to `accepted` or `replayed` and stay on the set-based `enqueue_many_v1` path. A batch containing `debounce` or `throttle` requests locks every scoped idempotency, debounce, or throttle key in bytewise order before processing requests in caller order. This keeps mixed batches atomic and prevents overlapping batches from reversing key-lock order.
 
@@ -1230,7 +1238,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 30. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 31. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

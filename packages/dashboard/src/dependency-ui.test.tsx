@@ -15,6 +15,8 @@ async function renderDependency(
   const job = {
     identity: {
       prerequisiteJobId: null,
+      prerequisiteJobIds: [],
+      dependencyPolicy: null,
       dependencyReleasedAt: null,
       blockedReason: null,
       ...identity,
@@ -29,16 +31,18 @@ describe("task dependency detail", () => {
   it("shows the prerequisite identity and blocked reason", async () => {
     const html = await renderDependency({
       prerequisiteJobId: "prerequisite-job",
+      prerequisiteJobIds: ["prerequisite-job"],
       blockedReason: "prerequisite_pending",
     });
     expect(html).toContain("prerequisite-job");
     expect(html).toContain("blocked");
-    expect(html).toContain("Blocked until this prerequisite succeeds");
+    expect(html).toContain("Blocked until every prerequisite satisfies the dependency policy");
   });
 
   it("shows when PostgreSQL released the dependency", async () => {
     const html = await renderDependency({
       prerequisiteJobId: "prerequisite-job",
+      prerequisiteJobIds: ["prerequisite-job"],
       dependencyReleasedAt: "2026-08-14T12:00:00.000Z",
     });
     expect(html).toContain("released");

@@ -7,6 +7,368 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("job dependencies", () => {
+  it("releases fan-in only after every prerequisite succeeds", async () => {
+    const firstId = await queue.enqueue("fan-in-first", null);
+    const secondId = await queue.enqueue("fan-in-second", null);
+    const dependentId = await queue.enqueue("fan-in-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [firstId, secondId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const expectedPrerequisiteIds = [firstId, secondId];
+    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+    expectedPrerequisiteIds.sort();
+
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+      state: "blocked",
+      prerequisiteJobIds: expectedPrerequisiteIds,
+    });
+    const first = await queue.claim("fan-in-first-worker");
+    expect(first?.id).toBe(firstId);
+    expect(await queue.complete(first!, "fan-in-first-worker", null)).toBe(true);
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "blocked" });
+
+    const second = await queue.claim("fan-in-second-worker");
+    expect(second?.id).toBe(secondId);
+    expect(await queue.complete(second!, "fan-in-second-worker", null)).toBe(true);
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
+  });
+
+  it("fails a dependent when a prerequisite failure selects the fail policy", async () => {
+    const prerequisiteId = await queue.enqueue("failing-prerequisite", null, { maxAttempts: 1 });
+    const dependentId = await queue.enqueue("failed-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [prerequisiteId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const prerequisite = await queue.claim("failing-prerequisite-worker");
+    expect(prerequisite?.id).toBe(prerequisiteId);
+
+    expect(await queue.fail(prerequisite!, "failing-prerequisite-worker", new Error("nope"))).toBe(
+      "failed",
+    );
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({
+        name: "DependencyFailed",
+        prerequisite_job_id: prerequisiteId,
+      }),
+    });
+  });
+
+  it("applies the declared policy to prerequisite success", async () => {
+    const prerequisiteId = await queue.enqueue("successful-prerequisite", null);
+    const dependentId = await queue.enqueue("success-policy-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [prerequisiteId],
+        onSuccess: "cancel",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const prerequisite = await queue.claim("successful-prerequisite-worker");
+    expect(prerequisite?.id).toBe(prerequisiteId);
+    expect(await queue.complete(prerequisite!, "successful-prerequisite-worker", null)).toBe(true);
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "canceled" });
+  });
+
+  it("cancels a dependent when a prerequisite cancellation selects the cancel policy", async () => {
+    const prerequisiteId = await queue.enqueue("canceled-prerequisite", null);
+    const dependentId = await queue.enqueue("canceled-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [prerequisiteId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+
+    await expect(
+      queue.cancel(prerequisiteId, { requestedBy: "dependency-test" }),
+    ).resolves.toMatchObject({
+      status: "canceled",
+    });
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+      state: "canceled",
+      error: expect.objectContaining({
+        name: "DependencyCanceled",
+        prerequisite_job_id: prerequisiteId,
+      }),
+    });
+  });
+
+  it("accepts mixed terminal outcomes when both policies release", async () => {
+    const succeededId = await queue.enqueue("accepted-success", null);
+    const failedId = await queue.enqueue("accepted-failure", null, { maxAttempts: 1 });
+    const canceledId = await queue.enqueue("accepted-cancellation", null);
+    const dependentId = await queue.enqueue("mixed-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [succeededId, failedId, canceledId],
+        onSuccess: "release",
+        onFailure: "release",
+        onCancellation: "release",
+      },
+    });
+
+    const succeeded = await queue.claim("accepted-success-worker");
+    expect(succeeded?.id).toBe(succeededId);
+    expect(await queue.complete(succeeded!, "accepted-success-worker", null)).toBe(true);
+    const failed = await queue.claim("accepted-failure-worker");
+    expect(failed?.id).toBe(failedId);
+    expect(await queue.fail(failed!, "accepted-failure-worker", new Error("accepted"))).toBe(
+      "failed",
+    );
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "blocked" });
+
+    await expect(queue.cancel(canceledId)).resolves.toMatchObject({ status: "canceled" });
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
+  });
+
+  it("applies policy to prerequisites which are terminal before enqueue", async () => {
+    const prerequisiteId = await queue.enqueue("already-failed-prerequisite", null, {
+      maxAttempts: 1,
+    });
+    const prerequisite = await queue.claim("already-failed-worker");
+    expect(prerequisite?.id).toBe(prerequisiteId);
+    expect(await queue.fail(prerequisite!, "already-failed-worker", new Error("done"))).toBe(
+      "failed",
+    );
+
+    const releasedId = await queue.enqueue("released-after-failure", null, {
+      dependencies: {
+        prerequisiteJobIds: [prerequisiteId],
+        onSuccess: "release",
+        onFailure: "release",
+        onCancellation: "cancel",
+      },
+    });
+    await expect(queue.getJob(releasedId)).resolves.toMatchObject({ state: "ready" });
+
+    const failedId = await queue.enqueue("failed-after-failure", null, {
+      dependencies: {
+        prerequisiteJobIds: [prerequisiteId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    await expect(queue.getJob(failedId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({ name: "DependencyFailed" }),
+    });
+  });
+
+  it("rejects direct and transitive dependency cycles with bounded details", async () => {
+    const firstId = await queue.enqueue("cycle-first", null);
+    const secondId = await queue.enqueue("cycle-second", null);
+    const thirdId = await queue.enqueue("cycle-third", null);
+    const fourthId = await queue.enqueue("cycle-fourth", null);
+    await pool.query(
+      `INSERT INTO workhorse.job_dependency(
+         dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation
+       ) VALUES ($1, $2, 'release', 'fail', 'cancel'),
+                ($2, $3, 'release', 'fail', 'cancel')`,
+      [firstId, secondId, thirdId],
+    );
+
+    let cycleError: unknown;
+    try {
+      await pool.query(
+        `INSERT INTO workhorse.job_dependency(
+         dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation
+         ) VALUES ($1, $2, 'release', 'fail', 'cancel'),
+                  ($2, $3, 'release', 'fail', 'cancel')`,
+        [fourthId, thirdId, firstId],
+      );
+    } catch (error) {
+      cycleError = error;
+    }
+    expect(cycleError).toMatchObject({
+      code: "P1002",
+      detail: expect.stringContaining('"cycleJobIds"'),
+    });
+    const cycleDetails = JSON.parse((cycleError as { detail: string }).detail) as {
+      cycleJobIds: string[];
+      truncated: boolean;
+    };
+    expect(cycleDetails.cycleJobIds.length).toBeLessThanOrEqual(101);
+    expect(cycleDetails.truncated).toBe(false);
+    await expect(
+      pool.query<{ count: number }>(
+        `SELECT count(*)::integer AS count
+           FROM workhorse.job_dependency
+          WHERE dependent_job_id = $1 AND prerequisite_job_id = $2`,
+        [fourthId, thirdId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+    await expect(
+      pool.query(
+        `INSERT INTO workhorse.job_dependency(
+           dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation
+         ) VALUES ($1, $1, 'release', 'fail', 'cancel')`,
+        [firstId],
+      ),
+    ).rejects.toMatchObject({ code: "P1002" });
+  });
+
+  it("chooses fail deterministically when failure and cancellation complete concurrently", async () => {
+    const failedId = await queue.enqueue("mixed-race-failure", null, { maxAttempts: 1 });
+    const canceledId = await queue.enqueue("mixed-race-cancellation", null);
+    const dependentId = await queue.enqueue("mixed-race-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [failedId, canceledId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const failed = await queue.claim("mixed-race-worker");
+    expect(failed?.id).toBe(failedId);
+
+    await Promise.all([
+      queue.fail(failed!, "mixed-race-worker", new Error("failed")),
+      queue.cancel(canceledId),
+    ]);
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({ name: "DependencyFailed" }),
+    });
+  });
+
+  it("releases fan-in once under concurrent prerequisite completion", async () => {
+    const [firstId, secondId] = await queue.enqueueMany([
+      { type: "concurrent-first", payload: null },
+      { type: "concurrent-second", payload: null },
+    ]);
+    const dependentId = await queue.enqueue("concurrent-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [firstId!, secondId!],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const first = await queue.claim("concurrent-worker-1");
+    const second = await queue.claim("concurrent-worker-2");
+    const actualIds = [first?.id, second?.id];
+    const expectedIds = [firstId, secondId];
+    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+    actualIds.sort();
+    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+    expectedIds.sort();
+    expect(actualIds).toEqual(expectedIds);
+
+    await expect(
+      Promise.all([
+        queue.complete(first!, "concurrent-worker-1", null),
+        queue.complete(second!, "concurrent-worker-2", null),
+      ]),
+    ).resolves.toEqual([true, true]);
+    await expect(queue.getJob(dependentId)).resolves.toMatchObject({ state: "ready" });
+    await expect(
+      pool.query<{ count: number }>(
+        `SELECT count(*)::integer AS count FROM workhorse.job_event
+          WHERE job_id = $1 AND event_type = 'dependency_released'`,
+        [dependentId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it("settles a dependent deterministically when cancellation races completion", async () => {
+    const prerequisiteId = await queue.enqueue("racing-cancel-prerequisite", null);
+    const dependentId = await queue.enqueue("racing-cancel-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [prerequisiteId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    const prerequisite = await queue.claim("racing-cancel-worker");
+    expect(prerequisite?.id).toBe(prerequisiteId);
+
+    const [cancellation, completed] = await Promise.all([
+      queue.cancel(prerequisiteId, { requestedBy: "race-test" }),
+      queue.complete(prerequisite!, "racing-cancel-worker", null),
+    ]);
+    const acknowledged = completed
+      ? null
+      : await queue.acknowledgeCancel(prerequisite!, "racing-cancel-worker");
+    const dependent = await queue.getJob(dependentId);
+    expect({
+      completed,
+      cancellation: cancellation.status,
+      acknowledged,
+      state: dependent?.state,
+    }).toEqual(
+      completed
+        ? {
+            completed: true,
+            cancellation: "already_terminal",
+            acknowledged: null,
+            state: "ready",
+          }
+        : {
+            completed: false,
+            cancellation: "cancel_requested",
+            acknowledged: true,
+            state: "canceled",
+          },
+    );
+  });
+
+  it("enforces unique prerequisite identities and the fan-in bound", async () => {
+    const prerequisiteIds = await queue.enqueueMany(
+      Array.from({ length: 101 }, (_, index) => ({
+        type: `bounded-prerequisite-${index}`,
+        payload: null,
+      })),
+    );
+    await expect(
+      queue.enqueue("duplicate-dependent", null, {
+        dependencies: {
+          prerequisiteJobIds: [prerequisiteIds[0]!, prerequisiteIds[0]!],
+          onSuccess: "release",
+          onFailure: "fail",
+          onCancellation: "cancel",
+        },
+      }),
+    ).rejects.toThrow(/must be unique/);
+    await expect(
+      queue.enqueue("oversized-dependent", null, {
+        dependencies: {
+          prerequisiteJobIds: prerequisiteIds,
+          onSuccess: "release",
+          onFailure: "fail",
+          onCancellation: "cancel",
+        },
+      }),
+    ).rejects.toThrow(/between 1 and 100/);
+    const boundedDependentId = await queue.enqueue("bounded-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: prerequisiteIds.slice(0, 100),
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    expect(boundedDependentId).toEqual(expect.any(String));
+    const claims = [];
+    for (let index = 0; index < 100; index += 1) {
+      claims.push(await queue.claim(`bounded-worker-${index}`));
+    }
+    await Promise.all(
+      claims.map((claim, index) => queue.complete(claim!, `bounded-worker-${index}`, null)),
+    );
+    await expect(queue.getJob(boundedDependentId)).resolves.toMatchObject({ state: "ready" });
+  });
+
   it("keeps a dependent outside dispatch until its prerequisite succeeds", async () => {
     const prerequisiteId = await queue.enqueue("prerequisite", { step: 1 });
     const dependentId = await queue.enqueue(

@@ -2167,6 +2167,10 @@ export async function readDashboardJobDetail(
       execution_timeout_ms: string | number | null;
       concurrency_key: string | null;
       prerequisite_job_id: string | null;
+      prerequisite_job_ids: string[];
+      dependency_on_success: "release" | "cancel" | "fail" | null;
+      dependency_on_failure: "release" | "cancel" | "fail" | null;
+      dependency_on_cancellation: "release" | "cancel" | "fail" | null;
       dependency_released_at: Date | string | null;
       created_at: Date | string;
       runtime_state: string | null;
@@ -2202,7 +2206,11 @@ export async function readDashboardJobDetail(
              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
              j.max_attempts,
              j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.concurrency_key, j.created_at,
-             dependency.prerequisite_job_id, dependency.released_at AS dependency_released_at,
+             dependency.prerequisite_job_id, dependency.prerequisite_job_ids,
+             dependency.on_success AS dependency_on_success,
+             dependency.on_failure AS dependency_on_failure,
+             dependency.on_cancellation AS dependency_on_cancellation,
+             dependency.released_at AS dependency_released_at,
              r.state AS runtime_state, r.current_attempt AS runtime_attempt, r.run_at, r.ready_at,
              r.worker_id, r.fence_token::text, r.acquired_at, r.heartbeat_at, r.expires_at,
              r.wait_name, r.attempt_started_at, r.attempt_timeout_at,
@@ -2219,8 +2227,19 @@ export async function readDashboardJobDetail(
         LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
         LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
         LEFT JOIN workhorse.dashboard_job_progress_v1 p ON p.job_id = j.id
-        LEFT JOIN workhorse.dashboard_job_dependency_v1 dependency
-          ON dependency.dependent_job_id = j.id
+        LEFT JOIN LATERAL (
+          SELECT CASE WHEN count(*) = 1
+                   THEN (array_agg(edge.prerequisite_job_id))[1] END AS prerequisite_job_id,
+                 COALESCE(array_agg(edge.prerequisite_job_id ORDER BY edge.prerequisite_job_id)
+                   FILTER (WHERE edge.prerequisite_job_id IS NOT NULL), '{}') AS prerequisite_job_ids,
+                 min(edge.on_success) AS on_success,
+                 min(edge.on_failure) AS on_failure,
+                 min(edge.on_cancellation) AS on_cancellation,
+                 CASE WHEN bool_and(edge.released_at IS NOT NULL)
+                   THEN max(edge.released_at) END AS released_at
+            FROM workhorse.dashboard_job_dependency_v1 edge
+           WHERE edge.dependent_job_id = j.id
+        ) dependency ON true
        WHERE j.id = ${id}
     `),
     database.execute<{
@@ -2333,9 +2352,18 @@ export async function readDashboardJobDetail(
         job.execution_timeout_ms === null ? null : Number(job.execution_timeout_ms),
       concurrencyKey: job.concurrency_key,
       prerequisiteJobId: job.prerequisite_job_id,
+      prerequisiteJobIds: job.prerequisite_job_ids,
+      dependencyPolicy:
+        job.dependency_on_failure === null
+          ? null
+          : {
+              onSuccess: job.dependency_on_success!,
+              onFailure: job.dependency_on_failure,
+              onCancellation: job.dependency_on_cancellation!,
+            },
       dependencyReleasedAt: toIsoOrNull(job.dependency_released_at),
       blockedReason:
-        job.runtime_state === "blocked" && job.prerequisite_job_id !== null
+        job.runtime_state === "blocked" && job.prerequisite_job_ids.length > 0
           ? "prerequisite_pending"
           : null,
     },

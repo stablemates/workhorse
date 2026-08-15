@@ -20,6 +20,7 @@ import {
   DEFAULT_JOB_VALUE_MAX_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
   MAX_JOB_CONTRACT_SENSITIVE_KEYS,
+  MAX_JOB_DEPENDENCIES,
   MAX_JOB_PRIORITY,
   MAX_JOB_VALUE_MAX_BYTES,
 } from "../types.js";
@@ -114,6 +115,7 @@ const enqueueConflictFields = new Set<EnqueueIdempotencyConflictField>([
   "maxAttempts",
   "retryPolicy",
   "prerequisiteJobId",
+  "dependencies",
   "ttlMs",
 ]);
 const enqueueConflictDetailKeys = new Set([
@@ -432,6 +434,31 @@ export class EnqueueContractsModule extends QueueModule {
             );
           }
           const acceptance = this.jobAcceptance(type, payload);
+          if (options.prerequisiteJobId !== undefined && options.dependencies !== undefined) {
+            throw new TypeError(
+              "enqueue options cannot combine prerequisiteJobId and dependencies",
+            );
+          }
+          const dependencies = options.dependencies;
+          if (dependencies !== undefined) {
+            if (
+              dependencies.prerequisiteJobIds.length === 0 ||
+              dependencies.prerequisiteJobIds.length > MAX_JOB_DEPENDENCIES
+            ) {
+              throw new RangeError(
+                `dependencies requires between 1 and ${MAX_JOB_DEPENDENCIES} prerequisiteJobIds`,
+              );
+            }
+            if (
+              new Set(dependencies.prerequisiteJobIds).size !==
+              dependencies.prerequisiteJobIds.length
+            ) {
+              throw new TypeError("dependencies prerequisiteJobIds must be unique");
+            }
+          }
+          const prerequisiteJobIds = [...(dependencies?.prerequisiteJobIds ?? [])];
+          // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+          prerequisiteJobIds.sort();
           return {
             queue: options.queue ?? this.context.defaultQueue,
             type,
@@ -451,6 +478,15 @@ export class EnqueueContractsModule extends QueueModule {
             maxAttempts: options.maxAttempts ?? 25,
             retryPolicy: options.retryPolicy ?? null,
             prerequisiteJobId: options.prerequisiteJobId ?? null,
+            dependencies:
+              dependencies === undefined
+                ? null
+                : {
+                    prerequisiteJobIds,
+                    onSuccess: dependencies.onSuccess,
+                    onFailure: dependencies.onFailure,
+                    onCancellation: dependencies.onCancellation,
+                  },
             tags: tags ?? options.tags ?? [],
             ...(idempotency === undefined
               ? {}

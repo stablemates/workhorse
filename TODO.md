@@ -743,9 +743,9 @@ three primitives below have shipped and proven their contracts.
 
 **Depends on:** P1-01, P1-02, P1-06, P2-01
 
-- [ ] Model dependency edges without putting blocked jobs in ready dispatch indexes.
-- [ ] Atomically release dependents when prerequisites reach accepted terminal states.
-- [ ] Define failure, cancellation, fan-in, and dependency-cycle behavior.
+- [x] Model dependency edges without putting blocked jobs in ready dispatch indexes.
+- [x] Atomically release dependents when prerequisites reach accepted terminal states.
+- [x] Define failure, cancellation, fan-in, and dependency-cycle behavior.
 - [ ] Expose dependency state and lineage through query APIs.
 
 ### [ ] P3-02 Child jobs and result joining

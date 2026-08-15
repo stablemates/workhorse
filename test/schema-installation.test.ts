@@ -46,8 +46,12 @@ describe("schema installation", () => {
       dashboard_job_dependency_v1: [
         "dependent_job_id",
         "prerequisite_job_id",
+        "on_success",
+        "on_failure",
+        "on_cancellation",
         "created_at",
         "released_at",
+        "resolution",
       ],
       dashboard_job_event_v1: [
         "event_id",
@@ -201,11 +205,11 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v30 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v31 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(30);
+    expect(version.rows[0]?.version).toBe(31);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -219,6 +223,7 @@ describe("schema installation", () => {
       { version: 28, description: "add keyed debounce enqueue" },
       { version: 29, description: "add keyed throttle enqueue" },
       { version: 30, description: "add one-prerequisite job dependencies" },
+      { version: 31, description: "add fan-in dependency policies" },
     ]);
 
     const maintenanceFunctions = await pool.query<{
