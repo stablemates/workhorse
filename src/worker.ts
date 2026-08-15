@@ -13,6 +13,7 @@ import type {
   ScheduleWaitRequest,
   ScheduleWaitResult,
 } from "./queue/checkpoints-progress-waits.js";
+import type { WaitForSignalResult } from "./queue/signals.js";
 import type { StoredSchedule } from "./queue/cron-schedules.js";
 import type { MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 import {
@@ -109,6 +110,8 @@ export interface HandlerContext<TPayload = Json> {
   sleep(name: string, durationMs: number): Promise<void>;
   /** Suspend this job without consuming its logical attempt until the absolute target is due. */
   sleepUntil(name: string, wakeAt: Date): Promise<void>;
+  /** Suspend until one idempotent external delivery supplies this named signal payload. */
+  waitForSignal<TPayload extends Json = Json>(name: string): Promise<TPayload>;
   /** Create or replay one named child and return its retained successful result after resumption. */
   runChild<TChildPayload extends Json, TResult extends Json = Json>(
     name: string,
@@ -208,6 +211,11 @@ export interface WorkerQueueApi {
     name: string,
     request: ScheduleWaitRequest,
   ): Promise<ScheduleWaitResult>;
+  waitForSignal<TPayload extends Json = Json>(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+  ): Promise<WaitForSignalResult<TPayload>>;
   createChild<TPayload extends Json, TResult extends Json = Json>(
     parent: ClaimedJob<unknown>,
     workerId: string,
@@ -1053,6 +1061,30 @@ export class Worker {
         scheduleWait(name, { durationMs });
       const sleepUntil: HandlerContext["sleepUntil"] = (name, wakeAt) =>
         scheduleWait(name, { wakeAt });
+      const inFlightSignals = new Map<string, Promise<Json>>();
+      const waitForSignal: HandlerContext["waitForSignal"] = async <TPayload extends Json>(
+        name: string,
+      ): Promise<TPayload> => {
+        const pending = inFlightSignals.get(name);
+        if (pending) return (await pending) as TPayload;
+        const execution = (async (): Promise<TPayload> => {
+          if (controller.signal.aborted) {
+            throw controller.signal.reason ?? new Error("Job lease was lost");
+          }
+          const signal = await this.queue.waitForSignal<TPayload>(job, this.workerId, name);
+          if (signal.status === "waiting" && arbiter.submit("suspended_for_wait")) {
+            controller.abort(DURABLE_WAIT_SUSPENSION);
+            throw DURABLE_WAIT_SUSPENSION;
+          }
+          return signal.payload as TPayload;
+        })();
+        inFlightSignals.set(name, execution);
+        try {
+          return await execution;
+        } finally {
+          if (inFlightSignals.get(name) === execution) inFlightSignals.delete(name);
+        }
+      };
       const inFlightChildren = new Map<string, { request: unknown; execution: Promise<Json> }>();
       const runChild: HandlerContext["runChild"] = <
         TChildPayload extends Json,
@@ -1141,6 +1173,7 @@ export class Worker {
         checkpoint,
         sleep: durableSleep,
         sleepUntil,
+        waitForSignal,
         runChild,
         runChildren,
       });

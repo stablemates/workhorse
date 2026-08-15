@@ -7,6 +7,7 @@ import type { QueueModuleContext } from "./module-context.js";
 import { OperatorReadsModule } from "./operator-reads.js";
 import { QueueAdministrationModule } from "./queue-administration.js";
 import { RetentionMaintenanceModule } from "./retention-maintenance.js";
+import { SignalsModule } from "./signals.js";
 import { WorkerRegistryModule } from "./worker-registry.js";
 
 export interface QueueModules {
@@ -14,6 +15,7 @@ export interface QueueModules {
   readonly claimLeaseFence: ClaimLeaseFenceModule;
   readonly checkpointsProgressWaits: CheckpointsProgressWaitsModule;
   readonly childJobs: ChildJobsModule;
+  readonly signals: SignalsModule;
   readonly queueAdministration: QueueAdministrationModule;
   readonly workerRegistry: WorkerRegistryModule;
   readonly retentionMaintenance: RetentionMaintenanceModule;
@@ -28,6 +30,7 @@ export function createQueueModules(context: QueueModuleContext): QueueModules {
     claimLeaseFence: new ClaimLeaseFenceModule(context),
     checkpointsProgressWaits: new CheckpointsProgressWaitsModule(context),
     childJobs: new ChildJobsModule(context, enqueueContracts),
+    signals: new SignalsModule(context),
     queueAdministration: new QueueAdministrationModule(context),
     workerRegistry: new WorkerRegistryModule(context),
     retentionMaintenance: new RetentionMaintenanceModule(context),

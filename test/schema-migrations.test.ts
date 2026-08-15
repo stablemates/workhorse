@@ -109,6 +109,7 @@ describe("schema migrations", () => {
       { version: 33, description: "add single linked child jobs" },
       { version: 34, description: "add bounded child fan-out and joins" },
       { version: 35, description: "preserve child lineage through lifecycle changes" },
+      { version: 36, description: "add idempotent signals to waiting executions" },
     ]);
   });
 
@@ -118,20 +119,20 @@ describe("schema migrations", () => {
 
   it("leaves an already-current schema unchanged", async () => {
     const before = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 35",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 36",
     );
 
     await migrateSchema(database.pool);
 
     const after = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 35",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 36",
     );
     expect(after.rows).toEqual(before.rows);
   });
 
   it("safely replays the latest migration after its target version commits", async () => {
     const migration = await readFile(
-      path.join(repository, "sql", "migrations", "0035-preserve-child-lineage.sql"),
+      path.join(repository, "sql", "migrations", "0036-add-idempotent-signals.sql"),
       "utf8",
     );
 

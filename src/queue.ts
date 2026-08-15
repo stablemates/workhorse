@@ -98,6 +98,16 @@ import {
   ChildLimitExceededError,
   ChildResultLimitExceededError,
 } from "./queue/child-jobs.js";
+import {
+  SignalIdempotencyConflictError,
+  SignalWaitLeaseLostError,
+  SignalWaitLimitExceededError,
+  type SendSignalRequest,
+  type SendSignalResult,
+  type SendSignalStatus,
+  type WaitForSignalResult,
+  type WaitForSignalStatus,
+} from "./queue/signals.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -118,8 +128,19 @@ export {
   WaitConflictError,
   WaitLeaseLostError,
   WaitLimitExceededError,
+  SignalIdempotencyConflictError,
+  SignalWaitLeaseLostError,
+  SignalWaitLimitExceededError,
 };
-export type { ScheduleWaitRequest, ScheduleWaitResult };
+export type {
+  ScheduleWaitRequest,
+  ScheduleWaitResult,
+  SendSignalRequest,
+  SendSignalResult,
+  SendSignalStatus,
+  WaitForSignalResult,
+  WaitForSignalStatus,
+};
 export type { ScheduleDefinition, ScheduleJobDefinition, StoredSchedule };
 import { nullableRowTimestamp } from "./queue/row-mapping.js";
 
@@ -582,6 +603,23 @@ export class Queue {
     request: ScheduleWaitRequest,
   ): Promise<ScheduleWaitResult> {
     return this.modules.checkpointsProgressWaits.scheduleWait(job, workerId, name, request);
+  }
+
+  async waitForSignal<TPayload extends Json = Json>(
+    job: ClaimedJob<unknown>,
+    workerId: string,
+    name: string,
+  ): Promise<WaitForSignalResult<TPayload>> {
+    return this.modules.signals.waitForSignal<TPayload>(job, workerId, name);
+  }
+
+  async sendSignal<TPayload extends Json>(
+    jobId: string,
+    name: string,
+    payload: TPayload,
+    request: SendSignalRequest,
+  ): Promise<SendSignalResult<TPayload>> {
+    return this.modules.signals.sendSignal(jobId, name, payload, request);
   }
 
   async createChild<TPayload extends Json, TResult extends Json = Json>(

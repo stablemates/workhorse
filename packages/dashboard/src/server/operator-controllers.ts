@@ -1,4 +1,5 @@
 import type { Queue } from "@workhorse/core";
+import type { Json } from "@workhorse/core";
 import type {
   DashboardAuditContext,
   DashboardCancellationAuditContext,
@@ -17,6 +18,14 @@ export type DashboardOperatorAction =
   | { kind: "purgeQueue"; queueName: string; audit: DashboardAuditContext }
   | { kind: "runTaskNow"; jobId: string; audit: DashboardAuditContext }
   | { kind: "cancelTask"; jobId: string; audit: DashboardCancellationAuditContext }
+  | {
+      kind: "signalTask";
+      jobId: string;
+      name: string;
+      payload: Json;
+      idempotencyKey: string;
+      audit: DashboardAuditContext;
+    }
   | {
       kind: "setWorkerPaused";
       workerId: string;
@@ -99,6 +108,20 @@ export function createDashboardOperatorControllers(
             finishedAt: isoTimestamp(result.finishedAt),
           };
         }),
+      signalTask: (jobId, name, payload, idempotencyKey, audit) =>
+        options.run(
+          { kind: "signalTask", jobId, name, payload, idempotencyKey, audit },
+          async (queue) => {
+            const result = await queue.sendSignal(jobId, name, payload, {
+              idempotencyKey,
+              requestedBy: requestedBy(audit),
+            });
+            return {
+              ...result,
+              deliveredAt: isoTimestamp(result.deliveredAt),
+            };
+          },
+        ),
     },
     workerController: {
       setWorkerPaused: (workerId, paused, audit) =>

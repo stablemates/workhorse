@@ -1,0 +1,43 @@
+# How do I wait for an external signal?
+
+Some jobs need a decision or event that arrives from another process. A signal wait releases the
+worker slot until an application or authenticated operator supplies a named JSON payload.
+
+## The handler restarts when delivery arrives
+
+`ctx.waitForSignal(name)` records a durable boundary and releases the lease. When a caller delivers
+that signal, Workhorse makes the same logical attempt ready and a worker starts the handler again.
+
+The handler restarts from its entry point, so checkpoint earlier effects or make them idempotent.
+When replay reaches the same name, `waitForSignal` returns the retained payload.
+
+```ts
+const approval = await ctx.waitForSignal<{ approved: boolean }>("approval");
+
+if (approval.approved) await publishOrder();
+```
+
+## Delivery is idempotent at the state transition
+
+An application calls `Queue.sendSignal` with the stable job identity, name, payload, idempotency
+key, and trusted actor. The first accepted delivery resumes the job. An equal retry returns the
+retained delivery, so a network retry cannot resume the handler twice.
+
+A reused key conflicts if its payload or actor changes. Another key arriving after acceptance is
+late and returns the retained winner. A delivery before the wait exists is rejected without being
+buffered, so the caller may retry after the handler declares the boundary.
+
+The dashboard uses the same queue operation, but its server replaces browser attribution with the
+authenticated principal. Application-owned callers must establish authorization before calling
+the core API.
+
+## Next
+
+- [130-durable-waits.md](130-durable-waits.md) — pause until a time instead of an external event
+- [030-delivery-guarantees.md](030-delivery-guarantees.md) — make replayed work safe
+- [120-cancellation.md](120-cancellation.md) — close work that should no longer wait
+
+---
+
+Exact signal bounds, statuses, and SQL transitions:
+[`architecture.md`](../architecture.md#durable-signal-suspension).

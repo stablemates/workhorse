@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 35 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 36 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency, keyed debounce, keyed throttle, and
 fan-in job dependencies with terminal policies. It also supports retry policies, bounded linked
 child fan-out and joins, checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
@@ -151,7 +151,15 @@ Delivery is at least once. Enqueue idempotency deduplicates durable acceptance, 
 
 `HandlerContext.sleep(name, durationMs)` and `sleepUntil(name, date)` create named durable timer boundaries. A future first target atomically clears active ownership and reuses the scheduled index; normal promotion later restarts the handler from its entry point in the same attempt with a new fence. Relative durations are PostgreSQL-clock-based and first-write-wins by name. Absolute target or mode changes conflict. The worker aborts its cooperative signal and frees the slot without calling fail or complete. Code before the wait is replayed and therefore still needs checkpoints or application idempotency.
 
-Wait names are limited to 200 characters, relative durations to 365 days, and retained names to 1,000 per job. A past-due first target is still recorded and returns immediately. The default one-second maintenance cadence makes sub-second durable waits inefficient and actual wake time can be later because of queue pause, downtime, or worker availability. Timer waits follow parent-job retention. They do not provide general-purpose signals, early wake, or a workflow graph, although the containing job may be canceled through the ordinary job lifecycle.
+Wait names are limited to 200 characters, relative durations to 365 days, and retained names to 1,000 per job. A past-due first target is still recorded and returns immediately. The default one-second maintenance cadence makes sub-second durable waits inefficient and actual wake time can be later because of queue pause, downtime, or worker availability. Timer waits follow parent-job retention.
+
+`HandlerContext.waitForSignal(name)` creates a separate named external-delivery boundary. A first
+declaration atomically releases the lease outside ready and active dispatch. `Queue.sendSignal`
+accepts a JSON payload, idempotency key, and trusted actor. Payloads are limited to 65,536 bytes,
+keys to 512 UTF-8 bytes, names and actors to 200 characters, and one job to 1,000 signal names.
+One accepted delivery makes the same logical attempt ready. Equal retries return the retained
+payload, conflicting reuse raises `SignalIdempotencyConflictError`, and early, late, or stale calls
+return explicit statuses. The authenticated dashboard mutation derives the actor on the server.
 
 Checkpoint values are limited to 1 MiB of PostgreSQL's canonical JSONB text representation. They follow the parent job identity's retention lifecycle and cannot be retired independently without risking repetition of a previously completed step. A checkpoint miss proves only that PostgreSQL has no committed result for that name; it does not prove an external operation never ran.
 

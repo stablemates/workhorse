@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 35. Version 23 is the oldest supported
+The current clean-install protocol is schema version 36. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 35 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 36 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -56,7 +56,11 @@ Migration `0035-preserve-child-lineage.sql` requires version 34. It makes the pa
 lifetime, prevents terminal pruning while any child is live or within an evidence window, and adds
 the bounded dashboard redrive-lineage view. It records version 35 and advances the schema row.
 
-Versions below 23, versions above 35, gaps, and mixed version rows fail without running a migration.
+Migration `0036-add-idempotent-signals.sql` requires version 35. It adds retained named signal
+waits, fenced lease release, and idempotent attributed delivery. It records version 36 and advances
+the schema row.
+
+Versions below 23, versions above 36, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -559,6 +563,29 @@ Insert-once named timer boundaries for a stable job identity. Relative sleeps st
 
 Code after a wait resumes by replaying the handler from its entry point. Work before the wait must itself be idempotent or checkpointed. Names are limited to 200 characters, durations to 365 days, and one job to 1,000 timer names. Waits cascade only with the stable parent job identity.
 
+### `job_signal_wait`
+
+One named external-delivery boundary per stable job identity. `wait_for_signal_v1` accepts the
+exact active job, worker, and fence generation. A first declaration retains its attempt, fence,
+worker, and claim time, then moves runtime to a non-runnable scheduled row without closing the
+logical attempt. One job retains at most 1,000 signal names, each limited to 200 characters.
+
+`send_signal_v1` accepts the job identity, signal name, JSON payload, idempotency key, and trusted
+actor. Payloads are limited to 65,536 bytes of canonical JSONB text, keys to 512 UTF-8 bytes, and
+actors to 200 characters. The function serializes delivery with declaration, stores only a SHA-256
+key hash and request fingerprint, and makes the waiting runtime ready in the same transaction.
+The first accepted payload is retained. An equal same-key retry returns `duplicate`; a changed
+same-key request raises `SignalIdempotencyConflictError`; another key returns
+`already_delivered`. Early, stale, and late deliveries return bounded statuses without changing
+dispatch state.
+
+`HandlerContext.waitForSignal(name)` suspends and later returns the retained payload after handler
+replay. `Queue.sendSignal` is the application-owned delivery surface. The dashboard procedure
+`dashboard.signalTask` derives `requestedBy` from its authenticated server principal before it
+calls the same queue operation. `signal_waiting`, `signal_received`, `signal_replayed`, and
+`signal_rejected` events retain bounded lifecycle evidence. Events include the actor and a short
+key digest but never the raw key or payload.
+
 ### `retention_policy`
 
 One singleton row is the target database's authoritative retention policy. Its effective typed
@@ -833,6 +860,19 @@ redrive attribution as metric attributes.
 `schedule_wait_v1` accepts either a relative bigint duration or an absolute timestamp, locks the exact active worker/fence generation, and rechecks lease expiry after acquiring the runtime lock. A first future target inserts `job_wait`, changes runtime to wait-marked scheduled state, clears ownership, and emits `wait_scheduled`. A first past-due target is still recorded but leaves runtime active and returns elapsed. Relative replay returns the first stored target even if later configuration supplies another duration; absolute target or mode changes conflict. Reaching an elapsed name emits `wait_replayed`.
 
 Suspension aborts the handler's cooperative signal and exits through private worker control flow, so the heartbeat stops and the worker slot is free for another claim. If the handler catches that signal and returns, the worker reasserts the recorded suspension. It also emits `workhorse.handler.signal_swallowed` at warning severity with `workhorse.handler.outcome = suspended`. Suspension does not call failure or completion and does not increment attempts. Normal promotion later makes the same logical attempt claimable with a new fence. Wake latency is bounded by maintenance cadence and worker availability, not by an exact wall-clock guarantee. Queue health reports the number of sleeping and overdue waits plus the next durable wake target.
+
+### Durable signal suspension
+
+`wait_for_signal_v1` takes an advisory lock scoped to job identity and signal name, then locks and
+revalidates the active runtime generation. It inserts `job_signal_wait`, clears ownership, and
+parks runtime outside the ready and active indexes. The worker uses the same private suspension
+control path as a timer wait, so no failure, completion, or attempt-history row is written.
+
+`send_signal_v1` takes the same advisory lock. If a pending row still owns the waiting boundary,
+it retains the request and changes runtime to ready with a fresh FIFO sequence before notifying
+workers. Competing deliveries serialize at this transition. Cancellation, deadline materialization,
+or another lifecycle transition makes an undelivered row stale. A delivered row remains replayable
+through later handler retries and follows parent-job retention.
 
 ### Claim
 
@@ -1295,7 +1335,7 @@ dispatch index. Its stable order makes the timings diagnostic rather than a perf
 
 ## Errors
 
-Every error Workhorse raises deliberately extends `WorkhorseError` (`src/errors.ts`), which extends `Error` and sets `name` in each subclass. `instanceof WorkhorseError` therefore means "Workhorse rejected this call", not "this call failed": a PostgreSQL error, a handler's own throw, and a driver connection failure propagate unchanged and do not carry the base. The exported subclasses are `CheckpointConflictError`, `CheckpointLeaseLostError`, `EnqueueIdempotencyConflictError`, `JobContractUnavailableError`, `JobContractValidationError`, `JobValueSizeLimitError`, `MissingRowError`, `ProgressLeaseLostError`, `ProgressRateLimitError`, `RedriveIdempotencyConflictError`, `WaitConflictError`, `WaitLeaseLostError`, and `WaitLimitExceededError` from the queue, plus `CancellationRequestedError`, `DeadlineExceededError`, `ExecutionTimeoutError`, and `InjectedCrashError` from the worker.
+Every error Workhorse raises deliberately extends `WorkhorseError` (`src/errors.ts`), which extends `Error` and sets `name` in each subclass. `instanceof WorkhorseError` therefore means "Workhorse rejected this call", not "this call failed": a PostgreSQL error, a handler's own throw, and a driver connection failure propagate unchanged and do not carry the base. The exported subclasses are `CheckpointConflictError`, `CheckpointLeaseLostError`, `EnqueueIdempotencyConflictError`, `JobContractUnavailableError`, `JobContractValidationError`, `JobValueSizeLimitError`, `MissingRowError`, `ProgressLeaseLostError`, `ProgressRateLimitError`, `RedriveIdempotencyConflictError`, `SignalIdempotencyConflictError`, `SignalWaitLeaseLostError`, `SignalWaitLimitExceededError`, `WaitConflictError`, `WaitLeaseLostError`, and `WaitLimitExceededError` from the queue, plus `CancellationRequestedError`, `DeadlineExceededError`, `ExecutionTimeoutError`, and `InjectedCrashError` from the worker.
 
 Recognizing a PostgreSQL failure means reading through whatever an ORM wrapped it in. `databaseErrorCode(error)` returns the SQLSTATE and `databaseErrorDetails(error)` returns every `DETAIL` string along the chain. Both walk breadth-first over `cause`, `driverError`, and `meta`, visit at most 16 objects, and track visited objects so a cyclic `cause` terminates. A candidate SQLSTATE must match `/^[0-9A-Z]{5}$/`; a Prisma code matching `/^P\d{4}$/` on an object that also carries `meta` is held back and returned only when nothing nested supplies a real SQLSTATE, because Prisma reports `P2010` on the same field and retains the true SQLSTATE under `meta`.
 
@@ -1347,7 +1387,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 35. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 36. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

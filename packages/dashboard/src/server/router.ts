@@ -121,6 +121,10 @@ const eventTypeValues = [
   "redriven",
   "redrive_created",
   "wait_elapsed",
+  "signal_waiting",
+  "signal_received",
+  "signal_replayed",
+  "signal_rejected",
   "retry",
   "deadline_exceeded",
   "timeout",
@@ -264,6 +268,13 @@ const cancelTaskInput = z.object({
 });
 const runTaskNowInput = z.object({
   id: z.uuid(),
+  audit: auditSchema,
+});
+const signalTaskInput = z.object({
+  id: z.uuid(),
+  name: z.string().trim().min(1).max(200),
+  payload: z.json(),
+  idempotencyKey: z.string().min(1).max(512),
   audit: auditSchema,
 });
 
@@ -473,6 +484,22 @@ export const dashboardRouter = {
       }
       const result = await context.taskController.cancelTask(
         input.id,
+        auditWithOccurredAt(input.audit, context.authenticatedActor),
+      );
+      if (result.status === "not_found") {
+        throw new ORPCError("NOT_FOUND", { message: "Task not found" });
+      }
+      return result;
+    }),
+    signalTask: procedure.input(signalTaskInput).handler(async ({ context, input }) => {
+      if (context.operator.mode !== "local" || !context.taskController?.signalTask) {
+        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+      }
+      const result = await context.taskController.signalTask(
+        input.id,
+        input.name,
+        input.payload,
+        input.idempotencyKey,
         auditWithOccurredAt(input.audit, context.authenticatedActor),
       );
       if (result.status === "not_found") {

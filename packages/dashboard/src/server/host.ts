@@ -107,6 +107,7 @@ const mutationProcedures = new Set([
   "dashboard.revertRetentionPolicy",
   "dashboard.runTaskNow",
   "dashboard.cancelTask",
+  "dashboard.signalTask",
 ]);
 const rpcLogRecords = {
   completed: {
