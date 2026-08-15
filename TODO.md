@@ -479,7 +479,8 @@ Trigger.dev, and DBOS all name these; Workhorse currently only rejects or replay
       equivalent requests coalesced into the retained job rather than rejected.
 - [x] Keep PostgreSQL the owner of window arithmetic and define behavior when the keyed job is
       already active or terminal.
-- [x] Report the coalescing outcome in structured enqueue results and lifecycle events.
+- [x] Report coalescing in structured results, debug logs, and queue-level metrics. Throttle omits
+      durable events because repeated requests could amplify audit writes without changing job state.
 - [x] Cover replace, preserve, coalesce, and concurrent-enqueue races with integration tests
       and a benchmark scenario.
 

@@ -33,7 +33,8 @@ A pending replacement is `replaced`.
 ## Replacement stops when processing starts
 
 Only a `scheduled` or `ready` job can be replaced. If a worker owns the job, or the job is already
-terminal, the outcome is `non_replaceable` and the accepted payload stays unchanged.
+terminal, the outcome is `non_replaceable`. Workhorse discards the new request's payload and
+returns the retained job's stable `jobId`, while its accepted payload stays unchanged.
 
 If the window elapses before promotion runs, Workhorse also refuses replacement. This prevents a
 late request from creating a second live job beside overdue work. After an operator purges the old

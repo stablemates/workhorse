@@ -1104,13 +1104,14 @@ describe("enqueue contracts", () => {
     expect(accepted).toMatchObject({ outcome: "accepted" });
     expect(coalesced).toEqual({ jobId: accepted.jobId, outcome: "coalesced" });
     await expect(
-      pool.query<{ jobs: number; enqueued_events: number }>(
+      pool.query<{ jobs: number; events: number; enqueued_events: number }>(
         `SELECT
            (SELECT count(*)::integer FROM workhorse.job) AS jobs,
+           (SELECT count(*)::integer FROM workhorse.job_event) AS events,
            (SELECT count(*)::integer FROM workhorse.job_event WHERE event_type = 'enqueued')
              AS enqueued_events`,
       ),
-    ).resolves.toMatchObject({ rows: [{ jobs: 1, enqueued_events: 1 }] });
+    ).resolves.toMatchObject({ rows: [{ jobs: 1, events: 1, enqueued_events: 1 }] });
   });
 
   it("coalesces throttled work without another FIFO placement or notification", async () => {

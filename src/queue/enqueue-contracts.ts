@@ -551,6 +551,10 @@ export class EnqueueContractsModule extends QueueModule {
               "workhorse.job.type": request.type,
               "workhorse.queue.name": request.options?.queue ?? this.context.defaultQueue,
             });
+            telemetryMetrics.enqueueOutcomes.add(1, {
+              "workhorse.queue.name": request.options?.queue ?? this.context.defaultQueue,
+              "workhorse.enqueue.outcome": outcome,
+            });
             if (outcome !== "accepted") continue;
             telemetryMetrics.enqueued.add(1, {
               "workhorse.queue.name": request.options?.queue ?? this.context.defaultQueue,
@@ -559,6 +563,7 @@ export class EnqueueContractsModule extends QueueModule {
           }
           if (enqueueResults.length === 1) {
             span.setAttribute("workhorse.job.id", enqueueResults[0]!.jobId);
+            span.setAttribute("workhorse.enqueue.outcome", enqueueResults[0]!.outcome);
           }
           return enqueueResults;
         } catch (error) {

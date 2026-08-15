@@ -66,6 +66,9 @@ same database, the backend receives duplicate observations.
 Lifecycle counters and handler timing metrics attach the job type and queue name. SigNoz can group
 throughput, failures, retries, and runtime by either value.
 
+Use the [enqueue outcome metric](350-observability.md#reading-the-signals-together) to inspect
+coalescing rates.
+
 Keep both values as stable application identifiers. If a job type contains a customer or request
 identifier, every value creates more time series and makes metric storage grow continuously.
 
