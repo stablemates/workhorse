@@ -4,6 +4,8 @@ This runbook explains how to execute Workhorse's benchmark suite, preserve repro
 
 ## Recorded evidence
 
+- [2026-08-14 batch dispatch analysis](benchmarks/2026-08-14-batch-dispatch-default-analysis.md): serial and batched handler cohorts, full and partial dispatch, policy accounting, mixed outcomes, and isolated lease recovery.
+- [`results/2026-08-14-batch-dispatch-default.json`](benchmarks/results/2026-08-14-batch-dispatch-default.json): default-profile batch dispatch artifact on PostgreSQL 18.
 - [2026-08-14 priority dispatch analysis](benchmarks/2026-08-14-priority-dispatch-default-analysis.md): strict ordering, FIFO baseline cost, retained-history claim-plan bounds, and explicit starvation under replenished urgent work.
 - [`results/2026-08-14-priority-dispatch-default.json`](benchmarks/results/2026-08-14-priority-dispatch-default.json): default-profile priority dispatch artifact on PostgreSQL 18.
 - [`results/2026-08-12-dashboard-read-surface.json`](benchmarks/results/2026-08-12-dashboard-read-surface.json): loaded direct SQL, versioned view, and SQL-function plans for representative dashboard reads, interpreted in [ADR 0027](decisions/0027-keep-versioned-dashboard-views.md).
@@ -75,6 +77,7 @@ The lifecycle suite runs deterministic operational scenarios with hard invariant
 | `retention-pruning`             | persisted-policy housekeeping, independent event/attempt retirement, and retained job identity                                                                                                   |
 | `health-snapshot`               | single-statement snapshot latency, capped-scan flags, and machine-readable critical status reasons                                                                                               |
 | `worker-concurrency`            | 1/4/8-slot timing, equal-capacity single/balanced/distributed worker topologies, immediate/I/O-like profiles, start latency, query pressure, heartbeats, first-null, pause, and drain invariants |
+| `batch-dispatch`                | equal serial and batched cohorts, full/partial groups, mixed outcomes, per-job policy admission, claim cost, active slots, and isolated recovery                                                 |
 | `notification-dispatch`         | polling-only versus notification-assisted idle claim pressure, enqueue-to-claim latency, completion, and bounded-fallback invariants                                                             |
 | `telemetry-context`             | equal-cohort enqueue and claiming timings with the OpenTelemetry SDK disabled and enabled, plus export, payload, and index invariants                                                            |
 
@@ -151,6 +154,10 @@ an I/O-like delayed profile. It records complete-run throughput, handler-start p
 heartbeat pressure, maximum concurrent claims, and maximum handler overlap. Every topology uses the real
 `Worker` runtime. These measurements cover process-local topology overhead, not operating-system process
 isolation or global queue concurrency.
+
+`batch-dispatch` runs equal serial and batched cohorts through the same `claim_v3` path. It records claim cost, throughput, group sizes, dispatch wait, active slots, and terminal health.
+
+Separate phases exercise mixed results, policy admission, and recovery of one expired member. Timings describe one local run and do not establish a production throughput advantage.
 
 `notification-dispatch` holds polling-only and notification-assisted workers idle before enqueue,
 then records empty claim calls and client-observed enqueue-to-claim latency. The smoke artifact
@@ -285,6 +292,7 @@ pnpm benchmark -- --suite lifecycle --profile smoke --scenario lease-expiry-reco
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario idempotent-ingress
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario cancellation-lifecycle
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario worker-concurrency
+pnpm benchmark -- --suite lifecycle --profile smoke --scenario batch-dispatch
 pnpm benchmark -- --suite lifecycle --profile smoke --scenario notification-dispatch
 ```
 

@@ -235,6 +235,41 @@ describe("operational scenario contracts", () => {
       ]),
     );
   });
+
+  it("defines comparative batch-dispatch evidence without a production performance claim", () => {
+    const contract = operationalScenarioContracts.find(
+      (candidate) => candidate.name === "batch-dispatch",
+    );
+
+    expect(contract).toBeDefined();
+    expect(contract!.invariants.join("\n")).toMatch(/full and partial batches/);
+    expect(contract!.invariants.join("\n")).toMatch(/mixed outcomes/);
+    expect(contract!.invariants.join("\n")).toMatch(/one slot and one policy admission per job/);
+    expect(contract!.invariants.join("\n")).toMatch(/lease recovery and stale fences/);
+    expect(contract!.invariants.join("\n")).toMatch(/live ready-index work/);
+    expect(contract!.metrics).toEqual(
+      expect.arrayContaining([
+        "serialJobsPerSecond",
+        "batchJobsPerSecond",
+        "serialPartialJobsPerSecond",
+        "batchPartialJobsPerSecond",
+        "fullBatches",
+        "partialBatches",
+        "batchSizeP50",
+        "batchLingerP95Ms",
+        "serialClaimP95Ms",
+        "batchClaimP95Ms",
+        "batchMaxActiveSlots",
+        "batchTelemetrySeries",
+        "concurrencyPolicyAdmittedJobs",
+        "ratePolicyAdmittedJobs",
+        "recoveredMembers",
+        "claimPlanSharedBlocksBeforeHistory",
+        "claimPlanSharedBlocksAfterHistory",
+      ]),
+    );
+    expect(contract!.purpose.toLowerCase()).not.toMatch(/faster|speedup|production throughput/);
+  });
 });
 
 describe("resolveOperationalScenarioOptions", () => {

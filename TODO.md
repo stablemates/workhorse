@@ -446,7 +446,7 @@ later integration rather than a prerequisite.
 - [x] Bound names, durations, future horizons, and retained waits, and document restart-from-entry
       semantics without claiming continuation or workflow persistence.
 
-### [ ] P1-12 Task batches
+### [x] P1-12 Task batches
 
 **Depends on:** P0-03, P1-06
 
@@ -454,16 +454,16 @@ Batch processing — several ready jobs delivered to one handler invocation — 
 a paid tier (BullMQ Pro, River Pro) or a platform primitive (Inngest). No open-source
 PostgreSQL queue offers it. Workhorse already has batch enqueue; this is batch claim.
 
-- [ ] Define batch claim: up to a bounded number of ready jobs of one queue and job type
+- [x] Define batch claim: up to a bounded number of ready jobs of one queue and job type
       delivered to one handler invocation, with a configured maximum batch size and a bounded
       linger window before a partial batch dispatches.
-- [ ] Preserve per-job lifecycle: every job in a batch keeps its own identity, lease, fence,
+- [x] Preserve per-job lifecycle: every job in a batch keeps its own identity, lease, fence,
       heartbeat, retry budget, and independent success, failure, or cancellation outcome.
-- [ ] Keep batch claims on the selective ready indexes and prove claim cost stays proportional
+- [x] Keep batch claims on the selective ready indexes and prove claim cost stays proportional
       to live work.
-- [ ] Define how a batch interacts with priorities, concurrency policies, and rate limits, and
+- [x] Define how a batch interacts with priorities, concurrency policies, and rate limits, and
       document whether a batch consumes one policy slot or one per job.
-- [ ] Benchmark batch claim throughput against serial claims in an operational scenario before
+- [x] Benchmark batch claim throughput against serial claims in an operational scenario before
       making any performance claim.
 
 ### [ ] P1-13 Debounce and throttle
