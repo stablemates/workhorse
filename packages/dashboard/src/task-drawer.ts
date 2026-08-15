@@ -17,6 +17,11 @@ export const taskDrawerModelessProps = {
   closeOnEscape: true,
 } as const;
 
+/** Escape closes a dropdown before the detail panel behind it. */
+export function taskDrawerCloseOnEscape(dropdownOpened: boolean): boolean {
+  return !dropdownOpened;
+}
+
 /**
  * What the drawer body shows for one controller state.
  *

@@ -4,6 +4,7 @@ import {
   clearPendingCancel,
   createLatestRequestGuard,
   taskDrawerBody,
+  taskDrawerCloseOnEscape,
   taskDrawerModelessProps,
   taskDrawerOpened,
   taskDrawerSync,
@@ -20,6 +21,11 @@ describe("task detail drawer", () => {
     expect(taskDrawerModelessProps.returnFocus).toBe(false);
     // Escape stays the one keyboard way out of the panel.
     expect(taskDrawerModelessProps.closeOnEscape).toBe(true);
+  });
+
+  it("lets Escape close only the top interaction layer", () => {
+    expect(taskDrawerCloseOnEscape(true)).toBe(false);
+    expect(taskDrawerCloseOnEscape(false)).toBe(true);
   });
 
   it("stays open while the next selected task loads", () => {

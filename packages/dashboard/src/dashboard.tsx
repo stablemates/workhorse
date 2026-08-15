@@ -14,14 +14,11 @@ import {
   Grid,
   Group,
   Loader,
-  Menu,
-  MultiSelect,
   NavLink,
   Pagination,
   Paper,
   ScrollArea,
   SegmentedControl,
-  Select,
   Stack,
   Stepper,
   Switch,
@@ -127,11 +124,13 @@ import { requestRunNow, type RunNowFeedback } from "./run-now.js";
 import { notifyCancel, notifyDashboard, notifyFailure, notifyRunNow } from "./notifications.js";
 import { WorkhorseBrand } from "./brand.js";
 import {
-  dashboardPollingIntervalMs,
+  createDashboardPollingClock,
+  createDashboardRefreshResumePolicy,
+  dashboardAutoRefreshPaused,
+  dashboardRefreshIntervalMs,
   dashboardRefreshIntervals,
   defaultDashboardRefreshInterval,
   discardBackgroundSettingsRefresh,
-  startDashboardPolling,
   type DashboardRefreshIntervalValue,
 } from "./refresh-policy.js";
 import {
@@ -154,6 +153,7 @@ import {
   cancelResultAppliesTo,
   clearPendingCancel,
   createLatestRequestGuard,
+  taskDrawerCloseOnEscape,
   taskDrawerModelessProps,
   taskDrawerOpened,
   taskDrawerSync,
@@ -167,6 +167,13 @@ import {
 } from "./concurrency-policy.js";
 import { describeRateLimit, describeRateThrottle, rateLimitCappedFootnote } from "./rate-limit.js";
 import { ThemeSchemeSwitch } from "./theme.js";
+import {
+  DropdownActivityProvider,
+  Menu,
+  MultiSelect,
+  Select,
+  useDropdownActivity,
+} from "./dropdown-activity.js";
 
 const DashboardClientContext = createContext<DashboardClient | null>(null);
 
@@ -5485,6 +5492,7 @@ function useDashboardController(
   basePath: string,
 ) {
   const client = useDashboardClient();
+  const dropdownOpened = useDropdownActivity();
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
   // Timestamps format through module-level displayTimeZone; re-render everything on change.
   const [, setTimeZoneTick] = useState(0);
@@ -5562,6 +5570,14 @@ function useDashboardController(
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] =
     useState<DashboardRefreshIntervalValue>(readStoredRefreshInterval);
+  const [resumeCountdown, setResumeCountdown] = useState<number | null>(null);
+  const refreshResumePolicy = useMemo(
+    () => createDashboardRefreshResumePolicy(setResumeCountdown),
+    [],
+  );
+  const pollingClock = useMemo(() => createDashboardPollingClock(() => undefined), []);
+  const [refreshScheduleResetKey, setRefreshScheduleResetKey] = useState(0);
+  const resetRefreshSchedule = useCallback(() => setRefreshScheduleResetKey((key) => key + 1), []);
   const eventsQuery = location.events;
   const [systemWindow, setSystemWindow] = useState<DashboardSystemWindow>(() => {
     const initial = readLocation(basePath);
@@ -6210,16 +6226,46 @@ function useDashboardController(
     if (location.route !== "/tasks") void loadTaskCounts();
   }, [loadPage, loadTaskCounts, location.route]);
 
-  const autoRefreshPaused = location.route === "/settings" && settingsDirty;
+  const settingsBlockRefresh = location.route === "/settings" && settingsDirty;
+  const taskDetailBlocksRefresh = taskDrawerOpened(selectedJobId);
+  const refreshBlocked = settingsBlockRefresh || taskDetailBlocksRefresh || dropdownOpened;
+  const previousRefreshBlocked = useRef(refreshBlocked);
+  const refreshWasBlocked = previousRefreshBlocked.current;
   useEffect(() => {
-    return startDashboardPolling(
-      dashboardPollingIntervalMs(refreshInterval, autoRefreshPaused),
-      () => {
-        void loadPage({ background: true });
-        if (location.route !== "/tasks") void loadTaskCounts();
-      },
-    );
-  }, [autoRefreshPaused, refreshInterval, loadPage, loadTaskCounts, location.route]);
+    previousRefreshBlocked.current = refreshBlocked;
+  }, [refreshBlocked]);
+  useEffect(() => {
+    refreshResumePolicy.update(refreshBlocked, refreshInterval !== "off");
+  }, [refreshBlocked, refreshInterval, refreshResumePolicy]);
+  useEffect(() => () => refreshResumePolicy.stop(), [refreshResumePolicy]);
+  const autoRefreshPaused = dashboardAutoRefreshPaused(
+    refreshBlocked,
+    refreshWasBlocked,
+    resumeCountdown,
+    refreshInterval !== "off",
+  );
+  const autoRefreshPausedRef = useRef(autoRefreshPaused);
+  autoRefreshPausedRef.current = autoRefreshPaused;
+  const refreshPauseDescription = settingsBlockRefresh
+    ? "Auto refresh paused while settings have unsaved changes"
+    : taskDetailBlocksRefresh
+      ? "Auto refresh paused while task details are open"
+      : dropdownOpened
+        ? "Auto refresh paused while a dropdown is open"
+        : resumeCountdown !== null
+          ? `Auto refresh resumes in ${resumeCountdown} seconds`
+          : "Auto refresh interval";
+  useEffect(() => {
+    pollingClock.setRefresh(() => {
+      void loadPage({ background: true });
+      if (location.route !== "/tasks") void loadTaskCounts();
+    });
+  }, [loadPage, loadTaskCounts, location.route, pollingClock]);
+  useEffect(() => {
+    pollingClock.reset(dashboardRefreshIntervalMs(refreshInterval), autoRefreshPausedRef.current);
+  }, [location.route, pollingClock, refreshInterval, refreshScheduleResetKey]);
+  useEffect(() => pollingClock.setPaused(autoRefreshPaused), [autoRefreshPaused, pollingClock]);
+  useEffect(() => () => pollingClock.stop(), [pollingClock]);
 
   const connected = loadState.status !== "error" && loadState.data !== null;
   const loading = loadState.status === "loading";
@@ -6336,6 +6382,10 @@ function useDashboardController(
     loadPage,
     refreshInterval,
     autoRefreshPaused,
+    resumeCountdown,
+    refreshPauseDescription,
+    refreshScheduleResetKey,
+    resetRefreshSchedule,
     changeRefreshInterval,
     location,
     taskCounts,
@@ -6367,6 +6417,7 @@ function DashboardContent({
   basePath: string;
 }) {
   const controller = useDashboardController(auditActor, demoTools, basePath);
+  const dropdownOpened = useDropdownActivity();
   const {
     navbarOpened,
     toggleNavbar,
@@ -6377,6 +6428,10 @@ function DashboardContent({
     loadPage,
     refreshInterval,
     autoRefreshPaused,
+    resumeCountdown,
+    refreshPauseDescription,
+    refreshScheduleResetKey,
+    resetRefreshSchedule,
     changeRefreshInterval,
     location,
     taskCounts,
@@ -6397,6 +6452,11 @@ function DashboardContent({
     cancelingJobId,
     cancelTask,
   } = controller;
+  const refreshProgressDuration = dashboardRefreshIntervalMs(refreshInterval);
+  const detailDrawerProps = {
+    ...taskDrawerModelessProps,
+    closeOnEscape: taskDrawerCloseOnEscape(dropdownOpened),
+  };
 
   return (
     <AppShell
@@ -6410,15 +6470,85 @@ function DashboardContent({
     >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between" wrap="nowrap">
-          <Group gap="sm" wrap="nowrap">
-            <Burger
-              opened={navbarOpened}
-              onClick={toggleNavbar}
-              hiddenFrom="sm"
-              size="sm"
-              aria-label="Open or close navigation"
-            />
-            <WorkhorseBrand />
+          <Group gap={0} wrap="nowrap">
+            <Group gap="sm" wrap="nowrap" w={{ sm: 240 }}>
+              <Burger
+                opened={navbarOpened}
+                onClick={toggleNavbar}
+                hiddenFrom="sm"
+                size="sm"
+                aria-label="Open or close navigation"
+              />
+              <WorkhorseBrand />
+            </Group>
+            <Group
+              gap={0}
+              wrap="nowrap"
+              ml={{ base: "md", sm: "xl" }}
+              className="dashboard-refresh-control"
+            >
+              <Button
+                variant="default"
+                size="xs"
+                w={120}
+                leftSection={<ArrowClockwise size={14} />}
+                loading={loading}
+                onClick={() => {
+                  resetRefreshSchedule();
+                  void loadPage();
+                }}
+                style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+              >
+                {resumeCountdown === null ? "Refresh" : `Refresh (${resumeCountdown})`}
+              </Button>
+              <Menu position="bottom-start" withinPortal>
+                <Menu.Target>
+                  <Button
+                    variant="default"
+                    size="xs"
+                    w={56}
+                    px={6}
+                    style={{
+                      borderTopLeftRadius: 0,
+                      borderBottomLeftRadius: 0,
+                      borderLeft: "none",
+                    }}
+                    aria-label={refreshPauseDescription}
+                  >
+                    {autoRefreshPaused
+                      ? "paused"
+                      : refreshInterval === "off"
+                        ? "manual"
+                        : refreshInterval}
+                  </Button>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Label>Auto refresh</Menu.Label>
+                  {dashboardRefreshIntervals.map((option) => (
+                    <Menu.Item
+                      key={option.value}
+                      onClick={() => changeRefreshInterval(option.value)}
+                      rightSection={
+                        refreshInterval === option.value ? <CheckCircle size={14} /> : null
+                      }
+                    >
+                      {option.label}
+                    </Menu.Item>
+                  ))}
+                </Menu.Dropdown>
+              </Menu>
+              {refreshProgressDuration !== null ? (
+                <Box
+                  key={`${location.route}-${refreshInterval}-${refreshScheduleResetKey}`}
+                  className="dashboard-refresh-control__progress"
+                  style={{
+                    animationDuration: `${refreshProgressDuration}ms`,
+                    animationPlayState: autoRefreshPaused ? "paused" : "running",
+                  }}
+                  aria-hidden
+                />
+              ) : null}
+            </Group>
           </Group>
           <Group gap="sm" wrap="nowrap">
             <ThemeSchemeSwitch />
@@ -6450,57 +6580,6 @@ function DashboardContent({
                   ? "Connected"
                   : "Connecting"}
             </Badge>
-            <Group gap={0} wrap="nowrap">
-              <Button
-                variant="default"
-                size="xs"
-                leftSection={<ArrowClockwise size={14} />}
-                loading={loading}
-                onClick={() => void loadPage()}
-                style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
-              >
-                Refresh
-              </Button>
-              <Menu position="bottom-end" withinPortal>
-                <Menu.Target>
-                  <Button
-                    variant="default"
-                    size="xs"
-                    px={6}
-                    style={{
-                      borderTopLeftRadius: 0,
-                      borderBottomLeftRadius: 0,
-                      borderLeft: "none",
-                    }}
-                    aria-label={
-                      autoRefreshPaused
-                        ? "Auto refresh paused while settings have unsaved changes"
-                        : "Auto refresh interval"
-                    }
-                  >
-                    {autoRefreshPaused
-                      ? "paused"
-                      : refreshInterval === "off"
-                        ? "manual"
-                        : refreshInterval}
-                  </Button>
-                </Menu.Target>
-                <Menu.Dropdown>
-                  <Menu.Label>Auto refresh</Menu.Label>
-                  {dashboardRefreshIntervals.map((option) => (
-                    <Menu.Item
-                      key={option.value}
-                      onClick={() => changeRefreshInterval(option.value)}
-                      rightSection={
-                        refreshInterval === option.value ? <CheckCircle size={14} /> : null
-                      }
-                    >
-                      {option.label}
-                    </Menu.Item>
-                  ))}
-                </Menu.Dropdown>
-              </Menu>
-            </Group>
           </Group>
         </Group>
       </AppShell.Header>
@@ -6627,7 +6706,7 @@ function DashboardContent({
         size="lg"
         // The panel sits beside the task list instead of over it, so a row behind it stays
         // clickable and picking another task swaps the contents in place.
-        {...taskDrawerModelessProps}
+        {...detailDrawerProps}
         classNames={{ content: "task-drawer__content" }}
       >
         {jobDetailError ? (
@@ -6735,7 +6814,7 @@ function DashboardContent({
         }
         position="right"
         size="lg"
-        {...taskDrawerModelessProps}
+        {...detailDrawerProps}
         classNames={{ content: "task-drawer__content" }}
       >
         {eventDetailError ? (
@@ -6773,7 +6852,13 @@ export function Dashboard({
   const basePath = normalizeBasePath(basePathInput);
   return (
     <DashboardClientContext.Provider value={client}>
-      <DashboardContent auditActor={auditActor} demoTools={demoTools ?? null} basePath={basePath} />
+      <DropdownActivityProvider>
+        <DashboardContent
+          auditActor={auditActor}
+          demoTools={demoTools ?? null}
+          basePath={basePath}
+        />
+      </DropdownActivityProvider>
     </DashboardClientContext.Provider>
   );
 }

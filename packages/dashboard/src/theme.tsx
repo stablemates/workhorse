@@ -5,11 +5,11 @@ import {
   createTheme,
   Group,
   MantineProvider,
-  Menu,
   SegmentedControl,
   Text,
   Tooltip,
 } from "@mantine/core";
+import { Menu } from "./dropdown-activity.js";
 import { Moon, Palette, Sun } from "@phosphor-icons/react";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { DashboardNotifications } from "./notifications.js";

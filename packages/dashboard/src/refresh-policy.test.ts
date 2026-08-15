@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createDashboardPollingClock,
+  createDashboardRefreshResumePolicy,
+  dashboardAutoRefreshPaused,
   dashboardPollingIntervalMs,
   dashboardRefreshIntervalMs,
   defaultDashboardRefreshInterval,
   discardBackgroundSettingsRefresh,
+  startDashboardResumeCountdown,
   startDashboardPolling,
 } from "./refresh-policy.js";
 
@@ -43,6 +47,69 @@ describe("dashboard refresh policy", () => {
   it("pauses a configured interval while a form has unsaved changes", () => {
     expect(dashboardPollingIntervalMs("15s", true)).toBeNull();
     expect(dashboardPollingIntervalMs("15s", false)).toBe(15_000);
+  });
+
+  it("stays paused between the last blocker closing and the countdown starting", () => {
+    expect(dashboardAutoRefreshPaused(false, true, null, true)).toBe(true);
+    expect(dashboardAutoRefreshPaused(false, false, 3, true)).toBe(true);
+    expect(dashboardAutoRefreshPaused(false, false, null, true)).toBe(false);
+    expect(dashboardAutoRefreshPaused(false, true, null, false)).toBe(false);
+  });
+
+  it("continues a periodic refresh from the point where it was paused", () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn<() => void>();
+    const clock = createDashboardPollingClock(refresh);
+
+    clock.reset(5_000, false);
+    vi.advanceTimersByTime(3_000);
+    clock.setPaused(true);
+    vi.advanceTimersByTime(60_000);
+    expect(refresh).not.toHaveBeenCalled();
+
+    clock.setPaused(false);
+    vi.advanceTimersByTime(1_999);
+    expect(refresh).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    clock.stop();
+  });
+
+  it("counts down three seconds before auto refresh resumes", () => {
+    vi.useFakeTimers();
+    const countdown = vi.fn<(seconds: number) => void>();
+    const resume = vi.fn<() => void>();
+    const stop = startDashboardResumeCountdown(countdown, resume);
+
+    expect(countdown).toHaveBeenLastCalledWith(3);
+    vi.advanceTimersByTime(1_000);
+    expect(countdown).toHaveBeenLastCalledWith(2);
+    vi.advanceTimersByTime(1_000);
+    expect(countdown).toHaveBeenLastCalledWith(1);
+    expect(resume).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1_000);
+    expect(resume).toHaveBeenCalledTimes(1);
+
+    stop();
+    vi.advanceTimersByTime(3_000);
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a pending resume when another refresh blocker opens", () => {
+    vi.useFakeTimers();
+    const countdown = vi.fn<(seconds: number | null) => void>();
+    const policy = createDashboardRefreshResumePolicy(countdown);
+
+    policy.update(true, true);
+    policy.update(false, true);
+    vi.advanceTimersByTime(1_000);
+    policy.update(true, true);
+    vi.advanceTimersByTime(3_000);
+
+    expect(countdown.mock.calls.map(([seconds]) => seconds)).toEqual([null, 3, 2, null]);
+
+    policy.stop();
   });
 
   it("discards only background settings refreshes that resolve against a dirty form", () => {

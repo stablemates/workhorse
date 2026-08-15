@@ -33,6 +33,34 @@ body {
   border: 1px solid var(--mantine-color-default-border);
 }
 
+.dashboard-refresh-control {
+  position: relative;
+}
+
+.dashboard-refresh-control__progress {
+  animation-iteration-count: infinite;
+  animation-name: dashboard-refresh-progress;
+  animation-timing-function: linear;
+  background: var(--mantine-primary-color-filled);
+  bottom: 0;
+  height: 2px;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  transform-origin: left;
+  width: 100%;
+}
+
+@keyframes dashboard-refresh-progress {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
 /*
  * Task detail drawer.
  *
@@ -85,5 +113,11 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
     transition:
       background-color 180ms ease,
       border-color 180ms ease;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-refresh-control__progress {
+    display: none;
   }
 }
