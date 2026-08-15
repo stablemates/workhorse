@@ -50,6 +50,7 @@ export const operationalScenarioNames = [
   "retention-pruning",
   "health-snapshot",
   "worker-concurrency",
+  "batch-dispatch",
   "rate-limiting",
   "notification-dispatch",
   "telemetry-context",
@@ -460,6 +461,42 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
     ],
   },
   {
+    name: "batch-dispatch",
+    purpose:
+      "Compare serial and batched handler dispatch with the same per-job durable lifecycle and record bounded operational evidence.",
+    invariants: [
+      "the batched cohort dispatches full and partial batches while completing the same job count as serial handlers",
+      "mixed outcomes settle independently without changing successful peers",
+      "every admitted member consumes one slot and one policy admission per job",
+      "lease recovery and stale fences isolate one lost member from its batch peers",
+      "serial and batched cohorts record claim cost through the same claim_v3 path over live ready-index work",
+    ],
+    metrics: [
+      "jobsPerCohort",
+      "partialJobsPerCohort",
+      "batchMaxSize",
+      "serialJobsPerSecond",
+      "batchJobsPerSecond",
+      "serialPartialJobsPerSecond",
+      "batchPartialJobsPerSecond",
+      "fullBatches",
+      "partialBatches",
+      "batchSizeP50",
+      "batchLingerP95Ms",
+      "serialClaimP95Ms",
+      "batchClaimP95Ms",
+      "serialClaimCalls",
+      "batchClaimCalls",
+      "batchMaxActiveSlots",
+      "batchTelemetrySeries",
+      "concurrencyPolicyAdmittedJobs",
+      "ratePolicyAdmittedJobs",
+      "recoveredMembers",
+      "claimPlanSharedBlocksBeforeHistory",
+      "claimPlanSharedBlocksAfterHistory",
+    ],
+  },
+  {
     name: "rate-limiting",
     purpose:
       "Exercise atomic queue bursts, bounded throttling visibility, and PostgreSQL-time refill.",
@@ -693,6 +730,8 @@ interface QueryPressureSnapshot {
   maxConcurrentClaims: number;
   claimsWithoutFreeSlot: number;
   lastSuccessfulClaimAt: number | null;
+  claimDurationsMs: readonly number[];
+  successfulClaimTimes: readonly number[];
 }
 
 class QueryPressureProbe implements Queryable {
@@ -705,6 +744,8 @@ class QueryPressureProbe implements Queryable {
   private maxConcurrentClaims = 0;
   private claimsWithoutFreeSlot = 0;
   private lastSuccessfulClaimAt: number | null = null;
+  private readonly claimDurationsMs: number[] = [];
+  private readonly successfulClaimTimes: number[] = [];
 
   constructor(
     private readonly target: Queryable,
@@ -715,7 +756,8 @@ class QueryPressureProbe implements Queryable {
     text: string,
     values?: readonly unknown[],
   ): Promise<QueryResult<R>> {
-    const claim = text.includes("workhorse.claim_v2");
+    const claim = text.includes("workhorse.claim_v3");
+    const claimStartedAt = claim ? performance.now() : 0;
     this.queries += 1;
     this.activeQueries += 1;
     this.maxConcurrentQueries = Math.max(this.maxConcurrentQueries, this.activeQueries);
@@ -732,7 +774,13 @@ class QueryPressureProbe implements Queryable {
     }
     try {
       const result = await this.target.query<R>(text, values);
-      if (claim && result.rows.length > 0) this.lastSuccessfulClaimAt = performance.now();
+      if (claim) {
+        this.claimDurationsMs.push(Math.max(0, performance.now() - claimStartedAt));
+        if (result.rows.length > 0) {
+          this.lastSuccessfulClaimAt = performance.now();
+          this.successfulClaimTimes.push(this.lastSuccessfulClaimAt);
+        }
+      }
       return result;
     } finally {
       this.activeQueries -= 1;
@@ -749,6 +797,8 @@ class QueryPressureProbe implements Queryable {
       maxConcurrentClaims: this.maxConcurrentClaims,
       claimsWithoutFreeSlot: this.claimsWithoutFreeSlot,
       lastSuccessfulClaimAt: this.lastSuccessfulClaimAt,
+      claimDurationsMs: [...this.claimDurationsMs],
+      successfulClaimTimes: [...this.successfulClaimTimes],
     };
   }
 }
@@ -1054,13 +1104,13 @@ function summarizeClaimPlan(value: unknown): ClaimPlanSummary {
 
 async function claimPlan(
   pool: Queryable,
-  queueName: string,
+  targetQueueName: string,
   workerId: string,
 ): Promise<ClaimPlanSummary> {
   const result = await pool.query<{ "QUERY PLAN": unknown }>(
     `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
      SELECT * FROM workhorse.claim_v3($1::text, $2::text, 30000::integer)`,
-    [queueName, workerId],
+    [targetQueueName, workerId],
   );
   return summarizeClaimPlan(result.rows[0]?.["QUERY PLAN"]);
 }
@@ -1080,19 +1130,19 @@ async function priorityDispatch(
   const assertions: ScenarioAssertion[] = [];
   const jobsPerCohort = Math.max(5, context.options.jobCount * 5);
   const historyJobs = jobsPerCohort * 4;
-  const workerConcurrency = 4;
+  const priorityWorkerConcurrency = 4;
 
   const runCohort = async (
-    queueName: string,
+    cohortQueueName: string,
     priorities: readonly number[],
-    workerConcurrency: number,
+    cohortWorkerConcurrency: number,
   ): Promise<{
     claims: ClaimedJob[];
     claimDurations: number[];
     throughputJobsPerSecond: number;
     readyIndexBytes: number;
   }> => {
-    const queue = new Queue(context.pool, queueName);
+    const queue = new Queue(context.pool, cohortQueueName);
     for (let offset = 0; offset < priorities.length; offset += 1_000) {
       await queue.enqueueMany(
         priorities.slice(offset, offset + 1_000).map((priority, relativeIndex) => ({
@@ -1108,14 +1158,16 @@ async function priorityDispatch(
     const started = context.now();
     let nextClaim = 0;
     await Promise.all(
-      Array.from({ length: workerConcurrency }, async (_unused, workerSlot) => {
+      Array.from({ length: cohortWorkerConcurrency }, async (_unused, workerSlot) => {
         while (true) {
           const claimIndex = nextClaim;
           nextClaim += 1;
           if (claimIndex >= priorities.length) return;
-          const workerId = `${queueName}-worker-${workerSlot}-${claimIndex}`;
+          const workerId = `${cohortQueueName}-worker-${workerSlot}-${claimIndex}`;
           const [claim, claimMs] = await measured(context.now, () => queue.claim(workerId));
-          if (claim === null) throw new Error(`priority cohort ${queueName} exhausted early`);
+          if (claim === null) {
+            throw new Error(`priority cohort ${cohortQueueName} exhausted early`);
+          }
           claims.push(claim);
           claimDurations.push(claimMs);
           await context.sleep(1);
@@ -1142,6 +1194,7 @@ async function priorityDispatch(
   }));
   const expectedMixedOrder = mixedPriorities
     .map((priority, index) => ({ priority, index }))
+    // oxlint-disable-next-line unicorn/no-array-sort -- Array.map returns a fresh array.
     .sort((left, right) => right.priority - left.priority || left.index - right.index);
   recordInvariant(
     assertions,
@@ -1155,11 +1208,15 @@ async function priorityDispatch(
   const baseline = await runCohort(
     `${context.queueName}-baseline`,
     baselinePriorities,
-    workerConcurrency,
+    priorityWorkerConcurrency,
   );
 
   await reset(context.pool);
-  const mixed = await runCohort(`${context.queueName}-mixed`, mixedPriorities, workerConcurrency);
+  const mixed = await runCohort(
+    `${context.queueName}-mixed`,
+    mixedPriorities,
+    priorityWorkerConcurrency,
+  );
 
   await reset(context.pool);
   const liveQueueName = `${context.queueName}-live`;
@@ -1188,7 +1245,7 @@ async function priorityDispatch(
   await runCohort(
     `${context.queueName}-history`,
     Array.from({ length: historyJobs }, () => 0),
-    workerConcurrency,
+    priorityWorkerConcurrency,
   );
   await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
   const readyIndexBytesAfterHistory = await relationBytes(
@@ -1267,7 +1324,7 @@ async function priorityDispatch(
     durationMs: 0,
     metrics: {
       jobsPerCohort,
-      workerConcurrency,
+      workerConcurrency: priorityWorkerConcurrency,
       baselineClaimP50Ms: percentile(baseline.claimDurations, 0.5),
       baselineClaimP95Ms: percentile(baseline.claimDurations, 0.95),
       mixedClaimP50Ms: percentile(mixed.claimDurations, 0.5),
@@ -3627,6 +3684,545 @@ async function workerConcurrency(
   return { name: "worker-concurrency", durationMs: 0, metrics, assertions };
 }
 
+async function batchDispatch(
+  context: OperationalScenarioContext,
+): Promise<OperationalScenarioResult> {
+  const assertions: ScenarioAssertion[] = [];
+  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const metricReader = new PeriodicExportingMetricReader({
+    exporter: metricExporter,
+    exportIntervalMillis: 60_000,
+  });
+  const meterProvider = new MeterProvider({ readers: [metricReader] });
+  const metricSdkInstalled = otelMetrics.setGlobalMeterProvider(meterProvider);
+  const batchMaxSize = Math.max(2, Math.min(8, context.options.batchSize));
+  const jobsPerCohort = Math.max(
+    batchMaxSize,
+    Math.ceil(context.options.jobCount / batchMaxSize) * batchMaxSize,
+  );
+  const partialJobsPerCohort = batchMaxSize - 1;
+  const leaseMs = Math.max(1_000, context.options.leaseMs * 4);
+  const heartbeatMs = Math.max(50, Math.floor(leaseMs / 3));
+
+  const runCohort = async (
+    mode: "batch" | "serial",
+    cohort: "full" | "mixed" | "partial",
+    cohortJobs: number,
+    lingerMs: number,
+  ) => {
+    const mixedOutcomes = cohort === "mixed";
+    await reset(context.pool);
+    const cohortQueueName = `${context.queueName}-${mode}-${cohort}`;
+    const seedQueue = new Queue(context.pool, cohortQueueName);
+    const jobIds = await seedQueue.enqueueMany(
+      Array.from({ length: cohortJobs }, (_, index) => ({
+        type: "batch-dispatch",
+        payload: { index },
+        options: { maxAttempts: 1 },
+      })),
+    );
+    let worker!: Worker;
+    const probe = new QueryPressureProbe(
+      context.pool,
+      () => batchMaxSize - worker.runtimeState().activeSlots,
+    );
+    worker = new Worker(new Queue(probe, cohortQueueName), {
+      concurrency: batchMaxSize,
+      workerId: `benchmark-batch-${mode}`,
+      leaseMs,
+      heartbeatMs,
+      pollMs: 10,
+      registryIntervalMs: 0,
+      statisticsRollupIntervalMs: 0,
+    });
+    let completedMembers = 0;
+    let maxActiveSlots = 0;
+    let consumedClaimTimes = 0;
+    const batchSizes: number[] = [];
+    const batchLingerMs: number[] = [];
+
+    if (mode === "serial") {
+      worker.handle<{ index: number }, { ok: boolean }>("batch-dispatch", ({ index }) => {
+        completedMembers += 1;
+        maxActiveSlots = Math.max(maxActiveSlots, worker.runtimeState().activeSlots);
+        if (completedMembers === cohortJobs) worker.stop();
+        if (mixedOutcomes && index === 1) throw new Error("expected mixed failure");
+        return { ok: true };
+      });
+    } else {
+      worker.handleBatch<{ index: number }, { ok: boolean }>(
+        "batch-dispatch",
+        { maxSize: batchMaxSize, lingerMs },
+        (items) => {
+          const claimTimes = probe.snapshot().successfulClaimTimes;
+          const firstClaimAt = claimTimes[consumedClaimTimes];
+          if (firstClaimAt !== undefined) {
+            batchLingerMs.push(Math.max(0, performance.now() - firstClaimAt));
+          }
+          consumedClaimTimes += items.length;
+          batchSizes.push(items.length);
+          completedMembers += items.length;
+          maxActiveSlots = Math.max(maxActiveSlots, worker.runtimeState().activeSlots);
+          if (completedMembers === cohortJobs) worker.stop();
+          return items.map(({ payload }) =>
+            mixedOutcomes && payload.index === 1
+              ? { status: "failed" as const, error: new Error("expected mixed failure") }
+              : { status: "succeeded" as const, result: { ok: true } },
+          );
+        },
+      );
+    }
+
+    const before = probe.snapshot();
+    const started = context.now();
+    await worker.run();
+    const durationMs = Math.max(0.001, context.now() - started);
+    const after = probe.snapshot();
+    const health = await seedQueue.health();
+    const outcomes = await rowCount(context.pool, "job_outcome");
+    const states = await Promise.all(jobIds.map((id) => seedQueue.getJob(id)));
+    return {
+      durationMs,
+      jobsPerSecond: (cohortJobs * 1_000) / durationMs,
+      completedMembers,
+      outcomes,
+      succeeded: states.filter((job) => job?.state === "succeeded").length,
+      failed: states.filter((job) => job?.state === "failed").length,
+      health,
+      maxActiveSlots,
+      batchSizes,
+      batchLingerMs,
+      claimCalls: after.claimCalls - before.claimCalls,
+      claimDurationsMs: after.claimDurationsMs.slice(before.claimDurationsMs.length),
+      successfulClaims: after.successfulClaimTimes.length - before.successfulClaimTimes.length,
+      maxConcurrentClaims: after.maxConcurrentClaims,
+      claimsWithoutFreeSlot: after.claimsWithoutFreeSlot - before.claimsWithoutFreeSlot,
+    };
+  };
+
+  const serial = await runCohort("serial", "full", jobsPerCohort, 60_000);
+  const batched = await runCohort("batch", "full", jobsPerCohort, 60_000);
+  const serialPartial = await runCohort("serial", "partial", partialJobsPerCohort, 20);
+  const batchedPartial = await runCohort("batch", "partial", partialJobsPerCohort, 20);
+  const fullBatches = batched.batchSizes.filter((size) => size === batchMaxSize).length;
+  const partialBatches = batchedPartial.batchSizes.filter((size) => size < batchMaxSize).length;
+
+  for (const [name, cohort] of [
+    ["serial", serial],
+    ["batch", batched],
+  ] as const) {
+    recordInvariant(
+      assertions,
+      `${name} cohort completes every member`,
+      cohort.completedMembers,
+      jobsPerCohort,
+    );
+    recordInvariant(
+      assertions,
+      `${name} cohort persists every outcome`,
+      cohort.outcomes,
+      jobsPerCohort,
+    );
+    recordInvariant(assertions, `${name} cohort leaves no ready jobs`, cohort.health.readyDepth, 0);
+    recordInvariant(
+      assertions,
+      `${name} cohort leaves no active leases`,
+      cohort.health.activeLeases,
+      0,
+    );
+    recordInvariant(
+      assertions,
+      `${name} cohort leaves no expired leases`,
+      cohort.health.expiredLeases,
+      0,
+    );
+    recordInvariant(
+      assertions,
+      `${name} cohort claim execution remains serial`,
+      cohort.maxConcurrentClaims,
+      1,
+    );
+    recordInvariant(
+      assertions,
+      `${name} cohort claim execution occurs only with free slots`,
+      cohort.claimsWithoutFreeSlot,
+      0,
+    );
+    recordInvariant(
+      assertions,
+      `${name} cohort successful claim count matches jobs`,
+      cohort.successfulClaims,
+      jobsPerCohort,
+    );
+    recordInvariant(
+      assertions,
+      `${name} cohort claim cost samples are finite`,
+      cohort.claimDurationsMs.length >= jobsPerCohort &&
+        cohort.claimDurationsMs.every(Number.isFinite),
+      true,
+    );
+  }
+  recordInvariant(assertions, "batch cohort dispatches a full batch", fullBatches > 0, true);
+  recordInvariant(
+    assertions,
+    "serial and batch partial cohorts complete the same jobs",
+    serialPartial.completedMembers === partialJobsPerCohort &&
+      batchedPartial.completedMembers === partialJobsPerCohort &&
+      serialPartial.outcomes === partialJobsPerCohort &&
+      batchedPartial.outcomes === partialJobsPerCohort,
+    true,
+  );
+  recordInvariant(assertions, "batch partial cohort dispatches one group", partialBatches, 1);
+  recordInvariant(
+    assertions,
+    "batch partial cohort leaves no active or expired leases",
+    batchedPartial.health.activeLeases === 0 && batchedPartial.health.expiredLeases === 0,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "batch active slots remain bounded by member capacity",
+    batched.maxActiveSlots,
+    batchMaxSize,
+    (actual, expected) => Number(actual) > 0 && Number(actual) <= Number(expected),
+  );
+
+  const serialMixed = await runCohort("serial", "mixed", jobsPerCohort, 60_000);
+  const batchedMixed = await runCohort("batch", "mixed", jobsPerCohort, 60_000);
+  recordInvariant(
+    assertions,
+    "serial and batch mixed cohorts isolate one failure equally",
+    serialMixed.failed === 1 &&
+      batchedMixed.failed === 1 &&
+      serialMixed.succeeded === jobsPerCohort - 1 &&
+      batchedMixed.succeeded === jobsPerCohort - 1,
+    true,
+  );
+
+  const runPolicyCohort = async (policy: "concurrency" | "rate") => {
+    await reset(context.pool);
+    const policyQueueName = `${context.queueName}-policy-${policy}`;
+    const policyQueue = new Queue(context.pool, policyQueueName);
+    if (policy === "concurrency") {
+      await policyQueue.syncConcurrencyPolicies("batch-benchmark", [
+        { queue: policyQueueName, maxActive: 2 },
+      ]);
+    } else {
+      await policyQueue.syncRateLimitPolicies("batch-benchmark", [
+        { queue: policyQueueName, rate: { limit: 2, intervalMs: 60_000, burst: 2 } },
+      ]);
+    }
+    await policyQueue.enqueueMany(
+      Array.from({ length: batchMaxSize + 1 }, (_, index) => ({
+        type: "batch-policy",
+        payload: { index },
+      })),
+    );
+    let admittedJobs = 0;
+    let maxActiveSlots = 0;
+    let policyWorker!: Worker;
+    policyWorker = new Worker(policyQueue, {
+      queue: policyQueueName,
+      concurrency: batchMaxSize,
+      workerId: `benchmark-batch-policy-${policy}`,
+      leaseMs,
+      heartbeatMs,
+      registryIntervalMs: 0,
+      statisticsRollupIntervalMs: 0,
+    }).handleBatch<{ index: number }, null>(
+      "batch-policy",
+      { maxSize: batchMaxSize, lingerMs: 20 },
+      (items) => {
+        admittedJobs += items.length;
+        maxActiveSlots = Math.max(maxActiveSlots, policyWorker.runtimeState().activeSlots);
+        return items.map(() => ({ status: "succeeded", result: null }));
+      },
+    );
+    await policyWorker.runOnce();
+    return {
+      admittedJobs,
+      maxActiveSlots,
+      health: await policyQueue.health(),
+      rateStatus:
+        policy === "rate" ? (await policyQueue.rateLimitStatuses([policyQueueName]))[0]! : null,
+    };
+  };
+
+  const concurrencyPolicy = await runPolicyCohort("concurrency");
+  const ratePolicy = await runPolicyCohort("rate");
+  recordInvariant(
+    assertions,
+    "concurrency policy admits one member for each active count",
+    concurrencyPolicy.admittedJobs,
+    2,
+  );
+  recordInvariant(
+    assertions,
+    "concurrency policy admission occupies one slot per member",
+    concurrencyPolicy.maxActiveSlots,
+    2,
+  );
+  recordInvariant(
+    assertions,
+    "concurrency-limited members remain ready",
+    concurrencyPolicy.health.readyDepth,
+    batchMaxSize - 1,
+  );
+  recordInvariant(
+    assertions,
+    "rate policy admits one member for each available token",
+    ratePolicy.admittedJobs,
+    2,
+  );
+  recordInvariant(
+    assertions,
+    "rate policy status exposes the throttled remainder",
+    ratePolicy.rateStatus!.throttledReady,
+    batchMaxSize - 1,
+  );
+
+  await reset(context.pool);
+  const recoveryQueueName = `${context.queueName}-recovery`;
+  const recoveryQueue = new Queue(context.pool, recoveryQueueName);
+  const staleId = await recoveryQueue.enqueue(
+    "batch-recovery",
+    { member: "stale" },
+    { maxAttempts: 2 },
+  );
+  const peerId = await recoveryQueue.enqueue("batch-recovery", { member: "peer" });
+  const recoveryWorkerId = "benchmark-batch-recovery";
+  let staleClaim: ClaimedJob | undefined;
+  let recoveredMembers = 0;
+  let replacementFenceAdvanced = false;
+  const recoveryWorker = new Worker(recoveryQueue, {
+    queue: recoveryQueueName,
+    concurrency: 2,
+    workerId: recoveryWorkerId,
+    leaseMs,
+    heartbeatMs: leaseMs - 1,
+    registryIntervalMs: 0,
+    statisticsRollupIntervalMs: 0,
+  }).handleBatch<{ member: string }, { source: string }>(
+    "batch-recovery",
+    { maxSize: 2, lingerMs: 20 },
+    async (items) => {
+      staleClaim = items.find(({ payload }) => payload.member === "stale")!.context.job;
+      await context.pool.query(
+        `UPDATE workhorse.job_runtime
+            SET expires_at = clock_timestamp() - interval '1 millisecond'
+          WHERE job_id = $1 AND state = 'active'`,
+        [staleId],
+      );
+      recoveredMembers = await recoveryQueue.recoverExpired(100, 0);
+      const replacement = await recoveryQueue.claim("benchmark-batch-reclaimer", {
+        queue: recoveryQueueName,
+        leaseMs,
+      });
+      replacementFenceAdvanced =
+        replacement?.id === staleId && replacement.fenceToken > staleClaim.fenceToken;
+      if (replacement === null) throw new Error("batch recovery failed to reclaim its member");
+      await recoveryQueue.complete(replacement, "benchmark-batch-reclaimer", {
+        source: "recovered",
+      });
+      return items.map(() => ({ status: "succeeded", result: { source: "handler" } }));
+    },
+  );
+  await recoveryWorker.runOnce();
+  const staleCompletionAccepted = await recoveryQueue.complete(staleClaim!, recoveryWorkerId, {
+    source: "stale",
+  });
+  const [recoveredJob, peerJob, recoveryHealth] = await Promise.all([
+    recoveryQueue.getJob<{ source: string }>(staleId),
+    recoveryQueue.getJob<{ source: string }>(peerId),
+    recoveryQueue.health(),
+  ]);
+  recordInvariant(
+    assertions,
+    "recovery advances only the lost member fence",
+    replacementFenceAdvanced,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "recovery rejects the stale member completion",
+    staleCompletionAccepted,
+    false,
+  );
+  recordInvariant(
+    assertions,
+    "recovery preserves the peer outcome",
+    recoveredJob?.state === "succeeded" &&
+      recoveredJob.currentAttempt === 2 &&
+      recoveredJob.result?.source === "recovered" &&
+      peerJob?.state === "succeeded" &&
+      peerJob.currentAttempt === 1 &&
+      peerJob.result?.source === "handler",
+    true,
+  );
+  recordInvariant(assertions, "recovery leaves no active leases", recoveryHealth.activeLeases, 0);
+  recordInvariant(assertions, "recovery leaves no expired leases", recoveryHealth.expiredLeases, 0);
+
+  const planLiveJobs = jobsPerCohort;
+  const historyJobs = jobsPerCohort * 4;
+  const seedPlanReady = async (targetQueueName: string) => {
+    const targetQueue = new Queue(context.pool, targetQueueName);
+    await targetQueue.enqueueMany(
+      Array.from({ length: planLiveJobs }, (_, index) => ({
+        type: "batch-plan-live",
+        payload: { index },
+      })),
+    );
+  };
+
+  await reset(context.pool);
+  const planQueueName = `${context.queueName}-plan`;
+  await seedPlanReady(planQueueName);
+  const claimPlanBeforeHistory = await claimPlan(
+    context.pool,
+    planQueueName,
+    "benchmark-batch-plan-before-history",
+  );
+
+  await reset(context.pool);
+  const historyQueueName = `${context.queueName}-history`;
+  const historyQueue = new Queue(context.pool, historyQueueName);
+  await historyQueue.enqueueMany(
+    Array.from({ length: historyJobs }, (_, index) => ({
+      type: "batch-plan-history",
+      payload: { index },
+    })),
+  );
+  for (let index = 0; index < historyJobs; index += 1) {
+    const workerId = `benchmark-batch-history-${index}`;
+    const job = await historyQueue.claim(workerId);
+    if (job === null) throw new Error("batch claim-plan history exhausted early");
+    await historyQueue.complete(job, workerId, null);
+  }
+  await seedPlanReady(planQueueName);
+  await context.pool.query("VACUUM (ANALYZE) workhorse.job_runtime");
+  const claimPlanAfterHistory = await claimPlan(
+    context.pool,
+    planQueueName,
+    "benchmark-batch-plan-after-history",
+  );
+  const retainedJobIdentities = await rowCount(context.pool, "job");
+  const liveRuntimeRows = await rowCount(context.pool, "job_runtime");
+  recordInvariant(
+    assertions,
+    "batch claim plans record shared buffer work",
+    claimPlanBeforeHistory.sharedBlocks > 0 && claimPlanAfterHistory.sharedBlocks > 0,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "batch claim buffer work stays bounded after retained history grows",
+    claimPlanAfterHistory.sharedBlocks <= claimPlanBeforeHistory.sharedBlocks * 2,
+    true,
+  );
+  recordInvariant(assertions, "claim-plan live runtime stays fixed", liveRuntimeRows, planLiveJobs);
+  recordInvariant(
+    assertions,
+    "claim-plan history remains outside live runtime",
+    retainedJobIdentities,
+    historyJobs + planLiveJobs,
+  );
+
+  await meterProvider.forceFlush();
+  const exportedMetrics = metricExporter
+    .getMetrics()
+    .flatMap((resource) => resource.scopeMetrics)
+    .flatMap((scope) => scope.metrics);
+  const batchSizePoints =
+    exportedMetrics.find((metric) => metric.descriptor.name === "workhorse.handler.batch.size")
+      ?.dataPoints ?? [];
+  const batchLingerPoints =
+    exportedMetrics.find((metric) => metric.descriptor.name === "workhorse.handler.batch.linger")
+      ?.dataPoints ?? [];
+  const expectedBatchAttributeNames = [
+    "workhorse.handler.batch.full",
+    "workhorse.job.type",
+    "workhorse.queue.name",
+  ];
+  const boundedBatchAttributes = batchSizePoints.every((point) =>
+    // oxlint-disable-next-line unicorn/no-array-sort -- Object.keys returns a fresh array.
+    jsonEquivalent(Object.keys(point.attributes).sort(), expectedBatchAttributeNames),
+  );
+  const batchTelemetrySeries = batchSizePoints.length;
+  recordInvariant(
+    assertions,
+    "batch metric SDK installs for the scenario",
+    metricSdkInstalled,
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "batch size telemetry distinguishes full and partial dispatch",
+    batchSizePoints.some((point) => point.attributes["workhorse.handler.batch.full"] === true) &&
+      batchSizePoints.some((point) => point.attributes["workhorse.handler.batch.full"] === false),
+    true,
+  );
+  recordInvariant(
+    assertions,
+    "batch linger telemetry covers every bounded size series",
+    batchLingerPoints.length,
+    batchTelemetrySeries,
+  );
+  recordInvariant(
+    assertions,
+    "batch telemetry uses only bounded diagnostic attributes",
+    boundedBatchAttributes,
+    true,
+  );
+  await meterProvider.shutdown();
+  otelMetrics.disable();
+
+  return {
+    name: "batch-dispatch",
+    durationMs: 0,
+    metrics: {
+      jobsPerCohort,
+      partialJobsPerCohort,
+      batchMaxSize,
+      serialJobsPerSecond: serial.jobsPerSecond,
+      batchJobsPerSecond: batched.jobsPerSecond,
+      fullBatches,
+      partialBatches,
+      batchSizeP50: percentile([...batched.batchSizes, ...batchedPartial.batchSizes], 0.5),
+      batchLingerP95Ms: percentile(
+        [...batched.batchLingerMs, ...batchedPartial.batchLingerMs],
+        0.95,
+      ),
+      serialClaimP95Ms: percentile(serial.claimDurationsMs, 0.95),
+      batchClaimP95Ms: percentile(batched.claimDurationsMs, 0.95),
+      serialClaimCalls: serial.claimCalls,
+      batchClaimCalls: batched.claimCalls,
+      serialPartialJobsPerSecond: serialPartial.jobsPerSecond,
+      batchPartialJobsPerSecond: batchedPartial.jobsPerSecond,
+      batchMaxActiveSlots: batched.maxActiveSlots,
+      batchTelemetrySeries,
+      batchTelemetryAttributeCount: expectedBatchAttributeNames.length,
+      concurrencyPolicyAdmittedJobs: concurrencyPolicy.admittedJobs,
+      concurrencyPolicyMaxActiveSlots: concurrencyPolicy.maxActiveSlots,
+      concurrencyPolicyReady: concurrencyPolicy.health.readyDepth,
+      ratePolicyAdmittedJobs: ratePolicy.admittedJobs,
+      ratePolicyThrottledReady: ratePolicy.rateStatus!.throttledReady,
+      serialMixedSucceeded: serialMixed.succeeded,
+      serialMixedFailed: serialMixed.failed,
+      batchMixedSucceeded: batchedMixed.succeeded,
+      batchMixedFailed: batchedMixed.failed,
+      recoveredMembers,
+      replacementFenceAdvanced,
+      claimPlanExecutionMsBeforeHistory: claimPlanBeforeHistory.executionTimeMs,
+      claimPlanExecutionMsAfterHistory: claimPlanAfterHistory.executionTimeMs,
+      claimPlanSharedBlocksBeforeHistory: claimPlanBeforeHistory.sharedBlocks,
+      claimPlanSharedBlocksAfterHistory: claimPlanAfterHistory.sharedBlocks,
+      retainedJobIdentities,
+      liveRuntimeRows,
+    },
+    assertions,
+  };
+}
+
 async function rateLimiting(
   context: OperationalScenarioContext,
 ): Promise<OperationalScenarioResult> {
@@ -3944,6 +4540,7 @@ export const operationalScenarioImplementations: Readonly<
   "retention-pruning": retentionPruning,
   "health-snapshot": healthSnapshot,
   "worker-concurrency": workerConcurrency,
+  "batch-dispatch": batchDispatch,
   "rate-limiting": rateLimiting,
   "notification-dispatch": notificationDispatch,
   "telemetry-context": telemetryContext,
