@@ -74,7 +74,10 @@ PostgreSQL and applied cooperatively by the worker when it next refreshes.
 
 Auto refresh polls the active page every 15 seconds by default. The menu also has 5-second,
 30-second, 1-minute, 5-minute, and manual-only options. Job volume does not start extra browser
-refreshes, so the page has a stable update rate under load.
+refreshes, so the page has a stable update rate under load. Opening task details or a dropdown
+pauses polling. After the last one closes, the refresh button counts down three seconds before
+polling resumes from the point where it paused. A line under the refresh control freezes and
+continues with the same interval.
 
 ## Developing the dashboard itself
 
