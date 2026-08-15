@@ -1,8 +1,12 @@
 # ADR 0023: Language SDKs and HTTP boundaries
 
-- **Status:** Accepted
+- **Status:** Accepted; superseded in part by [ADR 0029](0029-embeddable-dashboard-backends.md)
 - **Date:** 2026-08-11
 - **Related:** [ADR 0012](0012-dedicated-worker-processes.md), [ADR 0015](0015-operator-query-api.md), [ADR 0018](0018-framework-neutral-dashboard-host.md), [ADR 0021](0021-no-framework-integration-packages.md)
+
+> ADR 0029 supersedes the clause "Python and Go do not embed or reimplement it": language SDKs
+> may embed the dashboard by implementing its backend against the versioned `dashboard/v1` wire
+> specification. The standalone dashboard remains supported as decided here.
 
 ## Context
 
