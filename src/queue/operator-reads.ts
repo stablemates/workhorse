@@ -73,6 +73,8 @@ type JobListRow = {
   priority: number;
   tags: string[];
   state: JobState;
+  prerequisite_job_id: string | null;
+  blocked_reason: "prerequisite_pending" | null;
   current_attempt: number;
   max_attempts: number;
   retry_policy: RetryPolicy | null;
@@ -182,6 +184,7 @@ function nullableHealthTimestamp(value: Date | string | null): Date | null {
 type HealthSnapshotRow = RetentionPolicyRow & {
   captured_at: Date | string;
   schema_version: number | null;
+  blocked: string;
   ready: string;
   scheduled: string;
   sleeping: string;
@@ -304,6 +307,8 @@ function jobListItem(row: JobListRow): JobListItem {
     priority: row.priority,
     tags: row.tags,
     state: row.state,
+    prerequisiteJobId: row.prerequisite_job_id,
+    blockedReason: row.blocked_reason,
     currentAttempt: row.current_attempt,
     maxAttempts: row.max_attempts,
     retryPolicy: row.retry_policy,
@@ -556,14 +561,21 @@ export class OperatorReadsModule extends QueueModule {
   async listJobs(query: JobListQuery = {}): Promise<JobListPage> {
     const { limit, cursor, payloadProjection } = this.validateJobListQuery(query);
     const result = await this.context.database.query<JobListRow>(
-      `SELECT job_id, queue_name, job_type, concurrency_key, priority, tags, state, current_attempt, max_attempts,
-              retry_policy, deadline_at, execution_timeout_ms::text AS execution_timeout_ms,
-              run_at, cancel_requested_at, cancel_requested_by, cancel_reason, created_at,
-              updated_at, payload, payload_status, payload_bytes, has_more,
-              cursor_created_at::text AS cursor_created_at, cursor_signature
+      `SELECT listed.job_id, listed.queue_name, listed.job_type, listed.concurrency_key,
+              listed.priority, listed.tags, listed.state, dependency.prerequisite_job_id,
+              CASE WHEN listed.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
+              listed.current_attempt, listed.max_attempts, listed.retry_policy,
+              listed.deadline_at,
+              listed.execution_timeout_ms::text AS execution_timeout_ms,
+              listed.run_at, listed.cancel_requested_at, listed.cancel_requested_by,
+              listed.cancel_reason, listed.created_at, listed.updated_at, listed.payload,
+              listed.payload_status, listed.payload_bytes, listed.has_more,
+              listed.cursor_created_at::text AS cursor_created_at, listed.cursor_signature
          FROM workhorse.list_jobs_v2(
            $1::jsonb, $2::integer, $3::timestamptz, $4::uuid, $5::text, $6::jsonb
-         )`,
+         ) listed
+         LEFT JOIN workhorse.job_dependency dependency
+           ON dependency.dependent_job_id = listed.job_id`,
       [
         JSON.stringify(jobListFilter(query)),
         limit,
@@ -754,6 +766,8 @@ export class OperatorReadsModule extends QueueModule {
       contract_version: string | null;
       tags: string[];
       state: JobSnapshot["state"];
+      prerequisite_job_id: string | null;
+      blocked_reason: "prerequisite_pending" | null;
       current_attempt: number;
       max_attempts: number;
       retry_policy: RetryPolicy | null;
@@ -781,6 +795,8 @@ export class OperatorReadsModule extends QueueModule {
               j.contract_version, j.tags, j.retry_policy,
               j.deadline_at, j.execution_timeout_ms::text,
               COALESCE(r.state, o.state) AS state,
+              dependency.prerequisite_job_id,
+              CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
               COALESCE(r.current_attempt, o.current_attempt) AS current_attempt,
               j.max_attempts, COALESCE(r.fence_token, o.fence_token) AS version,
               COALESCE(r.run_at, o.run_at) AS run_at,
@@ -795,6 +811,7 @@ export class OperatorReadsModule extends QueueModule {
          FROM workhorse.job j
          LEFT JOIN workhorse.job_runtime r ON r.job_id = j.id
          LEFT JOIN workhorse.job_outcome o ON o.job_id = j.id
+         LEFT JOIN workhorse.job_dependency dependency ON dependency.dependent_job_id = j.id
          LEFT JOIN workhorse.job_progress p ON p.job_id = j.id
         WHERE j.id = $1::uuid`,
       [id],
@@ -811,6 +828,8 @@ export class OperatorReadsModule extends QueueModule {
       contractVersion: row.contract_version,
       tags: row.tags,
       state: row.state,
+      prerequisiteJobId: row.prerequisite_job_id,
+      blockedReason: row.blocked_reason,
       currentAttempt: row.current_attempt,
       maxAttempts: row.max_attempts,
       retryPolicy: row.retry_policy,
@@ -903,6 +922,7 @@ export class OperatorReadsModule extends QueueModule {
       capturedAt: healthTimestamp(row.captured_at),
       schemaVersion: row.schema_version,
       counts: {
+        blocked: Number(row.blocked),
         scheduled: Number(row.scheduled),
         ready: Number(row.ready),
         active: Number(row.active),

@@ -91,7 +91,7 @@ describe("schema migrations", () => {
   });
 
   it("migrates the supported v23 baseline to the current schema", async () => {
-    expect(await readSchemaVersion(database.pool)).toBe(29);
+    expect(await readSchemaVersion(database.pool)).toBe(WORKHORSE_SCHEMA_VERSION);
     const migrations = await database.pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
     );
@@ -103,6 +103,7 @@ describe("schema migrations", () => {
       { version: 27, description: "add strict-priority job dispatch" },
       { version: 28, description: "add keyed debounce enqueue" },
       { version: 29, description: "add keyed throttle enqueue" },
+      { version: 30, description: "add one-prerequisite job dependencies" },
     ]);
   });
 
@@ -112,26 +113,26 @@ describe("schema migrations", () => {
 
   it("leaves an already-current schema unchanged", async () => {
     const before = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 29",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 30",
     );
 
     await migrateSchema(database.pool);
 
     const after = await database.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 29",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 30",
     );
     expect(after.rows).toEqual(before.rows);
   });
 
   it("safely replays the latest migration after its target version commits", async () => {
     const migration = await readFile(
-      path.join(repository, "sql", "migrations", "0029-add-keyed-throttle-enqueue.sql"),
+      path.join(repository, "sql", "migrations", "0030-add-job-dependencies.sql"),
       "utf8",
     );
 
     await database.pool.query(migration);
 
-    expect(await readSchemaVersion(database.pool)).toBe(29);
+    expect(await readSchemaVersion(database.pool)).toBe(WORKHORSE_SCHEMA_VERSION);
     expect(await dumpNormalizedSchema(database.databaseUrl)).toBe(cleanInstallSchema);
   });
 });

@@ -133,6 +133,7 @@ export type EnqueueIdempotencyConflictField =
   | "executionTimeoutMs"
   | "maxAttempts"
   | "retryPolicy"
+  | "prerequisiteJobId"
   | "ttlMs";
 
 /** Safe diagnostics for a materially different replay. The raw idempotency key is never exposed. */
@@ -168,6 +169,8 @@ export interface EnqueueOptions {
   debounce?: EnqueueDebounce;
   /** Accept at most one equivalent job per PostgreSQL-owned window. */
   throttle?: EnqueueThrottle;
+  /** Stable job identity that must succeed before this job can enter dispatch. */
+  prerequisiteJobId?: string;
 }
 
 /** One queue's deployment-synchronized concurrency budget. */
@@ -406,6 +409,8 @@ export interface JobListItem {
   priority: number;
   tags: string[];
   state: JobState;
+  prerequisiteJobId: string | null;
+  blockedReason: "prerequisite_pending" | null;
   currentAttempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;
@@ -629,7 +634,14 @@ export interface JobWait {
   createdAt: Date;
 }
 
-export type JobState = "scheduled" | "ready" | "active" | "succeeded" | "failed" | "canceled";
+export type JobState =
+  | "blocked"
+  | "scheduled"
+  | "ready"
+  | "active"
+  | "succeeded"
+  | "failed"
+  | "canceled";
 
 export interface JobSnapshot<TResult = Json> {
   id: string;
@@ -641,6 +653,8 @@ export interface JobSnapshot<TResult = Json> {
   contractVersion: string | null;
   tags: string[];
   state: JobState;
+  prerequisiteJobId: string | null;
+  blockedReason: "prerequisite_pending" | null;
   currentAttempt: number;
   maxAttempts: number;
   retryPolicy: RetryPolicy | null;

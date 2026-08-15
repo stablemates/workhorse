@@ -806,6 +806,12 @@ export interface DashboardJobDetail {
      * finishes. Deliberately available only in task detail identity.
      */
     concurrencyKey: string | null;
+    /** Stable prerequisite identity, or null when this task has no dependency. */
+    prerequisiteJobId: string | null;
+    /** When PostgreSQL released the dependency edge after prerequisite success. */
+    dependencyReleasedAt: string | null;
+    /** Why this task remains blocked. Null after release and for independent tasks. */
+    blockedReason: "prerequisite_pending" | null;
   };
   /**
    * The queue's admission budget as it stands now, not a snapshot of the policy this task ran

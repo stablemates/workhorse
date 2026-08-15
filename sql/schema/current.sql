@@ -386,6 +386,20 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
 CREATE INDEX IF NOT EXISTS job_tags_gin_idx ON workhorse.job USING gin (tags);
 CREATE INDEX IF NOT EXISTS job_created_retention_idx ON workhorse.job (created_at, id);
 
+-- One immutable prerequisite edge per dependent. The prerequisite reference deliberately restricts
+-- identity pruning so retention cannot strand blocked work or erase released lineage.
+CREATE TABLE IF NOT EXISTS workhorse.job_dependency (
+  dependent_job_id uuid PRIMARY KEY REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  prerequisite_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE RESTRICT,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  released_at timestamptz,
+  CHECK (dependent_job_id <> prerequisite_job_id),
+  CHECK (released_at IS NULL OR released_at >= created_at)
+);
+CREATE INDEX IF NOT EXISTS job_dependency_prerequisite_pending_idx
+  ON workhorse.job_dependency (prerequisite_job_id, dependent_job_id)
+  WHERE released_at IS NULL;
+
 -- PostgreSQL owns enqueue deduplication. The deferred reference lets enqueue reserve a scoped key
 -- through the unique index before creating any job, event, FIFO, or notification side effects.
 CREATE TABLE IF NOT EXISTS workhorse.enqueue_idempotency (
@@ -474,7 +488,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
   concurrency_key text CHECK (
     concurrency_key IS NULL OR (concurrency_key <> '' AND octet_length(concurrency_key) <= 256)
   ),
-  state text NOT NULL CHECK (state IN ('scheduled', 'ready', 'active')),
+  state text NOT NULL CHECK (state IN ('blocked', 'scheduled', 'ready', 'active')),
   current_attempt integer NOT NULL DEFAULT 1 CHECK (current_attempt BETWEEN 1 AND 100),
   fence_token bigint NOT NULL DEFAULT 0 CHECK (fence_token >= 0),
   run_at timestamptz NOT NULL,
@@ -511,7 +525,12 @@ CREATE TABLE IF NOT EXISTS workhorse.job_runtime (
     (cancel_requested_at IS NULL AND cancel_requested_by IS NULL AND cancel_reason IS NULL)
     OR (state = 'active' AND cancel_requested_at IS NOT NULL)
   ),
-  CHECK (
+  CONSTRAINT job_runtime_state_shape_check CHECK (
+    (state = 'blocked' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NULL
+      AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL
+      AND attempt_timeout_at IS NULL AND fence_token = 0
+      AND wait_name IS NULL AND attempt_started_at IS NULL)
+    OR
     (state = 'scheduled' AND ready_at IS NULL AND sequence IS NULL AND worker_id IS NULL
       AND acquired_at IS NULL AND heartbeat_at IS NULL AND expires_at IS NULL
       AND attempt_timeout_at IS NULL
@@ -617,7 +636,7 @@ CREATE TABLE IF NOT EXISTS workhorse.job_query (
   queue_name text NOT NULL CHECK (queue_name <> ''),
   job_type text NOT NULL CHECK (job_type <> ''),
   state text NOT NULL CHECK (
-    state IN ('scheduled', 'ready', 'active', 'succeeded', 'failed', 'canceled')
+    state IN ('blocked', 'scheduled', 'ready', 'active', 'succeeded', 'failed', 'canceled')
   ),
   current_attempt integer NOT NULL CHECK (current_attempt BETWEEN 1 AND 100),
   run_at timestamptz NOT NULL,
@@ -2213,6 +2232,8 @@ DECLARE
   v_retry_policy jsonb;
   v_deadline_at timestamptz;
   v_execution_timeout_ms numeric;
+  v_prerequisite_job_id uuid;
+  v_prerequisite_succeeded boolean;
   v_state text;
   v_idempotency jsonb;
   v_key text;
@@ -2389,7 +2410,31 @@ BEGIN
     ) THEN
       RAISE EXCEPTION 'executionTimeoutMs must be an integer between 1 and 31536000000';
     END IF;
-    v_state := CASE WHEN v_run_at <= v_now THEN 'ready' ELSE 'scheduled' END;
+    IF v_request ? 'prerequisiteJobId'
+       AND v_request->'prerequisiteJobId' <> 'null'::jsonb
+       AND jsonb_typeof(v_request->'prerequisiteJobId') <> 'string' THEN
+      RAISE EXCEPTION 'prerequisiteJobId must be a UUID string or null';
+    END IF;
+    v_prerequisite_job_id := NULLIF(v_request->>'prerequisiteJobId', '')::uuid;
+    v_prerequisite_succeeded := false;
+    IF v_prerequisite_job_id IS NOT NULL THEN
+      PERFORM 1 FROM workhorse.job prerequisite
+       WHERE prerequisite.id = v_prerequisite_job_id FOR UPDATE;
+      IF NOT FOUND THEN RAISE EXCEPTION 'prerequisite job does not exist'; END IF;
+      SELECT outcome.state = 'succeeded' INTO v_prerequisite_succeeded
+        FROM workhorse.job_outcome outcome
+       WHERE outcome.job_id = v_prerequisite_job_id;
+      IF NOT FOUND THEN
+        v_prerequisite_succeeded := false;
+      ELSIF NOT v_prerequisite_succeeded THEN
+        RAISE EXCEPTION 'prerequisite job is already terminal without success';
+      END IF;
+    END IF;
+    v_state := CASE
+      WHEN v_prerequisite_job_id IS NOT NULL AND NOT v_prerequisite_succeeded THEN 'blocked'
+      WHEN v_run_at <= v_now THEN 'ready'
+      ELSE 'scheduled'
+    END;
     v_idempotency := v_request->'idempotency';
     v_is_new := true;
     v_is_keyed := false;
@@ -2455,6 +2500,7 @@ BEGIN
         'executionTimeoutMs', to_jsonb(v_execution_timeout_ms),
         'maxAttempts', v_max_attempts,
         'retryPolicy', v_retry_policy,
+        'prerequisiteJobId', to_jsonb(v_prerequisite_job_id),
         'ttlMs', v_ttl_ms
       );
       v_request_digest := workhorse.sha256_hex_v1(v_fingerprint::text);
@@ -2531,6 +2577,26 @@ BEGIN
         CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
         v_deadline_at
       );
+      IF v_prerequisite_job_id IS NOT NULL THEN
+        INSERT INTO workhorse.job_dependency(
+          dependent_job_id, prerequisite_job_id, created_at, released_at
+        ) VALUES (
+          job_id, v_prerequisite_job_id, v_now,
+          CASE WHEN v_prerequisite_succeeded THEN v_now END
+        );
+        INSERT INTO workhorse.job_event(job_id, event_type, details)
+          VALUES (
+            job_id,
+            CASE WHEN v_prerequisite_succeeded
+              THEN 'dependency_released' ELSE 'dependency_blocked' END,
+            jsonb_build_object(
+              'prerequisite_job_id', v_prerequisite_job_id,
+              'state', v_state,
+              'reason', CASE WHEN v_prerequisite_succeeded
+                THEN 'prerequisite_already_succeeded' ELSE 'prerequisite_pending' END
+            )
+          );
+      END IF;
       INSERT INTO workhorse.job_event(job_id, event_type, details)
         VALUES (
           job_id,
@@ -3724,24 +3790,24 @@ BEGIN
   PERFORM 1
     FROM workhorse.job_runtime runtime
     JOIN workhorse.job job ON job.id = runtime.job_id
-   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
    FOR UPDATE OF runtime, job;
 
   DELETE FROM workhorse.enqueue_idempotency idempotency
    USING workhorse.job_runtime runtime
-   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
      AND idempotency.job_id = runtime.job_id;
   DELETE FROM workhorse.job_event event
    USING workhorse.job_runtime runtime
-   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
      AND event.job_id = runtime.job_id;
   DELETE FROM workhorse.attempt_history attempt
    USING workhorse.job_runtime runtime
-   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
      AND attempt.job_id = runtime.job_id;
   DELETE FROM workhorse.job job
    USING workhorse.job_runtime runtime
-   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('ready', 'scheduled')
+   WHERE runtime.queue_name = p_queue_name AND runtime.state IN ('blocked', 'ready', 'scheduled')
      AND job.id = runtime.job_id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
@@ -4968,6 +5034,54 @@ BEGIN
 END;
 $$;
 
+-- Release every pending dependent in the same transaction that materializes prerequisite success.
+-- The dependency-row lock and blocked-state predicate make release evidence and dispatch effects
+-- exactly once even when stale workers repeat completion.
+CREATE OR REPLACE FUNCTION workhorse.release_dependents_v1(p_prerequisite_job_id uuid)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_dependency workhorse.job_dependency%ROWTYPE;
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_now timestamptz := clock_timestamp();
+  v_count integer := 0;
+BEGIN
+  FOR v_dependency IN
+    SELECT dependency.* FROM workhorse.job_dependency dependency
+     WHERE dependency.prerequisite_job_id = p_prerequisite_job_id
+       AND dependency.released_at IS NULL
+     ORDER BY dependency.dependent_job_id FOR UPDATE
+  LOOP
+    UPDATE workhorse.job_dependency dependency SET released_at = v_now
+     WHERE dependency.dependent_job_id = v_dependency.dependent_job_id
+       AND dependency.released_at IS NULL;
+    UPDATE workhorse.job_runtime runtime
+       SET state = CASE WHEN runtime.run_at <= v_now THEN 'ready' ELSE 'scheduled' END,
+           ready_at = CASE WHEN runtime.run_at <= v_now THEN v_now END,
+           sequence = CASE WHEN runtime.run_at <= v_now
+             THEN nextval('workhorse.ready_sequence_seq') END,
+           updated_at = v_now
+     WHERE runtime.job_id = v_dependency.dependent_job_id AND runtime.state = 'blocked'
+    RETURNING * INTO v_runtime;
+    IF NOT FOUND THEN CONTINUE; END IF;
+
+    INSERT INTO workhorse.job_event(job_id, event_type, details)
+      VALUES (v_runtime.job_id, 'dependency_released', jsonb_build_object(
+        'prerequisite_job_id', p_prerequisite_job_id, 'state', v_runtime.state,
+        'reason', 'prerequisite_succeeded'
+      ));
+    v_count := v_count + 1;
+    IF v_runtime.deadline_at IS NOT NULL AND v_runtime.deadline_at <= v_now THEN
+      PERFORM workhorse.terminalize_deadline_v1(v_runtime.job_id);
+    ELSIF v_runtime.state = 'ready' THEN
+      PERFORM pg_notify('workhorse_jobs', v_runtime.queue_name);
+    END IF;
+  END LOOP;
+  RETURN v_count;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION workhorse.complete_v1(
   p_job_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb DEFAULT 'null'::jsonb
 ) RETURNS boolean
@@ -4986,7 +5100,7 @@ BEGIN
      AND (runtime.deadline_at IS NULL OR runtime.deadline_at > clock_timestamp())
      AND (runtime.attempt_timeout_at IS NULL OR runtime.attempt_timeout_at > clock_timestamp())
      AND runtime.cancel_requested_at IS NULL
-   FOR UPDATE OF runtime;
+   FOR UPDATE OF runtime, job;
   IF NOT FOUND THEN RETURN false; END IF;
   IF octet_length(COALESCE(p_result, 'null'::jsonb)::text) > v_result_max_bytes THEN
     RAISE EXCEPTION 'result exceeds its configured size limit';
@@ -5010,6 +5124,7 @@ BEGIN
   );
   INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
     VALUES (p_job_id, v_runtime.current_attempt, 'succeeded', jsonb_build_object('fence_token', p_fence_token::text));
+  PERFORM workhorse.release_dependents_v1(p_job_id);
   RETURN true;
 END;
 $$;
@@ -5515,6 +5630,10 @@ BEGIN
        AND NOT EXISTS (
              SELECT 1 FROM workhorse.job_redrive redrive
               WHERE redrive.source_job_id = candidate.id
+           )
+       AND NOT EXISTS (
+             SELECT 1 FROM workhorse.job_dependency dependency
+              WHERE dependency.prerequisite_job_id = candidate.id
            )
      ORDER BY candidate.finished_at, candidate.id
      LIMIT p_limit
@@ -6380,7 +6499,7 @@ BEGIN
       SELECT 1 FROM jsonb_array_elements(v_filter->'states') state_value
       WHERE jsonb_typeof(state_value) <> 'string'
          OR state_value #>> '{}' NOT IN (
-           'scheduled', 'ready', 'active', 'succeeded', 'failed', 'canceled'
+           'blocked', 'scheduled', 'ready', 'active', 'succeeded', 'failed', 'canceled'
          )
     ) THEN
       RAISE EXCEPTION 'filter.states contains an invalid lifecycle state';
@@ -6694,6 +6813,9 @@ CREATE OR REPLACE VIEW workhorse.dashboard_concurrency_policy_v1 AS
 CREATE OR REPLACE VIEW workhorse.dashboard_job_checkpoint_v1 AS
   SELECT job_id, checkpoint_name, checkpoint_value, attempt, fence_token, worker_id, created_at
     FROM workhorse.job_checkpoint;
+CREATE OR REPLACE VIEW workhorse.dashboard_job_dependency_v1 AS
+  SELECT dependent_job_id, prerequisite_job_id, created_at, released_at
+    FROM workhorse.job_dependency;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_event_v1 AS
   SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM workhorse.job_event;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_outcome_v1 AS
@@ -6753,9 +6875,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (26, 'add versioned dashboard read surface'),
   (27, 'add strict-priority job dispatch'),
   (28, 'add keyed debounce enqueue'),
-  (29, 'add keyed throttle enqueue')
+  (29, 'add keyed throttle enqueue'),
+  (30, 'add one-prerequisite job dependencies')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (29) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (30) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )
