@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 39. Version 23 is the oldest supported
+The current clean-install protocol is schema version 40. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 39 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 40 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -74,14 +74,20 @@ Migration `0039-fix-dependency-release-reasons.sql` requires version 38. It make
 `dependency_released` reason identify the prerequisite state which selected a release policy. It
 records version 39 and advances the schema row.
 
-Versions below 23, versions above 39, gaps, and mixed version rows fail without running a migration.
+Migration `0040-bound-dependency-fan-out.sql` requires version 39. It rejects an upgrade if a
+prerequisite already retains more than 100 direct dependents or reaches more than 100 unresolved
+transitive dependents. It adds both bounds, `job_dependency_prerequisite_idx`,
+`job_dependency_dependent_pending_idx`, and `job_runtime_blocked_queue_idx`. It records version 40
+and advances the schema row.
+
+Versions below 23, versions above 40, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 1. It accepts installed
-schema version 39 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
+schema version 40 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -458,17 +464,21 @@ The stored canonical fingerprint covers queue, concurrency key, priority, type, 
 
 ### `job_dependency`
 
-At most 100 immutable prerequisite edges per dependent job. The primary key is `(dependent_job_id, prerequisite_job_id)`. `dependent_job_id` cascades when that job identity is removed. `prerequisite_job_id` restricts deletion, so retention cannot strand blocked work or erase released lineage. `on_success`, `on_failure`, and `on_cancellation` each contain `release`, `cancel`, or `fail`. `created_at` records acceptance. Nullable `released_at` records when the prerequisite outcome resolved, and `resolution` records the selected action.
+At most 100 immutable prerequisite edges may enter one dependent job, and at most 100 immutable dependent edges may leave one prerequisite job. The primary key is `(dependent_job_id, prerequisite_job_id)`. `dependent_job_id` cascades when that job identity is removed. `prerequisite_job_id` restricts deletion, so retention cannot strand blocked work or erase released lineage. `on_success`, `on_failure`, and `on_cancellation` each contain `release`, `cancel`, or `fail`. `created_at` records acceptance. Nullable `released_at` records when the prerequisite outcome resolved, and `resolution` records the selected action.
+
+Each prerequisite may reach at most 100 distinct dependents through unresolved edges. The bound
+includes direct and transitive descendants. PostgreSQL checks every affected ancestor while the
+dependency-graph advisory lock keeps the pending graph stable.
 
 `EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteJobId` remains the compatible success-oriented shorthand. `enqueue_many_v1` sorts and locks every prerequisite identity inside the caller's transaction. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
 
-`resolve_job_outcome_dependencies_v1` runs after every `job_outcome` insert and calls `resolve_dependents_v1`. That function locks dependents in identity order and records each edge's `released_at` plus `resolution`. The dependent stays blocked until every edge resolves. It then chooses `fail`, `cancel`, or `release` by fixed precedence. Release moves the blocked runtime to ready or scheduled, appends one `dependency_released`, and notifies a queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release. Failure or cancellation removes the runtime and inserts a synthetic terminal outcome with `DependencyFailed` or `DependencyCanceled`. The outcome trigger applies the same policy recursively to downstream jobs. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once.
+`resolve_job_outcome_dependencies_v1` runs after every `job_outcome` insert and calls `resolve_dependents_v1`. That function locks at most 100 direct dependents in identity order and records each edge's `released_at` plus `resolution`. The dependent stays blocked until every edge resolves. It then chooses `fail`, `cancel`, or `release` by fixed precedence. Release moves the blocked runtime to ready or scheduled, appends one `dependency_released`, and notifies a queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release. Failure or cancellation removes the runtime and inserts a synthetic terminal outcome with `DependencyFailed` or `DependencyCanceled`. The outcome trigger applies the same policy recursively to downstream jobs. One outcome transaction can recurse through at most 100 unresolved descendants. It can invoke at most 101 resolver calls. Those calls can inspect at most 10,100 direct pending-edge slots. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once.
 
-`validate_job_dependency_v1` takes the transaction-scoped dependency-graph advisory lock before every edge insert. Its recursive reachability check rejects direct and transitive cycles with SQLSTATE `P1002`. The JSON detail contains `dependentJobId`, `prerequisiteJobId`, at most 101 `cycleJobIds`, and `truncated`. The trigger also enforces the 100-edge bound for SQL callers.
+`validate_job_dependency_v1` takes the transaction-scoped dependency-graph advisory lock before every edge insert. Its recursive reachability check rejects direct and transitive cycles with SQLSTATE `P1002`. The JSON detail contains `dependentJobId`, `prerequisiteJobId`, at most 101 `cycleJobIds`, and `truncated`. The trigger enforces the 100-edge fan-in bound, the 100-edge retained fan-out bound, and the 100-descendant unresolved cascade bound for SQL callers. `job_dependency_prerequisite_idx` supports the retained fan-out check without scanning the graph.
 
-`Queue.getJob` and `Queue.listJobs` expose sorted `prerequisiteJobIds`, `dependencyPolicy`, the compatible singular `prerequisiteJobId` when exactly one edge exists, and `blockedReason`. `Queue.getDependencyLineage(jobId, limit)` returns at most 1,000 edges where the identity is either the prerequisite or dependent. Each `DependencyLineageRecord` contains both identities, all three terminal policies, `createdAt`, nullable `releasedAt`, and nullable `resolution`; the result sets `truncated` when another edge exists. `dashboard_job_dependency_v1` exposes the same retained edge evidence to the bounded dashboard task-detail read.
+`Queue.getJob` and `Queue.listJobs` expose sorted `prerequisiteJobIds`, `dependencyPolicy`, the compatible singular `prerequisiteJobId` when exactly one edge exists, and `blockedReason`. `Queue.getDependencyLineage(jobId, limit)` returns at most 1,000 edges where the identity is either the prerequisite or dependent. Each identity can own at most 100 edges in either direction, so the default read returns its complete one-hop lineage and needs no continuation cursor. A caller-selected lower limit can still set `truncated`. Each `DependencyLineageRecord` contains both identities, all three terminal policies, `createdAt`, nullable `releasedAt`, and nullable `resolution`. `dashboard_job_dependency_v1` exposes the same retained edge evidence to the bounded dashboard task-detail read.
 
-`Queue.health().dependencies` reports blocked jobs, pending edges, and retained `DependencyFailed` outcomes. Each count scans at most 10,001 matching rows, returns at most 10,000, and sets `capped` when any value is a lower bound. The failure count uses `job_outcome_dependency_failed_idx`, so it scales with matching outcomes instead of all terminal history. `Queue.queueMetricSnapshot()` splits the same bounded facts by queue and exposes `dependencyCountsCapped`. `registerQueueMetrics()` exports them as `workhorse.queue.dependencies.blocked`, `workhorse.queue.dependencies.pending_edges`, `workhorse.queue.dependencies.failed_resolutions`, and `workhorse.queue.dependencies.capped`; the only attribute is `workhorse.queue.name`.
+`Queue.health().dependencies` reports blocked jobs, pending edges, and retained `DependencyFailed` outcomes. Each count scans at most 10,001 matching rows, returns at most 10,000, and sets `capped` when any value is a lower bound. `job_runtime_blocked_queue_idx` supports global and per-queue blocked counts. `job_dependency_dependent_pending_idx` supports pending-edge joins from live runtimes. `job_outcome_dependency_failed_idx` supports failure counts, so none of the three dependency diagnostics scans unrelated runtime or history rows. These partial diagnostic indexes exclude ready, scheduled, and active rows from their predicates, so claim does not use them. `Queue.queueMetricSnapshot()` splits the same bounded facts by queue and exposes `dependencyCountsCapped`. `registerQueueMetrics()` exports them as `workhorse.queue.dependencies.blocked`, `workhorse.queue.dependencies.pending_edges`, `workhorse.queue.dependencies.failed_resolutions`, and `workhorse.queue.dependencies.capped`; the only attribute is `workhorse.queue.name`.
 
 ### `job_child`
 
@@ -1459,7 +1469,7 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 
 `examples/agentic-flow.mjs` composes the public SQL-backed primitives without adding a workflow
 runtime. `pnpm example:agentic-flow` builds the publishable packages, loads this worktree's
-`DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 39 with
+`DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 40 with
 `assertSchemaCompatible`, and runs the example as a package consumer. The controller advances the
 two `Worker` instances through `Worker.runOnce` and reads completion through `Queue.getJob`.
 `test/packed-packages.ts`

@@ -7,7 +7,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 39;
+export const WORKHORSE_SCHEMA_VERSION = 40;
 
 const SCHEMA_MIGRATIONS = [
   {
@@ -89,6 +89,11 @@ const SCHEMA_MIGRATIONS = [
     fromVersion: 38,
     toVersion: 39,
     file: "0039-fix-dependency-release-reasons.sql",
+  },
+  {
+    fromVersion: 39,
+    toVersion: 40,
+    file: "0040-bound-dependency-fan-out.sql",
   },
 ] as const;
 

@@ -311,18 +311,24 @@ describe("operational scenario contracts", () => {
     expect(contract!.purpose.toLowerCase()).not.toMatch(/exactly once|faster|latency target|sla/);
   });
 
-  it("defines dependency operations evidence across fan-in, cancellation, and retained history", () => {
+  it("defines dependency operations evidence across fan-in, fan-out, contention, and history", () => {
     const contract = operationalScenarioContracts.find(
       (candidate) => candidate.name === "dependency-operations",
     );
 
     expect(contract).toBeDefined();
     expect(contract!.invariants.join("\n")).toMatch(/fan-in/);
+    expect(contract!.invariants.join("\n")).toMatch(/fan-out/);
+    expect(contract!.invariants.join("\n")).toMatch(/concurrent dependency/);
     expect(contract!.invariants.join("\n")).toMatch(/cancellation/);
     expect(contract!.invariants.join("\n")).toMatch(/retained terminal history/);
     expect(contract!.metrics).toEqual(
       expect.arrayContaining([
         "fanInReleaseMs",
+        "fanOutSettlementMs",
+        "concurrentDependencyEnqueueP50Ms",
+        "concurrentDependencyEnqueueP95Ms",
+        "concurrentDependencyEnqueueThroughputPerSecond",
         "cancellationResolutionMs",
         "claimPlanSharedBlocksBeforeHistory",
         "claimPlanSharedBlocksAfterHistory",

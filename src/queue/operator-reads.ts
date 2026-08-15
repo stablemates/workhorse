@@ -1332,7 +1332,8 @@ export class OperatorReadsModule extends QueueModule {
              (SELECT count(*) FROM (
                SELECT 1 FROM workhorse.job_dependency edge
                 JOIN workhorse.job_runtime runtime ON runtime.job_id = edge.dependent_job_id
-               WHERE runtime.queue_name = usage.queue_name AND edge.released_at IS NULL
+               WHERE runtime.queue_name = usage.queue_name AND runtime.state = 'blocked'
+                 AND edge.released_at IS NULL
                LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
              ) sampled_pending)
                AS pending_edges,

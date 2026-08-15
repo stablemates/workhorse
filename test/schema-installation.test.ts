@@ -236,11 +236,11 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v39 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v40 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(39);
+    expect(version.rows[0]?.version).toBe(40);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -263,6 +263,7 @@ describe("schema installation", () => {
       { version: 37, description: "add completable human wait tokens" },
       { version: 38, description: "harden signal and human wait lifecycles" },
       { version: 39, description: "fix dependency release event reasons" },
+      { version: 40, description: "bound dependency fan-out and index dependency health" },
     ]);
 
     const maintenanceFunctions = await pool.query<{
@@ -346,8 +347,11 @@ describe("schema installation", () => {
       [
         [
           "job_runtime_expired_active_idx",
+          "job_runtime_blocked_queue_idx",
           "job_runtime_ready_idx",
           "job_runtime_scheduled_idx",
+          "job_dependency_dependent_pending_idx",
+          "job_dependency_prerequisite_idx",
           "job_tags_gin_idx",
           "enqueue_idempotency_expiry_idx",
         ],
@@ -355,6 +359,9 @@ describe("schema installation", () => {
     );
     expect(indexes.rows.map((row) => row.indexname)).toEqual([
       "enqueue_idempotency_expiry_idx",
+      "job_dependency_dependent_pending_idx",
+      "job_dependency_prerequisite_idx",
+      "job_runtime_blocked_queue_idx",
       "job_runtime_expired_active_idx",
       "job_runtime_ready_idx",
       "job_runtime_scheduled_idx",

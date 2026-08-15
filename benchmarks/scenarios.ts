@@ -26,6 +26,7 @@ import {
   EnqueueIdempotencyConflictError,
   ExecutionTimeoutError,
   InjectedCrashError,
+  MAX_JOB_DEPENDENTS,
   ProgressLeaseLostError,
   ProgressRateLimitError,
   Queue,
@@ -445,16 +446,25 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   {
     name: "dependency-operations",
     purpose:
-      "Measure fan-in release and cancellation while proving claim work stays bounded as terminal history grows.",
+      "Measure fan-in, wide fan-out settlement, dependency enqueue contention, and cancellation while proving claim work stays bounded as terminal history grows.",
     invariants: [
       "fan-in releases once after every prerequisite resolves",
+      "wide fan-out terminal settlement cancels every dependent at the configured bound",
+      "concurrent dependency enqueue creates every requested edge under advisory-lock contention",
       "cancellation applies its declared terminal dependency policy",
       "claim buffer work stays bounded after retained terminal history grows",
-      "health reports no blocked dependency after both cohorts settle",
+      "health reports no blocked dependency after every cohort settles",
     ],
     metrics: [
       "fanIn",
       "fanInReleaseMs",
+      "fanOut",
+      "fanOutSettlementMs",
+      "concurrentDependencyEnqueues",
+      "concurrentDependencyEnqueueTotalMs",
+      "concurrentDependencyEnqueueP50Ms",
+      "concurrentDependencyEnqueueP95Ms",
+      "concurrentDependencyEnqueueThroughputPerSecond",
       "cancellationResolutionMs",
       "claimPlanExecutionMsBeforeHistory",
       "claimPlanExecutionMsAfterHistory",
@@ -3391,6 +3401,64 @@ async function dependencyOperations(
   ).length;
   recordInvariant(assertions, "fan-in records one release transition", dependencyReleaseEvents, 1);
 
+  const fanOut = MAX_JOB_DEPENDENTS;
+  const fanOutQueue = new Queue(context.pool, `${context.queueName}-fan-out`);
+  const fanOutPrerequisiteId = await fanOutQueue.enqueue("dependency-fan-out-prerequisite", null);
+  const fanOutDependentIds = await fanOutQueue.enqueueMany(
+    Array.from({ length: fanOut }, (_unused, index) => ({
+      type: "dependency-fan-out-dependent",
+      payload: { index },
+      options: { prerequisiteJobId: fanOutPrerequisiteId },
+    })),
+  );
+  const [, fanOutSettlementMs] = await measured(context.now, () =>
+    fanOutQueue.cancel(fanOutPrerequisiteId, { requestedBy: "dependency-operations" }),
+  );
+  const fanOutStates = await Promise.all(
+    fanOutDependentIds.map((jobId) => fanOutQueue.getJob(jobId)),
+  );
+  recordInvariant(
+    assertions,
+    "wide fan-out terminal settlement cancels every dependent at the configured bound",
+    fanOutStates.filter((job) => job?.state === "canceled").length,
+    fanOut,
+  );
+
+  const contentionQueue = new Queue(context.pool, `${context.queueName}-contention`);
+  const contentionPrerequisiteId = await contentionQueue.enqueue(
+    "dependency-contention-prerequisite",
+    null,
+  );
+  const concurrentDependencyEnqueues = Math.max(
+    2,
+    Math.min(context.options.jobCount, MAX_JOB_DEPENDENTS),
+  );
+  const contentionStarted = context.now();
+  const contentionRequests = await Promise.all(
+    Array.from({ length: concurrentDependencyEnqueues }, async (_unused, index) => {
+      const [jobId, durationMs] = await measured(context.now, () =>
+        contentionQueue.enqueue(
+          "dependency-contention-dependent",
+          { index },
+          {
+            prerequisiteJobId: contentionPrerequisiteId,
+          },
+        ),
+      );
+      return { jobId, durationMs };
+    }),
+  );
+  const concurrentDependencyEnqueueTotalMs = Math.max(0.001, context.now() - contentionStarted);
+  recordInvariant(
+    assertions,
+    "concurrent dependency enqueue creates every requested edge under advisory-lock contention",
+    new Set(contentionRequests.map((request) => request.jobId)).size,
+    concurrentDependencyEnqueues,
+  );
+  await contentionQueue.cancel(contentionPrerequisiteId, {
+    requestedBy: "dependency-operations",
+  });
+
   const cancellationPrerequisiteId = await queue.enqueue("dependency-cancel-prerequisite", null);
   const canceledDependentId = await queue.enqueue("dependency-cancel-dependent", null, {
     dependencies: {
@@ -3455,7 +3523,7 @@ async function dependencyOperations(
   const health = await queue.health();
   recordInvariant(
     assertions,
-    "health reports no blocked dependency after both cohorts settle",
+    "health reports no blocked dependency after every cohort settles",
     health.dependencies.blockedJobs,
     0,
   );
@@ -3466,6 +3534,20 @@ async function dependencyOperations(
     metrics: {
       fanIn,
       fanInReleaseMs,
+      fanOut,
+      fanOutSettlementMs,
+      concurrentDependencyEnqueues,
+      concurrentDependencyEnqueueTotalMs,
+      concurrentDependencyEnqueueP50Ms: percentile(
+        contentionRequests.map((request) => request.durationMs),
+        0.5,
+      ),
+      concurrentDependencyEnqueueP95Ms: percentile(
+        contentionRequests.map((request) => request.durationMs),
+        0.95,
+      ),
+      concurrentDependencyEnqueueThroughputPerSecond:
+        concurrentDependencyEnqueues / (concurrentDependencyEnqueueTotalMs / 1_000),
       cancellationResolutionMs,
       claimPlanExecutionMsBeforeHistory: claimPlanBeforeHistory.executionTimeMs,
       claimPlanExecutionMsAfterHistory: claimPlanAfterHistory.executionTimeMs,
