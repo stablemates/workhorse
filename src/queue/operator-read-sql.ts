@@ -419,6 +419,79 @@ export const HEALTH_SNAPSHOT_SQL = `
   ), children AS (
     SELECT ${childPressureProjectionSql("samples")}
       FROM (${childPressureSamplesSql()}) samples
+  ), external_waits AS (
+    WITH pending AS (
+      SELECT 'signal'::text AS kind, signal.created_at, runtime.deadline_at
+        FROM workhorse.job_signal_wait signal
+        JOIN workhorse.job_runtime runtime
+          ON runtime.job_id = signal.job_id
+         AND runtime.state = 'scheduled'
+         AND runtime.wait_name = signal.signal_name
+         AND runtime.current_attempt = signal.attempt
+       WHERE signal.delivered_at IS NULL
+       ORDER BY signal.created_at, signal.job_id, signal.signal_name
+       LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+    ), pending_human AS (
+      SELECT 'human'::text AS kind, human_wait.created_at, runtime.deadline_at
+        FROM workhorse.job_human_wait human_wait
+        JOIN workhorse.job_runtime runtime
+          ON runtime.job_id = human_wait.job_id
+         AND runtime.state = 'scheduled'
+         AND runtime.wait_name = human_wait.token_name
+         AND runtime.current_attempt = human_wait.attempt
+       WHERE human_wait.completed_at IS NULL
+       ORDER BY human_wait.created_at, human_wait.job_id, human_wait.token_name
+       LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+    ), combined AS (
+      SELECT * FROM pending UNION ALL SELECT * FROM pending_human
+    ), overdue_signals AS (
+      SELECT 1
+        FROM workhorse.job_signal_wait signal
+        JOIN workhorse.job_runtime runtime
+          ON runtime.job_id = signal.job_id
+         AND runtime.state = 'scheduled'
+         AND runtime.wait_name = signal.signal_name
+         AND runtime.current_attempt = signal.attempt
+       WHERE signal.delivered_at IS NULL AND runtime.deadline_at <= clock_timestamp()
+       ORDER BY runtime.deadline_at, signal.job_id, signal.signal_name
+       LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+    ), overdue_humans AS (
+      SELECT 1
+        FROM workhorse.job_human_wait human_wait
+        JOIN workhorse.job_runtime runtime
+          ON runtime.job_id = human_wait.job_id
+         AND runtime.state = 'scheduled'
+         AND runtime.wait_name = human_wait.token_name
+         AND runtime.current_attempt = human_wait.attempt
+       WHERE human_wait.completed_at IS NULL AND runtime.deadline_at <= clock_timestamp()
+       ORDER BY runtime.deadline_at, human_wait.job_id, human_wait.token_name
+       LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+    ), rejected AS (
+      SELECT 1
+        FROM workhorse.job_event
+       WHERE event_type IN ('signal_rejected', 'human_wait_rejected')
+       ORDER BY occurred_at DESC, event_id DESC
+       LIMIT ${DEPENDENCY_OPERATIONS_SCAN_LIMIT + 1}
+    )
+    SELECT LEAST(count(*) FILTER (WHERE kind = 'signal'), ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS pending_signal_waits,
+           LEAST(count(*) FILTER (WHERE kind = 'human'), ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS pending_human_waits,
+           LEAST(
+             (SELECT count(*) FROM overdue_signals) + (SELECT count(*) FROM overdue_humans),
+             ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+           )::text AS overdue_external_waits,
+           extract(epoch FROM clock_timestamp() - min(created_at)) * 1000
+             AS oldest_external_wait_age_ms,
+           LEAST((SELECT count(*) FROM rejected), ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
+             AS rejected_wait_deliveries,
+           count(*) FILTER (WHERE kind = 'signal') > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             OR count(*) FILTER (WHERE kind = 'human') > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             OR (SELECT count(*) FROM overdue_signals)
+                  + (SELECT count(*) FROM overdue_humans) > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             OR (SELECT count(*) FROM rejected) > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
+             AS external_wait_counts_capped
+      FROM combined
   ), rollup AS (
     SELECT state.rolled_up_through,
            GREATEST(0, extract(epoch FROM clock_timestamp() - state.rolled_up_through) * 1000)
@@ -510,7 +583,7 @@ export const HEALTH_SNAPSHOT_SQL = `
   )
   SELECT now() AS captured_at,
          installed.schema_version,
-         depth.*, terminal.*, dependencies.*, children.*, retention.*, rollup.*,
+         depth.*, terminal.*, dependencies.*, children.*, external_waits.*, retention.*, rollup.*,
          (SELECT COALESCE(jsonb_agg(to_jsonb(c.*) ORDER BY c.queue_name), '[]'::jsonb)
             FROM concurrency c) AS concurrency_policies,
          (SELECT COALESCE(jsonb_agg(to_jsonb(r.*) ORDER BY r.queue_name), '[]'::jsonb)
@@ -522,5 +595,6 @@ export const HEALTH_SNAPSHOT_SQL = `
     CROSS JOIN terminal
     CROSS JOIN dependencies
     CROSS JOIN children
+    CROSS JOIN external_waits
     CROSS JOIN retention
     CROSS JOIN rollup`;

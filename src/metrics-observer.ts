@@ -26,6 +26,18 @@ const overdueExecutionTimeouts = lazyGauge("workhorse.execution_timeout.overdue"
   description: "Current active attempts past their execution timeout",
   unit: "{attempt}",
 });
+const pendingExternalWaits = lazyGauge("workhorse.wait.pending", {
+  description: "Current signal and human waits that still own a live suspension boundary",
+  unit: "{wait}",
+});
+const overdueExternalWaits = lazyGauge("workhorse.wait.overdue", {
+  description: "Current signal and human waits past their effective PostgreSQL timeout",
+  unit: "{wait}",
+});
+const rejectedWaitDeliveries = lazyGauge("workhorse.wait.delivery.rejected", {
+  description: "Retained rejected signal deliveries and human-wait completions",
+  unit: "{delivery}",
+});
 const queuePaused = lazyGauge("workhorse.queue.paused", {
   description: "Whether dispatch is paused for a queue",
   unit: "1",
@@ -53,6 +65,12 @@ type QueueObservationRow = {
   overdue_deadlines: string;
   overdue_execution_timeouts: string;
   paused: boolean;
+  pending_signal_waits: string;
+  pending_human_waits: string;
+  overdue_signal_waits: string;
+  overdue_human_waits: string;
+  rejected_signals: string;
+  rejected_human_waits: string;
 };
 
 type WorkerObservationRow = {
@@ -130,9 +148,64 @@ export class WorkhorseMetricsObserver {
             "queue_names",
           )}
         )
-        SELECT depth.*, coalesce(control.paused, false) AS paused
+        SELECT depth.*, coalesce(control.paused, false) AS paused,
+               waits.pending_signal_waits, waits.pending_human_waits,
+               waits.overdue_signal_waits, waits.overdue_human_waits,
+               waits.rejected_signals, waits.rejected_human_waits
           FROM depth
           LEFT JOIN workhorse.queue_control control USING (queue_name)
+          CROSS JOIN LATERAL (
+            SELECT
+              (SELECT count(*)::text FROM (
+                SELECT 1 FROM workhorse.job_signal_wait signal
+                 JOIN workhorse.job_runtime runtime ON runtime.job_id = signal.job_id
+                WHERE runtime.queue_name = depth.queue_name
+                  AND runtime.state = 'scheduled' AND runtime.wait_name = signal.signal_name
+                  AND runtime.current_attempt = signal.attempt AND signal.delivered_at IS NULL
+                LIMIT 10001
+              ) sampled) AS pending_signal_waits,
+              (SELECT count(*)::text FROM (
+                SELECT 1 FROM workhorse.job_human_wait human_wait
+                 JOIN workhorse.job_runtime runtime ON runtime.job_id = human_wait.job_id
+                WHERE runtime.queue_name = depth.queue_name
+                  AND runtime.state = 'scheduled' AND runtime.wait_name = human_wait.token_name
+                  AND runtime.current_attempt = human_wait.attempt
+                  AND human_wait.completed_at IS NULL
+                LIMIT 10001
+              ) sampled) AS pending_human_waits,
+              (SELECT count(*)::text FROM (
+                SELECT 1 FROM workhorse.job_signal_wait signal
+                 JOIN workhorse.job_runtime runtime ON runtime.job_id = signal.job_id
+                WHERE runtime.queue_name = depth.queue_name
+                  AND runtime.state = 'scheduled' AND runtime.wait_name = signal.signal_name
+                  AND runtime.current_attempt = signal.attempt AND signal.delivered_at IS NULL
+                  AND runtime.deadline_at <= clock_timestamp()
+                LIMIT 10001
+              ) sampled) AS overdue_signal_waits,
+              (SELECT count(*)::text FROM (
+                SELECT 1 FROM workhorse.job_human_wait human_wait
+                 JOIN workhorse.job_runtime runtime ON runtime.job_id = human_wait.job_id
+                WHERE runtime.queue_name = depth.queue_name
+                  AND runtime.state = 'scheduled' AND runtime.wait_name = human_wait.token_name
+                  AND runtime.current_attempt = human_wait.attempt
+                  AND human_wait.completed_at IS NULL
+                  AND runtime.deadline_at <= clock_timestamp()
+                LIMIT 10001
+              ) sampled) AS overdue_human_waits,
+              (SELECT count(*)::text FROM (
+                SELECT 1 FROM workhorse.job_event event
+                 JOIN workhorse.job job ON job.id = event.job_id
+                WHERE job.queue_name = depth.queue_name AND event.event_type = 'signal_rejected'
+                LIMIT 10001
+              ) sampled) AS rejected_signals,
+              (SELECT count(*)::text FROM (
+                SELECT 1 FROM workhorse.job_event event
+                 JOIN workhorse.job job ON job.id = event.job_id
+                WHERE job.queue_name = depth.queue_name
+                  AND event.event_type = 'human_wait_rejected'
+                LIMIT 10001
+              ) sampled) AS rejected_human_waits
+          ) waits
          ORDER BY depth.queue_name`),
       this.database.query<WorkerObservationRow>(`
         SELECT queue_name,
@@ -163,6 +236,21 @@ export class WorkhorseMetricsObserver {
       expiredLeases.record(Number(row.expired), attributes);
       overdueDeadlines.record(Number(row.overdue_deadlines), attributes);
       overdueExecutionTimeouts.record(Number(row.overdue_execution_timeouts), attributes);
+      for (const kind of ["signal", "human"] as const) {
+        const waitAttributes = { ...attributes, "workhorse.wait.kind": kind };
+        pendingExternalWaits.record(
+          Number(kind === "signal" ? row.pending_signal_waits : row.pending_human_waits),
+          waitAttributes,
+        );
+        overdueExternalWaits.record(
+          Number(kind === "signal" ? row.overdue_signal_waits : row.overdue_human_waits),
+          waitAttributes,
+        );
+        rejectedWaitDeliveries.record(
+          Number(kind === "signal" ? row.rejected_signals : row.rejected_human_waits),
+          waitAttributes,
+        );
+      }
       queuePaused.record(row.paused ? 1 : 0, attributes);
     }
 

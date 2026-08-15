@@ -872,6 +872,7 @@ export type QueueHealthReasonCode =
   | "expired-leases"
   | "overdue-deadlines"
   | "overdue-execution-timeouts"
+  | "overdue-external-waits"
   | "stalled-promotion"
   | "missing-history-partitions"
   | "rollup-stalled"
@@ -1002,6 +1003,16 @@ export interface QueueHealth {
     failedParents: number;
     canceledParents: number;
     /** True when at least one value is a lower bound at the operations scan limit. */
+    capped: boolean;
+  };
+  /** Bounded signal and human-decision lifecycle diagnostics without job or wait-name labels. */
+  externalWaits: {
+    pendingSignals: number;
+    pendingHumanDecisions: number;
+    overdue: number;
+    oldestPendingAgeMs: number | null;
+    rejectedDeliveries: number;
+    /** True when any pending or rejection sample reached the operations scan limit. */
     capped: boolean;
   };
   oldestReadyAgeMs: number | null;

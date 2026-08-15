@@ -233,6 +233,12 @@ type HealthSnapshotRow = RetentionPolicyRow & {
   child_failed_parents: string;
   child_canceled_parents: string;
   child_counts_capped: boolean;
+  pending_signal_waits: string;
+  pending_human_waits: string;
+  overdue_external_waits: string;
+  oldest_external_wait_age_ms: number | null;
+  rejected_wait_deliveries: string;
+  external_wait_counts_capped: boolean;
   oldest_job_identity_at: Date | string | null;
   oldest_terminal_outcome_at: Date | string | null;
   oldest_job_event_at: Date | string | null;
@@ -1122,6 +1128,15 @@ export class OperatorReadsModule extends QueueModule {
         failedParents: Number(row.child_failed_parents),
         canceledParents: Number(row.child_canceled_parents),
         capped: row.child_counts_capped,
+      },
+      externalWaits: {
+        pendingSignals: Number(row.pending_signal_waits),
+        pendingHumanDecisions: Number(row.pending_human_waits),
+        overdue: Number(row.overdue_external_waits),
+        oldestPendingAgeMs:
+          row.oldest_external_wait_age_ms === null ? null : Number(row.oldest_external_wait_age_ms),
+        rejectedDeliveries: Number(row.rejected_wait_deliveries),
+        capped: row.external_wait_counts_capped,
       },
       oldestReadyAgeMs: row.oldest_ready_age_ms === null ? null : Number(row.oldest_ready_age_ms),
       deadlinePressure: {

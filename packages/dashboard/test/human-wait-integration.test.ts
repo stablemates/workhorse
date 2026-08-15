@@ -53,11 +53,19 @@ describe("dashboard human waits", () => {
 
     await expect(client(true).dashboard.humanWaits()).resolves.toMatchObject({
       canComplete: true,
+      diagnostics: {
+        pendingHumanDecisions: 1,
+        pendingSignals: 0,
+        overdue: 0,
+        rejectedDeliveries: 0,
+        capped: false,
+      },
       waits: [
         expect.objectContaining({
           jobId: id,
           name: "account-review",
           context: { prompt: "Approve this account?", accountId: "account-1" },
+          deadlineAt: expect.any(String),
         }),
       ],
     });

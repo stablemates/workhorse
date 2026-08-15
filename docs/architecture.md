@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 37. Version 23 is the oldest supported
+The current clean-install protocol is schema version 38. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 37 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 38 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -64,7 +64,13 @@ Migration `0037-add-human-wait-tokens.sql` requires version 36. It adds retained
 context, authenticated idempotent completion, and the actionable dashboard projection. It records
 version 37 and advances the schema row.
 
-Versions below 23, versions above 37, gaps, and mixed version rows fail without running a migration.
+Migration `0038-harden-signal-human-waits.sql` requires version 37. It preserves human-wait
+attempt provenance through cancellation and deadline terminalization. It adds `timeout_at` to
+`job_signal_wait` and `job_human_wait`, plus `job_signal_wait_pending_idx`. It adds the effective
+PostgreSQL deadline to `dashboard_human_wait_v1.deadline_at`. It records version 38 and advances
+the schema row.
+
+Versions below 23, versions above 38, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -590,6 +596,14 @@ calls the same queue operation. `signal_waiting`, `signal_received`, `signal_rep
 `signal_rejected` events retain bounded lifecycle evidence. Events include the actor and a short
 key digest but never the raw key or payload.
 
+PostgreSQL gives every undelivered signal a seven-day `timeout_at`; an earlier `job.deadline_at`
+wins. The waiting runtime temporarily stores that effective bound in `job_runtime.deadline_at`.
+Accepted delivery restores the immutable job deadline before making the runtime ready.
+`terminalize_deadline_v1` materializes `DeadlineExceeded`, retains the original attempt attribution,
+and makes every later delivery return `stale`. Signal rows have no independent retention window.
+They cascade only when terminal identity pruning can safely remove the parent `job`, after its
+outcome and required history are also eligible.
+
 ### `job_human_wait`
 
 One named human decision per stable job identity. `wait_for_human_v1` accepts the exact active job,
@@ -609,6 +623,13 @@ dispatch state.
 actionable rows from `dashboard_human_wait_v1`, validates result JSON, and derives `completedBy` from
 the authenticated principal. `human_wait_created`, `human_wait_completed`, `human_wait_replayed`,
 and `human_wait_rejected` retain value-free lifecycle evidence.
+
+Human decisions use the same seven-day PostgreSQL timeout and parent-identity retention contract.
+Immediate cancellation and deadline terminalization read `job_human_wait` to preserve the original
+attempt, fence, worker, and claim time before deleting `job_runtime`. A completion after either
+transition returns `stale` and appends `human_wait_rejected`; it cannot overwrite the retained
+decision row or terminal outcome. `dashboard_human_wait_v1.deadline_at` exposes the effective
+PostgreSQL timeout, including an earlier immutable job deadline when one exists.
 
 ### `retention_policy`
 
@@ -897,6 +918,14 @@ it retains the request and changes runtime to ready with a fresh FIFO sequence b
 workers. Competing deliveries serialize at this transition. Cancellation, deadline materialization,
 or another lifecycle transition makes an undelivered row stale. A delivered row remains replayable
 through later handler retries and follows parent-job retention.
+
+`QueueHealth.externalWaits` reports `pendingSignals`, `pendingHumanDecisions`, `overdue`,
+`oldestPendingAgeMs`, `rejectedDeliveries`, and `capped`. Separate scans inspect at most 10,001
+pending signals, pending human decisions, overdue signals, overdue human decisions, and retained
+rejection events. Counts cap at 10,000. An overdue row adds the critical
+`overdue-external-waits` reason until the deadline reaper materializes it. `WorkhorseMetricsObserver`
+exports `workhorse.wait.pending`, `workhorse.wait.overdue`, and
+`workhorse.wait.delivery.rejected` by queue and the bounded `signal` or `human` kind only.
 
 ### Human decision suspension
 
@@ -1419,7 +1448,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 37. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 38. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

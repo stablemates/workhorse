@@ -996,10 +996,13 @@ export interface DashboardHumanWaitRow {
   context: unknown;
   attempt: number;
   createdAt: string;
+  /** Effective PostgreSQL-owned absolute timeout for this decision. */
+  deadlineAt: string;
 }
 
 export interface DashboardHumanWaitPage {
   capturedAt: string;
   canComplete: boolean;
+  diagnostics: Awaited<ReturnType<Queue["health"]>>["externalWaits"];
   waits: DashboardHumanWaitRow[];
 }

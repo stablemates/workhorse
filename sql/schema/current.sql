@@ -587,6 +587,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job_signal_wait (
   ),
   delivered_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  timeout_at timestamptz NOT NULL CONSTRAINT job_signal_wait_timeout_finite
+    CHECK (isfinite(timeout_at)),
   PRIMARY KEY (job_id, signal_name),
   CHECK (
     (payload IS NULL AND idempotency_key_hash IS NULL AND request_fingerprint IS NULL
@@ -5085,7 +5087,6 @@ BEGIN
     );
     RETURN;
   END IF;
-
   SELECT * INTO v_progress
     FROM workhorse.job_progress progress
    WHERE progress.job_id = p_job_id
@@ -5375,6 +5376,7 @@ DECLARE
   v_runtime workhorse.job_runtime%ROWTYPE;
   v_wait workhorse.job_signal_wait%ROWTYPE;
   v_now timestamptz;
+  v_timeout_at timestamptz;
 BEGIN
   IF p_signal_name IS NULL OR p_signal_name = '' OR char_length(p_signal_name) > 200 THEN
     RAISE EXCEPTION 'signal_name must contain between 1 and 200 characters';
@@ -5401,6 +5403,10 @@ BEGIN
     RETURN QUERY VALUES ('stale'::text, NULL::jsonb);
     RETURN;
   END IF;
+  v_timeout_at := LEAST(
+    COALESCE(v_runtime.deadline_at, 'infinity'::timestamptz),
+    v_now + interval '7 days'
+  );
 
   SELECT * INTO v_wait
     FROM workhorse.job_signal_wait stored
@@ -5425,10 +5431,10 @@ BEGIN
   END IF;
 
   INSERT INTO workhorse.job_signal_wait(
-    job_id, signal_name, attempt, fence_token, worker_id, claimed_at
+    job_id, signal_name, attempt, fence_token, worker_id, claimed_at, timeout_at
   ) VALUES (
     p_job_id, p_signal_name, v_runtime.current_attempt, p_fence_token,
-    p_worker_id, v_runtime.acquired_at
+    p_worker_id, v_runtime.acquired_at, v_timeout_at
   );
 
   UPDATE workhorse.job_runtime runtime
@@ -5442,7 +5448,8 @@ BEGIN
              0, floor(extract(epoch FROM v_now - runtime.acquired_at) * 1000)::bigint
            )
          ),
-         attempt_timeout_at = NULL, error = NULL, updated_at = clock_timestamp()
+         attempt_timeout_at = NULL, deadline_at = v_timeout_at,
+         error = NULL, updated_at = clock_timestamp()
    WHERE runtime.job_id = p_job_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
@@ -5593,6 +5600,7 @@ BEGIN
   UPDATE workhorse.job_runtime runtime
      SET state = 'ready', run_at = v_now, ready_at = v_now,
          sequence = nextval('workhorse.ready_sequence_seq'), wait_name = NULL,
+         deadline_at = (SELECT job.deadline_at FROM workhorse.job job WHERE job.id = p_job_id),
          updated_at = v_now
    WHERE runtime.job_id = p_job_id;
   INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
@@ -7977,6 +7985,8 @@ CREATE TABLE IF NOT EXISTS workhorse.job_human_wait (
   ),
   completed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  timeout_at timestamptz NOT NULL CONSTRAINT job_human_wait_timeout_finite
+    CHECK (isfinite(timeout_at)),
   PRIMARY KEY (job_id, token_name),
   CHECK (
     (completed_at IS NULL AND result IS NULL AND idempotency_key_hash IS NULL
@@ -7991,6 +8001,10 @@ CREATE INDEX IF NOT EXISTS job_human_wait_actionable_idx
   ON workhorse.job_human_wait(created_at, job_id, token_name)
   WHERE completed_at IS NULL;
 
+CREATE INDEX IF NOT EXISTS job_signal_wait_pending_idx
+  ON workhorse.job_signal_wait(created_at, job_id, signal_name)
+  WHERE delivered_at IS NULL;
+
 CREATE OR REPLACE FUNCTION workhorse.wait_for_human_v1(
   p_job_id uuid,
   p_worker_id text,
@@ -8004,6 +8018,7 @@ DECLARE
   v_runtime workhorse.job_runtime%ROWTYPE;
   v_wait workhorse.job_human_wait%ROWTYPE;
   v_now timestamptz;
+  v_timeout_at timestamptz;
 BEGIN
   IF p_token_name IS NULL OR p_token_name = '' OR char_length(p_token_name) > 200 THEN
     RAISE EXCEPTION 'token_name must contain between 1 and 200 characters';
@@ -8036,6 +8051,10 @@ BEGIN
     RETURN QUERY VALUES ('stale'::text, NULL::jsonb);
     RETURN;
   END IF;
+  v_timeout_at := LEAST(
+    COALESCE(v_runtime.deadline_at, 'infinity'::timestamptz),
+    v_now + interval '7 days'
+  );
 
   SELECT * INTO v_wait
     FROM workhorse.job_human_wait stored
@@ -8064,10 +8083,10 @@ BEGIN
   END IF;
 
   INSERT INTO workhorse.job_human_wait(
-    job_id, token_name, context, attempt, fence_token, worker_id, claimed_at
+    job_id, token_name, context, attempt, fence_token, worker_id, claimed_at, timeout_at
   ) VALUES (
     p_job_id, p_token_name, p_context, v_runtime.current_attempt, p_fence_token,
-    p_worker_id, v_runtime.acquired_at
+    p_worker_id, v_runtime.acquired_at, v_timeout_at
   );
   UPDATE workhorse.job_runtime runtime
      SET state = 'scheduled', run_at = '9999-12-31 00:00:00+00'::timestamptz,
@@ -8080,7 +8099,8 @@ BEGIN
              0, floor(extract(epoch FROM v_now - runtime.acquired_at) * 1000)::bigint
            )
          ),
-         attempt_timeout_at = NULL, error = NULL, updated_at = clock_timestamp()
+         attempt_timeout_at = NULL, deadline_at = v_timeout_at,
+         error = NULL, updated_at = clock_timestamp()
    WHERE runtime.job_id = p_job_id
      AND runtime.state = 'active'
      AND runtime.worker_id = p_worker_id
@@ -8232,6 +8252,7 @@ BEGIN
   UPDATE workhorse.job_runtime runtime
      SET state = 'ready', run_at = v_now, ready_at = v_now,
          sequence = nextval('workhorse.ready_sequence_seq'), wait_name = NULL,
+         deadline_at = (SELECT job.deadline_at FROM workhorse.job job WHERE job.id = p_job_id),
          updated_at = v_now
    WHERE runtime.job_id = p_job_id;
   INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
@@ -8249,7 +8270,8 @@ $$;
 
 CREATE OR REPLACE VIEW workhorse.dashboard_human_wait_v1 AS
   SELECT wait.job_id, job.queue_name, job.job_type, wait.token_name, wait.context,
-         wait.attempt, wait.created_at, wait.completed_at, wait.completed_by
+         wait.attempt, wait.created_at, wait.completed_at, wait.completed_by,
+         runtime.deadline_at
     FROM workhorse.job_human_wait wait
     JOIN workhorse.job job ON job.id = wait.job_id
     JOIN workhorse.job_runtime runtime
@@ -8258,6 +8280,272 @@ CREATE OR REPLACE VIEW workhorse.dashboard_human_wait_v1 AS
      AND runtime.wait_name = wait.token_name
      AND runtime.current_attempt = wait.attempt
    WHERE wait.completed_at IS NULL;
+
+-- Human waits are defined after the core lifecycle functions in the clean-install layout. Replace
+-- those functions now that all suspension provenance tables exist.
+CREATE OR REPLACE FUNCTION workhorse.terminalize_deadline_v1(p_job_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_error jsonb;
+  v_worker_id text;
+  v_fence_token bigint := 0;
+  v_claimed_at timestamptz;
+BEGIN
+  SELECT * INTO v_runtime FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id FOR UPDATE;
+  IF NOT FOUND OR v_runtime.deadline_at IS NULL
+     OR v_runtime.deadline_at > clock_timestamp() THEN RETURN false; END IF;
+  IF v_runtime.cancel_requested_at IS NOT NULL THEN
+    v_error := workhorse.cancellation_envelope_v1(
+      v_runtime.cancel_requested_at, v_runtime.cancel_requested_by, v_runtime.cancel_reason
+    );
+    DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
+    INSERT INTO workhorse.job_outcome(
+      job_id, state, current_attempt, fence_token, run_at, error
+    ) VALUES (
+      p_job_id, 'canceled', v_runtime.current_attempt, v_runtime.fence_token,
+      v_runtime.run_at, v_error
+    );
+    INSERT INTO workhorse.attempt_history(
+      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+    ) VALUES (
+      p_job_id, v_runtime.current_attempt, v_runtime.fence_token, v_runtime.worker_id,
+      'canceled', v_runtime.attempt_started_at, v_runtime.acquired_at, v_error
+    );
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id, v_runtime.current_attempt, 'canceled',
+        jsonb_build_object(
+          'requested_at', v_runtime.cancel_requested_at,
+          'requested_by', v_runtime.cancel_requested_by,
+          'reason', v_runtime.cancel_reason,
+          'fence_token', v_runtime.fence_token::text,
+          'source', 'deadline_reaper'
+        )
+      );
+    RETURN true;
+  END IF;
+  v_error := workhorse.deadline_envelope_v1(v_runtime.deadline_at);
+  IF v_runtime.state = 'active' THEN
+    v_worker_id := v_runtime.worker_id;
+    v_fence_token := v_runtime.fence_token;
+    v_claimed_at := v_runtime.acquired_at;
+  ELSIF v_runtime.attempt_started_at IS NOT NULL THEN
+    SELECT provenance.worker_id, provenance.fence_token, provenance.claimed_at
+      INTO STRICT v_worker_id, v_fence_token, v_claimed_at
+      FROM (
+        SELECT wait_row.worker_id, wait_row.fence_token, wait_row.claimed_at,
+               wait_row.created_at, wait_row.wait_name AS name
+          FROM workhorse.job_wait wait_row
+         WHERE wait_row.job_id = p_job_id AND wait_row.attempt = v_runtime.current_attempt
+        UNION ALL
+        SELECT signal.worker_id, signal.fence_token, signal.claimed_at,
+               signal.created_at, signal.signal_name AS name
+          FROM workhorse.job_signal_wait signal
+         WHERE signal.job_id = p_job_id AND signal.attempt = v_runtime.current_attempt
+        UNION ALL
+        SELECT human_wait.worker_id, human_wait.fence_token, human_wait.claimed_at,
+               human_wait.created_at, human_wait.token_name AS name
+          FROM workhorse.job_human_wait human_wait
+         WHERE human_wait.job_id = p_job_id
+           AND human_wait.attempt = v_runtime.current_attempt
+      ) provenance
+     ORDER BY provenance.created_at DESC, provenance.name DESC LIMIT 1;
+  END IF;
+  DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
+  INSERT INTO workhorse.job_outcome(
+    job_id, state, current_attempt, fence_token, run_at, error
+  ) VALUES (
+    p_job_id, 'failed', v_runtime.current_attempt, v_fence_token, v_runtime.run_at, v_error
+  );
+  IF v_runtime.attempt_started_at IS NOT NULL THEN
+    INSERT INTO workhorse.attempt_history(
+      job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+    ) VALUES (
+      p_job_id, v_runtime.current_attempt, v_fence_token, v_worker_id,
+      'deadline_exceeded', v_runtime.attempt_started_at, v_claimed_at, v_error
+    );
+  END IF;
+  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    VALUES (
+      p_job_id,
+      CASE WHEN v_runtime.attempt_started_at IS NULL THEN NULL ELSE v_runtime.current_attempt END,
+      'deadline_exceeded',
+      jsonb_build_object(
+        'deadline_at', v_runtime.deadline_at,
+        'fence_token', v_fence_token::text,
+        'started', v_runtime.attempt_started_at IS NOT NULL
+      )
+    );
+  RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.cancel_v1(
+  p_job_id uuid, p_requested_by text DEFAULT NULL, p_reason text DEFAULT NULL
+) RETURNS TABLE (
+  status text, state text, current_attempt integer, requested_at timestamptz,
+  requested_by text, reason text, finished_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_runtime workhorse.job_runtime%ROWTYPE;
+  v_outcome workhorse.job_outcome%ROWTYPE;
+  v_now timestamptz := clock_timestamp();
+  v_fence_token bigint := 0;
+  v_worker_id text;
+  v_claimed_at timestamptz;
+  v_attempt integer;
+  v_envelope jsonb;
+BEGIN
+  IF p_job_id IS NULL THEN RAISE EXCEPTION 'job_id is required'; END IF;
+  IF p_requested_by IS NOT NULL
+     AND (p_requested_by = '' OR char_length(p_requested_by) > 200) THEN
+    RAISE EXCEPTION 'requested_by must contain between 1 and 200 characters';
+  END IF;
+  IF p_reason IS NOT NULL AND (p_reason = '' OR char_length(p_reason) > 2000) THEN
+    RAISE EXCEPTION 'reason must contain between 1 and 2000 characters';
+  END IF;
+
+  SELECT * INTO v_runtime
+    FROM workhorse.job_runtime runtime
+   WHERE runtime.job_id = p_job_id
+   FOR UPDATE;
+  IF FOUND THEN
+    IF v_runtime.state = 'active' THEN
+      IF v_runtime.cancel_requested_at IS NULL THEN
+        UPDATE workhorse.job_runtime runtime
+           SET cancel_requested_at = v_now,
+               cancel_requested_by = p_requested_by,
+               cancel_reason = p_reason,
+               updated_at = v_now
+         WHERE runtime.job_id = p_job_id AND runtime.state = 'active'
+           AND runtime.cancel_requested_at IS NULL
+        RETURNING * INTO v_runtime;
+        IF FOUND THEN
+          INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+            VALUES (
+              p_job_id,
+              v_runtime.current_attempt,
+              'cancel_requested',
+              jsonb_build_object(
+                'requested_at', v_now,
+                'requested_by', p_requested_by,
+                'reason', p_reason,
+                'fence_token', v_runtime.fence_token::text
+              )
+            );
+        END IF;
+      END IF;
+      RETURN QUERY VALUES (
+        'cancel_requested'::text,
+        'active'::text,
+        v_runtime.current_attempt,
+        v_runtime.cancel_requested_at,
+        v_runtime.cancel_requested_by,
+        v_runtime.cancel_reason,
+        NULL::timestamptz
+      );
+      RETURN;
+    END IF;
+
+    -- A suspended logical attempt retains its original worker/fence attribution in its timer or
+    -- signal or human boundary even though scheduled runtime ownership has been released.
+    IF v_runtime.attempt_started_at IS NOT NULL THEN
+      SELECT provenance.fence_token, provenance.worker_id, provenance.attempt,
+             provenance.claimed_at
+        INTO v_fence_token, v_worker_id, v_attempt, v_claimed_at
+        FROM (
+          SELECT wait_row.fence_token, wait_row.worker_id, wait_row.attempt,
+                 wait_row.claimed_at, wait_row.created_at, wait_row.wait_name AS name
+            FROM workhorse.job_wait wait_row
+           WHERE wait_row.job_id = p_job_id AND wait_row.attempt = v_runtime.current_attempt
+          UNION ALL
+          SELECT signal.fence_token, signal.worker_id, signal.attempt,
+                 signal.claimed_at, signal.created_at, signal.signal_name AS name
+            FROM workhorse.job_signal_wait signal
+           WHERE signal.job_id = p_job_id AND signal.attempt = v_runtime.current_attempt
+          UNION ALL
+          SELECT human_wait.fence_token, human_wait.worker_id, human_wait.attempt,
+                 human_wait.claimed_at, human_wait.created_at, human_wait.token_name AS name
+            FROM workhorse.job_human_wait human_wait
+           WHERE human_wait.job_id = p_job_id
+             AND human_wait.attempt = v_runtime.current_attempt
+        ) provenance
+       ORDER BY provenance.created_at DESC, provenance.name DESC
+       LIMIT 1;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'started job % has no retained suspension attribution', p_job_id;
+      END IF;
+    END IF;
+    v_envelope := workhorse.cancellation_envelope_v1(v_now, p_requested_by, p_reason);
+    DELETE FROM workhorse.job_runtime runtime WHERE runtime.job_id = p_job_id;
+    INSERT INTO workhorse.job_outcome(
+      job_id, state, current_attempt, fence_token, run_at, error, finished_at, updated_at
+    ) VALUES (
+      p_job_id, 'canceled', v_runtime.current_attempt, v_fence_token, v_runtime.run_at,
+      v_envelope, v_now, v_now
+    ) RETURNING * INTO v_outcome;
+    IF v_runtime.attempt_started_at IS NOT NULL THEN
+      INSERT INTO workhorse.attempt_history(
+        job_id, attempt, fence_token, worker_id, outcome, started_at, claimed_at, error
+      ) VALUES (
+        p_job_id, v_attempt, v_fence_token, v_worker_id, 'canceled',
+        v_runtime.attempt_started_at, v_claimed_at, v_envelope
+      );
+    END IF;
+    INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+      VALUES (
+        p_job_id,
+        CASE WHEN v_runtime.attempt_started_at IS NULL THEN NULL ELSE v_attempt END,
+        'canceled',
+        jsonb_build_object(
+          'requested_at', v_now,
+          'requested_by', p_requested_by,
+          'reason', p_reason,
+          'fence_token', v_fence_token::text,
+          'source', 'immediate'
+        )
+      );
+    RETURN QUERY VALUES (
+      'canceled'::text, 'canceled'::text, v_runtime.current_attempt,
+      v_now, p_requested_by, p_reason, v_outcome.finished_at
+    );
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_outcome FROM workhorse.job_outcome outcome WHERE outcome.job_id = p_job_id;
+  IF FOUND THEN
+    IF v_outcome.state = 'canceled' THEN
+      RETURN QUERY VALUES (
+        'canceled'::text,
+        v_outcome.state,
+        v_outcome.current_attempt,
+        NULLIF(v_outcome.error->>'requested_at', '')::timestamptz,
+        v_outcome.error->>'requested_by',
+        v_outcome.error->>'reason',
+        v_outcome.finished_at
+      );
+    ELSE
+      RETURN QUERY VALUES (
+        'already_terminal'::text, v_outcome.state, v_outcome.current_attempt,
+        NULL::timestamptz, NULL::text, NULL::text, v_outcome.finished_at
+      );
+    END IF;
+    RETURN;
+  END IF;
+
+  RETURN QUERY VALUES (
+    'not_found'::text, NULL::text, NULL::integer, NULL::timestamptz,
+    NULL::text, NULL::text, NULL::timestamptz
+  );
+END;
+$$;
+
 
 -- Stable, versioned relations owned by core for dashboard reads. PostgreSQL stores each view's
 -- expanded target list, so later private-table changes can preserve this contract in one migration.
@@ -8347,9 +8635,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (34, 'add bounded child fan-out and joins'),
   (35, 'preserve child lineage through lifecycle changes'),
   (36, 'add idempotent signals to waiting executions'),
-  (37, 'add completable human wait tokens')
+  (37, 'add completable human wait tokens'),
+  (38, 'harden signal and human wait lifecycles')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (37) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (38) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

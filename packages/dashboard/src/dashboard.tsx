@@ -5386,6 +5386,13 @@ function HumanWaitsPage({
           Decisions waiting for an authenticated operator. The first accepted result resumes the
           handler and remains the audit record.
         </Text>
+        <Text c="dimmed" size="xs" mt={4}>
+          {data.diagnostics.pendingSignals} signals and {data.diagnostics.pendingHumanDecisions}
+          {" human decisions are pending; "}
+          {data.diagnostics.overdue} are overdue and {data.diagnostics.rejectedDeliveries}
+          {" retained deliveries were rejected"}
+          {data.diagnostics.capped ? " (bounded lower bounds)." : "."}
+        </Text>
       </Box>
       {data.waits.length === 0 ? (
         <Paper withBorder p="xl">
@@ -5409,6 +5416,9 @@ function HumanWaitsPage({
                     {formatExact(wait.createdAt)}
                   </Text>
                 </Group>
+                <Text c={Date.parse(wait.deadlineAt) <= Date.now() ? "red" : "dimmed"} size="xs">
+                  Deadline {formatExact(wait.deadlineAt)}
+                </Text>
                 <Box>
                   <Text c="dimmed" fw={600} size="xs" mb={4}>
                     Decision context
