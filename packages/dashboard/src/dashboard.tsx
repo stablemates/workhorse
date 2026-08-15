@@ -1397,6 +1397,31 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
   );
 }
 
+/** The immutable prerequisite edge and its current release state. */
+export function DependencyLine({ job }: { job: DashboardJobDetail }) {
+  if (job.identity.prerequisiteJobId === null) return null;
+  const blocked = job.identity.blockedReason === "prerequisite_pending";
+  const summary = blocked
+    ? "Blocked until this prerequisite succeeds"
+    : job.identity.dependencyReleasedAt === null
+      ? "Dependency recorded"
+      : `Released ${formatRelative(job.identity.dependencyReleasedAt)}`;
+  return (
+    <Group gap="xs" mt="sm" align="baseline" wrap="wrap">
+      <Text c="dimmed" size="xs" fw={600}>
+        Prerequisite
+      </Text>
+      <Code fz="xs">{job.identity.prerequisiteJobId}</Code>
+      <Badge size="xs" variant="light" color={blocked ? "yellow" : "teal"} tt="none">
+        {blocked ? "blocked" : "released"}
+      </Badge>
+      <Text c="dimmed" size="xs">
+        {summary}
+      </Text>
+    </Group>
+  );
+}
+
 /**
  * Queue admission context for the selected task.
  *
@@ -6339,6 +6364,7 @@ function DashboardContent({
               </Group>
               <Code fz="xs">{selectedJob.identity.id}</Code>
               <RetryPolicyLine job={selectedJob} />
+              <DependencyLine job={selectedJob} />
               <Group gap="xs" mt="sm" align="baseline">
                 <Text c="dimmed" size="xs" fw={600}>
                   Priority

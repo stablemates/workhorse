@@ -16,6 +16,7 @@
 export type DepthMetric = keyof typeof DEPTH_METRICS;
 
 const DEPTH_METRICS = {
+  blocked: (r: string) => `count(${r}.job_id) FILTER (WHERE ${r}.state = 'blocked')::text`,
   ready: (r: string) => `count(${r}.job_id) FILTER (WHERE ${r}.state = 'ready')::text`,
   scheduled: (r: string) => `count(${r}.job_id) FILTER (WHERE ${r}.state = 'scheduled')::text`,
   active: (r: string) => `count(${r}.job_id) FILTER (WHERE ${r}.state = 'active')::text`,

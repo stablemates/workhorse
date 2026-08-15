@@ -2,11 +2,11 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 29. Version 23 is the oldest supported
+The current clean-install protocol is schema version 30. Version 23 is the oldest supported
 forward-migration baseline.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 29 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
+version 30 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
 Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
@@ -23,7 +23,6 @@ schema-version row to 26.
 
 Migration `0027-add-job-priority.sql` requires version 26. It adds immutable priority and replaces
 the ready index and affected SQL contracts. It records version 27 and advances the schema row.
-
 Migration `0028-add-keyed-debounce-enqueue.sql` requires version 27. It adds the coalescing mode to
 enqueue key ownership plus `enqueue_debounce_v1` and `enqueue_many_v2`. It records version 28 and
 advances the schema-version row.
@@ -33,7 +32,11 @@ ownership with `throttle`, adds `enqueue_throttle_v1`, and updates `enqueue_many
 version 29 and advances the schema-version row. Every migration is safe to replay after its target
 version commits.
 
-Versions below 23, versions above 29, gaps, and mixed version rows fail without running a migration.
+Migration `0030-add-job-dependencies.sql` requires version 29. It adds the blocked runtime state,
+one-prerequisite edge, release transition, and operator projection. It records version 30 and
+advances the schema row.
+
+Versions below 23, versions above 30, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -377,7 +380,15 @@ Insert-only identity, routing, payload, priority, retry budget, normalized optio
 
 PostgreSQL-owned scoped enqueue ownership, separate from stable job identity and dispatch. The primary key `(idempotency_scope, idempotency_key_hash)` serializes competing callers through one scoped unique owner. The hash is the full SHA-256 of the scope/key ownership input; raw keys are never persisted. Scope defaults to `default`; TTL defaults to 24 hours; keys are 1 through 512 UTF-8 bytes; scopes are 1 through 256 UTF-8 bytes; and TTL is an integer from 1 millisecond through 365 days.
 
-The stored canonical fingerprint covers queue, concurrency key, priority, type, payload, contract version, both size limits, both redaction-key sets, sorted tags, `maxAttempts`, normalized `retryPolicy`, TTL, and explicitly supplied `runAt`. An omitted `runAt` stays omitted for keyed immediate ingress instead of capturing the classification timestamp. Exact replay returns the bound job ID before job, event, runtime, FIFO-sequence, or notification side effects. A mismatch raises a structured conflict and aborts the whole statement or caller transaction. Requests without `options.idempotency` bypass this relation and retain the prior always-create behavior.
+The stored canonical fingerprint covers queue, concurrency key, priority, type, payload, contract version, both size limits, both redaction-key sets, sorted tags, `maxAttempts`, normalized `retryPolicy`, `prerequisiteJobId`, TTL, and explicitly supplied `runAt`. An omitted `runAt` stays omitted for keyed immediate ingress instead of capturing the classification timestamp. Exact replay returns the bound job ID before job, dependency, event, runtime, FIFO-sequence, or notification side effects. A mismatch raises a structured conflict and aborts the whole statement or caller transaction. Requests without `options.idempotency` bypass this relation and retain the prior always-create behavior.
+
+### `job_dependency`
+
+One immutable prerequisite edge per dependent job. `dependent_job_id` is the primary key and cascades when that job identity is removed. `prerequisite_job_id` references the stable prerequisite identity with deletion restricted, so retention cannot strand a blocked dependent or erase released lineage. `created_at` records acceptance and nullable `released_at` records the prerequisite-success transaction.
+
+`EnqueueOptions.prerequisiteJobId` accepts an existing stable identity. `enqueue_many_v1` locks and validates that identity inside the caller's transaction. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`; an already-succeeded prerequisite records an immediately released edge and creates the ordinary ready or scheduled runtime. A failed or canceled prerequisite is rejected until terminal dependency policies define another outcome.
+
+`release_dependents_v1` locks pending edges in dependent identity order. It stamps `released_at`, moves each matching blocked runtime to ready or scheduled according to its persisted `run_at`, appends `dependency_released`, and notifies each queue that gained ready work. `complete_v1` invokes it after inserting the prerequisite's succeeded outcome and event, so success and every dependent release commit atomically. The pending-edge predicate and blocked-runtime predicate make repeated or competing completion unable to repeat release evidence, FIFO allocation, or notification effects. `Queue.getJob` and `Queue.listJobs` expose `prerequisiteJobId` plus `blockedReason`; `dashboard_job_dependency_v1` exposes the retained edge to operator reads.
 
 The ownership relation stores scope and full key hash, never the raw key. The initial `enqueued` event, UI projections, and errors expose only a bounded key preview plus 12-hex key digest; exact replay appends no event. Structured conflicts additionally carry full SHA-256 stored and rejected request digests. Expired ownership can be replaced by a new request. Housekeeping prunes expired bindings before terminal job identity, and purging ready or scheduled jobs releases their bindings with the job.
 
@@ -386,6 +397,7 @@ The ownership relation stores scope and full key hash, never the raw key. The in
 The only mutable lifecycle relation. Its check constraint makes state-specific fields mutually exclusive:
 
 - `scheduled`: `run_at` is populated; ready and ownership fields are null; `wait_name` and `attempt_started_at` are either both null for enqueue/retry delay or both populated for a durable timer
+- `blocked`: `run_at` preserves the requested dispatch time; ready, ownership, wait, and attempt-start fields are null; no dispatch partial index contains the row
 - `ready`: `ready_at` and FIFO `sequence` are populated; ownership fields and `wait_name` are null; a resumed timer may preserve `attempt_started_at`
 - `active`: worker, acquisition, heartbeat, expiry, positive fence, and logical `attempt_started_at` are populated; ready placement and `wait_name` are null; optional cancellation-request timestamp, attribution, and reason are all present or all absent
 
@@ -606,8 +618,12 @@ Scheduling metadata lives entirely in the target database. Workers evaluate cron
 
 ```mermaid
 stateDiagram-v2
+  [*] --> blocked: enqueue with live prerequisite
   [*] --> ready: enqueue due
   [*] --> scheduled: enqueue future
+  blocked --> ready: prerequisite succeeds after run_at
+  blocked --> scheduled: prerequisite succeeds before run_at
+  blocked --> canceled: cancel immediately
   ready --> canceled: cancel immediately
   scheduled --> canceled: cancel immediately
   scheduled --> ready: promote
@@ -623,7 +639,7 @@ stateDiagram-v2
 
 ### Enqueue
 
-`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority and persisted retry policies. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, job_id, accepted)` for each input; `accepted` is true only when the statement created the durable job. One statement inserts `job`, `job_runtime`, and `enqueued` events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
+`enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority, persisted retry policies, and one `prerequisiteJobId`. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, job_id, accepted)` for each input; `accepted` is true only when the statement created the durable job. One statement inserts `job`, optional `job_dependency`, `job_runtime`, and acceptance events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
 
 `enqueue_many_v2` preserves that contract and returns `(ordinal, job_id, outcome)`. Ordinary requests map `accepted` to `accepted` or `replayed` and stay on the set-based `enqueue_many_v1` path. A batch containing `debounce` or `throttle` requests locks every scoped idempotency, debounce, or throttle key in bytewise order before processing requests in caller order. This keeps mixed batches atomic and prevents overlapping batches from reversing key-lock order.
 
@@ -1212,7 +1228,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 29. Forward migration starts at version 23; older schemas
+- The canonical artifact installs version 30. Forward migration starts at version 23; older schemas
   require a separately engineered upgrade path.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

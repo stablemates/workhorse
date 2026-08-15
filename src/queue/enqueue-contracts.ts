@@ -113,6 +113,7 @@ const enqueueConflictFields = new Set<EnqueueIdempotencyConflictField>([
   "executionTimeoutMs",
   "maxAttempts",
   "retryPolicy",
+  "prerequisiteJobId",
   "ttlMs",
 ]);
 const enqueueConflictDetailKeys = new Set([
@@ -449,6 +450,7 @@ export class EnqueueContractsModule extends QueueModule {
             executionTimeoutMs: options.executionTimeoutMs ?? null,
             maxAttempts: options.maxAttempts ?? 25,
             retryPolicy: options.retryPolicy ?? null,
+            prerequisiteJobId: options.prerequisiteJobId ?? null,
             tags: tags ?? options.tags ?? [],
             ...(idempotency === undefined
               ? {}

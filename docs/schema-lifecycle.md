@@ -32,6 +32,7 @@ single `workhorse.schema_version` row from 23 to 24.
 `0026-add-dashboard-read-surface.sql`, adds the core-owned versioned dashboard views and
 planner-estimate function, then advances the schema from 25 to 26. Migration
 `0027-add-job-priority.sql` adds strict-priority dispatch and advances the schema from 26 to 27.
+`0030-add-job-dependencies.sql` adds success-only prerequisite dispatch and advances the schema from 29 to 30.
 
 `0028-add-keyed-debounce-enqueue.sql` adds keyed debounce and advances the schema from 27 to 28.
 

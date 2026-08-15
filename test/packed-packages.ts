@@ -298,7 +298,7 @@ import { createDashboardHost } from "@workhorse/dashboard/server";
 
 const salt = Buffer.from("packed-dashboard-auth-salt");
 const passwordHash = \`scrypt-v1$\${salt.toString("base64url")}$\${scryptSync("correct horse", salt, 32).toString("base64url")}\`;
-const database = { query: async () => ({ rows: [{ version: 29 }] }) };
+const database = { query: async () => ({ rows: [{ version: 30 }] }) };
 const audits = [];
 const host = createDashboardHost({
   database,

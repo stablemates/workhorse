@@ -2166,6 +2166,8 @@ export async function readDashboardJobDetail(
       deadline_at: Date | string | null;
       execution_timeout_ms: string | number | null;
       concurrency_key: string | null;
+      prerequisite_job_id: string | null;
+      dependency_released_at: Date | string | null;
       created_at: Date | string;
       runtime_state: string | null;
       runtime_attempt: number | null;
@@ -2200,6 +2202,7 @@ export async function readDashboardJobDetail(
              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
              j.max_attempts,
              j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.concurrency_key, j.created_at,
+             dependency.prerequisite_job_id, dependency.released_at AS dependency_released_at,
              r.state AS runtime_state, r.current_attempt AS runtime_attempt, r.run_at, r.ready_at,
              r.worker_id, r.fence_token::text, r.acquired_at, r.heartbeat_at, r.expires_at,
              r.wait_name, r.attempt_started_at, r.attempt_timeout_at,
@@ -2216,6 +2219,8 @@ export async function readDashboardJobDetail(
         LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
         LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
         LEFT JOIN workhorse.dashboard_job_progress_v1 p ON p.job_id = j.id
+        LEFT JOIN workhorse.dashboard_job_dependency_v1 dependency
+          ON dependency.dependent_job_id = j.id
        WHERE j.id = ${id}
     `),
     database.execute<{
@@ -2327,6 +2332,12 @@ export async function readDashboardJobDetail(
       executionTimeoutMs:
         job.execution_timeout_ms === null ? null : Number(job.execution_timeout_ms),
       concurrencyKey: job.concurrency_key,
+      prerequisiteJobId: job.prerequisite_job_id,
+      dependencyReleasedAt: toIsoOrNull(job.dependency_released_at),
+      blockedReason:
+        job.runtime_state === "blocked" && job.prerequisite_job_id !== null
+          ? "prerequisite_pending"
+          : null,
     },
     // The queue's policy as it stands now, sent for every task including finished ones. Workhorse
     // stores no per-task policy snapshot, so the drawer labels this as current rather than

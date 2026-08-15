@@ -25,6 +25,7 @@ const JOB_LIST_FIELDS = new Set([
 const JOB_LIST_CURSOR_FIELDS = new Set(["createdAt", "jobId", "signature"]);
 const PAYLOAD_PROJECTION_FIELDS = new Set(["include", "maxBytes", "redactKeys"]);
 const JOB_STATES = new Set<JobState>([
+  "blocked",
   "scheduled",
   "ready",
   "active",

@@ -117,6 +117,7 @@ export const HEALTH_SNAPSHOT_SQL = `
       FROM workhorse.schema_version
   ), depth AS (
     ${totalDepthSelect([
+      "blocked",
       "ready",
       "scheduled",
       "sleeping",

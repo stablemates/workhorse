@@ -17,7 +17,15 @@ function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
   return {
     capturedAt: new Date(),
     schemaVersion: 23,
-    counts: { scheduled: 0, ready: 0, active: 0, succeeded: 0, failed: 0, canceled: 0 },
+    counts: {
+      blocked: 0,
+      scheduled: 0,
+      ready: 0,
+      active: 0,
+      succeeded: 0,
+      failed: 0,
+      canceled: 0,
+    },
     terminalCountsCapped: false,
     readyDepth: 0,
     scheduledDepth: 0,
