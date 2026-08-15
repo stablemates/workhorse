@@ -4,10 +4,12 @@ import type {
   BulkRedriveOptions,
   ChildLineage,
   ChildJobOptions,
+  ChildJobRequest,
   CancellationRequest,
   CancelResult,
   ClaimedJob,
   CreateChildResult,
+  CreateChildrenResult,
   ConcurrencyPolicy,
   ConcurrencyPolicyDefinition,
   RateLimitPolicy,
@@ -94,6 +96,7 @@ import {
   ChildConflictError,
   ChildLeaseLostError,
   ChildLimitExceededError,
+  ChildResultLimitExceededError,
 } from "./queue/child-jobs.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
@@ -104,6 +107,7 @@ export {
   ChildConflictError,
   ChildLeaseLostError,
   ChildLimitExceededError,
+  ChildResultLimitExceededError,
   EnqueueIdempotencyConflictError,
   JobContractUnavailableError,
   JobContractValidationError,
@@ -589,6 +593,14 @@ export class Queue {
     options: ChildJobOptions = {},
   ): Promise<CreateChildResult<TResult>> {
     return this.modules.childJobs.createChild(parent, workerId, name, type, payload, options);
+  }
+
+  async createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
+    parent: ClaimedJob<unknown>,
+    workerId: string,
+    children: readonly ChildJobRequest[],
+  ): Promise<CreateChildrenResult<TResult>> {
+    return this.modules.childJobs.createChildren<TResult>(parent, workerId, children);
   }
 
   async complete<TResult extends Json>(

@@ -611,10 +611,23 @@ export type ChildJobOptions = Omit<
   "idempotency" | "debounce" | "throttle" | "prerequisiteJobId" | "dependencies"
 >;
 
+/** One named child request in a bounded fan-out created by a fenced parent activation. */
+export interface ChildJobRequest<TPayload extends Json = Json> {
+  name: string;
+  type: string;
+  payload: TPayload;
+  options?: ChildJobOptions;
+}
+
 /** PostgreSQL's decision when a handler creates or replays its single named child. */
 export type CreateChildResult<TResult extends Json = Json> =
   | { status: "created"; child: ChildJob<TResult> }
   | { status: "completed"; child: ChildJob<TResult> };
+
+/** PostgreSQL's decision when a handler creates or replays one bounded child set. */
+export type CreateChildrenResult<TResult extends Record<string, Json> = Record<string, Json>> =
+  | { status: "created"; children: ChildJob[] }
+  | { status: "completed"; children: ChildJob[]; results: TResult };
 
 /** Bounded edges where the requested job is either the parent or the child. */
 export interface ChildLineage {

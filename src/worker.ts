@@ -30,8 +30,10 @@ import {
 } from "./telemetry.js";
 import type {
   ChildJobOptions,
+  ChildJobRequest,
   ClaimedJob,
   CreateChildResult,
+  CreateChildrenResult,
   ExpireOwnedStatus,
   JobCheckpoint,
   JobProgress,
@@ -113,6 +115,10 @@ export interface HandlerContext<TPayload = Json> {
     type: string,
     payload: TChildPayload,
     options?: ChildJobOptions,
+  ): Promise<TResult>;
+  /** Create or replay a bounded named child set and join successful results by name. */
+  runChildren<TResult extends Record<string, Json> = Record<string, Json>>(
+    children: readonly ChildJobRequest[],
   ): Promise<TResult>;
 }
 
@@ -210,6 +216,11 @@ export interface WorkerQueueApi {
     payload: TPayload,
     options?: ChildJobOptions,
   ): Promise<CreateChildResult<TResult>>;
+  createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
+    parent: ClaimedJob<unknown>,
+    workerId: string,
+    children: readonly ChildJobRequest[],
+  ): Promise<CreateChildrenResult<TResult>>;
   complete<TResult extends Json>(
     job: ClaimedJob<unknown>,
     workerId: string,
@@ -1042,10 +1053,7 @@ export class Worker {
         scheduleWait(name, { durationMs });
       const sleepUntil: HandlerContext["sleepUntil"] = (name, wakeAt) =>
         scheduleWait(name, { wakeAt });
-      const inFlightChildren = new Map<
-        string,
-        { request: unknown; execution: Promise<Json> }
-      >();
+      const inFlightChildren = new Map<string, { request: unknown; execution: Promise<Json> }>();
       const runChild: HandlerContext["runChild"] = <
         TChildPayload extends Json,
         TResult extends Json = Json,
@@ -1089,6 +1097,40 @@ export class Worker {
           .catch(() => undefined);
         return execution;
       };
+      let inFlightChildSet:
+        | { request: unknown; execution: Promise<Record<string, Json>> }
+        | undefined;
+      const runChildren: HandlerContext["runChildren"] = <
+        TResult extends Record<string, Json> = Record<string, Json>,
+      >(
+        children: readonly ChildJobRequest[],
+      ): Promise<TResult> => {
+        const request = structuredClone(children);
+        if (inFlightChildSet) {
+          if (!isDeepStrictEqual(inFlightChildSet.request, request)) {
+            return Promise.reject(new ChildConflictError(job.id, "child set"));
+          }
+          return inFlightChildSet.execution as Promise<TResult>;
+        }
+        const execution = (async (): Promise<TResult> => {
+          if (controller.signal.aborted) {
+            throw controller.signal.reason ?? new Error("Job lease was lost");
+          }
+          const processed = await this.queue.createChildren<TResult>(job, this.workerId, children);
+          if (processed.status === "created") {
+            if (arbiter.submit("suspended_for_child")) controller.abort(CHILD_JOB_SUSPENSION);
+            throw CHILD_JOB_SUSPENSION;
+          }
+          return processed.results;
+        })();
+        inFlightChildSet = { request, execution: execution as Promise<Record<string, Json>> };
+        void execution
+          .finally(() => {
+            if (inFlightChildSet?.execution === execution) inFlightChildSet = undefined;
+          })
+          .catch(() => undefined);
+        return execution;
+      };
       const result = await handler(job.payload, {
         job,
         signal: controller.signal,
@@ -1100,6 +1142,7 @@ export class Worker {
         sleep: durableSleep,
         sleepUntil,
         runChild,
+        runChildren,
       });
       await this.inject("afterHandler", job);
       if (arbiter.isSuspended()) {

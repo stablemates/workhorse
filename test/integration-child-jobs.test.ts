@@ -27,6 +27,348 @@ const underTrace = <T>(traceId: string, spanId: string, operation: () => Promise
   );
 
 describe("child jobs", () => {
+  it("creates bounded fan-out and joins results by stable child name", async () => {
+    const parentId = await queue.enqueue("fan-out-parent", null, { queue: "fan-out-parents" });
+    let activations = 0;
+    const worker = new Worker(queue, {
+      queue: "fan-out-parents",
+      workerId: "fan-out-parent-worker",
+    });
+    worker.handle("fan-out-parent", async (_payload, context) => {
+      activations += 1;
+      return context.runChildren<{ first: { value: number }; second: { value: number } }>([
+        {
+          name: "first",
+          type: "fan-out-child",
+          payload: { value: 1 },
+          options: { queue: "fan-out-children" },
+        },
+        {
+          name: "second",
+          type: "fan-out-child",
+          payload: { value: 2 },
+          options: { queue: "fan-out-children" },
+        },
+      ]);
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.getJob(parentId)).resolves.toMatchObject({ state: "blocked" });
+    const lineage = await queue.getChildLineage(parentId);
+    expect(new Set(lineage.records.map((record) => record.name))).toEqual(
+      new Set(["first", "second"]),
+    );
+
+    const values = new Map(
+      lineage.records.map((record) => [record.childJobId, record.name === "first" ? 1 : 2]),
+    );
+    for (let index = 0; index < lineage.records.length; index += 1) {
+      const child = await queue.claim("fan-out-child-worker", { queue: "fan-out-children" });
+      expect(
+        await queue.complete(child!, "fan-out-child-worker", {
+          value: values.get(child!.id)! * 10,
+        }),
+      ).toBe(true);
+    }
+
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.getJob(parentId)).resolves.toMatchObject({
+      state: "succeeded",
+      result: { first: { value: 10 }, second: { value: 20 } },
+    });
+    expect(activations).toBe(2);
+  });
+
+  it("completes an empty fan-out without suspending or replaying the parent", async () => {
+    const parentId = await queue.enqueue("empty-fan-out-parent", null, {
+      queue: "empty-fan-out-parents",
+    });
+    let activations = 0;
+    const worker = new Worker(queue, {
+      queue: "empty-fan-out-parents",
+      workerId: "empty-fan-out-worker",
+    });
+    worker.handle("empty-fan-out-parent", async (_payload, context) => {
+      activations += 1;
+      return context.runChildren([]);
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.getJob(parentId)).resolves.toMatchObject({ state: "succeeded", result: {} });
+    expect(activations).toBe(1);
+    await expect(queue.getChildLineage(parentId)).resolves.toEqual({
+      records: [],
+      truncated: false,
+    });
+  });
+
+  it.each([
+    ["failed", "failed"],
+    ["canceled", "canceled"],
+  ] as const)("makes a fan-out parent %s when one child is %s", async (childState, parentState) => {
+    const parentId = await queue.enqueue(`partial-${childState}-parent`, null);
+    const parent = await queue.claim(`partial-${childState}-parent-worker`);
+    const created = await queue.createChildren(parent!, `partial-${childState}-parent-worker`, [
+      { name: "accepted", type: "partial-child", payload: null, options: { maxAttempts: 1 } },
+      { name: "rejected", type: "partial-child", payload: null, options: { maxAttempts: 1 } },
+    ]);
+    expect(created.status).toBe("created");
+    const first = await queue.claim("partial-child-worker");
+    expect(await queue.complete(first!, "partial-child-worker", { value: "ok" })).toBe(true);
+    const second = await queue.claim("partial-child-worker");
+    let childOutcome: string;
+    if (childState === "failed") {
+      childOutcome = await queue.fail(second!, "partial-child-worker", new Error("rejected"));
+    } else {
+      const request = await queue.cancel(second!.id);
+      const acknowledged = await queue.acknowledgeCancel(second!, "partial-child-worker");
+      if (request.status !== "cancel_requested" || !acknowledged) {
+        throw new Error("active child cancellation was not acknowledged");
+      }
+      childOutcome = "canceled";
+    }
+    expect(childOutcome).toBe(childState);
+    await expect(queue.getJob(parentId)).resolves.toMatchObject({ state: parentState });
+  });
+
+  it("reuses one joined fan-out across retries and ignores duplicate wakeups", async () => {
+    const parentId = await queue.enqueue("retrying-fan-out-parent", null, {
+      queue: "retrying-fan-out-parents",
+      maxAttempts: 2,
+    });
+    let joinedAttempts = 0;
+    const worker = new Worker(queue, {
+      queue: "retrying-fan-out-parents",
+      workerId: "retrying-fan-out-worker",
+      retryDelayMs: 0,
+    });
+    worker.handle("retrying-fan-out-parent", async (_payload, context) => {
+      const results = await context.runChildren<{ child: { value: number } }>([
+        { name: "child", type: "retrying-fan-out-child", payload: null },
+      ]);
+      joinedAttempts += 1;
+      if (joinedAttempts === 1) throw new Error("retry after join");
+      return results;
+    });
+
+    expect(await worker.runOnce()).toBe(true);
+    const child = await queue.claim("retrying-fan-out-child-worker");
+    expect(await queue.complete(child!, "retrying-fan-out-child-worker", { value: 7 })).toBe(true);
+    await expect(
+      pool.query(`SELECT workhorse.release_dependents_v1($1::uuid) AS count`, [child!.id]),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+    expect(await worker.runOnce()).toBe(true);
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.getJob(parentId)).resolves.toMatchObject({
+      state: "succeeded",
+      result: { child: { value: 7 } },
+    });
+    const timeline = await queue.getJobTimeline(parentId, { limit: 100 });
+    expect(
+      timeline.items.filter(
+        (item) => item.kind === "event" && item.eventType === "children_joined",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not replay a one-child set through the single-child contract", async () => {
+    const parentId = await queue.enqueue("one-child-set-parent", null);
+    const parent = await queue.claim("one-child-set-parent-worker");
+    const created = await queue.createChildren(parent!, "one-child-set-parent-worker", [
+      { name: "child", type: "one-child-set-child", payload: null },
+    ]);
+    expect(created.status).toBe("created");
+    const child = await queue.claim("one-child-set-child-worker");
+    expect(await queue.complete(child!, "one-child-set-child-worker", { value: 1 })).toBe(true);
+    const resumed = await queue.claim("one-child-set-parent-worker");
+
+    await expect(
+      queue.createChildren(resumed!, "one-child-set-parent-worker", []),
+    ).rejects.toMatchObject({ name: "ChildConflictError", parentJobId: parentId });
+    await expect(
+      queue.createChild(
+        resumed!,
+        "one-child-set-parent-worker",
+        "child",
+        "one-child-set-child",
+        null,
+      ),
+    ).rejects.toMatchObject({ name: "ChildLimitExceededError", parentJobId: parentId });
+
+    const singleParentId = await queue.enqueue("single-contract-parent", null);
+    const singleParent = await queue.claim("single-contract-parent-worker");
+    const single = await queue.createChild(
+      singleParent!,
+      "single-contract-parent-worker",
+      "child",
+      "single-contract-child",
+      null,
+    );
+    const singleChild = await queue.claim("single-contract-child-worker");
+    expect(await queue.complete(singleChild!, "single-contract-child-worker", { value: 1 })).toBe(
+      true,
+    );
+    const resumedSingle = await queue.claim("single-contract-parent-worker");
+    await expect(
+      queue.createChildren(resumedSingle!, "single-contract-parent-worker", [
+        { name: "child", type: "single-contract-child", payload: null },
+      ]),
+    ).rejects.toMatchObject({ name: "ChildConflictError", parentJobId: singleParentId });
+    expect(single.status).toBe("created");
+  });
+
+  it("attributes a late fan-out failure to the child that failed", async () => {
+    const parentId = await queue.enqueue("late-failure-parent", null);
+    const parent = await queue.claim("late-failure-parent-worker");
+    const created = await queue.createChildren(parent!, "late-failure-parent-worker", [
+      { name: "rejected", type: "late-failure-child", payload: null, options: { maxAttempts: 1 } },
+      { name: "accepted", type: "late-failure-child", payload: null, options: { maxAttempts: 1 } },
+    ]);
+    if (created.status !== "created") throw new Error("fan-out was not created");
+    const rejected = await queue.claim("late-failure-child-worker");
+    expect(await queue.fail(rejected!, "late-failure-child-worker", new Error("rejected"))).toBe(
+      "failed",
+    );
+    await expect(queue.getJob(parentId)).resolves.toMatchObject({ state: "blocked" });
+    const accepted = await queue.claim("late-failure-child-worker");
+    expect(await queue.complete(accepted!, "late-failure-child-worker", null)).toBe(true);
+    await expect(queue.getJob(parentId)).resolves.toMatchObject({
+      state: "failed",
+      error: {
+        prerequisite_job_id: rejected!.id,
+        prerequisite_state: "failed",
+        policy_action: "fail",
+      },
+    });
+  });
+
+  it("bounds child count and aggregate joined result size", async () => {
+    const oneByteQueue = new Queue(pool, "default", { defaultMaxResultBytes: 1 });
+    const oneByteParentId = await oneByteQueue.enqueue("one-byte-empty-parent", null);
+    const oneByteParent = await oneByteQueue.claim("one-byte-empty-parent-worker");
+    await expect(
+      oneByteQueue.createChildren(oneByteParent!, "one-byte-empty-parent-worker", []),
+    ).rejects.toMatchObject({
+      name: "ChildResultLimitExceededError",
+      parentJobId: oneByteParentId,
+      resultBytes: 2,
+      resultLimitBytes: 1,
+    });
+
+    const limitedQueue = new Queue(pool, "default", { defaultMaxResultBytes: 32 });
+    const parentId = await limitedQueue.enqueue("limited-fan-out-parent", null);
+    const parent = await limitedQueue.claim("limited-fan-out-parent-worker");
+    await expect(
+      limitedQueue.createChildren(
+        parent!,
+        "limited-fan-out-parent-worker",
+        Array.from({ length: 101 }, (_, index) => ({
+          name: `child-${index}`,
+          type: "limited-child",
+          payload: null,
+        })),
+      ),
+    ).rejects.toMatchObject({ name: "ChildLimitExceededError", parentJobId: parentId });
+
+    const created = await limitedQueue.createChildren(parent!, "limited-fan-out-parent-worker", [
+      { name: "first", type: "limited-child", payload: null },
+      { name: "second", type: "limited-child", payload: null },
+    ]);
+    expect(created.status).toBe("created");
+    for (let index = 0; index < 2; index += 1) {
+      const child = await limitedQueue.claim("limited-child-worker");
+      expect(await limitedQueue.complete(child!, "limited-child-worker", "1234567890")).toBe(true);
+    }
+    const resumed = await limitedQueue.claim("limited-fan-out-parent-worker");
+    await expect(
+      limitedQueue.createChildren(resumed!, "limited-fan-out-parent-worker", [
+        { name: "first", type: "limited-child", payload: null },
+        { name: "second", type: "limited-child", payload: null },
+      ]),
+    ).rejects.toMatchObject({
+      name: "ChildResultLimitExceededError",
+      parentJobId: parentId,
+      resultLimitBytes: 32,
+    });
+  });
+
+  it("releases parent policy capacity and admits children under their own policy", async () => {
+    await queue.syncConcurrencyPolicies("child-policy-test", [
+      { queue: "policy-parents", maxActive: 1 },
+      { queue: "policy-children", maxActive: 1 },
+    ]);
+    await queue.syncRateLimitPolicies("child-policy-test", [
+      {
+        queue: "policy-rate-children",
+        rate: { limit: 1, intervalMs: 60_000, burst: 1 },
+      },
+    ]);
+    const parentId = await queue.enqueue("policy-parent", null, { queue: "policy-parents" });
+    const siblingId = await queue.enqueue("policy-sibling", null, { queue: "policy-parents" });
+    const parent = await queue.claim("policy-parent-worker", { queue: "policy-parents" });
+    expect(parent?.id).toBe(parentId);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const transactionalQueue = new Queue(client);
+      await transactionalQueue.createChildren(parent!, "policy-parent-worker", [
+        { name: "rolled-back", type: "policy-child", payload: null },
+      ]);
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+    await expect(
+      queue.claim("policy-sibling-worker", { queue: "policy-parents" }),
+    ).resolves.toBeNull();
+
+    await queue.createChildren(parent!, "policy-parent-worker", [
+      { name: "first", type: "policy-child", payload: null, options: { queue: "policy-children" } },
+      {
+        name: "second",
+        type: "policy-child",
+        payload: null,
+        options: { queue: "policy-children" },
+      },
+      {
+        name: "rate-first",
+        type: "policy-child",
+        payload: null,
+        options: { queue: "policy-rate-children" },
+      },
+      {
+        name: "rate-second",
+        type: "policy-child",
+        payload: null,
+        options: { queue: "policy-rate-children" },
+      },
+    ]);
+    await expect(
+      queue.claim("policy-sibling-worker", { queue: "policy-parents" }),
+    ).resolves.toMatchObject({
+      id: siblingId,
+    });
+    const first = await queue.claim("policy-child-worker", { queue: "policy-children" });
+    expect(first).not.toBeNull();
+    await expect(
+      queue.claim("other-policy-child-worker", { queue: "policy-children" }),
+    ).resolves.toBeNull();
+    expect(await queue.complete(first!, "policy-child-worker", null)).toBe(true);
+    await expect(
+      queue.claim("policy-child-worker", { queue: "policy-children" }),
+    ).resolves.not.toBeNull();
+    const rateFirst = await queue.claim("policy-rate-child-worker", {
+      queue: "policy-rate-children",
+    });
+    expect(rateFirst).not.toBeNull();
+    expect(await queue.complete(rateFirst!, "policy-rate-child-worker", null)).toBe(true);
+    await expect(
+      queue.claim("policy-rate-child-worker", { queue: "policy-rate-children" }),
+    ).resolves.toBeNull();
+  });
+
   it("creates one linked child and suspends its active parent atomically", async () => {
     const parentId = await queue.enqueue("parent", { orderId: "order-1" });
     const parent = await queue.claim("parent-worker");
@@ -190,13 +532,7 @@ describe("child jobs", () => {
     `);
     try {
       await expect(
-        queue.createChild(
-          parent!,
-          "expiring-transition-worker",
-          "child",
-          "orphan-candidate",
-          null,
-        ),
+        queue.createChild(parent!, "expiring-transition-worker", "child", "orphan-candidate", null),
       ).rejects.toMatchObject({ name: "ChildLeaseLostError", parentJobId: parentId });
     } finally {
       await pool.query(`
@@ -218,10 +554,8 @@ describe("child jobs", () => {
   it("keeps a trace-less parent child request stable across active handler traces", async () => {
     const parentId = await queue.enqueue("trace-stable-parent", null);
     const firstParent = await queue.claim("trace-stable-worker");
-    const created = await underTrace(
-      "11111111111111111111111111111111",
-      "1111111111111111",
-      () => queue.createChild(firstParent!, "trace-stable-worker", "child", "trace-child", null),
+    const created = await underTrace("11111111111111111111111111111111", "1111111111111111", () =>
+      queue.createChild(firstParent!, "trace-stable-worker", "child", "trace-child", null),
     );
     const child = await queue.claim("trace-child-worker");
     expect(await queue.complete(child!, "trace-child-worker", { value: 1 })).toBe(true);

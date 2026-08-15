@@ -48,6 +48,7 @@ export {
   ChildConflictError,
   ChildLeaseLostError,
   ChildLimitExceededError,
+  ChildResultLimitExceededError,
   EnqueueIdempotencyConflictError,
   JobContractValidationError,
   JobContractUnavailableError,
@@ -106,8 +107,10 @@ export type {
 export type {
   ClaimedJob,
   ChildJob,
+  ChildJobRequest,
   ChildLineage,
   CreateChildResult,
+  CreateChildrenResult,
   BulkRedriveOptions,
   BulkRedrivePage,
   CancellationRequest,
