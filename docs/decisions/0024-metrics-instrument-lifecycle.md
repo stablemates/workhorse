@@ -10,11 +10,11 @@ Core ships two instrumentation layers that fire on the same code paths, each wit
 instrument lifecycle. They are competing strategies, not complementary ones, and consolidating them
 requires picking a survivor.
 
-`src/metrics.ts` uses the **eager** lifecycle. It calls `metrics.getMeter("@workhorse/core")` once at
+`typescript/core/src/metrics.ts` uses the **eager** lifecycle. It calls `metrics.getMeter("@workhorse/core")` once at
 module evaluation and creates every instrument immediately at module scope. Emission is a direct
 call on a captured instrument.
 
-`src/telemetry.ts` uses the **lazy** lifecycle. `lazyCounter` and `lazyHistogram` defer instrument
+`typescript/core/src/telemetry.ts` uses the **lazy** lifecycle. `lazyCounter` and `lazyHistogram` defer instrument
 creation to the first emission, and re-create the instrument whenever `metrics.getMeterProvider()`
 returns a different provider than the one seen previously. Emission therefore costs one global
 provider read and one identity comparison before the underlying call.
@@ -23,7 +23,7 @@ The prior consolidation attempts argued from aesthetics. This decision measures 
 
 ## Measurement
 
-`benchmarks/metrics-lifecycle.ts` builds both lifecycles over the same counter with the attributes a
+`typescript/core/benchmarks/metrics-lifecycle.ts` builds both lifecycles over the same counter with the attributes a
 real emission carries — `workhorse.queue.name` and `workhorse.job.type`, as `recordClaimedJob` and
 `telemetryMetrics.claimed` both do. It measures each lifecycle with telemetry off (no global
 provider registered) and telemetry on (an SDK `MeterProvider` aggregating into memory), interleaving
@@ -62,13 +62,13 @@ The registration-order check is not close:
 time and returns no proxy that re-binds later, unlike the tracing API. An eager module-scope
 instrument created before the application installs its SDK is bound to the no-op provider for the
 lifetime of the process, and every emission through it is silently discarded. This is the ordinary
-case for a library: importing `@workhorse/core` to construct a `Queue` runs `src/metrics.ts` at
+case for a library: importing `@workhorse/core` to construct a `Queue` runs `typescript/core/src/metrics.ts` at
 import, which commonly precedes SDK setup.
 
 ## Decision
 
 Consolidated core instrumentation uses the lazy, provider-change-aware lifecycle from
-`src/telemetry.ts`. `src/metrics.ts` is the losing module.
+`typescript/core/src/telemetry.ts`. `typescript/core/src/metrics.ts` is the losing module.
 
 The measurement picks the survivor on correctness, not on overhead. Overhead does not decide this:
 the eager lifecycle is faster by an amount that is invisible next to a PostgreSQL round trip, and
@@ -83,7 +83,7 @@ Consolidation onto that lifecycle is 0.1b's work. This decision fixes only which
   `@workhorse/core`. Emissions after registration reach the registered provider.
 - Every core metric emission reads the global meter provider. That cost is measured above and
   accepted.
-- Instruments migrated out of `src/metrics.ts` must move to `lazyCounter`, `lazyHistogram`, or an
+- Instruments migrated out of `typescript/core/src/metrics.ts` must move to `lazyCounter`, `lazyHistogram`, or an
   equivalent lazy constructor. Copying an instrument to module scope reintroduces the defect.
 - `WorkhorseMetricsObserver` gauges and `registerQueueMetrics` observable gauges are a separate
   question. Observable instruments are read at collection time by whichever provider owns the

@@ -1,0 +1,68 @@
+{
+  "name": "@workhorse/dashboard-server",
+  "version": "0.1.0",
+  "description": "Node.js backend for the Workhorse operator dashboard",
+  "homepage": "https://workhorse.run",
+  "bugs": {
+    "url": "https://github.com/stablemates/workhorse/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stablemates/workhorse.git",
+    "directory": "typescript/dashboard-server"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./wire": {
+      "types": "./dist/wire.d.ts",
+      "import": "./dist/wire.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./standalone": {
+      "types": "./dist/server/standalone.d.ts",
+      "import": "./dist/server/standalone.js"
+    },
+    "./client": {
+      "types": "./dist/rpc-client.d.ts",
+      "import": "./dist/rpc-client.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "rm -rf dist && pnpm build:library",
+    "build:dev": "pnpm build:library",
+    "build:library": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
+  },
+  "dependencies": {
+    "@opentelemetry/api-logs": "0.221.0",
+    "@orpc/client": "^1.14.8",
+    "@orpc/server": "^1.14.8",
+    "@workhorse/dashboard-contract": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@workhorse/core": "workspace:*",
+    "typescript": "^5.8.3"
+  },
+  "peerDependencies": {
+    "@workhorse/core": ">=0.1.0 <0.2.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -6,5 +6,5 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["scripts/**/*.ts", "src/local-database.ts"]
+  "include": ["scripts/**/*.ts", "typescript/core/src/local-database.ts"]
 }

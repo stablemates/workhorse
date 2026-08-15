@@ -41,7 +41,7 @@ planner-estimate function, then advances the schema from 25 to 26. Migration
 `0029-add-keyed-throttle-enqueue.sql` adds keyed throttle and advances the schema from 28 to 29.
 
 `sql/schema/versions/0023.sql` preserves the supported baseline as a test fixture. It is immutable,
-just like a released migration, and does not ship in the package. `test/schema-migrations.test.ts`
+just like a released migration, and does not ship in the package. `typescript/core/test/schema-migrations.test.ts`
 installs that fixture in one database, applies `migrateSchema(database)`, and compares its
 schema-only dump with a second database created by `installSchema(database)`. The dump omits
 ownership, privileges, comments, security labels, publications, and subscriptions. The test also
@@ -54,7 +54,7 @@ retaining `claim_v2` for a compatibility window, but the migration's filename an
 version do not change either function suffix.
 
 Application data is outside this lifecycle. In particular, all representative jobs, schedules,
-audit records, and other seed/reset behavior live in `demo/` and are not shipped as core migrations.
+audit records, and other seed/reset behavior live in `typescript/demo/` and are not shipped as core migrations.
 The development command `pnpm demo` recreates the purpose-guarded demo database on every run so the
 current canonical schema is always exercised from scratch. `pnpm demo:production` preserves its
 database and represents the future deployable shape.

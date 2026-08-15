@@ -9,13 +9,16 @@ const scriptPath = path.join(repositoryRoot, "scripts/check-test-build.ts");
 const fixtureRoots: string[] = [];
 
 const expectedBuildOutputs = [
-  "dist/src/index.js",
-  "packages/dashboard/dist/index.js",
-  "packages/dashboard/dist/app/index.html",
-  "packages/drizzle/dist/index.js",
-  "packages/kysely/dist/index.js",
-  "packages/prisma/dist/index.js",
-  "packages/typeorm/dist/index.js",
+  "typescript/core/dist/src/index.js",
+  "dashboard/app/dist/library/index.js",
+  "typescript/dashboard/dist/index.js",
+  "typescript/dashboard-server/dist/index.js",
+  "dashboard/app/dist/app/index.html",
+  "typescript/dashboard-server/dist/app/index.html",
+  "typescript/drizzle/dist/index.js",
+  "typescript/kysely/dist/index.js",
+  "typescript/prisma/dist/index.js",
+  "typescript/typeorm/dist/index.js",
 ];
 
 afterEach(async () => {
@@ -63,12 +66,12 @@ describe("test build prerequisite", () => {
 
   it("names the build command when an output is missing", async () => {
     const root = await makeBuiltFixture();
-    await rm(path.join(root, "packages/dashboard/dist/app/index.html"));
+    await rm(path.join(root, "typescript/dashboard-server/dist/app/index.html"));
 
     const result = await runCheck(root);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("pnpm build:runtime");
-    expect(result.stderr).toContain("packages/dashboard/dist/app/index.html");
+    expect(result.stderr).toContain("typescript/dashboard-server/dist/app/index.html");
   });
 });

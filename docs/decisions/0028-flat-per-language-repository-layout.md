@@ -37,7 +37,7 @@ The repository adopts one top-level directory per language beside language-neutr
   toolchain and manifest.
 - `protocol/`, `sql/`, `docs/` — the language-neutral contract and reference.
 - `dashboard/` — the shared operator SPA and, later, its versioned wire specification.
-- `site/` — the workhorse.run site, moved up from `apps/site`.
+- `site/` — the workhorse.run site, promoted from the former application grouping.
 
 The placement rule: shared product artifacts live at the repository root; a language directory
 holds only that language's SDK and runtime code. The repository root becomes a private pnpm
@@ -66,7 +66,7 @@ repository.
 - A protocol change and every affected implementation land in one commit, gated by one
   conformance run at one schema version.
 - New SDKs reuse the existing database provisioning instead of rebuilding it per repository.
-- The most-edited code gains a path prefix, and documentation that names `src/` paths needs a
+- The most-edited code gains a path prefix, and documentation that names `typescript/core/src/` paths needs a
   one-time mechanical sweep.
 - Contributors clone every toolchain, and continuous integration must filter lanes by path.
 - npm consumers see no change; `@workhorse/core` keeps its name and contents.

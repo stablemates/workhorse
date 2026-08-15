@@ -3,12 +3,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Pool } from "pg";
-import { runDashboardReadSurfaceBenchmark } from "../benchmarks/dashboard-read-surface.js";
+import { runDashboardReadSurfaceBenchmark } from "../typescript/core/benchmarks/dashboard-read-surface.js";
 import {
   assertLocalDatabasePurpose,
   databaseName,
   localDatabaseUrl,
-} from "../src/local-database.js";
+} from "../typescript/core/src/local-database.js";
 
 const help = `Workhorse dashboard read-surface benchmark
 

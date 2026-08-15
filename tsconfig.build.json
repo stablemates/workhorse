@@ -1,5 +1,6 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["src/**/*.ts", "benchmarks/**/*.ts"],
-  "exclude": ["test", "vitest.config.ts", "src/cli/reset-db.ts"]
+  "compilerOptions": { "rootDir": "typescript/core" },
+  "include": ["typescript/core/src/**/*.ts", "typescript/core/benchmarks/**/*.ts"],
+  "exclude": ["typescript/core/test", "vitest.config.ts", "typescript/core/src/cli/reset-db.ts"]
 }

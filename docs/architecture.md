@@ -9,76 +9,10 @@ forward-migration baseline.
 version 40 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
 immutable files in `sql/migrations/` in version order.
 
-Migration `0024-add-schema-migration-ledger.sql` takes the transaction advisory lock keyed by
-`workhorse:schema-migration`. It requires version 23 and creates `workhorse.schema_migration`. It
-records the version 23 baseline and version 24 step. It then replaces the schema-version row with 24.
-
-Migration `0025-make-schedule-occurrence-replay-a-no-op.sql` takes the same advisory lock. It
-requires version 24 and changes `fire_schedule_v1` so a repeated occurrence returns null. It records
-the version 25 step and replaces the schema-version row with 25.
-
-Migration `0026-add-dashboard-read-surface.sql` requires version 25. It creates the versioned
-dashboard views and `dashboard_job_estimate_v1`, records the version 26 step, and advances the
-schema-version row to 26.
-
-Migration `0027-add-job-priority.sql` requires version 26. It adds immutable priority and replaces
-the ready index and affected SQL contracts. It records version 27 and advances the schema row.
-Migration `0028-add-keyed-debounce-enqueue.sql` requires version 27. It adds the coalescing mode to
-enqueue key ownership plus `enqueue_debounce_v1` and `enqueue_many_v2`. It records version 28 and
-advances the schema-version row.
-
-Migration `0029-add-keyed-throttle-enqueue.sql` requires version 28. It extends coalescing key
-ownership with `throttle`, adds `enqueue_throttle_v1`, and updates `enqueue_many_v2`. It records
-version 29 and advances the schema-version row. Every migration is safe to replay after its target
-version commits.
-
-Migration `0030-add-job-dependencies.sql` requires version 29. It adds the blocked runtime state,
-one-prerequisite edge, release transition, and operator projection. It records version 30 and
-advances the schema row.
-
-Migration `0031-add-fan-in-dependency-policies.sql` requires version 30. It adds bounded fan-in,
-terminal policies, serialized cycle rejection, and outcome-driven resolution. It records version
-31 and advances the schema row.
-
-Migration `0032-index-dependency-failures.sql` requires version 31. It adds the partial terminal
-outcome index used by dependency health and telemetry reads. It records version 32 and advances
-the schema row.
-
-Migration `0033-add-single-child-jobs.sql` requires version 32. It adds immutable parent-child
-lineage, fenced child creation and suspension, result joining, and the dashboard read view. It
-records version 33 and advances the schema row.
-
-Migration `0034-add-child-fan-out.sql` requires version 33. It removes the single-child index, marks
-set-created edges, and adds bounded transactional child-set creation and joining. It records
-version 34 and advances the schema row.
-
-Migration `0035-preserve-child-lineage.sql` requires version 34. It makes the parent own child-edge
-lifetime, prevents terminal pruning while any child is live or within an evidence window, and adds
-the bounded dashboard redrive-lineage view. It records version 35 and advances the schema row.
-
-Migration `0036-add-idempotent-signals.sql` requires version 35. It adds retained named signal
-waits, fenced lease release, and idempotent attributed delivery. It records version 36 and advances
-the schema row.
-
-Migration `0037-add-human-wait-tokens.sql` requires version 36. It adds retained human decision
-context, authenticated idempotent completion, and the actionable dashboard projection. It records
-version 37 and advances the schema row.
-
-Migration `0038-harden-signal-human-waits.sql` requires version 37. It preserves human-wait
-attempt provenance through cancellation and deadline terminalization. It adds `timeout_at` to
-`job_signal_wait` and `job_human_wait`, plus `job_signal_wait_pending_idx`. It adds the effective
-PostgreSQL deadline to `dashboard_human_wait_v1.deadline_at`. It records version 38 and advances
-the schema row.
-
-Migration `0039-fix-dependency-release-reasons.sql` requires version 38. It makes the
-`dependency_released` reason identify the prerequisite state which selected a release policy. It
-records version 39 and advances the schema row.
-
-Migration `0040-bound-dependency-fan-out.sql` requires version 39. It rejects an upgrade if a
-prerequisite already retains more than 100 direct dependents or reaches more than 100 unresolved
-transitive dependents. It adds both bounds, `job_dependency_prerequisite_idx`,
-`job_dependency_dependent_pending_idx`, and `job_runtime_blocked_queue_idx`. It records version 40
-and advances the schema row.
+Each migration takes the transaction advisory lock keyed by `workhorse:schema-migration`. It
+requires the preceding version, records its target in `workhorse.schema_migration`, and advances
+the single `workhorse.schema_version` row. The baseline step records version 23 before advancing to
+version 24. A migration is safe to replay after its target version commits.
 
 Versions below 23, versions above 40, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
@@ -194,7 +128,7 @@ alphanumeric codes, and copies the discovered code to its wrapper.
 
 ### What an adapter must guarantee
 
-`src/adapter.ts` owns the shared implementation of every guarantee below, exported from
+`typescript/core/src/adapter.ts` owns the shared implementation of every guarantee below, exported from
 `@workhorse/core` as `QueryError`, `rowsToQueryResult`, `attachNotificationPool`,
 `createProviderQueryable`, `createProviderAdapter`, and `createWorkhorseAdapter`. An adapter that
 uses them supplies only how its ORM runs a statement; an adapter that does not still owes the same
@@ -209,7 +143,7 @@ guarantees.
    caller's transaction and never commits, rolls back, disconnects, or destroys it.
 3. **Error translation.** A failed statement throws an error extending `QueryError`, which retains
    `statement` and the original `cause` and copies the SQLSTATE to `code`. The code comes from
-   `databaseErrorCode` in `src/errors.ts`: breadth-first over `cause`, `driverError`, and `meta`,
+   `databaseErrorCode` in `typescript/core/src/errors.ts`: breadth-first over `cause`, `driverError`, and `meta`,
    at most 16 objects, cycle-safe, accepting only five-character uppercase alphanumeric codes, and
    preferring a nested SQLSTATE over a Prisma `P\d{4}` code that carries `meta`. Core depends on
    this to raise `EnqueueIdempotencyConflictError` for SQLSTATE `P1001` and
@@ -232,7 +166,7 @@ guarantees.
 
 `Queue` remains the only public facade for queue operations. Its constructor calls
 `createQueueModuleContext` and `createQueueModules`. Neither function is exported from
-`src/index.ts`, so internal relocations do not change the package interface.
+`typescript/core/src/index.ts`, so internal relocations do not change the package interface.
 
 `createQueueModuleContext` returns an immutable `QueueModuleContext`. The context contains the
 `Queryable`, default queue name, and validated `QueueOptions`. Every internal module extends
@@ -249,7 +183,7 @@ contract for direct enqueue and schedule synchronization. `validateResult` valid
 against the contract version accepted by the claimed job. `validateQueueOptions` checks contract
 configuration before `Queue` creates the immutable module context. `Queue.enqueue`,
 `enqueueMany`, `syncSchedules`, and `complete` delegate these operations without changing their
-public signatures. `src/queue.ts` continues to re-export the four public error classes.
+public signatures. `typescript/core/src/queue.ts` continues to re-export the four public error classes.
 
 `ClaimLeaseFenceModule` owns `cancel`, `claim`, `heartbeat`, `heartbeatStatus`, `expireOwned`,
 `acknowledgeCancel`, `complete`, `fail`, and `recoverExpired`. `Queue` delegates without changing
@@ -262,7 +196,7 @@ for this module and the row mappers that remain in `Queue`.
 
 `OperatorReadsModule.validateJobListQuery` and `validateJobTimelineQuery` own the validation already
 moved behind the facade. They use `validateJobListQuery`, `validateJobTimelineCursor`, and
-`validatePageLimit` from `src/queue/filter-cursor.ts`. The validators enforce the limits exported as
+`validatePageLimit` from `typescript/core/src/queue/filter-cursor.ts`. The validators enforce the limits exported as
 `MAX_JOB_QUERY_PAGE_SIZE`, `MAX_JOB_QUERY_PAYLOAD_BYTES`, and `MAX_JOB_QUERY_REDACT_KEYS`.
 
 The operator dashboard is a separate boundary from the worker fleet. It is a framework-neutral
@@ -496,9 +430,9 @@ cancellation `cancel`. It then moves the parent from active to blocked and clear
 same transaction. A rollback removes the child, lineage, dependency, events, and suspension.
 Coalescing and additional dependency options are rejected for child requests.
 
-Migration 0034 retains that implementation as `create_single_child_v1`. The public
-`create_child_v1` wrapper rejects any `created_as_set` edge before it delegates, which keeps the
-single-child replay contract compatible without letting it consume a child-set replay.
+`create_single_child_v1` retains that implementation. The public `create_child_v1` wrapper rejects
+any `created_as_set` edge before it delegates, which keeps the single-child replay contract
+compatible without letting it consume a child-set replay.
 
 `HandlerContext.runChild(name, type, payload, options)` calls the fenced transition and suspends
 the handler without consuming its logical attempt. Child success releases the parent through the
@@ -894,7 +828,7 @@ All maintenance functions return one row per phase, `(phase, rows_affected, dura
 ## OpenTelemetry metrics
 
 `@workhorse/core` depends only on `@opentelemetry/api` and never installs an SDK, reader, exporter,
-or resource. `src/telemetry.ts` owns every instrument. `lazyCounter`, `lazyHistogram`, and
+or resource. `typescript/core/src/telemetry.ts` owns every instrument. `lazyCounter`, `lazyHistogram`, and
 `lazyGauge` create the underlying instrument on first emission and re-create it whenever
 `metrics.getMeterProvider()` returns a provider other than the one last seen, so an application may
 install its OpenTelemetry SDK before or after importing Workhorse. Emissions made while no provider
@@ -934,14 +868,14 @@ Each lifecycle event reaches exactly one instrument. A handler activation is cou
 outcome; the write it produces is counted by `workhorse.jobs.completed`, `workhorse.jobs.failed`, or
 `workhorse.jobs.retried` at the queue operation that performed it.
 
-`WorkhorseMetricsObserver` lives in `src/metrics-observer.ts` and records its gauges through the same
+`WorkhorseMetricsObserver` lives in `typescript/core/src/metrics-observer.ts` and records its gauges through the same
 lazy lifecycle. It performs two concurrent read-only queries every `intervalMs`, which
 defaults to 10,000 and must be a safe integer of at least 1,000. `start()` collects immediately and
 then repeats on an unreferenced timer; `stop()` clears the timer; `collect()` provides a serialized
 one-shot collection. `onError` receives interval failures. Applications must run at most one observer
 per database because every observer sees the same global PostgreSQL state.
 
-Its queue query reads the shared depth aggregates in `src/queue-depth.ts` and joins `queue_control`
+Its queue query reads the shared depth aggregates in `typescript/core/src/queue-depth.ts` and joins `queue_control`
 for the pause flag. The observer records `workhorse.jobs.count` for scheduled, ready, and active rows by queue and state;
 `workhorse.queue.oldest_ready.age`; `workhorse.queue.paused`; `workhorse.lease.expired`;
 `workhorse.deadline.overdue`; and `workhorse.execution_timeout.overdue`. A second query groups
@@ -1188,9 +1122,25 @@ without a dashboard release when it preserves these view and function contracts.
 `@workhorse/core` nor `@workhorse/dashboard`. Both packages depend on this contract, so neither
 copies the standalone API from the other.
 
-`@workhorse/dashboard/standalone` exports `startDashboardServer(database, options)`. The caller
-owns `database` and closes it after `RunningDashboard.close()` stops the HTTP listener. The
-dashboard entry owns `Queue`, `createDashboardOperatorControllers`, `createDashboardHost`,
+`dashboard/app` owns the shared React application, its styles and assets, the Vite development
+harness, and the compiled static bundle in `dashboard/app/dist/app`. Its private workspace package
+is `@workhorse/dashboard-app`.
+
+`typescript/dashboard` is the thin `@workhorse/dashboard` compatibility package. Its build copies
+the compiled library from `dashboard/app/dist/library`; those modules export the React API and
+re-export the backend entry points under their existing public names.
+
+`typescript/dashboard-server` owns the TypeScript backend. Its package is
+`@workhorse/dashboard-server`; it implements the wire types, RPC client, read model, operator
+controllers, request host, Node middleware, and standalone server. The full build copies
+`dashboard/app/dist/app` to `typescript/dashboard-server/dist/app`, and
+`dashboardAssetsDirectory()` serves that copied artifact. No React application source lives in
+the backend package.
+
+`@workhorse/dashboard/standalone` re-exports
+`@workhorse/dashboard-server/standalone.startDashboardServer(database, options)`. The caller owns
+`database` and closes it after `RunningDashboard.close()` stops the HTTP listener. The backend
+entry owns `Queue`, `createDashboardOperatorControllers`, `createDashboardHost`,
 `dashboardNodeMiddleware`, and the Node HTTP server. It binds `options.hostname` and `options.port`,
 uses `/` as the dashboard path, and enables queue, task, and worker mutations only when
 `options.allowMutations` is true.
@@ -1251,15 +1201,16 @@ scheme and authority instead. This keeps Secure-cookie and same-origin mutation 
 of untrusted proxy headers. The CLI maps `--socket`, `--public-origin`, and
 `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN` to those options.
 
-`Dockerfile.dashboard` builds the core, dashboard contract, and dashboard package tarballs, then
-installs those release-shaped artifacts with production dependencies into a Node 24 Alpine image.
+`Dockerfile.dashboard` builds the core, dashboard contract, dashboard server, and shared dashboard
+application tarballs, then installs those release-shaped artifacts with production dependencies
+into a Node 24 Alpine image.
 The image runs as the `node` user, exposes port 3000, binds `0.0.0.0`, and starts the read-only
 dashboard command. Its startup contract requires `DATABASE_URL` or `WORKHORSE_DATABASE_URL`, both
 single-admin credential values, and an HTTPS `WORKHORSE_DASHBOARD_PUBLIC_ORIGIN`. The packed test
 asserts that the image consumes the generated tarball names and starts the installed standalone
 CLI through the same remote-listener contract.
 
-`src/cli/dashboard.ts` imports only the shared contract. It loads the optional
+`typescript/core/src/cli/dashboard.ts` imports only the shared contract. It loads the optional
 `@workhorse/dashboard/standalone` entry and verifies that the module exports
 `startDashboardServer`. The `@workhorse/core` manifest declares `@workhorse/dashboard` as an
 optional peer, so a worker-only installation does not install React or the dashboard package.
@@ -1396,7 +1347,7 @@ rather than on an emission path:
   `workhorse.queue.rate_limit.next_eligible_delay` report rate-policy state for governed queues.
 
 `workhorse.queue.depth` and `WorkhorseMetricsObserver`'s `workhorse.jobs.count` measure the same
-live work and read it the same way. `src/queue-depth.ts` owns every aggregate over
+live work and read it the same way. `typescript/core/src/queue-depth.ts` owns every aggregate over
 `workhorse.job_runtime`: `depthColumns()` renders named aggregates such as `ready`, `expired`, and
 `oldest_ready_age_ms`, `totalDepthSelect()` renders the database-wide row the health snapshot uses,
 and `perQueueDepthSelect()` renders the per-queue rows `Queue.queueMetricSnapshot()` and the
@@ -1451,7 +1402,7 @@ dispatch index. Its stable order makes the timings diagnostic rather than a perf
 
 ## Errors
 
-Every error Workhorse raises deliberately extends `WorkhorseError` (`src/errors.ts`), which extends `Error` and sets `name` in each subclass. `instanceof WorkhorseError` therefore means "Workhorse rejected this call", not "this call failed": a PostgreSQL error, a handler's own throw, and a driver connection failure propagate unchanged and do not carry the base. The exported subclasses are `CheckpointConflictError`, `CheckpointLeaseLostError`, `EnqueueIdempotencyConflictError`, `JobContractUnavailableError`, `JobContractValidationError`, `JobValueSizeLimitError`, `MissingRowError`, `ProgressLeaseLostError`, `ProgressRateLimitError`, `RedriveIdempotencyConflictError`, `SignalIdempotencyConflictError`, `SignalWaitLeaseLostError`, `SignalWaitLimitExceededError`, `WaitConflictError`, `WaitLeaseLostError`, and `WaitLimitExceededError` from the queue, plus `CancellationRequestedError`, `DeadlineExceededError`, `ExecutionTimeoutError`, and `InjectedCrashError` from the worker.
+Every error Workhorse raises deliberately extends `WorkhorseError` (`typescript/core/src/errors.ts`), which extends `Error` and sets `name` in each subclass. `instanceof WorkhorseError` therefore means "Workhorse rejected this call", not "this call failed": a PostgreSQL error, a handler's own throw, and a driver connection failure propagate unchanged and do not carry the base. The exported subclasses are `CheckpointConflictError`, `CheckpointLeaseLostError`, `EnqueueIdempotencyConflictError`, `JobContractUnavailableError`, `JobContractValidationError`, `JobValueSizeLimitError`, `MissingRowError`, `ProgressLeaseLostError`, `ProgressRateLimitError`, `RedriveIdempotencyConflictError`, `SignalIdempotencyConflictError`, `SignalWaitLeaseLostError`, `SignalWaitLimitExceededError`, `WaitConflictError`, `WaitLeaseLostError`, and `WaitLimitExceededError` from the queue, plus `CancellationRequestedError`, `DeadlineExceededError`, `ExecutionTimeoutError`, and `InjectedCrashError` from the worker.
 
 Recognizing a PostgreSQL failure means reading through whatever an ORM wrapped it in. `databaseErrorCode(error)` returns the SQLSTATE and `databaseErrorDetails(error)` returns every `DETAIL` string along the chain. Both walk breadth-first over `cause`, `driverError`, and `meta`, visit at most 16 objects, and track visited objects so a cyclic `cause` terminates. A candidate SQLSTATE must match `/^[0-9A-Z]{5}$/`; a Prisma code matching `/^P\d{4}$/` on an object that also carries `meta` is held back and returned only when nothing nested supplies a real SQLSTATE, because Prisma reports `P2010` on the same field and retains the true SQLSTATE under `meta`.
 
@@ -1467,12 +1418,12 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 
 ## Agentic flow example
 
-`examples/agentic-flow.mjs` composes the public SQL-backed primitives without adding a workflow
+`typescript/examples/agentic-flow.mjs` composes the public SQL-backed primitives without adding a workflow
 runtime. `pnpm example:agentic-flow` builds the publishable packages, loads this worktree's
 `DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 40 with
 `assertSchemaCompatible`, and runs the example as a package consumer. The controller advances the
 two `Worker` instances through `Worker.runOnce` and reads completion through `Queue.getJob`.
-`test/packed-packages.ts`
+`typescript/core/test/packed-packages.ts`
 copies the same source into a scratch project, installs the packed `@workhorse/core` tarball, and
 requires a succeeded result plus the terminal progress stage.
 

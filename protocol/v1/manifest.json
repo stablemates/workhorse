@@ -96,11 +96,11 @@
     }
   ],
   "typescriptContractSources": [
-    "src/queue/enqueue-contracts.ts",
-    "src/queue/claim-lease-fence.ts",
-    "src/queue/checkpoints-progress-waits.ts",
-    "src/queue/child-jobs.ts",
-    "src/queue/signals.ts",
-    "src/queue/human-waits.ts"
+    "typescript/core/src/queue/enqueue-contracts.ts",
+    "typescript/core/src/queue/claim-lease-fence.ts",
+    "typescript/core/src/queue/checkpoints-progress-waits.ts",
+    "typescript/core/src/queue/child-jobs.ts",
+    "typescript/core/src/queue/signals.ts",
+    "typescript/core/src/queue/human-waits.ts"
   ]
 }

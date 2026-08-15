@@ -1,8 +1,8 @@
 # Compatibility and support boundary
 
 This is the authoritative supported-version contract for the published Workhorse packages. The
-version lists here are generated from the same constants CI uses: `src/support.ts` declares them,
-`.github/workflows/ci.yml` runs them, and `test/support-matrix.test.ts` fails when this document,
+version lists here are generated from the same constants CI uses: `typescript/core/src/support.ts` declares them,
+`.github/workflows/ci.yml` runs them, and `typescript/core/test/support-matrix.test.ts` fails when this document,
 that workflow, and the package `engines` fields disagree.
 
 ## What "supported" means

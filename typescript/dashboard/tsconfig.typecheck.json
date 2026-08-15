@@ -1,0 +1,4 @@
+{
+  "extends": ["../../dashboard/app/tsconfig.typecheck.json"],
+  "include": ["src/**/*.ts", "../../dashboard/app/src/assets.d.ts"]
+}

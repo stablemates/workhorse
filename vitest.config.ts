@@ -2,20 +2,20 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export const databaseTestFiles = [
-  "demo/test/app.integration.test.ts",
-  "packages/*/test/integration.test.ts",
-  "test/benchmark-conventional.test.ts",
-  "test/integration-*.test.ts",
-  "test/isolation-canary-*.test.ts",
-  "test/sql-protocol-conformance.test.ts",
-  "test/schema-installation.test.ts",
-  "test/schema-migrations.test.ts",
+  "typescript/demo/test/app.integration.test.ts",
+  "typescript/*/test/integration.test.ts",
+  "typescript/core/test/benchmark-conventional.test.ts",
+  "typescript/core/test/integration-*.test.ts",
+  "typescript/core/test/isolation-canary-*.test.ts",
+  "typescript/core/test/sql-protocol-conformance.test.ts",
+  "typescript/core/test/schema-installation.test.ts",
+  "typescript/core/test/schema-migrations.test.ts",
 ];
 
 export default defineConfig({
   resolve: {
     alias: {
-      workhorse: fileURLToPath(new URL("./src/index.ts", import.meta.url)),
+      workhorse: fileURLToPath(new URL("./typescript/core/src/index.ts", import.meta.url)),
     },
   },
   test: {

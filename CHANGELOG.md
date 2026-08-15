@@ -1,9 +1,9 @@
 # Changelog
 
-Seven published packages are versioned in lockstep and released from one tag. They are
+Eight published packages are versioned in lockstep and released from one tag. They are
 `@workhorse/core`, `@workhorse/drizzle`, `@workhorse/prisma`, `@workhorse/typeorm`,
-`@workhorse/kysely`, `@workhorse/dashboard`, and `@workhorse/dashboard-contract`. Each entry states its required
-schema version and upgrade steps.
+`@workhorse/kysely`, `@workhorse/dashboard`, `@workhorse/dashboard-server`, and
+`@workhorse/dashboard-contract`. Each entry states its required schema version and upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
@@ -100,8 +100,8 @@ name the retired instruments.
   [ADR 0024](docs/decisions/0024-metrics-instrument-lifecycle.md) records the measurement behind
   this.
 - `@workhorse/core`: two instrumentation modules emitted separately on the same lifecycle events.
-  They are now one. `src/metrics.ts` is deleted; `src/telemetry.ts` owns every instrument, and
-  `WorkhorseMetricsObserver` moves to `src/metrics-observer.ts`. The package export is unchanged —
+  They are now one. `typescript/core/src/metrics.ts` is deleted; `typescript/core/src/telemetry.ts` owns every instrument, and
+  `WorkhorseMetricsObserver` moves to `typescript/core/src/metrics-observer.ts`. The package export is unchanged —
   `WorkhorseMetricsObserver` is still exported from `@workhorse/core` — and no other export from
   either module was public.
 - `@workhorse/core`: `JobValueSizeLimitError` extends `WorkhorseError` rather than `RangeError`.

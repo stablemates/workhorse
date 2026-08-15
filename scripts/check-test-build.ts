@@ -2,13 +2,16 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 
 const requiredBuildOutputs = [
-  "dist/src/index.js",
-  "packages/dashboard/dist/index.js",
-  "packages/dashboard/dist/app/index.html",
-  "packages/drizzle/dist/index.js",
-  "packages/kysely/dist/index.js",
-  "packages/prisma/dist/index.js",
-  "packages/typeorm/dist/index.js",
+  "typescript/core/dist/src/index.js",
+  "dashboard/app/dist/library/index.js",
+  "typescript/dashboard/dist/index.js",
+  "typescript/dashboard-server/dist/index.js",
+  "dashboard/app/dist/app/index.html",
+  "typescript/dashboard-server/dist/app/index.html",
+  "typescript/drizzle/dist/index.js",
+  "typescript/kysely/dist/index.js",
+  "typescript/prisma/dist/index.js",
+  "typescript/typeorm/dist/index.js",
 ] as const;
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");

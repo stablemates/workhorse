@@ -7,13 +7,15 @@ RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
 WORKDIR /workhorse
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm build:core && pnpm --filter @workhorse/dashboard build
+RUN pnpm build:runtime
 RUN mkdir /artifacts \
-  && pnpm --silent pack --pack-destination /artifacts \
+  && pnpm --silent --dir typescript/core pack --pack-destination /artifacts \
   && mv /artifacts/workhorse-core-*.tgz /artifacts/workhorse-core.tgz \
-  && pnpm --silent --dir packages/dashboard-contract pack --pack-destination /artifacts \
+  && pnpm --silent --dir typescript/dashboard-contract pack --pack-destination /artifacts \
   && mv /artifacts/workhorse-dashboard-contract-*.tgz /artifacts/workhorse-dashboard-contract.tgz \
-  && pnpm --silent --dir packages/dashboard pack --pack-destination /artifacts \
+  && pnpm --silent --dir typescript/dashboard-server pack --pack-destination /artifacts \
+  && mv /artifacts/workhorse-dashboard-server-*.tgz /artifacts/workhorse-dashboard-server.tgz \
+  && pnpm --silent --dir typescript/dashboard pack --pack-destination /artifacts \
   && mv /artifacts/workhorse-dashboard-[0-9]*.tgz /artifacts/workhorse-dashboard.tgz
 
 FROM node:24-alpine AS production-dependencies
@@ -23,6 +25,7 @@ COPY --from=build /artifacts/ /artifacts/
 RUN npm install --omit=dev --ignore-scripts \
   /artifacts/workhorse-core.tgz \
   /artifacts/workhorse-dashboard-contract.tgz \
+  /artifacts/workhorse-dashboard-server.tgz \
   /artifacts/workhorse-dashboard.tgz
 
 FROM node:24-alpine AS runtime

@@ -41,7 +41,7 @@ failure modes follow from it:
 - A long-lived proxy serves `workhorse.localhost`. It outlives the demo process, so a demo that
   was stopped shows up as `504 Gateway Timeout` on every URL rather than a connection error.
 - Stopping Vite abruptly during dependency pre-bundling corrupts
-  `packages/dashboard/node_modules/.vite`. The signature is a `504` on a
+  `dashboard/app/node_modules/.vite`. The signature is a `504` on a
   `/@fs/**/.vite/deps/*.js` chunk while a server is running; the fix is to delete that directory
   and restart.
 - A running demo writes continuously to its database. Point it at the wrong one and it will
@@ -83,7 +83,7 @@ branch onto `origin/main`, then merge it into `main` with `git merge --ff-only <
 ## Building before testing
 
 `pnpm test` does not build the dashboard browser bundle. Anything that serves
-`packages/dashboard/dist/app` — `test:demo-smoke`, `test:packed` — needs a full `pnpm build`
+`typescript/dashboard-server/dist/app` — `test:demo-smoke`, `test:packed` — needs a full `pnpm build`
 first. `pnpm build:runtime:dev` only compiles the library half.
 
 ## Writing documentation
@@ -112,8 +112,8 @@ Rules that keep the two layers from drifting into each other:
 - **Never renumber a guide.** Numbers appear in links. Insert into the gaps — bands of one
   hundred, gaps of ten — and let the reading order absorb it.
 - **Verify examples against the source** before writing them. `HandlerContext` is in
-  `src/worker.ts`; `EnqueueOptions` and the `Queue` methods are in `src/types.ts` and
-  `src/queue.ts`. Do not write an example from memory.
+  `typescript/core/src/worker.ts`; `EnqueueOptions` and the `Queue` methods are in `typescript/core/src/types.ts` and
+  `typescript/core/src/queue.ts`. Do not write an example from memory.
 
 Both layers name real identifiers, so a rename stays greppable across both. If you change
 behaviour a guide describes, update it in the same commit.

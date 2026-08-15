@@ -7,22 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      '@opentelemetry/api':
-        specifier: 1.9.1
-        version: 1.9.1
-      '@opentelemetry/api-logs':
-        specifier: 0.221.0
-        version: 0.221.0
-      '@workhorse/dashboard-contract':
-        specifier: workspace:*
-        version: link:packages/dashboard-contract
-      cron-parser:
-        specifier: 5.6.2
-        version: 5.6.2
-      pg:
-        specifier: ^8.16.3
-        version: 8.22.0
     devDependencies:
       '@opentelemetry/context-async-hooks':
         specifier: 2.10.0
@@ -45,9 +29,6 @@ importers:
       '@vitest/coverage-v8':
         specifier: 3.2.7
         version: 3.2.7(vitest@3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0))
-      '@workhorse/dashboard':
-        specifier: workspace:*
-        version: link:packages/dashboard
       graphile-worker:
         specifier: 0.17.3
         version: 0.17.3(typescript@5.9.3)
@@ -79,7 +60,68 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
 
-  apps/site:
+  dashboard/app:
+    dependencies:
+      '@mantine/charts':
+        specifier: ^8.3.18
+        version: 8.3.18(@mantine/core@8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@mantine/hooks@8.3.18(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(recharts@3.10.1(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react-is@19.2.8)(react@19.2.8)(redux@5.0.1))
+      '@mantine/core':
+        specifier: ^8.3.14
+        version: 8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@mantine/hooks':
+        specifier: ^8.3.14
+        version: 8.3.18(react@19.2.8)
+      '@mantine/notifications':
+        specifier: ^8.3.18
+        version: 8.3.18(@mantine/core@8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@mantine/hooks@8.3.18(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@phosphor-icons/react':
+        specifier: ^2.1.10
+        version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@workhorse/dashboard-server':
+        specifier: workspace:*
+        version: link:../../typescript/dashboard-server
+      recharts:
+        specifier: ^3.10.1
+        version: 3.10.1(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react-is@19.2.8)(react@19.2.8)(redux@5.0.1)
+    devDependencies:
+      '@orpc/client':
+        specifier: ^1.14.8
+        version: 1.14.8(@opentelemetry/api@1.9.1)
+      '@types/node':
+        specifier: ^24.1.0
+        version: 24.13.3
+      '@types/react':
+        specifier: ^19.1.10
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.1.7
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^4.7.0
+        version: 4.7.0(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0))
+      '@workhorse/core':
+        specifier: workspace:*
+        version: link:../../typescript/core
+      react:
+        specifier: ^19.1.1
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.2.8(react@19.2.8)
+      react-grab:
+        specifier: ^0.1.50
+        version: 0.1.50(react@19.2.8)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.1.7
+        version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  site:
     dependencies:
       fumadocs-core:
         specifier: 16.14.0
@@ -128,7 +170,154 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
-  demo:
+  typescript/adapter-conformance:
+    devDependencies:
+      '@prisma/client':
+        specifier: 6.19.3
+        version: 6.19.3(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))(typescript@5.9.3)
+      '@workhorse/core':
+        specifier: workspace:*
+        version: link:../core
+      '@workhorse/drizzle':
+        specifier: workspace:*
+        version: link:../drizzle
+      '@workhorse/kysely':
+        specifier: workspace:*
+        version: link:../kysely
+      '@workhorse/prisma':
+        specifier: workspace:*
+        version: link:../prisma
+      '@workhorse/typeorm':
+        specifier: workspace:*
+        version: link:../typeorm
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))(typescript@5.9.3))(@types/pg@8.20.0)(kysely@0.29.5)(pg@8.22.0)(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))
+      kysely:
+        specifier: 0.29.5
+        version: 0.29.5
+      pg:
+        specifier: ^8.16.3
+        version: 8.22.0
+      typeorm:
+        specifier: 0.3.31
+        version: 0.3.31(pg@8.22.0)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  typescript/core:
+    dependencies:
+      '@opentelemetry/api':
+        specifier: 1.9.1
+        version: 1.9.1
+      '@opentelemetry/api-logs':
+        specifier: 0.221.0
+        version: 0.221.0
+      '@workhorse/dashboard-contract':
+        specifier: workspace:*
+        version: link:../dashboard-contract
+      cron-parser:
+        specifier: 5.6.2
+        version: 5.6.2
+      pg:
+        specifier: ^8.16.3
+        version: 8.22.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.1.0
+        version: 24.13.3
+      '@types/pg':
+        specifier: ^8.15.5
+        version: 8.20.0
+      '@workhorse/dashboard':
+        specifier: workspace:*
+        version: link:../dashboard
+      graphile-worker:
+        specifier: 0.17.3
+        version: 0.17.3(typescript@5.9.3)
+      pg-boss:
+        specifier: 12.26.2
+        version: 12.26.2
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  typescript/dashboard:
+    dependencies:
+      '@mantine/charts':
+        specifier: ^8.3.18
+        version: 8.3.18(@mantine/core@8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@mantine/hooks@8.3.18(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(recharts@3.10.1(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react-is@19.2.8)(react@19.2.8)(redux@5.0.1))
+      '@mantine/core':
+        specifier: ^8.3.14
+        version: 8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@mantine/hooks':
+        specifier: ^8.3.14
+        version: 8.3.18(react@19.2.8)
+      '@mantine/notifications':
+        specifier: ^8.3.18
+        version: 8.3.18(@mantine/core@8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@mantine/hooks@8.3.18(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@phosphor-icons/react':
+        specifier: ^2.1.10
+        version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@workhorse/dashboard-server':
+        specifier: workspace:*
+        version: link:../dashboard-server
+      recharts:
+        specifier: ^3.10.1
+        version: 3.10.1(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react-is@19.2.8)(react@19.2.8)(redux@5.0.1)
+    devDependencies:
+      '@workhorse/core':
+        specifier: workspace:*
+        version: link:../core
+      react:
+        specifier: ^19.1.1
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.2.8(react@19.2.8)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.1.7
+        version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  typescript/dashboard-contract:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  typescript/dashboard-server:
+    dependencies:
+      '@opentelemetry/api-logs':
+        specifier: 0.221.0
+        version: 0.221.0
+      '@orpc/client':
+        specifier: ^1.14.8
+        version: 1.14.8(@opentelemetry/api@1.9.1)
+      '@orpc/server':
+        specifier: ^1.14.8
+        version: 1.14.8(@opentelemetry/api@1.9.1)(ws@8.21.1)
+      '@workhorse/dashboard-contract':
+        specifier: workspace:*
+        version: link:../dashboard-contract
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@workhorse/core':
+        specifier: workspace:*
+        version: link:../core
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  typescript/demo:
     dependencies:
       '@hono/node-server':
         specifier: ^2.0.11
@@ -162,13 +351,13 @@ importers:
         version: 1.14.8(@opentelemetry/api@1.9.1)(ws@8.21.1)
       '@workhorse/core':
         specifier: workspace:*
-        version: link:..
+        version: link:../core
       '@workhorse/dashboard':
         specifier: workspace:*
-        version: link:../packages/dashboard
+        version: link:../dashboard
       '@workhorse/drizzle':
         specifier: workspace:*
-        version: link:../packages/drizzle
+        version: link:../drizzle
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))(typescript@5.9.3))(@types/pg@8.20.0)(kysely@0.29.5)(pg@8.22.0)(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))
@@ -195,123 +384,14 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
-  packages/adapter-conformance:
-    devDependencies:
-      '@prisma/client':
-        specifier: 6.19.3
-        version: 6.19.3(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))(typescript@5.9.3)
-      '@workhorse/core':
-        specifier: workspace:*
-        version: link:../..
-      '@workhorse/drizzle':
-        specifier: workspace:*
-        version: link:../drizzle
-      '@workhorse/kysely':
-        specifier: workspace:*
-        version: link:../kysely
-      '@workhorse/prisma':
-        specifier: workspace:*
-        version: link:../prisma
-      '@workhorse/typeorm':
-        specifier: workspace:*
-        version: link:../typeorm
-      drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))(typescript@5.9.3))(@types/pg@8.20.0)(kysely@0.29.5)(pg@8.22.0)(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))
-      kysely:
-        specifier: 0.29.5
-        version: 0.29.5
-      pg:
-        specifier: ^8.16.3
-        version: 8.22.0
-      typeorm:
-        specifier: 0.3.31
-        version: 0.3.31(pg@8.22.0)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
-
-  packages/dashboard:
-    dependencies:
-      '@mantine/charts':
-        specifier: ^8.3.18
-        version: 8.3.18(@mantine/core@8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@mantine/hooks@8.3.18(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(recharts@3.10.1(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react-is@19.2.8)(react@19.2.8)(redux@5.0.1))
-      '@mantine/core':
-        specifier: ^8.3.14
-        version: 8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@mantine/hooks':
-        specifier: ^8.3.14
-        version: 8.3.18(react@19.2.8)
-      '@mantine/notifications':
-        specifier: ^8.3.18
-        version: 8.3.18(@mantine/core@8.3.18(@mantine/hooks@8.3.18(react@19.2.8))(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@mantine/hooks@8.3.18(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@opentelemetry/api-logs':
-        specifier: 0.221.0
-        version: 0.221.0
-      '@orpc/client':
-        specifier: ^1.14.8
-        version: 1.14.8(@opentelemetry/api@1.9.1)
-      '@orpc/server':
-        specifier: ^1.14.8
-        version: 1.14.8(@opentelemetry/api@1.9.1)(ws@8.21.1)
-      '@phosphor-icons/react':
-        specifier: ^2.1.10
-        version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@workhorse/dashboard-contract':
-        specifier: workspace:*
-        version: link:../dashboard-contract
-      recharts:
-        specifier: ^3.10.1
-        version: 3.10.1(@types/react@19.2.17)(react-dom@19.2.8(react@19.2.8))(react-is@19.2.8)(react@19.2.8)(redux@5.0.1)
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@types/react':
-        specifier: ^19.1.10
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.1.7
-        version: 19.2.3(@types/react@19.2.17)
-      '@vitejs/plugin-react':
-        specifier: ^4.7.0
-        version: 4.7.0(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0))
-      '@workhorse/core':
-        specifier: workspace:*
-        version: link:../..
-      react:
-        specifier: ^19.1.1
-        version: 19.2.8
-      react-dom:
-        specifier: ^19.1.1
-        version: 19.2.8(react@19.2.8)
-      react-grab:
-        specifier: ^0.1.50
-        version: 0.1.50(react@19.2.8)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-      vite:
-        specifier: ^7.1.7
-        version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
-
-  packages/dashboard-contract:
-    devDependencies:
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-
-  packages/drizzle:
+  typescript/drizzle:
     devDependencies:
       '@types/pg':
         specifier: ^8.15.5
         version: 8.20.0
       '@workhorse/core':
         specifier: workspace:*
-        version: link:../..
+        version: link:../core
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@6.19.3(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))(typescript@5.9.3))(@types/pg@8.20.0)(kysely@0.29.5)(pg@8.22.0)(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))
@@ -319,14 +399,14 @@ importers:
         specifier: ^8.16.3
         version: 8.22.0
 
-  packages/kysely:
+  typescript/kysely:
     devDependencies:
       '@types/pg':
         specifier: ^8.15.5
         version: 8.20.0
       '@workhorse/core':
         specifier: workspace:*
-        version: link:../..
+        version: link:../core
       kysely:
         specifier: 0.29.5
         version: 0.29.5
@@ -334,7 +414,7 @@ importers:
         specifier: ^8.16.3
         version: 8.22.0
 
-  packages/prisma:
+  typescript/prisma:
     devDependencies:
       '@prisma/client':
         specifier: 6.19.3
@@ -344,7 +424,7 @@ importers:
         version: 8.20.0
       '@workhorse/core':
         specifier: workspace:*
-        version: link:../..
+        version: link:../core
       pg:
         specifier: ^8.16.3
         version: 8.22.0
@@ -352,14 +432,14 @@ importers:
         specifier: 6.19.3
         version: 6.19.3(magicast@0.3.5)(typescript@5.9.3)
 
-  packages/typeorm:
+  typescript/typeorm:
     devDependencies:
       '@types/pg':
         specifier: ^8.15.5
         version: 8.20.0
       '@workhorse/core':
         specifier: workspace:*
-        version: link:../..
+        version: link:../core
       pg:
         specifier: ^8.16.3
         version: 8.22.0

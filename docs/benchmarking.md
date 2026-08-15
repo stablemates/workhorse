@@ -453,7 +453,7 @@ The timed end point is successful completion of every task handler. Framework-ow
 
 ## Standalone metric lifecycle microbenchmark
 
-`benchmarks/metrics-lifecycle.ts` compares the two metric instrument lifecycles core ships: the eager module-scope instruments in `src/metrics.ts` and the lazy, provider-change-aware instruments in `src/telemetry.ts`. It measures per-emission cost with telemetry off and on, and reports whether each lifecycle still reaches an OpenTelemetry SDK registered after the instrumentation module loaded.
+`typescript/core/benchmarks/metrics-lifecycle.ts` compares the two metric instrument lifecycles core ships: the eager module-scope instruments in `typescript/core/src/metrics.ts` and the lazy, provider-change-aware instruments in `typescript/core/src/telemetry.ts`. It measures per-emission cost with telemetry off and on, and reports whether each lifecycle still reaches an OpenTelemetry SDK registered after the instrumentation module loaded.
 
 ```bash
 pnpm benchmark:metrics-lifecycle -- --output docs/benchmarks/results/<date>-metrics-lifecycle.json

@@ -2,17 +2,24 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@workhorse/core": ["src/index.ts"],
-      "@workhorse/dashboard": ["packages/dashboard/src/index.ts"],
-      "@workhorse/dashboard/dev": ["packages/dashboard/src/dev.ts"],
-      "@workhorse/dashboard/presentation": ["packages/dashboard/src/presentation.ts"],
-      "@workhorse/dashboard/server": ["packages/dashboard/src/server/index.ts"],
-      "@workhorse/dashboard/wire": ["packages/dashboard/src/wire.ts"],
-      "@workhorse/dashboard/*": ["packages/dashboard/src/*"],
-      "@workhorse/drizzle": ["packages/drizzle/src/index.ts"],
-      "@workhorse/kysely": ["packages/kysely/src/index.ts"],
-      "@workhorse/prisma": ["packages/prisma/src/index.ts"],
-      "@workhorse/typeorm": ["packages/typeorm/src/index.ts"]
+      "@workhorse/core": ["typescript/core/src/index.ts"],
+      "@workhorse/dashboard": ["typescript/dashboard/src/index.ts"],
+      "@workhorse/dashboard/dev": ["typescript/dashboard/src/dev.ts"],
+      "@workhorse/dashboard/presentation": ["typescript/dashboard/src/presentation.ts"],
+      "@workhorse/dashboard/server": ["typescript/dashboard/src/server.ts"],
+      "@workhorse/dashboard/wire": ["typescript/dashboard/src/wire.ts"],
+      "@workhorse/dashboard/*": ["typescript/dashboard/src/*"],
+      "@workhorse/dashboard-server": ["typescript/dashboard-server/src/index.ts"],
+      "@workhorse/dashboard-server/client": ["typescript/dashboard-server/src/rpc-client.ts"],
+      "@workhorse/dashboard-server/server": ["typescript/dashboard-server/src/server/index.ts"],
+      "@workhorse/dashboard-server/standalone": [
+        "typescript/dashboard-server/src/server/standalone.ts"
+      ],
+      "@workhorse/dashboard-server/*": ["typescript/dashboard-server/src/*"],
+      "@workhorse/drizzle": ["typescript/drizzle/src/index.ts"],
+      "@workhorse/kysely": ["typescript/kysely/src/index.ts"],
+      "@workhorse/prisma": ["typescript/prisma/src/index.ts"],
+      "@workhorse/typeorm": ["typescript/typeorm/src/index.ts"]
     }
   }
 }

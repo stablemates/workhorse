@@ -70,7 +70,7 @@ provider coverage.
 its intended integration experience, and its complete initial operator dashboard are
 understandable, installable, and useful.
 
-- [x] Build one end-to-end Workhorse application in `demo/`, using the Drizzle adapter and Hono as
+- [x] Build one end-to-end Workhorse application in `typescript/demo/`, using the Drizzle adapter and Hono as
       an application-owned HTTP server.
 - [x] Build a complete dashboard with queue, job, schedule, worker, failure, and health views.
 - [x] Extract the dashboard into `@workhorse/dashboard` and make the demo consume the generic host
@@ -259,9 +259,9 @@ hint, and polling stays the source of truth.
 
 **Depends on:** none
 
-- [x] Test supported Node.js and PostgreSQL versions in CI. `src/support.ts` owns the matrix,
+- [x] Test supported Node.js and PostgreSQL versions in CI. `typescript/core/src/support.ts` owns the matrix,
       `.github/workflows/ci.yml` runs the full suite across every Node 22/24 by PostgreSQL 15-18
-      combination, and `test/support-matrix.test.ts` fails when the constants, the workflow, the
+      combination, and `typescript/core/test/support-matrix.test.ts` fails when the constants, the workflow, the
       package `engines` fields, and the documentation disagree.
 - [x] Publish package provenance, changelog, upgrade notes, and protocol compatibility guarantees.
       `.github/workflows/release.yml` verifies the tag against every manifest and the changelog,

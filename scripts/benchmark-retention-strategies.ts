@@ -3,12 +3,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Pool } from "pg";
-import { runRetentionStrategiesBenchmark } from "../benchmarks/retention-strategies.js";
+import { runRetentionStrategiesBenchmark } from "../typescript/core/benchmarks/retention-strategies.js";
 import {
   assertLocalDatabasePurpose,
   databaseName,
   localDatabaseUrl,
-} from "../src/local-database.js";
+} from "../typescript/core/src/local-database.js";
 
 const help = `Workhorse retention strategy benchmark
 

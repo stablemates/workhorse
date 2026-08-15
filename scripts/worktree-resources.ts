@@ -11,7 +11,7 @@ import {
   localDatabaseUrl,
   type LocalDatabasePurpose,
   worktreeDatabaseUrl,
-} from "../src/local-database.js";
+} from "../typescript/core/src/local-database.js";
 
 export { parseEnvironment, readEnvironment, updateEnvironment } from "./environment-file.js";
 
