@@ -40,6 +40,12 @@ and trusted actor.
 The first accepted completion resumes the job. An equal retry returns the retained result, while a
 competing completion returns the accepted winner without overwriting its audit evidence.
 
+## PostgreSQL closes an unanswered decision
+
+PostgreSQL applies a finite [timeout](140-deadlines-and-timeouts.md), and an earlier job deadline
+wins. [Cancellation](120-cancellation.md) also closes the decision, so late completion returns
+`stale`. The token row follows the parent job's safe [retention](330-retention.md).
+
 ## Next
 
 - [135-signals.md](135-signals.md) — wait for an application-owned external event

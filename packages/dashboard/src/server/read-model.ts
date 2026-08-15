@@ -58,26 +58,32 @@ function toIsoOrNull(value: Date | string | null): string | null {
 
 export async function readDashboardHumanWaits(
   database: DashboardDatabase,
+  queue: Queue,
   canComplete: boolean,
 ): Promise<DashboardHumanWaitPage> {
-  const result = await database.execute<{
-    job_id: string;
-    queue_name: string;
-    job_type: string;
-    token_name: string;
-    context: unknown;
-    attempt: number;
-    created_at: Date | string;
-  }>(sql`
-    SELECT job_id, queue_name, job_type, token_name, context, attempt, created_at
+  const [result, health] = await Promise.all([
+    database.execute<{
+      job_id: string;
+      queue_name: string;
+      job_type: string;
+      token_name: string;
+      context: unknown;
+      attempt: number;
+      created_at: Date | string;
+      deadline_at: Date | string;
+    }>(sql`
+    SELECT job_id, queue_name, job_type, token_name, context, attempt, created_at, deadline_at
       FROM workhorse.dashboard_human_wait_v1
      WHERE completed_at IS NULL
      ORDER BY created_at, job_id, token_name
      LIMIT 100
-  `);
+  `),
+    queue.health(),
+  ]);
   return {
     capturedAt: new Date().toISOString(),
     canComplete,
+    diagnostics: health.externalWaits,
     waits: result.rows.map((wait) => ({
       jobId: wait.job_id,
       queue: wait.queue_name,
@@ -86,6 +92,7 @@ export async function readDashboardHumanWaits(
       context: wait.context,
       attempt: Number(wait.attempt),
       createdAt: toIso(wait.created_at),
+      deadlineAt: toIso(wait.deadline_at),
     })),
   };
 }

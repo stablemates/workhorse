@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SignalIdempotencyConflictError, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { queue } = createIntegrationTestContext(import.meta.url);
+const { pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("signals", () => {
   it("resumes one waiting execution with the retained signal payload", async () => {
@@ -120,6 +120,21 @@ describe("signals", () => {
       async (_payload, context) => context.waitForSignal("approval"),
     );
     expect(await worker.runOnce()).toBe(true);
+    const timeout = await pool.query<{
+      timeout_at: Date;
+      runtime_deadline_at: Date;
+      timeout_ms: number;
+    }>(
+      `SELECT signal.timeout_at, runtime.deadline_at AS runtime_deadline_at,
+              extract(epoch FROM signal.timeout_at - signal.created_at) * 1000 AS timeout_ms
+         FROM workhorse.job_signal_wait signal
+         JOIN workhorse.job_runtime runtime ON runtime.job_id = signal.job_id
+        WHERE signal.job_id = $1 AND signal.signal_name = 'approval'`,
+      [id],
+    );
+    expect(timeout.rows[0]?.timeout_at).toEqual(timeout.rows[0]?.runtime_deadline_at);
+    expect(Number(timeout.rows[0]?.timeout_ms)).toBeCloseTo(7 * 24 * 60 * 60 * 1_000, -2);
+
     await queue.sendSignal(
       id,
       "approval",
@@ -299,5 +314,51 @@ describe("signals", () => {
     );
     expect(JSON.stringify(events)).not.toContain("too-soon");
     expect(JSON.stringify(events)).not.toContain('accepted"');
+  });
+
+  it("uses the PostgreSQL job deadline as the signal timeout", async () => {
+    const id = await queue.enqueue("signal-timeout", {}, { deadline: new Date(Date.now() + 100) });
+    const worker = new Worker(queue, { workerId: "signal-timeout-worker" }).handle(
+      "signal-timeout",
+      async (_payload, context) => context.waitForSignal("approval"),
+    );
+    expect(await worker.runOnce()).toBe(true);
+    await sleep(130);
+    await queue.tick();
+
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({ name: "DeadlineExceeded" }),
+    });
+    await expect(
+      queue.sendSignal(
+        id,
+        "approval",
+        { approved: true },
+        { idempotencyKey: "after-timeout", requestedBy: "approval-service" },
+      ),
+    ).resolves.toMatchObject({ status: "stale" });
+  });
+
+  it("serializes cancellation against signal delivery", async () => {
+    const id = await queue.enqueue("signal-cancel-race", {});
+    const worker = new Worker(queue, { workerId: "signal-cancel-race-worker" }).handle(
+      "signal-cancel-race",
+      async (_payload, context) => context.waitForSignal("approval"),
+    );
+    expect(await worker.runOnce()).toBe(true);
+
+    const [cancellation, delivery] = await Promise.all([
+      queue.cancel(id, { requestedBy: "operator" }),
+      queue.sendSignal(
+        id,
+        "approval",
+        { approved: true },
+        { idempotencyKey: "racing-delivery", requestedBy: "service" },
+      ),
+    ]);
+    expect(cancellation.status).toBe("canceled");
+    expect(["delivered", "stale"]).toContain(delivery.status);
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "canceled" });
   });
 });

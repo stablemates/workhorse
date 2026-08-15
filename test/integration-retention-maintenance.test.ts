@@ -935,6 +935,74 @@ describe("retention maintenance", () => {
     ).toEqual([{ job_id: retained }]);
   });
 
+  it("retains signal and human-wait evidence until the terminal outcome is also eligible", async () => {
+    const id = await queue.enqueue("wait-retention", {});
+    const worker = new Worker(queue, { workerId: "wait-retention-worker" }).handle(
+      "wait-retention",
+      async (_payload, context) => {
+        await context.waitForSignal("signal");
+        return context.waitForHuman("decision", { prompt: "Continue?" });
+      },
+    );
+    expect(await worker.runOnce()).toBe(true);
+    await queue.sendSignal(
+      id,
+      "signal",
+      { received: true },
+      { idempotencyKey: "signal", requestedBy: "service" },
+    );
+    expect(await worker.runOnce()).toBe(true);
+    await queue.completeHumanWait(
+      id,
+      "decision",
+      { approved: true },
+      { idempotencyKey: "decision", completedBy: "operator" },
+    );
+    expect(await worker.runOnce()).toBe(true);
+
+    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = $1", [id]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = $1", [id]);
+    await pool.query(
+      `UPDATE workhorse.job
+          SET created_at = clock_timestamp() - interval '40 days' WHERE id = $1`,
+      [id],
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobIdentityRetentionDays: 30,
+      terminalOutcomeRetentionDays: 30,
+      jobEventRetentionDays: 30,
+      attemptHistoryRetentionDays: 30,
+      scheduleOccurrenceRetentionDays: 30,
+    });
+
+    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
+      phase: "terminal_jobs",
+      rowsAffected: 0,
+    });
+    await expect(
+      pool.query(
+        `SELECT
+           (SELECT count(*)::integer FROM workhorse.job_signal_wait WHERE job_id = $1) AS signals,
+           (SELECT count(*)::integer FROM workhorse.job_human_wait WHERE job_id = $1) AS humans`,
+        [id],
+      ),
+    ).resolves.toMatchObject({ rows: [{ signals: 1, humans: 1 }] });
+
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = clock_timestamp() - interval '40 days',
+              history_through_at = clock_timestamp() - interval '40 days'
+        WHERE job_id = $1`,
+      [id],
+    );
+    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
+      phase: "terminal_jobs",
+      rowsAffected: 1,
+    });
+    await expect(queue.getJob(id)).resolves.toBeNull();
+  });
+
   it("serializes terminal deletion with concurrent history insertion", async () => {
     const id = await queue.enqueue("retention-race", {});
     const job = await queue.claim("retention-race-worker");

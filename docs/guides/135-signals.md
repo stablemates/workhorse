@@ -31,6 +31,12 @@ The dashboard uses the same queue operation, but its server replaces browser att
 authenticated principal. Application-owned callers must establish authorization before calling
 the core API.
 
+## PostgreSQL closes an unanswered boundary
+
+PostgreSQL applies a finite [timeout](140-deadlines-and-timeouts.md), and an earlier job deadline
+wins. [Cancellation](120-cancellation.md) also closes the boundary, so late delivery returns
+`stale`. The signal row follows the parent job's safe [retention](330-retention.md).
+
 ## Next
 
 - [130-durable-waits.md](130-durable-waits.md) — pause until a time instead of an external event

@@ -379,6 +379,7 @@ export const dashboardRouter = {
     humanWaits: procedure.handler(({ context }) =>
       readDashboardHumanWaits(
         context.database,
+        context.queue,
         context.operator.mode === "local" && Boolean(context.taskController?.completeHumanWait),
       ),
     ),

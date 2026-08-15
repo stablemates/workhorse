@@ -70,6 +70,14 @@ export function evaluateQueueHealth(
       budget: 0,
     });
   }
+  if (snapshot.externalWaits.overdue > 0) {
+    critical.push({
+      code: "overdue-external-waits",
+      severity: "critical",
+      observed: snapshot.externalWaits.overdue,
+      budget: 0,
+    });
+  }
   if (
     snapshot.oldestOverdueScheduledAgeMs !== null &&
     snapshot.oldestOverdueScheduledAgeMs > budgets.promotionLagMs

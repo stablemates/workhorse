@@ -7,7 +7,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 37;
+export const WORKHORSE_SCHEMA_VERSION = 38;
 
 const SCHEMA_MIGRATIONS = [
   {
@@ -79,6 +79,11 @@ const SCHEMA_MIGRATIONS = [
     fromVersion: 36,
     toVersion: 37,
     file: "0037-add-human-wait-tokens.sql",
+  },
+  {
+    fromVersion: 37,
+    toVersion: 38,
+    file: "0038-harden-signal-human-waits.sql",
   },
 ] as const;
 

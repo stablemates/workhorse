@@ -43,6 +43,14 @@ function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
       canceledParents: 0,
       capped: false,
     },
+    externalWaits: {
+      pendingSignals: 0,
+      pendingHumanDecisions: 0,
+      overdue: 0,
+      oldestPendingAgeMs: null,
+      rejectedDeliveries: 0,
+      capped: false,
+    },
     oldestReadyAgeMs: null,
     deadlinePressure: { pending: 0, overdue: 0, dueWithinMinute: 0, earliestAt: null },
     activeExecutionTimeouts: 0,
@@ -82,6 +90,26 @@ function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
 describe("evaluateQueueHealth", () => {
   it("reports a quiet snapshot as healthy with no reasons", () => {
     expect(evaluateQueueHealth(snapshot())).toEqual({ level: "healthy", reasons: [] });
+  });
+
+  it("flags an external wait that remains open past its PostgreSQL deadline", () => {
+    expect(
+      evaluateQueueHealth(
+        snapshot({
+          externalWaits: {
+            pendingSignals: 1,
+            pendingHumanDecisions: 0,
+            overdue: 1,
+            oldestPendingAgeMs: 60_000,
+            rejectedDeliveries: 2,
+            capped: false,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      level: "critical",
+      reasons: [expect.objectContaining({ code: "overdue-external-waits", observed: 1 })],
+    });
   });
 
   it("treats work-stopping conditions as critical with zero budget", () => {
