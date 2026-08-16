@@ -38,6 +38,7 @@ import type {
 } from "../types.js";
 import {
   DEPENDENCY_OPERATIONS_SCAN_LIMIT,
+  EXTERNAL_WAIT_REJECTION_WINDOW_MS,
   MAX_JOB_QUERY_PAGE_SIZE,
   MAX_REDRIVE_BATCH_SIZE,
 } from "../types.js";
@@ -1043,8 +1044,9 @@ export class OperatorReadsModule extends QueueModule {
     // The consistent snapshot is one statement and therefore one MVCC snapshot. The remaining
     // queries are PostgreSQL observations — collector estimates and instantaneous server state —
     // which are not transactional facts and can lag until the statistics collector flushes.
+    const rejectedSince = new Date(Date.now() - EXTERNAL_WAIT_REJECTION_WINDOW_MS);
     const [snapshot, relations, activity, notification] = await Promise.all([
-      this.context.database.query<HealthSnapshotRow>(HEALTH_SNAPSHOT_SQL, [[]]),
+      this.context.database.query<HealthSnapshotRow>(HEALTH_SNAPSHOT_SQL, [[], rejectedSince]),
       this.context.database.query<{
         relation: string;
         total_bytes: string;

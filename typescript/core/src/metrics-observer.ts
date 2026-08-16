@@ -1,7 +1,7 @@
 import { diag } from "@opentelemetry/api";
 import { perQueueDepthSelect } from "./queue-depth.js";
 import { lazyGauge } from "./telemetry.js";
-import type { Queryable } from "./types.js";
+import { EXTERNAL_WAIT_REJECTION_WINDOW_MS, type Queryable } from "./types.js";
 
 // Every instrument here uses the lazy lifecycle selected by ADR 0024. A module-scope instrument
 // created eagerly binds to whichever meter provider exists at import, so an application that
@@ -35,7 +35,7 @@ const overdueExternalWaits = lazyGauge("workhorse.wait.overdue", {
   unit: "{wait}",
 });
 const rejectedWaitDeliveries = lazyGauge("workhorse.wait.delivery.rejected", {
-  description: "Retained rejected signal deliveries and human-wait completions",
+  description: "Rejected signal deliveries and human-wait completions in the trailing 24 hours",
   unit: "{delivery}",
 });
 const queuePaused = lazyGauge("workhorse.queue.paused", {
@@ -128,8 +128,10 @@ export class WorkhorseMetricsObserver {
   }
 
   private async collectOnce(): Promise<void> {
+    const rejectedSince = new Date(Date.now() - EXTERNAL_WAIT_REJECTION_WINDOW_MS);
     const [queues, workers] = await Promise.all([
-      this.database.query<QueueObservationRow>(`
+      this.database.query<QueueObservationRow>(
+        `
         WITH queue_names AS (
           SELECT queue_name FROM workhorse.job_runtime
           UNION
@@ -196,6 +198,7 @@ export class WorkhorseMetricsObserver {
                 SELECT 1 FROM workhorse.job_event event
                  JOIN workhorse.job job ON job.id = event.job_id
                 WHERE job.queue_name = depth.queue_name AND event.event_type = 'signal_rejected'
+                  AND event.occurred_at >= $1::timestamptz
                 LIMIT 10001
               ) sampled) AS rejected_signals,
               (SELECT count(*)::text FROM (
@@ -203,10 +206,13 @@ export class WorkhorseMetricsObserver {
                  JOIN workhorse.job job ON job.id = event.job_id
                 WHERE job.queue_name = depth.queue_name
                   AND event.event_type = 'human_wait_rejected'
+                  AND event.occurred_at >= $1::timestamptz
                 LIMIT 10001
               ) sampled) AS rejected_human_waits
           ) waits
-         ORDER BY depth.queue_name`),
+         ORDER BY depth.queue_name`,
+        [rejectedSince],
+      ),
       this.database.query<WorkerObservationRow>(`
         SELECT queue_name,
                CASE WHEN last_heartbeat_at < clock_timestamp() - interval '30 seconds'

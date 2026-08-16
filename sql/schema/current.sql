@@ -1054,6 +1054,10 @@ CREATE INDEX IF NOT EXISTS job_event_job_time_idx
   ON workhorse.job_event (job_id, occurred_at, event_id);
 CREATE INDEX IF NOT EXISTS job_event_retention_idx
   ON workhorse.job_event (occurred_at, event_id);
+CREATE INDEX IF NOT EXISTS job_event_rejected_delivery_idx
+  ON workhorse.job_event (occurred_at DESC, event_id DESC)
+  INCLUDE (job_id, event_type)
+  WHERE event_type IN ('signal_rejected', 'human_wait_rejected');
 
 -- One immutable row for every closed attempt.
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
@@ -8751,9 +8755,9 @@ AS $$
 $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (40, 'pre-release baseline')
+  (41, 'pre-release baseline')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (40) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (41) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )
