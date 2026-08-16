@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-11
 - **Related:** [ADR 0018](0018-framework-neutral-dashboard-host.md), [ADR 0020](0020-database-authoritative-configuration.md)
+- **Clarified by:** [ADR 0032](0032-keep-single-admin-authentication-process-local.md)
 
 ## Context
 
