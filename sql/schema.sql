@@ -729,7 +729,9 @@ CREATE TABLE IF NOT EXISTS workhorse.job_wait (
 -- declaration and later retains the one accepted payload, idempotency identity, and audit actor.
 CREATE TABLE IF NOT EXISTS workhorse.job_signal_wait (
   job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
-  signal_name text NOT NULL CHECK (signal_name <> '' AND char_length(signal_name) <= 200),
+  signal_name text NOT NULL CHECK (
+    signal_name <> '' AND char_length(signal_name) <= 200 AND signal_name = btrim(signal_name)
+  ),
   attempt integer NOT NULL CHECK (attempt >= 1),
   fence_token bigint NOT NULL CHECK (fence_token > 0),
   worker_id text NOT NULL CHECK (worker_id <> ''),
@@ -5614,11 +5616,15 @@ AS $$
 DECLARE
   v_runtime workhorse.job_runtime%ROWTYPE;
   v_wait workhorse.job_signal_wait%ROWTYPE;
+  v_wait_exists boolean;
   v_now timestamptz;
   v_timeout_at timestamptz;
 BEGIN
   IF p_signal_name IS NULL OR p_signal_name = '' OR char_length(p_signal_name) > 200 THEN
     RAISE EXCEPTION 'signal_name must contain between 1 and 200 characters';
+  END IF;
+  IF p_signal_name <> btrim(p_signal_name) THEN
+    RAISE EXCEPTION 'signal_name must not have leading or trailing whitespace';
   END IF;
   IF p_worker_id IS NULL OR p_worker_id = '' THEN
     RAISE EXCEPTION 'worker_id must not be empty';
@@ -5630,6 +5636,20 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended(
     'workhorse:signal:' || p_job_id::text || ':' || p_signal_name, 0
   ));
+  SELECT * INTO v_wait
+    FROM workhorse.job_signal_wait stored
+   WHERE stored.job_id = p_job_id AND stored.signal_name = p_signal_name;
+  v_wait_exists := FOUND;
+  IF v_wait_exists AND v_wait.delivered_at IS NULL THEN
+    IF v_wait.worker_id IS DISTINCT FROM p_worker_id
+       OR v_wait.fence_token IS DISTINCT FROM p_fence_token THEN
+      RETURN QUERY VALUES ('stale'::text, NULL::jsonb);
+      RETURN;
+    END IF;
+    RETURN QUERY VALUES ('already_waiting'::text, NULL::jsonb);
+    RETURN;
+  END IF;
+
   SELECT * INTO v_runtime
     FROM workhorse.job_runtime runtime
    WHERE runtime.job_id = p_job_id
@@ -5650,14 +5670,7 @@ BEGIN
     v_now + COALESCE(p_timeout_ms, 604800000) * interval '1 millisecond'
   );
 
-  SELECT * INTO v_wait
-    FROM workhorse.job_signal_wait stored
-   WHERE stored.job_id = p_job_id AND stored.signal_name = p_signal_name;
-  IF FOUND THEN
-    IF v_wait.delivered_at IS NULL THEN
-      RETURN QUERY VALUES ('stale'::text, NULL::jsonb);
-      RETURN;
-    END IF;
+  IF v_wait_exists THEN
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
       VALUES (
         p_job_id, v_runtime.current_attempt, 'signal_replayed',
@@ -5742,6 +5755,9 @@ DECLARE
 BEGIN
   IF p_signal_name IS NULL OR p_signal_name = '' OR char_length(p_signal_name) > 200 THEN
     RAISE EXCEPTION 'signal_name must contain between 1 and 200 characters';
+  END IF;
+  IF p_signal_name <> btrim(p_signal_name) THEN
+    RAISE EXCEPTION 'signal_name must not have leading or trailing whitespace';
   END IF;
   IF p_payload IS NULL THEN
     RAISE EXCEPTION 'signal payload must be JSON, including JSON null when appropriate';
@@ -8293,6 +8309,7 @@ AS $$
 DECLARE
   v_runtime workhorse.job_runtime%ROWTYPE;
   v_wait workhorse.job_human_wait%ROWTYPE;
+  v_wait_exists boolean;
   v_now timestamptz;
   v_timeout_at timestamptz;
 BEGIN
@@ -8315,6 +8332,24 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended(
     'workhorse:human-wait:' || p_job_id::text || ':' || p_token_name, 0
   ));
+  SELECT * INTO v_wait
+    FROM workhorse.job_human_wait stored
+   WHERE stored.job_id = p_job_id AND stored.token_name = p_token_name;
+  v_wait_exists := FOUND;
+  IF v_wait_exists AND v_wait.completed_at IS NULL THEN
+    IF v_wait.worker_id IS DISTINCT FROM p_worker_id
+       OR v_wait.fence_token IS DISTINCT FROM p_fence_token THEN
+      RETURN QUERY VALUES ('stale'::text, NULL::jsonb);
+      RETURN;
+    END IF;
+    IF v_wait.context IS DISTINCT FROM p_context THEN
+      RETURN QUERY VALUES ('conflict'::text, NULL::jsonb);
+      RETURN;
+    END IF;
+    RETURN QUERY VALUES ('already_waiting'::text, NULL::jsonb);
+    RETURN;
+  END IF;
+
   SELECT * INTO v_runtime
     FROM workhorse.job_runtime runtime
    WHERE runtime.job_id = p_job_id
@@ -8335,16 +8370,9 @@ BEGIN
     v_now + COALESCE(p_timeout_ms, 604800000) * interval '1 millisecond'
   );
 
-  SELECT * INTO v_wait
-    FROM workhorse.job_human_wait stored
-   WHERE stored.job_id = p_job_id AND stored.token_name = p_token_name;
-  IF FOUND THEN
+  IF v_wait_exists THEN
     IF v_wait.context IS DISTINCT FROM p_context THEN
       RETURN QUERY VALUES ('conflict'::text, NULL::jsonb);
-      RETURN;
-    END IF;
-    IF v_wait.completed_at IS NULL THEN
-      RETURN QUERY VALUES ('stale'::text, NULL::jsonb);
       RETURN;
     END IF;
     INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)

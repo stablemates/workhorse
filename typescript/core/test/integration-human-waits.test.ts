@@ -1,6 +1,12 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import { HumanWaitIdempotencyConflictError, Worker } from "../src/index.js";
+import {
+  HumanWaitAlreadyWaitingError,
+  HumanWaitIdempotencyConflictError,
+  HumanWaitLeaseLostError,
+  MAX_EXTERNAL_WAIT_VALUE_BYTES,
+  Worker,
+} from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { queue } = createIntegrationTestContext(import.meta.url);
@@ -35,7 +41,7 @@ describe("human waits", () => {
       id,
       "approval",
       { approved: true },
-      { idempotencyKey: "human-list-completion", completedBy: "operator" },
+      { idempotencyKey: "human-list-completion", requestedBy: "operator" },
     );
     await expect(queue.listHumanWaits()).resolves.toEqual({ items: [], nextCursor: null });
   });
@@ -46,6 +52,47 @@ describe("human waits", () => {
     await expect(
       queue.waitForHuman(claimed!, "human-name-worker", " review ", { prompt: "Review?" }),
     ).rejects.toThrow(/leading or trailing whitespace/);
+    await queue.cancel(id);
+  });
+
+  it("distinguishes an existing decision from a lost lease", async () => {
+    const id = await queue.enqueue("human-concurrent-wait", {});
+    const claimed = await queue.claim("human-concurrent-wait-worker");
+    const declarations = await Promise.allSettled([
+      queue.waitForHuman(claimed!, "human-concurrent-wait-worker", "approval", {
+        prompt: "Approve?",
+      }),
+      queue.waitForHuman(claimed!, "human-concurrent-wait-worker", "approval", {
+        prompt: "Approve?",
+      }),
+    ]);
+
+    expect(declarations).toEqual(
+      expect.arrayContaining([
+        { status: "fulfilled", value: { status: "waiting", payload: null } },
+        { status: "rejected", reason: expect.any(HumanWaitAlreadyWaitingError) },
+      ]),
+    );
+    await queue.cancel(id);
+  });
+
+  it("does not let another stale generation conflict with the pending decision owner", async () => {
+    const id = await queue.enqueue("human-pending-owner", {});
+    const claimed = await queue.claim("human-pending-owner-worker");
+    await expect(
+      queue.waitForHuman(claimed!, "human-pending-owner-worker", "approval", {
+        prompt: "Approve?",
+      }),
+    ).resolves.toMatchObject({ status: "waiting" });
+
+    await expect(
+      queue.waitForHuman(
+        { ...claimed!, fenceToken: claimed!.fenceToken + 1n },
+        "human-pending-owner-worker",
+        "approval",
+        { prompt: "Changed prompt" },
+      ),
+    ).rejects.toBeInstanceOf(HumanWaitLeaseLostError);
     await queue.cancel(id);
   });
 
@@ -65,11 +112,11 @@ describe("human waits", () => {
     expect(await worker.runOnce()).toBe(true);
     await expect(queue.getJob(id)).resolves.toMatchObject({ state: "scheduled" });
 
-    const request = { idempotencyKey: "operator-request-1", completedBy: "operator@example.com" };
+    const request = { idempotencyKey: "operator-request-1", requestedBy: "operator@example.com" };
     const first = await queue.completeHumanWait(id, "approval", { approved: true }, request);
     expect(first).toMatchObject({
       status: "completed",
-      result: { approved: true },
+      payload: { approved: true },
       completedBy: "operator@example.com",
     });
     await expect(
@@ -98,7 +145,7 @@ describe("human waits", () => {
         { choice: "a" },
         {
           idempotencyKey: "choice-a",
-          completedBy: "operator-a",
+          requestedBy: "operator-a",
         },
       ),
       queue.completeHumanWait(
@@ -107,14 +154,14 @@ describe("human waits", () => {
         { choice: "b" },
         {
           idempotencyKey: "choice-b",
-          completedBy: "operator-b",
+          requestedBy: "operator-b",
         },
       ),
     ]);
     expect(completions.map(({ status }) => status)).toEqual(
       expect.arrayContaining(["completed", "already_completed"]),
     );
-    expect(completions[0]!.result).toEqual(completions[1]!.result);
+    expect(completions[0]!.payload).toEqual(completions[1]!.payload);
 
     const events = (await queue.getJobTimeline(id)).items.filter((item) => item.kind === "event");
     expect(events).toEqual(
@@ -140,11 +187,93 @@ describe("human waits", () => {
       async (_payload, context) => context.waitForHuman("approval", { prompt: "Approve?" }),
     );
     expect(await worker.runOnce()).toBe(true);
-    const request = { idempotencyKey: "same-key", completedBy: "operator" };
+    const request = { idempotencyKey: "same-key", requestedBy: "operator" };
     await queue.completeHumanWait(id, "approval", { approved: true }, request);
     await expect(
       queue.completeHumanWait(id, "approval", { approved: false }, request),
     ).rejects.toBeInstanceOf(HumanWaitIdempotencyConflictError);
+  });
+
+  it("rejects an early completion but accepts the same request after the decision exists", async () => {
+    const id = await queue.enqueue("human-early", {});
+    const request = { idempotencyKey: "early-retry", requestedBy: "operator" };
+    await expect(
+      queue.completeHumanWait(id, "review", { approved: true }, request),
+    ).resolves.toMatchObject({ status: "not_waiting", payload: null });
+
+    const worker = new Worker(queue, { workerId: "human-early-worker" }).handle(
+      "human-early",
+      async (_payload, context) =>
+        context.waitForHuman("review", { prompt: "Review this account?" }),
+    );
+    expect(await worker.runOnce()).toBe(true);
+    await expect(
+      queue.completeHumanWait(id, "review", { approved: true }, request),
+    ).resolves.toMatchObject({ status: "completed", payload: { approved: true } });
+  });
+
+  it("rejects a stale handler generation before it can declare a decision", async () => {
+    const id = await queue.enqueue("human-stale", {}, { maxAttempts: 2 });
+    const stale = await queue.claim("human-stale-worker", { leaseMs: 100 });
+    await sleep(130);
+    expect(await queue.recoverExpired()).toBe(1);
+
+    await expect(
+      queue.waitForHuman(stale!, "human-stale-worker", "review", { prompt: "Review?" }),
+    ).rejects.toBeInstanceOf(HumanWaitLeaseLostError);
+    await expect(queue.getJob(id)).resolves.toMatchObject({ state: "ready", currentAttempt: 2 });
+  });
+
+  it("bounds decision context and results before writing them", async () => {
+    const id = await queue.enqueue("human-bounds", {});
+    const claimed = await queue.claim("human-bounds-worker");
+    await expect(
+      queue.waitForHuman(claimed!, "human-bounds-worker", "review", {
+        data: "x".repeat(MAX_EXTERNAL_WAIT_VALUE_BYTES),
+      }),
+    ).rejects.toThrow(/at most 65536 bytes/);
+
+    await expect(
+      queue.waitForHuman(claimed!, "human-bounds-worker", "review", { prompt: "Review?" }),
+    ).resolves.toMatchObject({ status: "waiting" });
+    await expect(
+      queue.completeHumanWait(
+        id,
+        "review",
+        { data: "x".repeat(MAX_EXTERNAL_WAIT_VALUE_BYTES) },
+        { idempotencyKey: "oversized-result", requestedBy: "operator" },
+      ),
+    ).rejects.toThrow(/at most 65536 bytes/);
+    await queue.cancel(id);
+  });
+
+  it("replays a completed decision after a later handler failure retries the attempt", async () => {
+    const id = await queue.enqueue("human-retry", {}, { maxAttempts: 2 });
+    const worker = new Worker(queue, {
+      workerId: "human-retry-worker",
+      retryDelayMs: 0,
+    }).handle("human-retry", async (_payload, context) => {
+      const decision = await context.waitForHuman<{ prompt: string }, { approved: boolean }>(
+        "review",
+        { prompt: "Review?" },
+      );
+      if (context.job.attempt === 1) throw new Error("fail after completion");
+      return decision;
+    });
+    expect(await worker.runOnce()).toBe(true);
+    await queue.completeHumanWait(
+      id,
+      "review",
+      { approved: true },
+      { idempotencyKey: "retry-completion", requestedBy: "operator" },
+    );
+    expect(await worker.runOnce()).toBe(true);
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "succeeded",
+      currentAttempt: 2,
+      result: { approved: true },
+    });
   });
 
   it("cancellation closes a pending decision and fences a late operator", async () => {
@@ -170,9 +299,9 @@ describe("human waits", () => {
         id,
         "review",
         { approved: true },
-        { idempotencyKey: "late-completion", completedBy: "late-operator" },
+        { idempotencyKey: "late-completion", requestedBy: "late-operator" },
       ),
-    ).resolves.toMatchObject({ status: "stale", result: null });
+    ).resolves.toMatchObject({ status: "stale", payload: null });
 
     const events = (await queue.getJobTimeline(id)).items.filter((item) => item.kind === "event");
     expect(events).toEqual(
@@ -208,7 +337,7 @@ describe("human waits", () => {
         id,
         "review",
         { approved: true },
-        { idempotencyKey: "after-timeout", completedBy: "operator" },
+        { idempotencyKey: "after-timeout", requestedBy: "operator" },
       ),
     ).resolves.toMatchObject({ status: "stale" });
   });
@@ -244,7 +373,7 @@ describe("human waits", () => {
         id,
         "review",
         { approved: true },
-        { idempotencyKey: "racing-completion", completedBy: "reviewer" },
+        { idempotencyKey: "racing-completion", requestedBy: "reviewer" },
       ),
     ]);
     expect(cancellation.status).toBe("canceled");

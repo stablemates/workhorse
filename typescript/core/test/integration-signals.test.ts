@@ -1,11 +1,59 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import { SignalIdempotencyConflictError, Worker } from "../src/index.js";
+import {
+  SignalIdempotencyConflictError,
+  SignalWaitConflictError,
+  SignalWaitLeaseLostError,
+  Worker,
+} from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("signals", () => {
+  it("rejects names the dashboard would normalize to another identity", async () => {
+    const id = await queue.enqueue("signal-name", {});
+    const claimed = await queue.claim("signal-name-worker");
+    await expect(queue.waitForSignal(claimed!, "signal-name-worker", " approval ")).rejects.toThrow(
+      /leading or trailing whitespace/,
+    );
+    await queue.cancel(id);
+  });
+
+  it("distinguishes an existing wait from a lost lease", async () => {
+    const id = await queue.enqueue("signal-concurrent-wait", {});
+    const claimed = await queue.claim("signal-concurrent-wait-worker");
+    const declarations = await Promise.allSettled([
+      queue.waitForSignal(claimed!, "signal-concurrent-wait-worker", "approval"),
+      queue.waitForSignal(claimed!, "signal-concurrent-wait-worker", "approval"),
+    ]);
+
+    expect(declarations).toEqual(
+      expect.arrayContaining([
+        { status: "fulfilled", value: { status: "waiting", payload: null } },
+        { status: "rejected", reason: expect.any(SignalWaitConflictError) },
+      ]),
+    );
+    await queue.cancel(id);
+  });
+
+  it("does not let another stale generation masquerade as the pending wait owner", async () => {
+    const id = await queue.enqueue("signal-pending-owner", {});
+    const claimed = await queue.claim("signal-pending-owner-worker");
+    await expect(
+      queue.waitForSignal(claimed!, "signal-pending-owner-worker", "approval"),
+    ).resolves.toMatchObject({ status: "waiting" });
+
+    await expect(
+      queue.waitForSignal(
+        { ...claimed!, fenceToken: claimed!.fenceToken + 1n },
+        "signal-pending-owner-worker",
+        "approval",
+      ),
+    ).rejects.toBeInstanceOf(SignalWaitLeaseLostError);
+    await queue.cancel(id);
+  });
+
   it("lists actionable signal waits through the public read API", async () => {
     const id = await queue.enqueue("signal-list", {});
     const worker = new Worker(queue, { workerId: "signal-list-worker" }).handle(

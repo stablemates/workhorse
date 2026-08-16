@@ -301,6 +301,20 @@ export const MAX_JOB_DEPENDENCIES = 100;
 export const MAX_JOB_DEPENDENTS = 100;
 /** Trailing window used by health and metrics for rejected external-wait deliveries (24 hours). */
 export const EXTERNAL_WAIT_REJECTION_WINDOW_MS = 86_400_000;
+/** Maximum characters accepted for one signal or human-decision name. */
+export const MAX_EXTERNAL_WAIT_NAME_CHARACTERS = 200;
+/** Maximum PostgreSQL canonical JSONB text size accepted for one external-wait value. */
+export const MAX_EXTERNAL_WAIT_VALUE_BYTES = 65_536;
+/** Maximum UTF-8 size accepted for one external-wait delivery idempotency key. */
+export const MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES = 512;
+/** Maximum characters accepted for external-wait delivery attribution. */
+export const MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS = 200;
+/** Maximum retained signal names or human decisions for one job. */
+export const MAX_EXTERNAL_WAITS_PER_JOB = 1_000;
+/** Maximum caller-selected timeout for a signal or human decision (7 days). */
+export const MAX_EXTERNAL_WAIT_TIMEOUT_MS = 604_800_000;
+/** Maximum actionable signal or human-decision rows returned in one page. */
+export const MAX_EXTERNAL_WAIT_LIST_SIZE = 1_000;
 /** Highest accepted job priority. Priority zero is the default. */
 export const MAX_JOB_PRIORITY = 100;
 /** Default namespace for enqueue idempotency keys whose caller omits an explicit scope. */

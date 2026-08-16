@@ -136,9 +136,14 @@ export function createDashboardOperatorControllers(
           async (queue) => {
             const completed = await queue.completeHumanWait(jobId, name, result, {
               idempotencyKey,
-              completedBy: requestedBy(audit),
+              requestedBy: requestedBy(audit),
             });
-            return { ...completed, completedAt: isoTimestamp(completed.completedAt) };
+            const { payload, ...completion } = completed;
+            return {
+              ...completion,
+              result: payload,
+              completedAt: isoTimestamp(completed.completedAt),
+            };
           },
         ),
     },
