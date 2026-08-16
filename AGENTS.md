@@ -9,6 +9,9 @@ tracker or an interactive client.
 
 If no Linear issue exists for the work, create one before starting implementation.
 
+When asked to pick up the next issue, select only an issue that has not started. Never pick up an
+issue in an in-progress state unless the person you are working with explicitly names that issue.
+
 Begin every commit subject for tracked work with the Linear issue identifier in square brackets.
 After the subject, add a blank line, the issue URL, another blank line, and a concise description
 of the change and why it was made:
