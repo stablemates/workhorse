@@ -109,6 +109,7 @@ import type {
   DashboardJobDetail,
   DashboardJobRow,
   DashboardHumanWaitPage,
+  DashboardSignalWaitRow,
   DashboardQueuesPage,
   DashboardStorageRelation,
   DashboardSystemPage,
@@ -2192,9 +2193,24 @@ function TaskBlockedBy({ job }: { job: DashboardJobRow }) {
  * Badge for a scheduled durable wait. "Waking" means the stored target has passed
  * and the task is eligible for promotion and a fresh claim, not that a worker holds it.
  */
-function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
+export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
   const scheduledWait = job.state === "scheduled" ? job.wait : null;
   const due = useElapsed(scheduledWait?.wakeAt ?? null);
+  if (job.signalWait) {
+    return (
+      <Badge
+        size="sm"
+        variant="light"
+        color="violet"
+        leftSection={<Lightning size={11} weight="bold" />}
+        tt="none"
+        title={`Waiting for signal ${job.signalWait.name} · deadline ${formatExact(job.signalWait.deadlineAt)}`}
+        style={{ flexShrink: 0 }}
+      >
+        Waiting for signal: {job.signalWait.name}
+      </Badge>
+    );
+  }
   if (!scheduledWait) return null;
   return (
     <Badge
@@ -5616,6 +5632,196 @@ export function SettingsPage({
   );
 }
 
+async function deliverDashboardSignal({
+  client,
+  auditActor,
+  jobId,
+  name,
+  payloadSource,
+  reason,
+}: {
+  client: DashboardClient;
+  auditActor: string;
+  jobId: string;
+  name: string;
+  payloadSource: string;
+  reason: string;
+}): Promise<boolean> {
+  const parsed = parseHumanWaitResult(payloadSource);
+  if (parsed === null) {
+    notifyDashboard({
+      title: "Payload is not valid JSON",
+      message: "Enter the JSON value the waiting handler should receive.",
+      tone: "failure",
+    });
+    return false;
+  }
+  try {
+    const delivery = await client.signalTask({
+      id: jobId,
+      name,
+      payload: parsed.value,
+      idempotencyKey: crypto.randomUUID(),
+      audit: { actor: auditActor, reason, requestId: crypto.randomUUID() },
+    });
+    notifyDashboard({
+      title: delivery.status === "delivered" ? "Signal delivered" : "Signal unchanged",
+      message: `${name}: ${delivery.status}`,
+      tone: delivery.status === "delivered" ? "success" : "neutral",
+    });
+    return true;
+  } catch (cause) {
+    notifyFailure("Signal not delivered", cause, "Workhorse rejected the signal payload");
+    return false;
+  }
+}
+
+function SignalPayloadEditor({
+  payload,
+  disabled,
+  sending,
+  onPayloadChange,
+  onSend,
+}: {
+  payload: string;
+  disabled: boolean;
+  sending: boolean;
+  onPayloadChange: (value: string) => void;
+  onSend: () => void;
+}) {
+  return (
+    <Stack gap="xs">
+      <Textarea
+        label="Signal payload (JSON)"
+        description="The waiting handler receives this JSON value after it restarts."
+        placeholder='{"approved":true}'
+        value={payload}
+        disabled={disabled}
+        autosize
+        minRows={3}
+        maxRows={12}
+        onChange={(event) => onPayloadChange(event.currentTarget.value)}
+      />
+      <Button
+        loading={sending}
+        disabled={disabled || !payload.trim()}
+        onClick={onSend}
+        style={{ alignSelf: "flex-start" }}
+      >
+        Send signal
+      </Button>
+    </Stack>
+  );
+}
+
+export function SignalWaitCard({
+  wait,
+  payload,
+  canSignal,
+  sending,
+  onPayloadChange,
+  onSend,
+  inspectJob,
+}: {
+  wait: DashboardSignalWaitRow;
+  payload: string;
+  canSignal: boolean;
+  sending: boolean;
+  onPayloadChange: (value: string) => void;
+  onSend: () => void;
+  inspectJob?: (id: string) => void;
+}) {
+  return (
+    <Paper withBorder p="lg">
+      <Stack gap="sm">
+        <Group justify="space-between" align="flex-start">
+          <Box>
+            <Text fw={700}>{wait.name}</Text>
+            <Text size="sm">
+              {wait.jobType} · {wait.queue} · attempt {wait.attempt}
+            </Text>
+            <Code fz="xs">{wait.jobId}</Code>
+            {inspectJob ? (
+              <Button variant="subtle" size="compact-xs" onClick={() => inspectJob(wait.jobId)}>
+                View task
+              </Button>
+            ) : null}
+          </Box>
+          <Text c="dimmed" size="xs">
+            {formatExact(wait.createdAt)}
+          </Text>
+        </Group>
+        <Text c={new Date(wait.deadlineAt).getTime() <= Date.now() ? "red" : "dimmed"} size="xs">
+          Deadline {formatExact(wait.deadlineAt)}
+        </Text>
+        <SignalPayloadEditor
+          payload={payload}
+          disabled={!canSignal}
+          sending={sending}
+          onPayloadChange={onPayloadChange}
+          onSend={onSend}
+        />
+      </Stack>
+    </Paper>
+  );
+}
+
+function SignalTaskPanel({
+  job,
+  auditActor,
+  reload,
+}: {
+  job: DashboardJobDetail;
+  auditActor: string;
+  reload: () => Promise<void>;
+}) {
+  const client = useDashboardClient();
+  const [payload, setPayload] = useState("");
+  const [sending, setSending] = useState(false);
+  const wait = job.signalWait;
+  if (!wait) return null;
+
+  const send = async () => {
+    setSending(true);
+    try {
+      const requestSucceeded = await deliverDashboardSignal({
+        client,
+        auditActor,
+        jobId: job.identity.id,
+        name: wait.name,
+        payloadSource: payload,
+        reason: `Send signal ${wait.name} from the task drawer`,
+      });
+      if (!requestSucceeded) return;
+      setPayload("");
+      await reload();
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Box>
+      <Text fw={600} size="sm" mb="xs">
+        Signal delivery
+      </Text>
+      <Text size="sm" mb={4}>
+        Waiting for <Code fz="xs">{wait.name}</Code>
+      </Text>
+      <Text c="dimmed" size="xs" mb="sm">
+        Deadline {formatExact(wait.deadlineAt)}
+      </Text>
+      <SignalPayloadEditor
+        payload={payload}
+        disabled={!job.canSignal}
+        sending={sending}
+        onPayloadChange={setPayload}
+        onSend={() => void send()}
+      />
+    </Box>
+  );
+}
+
 function HumanWaitsPage({
   data,
   auditActor,
@@ -5631,6 +5837,8 @@ function HumanWaitsPage({
 }) {
   const client = useDashboardClient();
   const [results, setResults] = useState<Record<string, string>>({});
+  const [signalPayloads, setSignalPayloads] = useState<Record<string, string>>({});
+  const [sendingSignal, setSendingSignal] = useState<string | null>(null);
   const [completing, setCompleting] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -5641,7 +5849,9 @@ function HumanWaitsPage({
     overdueOnly: waitFilter === "overdue",
     nowMs: Date.now(),
   });
-  const dirty = humanWaitResultsDirty(results);
+  const dirty =
+    humanWaitResultsDirty(results) ||
+    Object.values(signalPayloads).some((payload) => payload.trim().length > 0);
 
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
@@ -5710,13 +5920,37 @@ function HumanWaitsPage({
     }
   };
 
+  const sendSignal = async (wait: DashboardSignalWaitRow) => {
+    const key = `${wait.jobId}:${wait.name}`;
+    setSendingSignal(key);
+    try {
+      const requestSucceeded = await deliverDashboardSignal({
+        client,
+        auditActor,
+        jobId: wait.jobId,
+        name: wait.name,
+        payloadSource: signalPayloads[key] ?? "",
+        reason: `Send signal ${wait.name} from the dashboard`,
+      });
+      if (!requestSucceeded) return;
+      setSignalPayloads((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      await reload();
+    } finally {
+      setSendingSignal(null);
+    }
+  };
+
   return (
     <Stack gap="lg">
       <Box>
         <Title order={2}>Human waits</Title>
         <Text c="dimmed" size="sm">
-          Decisions waiting for an authenticated operator. The first accepted result resumes the
-          handler and remains the audit record.
+          Signals and human decisions waiting outside the worker fleet. The first accepted input
+          resumes the handler and remains the audit record.
         </Text>
         <Text c="dimmed" size="xs" mt={4}>
           {data.diagnostics.pendingSignals} signals and {data.diagnostics.pendingHumanDecisions}
@@ -5726,6 +5960,37 @@ function HumanWaitsPage({
           {data.diagnostics.capped ? " (bounded lower bounds)." : "."}
         </Text>
       </Box>
+      <Box>
+        <Title order={3} mb="xs">
+          Signal waits
+        </Title>
+        <Stack gap="sm">
+          {data.signalWaits.length === 0 ? (
+            <Paper withBorder p="xl">
+              <Text c="dimmed">No jobs are waiting for a signal.</Text>
+            </Paper>
+          ) : (
+            data.signalWaits.map((wait) => {
+              const key = `${wait.jobId}:${wait.name}`;
+              return (
+                <SignalWaitCard
+                  key={key}
+                  wait={wait}
+                  payload={signalPayloads[key] ?? ""}
+                  canSignal={data.canSignal}
+                  sending={sendingSignal === key}
+                  onPayloadChange={(payload) =>
+                    setSignalPayloads((current) => ({ ...current, [key]: payload }))
+                  }
+                  onSend={() => void sendSignal(wait)}
+                  inspectJob={inspectJob}
+                />
+              );
+            })
+          )}
+        </Stack>
+      </Box>
+      <Divider label="Human decisions" labelPosition="left" />
       {data.waits.length > 0 ? (
         <Group align="flex-end">
           <TextInput
@@ -6412,6 +6677,9 @@ function useDashboardController(
     },
     [client],
   );
+  const reloadSelectedJob = useCallback(async () => {
+    if (selectedJobIdRef.current) await showJobDetail(selectedJobIdRef.current);
+  }, [showJobDetail]);
 
   /**
    * Empty the drawer and abandon any detail load still in flight.
@@ -6812,6 +7080,7 @@ function useDashboardController(
     eventDetailError,
     selectedJob,
     jobDetailError,
+    reloadSelectedJob,
     inspectJob,
     closeJobDetail,
     closeEventDetail,
@@ -6860,6 +7129,7 @@ function DashboardContent({
     eventDetailError,
     selectedJob,
     jobDetailError,
+    reloadSelectedJob,
     inspectJob,
     closeJobDetail,
     closeEventDetail,
@@ -7187,6 +7457,7 @@ function DashboardContent({
             <TaskOutcome job={selectedJob} />
             <IdempotencySection job={selectedJob} />
             <CoalescingSection job={selectedJob} />
+            <SignalTaskPanel job={selectedJob} auditActor={auditActor} reload={reloadSelectedJob} />
             <CancelTaskPanel
               job={selectedJob}
               confirming={confirmingCancel}
