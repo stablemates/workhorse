@@ -8,9 +8,9 @@ __pycache__/
 .venv/
 /typescript/dashboard/development/
 coverage/
-.next/
-apps/site/next-env.d.ts
 .source/
+/site/public/robots.txt
+/site/public/sitemap.xml
 .env
 .env.*
 !.beans/*
