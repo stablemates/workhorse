@@ -73,7 +73,7 @@ export type FailureStatus =
 class FencedLease {
   private constructor(readonly sqlParameters: readonly [string, string, string]) {}
 
-  static from(job: ClaimedJob<unknown>, workerId: string): FencedLease {
+  static from(job: ClaimedJob, workerId: string): FencedLease {
     return new FencedLease([job.id, workerId, job.fenceToken.toString()]);
   }
 }
@@ -159,7 +159,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
     };
   }
 
-  async claim<TPayload = Json>(
+  async claim<TPayload extends Json = Json>(
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedJob<TPayload> | null> {
@@ -254,12 +254,12 @@ export class ClaimLeaseFenceModule extends QueueModule {
     this.assertBatchRecorded(result, "record_batch_failure_v1", batch.jobs.length);
   }
 
-  async heartbeat(job: ClaimedJob<unknown>, workerId: string, leaseMs = 30_000): Promise<boolean> {
+  async heartbeat(job: ClaimedJob, workerId: string, leaseMs = 30_000): Promise<boolean> {
     return (await this.heartbeatStatus(job, workerId, leaseMs)) === "accepted";
   }
 
   async heartbeatStatus(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     leaseMs = 30_000,
   ): Promise<HeartbeatStatus> {
@@ -290,7 +290,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
     });
   }
 
-  async expireOwned(job: ClaimedJob<unknown>, workerId: string): Promise<ExpireOwnedStatus> {
+  async expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus> {
     const lease = FencedLease.from(job, workerId);
     const result = await this.context.database.query<{
       status: ExpireOwnedStatus;
@@ -314,7 +314,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
     return expiration.status;
   }
 
-  async acknowledgeCancel(job: ClaimedJob<unknown>, workerId: string): Promise<boolean> {
+  async acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean> {
     const lease = FencedLease.from(job, workerId);
     const result = await this.context.database.query<{ accepted: boolean }>(
       "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted",
@@ -330,7 +330,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
   }
 
   async complete<TResult extends Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     result: TResult,
     validateResult: () => void,
@@ -361,7 +361,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
   }
 
   async fail(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     error: unknown,
     retryDelayMs?: number,

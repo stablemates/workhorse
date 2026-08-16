@@ -895,7 +895,7 @@ export class OperatorReadsModule extends QueueModule {
     };
   }
 
-  async getJob<TResult = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
+  async getJob<TResult extends Json = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
     // A job exists in exactly one lifecycle relation: runtime while live, outcome when terminal.
     const result = await this.context.database.query<{
       id: string;

@@ -467,7 +467,7 @@ export class EnqueueContractsModule extends QueueModule {
     };
   }
 
-  validateResult(job: ClaimedJob<unknown>, result: Json): void {
+  validateResult(job: ClaimedJob, result: Json): void {
     if (job.contractVersion !== null) {
       const contract = this.context.options.contracts?.[job.type]?.versions[job.contractVersion];
       if (contract === undefined) {

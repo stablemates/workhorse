@@ -109,7 +109,7 @@ export class ChildJobsModule extends QueueModule {
   }
 
   private childRequest<TPayload extends Json>(
-    parent: ClaimedJob<unknown>,
+    parent: ClaimedJob,
     type: string,
     payload: TPayload,
     options: ChildJobOptions,
@@ -145,7 +145,7 @@ export class ChildJobsModule extends QueueModule {
   }
 
   async createChild<TPayload extends Json, TResult extends Json = Json>(
-    parent: ClaimedJob<unknown>,
+    parent: ClaimedJob,
     workerId: string,
     name: string,
     type: string,
@@ -179,7 +179,7 @@ export class ChildJobsModule extends QueueModule {
   }
 
   async createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
-    parent: ClaimedJob<unknown>,
+    parent: ClaimedJob,
     workerId: string,
     children: readonly ChildJobRequest[],
   ): Promise<CreateChildrenResult<TResult>> {

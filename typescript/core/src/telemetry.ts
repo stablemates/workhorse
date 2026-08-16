@@ -358,9 +358,7 @@ export function recordHeartbeatFailure(status: Exclude<HeartbeatStatus, "accepte
   telemetryMetrics.heartbeatFailures.add(1, { "workhorse.heartbeat.status": status });
 }
 
-export function jobSpanAttributes(
-  job: Pick<ClaimedJob<unknown>, "id" | "type" | "attempt">,
-): Attributes {
+export function jobSpanAttributes(job: Pick<ClaimedJob, "id" | "type" | "attempt">): Attributes {
   return {
     "workhorse.job.id": job.id,
     "workhorse.job.type": job.type,
@@ -368,7 +366,7 @@ export function jobSpanAttributes(
   };
 }
 
-export function jobMetricAttributes(job: Pick<ClaimedJob<unknown>, "queue" | "type">): Attributes {
+export function jobMetricAttributes(job: Pick<ClaimedJob, "queue" | "type">): Attributes {
   return {
     "workhorse.queue.name": job.queue,
     "workhorse.job.type": job.type,

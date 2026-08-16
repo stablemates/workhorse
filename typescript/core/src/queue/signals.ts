@@ -127,7 +127,7 @@ export class SignalsModule extends QueueModule {
   }
 
   async waitForSignal<TPayload extends Json = Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     options: ExternalWaitOptions = {},
