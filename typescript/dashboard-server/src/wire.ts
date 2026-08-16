@@ -1,4 +1,10 @@
-import type { MaintenancePolicy, Queue, RetentionPolicy, RetryPolicy } from "@workhorse/core";
+import type {
+  MaintenancePolicy,
+  Queue,
+  QueueHealth,
+  RetentionPolicy,
+  RetryPolicy,
+} from "@workhorse/core";
 
 export type DashboardMaintenancePolicy = Omit<MaintenancePolicy, "updatedAt"> & {
   updatedAt: string;
@@ -7,6 +13,10 @@ export type DashboardMaintenancePolicy = Omit<MaintenancePolicy, "updatedAt"> & 
 export type DashboardRetentionPolicy = Omit<RetentionPolicy, "updatedAt"> & {
   updatedAt: string;
 };
+
+export type DashboardDependencyHealth = QueueHealth["dependencies"];
+export type DashboardChildHealth = QueueHealth["children"];
+export type DashboardExternalWaitHealth = QueueHealth["externalWaits"];
 
 export interface DashboardSettingsPage {
   capturedAt: string;
@@ -609,6 +619,9 @@ export interface DashboardSystemPage {
     queueWait: { p50Ms: number | null; p95Ms: number | null; p99Ms: number | null };
     retry: { backoff: number; dueSoon: number; buckets: DashboardSystemRetryBucket[] };
     lease: { active: number; expired: number; expiringSoon: number; recovered: number };
+    dependencies: DashboardDependencyHealth;
+    children: DashboardChildHealth;
+    externalWaits: DashboardExternalWaitHealth;
     deadline?: {
       pending: number;
       overdue: number;

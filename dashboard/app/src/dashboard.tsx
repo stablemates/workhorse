@@ -3715,7 +3715,13 @@ export function QueuePressure({
   );
 }
 
-function SystemKpiList({ data }: { data: DashboardSystemPage }) {
+export function SystemKpiList({
+  data,
+  navigate,
+}: {
+  data: DashboardSystemPage;
+  navigate: (href: string) => void;
+}) {
   const errorColor =
     data.kpis.errorRate.current >= systemErrorRateWarning
       ? "red"
@@ -3843,7 +3849,103 @@ function SystemKpiList({ data }: { data: DashboardSystemPage }) {
         }
         icon={<Clock size={16} />}
       />
+      <HealthKpi
+        divided
+        title="Blocked dependencies"
+        value={
+          <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+            <Button
+              aria-label="View blocked tasks"
+              size="compact-xs"
+              variant="subtle"
+              onClick={() => navigate("/tasks?filter=blocked")}
+            >
+              View blocked tasks
+            </Button>
+            <Text fw={750} fz={17} lh={1.2} ta="right">
+              {data.kpis.dependencies.blockedJobs}
+            </Text>
+          </Group>
+        }
+        detail={`${data.kpis.dependencies.pendingEdges} pending edges · ${data.kpis.dependencies.failedResolutions} failed resolutions${data.kpis.dependencies.retentionPruneStarved ? " · retention is blocked" : ""}${data.kpis.dependencies.capped ? " · Counts reached the scan limit" : ""}`}
+        help="These tasks are waiting for prerequisite outcomes. Failed resolutions need attention, while a blocked retention pass means dependency evidence is holding expired task history."
+        scope="now"
+        color={
+          data.kpis.dependencies.failedResolutions > 0 ||
+          data.kpis.dependencies.retentionPruneStarved
+            ? "orange"
+            : data.kpis.dependencies.blockedJobs > 0
+              ? "yellow"
+              : "teal"
+        }
+        icon={<FunnelSimple size={16} />}
+      />
+      <HealthKpi
+        divided
+        title="Waiting parents"
+        value={data.kpis.children.waitingParents}
+        detail={`${data.kpis.children.pendingChildren} pending children · ${data.kpis.children.unjoinedResults} unjoined results · ${data.kpis.children.failedParents} failed parents · ${data.kpis.children.canceledParents} canceled parents${data.kpis.children.capped ? " · Counts reached the scan limit" : ""}`}
+        help="These parent tasks are waiting for child work. Unjoined results remain available until the parent collects them."
+        scope="now"
+        color={
+          data.kpis.children.failedParents > 0 || data.kpis.children.canceledParents > 0
+            ? "orange"
+            : data.kpis.children.waitingParents > 0 || data.kpis.children.unjoinedResults > 0
+              ? "yellow"
+              : "teal"
+        }
+        icon={<UserFocus size={16} />}
+      />
+      <HealthKpi
+        divided
+        title="Pending external waits"
+        value={
+          <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+            <Button
+              aria-label="Review human waits"
+              size="compact-xs"
+              variant="subtle"
+              onClick={() => navigate("/human-waits")}
+            >
+              Review human waits
+            </Button>
+            <Text fw={750} fz={17} lh={1.2} ta="right">
+              {data.kpis.externalWaits.pendingSignals +
+                data.kpis.externalWaits.pendingHumanDecisions}
+            </Text>
+          </Group>
+        }
+        detail={`${data.kpis.externalWaits.pendingSignals} signals · ${data.kpis.externalWaits.pendingHumanDecisions} human decisions · ${data.kpis.externalWaits.overdue} overdue · oldest ${formatDuration(data.kpis.externalWaits.oldestPendingAgeMs)} · ${data.kpis.externalWaits.rejectedDeliveries} rejected deliveries/24h${data.kpis.externalWaits.capped ? " · Counts reached the scan limit" : ""}`}
+        help="These handlers are suspended for a signal or human decision. Overdue waits remain critical until deadline maintenance resolves them."
+        scope="now"
+        color={data.kpis.externalWaits.overdue > 0 ? "red" : "teal"}
+        icon={<Lightning size={16} />}
+      />
     </Paper>
+  );
+}
+
+export function ExternalWaitAlert({
+  externalWaits,
+  navigate,
+}: {
+  externalWaits: DashboardSystemPage["kpis"]["externalWaits"];
+  navigate: (href: string) => void;
+}) {
+  if (externalWaits.overdue === 0) return null;
+
+  return (
+    <Alert color="red" icon={<WarningCircle size={18} />} title="External waits are overdue">
+      <Group justify="space-between" align="center">
+        <Text size="sm">
+          A signal or human decision passed its deadline. Deadline maintenance will resolve the
+          suspended task; review pending decisions that an operator can complete now.
+        </Text>
+        <Button color="red" variant="light" onClick={() => navigate("/human-waits")}>
+          Review human waits
+        </Button>
+      </Group>
+    </Alert>
   );
 }
 
@@ -4003,12 +4105,14 @@ function SystemPage({
         </Stack>
       </Group>
 
+      <ExternalWaitAlert externalWaits={data.kpis.externalWaits} navigate={navigate} />
+
       {/* Current pressure leads the page: the queue table and the condensed measures share one
           row, so the numbers sit next to the queues they describe. The measures come first in
           source order to read first on a phone, where the columns stack. */}
       <Grid gutter="xl">
         <Grid.Col span={{ base: 12, lg: 4 }} order={{ base: 1, lg: 1 }}>
-          <SystemKpiList data={data} />
+          <SystemKpiList data={data} navigate={navigate} />
         </Grid.Col>
         <Grid.Col span={{ base: 12, lg: 8 }} order={{ base: 2, lg: 2 }}>
           <QueuePressure data={data} navigate={navigate} />
