@@ -80,17 +80,21 @@ const data: DashboardSettingsPage = {
 describe("settings page", () => {
   it("separates browser preferences from read-only Workhorse policy", async () => {
     const { SettingsPage } = await import("./dashboard.js");
+    const { RefreshBlockerProvider } = await import("./refresh-blockers.js");
     const html = renderToStaticMarkup(
       createElement(
-        MantineProvider,
+        RefreshBlockerProvider,
         null,
-        createElement(SettingsPage, {
-          data,
-          saving: false,
-          onSaveMaintenance: async () => undefined,
-          onRevertMaintenance: async () => undefined,
-          onDirtyChange: () => undefined,
-        }),
+        createElement(
+          MantineProvider,
+          null,
+          createElement(SettingsPage, {
+            data,
+            saving: false,
+            onSaveMaintenance: async () => undefined,
+            onRevertMaintenance: async () => undefined,
+          }),
+        ),
       ),
     );
 
