@@ -32,12 +32,8 @@ export function dashboardAutoRefreshPaused(
   return blocked || countdown !== null || (wasBlocked && autoRefreshEnabled);
 }
 
-export function discardBackgroundFormRefresh(
-  background: boolean,
-  formPage: boolean,
-  formDirty: boolean,
-): boolean {
-  return background && formPage && formDirty;
+export function discardBackgroundRefresh(background: boolean, blocked: boolean): boolean {
+  return background && blocked;
 }
 
 export function startDashboardPolling(intervalMs: number | null, refresh: () => void): () => void {

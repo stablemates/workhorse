@@ -141,7 +141,7 @@ import {
   dashboardRefreshIntervalMs,
   dashboardRefreshIntervals,
   defaultDashboardRefreshInterval,
-  discardBackgroundFormRefresh,
+  discardBackgroundRefresh,
   type DashboardRefreshIntervalValue,
 } from "./refresh-policy.js";
 import {
@@ -185,6 +185,13 @@ import {
   Select,
   useDropdownActivity,
 } from "./dropdown-activity.js";
+import {
+  dashboardRefreshBlockers,
+  RefreshBlockerProvider,
+  useRefreshBlocker,
+  useRefreshBlockers,
+  useRefreshBlockingInputCapture,
+} from "./refresh-blockers.js";
 
 const DashboardClientContext = createContext<DashboardClient | null>(null);
 
@@ -5320,7 +5327,6 @@ export interface SettingsPageProps {
   saving: boolean;
   onSaveMaintenance(definition: Partial<MaintenancePolicyDefinition>): Promise<void>;
   onRevertMaintenance(setting: MaintenancePolicySetting): Promise<void>;
-  onDirtyChange(dirty: boolean): void;
 }
 
 function OperatorOverride({
@@ -5436,7 +5442,6 @@ export function SettingsPage({
   saving,
   onSaveMaintenance,
   onRevertMaintenance,
-  onDirtyChange,
 }: SettingsPageProps) {
   const [timeZone, setTimeZone] = useState(currentTimeZoneValue);
   const [maintenance, setMaintenance] = useState(() => ({
@@ -5455,8 +5460,7 @@ export function SettingsPage({
     maintenanceChanges.historyRetentionLocalTime = maintenance.historyRetentionLocalTime;
   }
   const maintenanceChanged = Object.keys(maintenanceChanges).length > 0;
-  useLayoutEffect(() => onDirtyChange(maintenanceChanged), [maintenanceChanged, onDirtyChange]);
-  useLayoutEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  useRefreshBlocker(maintenanceChanged, dashboardRefreshBlockers.dirtySettings);
   useEffect(() => {
     setMaintenance({
       timezone: data.maintenance.timezone,
@@ -5951,13 +5955,11 @@ function HumanWaitsPage({
   auditActor,
   reload,
   inspectJob,
-  onDirtyChange,
 }: {
   data: DashboardHumanWaitPage;
   auditActor: string;
   reload: () => Promise<void>;
   inspectJob: (id: string) => void;
-  onDirtyChange: (dirty: boolean) => void;
 }) {
   const client = useDashboardClient();
   const [results, setResults] = useState<Record<string, string>>({});
@@ -5976,9 +5978,7 @@ function HumanWaitsPage({
   const dirty =
     humanWaitResultsDirty(results) ||
     Object.values(signalPayloads).some((payload) => payload.trim().length > 0);
-
-  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  useRefreshBlocker(dirty, dashboardRefreshBlockers.dirtyHumanWait);
 
   const parseResult = (key: string) => {
     const parsed = parseHumanWaitResult(results[key] ?? "");
@@ -6193,7 +6193,6 @@ function HumanWaitsPage({
                       const next = { ...results, [key]: event.currentTarget.value };
                       setConfirming((current) => (current === key ? null : current));
                       setResults(next);
-                      onDirtyChange(humanWaitResultsDirty(next));
                     }}
                   />
                   {confirming === key ? (
@@ -6273,7 +6272,7 @@ function useDashboardController(
   basePath: string,
 ) {
   const client = useDashboardClient();
-  const dropdownOpened = useDropdownActivity();
+  const refreshBlockers = useRefreshBlockers();
   const [navbarOpened, { toggle: toggleNavbar, close: closeNavbar }] = useDisclosure();
   // Timestamps format through module-level displayTimeZone; re-render everything on change.
   const [, setTimeZoneTick] = useState(0);
@@ -6306,24 +6305,13 @@ function useDashboardController(
   const [confirmingQueue, setConfirmingQueue] = useState<string | null>(null);
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [settingsDirty, setSettingsDirty] = useState(false);
-  const [humanWaitsDirty, setHumanWaitsDirty] = useState(false);
-  const settingsDirtyRef = useRef(false);
-  const humanWaitsDirtyRef = useRef(false);
-  const changeSettingsDirty = useCallback((dirty: boolean) => {
-    settingsDirtyRef.current = dirty;
-    setSettingsDirty(dirty);
-  }, []);
-  const changeHumanWaitsDirty = useCallback((dirty: boolean) => {
-    humanWaitsDirtyRef.current = dirty;
-    setHumanWaitsDirty(dirty);
-  }, []);
   /**
    * The open task is read from the URL rather than held beside it, so a copied or reloaded link
    * restores the same list and the same open drawer, and Back/Forward can only ever agree with
    * what is on screen.
    */
   const selectedJobId = location.route === "/tasks" ? location.taskId : null;
+  useRefreshBlocker(taskDrawerOpened(selectedJobId), dashboardRefreshBlockers.taskDrawer);
   const selectedEventId = location.route === "/events" ? location.events.eventId : null;
   const [inspectedEvent, setInspectedEvent] = useState<DashboardEventDetail | null>(null);
   const [eventDetailError, setEventDetailError] = useState<string | null>(null);
@@ -6444,18 +6432,9 @@ function useDashboardController(
 
   const loadPage = useCallback(
     async ({ background = false }: { background?: boolean } = {}) => {
-      const discardBackgroundDirtyFormRefresh = (pageRoute: PageRoute) =>
-        discardBackgroundFormRefresh(
-          background,
-          pageRoute === "/settings",
-          settingsDirtyRef.current,
-        ) ||
-        discardBackgroundFormRefresh(
-          background,
-          pageRoute === "/human-waits",
-          humanWaitsDirtyRef.current,
-        );
-      if (discardBackgroundDirtyFormRefresh(route)) return;
+      const discardBlockedBackgroundRefresh = () =>
+        discardBackgroundRefresh(background, refreshBlockers.isBlocked());
+      if (discardBlockedBackgroundRefresh()) return;
       const activeRequest = ++requestId.current;
       setLoadState((current) => ({
         status: "loading",
@@ -6515,7 +6494,7 @@ function useDashboardController(
           };
         }
         if (activeRequest === requestId.current) {
-          if (discardBackgroundDirtyFormRefresh(data.route)) {
+          if (discardBlockedBackgroundRefresh()) {
             setLoadState((current) =>
               current.data ? { status: "ready", data: current.data, error: null } : current,
             );
@@ -6529,7 +6508,7 @@ function useDashboardController(
         }
       } catch (cause) {
         if (activeRequest === requestId.current) {
-          if (discardBackgroundDirtyFormRefresh(route)) {
+          if (discardBlockedBackgroundRefresh()) {
             setLoadState((current) =>
               current.data ? { status: "ready", data: current.data, error: null } : current,
             );
@@ -6545,7 +6524,7 @@ function useDashboardController(
       // `listingKey` is the dependency the task listing actually has; the values themselves are
       // read from a ref so that a re-render for an unrelated reason cannot send a stale request.
     },
-    [client, route, listingKey, systemWindow, eventsKey],
+    [client, route, listingKey, systemWindow, eventsKey, refreshBlockers.isBlocked],
   );
 
   const loadTaskCounts = useCallback(async () => {
@@ -7024,11 +7003,7 @@ function useDashboardController(
     if (location.route !== "/human-waits") void loadHumanWaitCount();
   }, [loadHumanWaitCount, loadPage, loadTaskCounts, location.route]);
 
-  const settingsBlockRefresh = location.route === "/settings" && settingsDirty;
-  const humanWaitsBlockRefresh = location.route === "/human-waits" && humanWaitsDirty;
-  const taskDetailBlocksRefresh = taskDrawerOpened(selectedJobId);
-  const refreshBlocked =
-    settingsBlockRefresh || humanWaitsBlockRefresh || taskDetailBlocksRefresh || dropdownOpened;
+  const refreshBlocked = refreshBlockers.blocked;
   const previousRefreshBlocked = useRef(refreshBlocked);
   const refreshWasBlocked = previousRefreshBlocked.current;
   useEffect(() => {
@@ -7046,17 +7021,11 @@ function useDashboardController(
   );
   const autoRefreshPausedRef = useRef(autoRefreshPaused);
   autoRefreshPausedRef.current = autoRefreshPaused;
-  const refreshPauseDescription = settingsBlockRefresh
-    ? "Auto refresh paused while settings have unsaved changes"
-    : humanWaitsBlockRefresh
-      ? "Auto refresh paused while a human wait result is being composed"
-      : taskDetailBlocksRefresh
-        ? "Auto refresh paused while task details are open"
-        : dropdownOpened
-          ? "Auto refresh paused while a dropdown is open"
-          : resumeCountdown !== null
-            ? `Auto refresh resumes in ${resumeCountdown} seconds`
-            : "Auto refresh interval";
+  const refreshPauseDescription =
+    refreshBlockers.description ??
+    (resumeCountdown !== null
+      ? `Auto refresh resumes in ${resumeCountdown} seconds`
+      : "Auto refresh interval");
   useEffect(() => {
     pollingClock.setRefresh(() => {
       void loadPage({ background: true });
@@ -7121,7 +7090,6 @@ function useDashboardController(
         auditActor={auditActor}
         reload={loadPage}
         inspectJob={inspectJob}
-        onDirtyChange={changeHumanWaitsDirty}
       />
     );
   } else if (loadState.data?.route === "/events") {
@@ -7174,7 +7142,6 @@ function useDashboardController(
         saving={savingSettings}
         onSaveMaintenance={saveMaintenanceSettings}
         onRevertMaintenance={revertMaintenanceSetting}
-        onDirtyChange={changeSettingsDirty}
       />
     );
   } else {
@@ -7232,6 +7199,7 @@ function DashboardContent({
 }) {
   const controller = useDashboardController(auditActor, demoTools, basePath);
   const dropdownOpened = useDropdownActivity();
+  const refreshBlockingInputCapture = useRefreshBlockingInputCapture();
   const {
     navbarOpened,
     toggleNavbar,
@@ -7281,6 +7249,7 @@ function DashboardContent({
 
   return (
     <AppShell
+      {...refreshBlockingInputCapture}
       header={{ height: 64 }}
       navbar={{
         width: 256,
@@ -7715,14 +7684,16 @@ export function Dashboard({
   const basePath = normalizeBasePath(basePathInput);
   return (
     <DashboardClientContext.Provider value={client}>
-      <DropdownActivityProvider>
-        <DashboardContent
-          auditActor={auditActor}
-          logoutUrl={logoutUrl ?? null}
-          demoTools={demoTools ?? null}
-          basePath={basePath}
-        />
-      </DropdownActivityProvider>
+      <RefreshBlockerProvider>
+        <DropdownActivityProvider>
+          <DashboardContent
+            auditActor={auditActor}
+            logoutUrl={logoutUrl ?? null}
+            demoTools={demoTools ?? null}
+            basePath={basePath}
+          />
+        </DropdownActivityProvider>
+      </RefreshBlockerProvider>
     </DashboardClientContext.Provider>
   );
 }

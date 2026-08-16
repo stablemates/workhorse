@@ -17,6 +17,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { dashboardRefreshBlockers, useRefreshBlocker } from "./refresh-blockers.js";
 
 interface DropdownActivityContextValue {
   opened: boolean;
@@ -27,6 +28,7 @@ const DropdownActivityContext = createContext<DropdownActivityContextValue | nul
 
 export function DropdownActivityProvider({ children }: { children: ReactNode }) {
   const [openedIds, setOpenedIds] = useState<ReadonlySet<string>>(() => new Set());
+  useRefreshBlocker(openedIds.size > 0, dashboardRefreshBlockers.dropdown);
   const setOpened = useCallback((id: string, opened: boolean) => {
     setOpenedIds((current) => {
       if (current.has(id) === opened) return current;
