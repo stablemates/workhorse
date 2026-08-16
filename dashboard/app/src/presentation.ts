@@ -1,10 +1,11 @@
-import type { RetryPolicy } from "@workhorse/core";
+import type { Json, RetryPolicy } from "@workhorse/core";
 import type {
   DashboardCancellationRequest,
   DashboardCancelStatus,
   DashboardDemoJobKind,
   DashboardDemoScenario,
   DashboardJobRow,
+  DashboardHumanWaitRow,
   DashboardRunNowStatus,
   CompleteDashboardOptions,
   IdempotencyEvidence,
@@ -16,6 +17,58 @@ import {
 
 export const dashboardJobEventTypes = wireJobEventTypes;
 export const dashboardAttemptOutcomes = wireAttemptOutcomes;
+
+export function isHumanWaitOverdue(wait: DashboardHumanWaitRow, nowMs: number): boolean {
+  return Date.parse(wait.deadlineAt) <= nowMs;
+}
+
+/** Overdue decisions come first, then every group is ordered by its nearest deadline. */
+export function orderHumanWaits(
+  waits: readonly DashboardHumanWaitRow[],
+  nowMs: number,
+): DashboardHumanWaitRow[] {
+  // The dashboard's browser target does not include ES2023 Array.prototype.toSorted yet.
+  // oxlint-disable-next-line unicorn/no-array-sort
+  return [...waits].sort((left, right) => {
+    const leftOverdue = isHumanWaitOverdue(left, nowMs);
+    const rightOverdue = isHumanWaitOverdue(right, nowMs);
+    if (leftOverdue !== rightOverdue) return leftOverdue ? -1 : 1;
+    return Date.parse(left.deadlineAt) - Date.parse(right.deadlineAt);
+  });
+}
+
+export function filterHumanWaits(
+  waits: readonly DashboardHumanWaitRow[],
+  options: { search: string; overdueOnly: boolean; nowMs: number },
+): DashboardHumanWaitRow[] {
+  const query = options.search.trim().toLowerCase();
+  return waits.filter((wait) => {
+    if (options.overdueOnly && !isHumanWaitOverdue(wait, options.nowMs)) return false;
+    if (!query) return true;
+    return [wait.name, wait.jobId, wait.jobType, wait.queue].some((value) =>
+      value.toLowerCase().includes(query),
+    );
+  });
+}
+
+export interface ParsedHumanWaitResult {
+  value: Json;
+  formatted: string;
+}
+
+/** One parser owns both the value sent to the handler and the formatted review copy. */
+export function parseHumanWaitResult(source: string): ParsedHumanWaitResult | null {
+  try {
+    const value = JSON.parse(source) as Json;
+    return { value, formatted: JSON.stringify(value, null, 2) };
+  } catch {
+    return null;
+  }
+}
+
+export function humanWaitResultsDirty(results: Readonly<Record<string, string>>): boolean {
+  return Object.values(results).some((result) => result.trim().length > 0);
+}
 
 const demoJobKinds = [
   "success",

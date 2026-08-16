@@ -6,7 +6,7 @@ import {
   dashboardPollingIntervalMs,
   dashboardRefreshIntervalMs,
   defaultDashboardRefreshInterval,
-  discardBackgroundSettingsRefresh,
+  discardBackgroundFormRefresh,
   startDashboardResumeCountdown,
   startDashboardPolling,
 } from "./refresh-policy.js";
@@ -112,10 +112,10 @@ describe("dashboard refresh policy", () => {
     policy.stop();
   });
 
-  it("discards only background settings refreshes that resolve against a dirty form", () => {
-    expect(discardBackgroundSettingsRefresh(true, true, true)).toBe(true);
-    expect(discardBackgroundSettingsRefresh(false, true, true)).toBe(false);
-    expect(discardBackgroundSettingsRefresh(true, false, true)).toBe(false);
-    expect(discardBackgroundSettingsRefresh(true, true, false)).toBe(false);
+  it("discards only background page refreshes that resolve against a dirty form", () => {
+    expect(discardBackgroundFormRefresh(true, true, true)).toBe(true);
+    expect(discardBackgroundFormRefresh(false, true, true)).toBe(false);
+    expect(discardBackgroundFormRefresh(true, false, true)).toBe(false);
+    expect(discardBackgroundFormRefresh(true, true, false)).toBe(false);
   });
 });
