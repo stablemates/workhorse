@@ -159,7 +159,7 @@ export type ConcurrencyPolicyRow = {
   queue_name: string;
   max_active: number;
   max_active_per_key: number | null;
-  updated_at: Date;
+  updated_at: Date | string;
 };
 
 export type RateLimitPolicyRow = {
@@ -451,7 +451,7 @@ export function concurrencyPolicy(row: ConcurrencyPolicyRow): ConcurrencyPolicy 
     queue: row.queue_name,
     maxActive: row.max_active,
     maxActivePerKey: row.max_active_per_key,
-    updatedAt: new Date(row.updated_at),
+    updatedAt: rowTimestamp(row.updated_at, "updated_at"),
   };
 }
 
@@ -472,7 +472,7 @@ export function rateLimitPolicy(row: RateLimitPolicyRow): RateLimitPolicy {
             intervalMs: row.per_key_interval_ms!,
             burst: row.per_key_burst!,
           },
-    updatedAt: new Date(row.updated_at),
+    updatedAt: rowTimestamp(row.updated_at, "updated_at"),
   };
 }
 
@@ -482,7 +482,7 @@ function rateLimitStatus(row: RateLimitStatusRow): RateLimitStatus {
     availableTokens: Number(row.available_tokens),
     throttledReady: Number(row.throttled_ready),
     throttledKeys: Number(row.throttled_keys),
-    nextEligibleAt: row.next_eligible_at === null ? null : new Date(row.next_eligible_at),
+    nextEligibleAt: nullableRowTimestamp(row.next_eligible_at, "next_eligible_at"),
     sampleCapped: row.sample_capped,
     policySetCapped: row.policy_set_capped,
   };
@@ -918,13 +918,13 @@ export class OperatorReadsModule extends QueueModule {
       current_attempt: number;
       max_attempts: number;
       retry_policy: RetryPolicy | null;
-      deadline_at: Date | null;
+      deadline_at: Date | string | null;
       execution_timeout_ms: string | null;
       version: string;
-      run_at: Date;
+      run_at: Date | string;
       result: TResult | null;
       error: Json | null;
-      cancel_requested_at: Date | null;
+      cancel_requested_at: Date | string | null;
       cancel_requested_by: string | null;
       cancel_reason: string | null;
       progress_value: Json | null;
@@ -932,10 +932,10 @@ export class OperatorReadsModule extends QueueModule {
       progress_attempt: number | null;
       progress_fence_token: string | null;
       progress_worker_id: string | null;
-      progress_created_at: Date | null;
-      progress_updated_at: Date | null;
-      created_at: Date;
-      updated_at: Date;
+      progress_created_at: Date | string | null;
+      progress_updated_at: Date | string | null;
+      created_at: Date | string;
+      updated_at: Date | string;
     }>(
       `SELECT j.id, j.queue_name, j.job_type, j.concurrency_key, j.priority,
               workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
@@ -1012,14 +1012,14 @@ export class OperatorReadsModule extends QueueModule {
       currentAttempt: row.current_attempt,
       maxAttempts: row.max_attempts,
       retryPolicy: row.retry_policy,
-      deadlineAt: row.deadline_at,
+      deadlineAt: nullableRowTimestamp(row.deadline_at, "deadline_at"),
       executionTimeoutMs:
         row.execution_timeout_ms === null ? null : Number(row.execution_timeout_ms),
       fenceToken: BigInt(row.version),
-      runAt: row.run_at,
+      runAt: rowTimestamp(row.run_at, "run_at"),
       result: row.result,
       error: row.error,
-      cancelRequestedAt: row.cancel_requested_at,
+      cancelRequestedAt: nullableRowTimestamp(row.cancel_requested_at, "cancel_requested_at"),
       cancelRequestedBy: row.cancel_requested_by,
       cancelReason: row.cancel_reason,
       progress:
@@ -1032,11 +1032,11 @@ export class OperatorReadsModule extends QueueModule {
               attempt: row.progress_attempt!,
               fence_token: row.progress_fence_token!,
               worker_id: row.progress_worker_id!,
-              created_at: row.progress_created_at!,
-              updated_at: row.progress_updated_at!,
+              created_at: rowTimestamp(row.progress_created_at!, "progress_created_at"),
+              updated_at: rowTimestamp(row.progress_updated_at!, "progress_updated_at"),
             }),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: rowTimestamp(row.created_at, "created_at"),
+      updatedAt: rowTimestamp(row.updated_at, "updated_at"),
     };
   }
 

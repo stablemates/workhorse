@@ -424,6 +424,33 @@ describe.each(integrationProviders)("$name built-package conformance", (provider
     expect(new Set(ids).size).toBe(6);
   });
 
+  it("returns Date instances for every job snapshot timestamp", async () => {
+    const workerId = `${provider.name}-snapshot-worker`;
+    const jobId = await provider.adapter.queue.enqueue(
+      `${provider.name}.snapshot`,
+      { provider: provider.name },
+      { deadline: new Date(Date.now() + 60_000) },
+    );
+    const claimed = await provider.adapter.queue.claim(workerId);
+    expect(claimed?.id).toBe(jobId);
+    await provider.adapter.queue.updateProgress(claimed!, workerId, { completed: 1 });
+    await provider.adapter.queue.cancel(jobId, {
+      requestedBy: `${provider.name}-operator`,
+      reason: "timestamp conformance",
+    });
+
+    const snapshot = await provider.adapter.queue.getJob(jobId);
+
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.deadlineAt).toBeInstanceOf(Date);
+    expect(snapshot!.runAt).toBeInstanceOf(Date);
+    expect(snapshot!.cancelRequestedAt).toBeInstanceOf(Date);
+    expect(snapshot!.progress?.createdAt).toBeInstanceOf(Date);
+    expect(snapshot!.progress?.updatedAt).toBeInstanceOf(Date);
+    expect(snapshot!.createdAt).toBeInstanceOf(Date);
+    expect(snapshot!.updatedAt).toBeInstanceOf(Date);
+  });
+
   it("uses the configured notification capability to wake a worker", async () => {
     const handled: string[] = [];
     const claim = vi.spyOn(provider.adapter.queue, "claim");
