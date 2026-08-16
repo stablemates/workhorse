@@ -28,7 +28,7 @@ export function describeRateLimit(policy: DashboardRateLimitPolicySummary | null
   return {
     label: bucketLabel(policy.rate),
     keyedLabel: policy.perKey === null ? null : `${bucketLabel(policy.perKey)} per key`,
-    title: `PostgreSQL admits ${policy.rate.limit} starts every ${intervalLabel(
+    title: `Workhorse admits ${policy.rate.limit} starts every ${intervalLabel(
       policy.rate.intervalMs,
     )}, retaining up to ${policy.rate.burst} tokens after idle time.`,
   };

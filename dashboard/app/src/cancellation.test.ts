@@ -43,6 +43,8 @@ describe("cancellation vocabulary", () => {
     expect(described.label).toBe("Canceled");
     expect(described.summary).toContain("before it started");
     expect(described.exact).toContain("No handler ran");
+    expect(described.exact).toContain("Workhorse");
+    expect(described.exact).not.toContain("PostgreSQL");
   });
 
   it("describes an active cancellation as cooperative without promising force", () => {

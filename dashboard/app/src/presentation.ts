@@ -198,13 +198,13 @@ export function describeRetryPolicy(policy: RetryPolicy | null): RetryPolicyDesc
     return {
       label: "Default backoff",
       summary:
-        "PostgreSQL delays retries after handler failures but retries expired leases immediately",
+        "Workhorse delays retries after handler failures but retries expired leases immediately",
       exact: "No persisted retry policy",
     };
   if (policy.type === "fixed")
     return {
       label: "Fixed",
-      summary: `PostgreSQL adds a ${formatRetryDelay(policy.delayMs)} delay before every retry`,
+      summary: `Workhorse adds a ${formatRetryDelay(policy.delayMs)} delay before every retry`,
       exact: `Fixed delay ${policy.delayMs} ms`,
     };
   if (policy.type === "exponential")
@@ -242,7 +242,7 @@ export function describeRetryEventSource(
   if (source === "lease-recovery-immediate")
     return {
       label: "Immediate recovery",
-      summary: "Because Workhorse saved no policy, PostgreSQL requeued the task immediately",
+      summary: "Because Workhorse saved no policy, it requeued the task immediately",
       exact: "Immediate lease-recovery compatibility default",
     };
   return describeRetryPolicy(policy);
@@ -281,7 +281,7 @@ export interface IdempotencyDescription {
 /**
  * State the deduplication contract in words rather than as stored field names.
  *
- * Wording is deliberately precise about what PostgreSQL actually guarantees: an identical repeat
+ * Wording is deliberately precise about what Workhorse actually guarantees: an identical repeat
  * submission within the retained window returns this same task identity instead of creating a new
  * one, and a changed request under the same key is refused rather than silently accepted.
  */
@@ -325,7 +325,7 @@ export interface CancelOutcomeDescription {
 }
 
 /**
- * Cancellation wording that matches what PostgreSQL actually did.
+ * Cancellation wording that matches what Workhorse actually did.
  *
  * The active case deliberately does not promise force, immediacy, or exactly-once cleanup: the
  * handler owns when it observes the signal, and external effects it already started can continue
@@ -340,7 +340,7 @@ export function describeCancelOutcome(
       label: "Canceled",
       summary: "Workhorse canceled this task before it started, so no handler ran",
       exact:
-        "PostgreSQL removed the task from dispatch and recorded an immutable canceled outcome. " +
+        "Workhorse removed the task from dispatch and recorded an immutable canceled outcome. " +
         "No handler ran for it, so there is no external effect to reconcile.",
     };
   }
@@ -382,7 +382,7 @@ export function describeCancelOutcome(
  */
 export type DashboardResultTone = "neutral" | "success" | "failure";
 
-/** A cancellation changed durable state only when PostgreSQL applied or recorded one. */
+/** A cancellation changed durable state only when Workhorse applied or recorded one. */
 export function cancelOutcomeTone(status: DashboardCancelStatus): DashboardResultTone {
   return status === "canceled" || status === "cancel_requested" ? "success" : "neutral";
 }

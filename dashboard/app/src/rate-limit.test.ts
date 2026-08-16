@@ -17,7 +17,7 @@ describe("rate-limit presentation", () => {
     expect(describeRateLimit(policy)).toEqual({
       label: "12/1m · burst 3",
       keyedLabel: "2/1s · burst 1 per key",
-      title: "PostgreSQL admits 12 starts every 1m, retaining up to 3 tokens after idle time.",
+      title: "Workhorse admits 12 starts every 1m, retaining up to 3 tokens after idle time.",
     });
     expect(describeRateThrottle(policy)).toEqual({
       label: "4 · 2 keys",
