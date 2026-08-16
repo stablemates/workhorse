@@ -37,22 +37,26 @@ try {
         break;
       }
     } catch {
-      // A production Next.js server can refuse connections briefly while it initializes.
+      // The static preview server can refuse connections briefly while it starts.
     }
     await sleep(50);
   }
   if (!ready) throw new Error(`Timed out waiting for documentation site\n${output}`);
 
+  // The site is documentation only. `/` redirects to `/docs`, and every other
+  // destination lives in the docs sidebar.
   const expectations = [
-    ["/", ["Workhorse", "/docs"]],
-    ["/docs", ["Workhorse", "TypeScript"]],
-    ["/reference", ["Reference", "@workhorse/core"]],
-    ["/integrations", ["Drizzle", "Dashboard"]],
-    ["/examples", ["Examples", "enqueue"]],
-    ["/demo", ["demo.workhorse.run", "live demo"]],
+    ["/docs", ["Workhorse", "PostgreSQL"]],
+    ["/docs/quickstart", ["quickstart", "worker"]],
+    ["/docs/retries", ["retry", "backoff"]],
     ["/robots.txt", ["Sitemap"]],
     ["/sitemap.xml", ["<urlset"]],
   ] as const;
+
+  const root = await fetch(`${baseUrl}/`, { redirect: "manual" });
+  if (root.status !== 200 && !(root.status >= 300 && root.status < 400)) {
+    throw new Error(`The site root returned ${root.status}`);
+  }
 
   for (const [path, tokens] of expectations) {
     const response = await fetch(`${baseUrl}${path}`);
@@ -65,24 +69,22 @@ try {
     }
   }
 
-  const search = await fetch(`${baseUrl}/api/search?query=checkpoint`);
+  // Static search ships one prerendered index that the browser downloads and
+  // queries locally, so the smoke test checks the index rather than a query.
+  const search = await fetch(`${baseUrl}/api/search`);
   const searchBody = await search.text();
-  if (!search.ok || !search.headers.get("content-type")?.includes("application/json")) {
-    throw new Error(`Documentation search was unavailable: ${search.status}\n${searchBody}`);
+  if (!search.ok) {
+    throw new Error(`Documentation search index was unavailable: ${search.status}`);
   }
   if (!searchBody.toLowerCase().includes("checkpoint")) {
-    throw new Error(`Documentation search returned no checkpoint result\n${searchBody}`);
+    throw new Error("Documentation search index omitted the checkpoint content");
   }
 
   console.log(
     `JCODE_CHECKPOINT ${JSON.stringify({
       message: "Documentation site smoke passed",
-      homepage: true,
+      root: true,
       docs: true,
-      reference: true,
-      integrations: true,
-      examples: true,
-      demo: true,
       search: true,
       discovery: true,
     })}`,

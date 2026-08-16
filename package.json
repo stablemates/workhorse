@@ -44,8 +44,8 @@
     "benchmark:metrics-lifecycle": "tsx scripts/benchmark-metrics-lifecycle.ts",
     "benchmark:retention-strategies": "tsx scripts/with-env.ts tsx scripts/benchmark-retention-strategies.ts",
     "benchmark:dashboard-read-surface": "tsx scripts/with-env.ts tsx scripts/benchmark-dashboard-read-surface.ts",
-    "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin --ignore-pattern site/next-env.d.ts typescript dashboard site scripts vitest*.config.ts && pnpm python:lint",
-    "lint:fix": "oxlint --fix --import-plugin --vitest-plugin --ignore-pattern site/next-env.d.ts typescript dashboard site scripts vitest*.config.ts",
+    "lint": "oxlint --deny-warnings --import-plugin --vitest-plugin typescript dashboard site scripts vitest*.config.ts && pnpm python:lint",
+    "lint:fix": "oxlint --fix --import-plugin --vitest-plugin typescript dashboard site scripts vitest*.config.ts",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check . && pnpm python:format:check",
     "python:build": "uv build --project python",
@@ -88,11 +88,5 @@
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   },
-  "packageManager": "pnpm@10.18.3",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "lefthook",
-      "sharp"
-    ]
-  }
+  "packageManager": "pnpm@10.18.3"
 }

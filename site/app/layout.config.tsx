@@ -3,8 +3,9 @@ import { WorkhorseWordmark } from "@/components/logo";
 import { demoUrl, siteConfig } from "@/lib/site";
 
 /**
- * Shared navigation for every layout (home, docs, and standalone pages) so the
- * header never diverges between marketing and documentation routes.
+ * The site is documentation only, so the header carries the wordmark, the
+ * GitHub link, and one external link to the hosted demo. Sidebar groups own
+ * every other destination.
  */
 export const baseOptions: BaseLayoutProps = {
   nav: {
@@ -13,11 +14,6 @@ export const baseOptions: BaseLayoutProps = {
   },
   githubUrl: siteConfig.github,
   links: [
-    { text: "Docs", url: "/docs", active: "nested-url" },
-    { text: "Reference", url: "/reference", active: "nested-url" },
-    { text: "Integrations", url: "/integrations", active: "nested-url" },
-    { text: "Examples", url: "/examples", active: "nested-url" },
-    { text: "Demo", url: "/demo", active: "nested-url" },
     {
       type: "icon",
       text: "Live demo",

@@ -1,5 +1,3 @@
-import Image from "next/image";
-
 /**
  * Canonical Workhorse brand assets, copied from `@workhorse/dashboard` so the
  * site, the operator dashboard, and the demo all present one identity.
@@ -16,13 +14,12 @@ export function WorkhorseMark({
   className?: string;
 }) {
   return (
-    <Image
+    <img
       src="/brand/workhorse-mark.svg"
       alt=""
       aria-hidden
       width={size}
       height={size}
-      priority
       className={className}
     />
   );
@@ -48,12 +45,11 @@ export function WorkhorseWordmark({ className = "" }: { className?: string }) {
   return (
     <span className={`flex items-center gap-0.5 ${className}`}>
       <WorkhorseMark size={40} className="size-[40px] shrink-0" />
-      <Image
+      <img
         src="/brand/workhorse-wordmark.svg"
         alt="Workhorse"
         width={895}
         height={53}
-        priority
         className="h-[9px] w-auto brightness-[0.26] contrast-[1.25] dark:brightness-100 dark:contrast-100"
       />
     </span>
