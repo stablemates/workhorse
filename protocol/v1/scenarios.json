@@ -78,6 +78,30 @@
         }
       },
       {
+        "id": "update-progress",
+        "sql": "SELECT jsonb_build_object('status', status, 'value', progress_value, 'revision', revision, 'attempt', attempt, 'fenceToken', fence_token, 'workerId', worker_id) AS value FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
+        "parameters": [
+          { "$ref": "successfulJob" },
+          "protocol-success",
+          { "$ref": "successfulFence" },
+          { "percent": 50 }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fenceToken": { "$ref": "successfulFence" },
+                "revision": 1,
+                "status": "updated",
+                "value": { "percent": 50 },
+                "workerId": "protocol-success"
+              }
+            }
+          ]
+        }
+      },
+      {
         "id": "complete",
         "covers": ["completion"],
         "sql": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted",
@@ -165,14 +189,86 @@
     ]
   },
   {
+    "id": "ownership-expiration-and-recovery",
+    "steps": [
+      {
+        "id": "enqueue-timeout",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-expiration",
+              "type": "protocol.timeout",
+              "payload": {},
+              "executionTimeoutMs": 100,
+              "maxAttempts": 2
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [{ "value": { "jobId": { "$type": "uuid" }, "outcome": "accepted" } }]
+        },
+        "capture": { "timeoutJob": "0.value.jobId" }
+      },
+      {
+        "id": "claim-timeout",
+        "sql": "SELECT jsonb_build_object('fenceToken', fence_token) AS value FROM workhorse.claim_v3($1, $2, 30000)",
+        "parameters": ["protocol-expiration", "protocol-timeout-worker"],
+        "expect": { "rows": [{ "value": { "fenceToken": { "$type": "integer" } } }] },
+        "capture": { "timeoutFence": "0.value.fenceToken" }
+      },
+      {
+        "id": "expire-owned-timeout",
+        "sql": "WITH slept AS MATERIALIZED (SELECT pg_sleep(0.15)) SELECT jsonb_build_object('status', status, 'retryState', retry_state) AS value FROM slept CROSS JOIN LATERAL workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)",
+        "parameters": [
+          { "$ref": "timeoutJob" },
+          "protocol-timeout-worker",
+          { "$ref": "timeoutFence" }
+        ],
+        "expect": {
+          "rows": [{ "value": { "retryState": "ready", "status": "timeout_exceeded" } }]
+        }
+      },
+      {
+        "id": "enqueue-recovery",
+        "sql": "SELECT jsonb_build_object('jobId', workhorse.enqueue_v1($1, $2, '{}'::jsonb, clock_timestamp(), $3)) AS value",
+        "parameters": ["protocol-recovery", "protocol.recovery", 2],
+        "expect": { "rows": [{ "value": { "jobId": { "$type": "uuid" } } }] },
+        "capture": { "recoveryJob": "0.value.jobId" }
+      },
+      {
+        "id": "claim-recovery",
+        "sql": "SELECT jsonb_build_object('fenceToken', fence_token) AS value FROM workhorse.claim_v3($1, $2, 100)",
+        "parameters": ["protocol-recovery", "protocol-recovery-worker"],
+        "expect": { "rows": [{ "value": { "fenceToken": { "$type": "integer" } } }] }
+      },
+      {
+        "id": "make-lease-expired",
+        "sql": "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1::uuid RETURNING state",
+        "parameters": [{ "$ref": "recoveryJob" }],
+        "expect": { "rows": [{ "state": "active" }] }
+      },
+      {
+        "id": "recover-expired",
+        "sql": "SELECT rows_affected, expired_leases, retried FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)",
+        "parameters": [100, 0],
+        "expect": { "rows": [{ "expired_leases": 1, "retried": 1, "rows_affected": 1 }] }
+      }
+    ]
+  },
+  {
     "id": "cancellation",
     "steps": [
       {
-        "id": "enqueue",
-        "sql": "SELECT jsonb_build_object('jobId', workhorse.enqueue_v1($1, $2, '{}'::jsonb)) AS value",
-        "parameters": ["protocol-cancel", "protocol.cancel"],
-        "expect": { "rows": [{ "value": { "jobId": { "$type": "uuid" } } }] },
-        "capture": { "cancelJob": "0.value.jobId" }
+        "id": "enqueue-and-claim",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": ["protocol-cancel", "protocol.cancel", "protocol-cancel-worker"],
+        "expect": {
+          "rows": [
+            { "value": { "fenceToken": { "$type": "integer" }, "jobId": { "$type": "uuid" } } }
+          ]
+        },
+        "capture": { "cancelJob": "0.value.jobId", "cancelFence": "0.value.fenceToken" }
       },
       {
         "id": "cancel",
@@ -185,8 +281,35 @@
               "value": {
                 "reason": "fixture",
                 "requestedBy": "protocol-operator",
-                "state": "canceled",
-                "status": "canceled"
+                "state": "active",
+                "status": "cancel_requested"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "acknowledge",
+        "sql": "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted",
+        "parameters": [
+          { "$ref": "cancelJob" },
+          "protocol-cancel-worker",
+          { "$ref": "cancelFence" }
+        ],
+        "expect": { "rows": [{ "accepted": true }] }
+      },
+      {
+        "id": "canceled-transition",
+        "sql": "SELECT jsonb_build_object('state', state, 'attempt', current_attempt, 'requestedBy', error->>'requested_by', 'reason', error->>'reason') AS value FROM workhorse.dashboard_job_outcome_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "cancelJob" }],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "reason": "fixture",
+                "requestedBy": "protocol-operator",
+                "state": "canceled"
               }
             }
           ]
@@ -487,6 +610,64 @@
         "id": "parent-released",
         "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_job_runtime_v1 WHERE job_id = $1::uuid",
         "parameters": [{ "$ref": "parentJob" }],
+        "expect": { "rows": [{ "value": { "state": "ready" } }] }
+      },
+      {
+        "id": "enqueue-and-claim-single-parent",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "parameters": [
+          "protocol-single-parent",
+          "protocol.single-parent",
+          "protocol-single-parent-worker"
+        ],
+        "expect": {
+          "rows": [
+            { "value": { "fenceToken": { "$type": "integer" }, "jobId": { "$type": "uuid" } } }
+          ]
+        },
+        "capture": {
+          "singleParentJob": "0.value.jobId",
+          "singleParentFence": "0.value.fenceToken"
+        }
+      },
+      {
+        "id": "create-single-child",
+        "sql": "SELECT jsonb_build_object('status', status, 'childJobId', child_job_id, 'childType', child_type, 'result', result) AS value FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)",
+        "parameters": [
+          { "$ref": "singleParentJob" },
+          "protocol-single-parent-worker",
+          { "$ref": "singleParentFence" },
+          "only",
+          {
+            "queue": "protocol-single-child",
+            "type": "protocol.single-child",
+            "payload": { "value": 8 }
+          }
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "childJobId": { "$type": "uuid" },
+                "childType": "protocol.single-child",
+                "result": null,
+                "status": "created"
+              }
+            }
+          ]
+        },
+        "capture": { "singleChildJob": "0.value.childJobId" }
+      },
+      {
+        "id": "complete-single-child",
+        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v3($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, $3::jsonb) AS accepted FROM claimed",
+        "parameters": ["protocol-single-child", "protocol-single-child-worker", { "value": 8 }],
+        "expect": { "rows": [{ "accepted": true }] }
+      },
+      {
+        "id": "single-parent-released",
+        "sql": "SELECT jsonb_build_object('state', state) AS value FROM workhorse.dashboard_job_runtime_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "singleParentJob" }],
         "expect": { "rows": [{ "value": { "state": "ready" } }] }
       }
     ]

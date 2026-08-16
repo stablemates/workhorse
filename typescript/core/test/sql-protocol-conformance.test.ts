@@ -217,7 +217,7 @@ describe("SQL protocol conformance fixtures", () => {
     }
   });
 
-  it("keeps every fixture function on the TypeScript raw-SQL contract", async () => {
+  it("keeps the manifest, scenarios, and TypeScript SQL contract in sync", async () => {
     const fixtures = await loadSqlProtocolFixtures(repository);
     const queueSources = await Promise.all(
       fixtures.manifest.typescriptContractSources.map((source) =>
@@ -226,9 +226,30 @@ describe("SQL protocol conformance fixtures", () => {
     );
     const contract = queueSources.join("\n");
     const normalizedContract = contract.replace(/\s+/g, " ");
+    const scenarioContract = fixtures.scenarios
+      .flatMap(({ steps }) => steps.map(({ sql }) => sql))
+      .join("\n");
+    const intentionallyUnpinnedSqlFunctions = new Set<string>();
+    const pinnedFunctions = new Set(fixtures.manifest.functions.map(({ name }) => name));
+    const contractFunctions = new Set(
+      [...contract.matchAll(/workhorse\.([a-z0-9_]+_v\d+)\s*\(/g)].map((match) => match[1]!),
+    );
+
+    expect(
+      [...contractFunctions].filter(
+        (functionName) =>
+          !pinnedFunctions.has(functionName) &&
+          !intentionallyUnpinnedSqlFunctions.has(functionName),
+      ),
+      "TypeScript SQL contract functions are absent from the language-neutral manifest",
+    ).toEqual([]);
 
     for (const { name: functionName, arity, contract: callContract } of fixtures.manifest
       .functions) {
+      expect(
+        scenarioContract,
+        `${functionName} has no language-neutral conformance scenario`,
+      ).toContain(`workhorse.${functionName}(`);
       expect(contract, `${functionName} is absent from the TypeScript SQL contract`).toContain(
         `workhorse.${functionName}`,
       );
