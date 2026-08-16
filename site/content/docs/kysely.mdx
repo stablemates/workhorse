@@ -7,7 +7,8 @@ Your application already writes through Kysely. When a request inserts a row and
 follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
 and a committed row with no job is a silent gap. `@workhorse/kysely` closes that gap: it converts
 Kysely databases and transactions into the core `Queryable` protocol, so `Queue.enqueue` runs
-inside the same transaction as your Kysely writes.
+inside the same transaction as your Kysely writes. This page covers building the adapter,
+enqueueing inside a transaction, and who owns the connection pool.
 
 Workhorse keeps its schema lifecycle outside Kysely migrations. Kysely owns your tables; Workhorse
 owns its versioned SQL functions.
@@ -68,16 +69,30 @@ If the callback throws, Kysely rolls back both writes. Nothing outside the trans
 half-committed pair. The adapter's default queue remains outside that transaction — use it for
 enqueues that stand alone.
 
+## Run workers from the same adapter
+
+A worker process needs no second wiring path. `workhorse.createWorker` uses the adapter's default
+queue and database connection.
+
+```ts
+const worker = workhorse.createWorker();
+worker.handle("account.created", handleAccountCreated);
+await worker.run();
+```
+
+Use `kyselyQueryable` directly when you need a custom `Queue` but do not want the adapter
+lifecycle.
+
+Database execution failures become `KyselyQueryError`, which retains the statement, original cause,
+and PostgreSQL error code. Typed Workhorse conflicts — idempotency, checkpoint, and wait errors —
+remain their core error classes.
+
 ## Keep resource ownership explicit
 
 The adapter does not destroy a caller-owned database unless `close` is configured. Add that hook
 only when the adapter owns the database, because `adapter.close` may run during process shutdown or
 failed startup. Without `notificationPool`, workers use bounded polling and keep the same durable
 behavior — jobs still run, just on the polling cadence.
-
-Database execution failures become `KyselyQueryError`, which retains the statement, original cause,
-and PostgreSQL error code. Typed Workhorse conflicts — idempotency, checkpoint, and wait errors —
-remain their core error classes.
 
 Install the Workhorse schema with the core deployment tools rather than a Kysely migration — the
 schema is a versioned protocol, not application tables.

@@ -3,11 +3,13 @@ title: Quickstart
 description: Install the schema, run your first job, then kill the worker mid-job and watch it finish anyway.
 ---
 
-In five minutes you will enqueue a job, run it, and then prove the interesting part: a job that
-survives its own worker being killed. All you need is Node.js 22+ and a PostgreSQL 15+ connection
-string.
+A background job disappears when the process running it dies. Workhorse keeps the job in
+PostgreSQL, so another process picks it up and finishes it. This page covers installing the
+schema, running one job, killing a worker mid-job, and enqueueing inside your own transaction.
 
-## 1. Install
+You need Node.js 22+ and a PostgreSQL 15+ connection string.
+
+## 1. Install the library
 
 ```bash
 npm install @workhorse/core pg
@@ -15,7 +17,7 @@ npm install @workhorse/core pg
 
 ## 2. Install the schema
 
-Workhorse lives entirely inside your database: tables for jobs and versioned SQL functions for
+Workhorse lives inside your database. It needs tables for jobs, and versioned SQL functions for
 every lifecycle transition. `installSchema` creates all of it.
 
 ```ts
@@ -29,10 +31,10 @@ await installSchema(pool);
 Run this once, as a deployment step. Runtime code should call `assertSchemaCompatible` instead of
 installing anything.
 
-## 3. Enqueue a job and run it
+## 3. Run your first job
 
-A `Queue` accepts work; a `Worker` with a matching handler runs it. This example keeps both in one
-file so you can watch the whole lifecycle.
+Two objects split the work. A `Queue` accepts jobs. A `Worker` with a matching handler runs them.
+This example keeps both in one file so you can watch the whole lifecycle.
 
 ```ts
 import { Pool } from "pg";
@@ -53,12 +55,14 @@ await pool.end();
 ```
 
 `getJob` returns the durable record: state `succeeded`, the stored result, and the attempt that
-produced it. That record is queryable evidence, not a log line — it stays after the process exits.
+produced it. You can query that record after the process exits. A log line gives you no such
+evidence.
 
-## 4. Kill the worker. The job finishes anyway.
+## 4. Kill the worker and watch the job finish
 
-Now the part that makes Workhorse worth installing. This handler does two stages of work, each
-wrapped in a named `checkpoint`, with a deliberate crash between them.
+A crash between two side effects normally repeats the first one. Name each stage with
+`checkpoint`, and PostgreSQL stores its result so the retry skips it. The handler below does two
+stages, with a deliberate crash between them.
 
 ```ts title="crash-demo.ts"
 import { Pool } from "pg";
@@ -77,6 +81,7 @@ const worker = new Worker(queue, { leaseMs: 5_000 }).handle(
 
     if (!process.env.SURVIVED) {
       console.log("simulating a crash");
+      // The process dies here. The retry replays the stored charge and resumes below.
       process.exit(1); // the worker dies mid-job
     }
 
@@ -106,19 +111,19 @@ node crash-demo.ts             # charges the card, then dies
 SURVIVED=1 node crash-demo.ts  # finishes the job
 ```
 
-The first run prints `charging card…` and exits. Nothing is lost: the checkpoint committed, the
+The first run prints `charging card…` and exits. Nothing is lost. The checkpoint committed, the
 lease expires, and the job becomes claimable again.
 
-The second run picks the job up once the expired lease is recovered — within a few seconds — and
-this time `charging card…` does **not** print. The completed
-checkpoint replays its stored result instead of running again — the customer was charged exactly
-once across the crash. That is the whole model: handlers restart from the top after any
-interruption, and the boundaries you name are the parts that never repeat.
+The second run picks the job up once the expired lease is recovered, within a few seconds. This
+time `charging card…` does **not** print. The completed checkpoint replays its stored result
+instead of running again, so the customer was charged exactly once across the crash. That is the
+whole model. Handlers restart from the top after any interruption, and the boundaries you name are
+the parts that never repeat.
 
-## 5. Enqueue with your data
+## 5. Enqueue inside your own transaction
 
-In a real application, enqueue rarely stands alone. Pass your open transaction as the last
-argument and the job commits — or rolls back — with your business write.
+A job that commits without its data row is a bug you cannot see until later. Pass your open
+transaction as the last argument. Then the job commits, or rolls back, with your business write.
 
 ```ts
 const client = await pool.connect();

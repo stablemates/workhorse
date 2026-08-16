@@ -3,11 +3,11 @@ title: Enqueue and transactions
 description: Accept immediate, delayed, batched, or transactional jobs without separating them from application state.
 ---
 
-The classic queue bug is a job that disagrees with your data: the order row committed but the
-fulfillment job was lost, or the job exists and the row does not. Workhorse removes that gap by
-living in the same PostgreSQL database as your data — an enqueue is a row your transaction can
-carry. This page covers everything an enqueue can do: run now, run later, join a transaction,
-batch, and target a named queue.
+The classic queue bug is a job that disagrees with your data. The order row commits and the
+fulfillment job is lost, or the job exists and the row does not. Workhorse closes that gap because
+it stores jobs in the same PostgreSQL database as your data, so an enqueue is a row your
+transaction can carry. This page covers what an enqueue can do: run now, run later, join a
+transaction, batch, and target a named queue.
 
 ## Enqueue immediate or delayed work
 
@@ -24,7 +24,7 @@ await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", runAt: 
 ```
 
 `runAt` is a not-before boundary, not an appointment. If someone pauses the queue, or workers
-become unavailable, a worker claims the job later than the boundary — never earlier.
+become unavailable, a worker claims the job after the boundary. No worker claims it before.
 
 `EnqueueOptions` carries everything else a job can be born with:
 
@@ -51,9 +51,10 @@ Each option is owned by its own page — [retries](/docs/retries), [deadlines](/
 
 ## Join an application transaction
 
-This is the option that replaces an outbox. Pass your open transaction client as the fourth
-argument and PostgreSQL commits the job and your business write together — or rolls both back
-together. There is no window where one exists without the other.
+An outbox table exists to stop a job and its data row from disagreeing. You do not need one here.
+Pass your open transaction client as the fourth argument. PostgreSQL then commits the job and your
+business write together, or rolls both back together. No window exists where one survives without
+the other.
 
 ```ts
 const client = await pool.connect();
@@ -74,14 +75,14 @@ try {
 The fourth argument accepts anything with a pg-compatible `query` method, so the ORM adapters
 pass their own transaction handles the same way.
 
-One boundary to keep in mind: the transaction covers durable acceptance only. Handlers run later,
-outside your transaction, so their external effects still need their own idempotency.
+The transaction covers durable acceptance only. Handlers run later, outside your transaction, so
+their external effects still need their own idempotency.
 
-## Enqueue a batch
+## Enqueue many jobs at once
 
-If a single operation produces many jobs — a fan-out to every subscriber, an import — use
-`queue.enqueueMany`. It validates and writes the whole group in one statement, and it also accepts
-a transaction as its second argument.
+One operation can produce many jobs: a fan-out to every subscriber, or an import. Use
+`queue.enqueueMany` for that. It validates and writes the whole group in one statement, and it
+also accepts a transaction as its second argument.
 
 ```ts
 const jobIds = await queue.enqueueMany(
@@ -94,14 +95,14 @@ const jobIds = await queue.enqueueMany(
 ```
 
 Returned IDs preserve input order, and the whole group commits or rolls back together. One call
-accepts at most 1,000 requests; split larger input into several bounded calls. If a caller may
-repeat part of the batch, give each request an idempotency key so the repeat converges instead of
-duplicating.
+accepts at most 1,000 requests, so split larger input into several bounded calls. If a caller may
+repeat part of the batch, give each request an idempotency key. The repeat then converges on the
+existing jobs instead of duplicating them.
 
 ## Prioritize work within a queue
 
-`new Queue(pool, "billing")` sets the client default queue; `options.queue` overrides one job. A
-`Worker` claims from its configured queue only.
+`new Queue(pool, "billing")` sets the client default queue. `options.queue` overrides it for one
+job. A `Worker` claims from its configured queue only.
 
 Set `options.priority` when urgent ready work should run before ordinary work in the same queue.
 Workhorse dispatches higher-priority jobs first, and it keeps FIFO order among jobs with the same

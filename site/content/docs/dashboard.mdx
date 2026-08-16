@@ -3,23 +3,24 @@ title: Dashboard
 description: Mount the operator interface behind application authorization, or run it standalone with a built-in administrator login.
 ---
 
-`@workhorse/dashboard` gives your operators a full interface — jobs, attempts, checkpoints,
-schedules, queues, workers, failures, health — without you building a single admin page. It reads
+Operators need to see jobs, attempts, checkpoints, schedules, queues, workers, failures, and
+health. `@workhorse/dashboard` renders all of it, so you build no admin page yourself. It reads
 everything from PostgreSQL, so a dashboard mounted anywhere can observe workers running on
-machines it has never met.
+machines it has never met. This page covers what each view reads, how to mount the handler, who
+decides that a request is allowed, and how the browser refreshes.
 
-## What it shows
+## Know what each view reads
 
 Every view comes from the same read models as [Queries and timelines](/docs/queries): job
 listings with redacted payloads, per-job timelines, dead letters, the worker registry, and the
 health verdict with its reasons. With host-authorized controllers wired in, it can also cancel
 jobs, run schedules now, pause queues and workers, and edit maintenance and retention policy.
 
-## Mount it in your server
+## Mount the dashboard in your server
 
-`createDashboardHost` builds a framework-neutral handler over standard `Request`/`Response`
-objects. It answers only for requests under its configured path and returns `null` for
-everything else.
+You should not have to pick a web framework to get an operator interface. `createDashboardHost`
+builds a framework-neutral handler over standard `Request`/`Response` objects. It answers only
+for requests under its configured path and returns `null` for everything else.
 
 ```ts
 import { createDashboardHost } from "@workhorse/dashboard/server";
@@ -70,9 +71,9 @@ The settings page edits maintenance and retention policy through `DashboardSetti
 previews destructive retention changes before applying them, and shows process-owned worker
 values read-only, because changing those requires a deployment.
 
-## The standalone CLI
+## Run the standalone console
 
-For a quick local console, skip the mounting entirely:
+A local console should not need a server to host it. Skip the mounting entirely:
 
 ```bash
 workhorse dashboard --port 3000
@@ -91,7 +92,7 @@ The login page follows the browser's color scheme. The dashboard header shows th
 administrator and provides sign-out; if the session expires while the page is open, the next
 private request returns the browser to login.
 
-## Customize without forking
+## Embed the components in your own React tree
 
 Hosts that want the components inside their own React tree can render `Dashboard` and
 `WorkhorseThemeProvider` directly, connected through `createDashboardClient`, importing the
@@ -99,10 +100,10 @@ packaged stylesheet for tokens and layout. `configuredWorkers` describes expecte
 processes before they first register, and `projectDurability` translates checkpoint evidence
 into domain-specific step names without touching stored queue data.
 
-## Refresh model
+## Know how fresh the numbers are
 
 The browser polls only the active page at the selected cadence, so job volume never multiplies
-browser requests; manual refresh covers the rest. Remember what you are looking at: an operator
+browser requests. Manual refresh covers the rest. Remember what you are looking at: an operator
 view, not a transactional snapshot. PostgreSQL statistics and worker registry rows can lag the
 processes behind them by design.
 

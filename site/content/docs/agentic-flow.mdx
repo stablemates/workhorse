@@ -3,24 +3,42 @@ title: Durable agentic flow
 description: Compose checkpoints, child tools, durable timers, and approval signals in an ordinary handler.
 ---
 
-An agent loop becomes durable when every restart boundary lives in PostgreSQL. Workhorse provides
-those boundaries while your application continues to own model calls, tool code, and prompts.
+An agent loop calls a model, runs tools, waits for a cooldown, and asks a person to approve the
+result. A crash loses every step that lived only in memory. An agent loop becomes durable when
+every restart boundary lives in PostgreSQL, and your application continues to own model calls, tool
+code, and prompts. This page covers the boundaries a handler crosses, what replay reuses, and which
+effects can still happen twice.
+
+## Cross a boundary instead of holding state
+
+Each call below hands a piece of the loop to PostgreSQL and returns control to the handler.
 
 ```ts
 const plan = await context.checkpoint("plan", () => callModel(prompt));
 await context.setProgress({ stage: "planned" });
 
+// If the process dies here, replay reuses the stored plan and resumes below.
 const tools = await context.runChildren(toolRequests);
 await context.sleep("model-cooldown", cooldownMs);
 const approval = await context.waitForSignal<{ approved: boolean }>("approval");
 ```
 
-Each child name and request must stay stable across replay. Checkpoints reuse stored results, timers
-keep their first wake target, and the approval signal arrives through `Queue.sendSignal`. Every
-boundary releases the lease instead of retaining an in-memory continuation.
+Every boundary releases the lease instead of retaining an in-memory continuation. Another worker
+can pick the job up later without losing a step.
+
+## Keep every durable name stable
+
+Replay matches work by name, so each child name and request must stay stable across replay.
+Checkpoints reuse stored results, and timers keep their first wake target. The approval signal
+arrives through `Queue.sendSignal`.
+
+## Expect external effects to repeat
 
 Model and tool calls remain at least once. Use provider idempotency, an outbox, an inbox, or a
 compensation path when an external effect cannot safely repeat.
+
+A checkpoint protects the stage: PostgreSQL stores its result once and replay reads it back. The
+call inside that stage is not protected until the provider itself rejects a duplicate.
 
 ## Run the repository example
 
@@ -31,7 +49,7 @@ prints the final result and progress.
 
 ## Next
 
-- [Child jobs](/docs/child-jobs) — delegate and join tool work
+- [Child jobs](/docs/child-jobs) — delegate tool work and join the results
 - [Signals](/docs/signals) — deliver approval from another process
 - [Durable execution](/docs/durable-execution) — make replayed stages safe
 

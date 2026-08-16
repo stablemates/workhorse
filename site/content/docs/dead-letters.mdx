@@ -7,7 +7,8 @@ A payment provider goes down for an hour. Two hundred jobs exhaust their retries
 terminally. When the provider recovers, you want those jobs to run again — without editing rows,
 without losing the evidence of what happened, and without replaying anything twice. That is
 redrive: Workhorse keeps the failed job as immutable evidence and creates a new job from it, with
-an audit trail linking the two.
+an audit trail linking the two. This page covers how to find those failures, what a redriven job
+copies, what a repeated request does, and how to clear a backlog.
 
 ## List terminal failures
 
@@ -91,6 +92,7 @@ do {
     { limit: 100, cursor },
   );
   cursor = page.nextCursor ?? undefined;
+  // If the process dies here, rerun the loop: this page converges on its existing targets.
 } while (cursor);
 ```
 
@@ -98,8 +100,8 @@ If the loop crashes mid-backlog, run it again: pages that already redrove conver
 existing targets instead of duplicating them.
 
 One honest caveat: a redriven job is another at-least-once execution. Payment, email, and webhook
-handlers still need provider-side idempotency before an operator replays them — redrive makes the
-operation auditable, not magically exactly-once.
+handlers still need provider-side idempotency before an operator replays them. Redrive makes the
+operation auditable, not exactly-once.
 
 ## Next
 

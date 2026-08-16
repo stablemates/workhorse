@@ -3,11 +3,15 @@ title: Child jobs
 description: Delegate durable work from a handler and join its result without holding a worker slot.
 ---
 
-`HandlerContext.runChild` creates a child and moves its parent to `blocked` in one transaction. The
-parent releases its lease while the child runs, then restarts from the top when the child settles.
+A handler often needs a step that belongs to another queue or another team. Calling it inline keeps
+a worker slot busy and loses the result if the process dies. `HandlerContext.runChild` creates a
+child and moves its parent to `blocked` in one transaction. The parent releases its lease while the
+child runs, then restarts from the top when the child settles. This page covers how a parent
+delegates, what replay returns, and how to read the resulting tree.
 
 ```ts
 worker.handle("orders.checkout", async (order, context) => {
+  // If the process dies here, the parent restarts from the top and this call returns the retained result.
   const charge = await context.runChild<{ orderId: string }, { receiptId: string }>(
     "charge",
     "payments.charge",
@@ -23,6 +27,8 @@ On replay, the stable child name and request return the retained result instead 
 job. Changing the name, payload, type, options, or set membership raises `ChildConflictError`, so a
 deploy cannot silently rewrite an in-flight parent.
 
+## Fan out to several children
+
 Use `runChildren` to create and join independent work in parallel. PostgreSQL releases the parent
 only after the whole set settles; a failed child fails the parent, while cancellation applies only
 when no failure takes precedence.
@@ -35,6 +41,9 @@ make them independently idempotent.
 `Queue.getJob` and `Queue.listJobs` expose `parentJobId` and `childJobIds`.
 `Queue.getChildLineage(jobId)` reads retained edges in either direction, and the dashboard links
 parents and children with their names and join state.
+
+A child is work the parent creates and waits for. A dependency is work a producer declares, which
+the consumer only waits for.
 
 ## Next
 

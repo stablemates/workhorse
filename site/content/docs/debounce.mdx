@@ -3,8 +3,16 @@ title: Keyed debounce
 description: Replace pending work under a stable key while updates continue arriving.
 ---
 
+A document can change five times in ten seconds. You want one reindex, and you want it to read the
+newest revision. Keyed debounce holds a single pending job under a key you choose, and swaps its
+payload each time a newer request arrives. This page covers how a replacement wins, how the two
+window modes differ, what each outcome means, and which options debounce refuses to share.
+
+## Replace the pending payload
+
 Debounce keeps one pending job with the latest accepted payload. PostgreSQL serializes concurrent
-replacements, so every caller observes one stable job identity.
+replacements, so every caller observes one stable job identity. Each request names the key, the
+scope that separates unrelated keys, and the length of the quiet period.
 
 ```ts
 const result = await queue.enqueueWithResult(
@@ -14,6 +22,7 @@ const result = await queue.enqueueWithResult(
     debounce: {
       key: documentId,
       scope: "search-index",
+      // A newer revision that arrives before the window ends replaces this payload.
       windowMs: quietPeriodMs,
       schedule: "reset",
     },
@@ -21,12 +30,18 @@ const result = await queue.enqueueWithResult(
 );
 ```
 
+## Pick a window mode
+
 Choose `reset` to start a fresh quiet period after every replacement. Choose `preserve` when the
 first request fixes the run time and later requests should update only the payload.
+
+## Read the outcome
 
 `result.outcome` is `accepted` for a new job and `replaced` for a pending update. Once a worker owns
 the job, it becomes terminal, or its window elapses, PostgreSQL returns `non_replaceable` and keeps
 the accepted payload unchanged.
+
+## Keep debounce on its own request
 
 Debounce cannot share a request with idempotency, throttle, or dependencies because each mechanism
 assigns a different meaning to a repeated key or immutable edge.

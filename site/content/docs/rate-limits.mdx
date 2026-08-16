@@ -7,7 +7,8 @@ An external API allows sixty calls a minute. A concurrency policy cannot enforce
 how much work runs at once, and sixty jobs that each finish in a hundred milliseconds sail through
 a `maxActive` of five. A rate-limit policy governs the other axis — how quickly work starts —
 with a token bucket that PostgreSQL owns, so every worker process draws from the same budget no
-matter how many you run.
+matter how many you run. This page covers how you declare a bucket, who supplies the refill time,
+what a token buys, and how you see work waiting for one.
 
 ## Synchronize desired policy
 
@@ -34,11 +35,13 @@ own refill while another customer's job starts. A keyless job draws from the que
 Omitted policies are pruned by default, and another namespace cannot replace a queue this
 namespace owns.
 
-## PostgreSQL owns the clock
+## Let PostgreSQL own the clock
 
 The claim transaction consumes tokens, and PostgreSQL supplies the refill time. Application clock
 skew cannot mint capacity, and two competing workers cannot spend the same token — the same
 property that makes claims safe makes throttling exact.
+
+## Size the budget for attempts
 
 Tokens are never refunded. The budget measures starts: a job that succeeds, fails, waits, or loses
 its lease keeps its token spent, and every retry start consumes a fresh one. Size the limit for

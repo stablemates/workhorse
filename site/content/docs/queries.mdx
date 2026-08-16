@@ -3,10 +3,11 @@ title: Queries and timelines
 description: Inspect any job's state, list work with bounded payloads, replay lifecycle evidence, and ask the queue how it feels.
 ---
 
-When something goes wrong at 2 a.m., you need answers from the queue itself: what state is this
-job in, what happened to it, and is the system healthy? Workhorse answers all three from
-PostgreSQL read models that stay separate from the dispatch path. You can page through millions
-of terminal jobs without slowing a single worker's claim.
+When something goes wrong at 2 a.m., you need answers from the queue itself. What state is this
+job in? What happened to it? Is the system healthy? Workhorse answers all three from PostgreSQL
+read models that stay separate from the dispatch path, so you can page through millions of
+terminal jobs without slowing a single worker's claim. This page covers the point lookup, the
+bounded listing, the lifecycle timeline, and the health verdict.
 
 ## Read one known job
 
@@ -23,8 +24,8 @@ if (snapshot) {
 }
 ```
 
-That `null` matters. A history query alone cannot distinguish "never existed" from "existed and
-was cleaned up", so use `getJob` whenever existence is the question.
+That `null` matters. A history query alone cannot tell "never existed" from "existed and was
+cleaned up". Use `getJob` whenever existence is the question.
 
 ## List jobs with bounded payloads
 
@@ -56,10 +57,10 @@ if (page.nextCursor) {
 }
 ```
 
-Payloads are omitted by default because operator lists rarely need them. When you opt in,
+Operator lists rarely need payloads, so Workhorse omits them by default. When you opt in,
 PostgreSQL redacts the top-level keys you name, enforces the size ceiling, and marks each row's
 `payloadStatus` as `included`, `omitted`, or `too_large`. Sensitive data never has to leave the
-database just to render a list.
+database to render a list.
 
 Two rules keep paging honest:
 
@@ -86,9 +87,9 @@ for (const entry of timeline.items) {
 ```
 
 This is the durable answer to "why did attempt 3 retry?" — each closed attempt carries its
-outcome, and each event carries its details. One caveat: history categories retire on independent
-retention windows, so a known job can have a partial or empty timeline. Absence of timeline is
-never proof of absence of the job.
+outcome, and each event carries its details. History categories retire on independent retention
+windows, so a known job can have a partial or empty timeline. An empty timeline is never proof
+that the job is gone.
 
 For the other durable projections, `queue.getCheckpoint`, `listCheckpoints`, `getWait`,
 `listWaits`, and `getProgress` expose checkpoints, durable waits, and progress without
@@ -114,7 +115,7 @@ if (health.status.level !== "healthy") {
 
 `status.level` is `healthy`, `degraded`, or `critical`. Each exceeded budget produces a reason
 with a stable machine-readable `code` and the `observed` value, so automation branches on codes
-instead of parsing prose. Exact counts live at the top level of `QueueHealth`; values that come
+instead of parsing prose. Exact counts live at the top level of `QueueHealth`. Values that come
 from PostgreSQL's own lagging statistics live under `observations`, where lag is expected.
 
 The `workhorse-health` CLI runs the identical evaluation and exits non-zero on any exceeded

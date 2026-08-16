@@ -3,8 +3,14 @@ title: Batch handlers
 description: Process several jobs of one type through a shared application call while preserving per-job outcomes.
 ---
 
+Some work is cheaper in bulk. One call to an email provider with fifty addresses costs far less
+than fifty calls, and the same is true of most external APIs. A batch handler lets one call cover
+several jobs, without those jobs losing their separate identities.
+
 Use `Worker.handleBatch` when one application call can process several jobs more efficiently. Each
-member keeps its own durable identity, lease, fence, retry budget, progress, and cancellation.
+member keeps its own durable identity, lease, fence, retry budget, progress, and cancellation. This
+page covers how a batch is assembled, how one member can fail without taking the others down, and
+what the worker owns while the call runs.
 
 ```ts
 new Worker(queue, { concurrency: workerCapacity }).handleBatch(

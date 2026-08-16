@@ -6,7 +6,9 @@ description: Version payload and result validators, bound durable JSON, and keep
 A queue accepts whatever producers send it. Without a gate, a malformed payload becomes a durable
 job that fails in a handler hours later, and a payload carrying an access token becomes a row an
 operator can read on a dashboard. Payload contracts close both gaps: they reject the malformed
-value before anything is written, and they carry a redaction policy with every accepted job.
+value before anything is written, and they carry a redaction policy with every accepted job. This
+page covers where you declare a contract, what PostgreSQL does with a payload that fails it, and
+how redaction decides what an operator sees.
 
 ## Define contracts where you create the queue
 

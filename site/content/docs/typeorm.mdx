@@ -7,7 +7,8 @@ Your application already writes through TypeORM. When a request saves an entity 
 follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
 and a committed row with no job is a silent gap. `@workhorse/typeorm` closes that gap: it converts
 TypeORM data sources and transactional entity managers into the core `Queryable` protocol, so
-`Queue.enqueue` runs inside the same transaction as your entity writes.
+`Queue.enqueue` runs inside the same transaction as your entity writes. This page covers building
+the adapter, enqueueing inside a transaction, and who owns the data source.
 
 Workhorse keeps its schema lifecycle outside TypeORM migrations. TypeORM owns your entities;
 Workhorse owns its versioned SQL functions.

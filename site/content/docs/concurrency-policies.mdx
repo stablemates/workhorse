@@ -7,7 +7,8 @@ Some capacity belongs to the application, not to one worker process: a database 
 a downstream API's connection limit, a per-tenant fairness rule. `WorkerOptions.concurrency`
 limits one process, so adding a worker silently raises the fleet's total. A concurrency policy
 stores the budget in PostgreSQL instead, where every competing worker checks it atomically during
-claim — scale the fleet and the limit holds.
+claim. This page covers how you declare a budget, how a key splits it into groups, what the budget
+does after a worker dies, and how you watch the pressure it creates.
 
 ## Synchronize desired policy
 
@@ -42,13 +43,16 @@ Keyless jobs consume queue capacity only. A keyed job also consumes capacity for
 key text in another queue is independent, and one saturated key does not block the queue: admission
 can pass over a full key and claim later ready work for another key, within a bounded FIFO window.
 
-## A dispatch budget, not a mutex
+## Treat it as a dispatch budget, not a mutex
 
 Capacity counts active jobs with unexpired leases. If a worker disappears, its capacity returns
 when the lease expires — the queue cannot be starved by a dead process. The flip side: a stale
 handler can briefly overlap its replacement after expiry, and fence tokens — not the policy —
 prevent that stale generation from recording a result. Handlers keep the ordinary at-least-once
 assumptions.
+
+A budget caps how many handlers run together. A mutex would promise that only one ever touches the
+work; the policy makes no such promise.
 
 ## Observe pressure
 

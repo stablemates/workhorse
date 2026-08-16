@@ -3,8 +3,11 @@ title: Queue health
 description: Read one bounded snapshot with a verdict and stable reason codes for exceeded budgets.
 ---
 
-`Queue.health()` reports backlog depth, lease state, external waits, admission pressure, statistics,
-and retention progress with a `healthy`, `degraded`, or `critical` verdict.
+A queue can fail in many separate ways at once, and polling each one costs a query. One call
+answers them together: `Queue.health()` reports backlog depth, lease state, external waits,
+admission pressure, statistics, and retention progress with a `healthy`, `degraded`, or
+`critical` verdict. This page covers what the snapshot measures exactly, where it stops counting,
+and how an alert reads the result.
 
 ```ts
 const health = await queue.health();
@@ -20,7 +23,7 @@ PostgreSQL reads correctness-sensitive values in one statement, so every exact c
 same instant at `capturedAt`. Lagging database statistics live under `observations`; when an
 observation and an exact count disagree, the exact count wins.
 
-## Bounded work, stable reasons
+## Trust the exact counts, cap the rest
 
 Live-state counts are exact. Unbounded terminal history and statistics buckets stop at explicit
 caps and mark the result as a lower bound, so health polling does not become more expensive as a
@@ -30,8 +33,11 @@ Critical reasons mean work is stopping now, such as an expired lease, overdue ex
 stalled promotion. Degraded reasons mean the queue still runs while maintenance or admission falls
 behind. The reason codes are stable, so alerts can branch on them without parsing prose.
 
-Override budgets per call when deployment needs differ. The dashboard and command-line health
-check use the same evaluation, so every operator surface agrees on the verdict.
+## Match budgets to a deployment
+
+What counts as late differs between a batch queue and a checkout queue. Override budgets per call
+when deployment needs differ. The dashboard and command-line health check use the same
+evaluation, so every operator surface agrees on the verdict.
 
 ## Next
 

@@ -7,7 +7,9 @@ Some work runs on a clock: a nightly report, an hourly sync, a weekly cleanup. T
 a separate scheduler process to deploy and keep alive, and a duplicate-firing problem the moment
 you run more than one of them. Workhorse has neither. Schedules are cron definitions stored in
 PostgreSQL, declared by your deployment, and evaluated by the workers you already run — any number
-of which can race on the same occurrence and still create exactly one job.
+of which can race on the same occurrence and still create exactly one job. This page covers how you
+declare a schedule, which worker fires an occurrence, and what happens to an occurrence nobody was
+awake for.
 
 ## Synchronize the namespace
 

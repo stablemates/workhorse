@@ -6,7 +6,8 @@ description: Publish a live, bounded status value for operators without changing
 A three-minute import looks identical to a stuck one from the outside: both sit in `active`.
 Progress closes that gap. It is a mutable, latest-value-only projection of what the handler is
 doing right now — operator data, not control flow. After a retry, progress cannot tell
-Workhorse to skip a stage; that is what [checkpoints](/docs/durable-execution) are for.
+Workhorse to skip a stage; that is what [checkpoints](/docs/durable-execution) are for. This page
+covers what a handler publishes, why PostgreSQL limits the writes, and who may write at all.
 
 ## Publish the latest value
 
@@ -19,6 +20,7 @@ worker.handle("catalog.import", async (payload: { source: string }, ctx) => {
 
   let processed = 0;
   for await (const batch of readBatches(payload.source)) {
+    // If the process dies here, the retry restarts the loop; the last value stays readable.
     await importBatch(batch);
     processed += batch.length;
     await ctx.setProgress({ phase: "importing", processed });
@@ -34,7 +36,7 @@ one, `Queue.getProgress` reads it by job ID, and a custom runtime can write thro
 `Queue.updateProgress` with the claimed job and worker identity. The
 [dashboard](/docs/dashboard) renders the value live.
 
-## Why progress is rate-limited
+## Stay inside the update limit
 
 Every changed value updates one `job_progress` row and appends a small `progress_updated`
 event. A tight loop — say, one update per imported row — would churn the database without
@@ -47,7 +49,7 @@ above, updating once per batch stays comfortably inside the limit.
 Repeating an identical value is a free no-op: it does not advance the revision or append an
 event. You can call `setProgress` defensively without paying for it.
 
-## What survives, and who may write
+## Know what survives, and who may write
 
 Each accepted update records the attempt, fence token, worker ID, revision, and timestamps.
 The latest value survives retries and terminal materialization, until retention removes the

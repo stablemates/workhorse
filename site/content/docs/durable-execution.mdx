@@ -5,8 +5,10 @@ description: Use named checkpoints and durable waits so a handler survives retri
 
 After a retry, a crash, or a durable wait, Workhorse calls your handler again — from the top.
 There is no saved JavaScript stack to resume; the process that held it may be gone, deployed
-over twice since. Durable execution is how a restarted handler skips the work it already
-finished: you name the boundaries, and the new activation replays their stored results.
+over twice since. A restarted handler must therefore skip the work it already finished: you
+name the boundaries, and the new activation replays their stored results. This page covers
+named checkpoints, durable waits, why those names must stay stable, and how a handler waits
+for an external result.
 
 ## Save completed stages with checkpoints
 
@@ -23,6 +25,7 @@ worker.handle("order.fulfill", async (payload: { orderId: string }, ctx) => {
     }),
   );
 
+  // If the process dies here, the retry replays the charge and reruns only the shipment.
   const shipment = await ctx.checkpoint("shipment", () =>
     logistics.createShipment(payload.orderId, charge.id),
   );

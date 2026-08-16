@@ -7,9 +7,11 @@ A durable queue accumulates: delayed jobs waiting to become ready, leases that e
 workers, history partitions filling up, and evidence that eventually outlives its usefulness.
 Workhorse handles all of it as bounded background work that workers drive automatically.
 PostgreSQL coordinates the passes with advisory locks, so scaling from one worker to fifty never
-multiplies destructive work — one worker wins each due phase, the rest get cheap no-ops.
+multiplies destructive work — one worker wins each due phase, the rest get cheap no-ops. This
+page covers the phases workers run, how long evidence lives, when each pass is due, and how you
+see it fall behind.
 
-## The phases, and how to watch them
+## Watch each cleanup phase
 
 Workers call the same versioned SQL functions you can call yourself:
 
@@ -39,8 +41,9 @@ and any error — enough to chart cleanup throughput in whatever monitoring you 
 
 ## Set retention policy
 
-Retention decides how long evidence lives. `queue.syncRetentionPolicy` stores your application's
-defaults as a deploy step:
+Evidence that answers "what happened to this job" costs storage forever unless something retires
+it. Retention decides how long that evidence lives. `queue.syncRetentionPolicy` stores your
+application's defaults as a deploy step:
 
 ```ts
 await queue.syncRetentionPolicy({
@@ -74,6 +77,7 @@ keeps its source identity available for lineage.
 
 ## Set maintenance cadence
 
+Cleanup that runs at the wrong hour competes with your peak traffic.
 `queue.syncMaintenancePolicy` stores one set of scheduling defaults for the database, including
 an IANA timezone and local wall-clock time for the daily history retention pass.
 `queue.overrideMaintenancePolicy` and `queue.revertMaintenancePolicy` follow the same
@@ -104,6 +108,8 @@ import { WorkhorseMetricsObserver } from "@workhorse/core";
 const observer = new WorkhorseMetricsObserver(pool, {
   onError: (error) => logger.error({ error }, "workhorse metrics collection failed"),
 }).start();
+
+// If this observer runs in a second replica, every gauge below is exported twice.
 
 // During service shutdown:
 observer.stop();

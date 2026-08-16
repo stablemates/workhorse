@@ -3,10 +3,10 @@ title: Retries
 description: Give jobs an attempt budget and a persisted backoff policy that PostgreSQL applies consistently.
 ---
 
-When a handler throws, the job usually is not finished — it has failed one attempt. PostgreSQL
-records the failure evidence, checks whether budget remains, and moves the job back to
-`scheduled` with a wake time or to a terminal failed outcome. This page covers who decides,
-when the next attempt runs, and what survives in between.
+A handler that throws has not finished the job. It has failed one attempt. PostgreSQL records
+the failure evidence, checks whether budget remains, and moves the job back to `scheduled`
+with a wake time or to a terminal failed outcome. This page covers who decides, when the next
+attempt runs, and what survives in between.
 
 ## Set an attempt budget
 
@@ -15,6 +15,7 @@ a thrown error or a crashed worker's expired lease — spends one. When the budg
 the database deletes the runtime row and writes an immutable failed outcome.
 
 ```ts
+// The fifth failure ends the job: PostgreSQL writes a failed outcome instead of a wake time.
 await queue.enqueue("provider.sync", { accountId }, { maxAttempts: 5 });
 ```
 
@@ -24,7 +25,7 @@ retries.
 
 ## Persist the delay policy with the job
 
-Retrying instantly is usually wrong: if a provider is down, hammering it just burns attempts.
+Retrying instantly is usually wrong. If a provider is down, a fast retry only burns attempts.
 `EnqueueOptions.retryPolicy` stores a backoff shape with the immutable job definition, and
 PostgreSQL validates it at enqueue time. Three shapes exist:
 
@@ -54,7 +55,7 @@ Workhorse derives the jitter from stable job state — identity and attempt numb
 than fresh randomness. Replaying the same transition therefore selects the same delay, which
 keeps retry timing explainable after the fact.
 
-## One policy for both failure paths
+## Apply one policy to both failure paths
 
 A job can need a retry for two different reasons: its handler threw, or its worker died and
 the lease expired. An explicit policy applies to both paths, so a crashed process does not

@@ -6,7 +6,8 @@ description: Bound a job by wall-clock time, or bound one attempt's execution, w
 Workhorse has two ways to say "this has taken too long", and they answer different questions.
 A deadline says the _result_ expires at a wall-clock moment — after that, the job is
 pointless. An execution timeout says one _attempt_ may only run so long — after that, try
-again. Mixing them up is the usual source of confusion, so this page keeps them apart.
+again. This page covers what each clock measures, how a handler learns that one expired, and
+how the two behave together.
 
 ## A deadline bounds the whole job
 
@@ -33,6 +34,7 @@ Use it when one run must stop consuming resources but a later attempt may still 
 stuck HTTP call, a wedged subprocess.
 
 ```ts
+// A stuck run stops after 30s of execution; four more attempts remain.
 await queue.enqueue("report.build", { reportId }, { executionTimeoutMs: 30_000, maxAttempts: 5 });
 ```
 

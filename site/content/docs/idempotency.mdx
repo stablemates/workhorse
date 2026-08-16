@@ -9,7 +9,8 @@ repeats a request that already succeeded. Enqueue idempotency stops the second j
 created at all: the repeated request returns the original job's ID and writes nothing.
 
 This solves duplicate acceptance. Handler delivery remains at least once — the other half of the
-problem, covered at the end of this page.
+problem, covered at the end of this page. This page covers what makes two requests the same
+request, how long that memory lasts, and what the second caller gets back.
 
 ## Choose a stable key
 

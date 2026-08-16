@@ -3,6 +3,14 @@ title: Keyed throttle
 description: Accept one equivalent job during a busy window and coalesce later triggers into it.
 ---
 
+Ten events ask for the same account digest inside a minute. You want one digest, and you want the
+other nine callers to learn which job carries their work. Keyed throttle opens an acceptance window
+for a key, and hands every equivalent request the identity of the job that already exists. This
+page covers what the window absorbs, what counts as equivalent, when the key frees up, and what an
+operator sees.
+
+## Coalesce equivalent triggers
+
 Throttle keeps an acceptance window in PostgreSQL. The first request creates a job; an equivalent
 request before the window closes returns the same identity with a `coalesced` outcome.
 
@@ -14,19 +22,26 @@ const result = await queue.enqueueWithResult(
     throttle: {
       key: accountId,
       scope: "digest",
+      // Requests that arrive before this window closes join the job above.
       windowMs: digestWindowMs,
     },
   },
 );
 ```
 
+## Know what counts as equivalent
+
 The retained job may be waiting, active, or finished. Execution state does not reopen the
 acceptance window. A changed payload, queue, priority, schedule, retry policy, or window conflicts
 because silently discarding changed work would hide caller intent.
 
 After the window closes, the key can accept a new job. One request cannot combine throttle with
-idempotency, debounce, or dependencies. The dashboard shows a safe key digest, the window, and the
-number of absorbed requests without exposing the raw key.
+idempotency, debounce, or dependencies.
+
+## See absorbed work without leaking the key
+
+The dashboard shows a safe key digest, the window, and the number of absorbed requests without
+exposing the raw key.
 
 ## Next
 

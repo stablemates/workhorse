@@ -3,8 +3,15 @@ title: Job dependencies
 description: Keep downstream work blocked until its prerequisites reach declared outcomes.
 ---
 
-Dependencies prevent a job from entering dispatch before its inputs are ready. PostgreSQL stores
-the job and its dependency edges in the enqueue transaction, so a rollback removes both.
+Some work is worthless until other work finishes. A notification about an import must not run
+before the import does. Declare that ordering when you enqueue, and PostgreSQL holds the dependent
+out of dispatch until its inputs settle. This page covers how you declare one prerequisite, how you
+declare several with an outcome policy for each, and how you inspect work that is still blocked.
+
+## Block a job behind one prerequisite
+
+PostgreSQL stores the job and its dependency edges in the enqueue transaction, so a rollback removes
+both.
 
 ```ts
 const importId = await queue.enqueue("contacts.import", { source: "upload" });
@@ -12,7 +19,10 @@ const importId = await queue.enqueue("contacts.import", { source: "upload" });
 await queue.enqueue("contacts.notify", { importId }, { prerequisiteJobId: importId });
 ```
 
-For fan-in, declare every prerequisite and what each terminal outcome means:
+## Declare an outcome policy for a fan-in
+
+Several prerequisites can end in different ways, so state what each terminal outcome means for the
+dependent:
 
 ```ts
 await queue.enqueue(

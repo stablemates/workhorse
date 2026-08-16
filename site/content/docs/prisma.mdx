@@ -3,14 +3,13 @@ title: Prisma
 description: Adapt a Prisma client and enqueue jobs inside caller-owned interactive transactions.
 ---
 
-Your application already writes through Prisma. When a request creates an account and enqueues a
-follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
-and a committed row with no job is a silent gap. `@workhorse/prisma` closes that gap: it converts
-Prisma clients and interactive transaction clients into the core `Queryable` protocol, so
-`Queue.enqueue` runs inside the same transaction as your Prisma writes.
-
-Workhorse keeps its schema lifecycle outside Prisma migrations. Prisma owns your models; Workhorse
-owns its versioned SQL functions.
+Your application already writes through Prisma. A request creates an account, then enqueues a
+follow-up job. Those two writes must commit together. A job for a row that rolled back is a bug, and
+a committed row with no job is a silent gap. `@workhorse/prisma` closes that gap: it converts Prisma
+clients and interactive transaction clients into the core `Queryable` protocol, so `Queue.enqueue`
+runs inside the same transaction as your Prisma writes. This page covers how to build the adapter,
+how to enqueue inside a caller-owned transaction, how workers reuse the same wiring, and who closes
+what.
 
 ## Create the adapter
 
@@ -20,8 +19,8 @@ Install the integration beside Prisma Client.
 pnpm add @workhorse/prisma @prisma/client
 ```
 
-Pass the client to `createPrismaAdapter`. The close callback is optional because the adapter does
-not disconnect caller-owned clients by default.
+The adapter needs the Prisma client you already built. Pass it to `createPrismaAdapter`. The close
+callback is optional because the adapter does not disconnect caller-owned clients by default.
 
 ```ts
 import { PrismaClient } from "@prisma/client";
@@ -36,15 +35,16 @@ const workhorse = createPrismaAdapter(prisma, {
 The returned `WorkhorseAdapter` exposes `database`, `queue`, `forTransaction`, `createWorker`, and
 `close` — one stable surface for both request handlers and worker processes.
 
-## Enqueue inside an interactive transaction
+## Enqueue inside a transaction
 
-This is the pattern the adapter exists for. Call `forTransaction` with the callback's transaction
-client. The queue sends its SQL through that client, so the job follows the surrounding commit or
-rollback.
+This is the pattern the adapter exists for. Call `forTransaction` with the interactive transaction
+client the callback receives. The queue sends its SQL through that client, so the job follows the
+surrounding commit or rollback.
 
 ```ts
 await prisma.$transaction(async (tx) => {
   const account = await tx.account.create({ data: { email } });
+  // If this throws, Prisma rolls back the account row with the job.
   await workhorse.forTransaction(tx).enqueue("account.created", {
     accountId: account.id,
   });
@@ -52,19 +52,29 @@ await prisma.$transaction(async (tx) => {
 ```
 
 If the callback throws, Prisma rolls back both writes. Nothing outside the transaction ever sees a
-half-committed pair. The adapter's default queue remains outside that transaction — use it for
-enqueues that stand alone.
+half-committed pair. A queue built by `forTransaction` lives inside the caller transaction. The
+adapter's default queue stays outside it, so use that one for enqueues that stand alone.
 
-## Enable notification-assisted workers
+## Run workers from the same adapter
+
+A worker process needs no second wiring path. `workhorse.createWorker` uses the adapter's default
+queue and database connection.
+
+```ts
+const worker = workhorse.createWorker();
+worker.handle("account.created", handleAccountCreated);
+await worker.run();
+```
 
 Prisma does not expose a stable node-postgres pool. Supply a separate caller-owned pool as
-`notificationPool` when workers should reserve a connection for `LISTEN/NOTIFY` and pick up new
-jobs immediately. Without it, workers use bounded polling and keep the same durable behavior — jobs
-still run, just on the polling cadence.
+`notificationPool` when workers should reserve a connection for `LISTEN/NOTIFY` and pick up new jobs
+immediately. Without it, workers use bounded polling and keep the same durable behavior — jobs still
+run, just on the polling cadence.
 
 Database execution failures become `PrismaQueryError`, which retains the statement, original cause,
 and nested PostgreSQL code when Prisma provides one. Typed Workhorse conflicts — idempotency,
-checkpoint, and wait errors — remain their core error classes.
+checkpoint, and wait errors — remain their core error classes, so your handling code never needs to
+unwrap them.
 
 ## Keep resource ownership explicit
 
@@ -73,7 +83,8 @@ the adapter owns the client, because `adapter.close` may run during process shut
 startup.
 
 Install the Workhorse schema with the core deployment tools. Prisma migrations should not manage
-Workhorse's versioned SQL functions — the schema is a versioned protocol, not application models.
+Workhorse's versioned SQL functions. Prisma owns your models; Workhorse owns its versioned SQL
+functions, which are a versioned protocol rather than application models.
 
 ## Next
 

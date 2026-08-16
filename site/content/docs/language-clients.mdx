@@ -4,7 +4,8 @@ description: Implement another Workhorse runtime against the versioned SQL proto
 ---
 
 PostgreSQL owns Workhorse's durable behavior. A language client translates application calls into
-the stable SQL protocol and runs handlers; it should not recreate queue transitions in memory.
+the stable SQL protocol and runs handlers; it should not recreate queue transitions in memory. This page covers which clients exist, what a
+client is responsible for, and what it must never reimplement.
 
 ## Start with the conformance fixtures
 

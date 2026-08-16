@@ -3,14 +3,13 @@ title: Drizzle
 description: Adapt a node-postgres Drizzle database and enqueue jobs inside caller-owned transactions.
 ---
 
-Your application already writes through Drizzle. When a request inserts an account and enqueues a
-follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
-and a committed row with no job is a silent gap. `@workhorse/drizzle` closes that gap: it converts
+Your application already writes through Drizzle. A request inserts an account, then enqueues a
+follow-up job. Those two writes must commit together. A job for a row that rolled back is a bug, and
+a committed row with no job is a silent gap. `@workhorse/drizzle` closes that gap: it converts
 Drizzle's database and transaction objects into the core `Queryable` protocol, so `Queue.enqueue`
-runs inside the same transaction as your Drizzle writes.
-
-Workhorse stays outside your Drizzle migration graph and keeps its own schema lifecycle. Drizzle
-owns your tables; Workhorse owns its versioned SQL functions.
+runs inside the same transaction as your Drizzle writes. This page covers how to build the adapter,
+how to enqueue inside a caller-owned transaction, how workers reuse the same wiring, and who closes
+what.
 
 ## Create the adapter
 
@@ -20,7 +19,7 @@ Install the integration beside the Drizzle and node-postgres packages your appli
 pnpm add @workhorse/drizzle drizzle-orm pg
 ```
 
-Pass the Drizzle database to `createDrizzleAdapter`.
+The adapter needs the Drizzle database you already built. Pass it to `createDrizzleAdapter`.
 
 ```ts
 import { createDrizzleAdapter } from "@workhorse/drizzle";
@@ -38,7 +37,7 @@ const workhorse = createDrizzleAdapter(db, {
 The returned `WorkhorseAdapter` exposes `database`, `queue`, `forTransaction`, `createWorker`, and
 `close`. It gives worker processes one stable surface without adding Drizzle to core.
 
-## Enqueue inside a Drizzle transaction
+## Enqueue inside a transaction
 
 This is the pattern the adapter exists for. Call `forTransaction` with the transaction object. The
 returned `Queue` sends its SQL through that transaction, so the job follows the surrounding commit
@@ -47,6 +46,7 @@ or rollback.
 ```ts
 await db.transaction(async (tx) => {
   await tx.insert(account).values({ id: accountId, email });
+  // If this throws, Drizzle rolls back the account row with the job.
   await workhorse.forTransaction(tx).enqueue("account.created", {
     accountId,
   });
@@ -54,13 +54,14 @@ await db.transaction(async (tx) => {
 ```
 
 If the callback throws, Drizzle rolls back both the account and the job. Nothing outside the
-transaction ever sees a half-committed pair. A queue created from the adapter's default `queue`
-property remains outside that caller transaction — use it for enqueues that stand alone.
+transaction ever sees a half-committed pair. A queue built by `forTransaction` lives inside the
+caller transaction. The adapter's default `queue` property stays outside it, so use that one for
+enqueues that stand alone.
 
-## Create workers from the same adapter
+## Run workers from the same adapter
 
-`workhorse.createWorker` uses the adapter's default queue and database connection, so a worker
-process needs no second wiring path.
+A worker process needs no second wiring path. `workhorse.createWorker` uses the adapter's default
+queue and database connection.
 
 ```ts
 const worker = workhorse.createWorker();
@@ -82,7 +83,8 @@ the adapter owns the pool, because `adapter.close` may run during process shutdo
 startup. If your application created the pool for other work, keep closing it yourself.
 
 Install the Workhorse schema with the core deployment tools. Drizzle should not generate or migrate
-Workhorse's versioned SQL functions — the schema is a versioned protocol, not application tables.
+Workhorse's versioned SQL functions. Drizzle owns your tables; Workhorse owns its versioned SQL
+functions, which are a versioned protocol rather than application tables.
 
 ## Next
 

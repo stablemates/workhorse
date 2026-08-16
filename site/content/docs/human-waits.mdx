@@ -3,11 +3,14 @@ title: Human waits
 description: Store decision context and pause a job until an authenticated operator responds.
 ---
 
-`HandlerContext.waitForHuman` parks a job without consuming its logical attempt. It stores bounded
-JSON context so an operator can understand the decision, then returns the retained result after the
-handler restarts.
+Some work cannot finish until a person answers a question. That person needs to see why the job
+stopped, and the job must not burn an attempt while it waits. `HandlerContext.waitForHuman` parks a
+job without consuming its logical attempt. It stores bounded JSON context so an operator can
+understand the decision, then returns the retained result after the handler restarts. This page
+covers how a handler asks, how an operator answers, and who may record the answer.
 
 ```ts
+// If the process dies here, the handler restarts from the top and this call returns the retained result.
 const review = await context.waitForHuman<
   { accountId: string; prompt: string },
   { approved: boolean }
@@ -32,6 +35,8 @@ work stays under `Blocked`, because operator input cannot resume it.
 An application can put `dashboard.quickAction` in the stored context with a menu `label` and JSON
 `result`. The task menu asks the operator to confirm that result before completion. It never invents
 a quick action for generic decisions.
+
+## Record the answer from your own tool
 
 Applications can call `Queue.completeHumanWait(jobId, name, result, request)` after enforcing their
 own authorization. The request records its trusted actor as `requestedBy`. The first accepted result

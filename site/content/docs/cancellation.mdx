@@ -5,8 +5,8 @@ description: Request a cooperative stop and let PostgreSQL preserve the winning 
 
 You cannot forcibly stop running JavaScript — there is no `Thread.kill`. Everything about
 cancellation in Workhorse follows from that fact. A job that is not running can be finished on
-the spot; a job whose handler is executing can only be asked to stop, and your handler decides
-how quickly it listens.
+the spot. A job whose handler is executing can only be asked to stop. This page covers who
+asks, how the handler hears the request, and which outcome wins when two writers race.
 
 ## Request cancellation
 
@@ -41,6 +41,7 @@ work before starting another external effect.
 ```ts
 worker.handle("export.build", async (payload: { parts: string[] }, ctx) => {
   for (const part of payload.parts) {
+    // Check before the next external effect, so a canceled job stops uploading parts.
     if (ctx.signal.aborted) throw ctx.signal.reason;
     await uploadPart(part, { signal: ctx.signal });
   }

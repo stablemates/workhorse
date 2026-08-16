@@ -6,13 +6,15 @@ description: Run workers as dedicated processes with one configuration file, gra
 Your web tier and your job workers have different failure modes, different scaling curves, and
 different memory budgets. A dedicated worker process keeps them apart: web replicas serve
 traffic, worker replicas process jobs, and the two meet only in PostgreSQL. Workhorse packages
-the whole process lifecycle — startup, signals, drain, probes — so a worker deployment is one
-configuration file and one command.
+the whole process lifecycle, so a worker deployment is one configuration file and one command.
+This page covers how you declare the process, what happens to running jobs when it stops, and
+what your orchestrator can ask it.
 
 ## Define the process
 
-`defineWorkerProcess` type-checks a configuration and returns it unchanged. The definition owns
-its adapter — and through it, its database pool — plus one entry per worker.
+A worker deployment needs one place that names the database connection and every job type the
+process handles. `defineWorkerProcess` type-checks that configuration and returns it unchanged.
+The definition owns its adapter — and through it, its database pool — plus one entry per worker.
 
 ```ts title="src/workhorse.worker.ts"
 import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse/core";
@@ -58,8 +60,8 @@ adds the standalone Node.js lifecycle — signal handling, exit codes, forced ex
 
 ## Drain, don't drop
 
-On the first `SIGTERM` or `SIGINT`, the process marks readiness false and calls `Worker.stop` on
-every worker. Workers stop asking PostgreSQL for jobs; active handlers keep their leases and
+A deploy stops workers while jobs are still running. On the first `SIGTERM` or `SIGINT`, the
+process marks readiness false and calls `Worker.stop` on every worker. Workers stop asking PostgreSQL for jobs; active handlers keep their leases and
 finish. If a claim was already in flight when the signal arrived, it can still commit — the
 process now owns that lease, so it drains that job too.
 
@@ -76,9 +78,9 @@ Two boundaries worth knowing:
   requests immediate exit, so handlers must stay safe for recovery after a forced stop — which
   checkpointed, idempotent handlers already are.
 
-## Probes for your orchestrator
+## Answer your orchestrator's probes
 
-The optional probe listener serves exactly two endpoints: liveness (`/livez`) while the process
+A rolling deployment needs to know when a process still wants traffic. The optional probe listener serves exactly two endpoints: liveness (`/livez`) while the process
 exists, readiness (`/readyz`) while workers can still ask for jobs. Readiness drops the moment
 draining begins, so a rolling deployment routes nothing to a process on its way out.
 
@@ -89,7 +91,7 @@ If startup fails partway, the process closes every resource it already created. 
 loop exits unexpectedly, the process stops its siblings and exits, so your supervisor restarts
 the whole unit rather than running it half-alive.
 
-## One process, one pool
+## Give each process its own pool
 
 Give each process its own pool and let the adapter's `close` shut it down after the last worker
 drains. Size total capacity across replicas: heartbeats, handler queries, and maintenance share
