@@ -57,5 +57,7 @@ describe("dashboard signal waits", () => {
     expect(html).toContain("Signal payload (JSON)");
     expect(html).toContain("Send signal");
     expect(html).toContain("View task");
+    expect(html).toContain('aria-label="Signal account-approval for task signal-job"');
+    expect(html).toContain('aria-label="Signal input for account-approval"');
   });
 });

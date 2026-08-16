@@ -2,8 +2,9 @@
  * Task detail drawer behaviour, kept out of the component so it can be asserted directly.
  *
  * The drawer is deliberately non-modal: an operator comparing tasks clicks straight from one
- * table row to the next while the panel stays open, so the panel must never take the pointer,
- * the focus, or the scroll position away from the task list behind it.
+ * table row to the next while the panel stays open, so the panel must never take the pointer or
+ * scroll position away from the task list behind it. On a narrow viewport the same content becomes
+ * a modal, full-width panel because there is no useful list area to preserve beside it.
  */
 
 /** Props that make the drawer a side panel rather than a modal dialog. */
@@ -12,10 +13,37 @@ export const taskDrawerModelessProps = {
   lockScroll: false,
   trapFocus: false,
   closeOnClickOutside: false,
+  // The shell returns focus to the current task control, including after the drawer switches tasks.
   returnFocus: false,
   /* Escape still closes, because that is the only keyboard affordance a side panel keeps. */
   closeOnEscape: true,
 } as const;
+
+/** Responsive drawer policy for task details. */
+export function taskDrawerViewportProps(narrow: boolean) {
+  if (!narrow) return { ...taskDrawerModelessProps, size: "lg" as const };
+  return {
+    withOverlay: true,
+    lockScroll: true,
+    trapFocus: true,
+    closeOnClickOutside: true,
+    // The shell owns this so switching tasks updates the return target before the panel closes.
+    returnFocus: false,
+    closeOnEscape: true,
+    size: "100%" as const,
+  };
+}
+
+export type TaskDrawerFocusChange = "drawer" | "trigger" | "none";
+
+/** Where focus moves when URL reconciliation opens, switches, or closes task detail. */
+export function taskDrawerFocusChange(
+  previousTaskId: string | null,
+  selectedTaskId: string | null,
+): TaskDrawerFocusChange {
+  if (previousTaskId === selectedTaskId) return "none";
+  return selectedTaskId === null ? "trigger" : "drawer";
+}
 
 /** Escape closes a dropdown before the detail panel behind it. */
 export function taskDrawerCloseOnEscape(dropdownOpened: boolean): boolean {
