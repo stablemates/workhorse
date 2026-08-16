@@ -33,6 +33,7 @@ export interface DashboardOperator {
     kind: DashboardDemoJobKind,
     audit: DashboardAuditContext,
     scenario?: DashboardDemoScenario,
+    priority?: number,
   ) => Promise<{ jobId: string }>;
 }
 

@@ -421,6 +421,13 @@ export const dashboardTaskFilters = [
 
 export type DashboardTaskFilter = (typeof dashboardTaskFilters)[number];
 
+export const dashboardTaskSorts = ["updated", "priority"] as const;
+
+export type DashboardTaskSort = (typeof dashboardTaskSorts)[number];
+
+/** Highest priority accepted by dashboard filters and operator enqueue controls. */
+export const dashboardTaskPriorityMax = 100;
+
 export type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 
 export type DashboardActivityPeriod = "15m" | "1h" | "6h" | "24h" | "7d";
@@ -448,6 +455,8 @@ export interface DashboardTasksPage {
   queue: string | null;
   worker: string | null;
   jobType: string | null;
+  priority: number | null;
+  sort: DashboardTaskSort;
   tags: string[];
   search: string | null;
   page: number;
@@ -501,6 +510,7 @@ export interface DashboardSystemQueueRow {
   paused: boolean;
   ready: number;
   oldestReadyMs: number | null;
+  priorityBacklog: Array<{ priority: number; ready: number; oldestReadyMs: number }>;
   dueSoon: number;
   active: number;
   retrying: number;

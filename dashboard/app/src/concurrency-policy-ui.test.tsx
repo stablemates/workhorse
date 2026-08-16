@@ -589,6 +589,7 @@ describe("system queue pressure concurrency column", () => {
             paused: false,
             ready: 7,
             oldestReadyMs: 1_000,
+            priorityBacklog: [],
             dueSoon: 0,
             active: 4,
             retrying: 0,

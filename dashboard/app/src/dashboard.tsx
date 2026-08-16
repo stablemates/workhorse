@@ -15,6 +15,7 @@ import {
   Group,
   Loader,
   NavLink,
+  NumberInput,
   Pagination,
   Paper,
   ScrollArea,
@@ -98,7 +99,11 @@ import {
   taskRowActionGroups,
   type TaskResultState,
 } from "./presentation.js";
-import { dashboardTaskFilters, readIdempotencyEvidence } from "@workhorse/dashboard-server/wire";
+import {
+  dashboardTaskFilters,
+  dashboardTaskPriorityMax,
+  readIdempotencyEvidence,
+} from "@workhorse/dashboard-server/wire";
 import type {
   DashboardCancellationRequest,
   DashboardCronPage,
@@ -2580,6 +2585,29 @@ function TaskListingFilters({
         maxDropdownHeight={240}
         style={{ flex: "1 1 220px" }}
       />
+      <NumberInput
+        size="xs"
+        value={data.priority ?? ""}
+        onChange={(value) => updateLocation({ priority: typeof value === "number" ? value : null })}
+        min={0}
+        max={dashboardTaskPriorityMax}
+        allowDecimal={false}
+        placeholder="Any priority"
+        aria-label="Filter tasks by exact priority"
+        style={{ flex: "1 1 130px" }}
+      />
+      <Select
+        size="xs"
+        value={data.sort}
+        onChange={(sort) => updateLocation({ sort: sort === "priority" ? "priority" : "updated" })}
+        data={[
+          { value: "updated", label: "Recently updated" },
+          { value: "priority", label: "Highest priority" },
+        ]}
+        allowDeselect={false}
+        aria-label="Sort tasks"
+        style={{ flex: "1 1 150px" }}
+      />
       {(
         [
           ["Queue", data.queue, taskFacets.facets.queues, "queue"],
@@ -2612,6 +2640,31 @@ function taskRowActionIcon(id: TaskRowActionId): ReactNode {
   if (id === "cancel") return <Prohibit size={16} />;
   if (id === "run-now") return <PlayCircle size={16} />;
   return <FunnelSimple size={16} />;
+}
+
+export function EnqueuePriorityInput({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <>
+      <NumberInput
+        size="xs"
+        value={value}
+        onChange={(next) => onChange(typeof next === "number" ? next : 0)}
+        min={0}
+        max={dashboardTaskPriorityMax}
+        allowDecimal={false}
+        aria-label="Test task priority"
+      />
+      <Text size="xs" c="dimmed" mt={4}>
+        Higher values run first. Redrive keeps the source task priority.
+      </Text>
+    </>
+  );
 }
 
 /**
@@ -2703,7 +2756,9 @@ function TasksPage({
   navigate: (href: string) => void;
   replace: (href: string) => void;
   taskLocation: TaskLocationState;
-  runDemoJob: ((kind: DemoJobKind, scenario?: DurableDemoScenario) => Promise<void>) | null;
+  runDemoJob:
+    | ((kind: DemoJobKind, scenario?: DurableDemoScenario, priority?: number) => Promise<void>)
+    | null;
   runningDemoJob: DemoJobKind | null;
   inspectJob: (id: string, options?: { confirmCancel?: boolean }) => void;
   /**
@@ -2716,6 +2771,7 @@ function TasksPage({
     () => localStorage.getItem("workhorse-full-args") === "true",
   );
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
+  const [enqueuePriority, setEnqueuePriority] = useState(0);
   // The one row action that is applied here rather than in the drawer. What it reported goes to
   // the notification system, so only the in-flight row is state this page has to hold.
   const [runningNowJobId, setRunningNowJobId] = useState<string | null>(null);
@@ -2793,6 +2849,8 @@ function TasksPage({
       aria-label="Tasks pagination"
     />
   );
+  const enqueueTestTask = (kind: DemoJobKind, scenario?: DurableDemoScenario) =>
+    runDemoJob?.(kind, scenario, enqueuePriority);
 
   return (
     <Stack gap="xl">
@@ -2836,65 +2894,70 @@ function TasksPage({
                     </Button>
                   </Menu.Target>
                   <Menu.Dropdown>
+                    <Menu.Label>Priority</Menu.Label>
+                    <Box px="xs" pb="xs" onClick={(event) => event.stopPropagation()}>
+                      <EnqueuePriorityInput value={enqueuePriority} onChange={setEnqueuePriority} />
+                    </Box>
+                    <Menu.Divider />
                     <Menu.Label>Test outcome</Menu.Label>
                     <Menu.Item
                       leftSection={<CheckCircle size={16} />}
-                      onClick={() => void runDemoJob("success")}
+                      onClick={() => void enqueueTestTask("success")}
                     >
                       Succeed
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ArrowCounterClockwise size={16} />}
-                      onClick={() => void runDemoJob("retry")}
+                      onClick={() => void enqueueTestTask("retry")}
                     >
                       Fail once, then retry
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<CheckCircle size={16} />}
-                      onClick={() => void runDemoJob("idempotent")}
+                      onClick={() => void enqueueTestTask("idempotent")}
                     >
                       Reuse one task for repeat requests
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ListChecks size={16} />}
-                      onClick={() => void runDemoJob("durable", "order-fulfillment")}
+                      onClick={() => void enqueueTestTask("durable", "order-fulfillment")}
                     >
                       Durable · order fulfillment · 4 steps
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ListChecks size={16} />}
-                      onClick={() => void runDemoJob("durable", "customer-onboarding")}
+                      onClick={() => void enqueueTestTask("durable", "customer-onboarding")}
                     >
                       Durable · customer onboarding · 3 steps
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ListChecks size={16} />}
-                      onClick={() => void runDemoJob("durable", "report-publication")}
+                      onClick={() => void enqueueTestTask("durable", "report-publication")}
                     >
                       Durable · report publication · 3 steps
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<Clock size={16} />}
-                      onClick={() => void runDemoJob("timer")}
+                      onClick={() => void enqueueTestTask("timer")}
                     >
                       Durable wait · named timer boundary
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<XCircle size={16} />}
                       color="red"
-                      onClick={() => void runDemoJob("failure")}
+                      onClick={() => void enqueueTestTask("failure")}
                     >
                       Terminal failure
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ArrowCounterClockwise size={16} />}
-                      onClick={() => void runDemoJob("redrive")}
+                      onClick={() => void enqueueTestTask("redrive")}
                     >
                       Redrive newest dead letter
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<Clock size={16} />}
-                      onClick={() => void runDemoJob("long-running")}
+                      onClick={() => void enqueueTestTask("long-running")}
                     >
                       Long-running · 20s
                     </Menu.Item>
@@ -3610,7 +3673,7 @@ export function QueuePressure({
   navigate: (href: string) => void;
 }) {
   return (
-    // Nine numeric columns need the wider two-thirds column; narrower viewports scroll the table
+    // The numeric columns need the wider two-thirds column; narrower viewports scroll the table
     // horizontally rather than dropping any of them.
     <Paper withBorder h="100%">
       <Group justify="space-between" p="md">
@@ -3634,13 +3697,14 @@ export function QueuePressure({
         </Badge>
       </Group>
       <ScrollArea>
-        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={1020}>
+        <Table highlightOnHover verticalSpacing={6} horizontalSpacing="sm" miw={1180}>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Queue</Table.Th>
               <Table.Th>Status</Table.Th>
               <Table.Th ta="right">Ready</Table.Th>
               <Table.Th ta="right">Oldest</Table.Th>
+              <Table.Th>Ready by priority</Table.Th>
               <Table.Th ta="right">Due in 5m</Table.Th>
               <Table.Th ta="right">Active</Table.Th>
               <Table.Th ta="right">
@@ -3688,6 +3752,24 @@ export function QueuePressure({
                   </Table.Td>
                   <Table.Td ta="right">{queue.ready}</Table.Td>
                   <Table.Td ta="right">{formatDuration(queue.oldestReadyMs)}</Table.Td>
+                  <Table.Td>
+                    {queue.priorityBacklog.length === 0 ? (
+                      <Text size="sm" c="dimmed">
+                        —
+                      </Text>
+                    ) : (
+                      <Stack gap={1}>
+                        {queue.priorityBacklog.map((lane) => (
+                          <Text key={lane.priority} size="xs" style={{ whiteSpace: "nowrap" }}>
+                            <Text component="span" fw={650} inherit>
+                              P{lane.priority}
+                            </Text>{" "}
+                            · {lane.ready} ready · oldest {formatDuration(lane.oldestReadyMs)}
+                          </Text>
+                        ))}
+                      </Stack>
+                    )}
+                  </Table.Td>
                   <Table.Td ta="right">{queue.dueSoon}</Table.Td>
                   <Table.Td ta="right">{queue.active}</Table.Td>
                   <Table.Td ta="right">
@@ -6358,6 +6440,8 @@ function useDashboardController(
               queue: listing.queue,
               worker: listing.worker,
               jobType: listing.jobType,
+              priority: listing.priority,
+              sort: listing.sort,
               tags: listing.tags,
               search: listing.search ?? undefined,
               page: listing.page,
@@ -6449,13 +6533,14 @@ function useDashboardController(
   }, [client]);
 
   const runDemoJob = useCallback(
-    async (kind: DemoJobKind, scenario?: DurableDemoScenario) => {
+    async (kind: DemoJobKind, scenario?: DurableDemoScenario, priority = 0) => {
       setRunningDemoJob(kind);
       try {
         if (!demoTools) return;
         await demoTools.enqueueTest({
           kind,
           ...(scenario ? { scenario } : {}),
+          priority,
           audit: {
             actor: auditActor,
             reason: `Demonstrate the ${scenario ?? kind} execution path`,
