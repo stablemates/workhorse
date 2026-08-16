@@ -1227,6 +1227,7 @@ async function seedDependencyChain(
         {
           maxAttempts: prerequisite.maxAttempts ?? 1,
           tags: [...example.tags, "prerequisite"],
+          ...(prerequisite.runAt === undefined ? {} : { runAt: prerequisite.runAt }),
         },
       ),
     );

@@ -85,6 +85,7 @@ export interface DemoFeatureDependencySeed {
     label: string;
     behavior: "success" | "always-fail";
     maxAttempts?: number;
+    runAt?: Date;
   }>;
   onFailure: DependencyTerminalPolicy;
   onCancellation: DependencyTerminalPolicy;
@@ -468,7 +469,13 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
         maxAttempts: 1,
         tags: ["showcase", "dependency", "release"],
         seedDependency: {
-          prerequisites: [{ label: "Prerequisite catalog import", behavior: "success" }],
+          prerequisites: [
+            {
+              label: "Prerequisite catalog import",
+              behavior: "success",
+              runAt: new Date("9999-12-31T23:59:59.999Z"),
+            },
+          ],
           onFailure: "fail",
           onCancellation: "cancel",
         },

@@ -532,6 +532,44 @@ describe("Workhorse demo", () => {
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
       rows: [{ count: 448 }],
     });
+    const blockedTasks = await dashboardClient(app).dashboard.tasks({
+      filter: "blocked",
+      page: 1,
+      pageSize: 25,
+    });
+    expect(blockedTasks.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          state: "blocked",
+          blockedReason: "prerequisite_pending",
+          payload: expect.objectContaining({
+            family: "job-dependencies",
+            scenario: "release-after-success",
+            role: "dependent",
+          }),
+        }),
+      ]),
+    );
+    const visibleBlockedTask = blockedTasks.jobs.find(
+      (job) =>
+        job.payload &&
+        typeof job.payload === "object" &&
+        "scenario" in job.payload &&
+        job.payload.scenario === "release-after-success",
+    );
+    expect(visibleBlockedTask).toBeDefined();
+    const scheduledTasks = await dashboardClient(app).dashboard.tasks({
+      filter: "scheduled",
+      page: 1,
+      pageSize: 25,
+    });
+    expect(scheduledTasks.jobs.map((job) => job.id)).toEqual(
+      expect.arrayContaining(visibleBlockedTask!.prerequisiteJobIds),
+    );
+    const retainedPrerequisite = scheduledTasks.jobs.find((job) =>
+      visibleBlockedTask!.prerequisiteJobIds.includes(job.id),
+    );
+    expect(retainedPrerequisite?.runAt).toBe("9999-12-31T23:59:59.999Z");
     expect(
       await pool.query(
         `SELECT payload->>'family' AS family,
@@ -755,8 +793,8 @@ describe("Workhorse demo", () => {
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
       all: 448,
-      scheduled: 9,
-      queued: 63,
+      scheduled: 10,
+      queued: 62,
       completed: 350,
       discarded: 21,
       retried: 22,
@@ -786,7 +824,7 @@ describe("Workhorse demo", () => {
       page: 1,
       pageSize: 25,
       total: 448,
-      counts: { all: 448, scheduled: 9, queued: 63, completed: 350, discarded: 21 },
+      counts: { all: 448, scheduled: 10, queued: 62, completed: 350, discarded: 21 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -819,7 +857,7 @@ describe("Workhorse demo", () => {
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
-      total: 9,
+      total: 10,
       jobs: expect.arrayContaining([
         expect.objectContaining({ state: "scheduled", payload: { source: "scheduled-seed" } }),
       ]),
