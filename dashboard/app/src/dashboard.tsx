@@ -1552,15 +1552,19 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
       ? "The attempt budget is exhausted, so no further retry will be scheduled."
       : "Retries remain within the attempt budget."
   }`;
+  // The default policy's summary is a fixed explainer, so it hides behind the help icon; a
+  // configured policy's summary carries its actual delays, which stay visible as data.
+  const isDefaultPolicy = job.identity.retryPolicy === null;
   return (
     <MetaRow label="Retry policy">
       <Badge size="xs" variant="light" color="orange" title={title} tt="none">
         {policy.label}
       </Badge>
       <Text c="dimmed" size="xs" title={title}>
-        {policy.summary} · {budget}
+        {isDefaultPolicy ? budget : `${policy.summary} · ${budget}`}
         {exhausted ? " · budget exhausted, no further retry is scheduled" : ""}
       </Text>
+      {isDefaultPolicy ? <HelpButton label="Default backoff" help={`${policy.summary}.`} /> : null}
     </MetaRow>
   );
 }
@@ -1772,8 +1776,25 @@ export function DependencyLine({
   job,
   ...navigation
 }: { job: DashboardJobDetail } & LineageNavigationProps) {
-  if (job.identity.prerequisiteJobIds.length === 0 && job.dependencyLineage.records.length === 0)
-    return null;
+  // Spawning a child also inserts a dependency edge — the parent blocks until the child joins —
+  // so every parent-child pair would otherwise appear twice in this drawer: once here and once
+  // in ChildLine. ChildLine owns that relationship; this component shows only the dependencies
+  // an enqueue declared explicitly.
+  const childEdgeKeys = new Set(
+    (job.childLineage?.records ?? []).map((edge) => `${edge.parentJobId}:${edge.childJobId}`),
+  );
+  const explicitRecords = job.dependencyLineage.records.filter(
+    (edge) => !childEdgeKeys.has(`${edge.dependentJobId}:${edge.prerequisiteJobId}`),
+  );
+  const ownChildIds = new Set(
+    (job.childLineage?.records ?? [])
+      .filter((edge) => edge.parentJobId === job.identity.id)
+      .map((edge) => edge.childJobId),
+  );
+  const explicitPrerequisiteIds = job.identity.prerequisiteJobIds.filter(
+    (id) => !ownChildIds.has(id),
+  );
+  if (explicitPrerequisiteIds.length === 0 && explicitRecords.length === 0) return null;
   const blocked = job.identity.blockedReason === "prerequisite_pending";
   const summary = blocked
     ? "Blocked until every prerequisite satisfies the dependency policy"
@@ -1783,20 +1804,18 @@ export function DependencyLine({
   // One edge renders as one row. The prerequisite identity, its state, and its policy used to be
   // split between a labeled row and a raw "success: release, failure: fail" line that repeated
   // the same id, which read as two different facts about two different tasks.
-  const prerequisiteEdges = job.dependencyLineage.records.filter(
+  const prerequisiteEdges = explicitRecords.filter(
     (edge) => edge.dependentJobId === job.identity.id,
   );
-  const dependentEdges = job.dependencyLineage.records.filter(
+  const dependentEdges = explicitRecords.filter(
     (edge) => edge.prerequisiteJobId === job.identity.id && edge.dependentJobId !== job.identity.id,
   );
   return (
     <Stack gap={6}>
-      {job.identity.prerequisiteJobIds.length > 0 ? (
-        <MetaRow
-          label={job.identity.prerequisiteJobIds.length === 1 ? "Prerequisite" : "Prerequisites"}
-        >
+      {explicitPrerequisiteIds.length > 0 ? (
+        <MetaRow label={explicitPrerequisiteIds.length === 1 ? "Prerequisite" : "Prerequisites"}>
           <span>
-            <RelatedTaskLinks ids={job.identity.prerequisiteJobIds} {...navigation} />
+            <RelatedTaskLinks ids={explicitPrerequisiteIds} {...navigation} />
           </span>
           <Badge size="xs" variant="light" color={blocked ? "yellow" : "teal"} tt="none">
             {blocked ? "blocked" : "released"}
@@ -1977,11 +1996,17 @@ function TimingPolicyLine({ job }: { job: DashboardJobDetail }) {
   const deadlineAt = job.identity.deadlineAt ?? null;
   const executionTimeoutMs = job.identity.executionTimeoutMs ?? null;
   if (deadlineAt === null && executionTimeoutMs === null) {
+    // "None set" stays visible — an operator asking "why is this still running?" needs the
+    // answer in the row — while the wordier explanation moves behind the help icon.
     return (
       <MetaRow label="Time limits">
         <Text c="dimmed" size="xs">
-          No lifetime deadline and no per-attempt execution limit.
+          None set
         </Text>
+        <HelpButton
+          label="Time limits"
+          help="No lifetime deadline and no per-attempt execution limit."
+        />
       </MetaRow>
     );
   }
@@ -7505,9 +7530,10 @@ function DashboardContent({
                   <Badge size="xs" variant="light" color="orange" tt="none">
                     {selectedJob.identity.priority}
                   </Badge>
-                  <Text c="dimmed" size="xs">
-                    Higher values are claimed first; equal values keep FIFO order.
-                  </Text>
+                  <HelpButton
+                    label="Priority"
+                    help="Higher values are claimed first; equal values keep FIFO order."
+                  />
                 </MetaRow>
                 <RetryPolicyLine job={selectedJob} />
                 <TimingPolicyLine job={selectedJob} />

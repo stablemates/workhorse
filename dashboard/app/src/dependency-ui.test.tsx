@@ -14,6 +14,7 @@ async function renderDependency(
     records: [],
     truncated: false,
   },
+  childLineage: DashboardJobDetail["childLineage"] = { records: [], truncated: false },
 ): Promise<string> {
   const { DependencyLine } = await import("./dashboard.js");
   const job = {
@@ -27,6 +28,7 @@ async function renderDependency(
       ...identity,
     },
     dependencyLineage,
+    childLineage,
   } as DashboardJobDetail;
   return renderToStaticMarkup(
     createElement(
@@ -176,6 +178,97 @@ describe("task dependency detail", () => {
 
   it("renders nothing for an independent task", async () => {
     await expect(renderDependency({})).resolves.not.toContain("Prerequisite");
+  });
+
+  it("hides dependency edges that mirror a parent-child edge", async () => {
+    // Spawning a child inserts both a job_child edge and a job_dependency edge for the same
+    // pair, so without filtering the child's drawer names its parent twice: once as
+    // "Dependent" here and once as "Parent" in ChildLine.
+    const html = await renderDependency(
+      {},
+      {
+        records: [
+          {
+            dependentJobId: "parent-job",
+            prerequisiteJobId: "selected-job",
+            onSuccess: "release",
+            onFailure: "fail",
+            onCancellation: "cancel",
+            createdAt: "2026-08-14T11:00:00.000Z",
+            releasedAt: "2026-08-14T12:00:00.000Z",
+            resolution: "release",
+          },
+        ],
+        truncated: false,
+      },
+      {
+        records: [
+          {
+            parentJobId: "parent-job",
+            childJobId: "selected-job",
+            name: "shard-1",
+            type: "demo.child-step",
+            createdAt: "2026-08-14T11:00:00.000Z",
+            joinedAt: "2026-08-14T12:00:00.000Z",
+            outcomeState: "succeeded",
+            error: null,
+          },
+        ],
+        truncated: false,
+      },
+    );
+    expect(html).not.toContain("Dependent");
+    expect(html).not.toContain("parent-job");
+  });
+
+  it("hides the parent's implicit child prerequisites but keeps explicit ones", async () => {
+    const html = await renderDependency(
+      { prerequisiteJobIds: ["child-job", "explicit-prerequisite"] },
+      {
+        records: [
+          {
+            dependentJobId: "selected-job",
+            prerequisiteJobId: "child-job",
+            onSuccess: "release",
+            onFailure: "fail",
+            onCancellation: "cancel",
+            createdAt: "2026-08-14T11:00:00.000Z",
+            releasedAt: null,
+            resolution: null,
+          },
+          {
+            dependentJobId: "selected-job",
+            prerequisiteJobId: "explicit-prerequisite",
+            onSuccess: "release",
+            onFailure: "fail",
+            onCancellation: "cancel",
+            createdAt: "2026-08-14T11:00:00.000Z",
+            releasedAt: null,
+            resolution: null,
+          },
+        ],
+        truncated: false,
+      },
+      {
+        records: [
+          {
+            parentJobId: "selected-job",
+            childJobId: "child-job",
+            name: "shard-1",
+            type: "demo.child-step",
+            createdAt: "2026-08-14T11:00:00.000Z",
+            joinedAt: null,
+            outcomeState: null,
+            error: null,
+          },
+        ],
+        truncated: false,
+      },
+    );
+    expect(html).toContain("explicit-prerequisite");
+    expect(html).not.toContain("child-job");
+    expect(html).toContain("Prerequisite");
+    expect(html).not.toContain("Prerequisites");
   });
 });
 
