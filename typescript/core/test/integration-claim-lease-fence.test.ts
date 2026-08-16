@@ -32,6 +32,18 @@ describe("claim lease fence", () => {
     expect(await queue.fail(promoted!, "priority-promoted", new Error("retry priority"), 0)).toBe(
       "ready",
     );
+    await expect(queue.getJob(scheduledHigh)).resolves.toMatchObject({
+      state: "ready",
+      priority: 90,
+    });
+    const elevatedPeer = await queue.enqueue("elevated-peer", null, {
+      queue: queueName,
+      priority: 85,
+    });
+    await expect(queue.claim("priority-retried", { queue: queueName })).resolves.toMatchObject({
+      id: scheduledHigh,
+      priority: 90,
+    });
 
     const highPeers = await queue.enqueueMany([
       { type: "high-peer-a", payload: null, options: { queue: queueName, priority: 80 } },
@@ -42,7 +54,7 @@ describe("claim lease fence", () => {
       queue.claim("priority-competitor-b", { queue: queueName }),
     ]);
     expect(claims.map((claim) => claim?.id)).toEqual(
-      expect.arrayContaining([scheduledHigh, highPeers[0]]),
+      expect.arrayContaining([elevatedPeer, highPeers[0]]),
     );
     expect(claims.every((claim) => claim !== null && claim.priority >= 80)).toBe(true);
     await expect(queue.getJob(low)).resolves.toMatchObject({ state: "ready", priority: 10 });

@@ -362,15 +362,15 @@ without treating one shared administrator as multi-user RBAC.
 - [x] Preserve the original immutable outcome and complete redrive lineage.
 - [x] Define idempotency behavior for repeated redrive requests.
 
-### [ ] P1-05 Priority queues
+### [x] P1-05 Priority queues
 
 **Depends on:** none
 
-- [ ] Add a bounded priority range with FIFO ordering inside each priority.
-- [ ] Preserve selective ready indexes and live-work claim scaling.
-- [ ] Define promotion, retry, and redrive priority behavior.
-- [ ] Add starvation controls or document strict-priority starvation explicitly.
-- [ ] Benchmark index size and claim latency under mixed priorities.
+- [x] Add a bounded priority range with FIFO ordering inside each priority.
+- [x] Preserve selective ready indexes and live-work claim scaling.
+- [x] Define promotion, retry, and redrive priority behavior.
+- [x] Add starvation controls or document strict-priority starvation explicitly.
+- [x] Benchmark index size and claim latency under mixed priorities.
 
 ### [x] P1-06 Queue concurrency policies
 
