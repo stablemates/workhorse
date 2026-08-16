@@ -44,29 +44,18 @@ Plain demo mode keeps those local files without exporting traces or metrics. The
 adds OTLP export to the same pipeline, so comparing a local record with its backend copy does not
 require two logging formats.
 
-## Export queue pressure
+## Collect database metrics
 
-Lifecycle counters and latency histograms emit automatically after your application configures the
-OpenTelemetry SDK. Database-wide queue depth and oldest-ready age need an asynchronous observation:
-
-```ts
-import { registerQueueMetrics } from "@workhorse/core";
-
-const unregisterQueueMetrics = registerQueueMetrics(adapter.queue);
-
-// Call this during application shutdown.
-unregisterQueueMetrics();
-```
-
-Register the callback once for each database telemetry resource. If every worker registers the
-same database, the backend receives duplicate observations.
+Database-wide queue state needs a collector because process metrics cannot reconstruct shared
+state. The [metrics guide](355-observability.md#database-metrics-need-a-dedicated-collector)
+explains both public collectors, their instrument sets, and how to avoid duplicate observations.
 
 ## Ask business questions by job type and queue
 
 Lifecycle counters and handler timing metrics attach the job type and queue name. SigNoz can group
 throughput, failures, retries, and runtime by either value.
 
-Use the [enqueue outcome metric](350-observability.md#reading-the-signals-together) to inspect
+Use the [enqueue outcome metric](355-observability.md#reading-the-signals-together) to inspect
 coalescing rates.
 
 Keep both values as stable application identifiers. If a job type contains a customer or request
@@ -91,9 +80,9 @@ use the handler histogram when you need unsampled percentiles for one task type.
 
 ## Next
 
+- [355-observability.md](355-observability.md) — collect and interpret runtime and database metrics
 - [310-workers.md](310-workers.md) — where telemetry runs in a deployment
 - [320-statistics.md](320-statistics.md) — how the dashboard gets longer-window statistics
-- [330-retention.md](330-retention.md) — how durable history is bounded
 
 ---
 

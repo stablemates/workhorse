@@ -1,23 +1,19 @@
-# How do I observe Workhorse in production?
+# How do I read Workhorse metrics in production?
 
-Workhorse emits OpenTelemetry metrics for activity inside each process. A separate observer reports
-the shared state in PostgreSQL, because every worker sees the same queues and would otherwise count
-that state more than once.
+Workhorse's [production telemetry](350-production-telemetry.md) includes bounded metrics for runtime
+activity and shared PostgreSQL state. This guide explains how to collect and interpret those metrics.
 
-## Process metrics happen automatically
+## Runtime metrics happen automatically
 
-Workhorse uses the OpenTelemetry API when it enqueues, claims, executes, cancels, recovers, or
-performs redrive operations. It also records schedule firing and maintenance. Once your application
-configures an OpenTelemetry SDK, those measurements flow through your chosen exporter. Configure it
-before or after you import `@workhorse/core`; Workhorse notices the change and follows the SDK you
-installed. Without an SDK the measurements are harmless no-ops.
+Workhorse records metrics when it enqueues, claims, executes, cancels, recovers, or performs redrive
+operations. It also records schedule firing and maintenance.
 
 Execution metrics use queue, job type, and outcome as attributes. They never use a job ID, payload,
 worker ID, or error message. Those values grow without a stable bound, so putting them in metric
 attributes would make the monitoring backend create an ever-growing set of time series. Use traces
 for per-job evidence instead.
 
-## Database metrics need a dedicated observer
+## Database metrics need a dedicated collector
 
 Queue depth, the age of ready work, expired leases, paused queues, deadline pressure, and fleet
 capacity are current database state. `WorkhorseMetricsObserver` reads that state and records gauges.
@@ -37,6 +33,22 @@ observer.stop();
 
 Do not start the observer in every worker replica. Each observer reads the same queues and fleet rows, so
 multiple observers would export duplicate gauges and add unnecessary queries.
+
+`registerQueueMetrics` reads through a `Queue` instead. It adds policy and orchestration gauges for
+concurrency, dependencies, child jobs, and rate limits alongside queue depth and age:
+
+```ts
+import { registerQueueMetrics } from "@workhorse/core";
+
+const unregisterQueueMetrics = registerQueueMetrics(adapter.queue);
+
+// During service shutdown:
+unregisterQueueMetrics();
+```
+
+The two collectors use distinct instrument names, but both report queue depth and age. Choose the
+instrument set your dashboards consume, and register each collector only once for a database and
+telemetry resource.
 
 ## Reading the signals together
 
@@ -64,9 +76,9 @@ describe its transitions and current state rather than reconstructing queue trut
 
 ## Next
 
+- [350-production-telemetry.md](350-production-telemetry.md) — connect traces, logs, and metrics to your telemetry backend
 - [310-workers.md](310-workers.md) — how workers claim and drain work
 - [320-statistics.md](320-statistics.md) — durable historical rates maintained in PostgreSQL
-- [340-redrive.md](340-redrive.md) — how operators create a fresh attempt from failed work
 
 ---
 
