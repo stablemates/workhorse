@@ -1,6 +1,7 @@
 docs/research
 node_modules/
 dist/
+/typescript/dashboard/development/
 coverage/
 .next/
 apps/site/next-env.d.ts

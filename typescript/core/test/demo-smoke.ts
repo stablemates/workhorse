@@ -152,6 +152,15 @@ try {
   if (!moduleSource.ok || !moduleText.includes("createRoot")) {
     throw new Error("Dashboard source modules were not served from the demo's own origin");
   }
+  const themeModule = await fetch(`${baseUrl}/src/theme.tsx`);
+  const themeModuleText = await themeModule.text();
+  if (
+    !themeModule.ok ||
+    (!themeModuleText.includes("react/jsx-dev-runtime") &&
+      !themeModuleText.includes("react/jsx-runtime"))
+  ) {
+    throw new Error("Dashboard TSX modules did not use the automatic JSX runtime");
+  }
 
   const tasksResponse = await fetch(`${baseUrl}/rpc/dashboard/tasks`, {
     method: "POST",

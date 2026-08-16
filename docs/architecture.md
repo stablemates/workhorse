@@ -1193,7 +1193,12 @@ is `@workhorse/dashboard-app`.
 
 `typescript/dashboard` is the thin `@workhorse/dashboard` compatibility package. Its build copies
 the compiled library from `dashboard/app/dist/library`; those modules export the React API and
-re-export the backend entry points under their existing public names.
+re-export the backend entry points under their existing public names. The same build copies
+`dashboard/app/browser/index.html` to `development/browser/index.html` and the non-test files from
+`dashboard/app/src` to `development/src`. If `createDashboardDevServer()` runs from the copied
+`dist/dev.js`, `developmentRoot()` selects that `development` directory for the HTML template and
+the `/src` Vite alias. The programmatic Vite server sets esbuild's `jsx` mode to `automatic`, so TSX
+modules import the React JSX runtime without loading the private application's Vite configuration.
 
 `typescript/dashboard-server` owns the TypeScript backend. Its package is
 `@workhorse/dashboard-server`; it implements the wire types, RPC client, read model, operator

@@ -33,12 +33,15 @@ export interface DashboardDevServer {
   close(): Promise<void>;
 }
 
-function packageRoot(): string {
+function developmentRoot(): string {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-  // Source sits in `src/`; the published module sits in `dist/library/`.
-  return basename(moduleDirectory) === "library"
-    ? dirname(dirname(moduleDirectory))
-    : dirname(moduleDirectory);
+  if (basename(moduleDirectory) === "library") return dirname(dirname(moduleDirectory));
+  if (basename(moduleDirectory) === "dist") {
+    // The public compatibility package copies the library into `dist/` and keeps the source
+    // modules that Vite needs under `development/`.
+    return join(dirname(moduleDirectory), "development");
+  }
+  return dirname(moduleDirectory);
 }
 
 export interface DashboardDevServerOptions {
@@ -65,14 +68,19 @@ export async function createDashboardDevServer(
     );
   }
 
-  const root = options.root ?? join(packageRoot(), "browser");
+  const source = join(developmentRoot(), "src");
+  const root = options.root ?? join(developmentRoot(), "browser");
   const server = await vite.createServer({
     root,
     base: "/",
+    // This helper does not load the dashboard application's Vite config, so configure the same
+    // automatic JSX runtime here. Without it, Vite emits `React.createElement` without importing
+    // React and the first module-scope JSX expression fails in the browser.
+    esbuild: { jsx: "automatic" },
     // The host owns HTML, so Vite must not try to serve an index itself.
     appType: "custom",
     server: { middlewareMode: true },
-    resolve: { alias: { "/src": join(packageRoot(), "src") } },
+    resolve: { alias: { "/src": source } },
   });
 
   return {

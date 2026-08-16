@@ -149,6 +149,8 @@ try {
     "dist/styles.css",
     "dist/assets/workhorse-mark.svg",
     "dist/assets/workhorse-wordmark.svg",
+    "development/browser/index.html",
+    "development/src/browser.tsx",
   ]) {
     await readFile(path.join(dashboardExtracted, "package", required));
   }
@@ -198,6 +200,7 @@ try {
           "react-dom": "19.1.1",
           "@types/react": "19.1.10",
           "@types/react-dom": "19.1.7",
+          vite: "7.1.7",
         },
         pnpm: {
           // Published packages can depend on another package from the same unreleased lockstep set.
@@ -426,6 +429,23 @@ assert.equal(loggedOut.status, 302);
 `,
   );
   await writeFile(
+    path.join(consumer, "dashboard-development.mjs"),
+    `import assert from "node:assert/strict";
+import { createDashboardDevServer } from "@workhorse/dashboard/dev";
+
+const development = await createDashboardDevServer();
+try {
+  const template = await development.readTemplate();
+  assert.match(template, /<div id="root"><\\/div>/);
+  const transformed = await development.transformHtml("/tasks", template);
+  assert.match(transformed, /\\/@vite\\/client/);
+  assert.match(transformed, /\\/src\\/browser.tsx/);
+} finally {
+  await development.close();
+}
+`,
+  );
+  await writeFile(
     path.join(consumer, "dashboard-standalone.mjs"),
     `import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -502,6 +522,7 @@ try {
     throw new Error("The packed Workhorse CLI did not expose worker command help");
   }
   await run("node", ["integration.mjs"], consumer);
+  await run("node", ["dashboard-development.mjs"], consumer);
   const agenticFlow = JSON.parse(await run("node", ["agentic-flow.mjs"], consumer)) as {
     result?: { status?: string };
     progress?: { stage?: string };

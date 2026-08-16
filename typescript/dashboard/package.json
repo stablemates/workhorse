@@ -13,6 +13,7 @@
   },
   "files": [
     "dist",
+    "development",
     "README.md"
   ],
   "type": "module",
@@ -52,7 +53,7 @@
     "provenance": true
   },
   "scripts": {
-    "build": "rm -rf dist && cp -R ../../dashboard/app/dist/library dist && find dist -name '*.map' -delete && sed -i '/sourceMappingURL=.*\\.map$/d' dist/*.js dist/*.d.ts",
+    "build": "rm -rf dist development && cp -R ../../dashboard/app/dist/library dist && mkdir -p development/browser && cp ../../dashboard/app/browser/index.html development/browser/index.html && cp -R ../../dashboard/app/src development/src && find dist -name '*.map' -delete && find development/src -name '*.test.*' -delete && sed -i '/sourceMappingURL=.*\\.map$/d' dist/*.js dist/*.d.ts",
     "build:dev": "pnpm build",
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
