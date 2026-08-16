@@ -2197,6 +2197,44 @@ function TaskBlockedBy({ job }: { job: DashboardJobRow }) {
   );
 }
 
+/** The stable task label, constrained so long types do not widen the listing table. */
+export function TaskName({ type, queue }: { type: string; queue: string }) {
+  const displayName = taskDisplayName(type, queue);
+  return (
+    <Text
+      fw={600}
+      size="sm"
+      lh={1.3}
+      title={displayName}
+      style={{
+        width: 180,
+        maxWidth: 180,
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {displayName}
+    </Text>
+  );
+}
+
+/** Visible task tags, separate from identity and independently discoverable on hover. */
+export function TaskTags({ tags }: { tags: readonly string[] }) {
+  return (
+    <Group gap={4} wrap="wrap">
+      {tags.map((tag) =>
+        tag === "durable-checkpoint" ? null : (
+          <Badge key={tag} size="xs" variant="light" color="gray" tt="none" title={tag}>
+            {tag}
+          </Badge>
+        ),
+      )}
+    </Group>
+  );
+}
+
 /**
  * Badge for a scheduled durable wait. "Waking" means the stored target has passed
  * and the task is eligible for promotion and a fresh claim, not that a worker holds it.
@@ -2991,12 +3029,13 @@ function TasksPage({
             highlightOnHover
             verticalSpacing={6}
             horizontalSpacing="sm"
-            miw={fullArgs ? 1064 : 944}
+            miw={fullArgs ? 1244 : 1124}
           >
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>ID</Table.Th>
-                <Table.Th>Task</Table.Th>
+                <Table.Th w={260}>Task</Table.Th>
+                <Table.Th miw={180}>Tags</Table.Th>
                 <Table.Th>Queue</Table.Th>
                 <Table.Th>Input</Table.Th>
                 <Table.Th miw={280}>Status</Table.Th>
@@ -3013,7 +3052,7 @@ function TasksPage({
             <Table.Tbody>
               {data.jobs.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={11}>
+                  <Table.Td colSpan={12}>
                     <Center mih={120}>
                       <Text c="dimmed" size="sm">
                         No tasks match this filter.
@@ -3041,11 +3080,9 @@ function TasksPage({
                         {job.id.slice(0, 8)}
                       </Code>
                     </Table.Td>
-                    <Table.Td>
-                      <Group gap={4} wrap="nowrap">
-                        <Text fw={600} size="sm" lh={1.3} title={job.type}>
-                          {taskDisplayName(job.type, job.queue)}
-                        </Text>
+                    <Table.Td w={260}>
+                      <Group gap={4} wrap="nowrap" style={{ minWidth: 0 }}>
+                        <TaskName type={job.type} queue={job.queue} />
                         {job.keyed ? (
                           <Badge
                             size="xs"
@@ -3068,14 +3105,10 @@ function TasksPage({
                             P{job.priority}
                           </Badge>
                         ) : null}
-                        {job.tags.map((tag) =>
-                          tag === "durable-checkpoint" ? null : (
-                            <Badge key={tag} size="xs" variant="light" color="gray" tt="none">
-                              {tag}
-                            </Badge>
-                          ),
-                        )}
                       </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <TaskTags tags={job.tags} />
                     </Table.Td>
                     <Table.Td>
                       <Text size="sm" c="dimmed">
