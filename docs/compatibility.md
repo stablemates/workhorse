@@ -71,8 +71,8 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   refuses on both sides: an older runtime against a newer schema fails just as loudly as the
   reverse. A mixed fleet mid-deploy is not supported.
 - **Installation is clean-database only.** `installSchema` refuses to interpret an older or
-  unversioned `workhorse` schema. `migrateSchema` owns explicit forward upgrades from the version 23
-  baseline, while earlier versions still require a fresh schema or a separately engineered path.
+  unversioned `workhorse` schema. `migrateSchema` owns explicit forward upgrades after the first
+  public release, while pre-release versions require a fresh schema or a separately engineered path.
 - **Correctness-sensitive transitions stay in versioned SQL functions.** Claim, completion, retry,
   cancellation, deadline, and maintenance transitions are owned by SQL. A client that speaks the
   same schema version speaks the same protocol, whatever language it is written in.

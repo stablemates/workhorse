@@ -2,19 +2,25 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol is schema version 40. Version 23 is the oldest supported
-forward-migration baseline.
+The current clean-install protocol and pre-release baseline are schema version 40. No earlier
+schema version has been published or remains a supported upgrade source.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 40 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It applies the
-immutable files in `sql/migrations/` in version order.
+version 40 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It accepts
+version 40 without mutation and rejects every other version on the unreleased line.
 
-Each migration takes the transaction advisory lock keyed by `workhorse:schema-migration`. It
-requires the preceding version, records its target in `workhorse.schema_migration`, and advances
-the single `workhorse.schema_version` row. The baseline step records version 23 before advancing to
-version 24. A migration is safe to replay after its target version commits.
+A clean installation records `(40, 'pre-release baseline')` in
+`workhorse.schema_migration`. `migrateSchema` delegates ordered execution to the internal
+`applySchemaMigrationPlan` function. Its `SchemaMigrationPlan` has `baselineVersion`,
+`currentVersion`, `steps`, and `readStep` fields. Each `SchemaMigrationStep` has `fromVersion`,
+`toVersion`, and `file` fields.
 
-Versions below 23, versions above 40, gaps, and mixed version rows fail without running a migration.
+After the first public release, each migration takes the transaction advisory lock keyed by
+`workhorse:schema-migration`. It requires the preceding version, records its target in
+`workhorse.schema_migration`, and advances the single `workhorse.schema_version` row. A migration
+is safe to replay after its target version commits.
+
+Versions below 40, versions above 40, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
@@ -1509,8 +1515,8 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 38. Forward migration starts at version 23; older schemas
-  require a separately engineered upgrade path.
+- The canonical artifact installs version 40. Forward migration starts with the first public
+  release; every pre-release database must install the current schema from scratch.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.
 - Job, outcome, event, attempt, and schedule-occurrence retention default to 14 days and remain independently configurable. Enqueue-idempotency bindings expire by their request TTL and are cleaned before terminal identity pruning.

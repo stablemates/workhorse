@@ -245,26 +245,7 @@ describe("schema installation", () => {
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
     );
-    expect(migrations.rows).toEqual([
-      { version: 23, description: "forward migration baseline" },
-      { version: 24, description: "add schema migration ledger" },
-      { version: 25, description: "make schedule occurrence replay a no-op" },
-      { version: 26, description: "add versioned dashboard read surface" },
-      { version: 27, description: "add strict-priority job dispatch" },
-      { version: 28, description: "add keyed debounce enqueue" },
-      { version: 29, description: "add keyed throttle enqueue" },
-      { version: 30, description: "add one-prerequisite job dependencies" },
-      { version: 31, description: "add fan-in dependency policies" },
-      { version: 32, description: "index dependency failure operations" },
-      { version: 33, description: "add single linked child jobs" },
-      { version: 34, description: "add bounded child fan-out and joins" },
-      { version: 35, description: "preserve child lineage through lifecycle changes" },
-      { version: 36, description: "add idempotent signals to waiting executions" },
-      { version: 37, description: "add completable human wait tokens" },
-      { version: 38, description: "harden signal and human wait lifecycles" },
-      { version: 39, description: "fix dependency release event reasons" },
-      { version: 40, description: "bound dependency fan-out and index dependency health" },
-    ]);
+    expect(migrations.rows).toEqual([{ version: 40, description: "pre-release baseline" }]);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;

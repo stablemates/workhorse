@@ -2,102 +2,21 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { expectOneRow } from "./errors.js";
+import {
+  applySchemaMigrationPlan,
+  readSchemaVersion,
+  type SchemaMigrationStep,
+} from "./schema-migrations.js";
 import { assertSupportedPostgres } from "./support.js";
 import type { Queryable } from "./types.js";
 
-/** Oldest schema version covered by the forward-only migration chain. */
-export const WORKHORSE_SCHEMA_BASELINE_VERSION = 23;
+/** Current pre-release baseline, and later the oldest version covered by migrations. */
+export const WORKHORSE_SCHEMA_BASELINE_VERSION = 40;
 
 /** Canonical schema version for the current pre-release line. */
 export const WORKHORSE_SCHEMA_VERSION = 40;
 
-const SCHEMA_MIGRATIONS = [
-  {
-    fromVersion: 23,
-    toVersion: 24,
-    file: "0024-add-schema-migration-ledger.sql",
-  },
-  {
-    fromVersion: 24,
-    toVersion: 25,
-    file: "0025-make-schedule-occurrence-replay-a-no-op.sql",
-  },
-  {
-    fromVersion: 25,
-    toVersion: 26,
-    file: "0026-add-dashboard-read-surface.sql",
-  },
-  {
-    fromVersion: 26,
-    toVersion: 27,
-    file: "0027-add-job-priority.sql",
-  },
-  {
-    fromVersion: 27,
-    toVersion: 28,
-    file: "0028-add-keyed-debounce-enqueue.sql",
-  },
-  {
-    fromVersion: 28,
-    toVersion: 29,
-    file: "0029-add-keyed-throttle-enqueue.sql",
-  },
-  {
-    fromVersion: 29,
-    toVersion: 30,
-    file: "0030-add-job-dependencies.sql",
-  },
-  {
-    fromVersion: 30,
-    toVersion: 31,
-    file: "0031-add-fan-in-dependency-policies.sql",
-  },
-  {
-    fromVersion: 31,
-    toVersion: 32,
-    file: "0032-index-dependency-failures.sql",
-  },
-  {
-    fromVersion: 32,
-    toVersion: 33,
-    file: "0033-add-single-child-jobs.sql",
-  },
-  {
-    fromVersion: 33,
-    toVersion: 34,
-    file: "0034-add-child-fan-out.sql",
-  },
-  {
-    fromVersion: 34,
-    toVersion: 35,
-    file: "0035-preserve-child-lineage.sql",
-  },
-  {
-    fromVersion: 35,
-    toVersion: 36,
-    file: "0036-add-idempotent-signals.sql",
-  },
-  {
-    fromVersion: 36,
-    toVersion: 37,
-    file: "0037-add-human-wait-tokens.sql",
-  },
-  {
-    fromVersion: 37,
-    toVersion: 38,
-    file: "0038-harden-signal-human-waits.sql",
-  },
-  {
-    fromVersion: 38,
-    toVersion: 39,
-    file: "0039-fix-dependency-release-reasons.sql",
-  },
-  {
-    fromVersion: 39,
-    toVersion: 40,
-    file: "0040-bound-dependency-fan-out.sql",
-  },
-] as const;
+const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
 
 function sqlAsset(relativePath: string): URL {
   const packaged = new URL(`../sql/${relativePath}`, import.meta.url);
@@ -106,12 +25,7 @@ function sqlAsset(relativePath: string): URL {
     : new URL(`../../../sql/${relativePath}`, import.meta.url);
 }
 
-export async function readSchemaVersion(database: Queryable): Promise<number | null> {
-  const result = await database.query<{ version: number }>(
-    "SELECT version FROM workhorse.schema_version ORDER BY version",
-  );
-  return result.rows.length === 1 ? (result.rows[0]?.version ?? null) : null;
-}
+export { readSchemaVersion };
 
 /** Check compatibility without creating or changing database objects. */
 export async function assertSchemaCompatible(database: Queryable): Promise<void> {
@@ -153,35 +67,16 @@ export async function migrateSchema(database: Queryable): Promise<void> {
     );
   }
 
-  if (version === null) {
-    throw new Error("Workhorse schema_version must contain exactly one version before migration");
-  }
-  if (version < WORKHORSE_SCHEMA_BASELINE_VERSION) {
-    throw new Error(
-      `Workhorse schema version ${version} predates the supported migration baseline ${WORKHORSE_SCHEMA_BASELINE_VERSION}`,
-    );
-  }
-  if (version > WORKHORSE_SCHEMA_VERSION) {
-    throw new Error(
-      `Workhorse schema version ${version} is newer than runtime version ${WORKHORSE_SCHEMA_VERSION}`,
-    );
-  }
-
-  while (version < WORKHORSE_SCHEMA_VERSION) {
-    const migration = SCHEMA_MIGRATIONS.find((candidate) => candidate.fromVersion === version);
-    if (!migration) {
-      throw new Error(`No Workhorse schema migration starts at version ${version}`);
-    }
-    const sql = await readFile(sqlAsset(`migrations/${migration.file}`), "utf8");
-    await database.query(sql);
-    const migratedVersion = await readSchemaVersion(database);
-    if (migratedVersion !== migration.toVersion) {
-      throw new Error(
-        `Workhorse migration ${migration.file} finished at version ${String(migratedVersion)} instead of ${migration.toVersion}`,
-      );
-    }
-    version = migratedVersion;
-  }
+  await applySchemaMigrationPlan(
+    database,
+    {
+      baselineVersion: WORKHORSE_SCHEMA_BASELINE_VERSION,
+      currentVersion: WORKHORSE_SCHEMA_VERSION,
+      steps: SCHEMA_MIGRATIONS,
+      readStep: async (file) => readFile(sqlAsset(`migrations/${file}`), "utf8"),
+    },
+    version,
+  );
 }
 
 export async function installSchema(database: Queryable): Promise<void> {

@@ -34,7 +34,7 @@
     "provenance": true
   },
   "scripts": {
-    "build": "pnpm --dir ../.. schema:generate && tsc -p ../../tsconfig.build.json && rm -rf dist/sql && mkdir -p dist/sql && cp ../../sql/schema.sql dist/sql/schema.sql && cp -R ../../sql/migrations dist/sql/migrations",
+    "build": "pnpm --dir ../.. schema:generate && tsc -p ../../tsconfig.build.json && rm -rf dist/sql && mkdir -p dist/sql/migrations && cp ../../sql/schema.sql dist/sql/schema.sql && find ../../sql/migrations -maxdepth 1 -name '*.sql' -exec cp {} dist/sql/migrations/ \\;",
     "build:dev": "pnpm build",
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
