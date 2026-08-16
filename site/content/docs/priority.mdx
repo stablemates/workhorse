@@ -24,10 +24,9 @@ Schedule definitions accept `priority` on their job definition. Priority orders 
 otherwise admissible; it does not bypass queue pauses, concurrency policies, rate limits, or a
 future `runAt`.
 
-The dashboard filters by exact priority, sorts the task list with higher priority first, and shows
-the stored value in task details. The System page groups ready work by priority and shows the oldest
-task in each group, so operators can see lower-priority work waiting behind urgent arrivals. The
-demo's enqueue control also accepts a priority; redrive continues to copy the source task priority.
+The dashboard sorts the task list with higher priority first and shows the stored value in task
+details. The System page groups ready work by priority and shows the oldest task in each group, so
+operators can see lower-priority work waiting behind urgent arrivals.
 
 ## Next
 

@@ -15,7 +15,6 @@ import {
   Group,
   Loader,
   NavLink,
-  NumberInput,
   Pagination,
   Paper,
   ScrollArea,
@@ -100,11 +99,7 @@ import {
   taskRowActionGroups,
   type TaskResultState,
 } from "./presentation.js";
-import {
-  dashboardTaskFilters,
-  dashboardTaskPriorityMax,
-  readIdempotencyEvidence,
-} from "@workhorse/dashboard-server/wire";
+import { dashboardTaskFilters, readIdempotencyEvidence } from "@workhorse/dashboard-server/wire";
 import type {
   DashboardCancellationRequest,
   DashboardCronPage,
@@ -2322,18 +2317,17 @@ export function TaskName({ type, queue }: { type: string; queue: string }) {
   );
 }
 
-/** Visible task tags, separate from identity and independently discoverable on hover. */
+/** Visible task tags, constrained to one discoverable line so they cannot widen a task row. */
 export function TaskTags({ tags }: { tags: readonly string[] }) {
+  if (tags.length === 0) return <Text c="dimmed">—</Text>;
   return (
-    <Group gap={4} wrap="wrap">
-      {tags.map((tag) =>
-        tag === "durable-checkpoint" ? null : (
-          <Badge key={tag} size="xs" variant="light" color="gray" tt="none" title={tag}>
-            {tag}
-          </Badge>
-        ),
-      )}
-    </Group>
+    <Text
+      size="sm"
+      title={tags.join(", ")}
+      style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+    >
+      {tags.join(", ")}
+    </Text>
   );
 }
 
@@ -2376,61 +2370,6 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
     >
       {due ? "Waking" : "Sleeping"}
     </Badge>
-  );
-}
-
-/** Render a payload as one collapsed `key: value` line, or full pretty JSON when expanded. */
-function CollapsedArgs({ payload, expanded }: { payload: unknown; expanded: boolean }) {
-  if (payload === null || payload === undefined) return <Text c="dimmed">—</Text>;
-  const full = JSON.stringify(payload, null, 1);
-  if (expanded) {
-    return (
-      <Code
-        fz="xs"
-        title={full}
-        style={{
-          display: "inline-block",
-          maxWidth: 340,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-all",
-          verticalAlign: "middle",
-          lineHeight: 1.4,
-          background: "transparent",
-          paddingBlock: 0,
-          paddingInline: 0,
-        }}
-      >
-        {JSON.stringify(payload)}
-      </Code>
-    );
-  }
-  let preview: string;
-  if (typeof payload === "object" && !Array.isArray(payload)) {
-    const entries = Object.entries(payload as Record<string, unknown>);
-    if (entries.length === 0) return <Text c="dimmed">—</Text>;
-    preview = entries.map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(", ");
-  } else {
-    preview = JSON.stringify(payload);
-  }
-  return (
-    <Code
-      fz="xs"
-      title={full}
-      style={{
-        display: "inline-block",
-        maxWidth: 220,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        verticalAlign: "middle",
-        lineHeight: 1.4,
-        background: "transparent",
-        paddingBlock: 0,
-        paddingInline: 0,
-      }}
-    >
-      {preview}
-    </Code>
   );
 }
 
@@ -2690,7 +2629,7 @@ function useTaskFacets({
   };
 }
 
-function TaskListingFilters({
+export function TaskListingFilters({
   data,
   searchInput,
   setSearchInput,
@@ -2730,29 +2669,6 @@ function TaskListingFilters({
         maxDropdownHeight={240}
         style={{ flex: "1 1 220px" }}
       />
-      <NumberInput
-        size="xs"
-        value={data.priority ?? ""}
-        onChange={(value) => updateLocation({ priority: typeof value === "number" ? value : null })}
-        min={0}
-        max={dashboardTaskPriorityMax}
-        allowDecimal={false}
-        placeholder="Any priority"
-        aria-label="Filter tasks by exact priority"
-        style={{ flex: "1 1 130px" }}
-      />
-      <Select
-        size="xs"
-        value={data.sort}
-        onChange={(sort) => updateLocation({ sort: sort === "priority" ? "priority" : "updated" })}
-        data={[
-          { value: "updated", label: "Recently updated" },
-          { value: "priority", label: "Highest priority" },
-        ]}
-        allowDeselect={false}
-        aria-label="Sort tasks"
-        style={{ flex: "1 1 150px" }}
-      />
       {(
         [
           ["Queue", data.queue, taskFacets.facets.queues, "queue"],
@@ -2776,6 +2692,18 @@ function TaskListingFilters({
           style={{ flex: "1 1 150px" }}
         />
       ))}
+      <Select
+        size="xs"
+        value={data.sort}
+        onChange={(sort) => updateLocation({ sort: sort === "priority" ? "priority" : "updated" })}
+        data={[
+          { value: "updated", label: "Recently updated" },
+          { value: "priority", label: "Highest priority" },
+        ]}
+        allowDeselect={false}
+        aria-label="Sort tasks"
+        style={{ flex: "1 1 150px" }}
+      />
     </Group>
   );
 }
@@ -2786,31 +2714,6 @@ function taskRowActionIcon(id: TaskRowActionId): ReactNode {
   if (id === "cancel") return <Prohibit size={16} />;
   if (id === "run-now") return <PlayCircle size={16} />;
   return <FunnelSimple size={16} />;
-}
-
-export function EnqueuePriorityInput({
-  value,
-  onChange,
-}: {
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <>
-      <NumberInput
-        size="xs"
-        value={value}
-        onChange={(next) => onChange(typeof next === "number" ? next : 0)}
-        min={0}
-        max={dashboardTaskPriorityMax}
-        allowDecimal={false}
-        aria-label="Test task priority"
-      />
-      <Text size="xs" c="dimmed" mt={4}>
-        Higher values run first. Redrive keeps the source task priority.
-      </Text>
-    </>
-  );
 }
 
 /**
@@ -2888,6 +2791,11 @@ function TaskRowActions({
   );
 }
 
+interface DemoJobOptions {
+  scenario?: DurableDemoScenario;
+  feature?: DashboardDemoFeature;
+}
+
 function TasksPage({
   data,
   navigate,
@@ -2902,14 +2810,7 @@ function TasksPage({
   navigate: (href: string) => void;
   replace: (href: string) => void;
   taskLocation: TaskLocationState;
-  runDemoJob:
-    | ((
-        kind: DemoJobKind,
-        scenario?: DurableDemoScenario,
-        priority?: number,
-        feature?: DashboardDemoFeature,
-      ) => Promise<void>)
-    | null;
+  runDemoJob: ((kind: DemoJobKind, options?: DemoJobOptions) => Promise<void>) | null;
   runningDemoJob: DemoJobKind | null;
   inspectJob: (id: string, options?: { confirmCancel?: boolean }) => void;
   /**
@@ -2918,11 +2819,7 @@ function TasksPage({
    */
   runTaskNow: ((id: string) => Promise<RunNowFeedback>) | null;
 }) {
-  const [fullArgs, setFullArgs] = useState(
-    () => localStorage.getItem("workhorse-full-args") === "true",
-  );
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
-  const [enqueuePriority, setEnqueuePriority] = useState(0);
   // The one row action that is applied here rather than in the drawer. What it reported goes to
   // the notification system, so only the in-flight row is state this page has to hold.
   const [runningNowJobId, setRunningNowJobId] = useState<string | null>(null);
@@ -2986,10 +2883,6 @@ function TasksPage({
     },
     [inspectJob, runTaskNow, runningNowJobId, updateLocation],
   );
-  const toggleFullArgs = (checked: boolean) => {
-    setFullArgs(checked);
-    localStorage.setItem("workhorse-full-args", String(checked));
-  };
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
   const pagination = (
     <Pagination
@@ -3000,11 +2893,8 @@ function TasksPage({
       aria-label="Tasks pagination"
     />
   );
-  const enqueueTestTask = (
-    kind: DemoJobKind,
-    scenario?: DurableDemoScenario,
-    feature?: DashboardDemoFeature,
-  ) => runDemoJob?.(kind, scenario, enqueuePriority, feature);
+  const enqueueTestTask = (kind: DemoJobKind, options?: DemoJobOptions) =>
+    runDemoJob?.(kind, options);
 
   return (
     <Stack gap="xl">
@@ -3044,13 +2934,7 @@ function TasksPage({
             taskFacets={taskFacets}
             updateLocation={updateLocation}
           />
-          <Group justify="space-between" wrap="wrap">
-            <Switch
-              size="xs"
-              label="Show full input"
-              checked={fullArgs}
-              onChange={(event) => toggleFullArgs(event.currentTarget.checked)}
-            />
+          <Group justify="flex-end" wrap="wrap">
             <Group gap="xs" wrap="wrap">
               {runDemoJob ? (
                 <Menu position="bottom-start" withinPortal>
@@ -3067,11 +2951,6 @@ function TasksPage({
                   </Menu.Target>
                   {/* The feature list makes this menu taller than small screens; it scrolls. */}
                   <Menu.Dropdown style={{ maxHeight: "min(560px, 80vh)", overflowY: "auto" }}>
-                    <Menu.Label>Priority</Menu.Label>
-                    <Box px="xs" pb="xs" onClick={(event) => event.stopPropagation()}>
-                      <EnqueuePriorityInput value={enqueuePriority} onChange={setEnqueuePriority} />
-                    </Box>
-                    <Menu.Divider />
                     <Menu.Label>Test outcome</Menu.Label>
                     <Menu.Item
                       leftSection={<CheckCircle size={16} />}
@@ -3093,19 +2972,25 @@ function TasksPage({
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ListChecks size={16} />}
-                      onClick={() => void enqueueTestTask("durable", "order-fulfillment")}
+                      onClick={() =>
+                        void enqueueTestTask("durable", { scenario: "order-fulfillment" })
+                      }
                     >
                       Durable · order fulfillment · 4 steps
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ListChecks size={16} />}
-                      onClick={() => void enqueueTestTask("durable", "customer-onboarding")}
+                      onClick={() =>
+                        void enqueueTestTask("durable", { scenario: "customer-onboarding" })
+                      }
                     >
                       Durable · customer onboarding · 3 steps
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<ListChecks size={16} />}
-                      onClick={() => void enqueueTestTask("durable", "report-publication")}
+                      onClick={() =>
+                        void enqueueTestTask("durable", { scenario: "report-publication" })
+                      }
                     >
                       Durable · report publication · 3 steps
                     </Menu.Item>
@@ -3140,7 +3025,7 @@ function TasksPage({
                       <Menu.Item
                         key={feature}
                         leftSection={<Lightning size={16} />}
-                        onClick={() => void enqueueTestTask("feature", undefined, feature)}
+                        onClick={() => void enqueueTestTask("feature", { feature })}
                       >
                         {label}
                       </Menu.Item>
@@ -3176,19 +3061,18 @@ function TasksPage({
             verticalSpacing={6}
             horizontalSpacing="sm"
             aria-label="Tasks matching the current filters"
-            className={`task-table${fullArgs ? " task-table--full-input" : ""}`}
+            className="task-table"
           >
             <Table.Thead>
               <Table.Tr>
                 <Table.Th className="task-table__col--id">ID</Table.Th>
+                <Table.Th className="task-table__col--queue">Queue</Table.Th>
                 <Table.Th className="task-table__col--task" w={260}>
                   Task
                 </Table.Th>
                 <Table.Th className="task-table__col--tags" miw={180}>
                   Tags
                 </Table.Th>
-                <Table.Th className="task-table__col--queue">Queue</Table.Th>
-                <Table.Th className="task-table__col--input">Input</Table.Th>
                 <Table.Th className="task-table__col--status" miw={280}>
                   Status
                 </Table.Th>
@@ -3215,7 +3099,7 @@ function TasksPage({
             <Table.Tbody>
               {data.jobs.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={12}>
+                  <Table.Td colSpan={11}>
                     <Center mih={120}>
                       <Text c="dimmed" size="sm">
                         No tasks match this filter.
@@ -3242,6 +3126,11 @@ function TasksPage({
                       >
                         {job.id.slice(0, 8)}
                       </Code>
+                    </Table.Td>
+                    <Table.Td className="task-table__col--queue">
+                      <Text size="sm" c="dimmed">
+                        {job.queue}
+                      </Text>
                     </Table.Td>
                     <Table.Td className="task-table__col--task" w={260}>
                       <TaskOpenButton
@@ -3278,14 +3167,6 @@ function TasksPage({
                     </Table.Td>
                     <Table.Td className="task-table__col--tags">
                       <TaskTags tags={job.tags} />
-                    </Table.Td>
-                    <Table.Td className="task-table__col--queue">
-                      <Text size="sm" c="dimmed">
-                        {job.queue}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td className="task-table__col--input">
-                      <CollapsedArgs payload={job.payload} expanded={fullArgs} />
                     </Table.Td>
                     <Table.Td className="task-table__col--status">
                       <Group className="task-table__status" gap="xs" wrap="nowrap">
@@ -6576,7 +6457,6 @@ function useDashboardController(
               queue: listing.queue,
               worker: listing.worker,
               jobType: listing.jobType,
-              priority: listing.priority,
               sort: listing.sort,
               tags: listing.tags,
               search: listing.search ?? undefined,
@@ -6657,12 +6537,8 @@ function useDashboardController(
   }, [client]);
 
   const runDemoJob = useCallback(
-    async (
-      kind: DemoJobKind,
-      scenario?: DurableDemoScenario,
-      priority = 0,
-      feature?: DashboardDemoFeature,
-    ) => {
+    async (kind: DemoJobKind, options: DemoJobOptions = {}) => {
+      const { scenario, feature } = options;
       setRunningDemoJob(kind);
       try {
         if (!demoTools) return;
@@ -6670,7 +6546,7 @@ function useDashboardController(
           kind,
           ...(scenario ? { scenario } : {}),
           ...(feature ? { feature } : {}),
-          priority,
+          priority: 0,
           audit: {
             actor: auditActor,
             reason: `Demonstrate the ${feature ?? scenario ?? kind} execution path`,
