@@ -24,6 +24,10 @@ policy, execution timeout. It deliberately does not copy the wreckage — no che
 waits, no attempt count, no old error, and not the original deadline either. A deadline that
 already passed would make the copy fail instantly, which is never what you meant.
 
+Dependency edges, child lineage, signal deliveries, and human decisions stay with the old identity.
+See [dependencies](160-job-dependencies.md), [children](170-child-jobs.md),
+[signals](135-signals.md), and [human decisions](145-human-decisions.md) for those lifecycles.
+
 So the new job starts genuinely clean, and the old one stays untouched as evidence. Its
 error is still there to read next month.
 
