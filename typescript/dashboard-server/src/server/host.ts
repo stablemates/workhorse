@@ -8,7 +8,7 @@ import type { MaintenanceLoopCadences } from "../wire.js";
 import { dashboardAssetsDirectory } from "./assets.js";
 import { createSingleAdminAuthentication } from "./authentication.js";
 import { renderDashboardHtml } from "./html.js";
-import { dashboardRouter } from "./router.js";
+import { dashboardRouter, isDashboardMutation } from "./router.js";
 import { dashboardDatabase } from "./sql.js";
 import type {
   DashboardDurabilityProjector,
@@ -95,21 +95,6 @@ const contentTypes: Readonly<Record<string, string>> = {
 };
 
 const SLOW_RPC_REQUEST_MS = 1_000;
-const mutationProcedures = new Set([
-  "dashboard.enqueueTest",
-  "dashboard.setScheduleEnabled",
-  "dashboard.setQueuePaused",
-  "dashboard.purgeQueue",
-  "dashboard.setWorkerPaused",
-  "dashboard.overrideMaintenancePolicy",
-  "dashboard.revertMaintenancePolicy",
-  "dashboard.overrideRetentionPolicy",
-  "dashboard.revertRetentionPolicy",
-  "dashboard.runTaskNow",
-  "dashboard.cancelTask",
-  "dashboard.signalTask",
-  "dashboard.completeHumanWait",
-]);
 const rpcLogRecords = {
   completed: {
     severityNumber: SeverityNumber.DEBUG,
@@ -273,7 +258,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       if (pathname === `${path}/rpc` || pathname.startsWith(`${path}/rpc/`)) {
         const rpcPrefix = `${path}/rpc`;
         const procedure = rpcProcedure(pathname, rpcPrefix);
-        if (mutationProcedures.has(procedure)) {
+        if (isDashboardMutation(procedure)) {
           const rejection = rejectCrossOriginMutation(request);
           if (rejection) return rejection;
         }
