@@ -25,6 +25,7 @@ import {
   Table,
   Text,
   TextInput,
+  Textarea,
   ThemeIcon,
   Title,
   Tooltip,
@@ -73,7 +74,6 @@ import {
 import type {
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
-  Json,
   RetentionPolicySetting,
   RetryPolicy,
 } from "@workhorse/core";
@@ -86,9 +86,14 @@ import {
   describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
+  filterHumanWaits,
   formatRetryDelay,
+  humanWaitResultsDirty,
   idempotencyEvidenceLine,
+  isHumanWaitOverdue,
   isTerminalTaskState,
+  orderHumanWaits,
+  parseHumanWaitResult,
   readTaskResultEvidence,
   taskRowActionGroups,
   type TaskResultState,
@@ -130,7 +135,7 @@ import {
   dashboardRefreshIntervalMs,
   dashboardRefreshIntervals,
   defaultDashboardRefreshInterval,
-  discardBackgroundSettingsRefresh,
+  discardBackgroundFormRefresh,
   type DashboardRefreshIntervalValue,
 } from "./refresh-policy.js";
 import {
@@ -5511,34 +5516,70 @@ function HumanWaitsPage({
   data,
   auditActor,
   reload,
+  inspectJob,
+  onDirtyChange,
 }: {
   data: DashboardHumanWaitPage;
   auditActor: string;
   reload: () => Promise<void>;
+  inspectJob: (id: string) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const client = useDashboardClient();
   const [results, setResults] = useState<Record<string, string>>({});
   const [completing, setCompleting] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [waitFilter, setWaitFilter] = useState<"all" | "overdue">("all");
+  const waits = useMemo(() => orderHumanWaits(data.waits, Date.now()), [data.waits]);
+  const visibleWaits = filterHumanWaits(waits, {
+    search,
+    overdueOnly: waitFilter === "overdue",
+    nowMs: Date.now(),
+  });
+  const dirty = humanWaitResultsDirty(results);
+
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+
+  const parseResult = (key: string) => {
+    const parsed = parseHumanWaitResult(results[key] ?? "");
+    if (parsed !== null) return parsed;
+    notifyDashboard({
+      title: "Result is not valid JSON",
+      message: "Enter the bounded JSON value the waiting handler should receive.",
+      tone: "failure",
+    });
+    return null;
+  };
+
+  const prettyPrintResult = (key: string) => {
+    const source = results[key]?.trim();
+    if (!source) return;
+    const parsed = parseHumanWaitResult(source);
+    if (parsed !== null) {
+      setResults((current) => ({ ...current, [key]: parsed.formatted }));
+    }
+    // Keep invalid input intact so the operator can correct it; Review reports the error.
+  };
+
+  const review = (key: string) => {
+    const parsed = parseResult(key);
+    if (parsed === null) return;
+    setResults((current) => ({ ...current, [key]: parsed.formatted }));
+    setConfirming(key);
+  };
 
   const complete = async (jobId: string, name: string) => {
     const key = `${jobId}:${name}`;
-    let result: Json;
-    try {
-      result = JSON.parse(results[key] ?? "");
-    } catch {
-      notifyDashboard({
-        title: "Result is not valid JSON",
-        message: "Enter the bounded JSON value the waiting handler should receive.",
-        tone: "failure",
-      });
-      return;
-    }
+    const parsed = parseResult(key);
+    if (parsed === null) return;
     setCompleting(key);
     try {
       const completion = await client.completeHumanWait({
         id: jobId,
         name,
-        result,
+        result: parsed.value,
         idempotencyKey: crypto.randomUUID(),
         audit: {
           actor: auditActor,
@@ -5550,6 +5591,12 @@ function HumanWaitsPage({
         title: completion.status === "completed" ? "Wait completed" : "Wait unchanged",
         message: `${name}: ${completion.status}`,
         tone: completion.status === "completed" ? "success" : "neutral",
+      });
+      setConfirming(null);
+      setResults((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
       });
       await reload();
     } catch (cause) {
@@ -5575,12 +5622,37 @@ function HumanWaitsPage({
           {data.diagnostics.capped ? " (bounded lower bounds)." : "."}
         </Text>
       </Box>
+      {data.waits.length > 0 ? (
+        <Group align="flex-end">
+          <TextInput
+            label="Search waits"
+            placeholder="Name, task, type, or queue"
+            leftSection={<MagnifyingGlass size={16} />}
+            value={search}
+            onChange={(event) => setSearch(event.currentTarget.value)}
+            style={{ flex: 1 }}
+          />
+          <SegmentedControl
+            aria-label="Filter human waits"
+            value={waitFilter}
+            onChange={(value) => setWaitFilter(value as "all" | "overdue")}
+            data={[
+              { value: "all", label: "All pending" },
+              { value: "overdue", label: "Overdue" },
+            ]}
+          />
+        </Group>
+      ) : null}
       {data.waits.length === 0 ? (
         <Paper withBorder p="xl">
           <Text c="dimmed">No jobs are waiting for a human decision.</Text>
         </Paper>
+      ) : visibleWaits.length === 0 ? (
+        <Paper withBorder p="xl">
+          <Text c="dimmed">No human waits match this search and filter.</Text>
+        </Paper>
       ) : (
-        data.waits.map((wait) => {
+        visibleWaits.map((wait) => {
           const key = `${wait.jobId}:${wait.name}`;
           return (
             <Paper withBorder p="lg" key={key}>
@@ -5592,12 +5664,19 @@ function HumanWaitsPage({
                       {wait.jobType} · {wait.queue} · attempt {wait.attempt}
                     </Text>
                     <Code fz="xs">{wait.jobId}</Code>
+                    <Button
+                      variant="subtle"
+                      size="compact-xs"
+                      onClick={() => inspectJob(wait.jobId)}
+                    >
+                      View task
+                    </Button>
                   </Box>
                   <Text c="dimmed" size="xs">
                     {formatExact(wait.createdAt)}
                   </Text>
                 </Group>
-                <Text c={Date.parse(wait.deadlineAt) <= Date.now() ? "red" : "dimmed"} size="xs">
+                <Text c={isHumanWaitOverdue(wait, Date.now()) ? "red" : "dimmed"} size="xs">
                   Deadline {formatExact(wait.deadlineAt)}
                 </Text>
                 <Box>
@@ -5606,25 +5685,60 @@ function HumanWaitsPage({
                   </Text>
                   <Code block>{JSON.stringify(wait.context, null, 2)}</Code>
                 </Box>
-                <Group align="flex-end" wrap="nowrap">
-                  <TextInput
+                <Stack gap="xs">
+                  <Textarea
                     label="Result (JSON)"
+                    description="Use the result shape requested in the decision context. Workhorse validates JSON size, not domain fields."
                     placeholder='{"approved":true}'
                     value={results[key] ?? ""}
                     disabled={!data.canComplete}
-                    onChange={(event) =>
-                      setResults((current) => ({ ...current, [key]: event.currentTarget.value }))
-                    }
-                    style={{ flex: 1 }}
+                    autosize
+                    minRows={3}
+                    maxRows={12}
+                    onBlur={() => prettyPrintResult(key)}
+                    onChange={(event) => {
+                      const next = { ...results, [key]: event.currentTarget.value };
+                      setConfirming((current) => (current === key ? null : current));
+                      setResults(next);
+                      onDirtyChange(humanWaitResultsDirty(next));
+                    }}
                   />
-                  <Button
-                    disabled={!data.canComplete || !(results[key] ?? "").trim()}
-                    loading={completing === key}
-                    onClick={() => void complete(wait.jobId, wait.name)}
-                  >
-                    Complete
-                  </Button>
-                </Group>
+                  {confirming === key ? (
+                    <Alert color="orange" title="Confirm this irreversible result">
+                      <Text size="sm" mb="sm">
+                        The first accepted result resumes the handler. Check the JSON before
+                        completing this wait because the result cannot be replaced.
+                      </Text>
+                      <Code block mb="sm">
+                        {results[key]}
+                      </Code>
+                      <Group gap="xs">
+                        <Button
+                          color="orange"
+                          loading={completing === key}
+                          onClick={() => void complete(wait.jobId, wait.name)}
+                        >
+                          Confirm completion
+                        </Button>
+                        <Button
+                          variant="default"
+                          disabled={completing === key}
+                          onClick={() => setConfirming(null)}
+                        >
+                          Keep editing
+                        </Button>
+                      </Group>
+                    </Alert>
+                  ) : (
+                    <Button
+                      disabled={!data.canComplete || !(results[key] ?? "").trim()}
+                      onClick={() => review(key)}
+                      style={{ alignSelf: "flex-start" }}
+                    >
+                      Review result
+                    </Button>
+                  )}
+                </Stack>
                 {!data.canComplete ? (
                   <Text c="dimmed" size="xs">
                     This dashboard is read-only, so it can inspect decisions but cannot complete
@@ -5678,6 +5792,7 @@ function useDashboardController(
     error: null,
   });
   const [taskCounts, setTaskCounts] = useState<DashboardTaskCounts | null>(null);
+  const [pendingHumanWaitCount, setPendingHumanWaitCount] = useState<number | null>(null);
   const [environment, setEnvironment] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -5699,10 +5814,16 @@ function useDashboardController(
   const [togglingWorker, setTogglingWorker] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const [humanWaitsDirty, setHumanWaitsDirty] = useState(false);
   const settingsDirtyRef = useRef(false);
+  const humanWaitsDirtyRef = useRef(false);
   const changeSettingsDirty = useCallback((dirty: boolean) => {
     settingsDirtyRef.current = dirty;
     setSettingsDirty(dirty);
+  }, []);
+  const changeHumanWaitsDirty = useCallback((dirty: boolean) => {
+    humanWaitsDirtyRef.current = dirty;
+    setHumanWaitsDirty(dirty);
   }, []);
   /**
    * The open task is read from the URL rather than held beside it, so a copied or reloaded link
@@ -5830,15 +5951,18 @@ function useDashboardController(
 
   const loadPage = useCallback(
     async ({ background = false }: { background?: boolean } = {}) => {
-      if (
-        discardBackgroundSettingsRefresh(
+      const discardBackgroundDirtyFormRefresh = (pageRoute: PageRoute) =>
+        discardBackgroundFormRefresh(
           background,
-          route === "/settings",
+          pageRoute === "/settings",
           settingsDirtyRef.current,
-        )
-      ) {
-        return;
-      }
+        ) ||
+        discardBackgroundFormRefresh(
+          background,
+          pageRoute === "/human-waits",
+          humanWaitsDirtyRef.current,
+        );
+      if (discardBackgroundDirtyFormRefresh(route)) return;
       const activeRequest = ++requestId.current;
       setLoadState((current) => ({
         status: "loading",
@@ -5896,30 +6020,21 @@ function useDashboardController(
           };
         }
         if (activeRequest === requestId.current) {
-          if (
-            discardBackgroundSettingsRefresh(
-              background,
-              data.route === "/settings",
-              settingsDirtyRef.current,
-            )
-          ) {
+          if (discardBackgroundDirtyFormRefresh(data.route)) {
             setLoadState((current) =>
               current.data ? { status: "ready", data: current.data, error: null } : current,
             );
           } else {
             if (data.route === "/tasks") setTaskCounts(data.value.counts);
+            if (data.route === "/human-waits") {
+              setPendingHumanWaitCount(data.value.diagnostics.pendingHumanDecisions);
+            }
             setLoadState({ status: "ready", data, error: null });
           }
         }
       } catch (cause) {
         if (activeRequest === requestId.current) {
-          if (
-            discardBackgroundSettingsRefresh(
-              background,
-              route === "/settings",
-              settingsDirtyRef.current,
-            )
-          ) {
+          if (discardBackgroundDirtyFormRefresh(route)) {
             setLoadState((current) =>
               current.data ? { status: "ready", data: current.data, error: null } : current,
             );
@@ -5943,6 +6058,15 @@ function useDashboardController(
       setTaskCounts(await client.taskCounts());
     } catch {
       // The active page owns the connection state; keep the last navigation counts on failure.
+    }
+  }, [client]);
+
+  const loadHumanWaitCount = useCallback(async () => {
+    try {
+      const page = await client.humanWaits();
+      setPendingHumanWaitCount(page.diagnostics.pendingHumanDecisions);
+    } catch {
+      // The active page owns the connection state; keep the last navigation count on failure.
     }
   }, [client]);
 
@@ -6398,11 +6522,14 @@ function useDashboardController(
   useEffect(() => {
     void loadPage();
     if (location.route !== "/tasks") void loadTaskCounts();
-  }, [loadPage, loadTaskCounts, location.route]);
+    if (location.route !== "/human-waits") void loadHumanWaitCount();
+  }, [loadHumanWaitCount, loadPage, loadTaskCounts, location.route]);
 
   const settingsBlockRefresh = location.route === "/settings" && settingsDirty;
+  const humanWaitsBlockRefresh = location.route === "/human-waits" && humanWaitsDirty;
   const taskDetailBlocksRefresh = taskDrawerOpened(selectedJobId);
-  const refreshBlocked = settingsBlockRefresh || taskDetailBlocksRefresh || dropdownOpened;
+  const refreshBlocked =
+    settingsBlockRefresh || humanWaitsBlockRefresh || taskDetailBlocksRefresh || dropdownOpened;
   const previousRefreshBlocked = useRef(refreshBlocked);
   const refreshWasBlocked = previousRefreshBlocked.current;
   useEffect(() => {
@@ -6422,19 +6549,22 @@ function useDashboardController(
   autoRefreshPausedRef.current = autoRefreshPaused;
   const refreshPauseDescription = settingsBlockRefresh
     ? "Auto refresh paused while settings have unsaved changes"
-    : taskDetailBlocksRefresh
-      ? "Auto refresh paused while task details are open"
-      : dropdownOpened
-        ? "Auto refresh paused while a dropdown is open"
-        : resumeCountdown !== null
-          ? `Auto refresh resumes in ${resumeCountdown} seconds`
-          : "Auto refresh interval";
+    : humanWaitsBlockRefresh
+      ? "Auto refresh paused while a human wait result is being composed"
+      : taskDetailBlocksRefresh
+        ? "Auto refresh paused while task details are open"
+        : dropdownOpened
+          ? "Auto refresh paused while a dropdown is open"
+          : resumeCountdown !== null
+            ? `Auto refresh resumes in ${resumeCountdown} seconds`
+            : "Auto refresh interval";
   useEffect(() => {
     pollingClock.setRefresh(() => {
       void loadPage({ background: true });
       if (location.route !== "/tasks") void loadTaskCounts();
+      if (location.route !== "/human-waits") void loadHumanWaitCount();
     });
-  }, [loadPage, loadTaskCounts, location.route, pollingClock]);
+  }, [loadHumanWaitCount, loadPage, loadTaskCounts, location.route, pollingClock]);
   useEffect(() => {
     pollingClock.reset(dashboardRefreshIntervalMs(refreshInterval), autoRefreshPausedRef.current);
   }, [location.route, pollingClock, refreshInterval, refreshScheduleResetKey]);
@@ -6487,7 +6617,13 @@ function useDashboardController(
     );
   } else if (loadState.data?.route === "/human-waits") {
     content = (
-      <HumanWaitsPage data={loadState.data.value} auditActor={auditActor} reload={loadPage} />
+      <HumanWaitsPage
+        data={loadState.data.value}
+        auditActor={auditActor}
+        reload={loadPage}
+        inspectJob={inspectJob}
+        onDirtyChange={changeHumanWaitsDirty}
+      />
     );
   } else if (loadState.data?.route === "/events") {
     content = (
@@ -6563,6 +6699,7 @@ function useDashboardController(
     changeRefreshInterval,
     location,
     taskCounts,
+    pendingHumanWaitCount,
     handleLink,
     content,
     selectedJobId,
@@ -6610,6 +6747,7 @@ function DashboardContent({
     changeRefreshInterval,
     location,
     taskCounts,
+    pendingHumanWaitCount,
     handleLink,
     content,
     selectedJobId,
@@ -6811,6 +6949,13 @@ function DashboardContent({
               label="Human waits"
               leftSection={<UserFocus size={18} />}
               variant="light"
+              rightSection={
+                pendingHumanWaitCount === null ? null : (
+                  <Badge variant="light" color="gray" miw={32}>
+                    {pendingHumanWaitCount}
+                  </Badge>
+                )
+              }
               onClick={(event) => handleLink(event, "/human-waits")}
             />
             <NavLink
