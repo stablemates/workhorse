@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "preinstall": "node scripts/require-pnpm.mjs",
     "dev": "pnpm demo",
     "build": "pnpm build:runtime && pnpm docs:build && pnpm --filter @workhorse/demo build && pnpm python:build",
     "build:runtime": "tsx scripts/build-runtime.ts",
@@ -88,11 +89,5 @@
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   },
-  "packageManager": "pnpm@10.18.3",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "lefthook",
-      "sharp"
-    ]
-  }
+  "packageManager": "pnpm@10.18.3"
 }

@@ -70,6 +70,13 @@ Anything spawned outside those scripts still inherits the ambient environment. I
 test fails on a row count that looks slightly off, confirm which database the process actually
 resolved before concluding anything about the test.
 
+## Package installation and script runners
+
+pnpm owns dependency installation. Run `pnpm install`; a root preinstall guard rejects `bun install`
+and tells the developer to use pnpm. Bun and pnpm can both run repository scripts: use
+`bun run <script>` or `pnpm run <script>`. Those scripts call pnpm where the workspace filter or
+directory support needs it.
+
 ## One worktree, one branch, one commit
 
 A branch checked out anywhere is locked everywhere: `git checkout main` inside a linked worktree

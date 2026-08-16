@@ -1,5 +1,7 @@
 docs/research
 node_modules/
+bun.lock
+bun.lockb
 dist/
 __pycache__/
 .mypy_cache/
