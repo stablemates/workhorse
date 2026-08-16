@@ -30,8 +30,8 @@ Critical reasons mean work is stopping now, such as an expired lease, overdue ex
 stalled promotion. Degraded reasons mean the queue still runs while maintenance or admission falls
 behind. The reason codes are stable, so alerts can branch on them without parsing prose.
 
-Override budgets per call when deployment needs differ. The dashboard and command-line health
-check use the same evaluation, so every operator surface agrees on the verdict.
+Override budgets per call when deployment needs differ. The dashboard and `workhorse health
+--json` use the same evaluation, so every operator surface agrees on the verdict.
 
 ## Next
 

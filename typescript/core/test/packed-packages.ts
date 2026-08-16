@@ -112,6 +112,11 @@ try {
   ) as Record<string, unknown>;
   const coreManifest = JSON.stringify(corePackage);
   if (
+    JSON.stringify(corePackage.bin) !== JSON.stringify({ workhorse: "./dist/src/cli/workhorse.js" })
+  ) {
+    throw new Error("The packed core package must expose only the workhorse binary");
+  }
+  if (
     coreManifest.includes('"drizzle-orm"') ||
     coreManifest.includes('"@prisma/client"') ||
     coreManifest.includes('"typeorm"') ||
@@ -517,8 +522,8 @@ try {
     ["node_modules/@workhorse/core/dist/src/cli/workhorse.js", "--help"],
     consumer,
   );
-  if (!cliHelp.includes("workhorse worker --config")) {
-    throw new Error("The packed Workhorse CLI did not expose worker command help");
+  if (!cliHelp.includes("worker") || !cliHelp.includes("health") || !cliHelp.includes("bench")) {
+    throw new Error("The packed Workhorse CLI did not expose all commands");
   }
   await run("node", ["integration.mjs"], consumer);
   await run("node", ["dashboard-development.mjs"], consumer);

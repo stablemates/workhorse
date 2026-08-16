@@ -455,13 +455,23 @@ npx workhorse init
 # Install the schema into a clean database. Reads --database-url, WORKHORSE_DATABASE_URL, or DATABASE_URL.
 npx workhorse schema install
 npx workhorse schema status
+npx workhorse schema status --json
 
 # Run the workers as their own process.
 npx workhorse worker --config workhorse.config.js
 
+# Inspect health or run the isolated benchmark suite.
+npx workhorse health --json
+npx workhorse bench
+npx workhorse bench competitors
+
 # Or just look at the queue, with no application involved.
 npx workhorse dashboard --port 3000
 ```
+
+Every command rejects unknown options and accepts both `--flag value` and `--flag=value`. Run
+`workhorse <command> --help` for command-specific options. Usage errors exit 64, runtime failures
+exit 1, and queue degradation from `health` exits 2.
 
 `workhorse dashboard` serves the operator console as its own process against any Workhorse
 database. It binds `127.0.0.1` and is read-only by default. Without credentials, that loopback

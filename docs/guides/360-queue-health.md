@@ -57,9 +57,9 @@ and the budget it broke. Codes split into two severities:
   by concurrency or rate-limit policies.
 
 Because the codes are stable strings, automation can branch on them instead of parsing prose.
-The `workhorse-health` command exits non-zero on any exceeded budget, the dashboard words the
-same reasons for humans, and both read the identical evaluation — there is exactly one place
-that decides what unhealthy means.
+The `workhorse health --json` command exits non-zero on any exceeded budget. The dashboard words
+the same reasons for humans. Both read the identical evaluation, so one place decides what
+unhealthy means.
 
 If the defaults don't fit a deployment, every budget can be overridden per call:
 

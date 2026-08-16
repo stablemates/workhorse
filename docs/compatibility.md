@@ -15,8 +15,8 @@ Nothing weaker counts. In particular:
   refuse to run on it, because a release cannot know about a database released after it. Bugs are
   accepted, but nothing here is evidence that it works.
 - **Unsupported.** Below the minimum. `installSchema` refuses these outright rather than failing
-  part way through `sql/schema.sql`, and `workhorse schema status` reports the server version and
-  which of these three categories it falls into.
+  part way through `sql/schema.sql`, and `workhorse schema status --json` reports the server
+  version and support level separately from schema compatibility.
 
 This boundary is about correctness only. It is not a performance claim; see
 [Benchmark validation is not the support boundary](#benchmark-validation-is-not-the-support-boundary).

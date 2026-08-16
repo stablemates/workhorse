@@ -117,8 +117,8 @@ with a stable machine-readable `code` and the `observed` value, so automation br
 instead of parsing prose. Exact counts live at the top level of `QueueHealth`; values that come
 from PostgreSQL's own lagging statistics live under `observations`, where lag is expected.
 
-The `workhorse-health` CLI runs the identical evaluation and exits non-zero on any exceeded
-budget — ready for probes and cron checks. For continuous export instead of polling, see
+The `workhorse health --json` command runs the identical evaluation and exits non-zero on any
+exceeded budget. It is ready for probes and cron checks. For continuous export instead of polling, see
 `WorkhorseMetricsObserver` in [Maintenance and retention](/docs/maintenance).
 
 ## Next
