@@ -64,6 +64,50 @@ export class EnqueueIdempotencyConflictError extends WorkhorseError {
   }
 }
 
+export type DependencyLimit = "prerequisites" | "dependents" | "unresolved_dependents" | "unknown";
+
+export interface DependencyCycleDetails {
+  readonly dependentJobId: string;
+  readonly prerequisiteJobId: string;
+  readonly cycleJobIds: readonly string[];
+  readonly truncated: boolean;
+}
+
+/** PostgreSQL rejected an edge because it would make the dependency graph cyclic. */
+export class DependencyCycleError extends WorkhorseError {
+  constructor(readonly details: DependencyCycleDetails) {
+    super(
+      `Dependency from ${details.dependentJobId} to ${details.prerequisiteJobId} forms a cycle`,
+    );
+    this.name = "DependencyCycleError";
+  }
+
+  get dependentJobId(): string {
+    return this.details.dependentJobId;
+  }
+  get prerequisiteJobId(): string {
+    return this.details.prerequisiteJobId;
+  }
+  get cycleJobIds(): readonly string[] {
+    return this.details.cycleJobIds;
+  }
+  get truncated(): boolean {
+    return this.details.truncated;
+  }
+}
+
+/** PostgreSQL rejected a dependency edge because it exceeded a bounded graph dimension. */
+export class DependencyLimitExceededError extends WorkhorseError {
+  constructor(
+    readonly jobId: string,
+    readonly limit: DependencyLimit,
+    readonly max: number,
+  ) {
+    super(`Job ${jobId} exceeds the supported dependency limit for ${limit}`);
+    this.name = "DependencyLimitExceededError";
+  }
+}
+
 export class JobContractValidationError extends WorkhorseError {
   constructor(
     readonly jobType: string,
@@ -142,6 +186,24 @@ const sanitizedEnqueueConflictDetails: EnqueueIdempotencyConflictDetails = {
   rejectedRequestDigest: "0".repeat(64),
 };
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function parsedErrorDetails<T>(
+  error: unknown,
+  valid: (value: unknown) => value is T,
+  fallback: T,
+): T {
+  for (const detail of databaseErrorDetails(error)) {
+    try {
+      const parsed: unknown = JSON.parse(detail);
+      if (valid(parsed)) return parsed;
+    } catch {
+      // PostgreSQL's DETAIL may sit behind an adapter wrapper's own detail string.
+    }
+  }
+  return fallback;
+}
+
 function validEnqueueConflictDetails(value: unknown): value is EnqueueIdempotencyConflictDetails {
   if (typeof value !== "object" || value === null) return false;
   const detail = value as Record<string, unknown>;
@@ -162,9 +224,7 @@ function validEnqueueConflictDetails(value: unknown): value is EnqueueIdempotenc
     detail.keyLength >= 1 &&
     detail.keyLength <= 512 &&
     typeof detail.existingJobId === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      detail.existingJobId,
-    ) &&
+    uuidPattern.test(detail.existingJobId) &&
     typeof detail.ordinal === "number" &&
     Number.isSafeInteger(detail.ordinal) &&
     detail.ordinal >= 1 &&
@@ -189,15 +249,70 @@ function validEnqueueConflictDetails(value: unknown): value is EnqueueIdempotenc
 
 function enqueueConflict(error: unknown): EnqueueIdempotencyConflictError | null {
   if (databaseErrorCode(error) !== "P1001") return null;
-  for (const detail of databaseErrorDetails(error)) {
-    try {
-      const parsed: unknown = JSON.parse(detail);
-      if (validEnqueueConflictDetails(parsed)) return new EnqueueIdempotencyConflictError(parsed);
-    } catch {
-      // PostgreSQL's DETAIL may sit behind an adapter wrapper's own detail string.
-    }
-  }
-  return new EnqueueIdempotencyConflictError(sanitizedEnqueueConflictDetails);
+  return new EnqueueIdempotencyConflictError(
+    parsedErrorDetails(error, validEnqueueConflictDetails, sanitizedEnqueueConflictDetails),
+  );
+}
+
+interface DependencyLimitDetails {
+  readonly jobId: string;
+  readonly limit: DependencyLimit;
+  readonly max: number;
+}
+
+function validDependencyLimitDetails(value: unknown): value is DependencyLimitDetails {
+  if (typeof value !== "object" || value === null) return false;
+  const detail = value as Record<string, unknown>;
+  return (
+    Object.keys(detail).length === 3 &&
+    typeof detail.jobId === "string" &&
+    uuidPattern.test(detail.jobId) &&
+    typeof detail.max === "number" &&
+    Number.isSafeInteger(detail.max) &&
+    detail.max === MAX_JOB_DEPENDENCIES &&
+    (detail.limit === "prerequisites" ||
+      detail.limit === "dependents" ||
+      detail.limit === "unresolved_dependents")
+  );
+}
+
+function validDependencyCycleDetails(value: unknown): value is DependencyCycleDetails {
+  if (typeof value !== "object" || value === null) return false;
+  const detail = value as Record<string, unknown>;
+  return (
+    Object.keys(detail).length === 4 &&
+    typeof detail.dependentJobId === "string" &&
+    uuidPattern.test(detail.dependentJobId) &&
+    typeof detail.prerequisiteJobId === "string" &&
+    uuidPattern.test(detail.prerequisiteJobId) &&
+    Array.isArray(detail.cycleJobIds) &&
+    detail.cycleJobIds.length >= 2 &&
+    detail.cycleJobIds.length <= 101 &&
+    detail.cycleJobIds.every((jobId) => typeof jobId === "string" && uuidPattern.test(jobId)) &&
+    typeof detail.truncated === "boolean"
+  );
+}
+
+function dependencyLimit(error: unknown): DependencyLimitExceededError | null {
+  if (databaseErrorCode(error) !== "P1005") return null;
+  const details = parsedErrorDetails<DependencyLimitDetails>(error, validDependencyLimitDetails, {
+    jobId: "unknown",
+    limit: "unknown",
+    max: MAX_JOB_DEPENDENCIES,
+  });
+  return new DependencyLimitExceededError(details.jobId, details.limit, details.max);
+}
+
+function dependencyCycle(error: unknown): DependencyCycleError | null {
+  if (databaseErrorCode(error) !== "P1003") return null;
+  return new DependencyCycleError(
+    parsedErrorDetails<DependencyCycleDetails>(error, validDependencyCycleDetails, {
+      dependentJobId: "unknown",
+      prerequisiteJobId: "unknown",
+      cycleJobIds: [],
+      truncated: true,
+    }),
+  );
 }
 
 function validateValueLimit(value: number | undefined, field: string): number | undefined {
@@ -575,7 +690,7 @@ export class EnqueueContractsModule extends QueueModule {
           }
           return enqueueResults;
         } catch (error) {
-          throw enqueueConflict(error) ?? error;
+          throw enqueueConflict(error) ?? dependencyCycle(error) ?? dependencyLimit(error) ?? error;
         }
       },
     );

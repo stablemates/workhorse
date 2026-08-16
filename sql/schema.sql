@@ -442,7 +442,7 @@ AS $$
 BEGIN
   IF NEW.dependent_job_id = NEW.prerequisite_job_id THEN
     RAISE EXCEPTION USING
-      ERRCODE = 'P1002',
+      ERRCODE = 'P1003',
       MESSAGE = 'dependency cycle rejected',
       DETAIL = jsonb_build_object(
         'dependentJobId', NEW.dependent_job_id,
@@ -463,6 +463,7 @@ DECLARE
   v_component_job_id text;
   v_cycle uuid[];
   v_fan_out_root uuid;
+  v_limit_job_id uuid;
 BEGIN
   -- Lock every job in each pre-existing component touched by this statement in canonical order.
   -- Transactions which mutate disconnected components proceed independently. Mutations which
@@ -531,7 +532,7 @@ BEGIN
    LIMIT 1;
   IF v_cycle IS NOT NULL THEN
     RAISE EXCEPTION USING
-      ERRCODE = 'P1002',
+      ERRCODE = 'P1003',
       MESSAGE = 'dependency cycle rejected',
       DETAIL = jsonb_build_object(
         'dependentJobId', v_cycle[1],
@@ -540,27 +541,43 @@ BEGIN
         'truncated', cardinality(v_cycle) > 101
       )::text;
   END IF;
-  IF EXISTS (
-    SELECT dependency.dependent_job_id
+  SELECT dependency.dependent_job_id INTO v_limit_job_id
       FROM workhorse.job_dependency dependency
       JOIN (
         SELECT DISTINCT inserted.dependent_job_id FROM inserted_dependencies inserted
       ) touched USING (dependent_job_id)
      GROUP BY dependency.dependent_job_id
     HAVING count(*) > 100
-  ) THEN
-    RAISE EXCEPTION 'a job accepts at most 100 prerequisite dependencies';
+     ORDER BY dependency.dependent_job_id
+     LIMIT 1;
+  IF v_limit_job_id IS NOT NULL THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P1005',
+      MESSAGE = 'a job accepts at most 100 prerequisite dependencies',
+      DETAIL = jsonb_build_object(
+        'jobId', v_limit_job_id,
+        'limit', 'prerequisites',
+        'max', 100
+      )::text;
   END IF;
-  IF EXISTS (
-    SELECT dependency.prerequisite_job_id
+  SELECT dependency.prerequisite_job_id INTO v_limit_job_id
       FROM workhorse.job_dependency dependency
       JOIN (
         SELECT DISTINCT inserted.prerequisite_job_id FROM inserted_dependencies inserted
       ) touched USING (prerequisite_job_id)
      GROUP BY dependency.prerequisite_job_id
     HAVING count(*) > 100
-  ) THEN
-    RAISE EXCEPTION 'a job accepts at most 100 dependent jobs';
+     ORDER BY dependency.prerequisite_job_id
+     LIMIT 1;
+  IF v_limit_job_id IS NOT NULL THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P1005',
+      MESSAGE = 'a job accepts at most 100 dependent jobs',
+      DETAIL = jsonb_build_object(
+        'jobId', v_limit_job_id,
+        'limit', 'dependents',
+        'max', 100
+      )::text;
   END IF;
   IF EXISTS (SELECT 1 FROM inserted_dependencies inserted WHERE inserted.released_at IS NULL) THEN
     WITH RECURSIVE affected(root_job_id) AS (
@@ -593,8 +610,14 @@ BEGIN
      ORDER BY reachable.root_job_id
      LIMIT 1;
     IF v_fan_out_root IS NOT NULL THEN
-      RAISE EXCEPTION
-        'a job accepts at most 100 unresolved transitive dependent jobs';
+      RAISE EXCEPTION USING
+        ERRCODE = 'P1005',
+        MESSAGE = 'a job accepts at most 100 unresolved transitive dependent jobs',
+        DETAIL = jsonb_build_object(
+          'jobId', v_fan_out_root,
+          'limit', 'unresolved_dependents',
+          'max', 100
+        )::text;
     END IF;
   END IF;
   IF EXISTS (

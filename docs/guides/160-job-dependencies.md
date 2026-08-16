@@ -104,6 +104,9 @@ Retention keeps a prerequisite identity while a dependent edge still controls di
 edge resolves and the dependent finishes, maintenance removes the edge before pruning eligible job
 identities. The dependency lineage can therefore disappear while either terminal job remains.
 
+If an edge would create a cycle or exceed a graph bound, `Queue` throws `DependencyCycleError` or
+`DependencyLimitExceededError`. Callers can handle those failures without matching database text.
+
 ## Next
 
 - [150-priority.md](150-priority.md) — how released work competes for dispatch
