@@ -63,6 +63,48 @@ describe("dashboard refresh policy", () => {
     expect(activity).toEqual([false, true, false, true]);
   });
 
+  it("resumes on every tab activation when focus updates after the visibility event", () => {
+    vi.useFakeTimers();
+    const browserWindow = new EventTarget();
+    const browserDocument = new EventTarget();
+    let focused = false;
+    let visibilityState: DocumentVisibilityState = "hidden";
+    const windowState = {
+      hasFocus: () => focused,
+      get visibilityState() {
+        return visibilityState;
+      },
+    };
+    const activity: boolean[] = [];
+    const unsubscribe = subscribeDashboardWindowActivity(
+      () => {
+        activity.push(dashboardWindowIsActive(windowState));
+      },
+      browserWindow,
+      browserDocument,
+    );
+
+    const activate = () => {
+      visibilityState = "visible";
+      browserDocument.dispatchEvent(new Event("visibilitychange"));
+      focused = true;
+      vi.runOnlyPendingTimers();
+      expect(activity.at(-1)).toBe(true);
+    };
+    const deactivate = () => {
+      focused = false;
+      visibilityState = "hidden";
+      browserDocument.dispatchEvent(new Event("visibilitychange"));
+      expect(activity.at(-1)).toBe(false);
+      vi.runOnlyPendingTimers();
+    };
+
+    activate();
+    deactivate();
+    activate();
+    unsubscribe();
+  });
+
   it("defaults to one bounded refresh every 15 seconds", () => {
     vi.useFakeTimers();
     const refresh = vi.fn<() => void>();
