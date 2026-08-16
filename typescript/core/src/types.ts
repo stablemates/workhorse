@@ -166,9 +166,9 @@ export interface EnqueueOptions {
   retryPolicy?: RetryPolicy;
   tags?: string[];
   idempotency?: EnqueueIdempotency;
-  /** Replace one still-pending keyed job during a PostgreSQL-owned window. */
+  /** Replace one still-pending keyed job without dependencies during a PostgreSQL-owned window. */
   debounce?: EnqueueDebounce;
-  /** Accept at most one equivalent job per PostgreSQL-owned window. */
+  /** Accept at most one equivalent job without dependencies per PostgreSQL-owned window. */
   throttle?: EnqueueThrottle;
   /** Stable job identity that must succeed before this job can enter dispatch. */
   prerequisiteJobId?: string;
