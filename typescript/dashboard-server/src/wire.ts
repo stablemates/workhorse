@@ -320,6 +320,7 @@ export interface DashboardJobRow extends Record<string, unknown> {
   waitName: string | null;
   wakeAt: string | null;
   wait: { name: string; wakeAt: string; mode: "relative" | "absolute" } | null;
+  signalWait: DashboardSignalWaitSummary | null;
 }
 
 export interface DashboardScheduleRow {
@@ -919,6 +920,9 @@ export interface DashboardJobDetail {
    * current queue context. Null when the queue has no policy.
    */
   concurrencyPolicy: DashboardConcurrencyPolicySummary | null;
+  /** The actionable signal boundary which currently owns this task's suspension. */
+  signalWait: DashboardSignalWaitSummary | null;
+  canSignal: boolean;
   payload: unknown;
   progress: {
     value: unknown;
@@ -1043,9 +1047,27 @@ export interface DashboardHumanWaitRow {
   deadlineAt: string;
 }
 
+export interface DashboardSignalWaitRow {
+  jobId: string;
+  queue: string;
+  jobType: string;
+  name: string;
+  attempt: number;
+  createdAt: string;
+  /** Effective PostgreSQL-owned absolute timeout for this signal. */
+  deadlineAt: string;
+}
+
+export interface DashboardSignalWaitSummary {
+  name: string;
+  deadlineAt: string;
+}
+
 export interface DashboardHumanWaitPage {
   capturedAt: string;
   canComplete: boolean;
+  canSignal: boolean;
   diagnostics: Awaited<ReturnType<Queue["health"]>>["externalWaits"];
   waits: DashboardHumanWaitRow[];
+  signalWaits: DashboardSignalWaitRow[];
 }

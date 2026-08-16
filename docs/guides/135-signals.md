@@ -28,9 +28,10 @@ A reused key conflicts if its payload or actor changes. Another key arriving aft
 late and returns the retained winner. A delivery before the wait exists is rejected without being
 buffered, so the caller may retry after the handler declares the boundary.
 
-The dashboard uses the same queue operation, but its server replaces browser attribution with the
-authenticated principal. Application-owned callers must establish authorization before calling
-the core API.
+The dashboard lists pending signals on its external waits page and marks the waiting task in the
+task table. An operator can enter the JSON payload there or in the task drawer. The dashboard uses
+the same queue operation, but its server replaces browser attribution with the authenticated
+principal. Application-owned callers must establish authorization before calling the core API.
 
 Operator tools can call `Queue.listSignalWaits()` to read the current actionable boundaries. Each
 row identifies the job, queue, job type, signal name, attempt, creation time, and effective

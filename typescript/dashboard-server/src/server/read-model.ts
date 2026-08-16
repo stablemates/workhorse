@@ -56,14 +56,35 @@ function toIsoOrNull(value: Date | string | null): string | null {
   return value ? toIso(value) : null;
 }
 
+const currentSignalWaitColumn = sql`
+  signal_wait.deadline_at AS signal_wait_deadline_at
+`;
+const currentSignalWaitJoin = sql`
+  LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
+    ON signal_wait.job_id = j.id AND signal_wait.signal_name = r.wait_name
+`;
+
+function signalWaitSummary(
+  name: string | null,
+  deadlineAt: Date | string | null,
+): { name: string; deadlineAt: string } | null {
+  return name && deadlineAt ? { name, deadlineAt: toIso(deadlineAt) } : null;
+}
+
 export async function readDashboardHumanWaits(
   queue: Queue,
   canComplete: boolean,
+  canSignal: boolean,
 ): Promise<DashboardHumanWaitPage> {
-  const [waitPage, health] = await Promise.all([queue.listHumanWaits(), queue.health()]);
+  const [waitPage, signalWaitPage, health] = await Promise.all([
+    queue.listHumanWaits(),
+    queue.listSignalWaits(),
+    queue.health(),
+  ]);
   return {
     capturedAt: new Date().toISOString(),
     canComplete,
+    canSignal,
     diagnostics: health.externalWaits,
     waits: waitPage.items.map((wait) => ({
       jobId: wait.jobId,
@@ -71,6 +92,15 @@ export async function readDashboardHumanWaits(
       jobType: wait.jobType,
       name: wait.name,
       context: wait.context,
+      attempt: wait.attempt,
+      createdAt: wait.createdAt.toISOString(),
+      deadlineAt: wait.deadlineAt.toISOString(),
+    })),
+    signalWaits: signalWaitPage.items.map((wait) => ({
+      jobId: wait.jobId,
+      queue: wait.queue,
+      jobType: wait.jobType,
+      name: wait.name,
       attempt: wait.attempt,
       createdAt: wait.createdAt.toISOString(),
       deadlineAt: wait.deadlineAt.toISOString(),
@@ -704,6 +734,7 @@ export async function readDashboardTasks(
       wait_name: string | null;
       wake_at: Date | string | null;
       wait_mode: "relative" | "absolute" | null;
+      signal_wait_deadline_at: Date | string | null;
       cancel_requested_at: Date | string | null;
       cancel_requested_by: string | null;
       cancel_reason: string | null;
@@ -736,6 +767,7 @@ export async function readDashboardTasks(
                r.cancel_reason,
                durable_wait.wake_at,
                durable_wait.mode AS wait_mode,
+               ${currentSignalWaitColumn},
                enqueued_event.details AS enqueued_details,
                ARRAY(SELECT checkpoint.checkpoint_name
                        FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
@@ -746,6 +778,7 @@ export async function readDashboardTasks(
           LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
           LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
             ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
+          ${currentSignalWaitJoin}
           LEFT JOIN LATERAL (
             SELECT event.details FROM workhorse.dashboard_job_event_v1 event
              WHERE event.job_id = j.id AND event.event_type = 'enqueued'
@@ -821,6 +854,7 @@ export async function readDashboardTasks(
           row.wait_name && row.wake_at && row.wait_mode
             ? { name: row.wait_name, wakeAt: toIso(row.wake_at), mode: row.wait_mode }
             : null,
+        signalWait: signalWaitSummary(row.wait_name, row.signal_wait_deadline_at),
       };
     }),
   };
@@ -2130,6 +2164,7 @@ export async function readDashboardSnapshot(
       waitName: null,
       wakeAt: null,
       wait: null,
+      signalWait: null,
     })),
     schedules: scheduleRows.rows.map((row) => {
       return {
@@ -2214,6 +2249,7 @@ export async function readDashboardJobDetail(
   id: string,
   projectDurability: DashboardDurabilityProjector = () => null,
   queue?: Queue,
+  canSignal = false,
 ): Promise<DashboardJobDetail | null> {
   const [
     jobRows,
@@ -2271,6 +2307,7 @@ export async function readDashboardJobDetail(
       progress_worker_id: string | null;
       progress_created_at: Date | string | null;
       progress_updated_at: Date | string | null;
+      signal_wait_deadline_at: Date | string | null;
     }>(sql`
       SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
              workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
@@ -2292,11 +2329,13 @@ export async function readDashboardJobDetail(
              p.progress_value, p.revision::text AS progress_revision,
              p.attempt AS progress_attempt, p.fence_token::text AS progress_fence_token,
              p.worker_id AS progress_worker_id, p.created_at AS progress_created_at,
-             p.updated_at AS progress_updated_at
+             p.updated_at AS progress_updated_at,
+             ${currentSignalWaitColumn}
         FROM workhorse.dashboard_job_v1 j
         LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
         LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
         LEFT JOIN workhorse.dashboard_job_progress_v1 p ON p.job_id = j.id
+        ${currentSignalWaitJoin}
         LEFT JOIN LATERAL (
           SELECT CASE WHEN count(*) = 1
                    THEN (array_agg(edge.prerequisite_job_id))[1] END AS prerequisite_job_id,
@@ -2536,6 +2575,8 @@ export async function readDashboardJobDetail(
     // stores no per-task policy snapshot, so the drawer labels this as current rather than
     // historical; only `identity.concurrencyKey` is a fact about the run itself.
     concurrencyPolicy,
+    signalWait: signalWaitSummary(job.wait_name, job.signal_wait_deadline_at),
+    canSignal,
     payload: job.payload,
     progress:
       job.progress_revision === null

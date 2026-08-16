@@ -343,6 +343,7 @@ export const dashboardRouter = {
         input.id,
         context.projectDurability,
         context.queue,
+        context.operator.mode === "writable" && Boolean(context.taskController?.signalTask),
       );
       if (!detail) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       return detail;
@@ -351,6 +352,7 @@ export const dashboardRouter = {
       readDashboardHumanWaits(
         context.queue,
         context.operator.mode === "writable" && Boolean(context.taskController?.completeHumanWait),
+        context.operator.mode === "writable" && Boolean(context.taskController?.signalTask),
       ),
     ),
     enqueueTest: mutationProcedure.input(enqueueTestInput).handler(async ({ context, input }) => {

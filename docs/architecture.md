@@ -604,6 +604,14 @@ key digest but never the raw key or payload.
 page exists. `dashboard_signal_wait_v1` owns the matching SQL projection and excludes delivered
 or stale rows.
 
+`dashboard.humanWaits` reads the first default page from both `Queue.listSignalWaits()` and
+`Queue.listHumanWaits()`. Its `DashboardHumanWaitPage` returns `signalWaits`, `waits`, `canSignal`,
+`canComplete`, and the bounded `QueueHealth.externalWaits` diagnostics. Dashboard task rows and
+task detail join the current runtime name to `dashboard_signal_wait_v1` and expose `signalWait` as
+`{ name, deadlineAt }`. Task detail also returns `canSignal` from the server-owned operator
+capability. The React application shows signal waits beside human decisions on `/human-waits`,
+marks matching task rows, and calls `dashboard.signalTask` from both the page and task drawer.
+
 If the caller omits `timeoutMs`, PostgreSQL gives the undelivered signal a seven-day `timeout_at`.
 A shorter caller timeout or earlier `job.deadline_at` wins. The waiting runtime temporarily stores
 that effective bound in `job_runtime.deadline_at`. Expiry terminally fails the job with
