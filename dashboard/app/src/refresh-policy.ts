@@ -22,13 +22,24 @@ export function subscribeDashboardWindowActivity(
   browserWindow: EventTarget = window,
   browserDocument: EventTarget = document,
 ): () => void {
+  let visibilityRecheck: ReturnType<typeof setTimeout> | null = null;
+  const visibilityChanged = () => {
+    changed();
+    if (visibilityRecheck !== null) clearTimeout(visibilityRecheck);
+    visibilityRecheck = setTimeout(() => {
+      visibilityRecheck = null;
+      changed();
+    }, 0);
+  };
+
   browserWindow.addEventListener("focus", changed);
   browserWindow.addEventListener("blur", changed);
-  browserDocument.addEventListener("visibilitychange", changed);
+  browserDocument.addEventListener("visibilitychange", visibilityChanged);
   return () => {
     browserWindow.removeEventListener("focus", changed);
     browserWindow.removeEventListener("blur", changed);
-    browserDocument.removeEventListener("visibilitychange", changed);
+    browserDocument.removeEventListener("visibilitychange", visibilityChanged);
+    if (visibilityRecheck !== null) clearTimeout(visibilityRecheck);
   };
 }
 
