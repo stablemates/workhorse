@@ -34,6 +34,26 @@ describe("dashboard signal waits", () => {
     expect(html).toContain("account-approval");
   });
 
+  it("marks a task row as waiting for its named human decision", async () => {
+    const { TaskWaitBadge } = await import("./dashboard.js");
+    const job = {
+      state: "active",
+      wait: null,
+      signalWait: null,
+      humanWait: {
+        name: "account-review",
+        context: { prompt: "Approve this account?" },
+        deadlineAt: "2026-08-17T03:00:00.000Z",
+      },
+    } as DashboardJobRow;
+    const html = renderToStaticMarkup(
+      createElement(MantineProvider, null, createElement(TaskWaitBadge, { job })),
+    );
+
+    expect(html).toContain("Waiting for decision");
+    expect(html).toContain("account-review");
+  });
+
   it("renders the named signal, JSON payload field, and delivery action", async () => {
     const { SignalWaitCard } = await import("./dashboard.js");
     const html = renderToStaticMarkup(

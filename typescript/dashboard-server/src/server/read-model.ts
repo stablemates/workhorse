@@ -64,6 +64,15 @@ const currentSignalWaitJoin = sql`
   LEFT JOIN workhorse.dashboard_signal_wait_v1 signal_wait
     ON signal_wait.job_id = j.id AND signal_wait.signal_name = r.wait_name
 `;
+const currentHumanWaitColumns = sql`
+  human_wait.token_name AS human_wait_name,
+  human_wait.context AS human_wait_context,
+  human_wait.deadline_at AS human_wait_deadline_at
+`;
+const currentHumanWaitJoin = sql`
+  LEFT JOIN workhorse.dashboard_human_wait_v1 human_wait
+    ON human_wait.job_id = j.id AND human_wait.token_name = r.wait_name
+`;
 
 function signalWaitSummary(
   name: string | null,
@@ -710,6 +719,7 @@ export async function readDashboardTasks(
   database: DashboardDatabase,
   query: DashboardTasksQuery,
   projectDurability: DashboardDurabilityProjector = () => null,
+  canCompleteHumanWait = false,
 ): Promise<DashboardTasksPage> {
   const { filter, page, pageSize, queue, tags, search, worker, jobType, priority, sort } = query;
   const offset = (page - 1) * pageSize;
@@ -776,6 +786,9 @@ export async function readDashboardTasks(
       wake_at: Date | string | null;
       wait_mode: "relative" | "absolute" | null;
       signal_wait_deadline_at: Date | string | null;
+      human_wait_name: string | null;
+      human_wait_context: unknown;
+      human_wait_deadline_at: Date | string | null;
       cancel_requested_at: Date | string | null;
       cancel_requested_by: string | null;
       cancel_reason: string | null;
@@ -810,6 +823,7 @@ export async function readDashboardTasks(
                durable_wait.wake_at,
                durable_wait.mode AS wait_mode,
                ${currentSignalWaitColumn},
+               ${currentHumanWaitColumns},
                enqueued_event.details AS enqueued_details,
                ARRAY(SELECT checkpoint.checkpoint_name
                        FROM workhorse.dashboard_job_checkpoint_v1 checkpoint
@@ -821,6 +835,7 @@ export async function readDashboardTasks(
           LEFT JOIN workhorse.dashboard_job_wait_v1 durable_wait
             ON durable_wait.job_id = j.id AND durable_wait.wait_name = r.wait_name
           ${currentSignalWaitJoin}
+          ${currentHumanWaitJoin}
           LEFT JOIN LATERAL (
             SELECT event.details FROM workhorse.dashboard_job_event_v1 event
              WHERE event.job_id = j.id AND event.event_type = 'enqueued'
@@ -841,6 +856,7 @@ export async function readDashboardTasks(
   ]);
   return {
     capturedAt: new Date().toISOString(),
+    canCompleteHumanWait,
     filter,
     queue,
     worker,
@@ -899,6 +915,14 @@ export async function readDashboardTasks(
             ? { name: row.wait_name, wakeAt: toIso(row.wake_at), mode: row.wait_mode }
             : null,
         signalWait: signalWaitSummary(row.wait_name, row.signal_wait_deadline_at),
+        humanWait:
+          row.human_wait_name && row.human_wait_deadline_at
+            ? {
+                name: row.human_wait_name,
+                context: row.human_wait_context,
+                deadlineAt: toIso(row.human_wait_deadline_at),
+              }
+            : null,
       };
     }),
   };
@@ -2239,6 +2263,7 @@ export async function readDashboardSnapshot(
       wakeAt: null,
       wait: null,
       signalWait: null,
+      humanWait: null,
     })),
     schedules: scheduleRows.rows.map((row) => {
       return {

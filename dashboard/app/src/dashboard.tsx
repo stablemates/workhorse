@@ -14,6 +14,7 @@ import {
   Grid,
   Group,
   Loader,
+  Modal,
   NavLink,
   Pagination,
   Paper,
@@ -86,14 +87,10 @@ import {
   describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
-  filterExternalWaits,
   formatRetryDelay,
-  humanWaitResultsDirty,
   humanWaitQuickAction,
   idempotencyEvidenceLine,
-  isHumanWaitOverdue,
   isTerminalTaskState,
-  orderHumanWaits,
   parseHumanWaitResult,
   readTaskResultEvidence,
   taskRowActionGroups,
@@ -110,7 +107,6 @@ import type {
   DashboardEventsWindow,
   DashboardJobDetail,
   DashboardJobRow,
-  DashboardHumanWaitPage,
   DashboardSignalWaitRow,
   DashboardQueuesPage,
   DashboardStorageRelation,
@@ -170,11 +166,7 @@ import {
 } from "./task-drawer.js";
 import { TaskOpenButton, taskOpenButtonId } from "./task-table-ui.js";
 import { StatusBadge } from "./status-badge.js";
-import {
-  ExternalWaitDeadline,
-  HumanDecisionControls,
-  SignalPayloadEditor,
-} from "./external-wait-controls.js";
+import { ExternalWaitDeadline, SignalPayloadEditor } from "./external-wait-controls.js";
 export { HumanDecisionControls } from "./external-wait-controls.js";
 import {
   concurrencyCappedFootnote,
@@ -318,15 +310,7 @@ function activityChartKey(group: string): string {
   return group.replaceAll(".", "_");
 }
 
-type PageRoute =
-  | "/tasks"
-  | "/human-waits"
-  | "/events"
-  | "/cron"
-  | "/queues"
-  | "/system"
-  | "/workers"
-  | "/settings";
+type PageRoute = "/tasks" | "/events" | "/cron" | "/queues" | "/system" | "/workers" | "/settings";
 type DemoJobKind =
   | "success"
   | "retry"
@@ -340,7 +324,6 @@ type DemoJobKind =
 type DurableDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
-  | { route: "/human-waits"; value: DashboardHumanWaitPage }
   | { route: "/events"; value: DashboardEventsPage }
   | { route: "/cron"; value: DashboardCronPage }
   | { route: "/queues"; value: DashboardQueuesPage }
@@ -354,7 +337,6 @@ type LoadState =
 
 const pageRoutes = new Set<PageRoute>([
   "/tasks",
-  "/human-waits",
   "/events",
   "/cron",
   "/queues",
@@ -2355,6 +2337,23 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
       </Badge>
     );
   }
+  if (job.humanWait) {
+    return (
+      <Badge
+        size="sm"
+        variant="light"
+        color="violet"
+        leftSection={<UserFocus size={11} weight="bold" />}
+        tt="none"
+        title={`Waiting for decision ${job.humanWait.name} · deadline ${formatExact(job.humanWait.deadlineAt)}`}
+        role="status"
+        aria-label={`Waiting for decision ${job.humanWait.name}`}
+        style={{ flexShrink: 0 }}
+      >
+        Waiting for decision: {job.humanWait.name}
+      </Badge>
+    );
+  }
   if (!scheduledWait) return null;
   return (
     <Badge
@@ -2713,6 +2712,7 @@ function taskRowActionIcon(id: TaskRowActionId): ReactNode {
   if (id === "copy-id" || id === "copy-args") return <Copy size={16} />;
   if (id === "cancel") return <Prohibit size={16} />;
   if (id === "run-now") return <PlayCircle size={16} />;
+  if (id === "complete-human-wait") return <CheckCircle size={16} />;
   return <FunnelSimple size={16} />;
 }
 
@@ -2805,6 +2805,8 @@ function TasksPage({
   replace,
   taskLocation,
   runTaskNow,
+  auditActor,
+  reload,
 }: {
   data: DashboardTasksPage;
   navigate: (href: string) => void;
@@ -2818,11 +2820,20 @@ function TasksPage({
    * as a stated reason rather than removing the item.
    */
   runTaskNow: ((id: string) => Promise<RunNowFeedback>) | null;
+  auditActor: string;
+  reload: () => Promise<void>;
 }) {
+  const client = useDashboardClient();
   const [searchDraft, setSearchDraft] = useState<string | null>(null);
   // The one row action that is applied here rather than in the drawer. What it reported goes to
   // the notification system, so only the in-flight row is state this page has to hold.
   const [runningNowJobId, setRunningNowJobId] = useState<string | null>(null);
+  const [completingHumanWaitJobId, setCompletingHumanWaitJobId] = useState<string | null>(null);
+  const [confirmingHumanWait, setConfirmingHumanWait] = useState<{
+    jobId: string;
+    waitName: string;
+    quickAction: NonNullable<ReturnType<typeof humanWaitQuickAction>>;
+  } | null>(null);
   const searchInput = searchDraft ?? taskLocation.search ?? "";
   const taskFacets = useTaskFacets(data);
   const locationState: TaskLocationState = taskLocation;
@@ -2855,6 +2866,13 @@ function TasksPage({
     (id: TaskRowActionId, job: DashboardJobRow) => {
       if (id === "inspect") return inspectJob(job.id);
       if (id === "cancel") return inspectJob(job.id, { confirmCancel: true });
+      if (id === "complete-human-wait") {
+        const wait = job.humanWait;
+        const quickAction = wait ? humanWaitQuickAction(wait.context) : null;
+        if (!wait || !quickAction || !data.canCompleteHumanWait || completingHumanWaitJobId) return;
+        setConfirmingHumanWait({ jobId: job.id, waitName: wait.name, quickAction });
+        return;
+      }
       if (id === "run-now") {
         if (runTaskNow === null || runningNowJobId !== null) return;
         setRunningNowJobId(job.id);
@@ -2881,8 +2899,44 @@ function TasksPage({
         }),
       );
     },
-    [inspectJob, runTaskNow, runningNowJobId, updateLocation],
+    [
+      completingHumanWaitJobId,
+      data.canCompleteHumanWait,
+      inspectJob,
+      runTaskNow,
+      runningNowJobId,
+      updateLocation,
+    ],
   );
+  const completeHumanWait = async () => {
+    if (!confirmingHumanWait || !data.canCompleteHumanWait) return;
+    const { jobId, waitName, quickAction } = confirmingHumanWait;
+    setCompletingHumanWaitJobId(jobId);
+    try {
+      const completion = await client.completeHumanWait({
+        id: jobId,
+        name: waitName,
+        result: quickAction.result,
+        idempotencyKey: crypto.randomUUID(),
+        audit: {
+          actor: auditActor,
+          reason: `${quickAction.label} human wait ${waitName} from the task list`,
+          requestId: crypto.randomUUID(),
+        },
+      });
+      notifyDashboard({
+        title: completion.status === "completed" ? "Decision completed" : "Decision unchanged",
+        message: `${waitName}: ${completion.status}`,
+        tone: completion.status === "completed" ? "success" : "neutral",
+      });
+      setConfirmingHumanWait(null);
+      await reload();
+    } catch (cause) {
+      notifyFailure("Decision not completed", cause, "Workhorse rejected the human decision");
+    } finally {
+      setCompletingHumanWaitJobId(null);
+    }
+  };
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
   const pagination = (
     <Pagination
@@ -2898,6 +2952,39 @@ function TasksPage({
 
   return (
     <Stack gap="xl">
+      <Modal
+        opened={confirmingHumanWait !== null}
+        onClose={() => setConfirmingHumanWait(null)}
+        title={
+          confirmingHumanWait
+            ? `Confirm ${confirmingHumanWait.quickAction.label}`
+            : "Confirm decision"
+        }
+        centered
+      >
+        <Text size="sm" mb="sm">
+          The first accepted result resumes the handler and cannot be replaced. Confirm the result
+          before completing this decision.
+        </Text>
+        {confirmingHumanWait ? (
+          <Code block>{confirmingHumanWait.quickAction.formatted}</Code>
+        ) : null}
+        <Group justify="flex-end" mt="lg">
+          <Button
+            variant="default"
+            disabled={completingHumanWaitJobId !== null}
+            onClick={() => setConfirmingHumanWait(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            loading={completingHumanWaitJobId !== null}
+            onClick={() => void completeHumanWait()}
+          >
+            Confirm decision
+          </Button>
+        </Group>
+      </Modal>
       <TasksActivityChart
         filter={data.filter}
         period={locationState.period}
@@ -2909,24 +2996,6 @@ function TasksPage({
       />
       <Paper withBorder>
         <Stack gap="xs" p="md">
-          {data.filter === "blocked" ? (
-            <Alert color="blue" title="Why these tasks are blocked">
-              {blockedTaskDescription}
-            </Alert>
-          ) : null}
-          {data.filter === "waiting" ? (
-            <Alert color="blue" title="Tasks waiting outside the worker fleet">
-              <Group justify="space-between" align="center">
-                <Text size="sm">
-                  These tasks need a signal or human decision. Timers and dependency-blocked tasks
-                  stay in their own filters.
-                </Text>
-                <Button size="compact-sm" variant="light" onClick={() => navigate("/human-waits")}>
-                  Review inputs
-                </Button>
-              </Group>
-            </Alert>
-          ) : null}
           <TaskListingFilters
             data={data}
             searchInput={searchInput}
@@ -3205,8 +3274,17 @@ function TasksPage({
                       <TaskRowActions
                         job={job}
                         onAction={runRowAction}
-                        capabilities={{ runNow: runTaskNow !== null }}
-                        pendingAction={runningNowJobId === job.id ? "run-now" : null}
+                        capabilities={{
+                          runNow: runTaskNow !== null,
+                          completeHumanWait: data.canCompleteHumanWait,
+                        }}
+                        pendingAction={
+                          completingHumanWaitJobId === job.id
+                            ? "complete-human-wait"
+                            : runningNowJobId === job.id
+                              ? "run-now"
+                              : null
+                        }
                       />
                     </Table.Td>
                   </Table.Tr>
@@ -4095,7 +4173,7 @@ export function SystemKpiList({
               aria-label="Review waiting tasks"
               size="compact-xs"
               variant="subtle"
-              onClick={() => navigate("/human-waits")}
+              onClick={() => navigate("/tasks?filter=waiting")}
             >
               Review waiting tasks
             </Button>
@@ -4131,7 +4209,7 @@ export function ExternalWaitAlert({
           A signal or human decision passed its deadline. Deadline maintenance will resolve the
           suspended task; review pending decisions that an operator can complete now.
         </Text>
-        <Button color="red" variant="light" onClick={() => navigate("/human-waits")}>
+        <Button color="red" variant="light" onClick={() => navigate("/tasks?filter=waiting")}>
           Review waiting tasks
         </Button>
       </Group>
@@ -5971,287 +6049,6 @@ function SignalTaskPanel({
   );
 }
 
-function HumanWaitsPage({
-  data,
-  auditActor,
-  reload,
-  inspectJob,
-}: {
-  data: DashboardHumanWaitPage;
-  auditActor: string;
-  reload: () => Promise<void>;
-  inspectJob: (id: string) => void;
-}) {
-  const client = useDashboardClient();
-  const [results, setResults] = useState<Record<string, string>>({});
-  const [signalPayloads, setSignalPayloads] = useState<Record<string, string>>({});
-  const [sendingSignal, setSendingSignal] = useState<string | null>(null);
-  const [completing, setCompleting] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [waitFilter, setWaitFilter] = useState<"all" | "overdue">("all");
-  const filterOptions = {
-    search,
-    overdueOnly: waitFilter === "overdue",
-    nowMs: Date.now(),
-  };
-  const waits = useMemo(() => orderHumanWaits(data.waits, Date.now()), [data.waits]);
-  const visibleWaits = filterExternalWaits(waits, filterOptions);
-  const visibleSignalWaits = filterExternalWaits(data.signalWaits, filterOptions);
-  const dirty =
-    humanWaitResultsDirty(results) ||
-    Object.values(signalPayloads).some((payload) => payload.trim().length > 0);
-  useRefreshBlocker(dirty, dashboardRefreshBlockers.dirtyHumanWait);
-
-  const parseResult = (key: string) => {
-    const parsed = parseHumanWaitResult(results[key] ?? "");
-    if (parsed !== null) return parsed;
-    notifyDashboard({
-      title: "Result is not valid JSON",
-      message: "Enter the bounded JSON value the waiting handler should receive.",
-      tone: "failure",
-    });
-    return null;
-  };
-
-  const prettyPrintResult = (key: string) => {
-    const source = results[key]?.trim();
-    if (!source) return;
-    const parsed = parseHumanWaitResult(source);
-    if (parsed !== null) {
-      setResults((current) => ({ ...current, [key]: parsed.formatted }));
-    }
-    // Keep invalid input intact so the operator can correct it; Review reports the error.
-  };
-
-  const review = (key: string) => {
-    const parsed = parseResult(key);
-    if (parsed === null) return;
-    setResults((current) => ({ ...current, [key]: parsed.formatted }));
-    setConfirming(key);
-  };
-
-  const complete = async (jobId: string, name: string) => {
-    const key = `${jobId}:${name}`;
-    const parsed = parseResult(key);
-    if (parsed === null) return;
-    setCompleting(key);
-    try {
-      const completion = await client.completeHumanWait({
-        id: jobId,
-        name,
-        result: parsed.value,
-        idempotencyKey: crypto.randomUUID(),
-        audit: {
-          actor: auditActor,
-          reason: `Complete human wait ${name} from the dashboard`,
-          requestId: crypto.randomUUID(),
-        },
-      });
-      notifyDashboard({
-        title: completion.status === "completed" ? "Wait completed" : "Wait unchanged",
-        message: `${name}: ${completion.status}`,
-        tone: completion.status === "completed" ? "success" : "neutral",
-      });
-      setConfirming(null);
-      setResults((current) => {
-        const next = { ...current };
-        delete next[key];
-        return next;
-      });
-      await reload();
-    } catch (cause) {
-      notifyFailure("Wait not completed", cause, "Workhorse rejected the human wait result");
-    } finally {
-      setCompleting(null);
-    }
-  };
-
-  const sendSignal = async (wait: DashboardSignalWaitRow) => {
-    const key = `${wait.jobId}:${wait.name}`;
-    setSendingSignal(key);
-    try {
-      const requestSucceeded = await deliverDashboardSignal({
-        client,
-        auditActor,
-        jobId: wait.jobId,
-        name: wait.name,
-        payloadSource: signalPayloads[key] ?? "",
-        reason: `Send signal ${wait.name} from the dashboard`,
-      });
-      if (!requestSucceeded) return;
-      setSignalPayloads((current) => {
-        const next = { ...current };
-        delete next[key];
-        return next;
-      });
-      await reload();
-    } finally {
-      setSendingSignal(null);
-    }
-  };
-
-  return (
-    <Stack gap="lg">
-      <Box>
-        <Title order={2}>Waiting</Title>
-        <Text c="dimmed" size="sm">
-          Tasks waiting for a signal or a human decision outside the worker fleet. The first
-          accepted input resumes the handler and remains the audit record.
-        </Text>
-        <Text c="dimmed" size="xs" mt={4}>
-          {data.diagnostics.pendingSignals} signals and {data.diagnostics.pendingHumanDecisions}
-          {" human decisions are pending; "}
-          {data.diagnostics.overdue} are overdue and {data.diagnostics.rejectedDeliveries}
-          {" retained deliveries were rejected"}
-          {data.diagnostics.capped ? " (bounded lower bounds)." : "."}
-        </Text>
-      </Box>
-      {data.waits.length > 0 || data.signalWaits.length > 0 ? (
-        <Group align="flex-end" wrap="wrap">
-          <TextInput
-            label="Search waiting tasks"
-            placeholder="Name, task, type, or queue"
-            leftSection={<MagnifyingGlass size={16} />}
-            value={search}
-            onChange={(event) => setSearch(event.currentTarget.value)}
-            style={{ flex: 1 }}
-          />
-          <SegmentedControl
-            aria-label="Filter waiting tasks"
-            value={waitFilter}
-            onChange={(value) => setWaitFilter(value as "all" | "overdue")}
-            data={[
-              { value: "all", label: "All pending" },
-              { value: "overdue", label: "Overdue" },
-            ]}
-          />
-        </Group>
-      ) : null}
-      <Box>
-        <Title order={3} mb="xs">
-          Signal waits
-        </Title>
-        <Stack gap="sm">
-          {data.signalWaits.length === 0 ? (
-            <Paper withBorder p="xl">
-              <Text c="dimmed">No jobs are waiting for a signal.</Text>
-            </Paper>
-          ) : visibleSignalWaits.length === 0 ? (
-            <Paper withBorder p="xl">
-              <Text c="dimmed">No signal waits match this search and filter.</Text>
-            </Paper>
-          ) : (
-            visibleSignalWaits.map((wait) => {
-              const key = `${wait.jobId}:${wait.name}`;
-              return (
-                <SignalWaitCard
-                  key={key}
-                  wait={wait}
-                  payload={signalPayloads[key] ?? ""}
-                  canSignal={data.canSignal}
-                  sending={sendingSignal === key}
-                  onPayloadChange={(payload) =>
-                    setSignalPayloads((current) => ({ ...current, [key]: payload }))
-                  }
-                  onSend={() => void sendSignal(wait)}
-                  inspectJob={inspectJob}
-                />
-              );
-            })
-          )}
-        </Stack>
-      </Box>
-      <Divider label="Human decisions" labelPosition="left" />
-      {data.waits.length === 0 ? (
-        <Paper withBorder p="xl">
-          <Text c="dimmed">No jobs are waiting for a human decision.</Text>
-        </Paper>
-      ) : visibleWaits.length === 0 ? (
-        <Paper withBorder p="xl">
-          <Text c="dimmed">No human waits match this search and filter.</Text>
-        </Paper>
-      ) : (
-        visibleWaits.map((wait) => {
-          const key = `${wait.jobId}:${wait.name}`;
-          const quickAction = humanWaitQuickAction(wait.context);
-          return (
-            <Paper
-              component="section"
-              aria-label={`Human decision ${wait.name} for task ${wait.jobId}`}
-              withBorder
-              p="lg"
-              key={key}
-            >
-              <Stack gap="sm">
-                <Group justify="space-between" align="flex-start">
-                  <Box>
-                    <Text fw={700}>{wait.name}</Text>
-                    <Text size="sm">
-                      {wait.jobType} · {wait.queue} · attempt {wait.attempt}
-                    </Text>
-                    <Code fz="xs">{wait.jobId}</Code>
-                    <Button
-                      variant="subtle"
-                      size="compact-xs"
-                      aria-label={`View task ${wait.jobId}`}
-                      onClick={() => inspectJob(wait.jobId)}
-                    >
-                      View task
-                    </Button>
-                  </Box>
-                  <Text c="dimmed" size="xs">
-                    {formatExact(wait.createdAt)}
-                  </Text>
-                </Group>
-                <ExternalWaitDeadline
-                  deadline={formatExact(wait.deadlineAt)}
-                  overdue={isHumanWaitOverdue(wait, Date.now())}
-                />
-                <Box>
-                  <Text c="dimmed" fw={600} size="xs" mb={4}>
-                    Decision context
-                  </Text>
-                  <Code block>{JSON.stringify(wait.context, null, 2)}</Code>
-                </Box>
-                <HumanDecisionControls
-                  ariaLabel={`Decision for ${wait.name}`}
-                  result={results[key] ?? ""}
-                  quickAction={quickAction ? { label: quickAction.label } : null}
-                  canComplete={data.canComplete}
-                  confirming={confirming === key}
-                  completing={completing === key}
-                  onQuickAction={() => {
-                    if (!quickAction) return;
-                    setResults((current) => ({ ...current, [key]: quickAction.formatted }));
-                    setConfirming(key);
-                  }}
-                  onResultChange={(value) => {
-                    setConfirming((current) => (current === key ? null : current));
-                    setResults((current) => ({ ...current, [key]: value }));
-                  }}
-                  onReview={() => {
-                    prettyPrintResult(key);
-                    review(key);
-                  }}
-                  onComplete={() => void complete(wait.jobId, wait.name)}
-                  onKeepEditing={() => setConfirming(null)}
-                />
-                {!data.canComplete ? (
-                  <Text c="dimmed" size="xs">
-                    This dashboard is read-only, so it can inspect decisions but cannot complete
-                    them.
-                  </Text>
-                ) : null}
-              </Stack>
-            </Paper>
-          );
-        })
-      )}
-    </Stack>
-  );
-}
-
 const refreshStorageKey = "workhorse-auto-refresh";
 
 function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
@@ -6262,7 +6059,6 @@ function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
 }
 
 function routeTitle(route: PageRoute): string {
-  if (route === "/human-waits") return "waiting tasks";
   if (route === "/events") return "events";
   if (route === "/cron") return "schedules";
   if (route === "/queues") return "queues";
@@ -6464,8 +6260,6 @@ function useDashboardController(
               pageSize: listing.pageSize,
             }),
           };
-        } else if (route === "/human-waits") {
-          data = { route: "/human-waits", value: await client.humanWaits() };
         } else if (route === "/events") {
           const events = eventsRef.current;
           data = {
@@ -7073,15 +6867,8 @@ function useDashboardController(
         runningDemoJob={runningDemoJob}
         inspectJob={inspectJob}
         runTaskNow={runTaskNow}
-      />
-    );
-  } else if (loadState.data?.route === "/human-waits") {
-    content = (
-      <HumanWaitsPage
-        data={loadState.data.value}
         auditActor={auditActor}
         reload={loadPage}
-        inspectJob={inspectJob}
       />
     );
   } else if (loadState.data?.route === "/events") {

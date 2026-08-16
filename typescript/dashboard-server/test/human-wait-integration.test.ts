@@ -19,6 +19,7 @@ describe("dashboard human waits", () => {
         context.waitForHuman("account-review", {
           prompt: "Approve this account?",
           accountId: "account-1",
+          dashboard: { quickAction: { label: "Approve", result: { approved: true } } },
         }),
     );
     expect(await worker.runOnce()).toBe(true);
@@ -64,8 +65,31 @@ describe("dashboard human waits", () => {
         expect.objectContaining({
           jobId: id,
           name: "account-review",
-          context: { prompt: "Approve this account?", accountId: "account-1" },
+          context: {
+            prompt: "Approve this account?",
+            accountId: "account-1",
+            dashboard: { quickAction: { label: "Approve", result: { approved: true } } },
+          },
           deadlineAt: expect.any(String),
+        }),
+      ],
+    });
+    await expect(
+      client(true).dashboard.tasks({ filter: "waiting", page: 1, pageSize: 25 }),
+    ).resolves.toMatchObject({
+      canCompleteHumanWait: true,
+      jobs: [
+        expect.objectContaining({
+          id,
+          humanWait: {
+            name: "account-review",
+            context: {
+              prompt: "Approve this account?",
+              accountId: "account-1",
+              dashboard: { quickAction: { label: "Approve", result: { approved: true } } },
+            },
+            deadlineAt: expect.any(String),
+          },
         }),
       ],
     });

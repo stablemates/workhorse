@@ -491,6 +491,7 @@ export type TaskRowActionId =
   | "filter-type"
   | "filter-queue"
   | "filter-worker"
+  | "complete-human-wait"
   | "run-now"
   | "cancel";
 
@@ -633,6 +634,34 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
   };
 }
 
+function completeHumanWaitRowAction(job: DashboardJobRow, supported: boolean): TaskRowAction {
+  const quickAction = job.humanWait ? humanWaitQuickAction(job.humanWait.context) : null;
+  if (!job.humanWait) {
+    return {
+      id: "complete-human-wait",
+      label: "Complete human decision",
+      unavailable: "This task is not waiting for a human decision.",
+      destructive: false,
+    };
+  }
+  if (!quickAction) {
+    return {
+      id: "complete-human-wait",
+      label: "Complete human decision",
+      unavailable: "This decision has no application-defined quick action.",
+      destructive: false,
+    };
+  }
+  return {
+    id: "complete-human-wait",
+    label: `${quickAction.label}…`,
+    unavailable: supported
+      ? null
+      : "This dashboard is read-only, so it cannot complete the human decision.",
+    destructive: false,
+  };
+}
+
 /**
  * What the connected host is able to do, so the menu can state a capability limit as a reason
  * rather than by quietly dropping an item.
@@ -640,6 +669,8 @@ function runNowRowAction(job: DashboardJobRow, supported: boolean): TaskRowActio
 export interface TaskRowActionCapabilities {
   /** True when the host exposes `runTaskNow`. */
   runNow: boolean;
+  /** True when the host lets this operator complete a human decision. */
+  completeHumanWait?: boolean;
 }
 
 /**
@@ -653,7 +684,7 @@ export interface TaskRowActionCapabilities {
  */
 export function taskRowActionGroups(
   job: DashboardJobRow,
-  capabilities: TaskRowActionCapabilities = { runNow: true },
+  capabilities: TaskRowActionCapabilities = { runNow: true, completeHumanWait: true },
 ): TaskRowActionGroup[] {
   const worker = job.workerId ?? job.lastWorkerId;
   return [
@@ -696,7 +727,11 @@ export function taskRowActionGroups(
     },
     {
       label: "Change task",
-      actions: [runNowRowAction(job, capabilities.runNow), cancelRowAction(job)],
+      actions: [
+        completeHumanWaitRowAction(job, capabilities.completeHumanWait !== false),
+        runNowRowAction(job, capabilities.runNow),
+        cancelRowAction(job),
+      ],
     },
   ];
 }
