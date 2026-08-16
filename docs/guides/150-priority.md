@@ -52,8 +52,14 @@ await queue.syncSchedules("billing", [
 Recurring definitions accept the same field on `ScheduleJobDefinition`. Every occurrence receives
 the stored priority when `fireSchedule` creates its job.
 
-The dashboard shows non-default priority beside each task and the stored value in task details.
-This lets an operator explain why newer work started before an older ready job.
+The dashboard can filter tasks by exact priority or sort them with the highest priority first. It
+also shows non-default priority beside each task and the stored value in task details.
+
+The System page groups each queue's ready work by priority and shows the oldest task in each group.
+This makes a lower-priority group that is waiting behind urgent work visible to an operator.
+
+If the demo's operator controls are enabled, an operator can choose the priority of a test task.
+Redrive keeps the source task's priority because it continues that task's operational intent.
 
 Priority does not bypass queue pauses, concurrency policies, rate limits, or other admission rules.
 It orders the jobs that PostgreSQL may admit after those rules apply.

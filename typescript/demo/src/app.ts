@@ -731,7 +731,7 @@ async function redriveLatestDeadLetter(
 export function createLocalOperator(database: DemoDatabase): DashboardOperator {
   return {
     mode: "writable",
-    async enqueueTest(kind, audit, scenario) {
+    async enqueueTest(kind, audit, scenario, priority = 0) {
       if (kind === "redrive") return redriveLatestDeadLetter(database, audit);
       const target = `job:${kind}`;
       return database.transaction(async (transaction) => {
@@ -743,6 +743,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
         const jobId = await workhorse.queue.enqueue(definition.type, definition.payload, {
           ...(definition.maxAttempts === undefined ? {} : { maxAttempts: definition.maxAttempts }),
           ...(definition.idempotency === undefined ? {} : { idempotency: definition.idempotency }),
+          priority,
           tags: definition.tags,
         });
         await transaction.execute(sql`
@@ -751,7 +752,7 @@ export function createLocalOperator(database: DemoDatabase): DashboardOperator {
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
              ${audit.occurredAt ?? new Date().toISOString()}, 'enqueueTest', ${target},
-             NULL, ${JSON.stringify({ jobId, ...definition })}::jsonb, 'succeeded')
+             NULL, ${JSON.stringify({ jobId, ...definition, priority })}::jsonb, 'succeeded')
         `);
         return { jobId };
       });

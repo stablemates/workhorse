@@ -11,6 +11,27 @@ Object.defineProperty(globalThis, "localStorage", {
 const systemPage = {
   window: "1h",
   outcomes: [],
+  queues: [
+    {
+      queue: "demo",
+      paused: false,
+      ready: 5,
+      oldestReadyMs: 90_000,
+      priorityBacklog: [
+        { priority: 90, ready: 2, oldestReadyMs: 5_000 },
+        { priority: 0, ready: 3, oldestReadyMs: 90_000 },
+      ],
+      dueSoon: 0,
+      active: 1,
+      retrying: 0,
+      enqueuedPerMinute: 1,
+      completedPerMinute: 1,
+      concurrencyPolicy: null,
+      rateLimitPolicy: null,
+    },
+  ],
+  concurrencyPoliciesCapped: false,
+  rateLimitPoliciesCapped: false,
   kpis: {
     drain: { enqueuedPerMinute: 1, completedPerMinute: 2, netPerMinute: 1 },
     backlog: { ready: 3, oldestReadyMs: 4_000 },
@@ -87,5 +108,22 @@ describe("system health counters", () => {
     expect(html).toContain("External waits are overdue");
     expect(html).toContain("A signal or human decision passed its deadline");
     expect(html).toContain("Review human waits");
+  });
+
+  it("shows ready age per priority so lower lanes cannot starve invisibly", async () => {
+    const { QueuePressure } = await import("./dashboard.js");
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(QueuePressure, { data: systemPage, navigate: () => undefined }),
+      ),
+    );
+
+    expect(html).toContain("Ready by priority");
+    expect(html).toContain("P90");
+    expect(html).toContain("2 ready");
+    expect(html).toContain("P0");
+    expect(html).toContain("oldest 2 min");
   });
 });

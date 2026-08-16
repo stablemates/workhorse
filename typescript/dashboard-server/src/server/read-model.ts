@@ -29,6 +29,7 @@ import {
   DashboardTaskCounts,
   DashboardTaskFacets,
   DashboardTaskFilter,
+  DashboardTaskSort,
   DashboardTasksPage,
   DashboardWorkerRow,
   DashboardWorkersPage,
@@ -272,13 +273,15 @@ function taskQueryCondition(options: {
   jobType: string | null;
   tags: readonly string[];
   searchPattern: string | null;
+  priority: number | null;
 }) {
-  const { queue, worker, jobType, tags, searchPattern } = options;
+  const { queue, worker, jobType, tags, searchPattern, priority } = options;
   const tagArray = textArrayExpression(tags);
   return sql`
     (${queue}::text IS NULL OR queue = ${queue})
     AND (${worker}::text IS NULL OR worker_id = ${worker})
     AND (${jobType}::text IS NULL OR type = ${jobType})
+    AND (${priority}::integer IS NULL OR priority = ${priority})
     -- Multiple selected tags use OR semantics through PostgreSQL array overlap.
     AND (cardinality(${tagArray}) = 0 OR tags && ${tagArray})
     AND (
@@ -671,26 +674,44 @@ export async function readDashboardActivity(
   };
 }
 
+export interface DashboardTasksQuery {
+  filter: DashboardTaskFilter;
+  page: number;
+  pageSize: number;
+  queue: string | null;
+  tags: readonly string[];
+  search: string | null;
+  worker: string | null;
+  jobType: string | null;
+  priority: number | null;
+  sort: DashboardTaskSort;
+}
+
 export async function readDashboardTasks(
   database: DashboardDatabase,
-  filter: DashboardTaskFilter,
-  page: number,
-  pageSize: number,
-  queue: string | null = null,
-  tags: readonly string[] = [],
-  search: string | null = null,
-  worker: string | null = null,
-  jobType: string | null = null,
+  query: DashboardTasksQuery,
   projectDurability: DashboardDurabilityProjector = () => null,
 ): Promise<DashboardTasksPage> {
+  const { filter, page, pageSize, queue, tags, search, worker, jobType, priority, sort } = query;
   const offset = (page - 1) * pageSize;
   const searchPattern = taskSearchPattern(search);
-  const queryCondition = taskQueryCondition({ queue, worker, jobType, tags, searchPattern });
+  const queryCondition = taskQueryCondition({
+    queue,
+    worker,
+    jobType,
+    tags,
+    searchPattern,
+    priority,
+  });
+  const taskOrder =
+    sort === "priority"
+      ? sql`priority DESC, updated_at DESC, id DESC`
+      : sql`updated_at DESC, id DESC`;
   const [counts, totalRows, jobRows] = await Promise.all([
     readDashboardTaskCounts(database),
     database.execute<{ count: number }>(sql`
       WITH tasks AS (
-        SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.tags,
+        SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.tags, j.priority,
                COALESCE(r.state, o.state) AS state,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                COALESCE(r.worker_id, current_wait.worker_id, attempt_worker.worker_id,
@@ -792,7 +813,7 @@ export async function readDashboardTasks(
       SELECT *
         FROM tasks
        WHERE ${taskFilterCondition(filter)} AND ${queryCondition}
-       ORDER BY updated_at DESC, id DESC
+       ORDER BY ${taskOrder}
        LIMIT ${pageSize}
       OFFSET ${offset}
     `),
@@ -803,6 +824,8 @@ export async function readDashboardTasks(
     queue,
     worker,
     jobType,
+    priority,
+    sort,
     tags: [...tags],
     search,
     page,
@@ -1449,6 +1472,7 @@ export async function readDashboardSystem(
     runtimeRows,
     retryRows,
     queueRows,
+    priorityBacklogRows,
     retryTypeRows,
     failingTypeRows,
     health,
@@ -1622,7 +1646,22 @@ export async function readDashboardSystem(
         FROM queue_names q
         LEFT JOIN workhorse.dashboard_queue_control_v1 c USING (queue_name)
         LEFT JOIN runtime r USING (queue_name)
-        LEFT JOIN rolled s USING (queue_name)
+       LEFT JOIN rolled s USING (queue_name)
+    `),
+    database.execute<{
+      queue: string;
+      priority: number;
+      ready: number;
+      oldest_ready_ms: number;
+    }>(sql`
+      SELECT runtime.queue_name AS queue, job.priority, count(*)::integer AS ready,
+             extract(epoch FROM clock_timestamp() - min(runtime.ready_at)) * 1000
+               AS oldest_ready_ms
+        FROM workhorse.dashboard_job_runtime_v1 runtime
+        JOIN workhorse.dashboard_job_v1 job ON job.id = runtime.job_id
+       WHERE runtime.state = 'ready'
+       GROUP BY runtime.queue_name, job.priority
+       ORDER BY runtime.queue_name, job.priority DESC
     `),
     database.execute<{ queue: string; type: string; count: number }>(sql`
       SELECT j.queue_name AS queue, j.job_type AS type, count(*)::integer AS count
@@ -1691,12 +1730,26 @@ export async function readDashboardSystem(
   };
 
   const admissionPolicies = dashboardAdmissionPolicies(health);
+  const priorityBacklogByQueue = new Map<
+    string,
+    Array<{ priority: number; ready: number; oldestReadyMs: number }>
+  >();
+  for (const row of priorityBacklogRows.rows) {
+    const lanes = priorityBacklogByQueue.get(row.queue) ?? [];
+    lanes.push({
+      priority: row.priority,
+      ready: row.ready,
+      oldestReadyMs: row.oldest_ready_ms,
+    });
+    priorityBacklogByQueue.set(row.queue, lanes);
+  }
   const queues = queueRows.rows
     .map((row) => ({
       queue: row.queue,
       paused: row.paused,
       ready: row.ready,
       oldestReadyMs: row.oldest_ready_ms,
+      priorityBacklog: priorityBacklogByQueue.get(row.queue) ?? [],
       dueSoon: row.due_soon,
       active: row.active,
       retrying: row.retrying,

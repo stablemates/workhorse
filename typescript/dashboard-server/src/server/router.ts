@@ -1,14 +1,21 @@
 import { isProcedure, ORPCError, os } from "@orpc/server";
-import type { Queue } from "@workhorse/core";
+import { MAX_JOB_PRIORITY, type Queue } from "@workhorse/core";
 import type {
   CompleteDashboardOptions,
   DashboardDemoJobKind,
   DashboardDemoScenario,
   DashboardEventTypeFilter,
   DashboardSystemWindow,
+  DashboardTaskSort,
   MaintenanceLoopCadences,
 } from "../wire.js";
-import { dashboardAttemptOutcomes, dashboardJobEventTypes, dashboardTaskFilters } from "../wire.js";
+import {
+  dashboardAttemptOutcomes,
+  dashboardJobEventTypes,
+  dashboardTaskFilters,
+  dashboardTaskPriorityMax,
+  dashboardTaskSorts,
+} from "../wire.js";
 import { z } from "zod";
 import type {
   DashboardDurabilityProjector,
@@ -79,12 +86,16 @@ const cancellationAuditSchema = z.object({
 const jobDetailInput = z.object({ id: z.uuid() });
 const eventDetailInput = z.object({ id: z.string().regex(/^(event|attempt):\d+$/) });
 const taskFilter = z.enum(dashboardTaskFilters);
+const taskSort = z.enum(dashboardTaskSorts);
+const checkedDashboardTaskPriorityMax: typeof MAX_JOB_PRIORITY = dashboardTaskPriorityMax;
 const tasksInput = z.object({
   filter: taskFilter.default("all"),
   queue: z.string().trim().min(1).nullable().default(null),
   page: z.number().int().min(1).default(1),
   worker: z.string().trim().min(1).nullable().default(null),
   jobType: z.string().trim().min(1).nullable().default(null),
+  priority: z.number().int().min(0).max(checkedDashboardTaskPriorityMax).nullable().default(null),
+  sort: taskSort.default("updated" satisfies DashboardTaskSort),
   tags: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
   search: z
     .string()
@@ -153,6 +164,7 @@ const eventsInput = z.object({
 const enqueueTestInput = z.object({
   kind: z.enum(checkedDemoJobKindValues),
   scenario: z.enum(checkedDemoScenarioValues).optional(),
+  priority: z.number().int().min(0).max(checkedDashboardTaskPriorityMax).default(0),
   audit: auditSchema,
 });
 const setScheduleEnabledInput = z.object({
@@ -275,18 +287,7 @@ export const dashboardRouter = {
     tasks: procedure
       .input(tasksInput)
       .handler(({ context, input }) =>
-        readDashboardTasks(
-          context.database,
-          input.filter,
-          input.page,
-          input.pageSize,
-          input.queue,
-          input.tags,
-          input.search,
-          input.worker,
-          input.jobType,
-          context.projectDurability,
-        ),
+        readDashboardTasks(context.database, input, context.projectDurability),
       ),
     taskFacets: procedure.handler(({ context }) =>
       readDashboardTaskFacets(context.database, context.configuredWorkers),
@@ -364,6 +365,7 @@ export const dashboardRouter = {
         input.kind,
         auditWithOccurredAt(input.audit, context.authenticatedActor),
         input.scenario,
+        input.priority,
       );
     }),
     setScheduleEnabled: mutationProcedure

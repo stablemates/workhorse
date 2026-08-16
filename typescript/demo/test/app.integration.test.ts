@@ -895,6 +895,25 @@ describe("Workhorse demo", () => {
           job.tags.includes("email"),
       ),
     ).toBe(true);
+    const priorityFiltered = await client.dashboard.tasks({
+      filter: "all",
+      page: 1,
+      pageSize: 25,
+      priority: 90,
+    });
+    expect(priorityFiltered).toMatchObject({ priority: 90, sort: "updated" });
+    expect(priorityFiltered.total).toBeGreaterThan(0);
+    expect(priorityFiltered.jobs.every((job) => job.priority === 90)).toBe(true);
+
+    const prioritySorted = await client.dashboard.tasks({
+      filter: "all",
+      page: 1,
+      pageSize: 100,
+      sort: "priority",
+    });
+    expect(prioritySorted).toMatchObject({ priority: null, sort: "priority" });
+    const sortedPriorities = prioritySorted.jobs.map((job) => job.priority);
+    expect(sortedPriorities).toEqual(sortedPriorities.toSorted((left, right) => right - left));
     expect(
       await pool.query(
         `SELECT runtime.state, job.payload, runtime.run_at > clock_timestamp() AS is_future
@@ -2252,6 +2271,7 @@ describe("Workhorse demo", () => {
 
     const enqueued = await client.dashboard.enqueueTest({
       kind: "retry",
+      priority: 73,
       audit: {
         actor: "operator",
         reason: "show durable checkpoint reuse",
@@ -2260,7 +2280,7 @@ describe("Workhorse demo", () => {
     });
 
     expect(await client.dashboard.jobDetail({ id: enqueued.jobId })).toMatchObject({
-      identity: { id: enqueued.jobId, type: "demo.retry", state: "ready" },
+      identity: { id: enqueued.jobId, type: "demo.retry", state: "ready", priority: 73 },
       payload: { label: "operator-retry", failUntilAttempt: 1 },
       checkpoints: [],
     });
@@ -2271,6 +2291,22 @@ describe("Workhorse demo", () => {
     ).toMatchObject({
       rows: [{ max_attempts: 3, tags: ["demo-test", "durable-checkpoint"] }],
     });
+    expect(
+      (await client.dashboard.system({ window: "1h" })).queues.find(
+        (row) => row.queue === DEMO_QUEUE,
+      )?.priorityBacklog,
+    ).toContainEqual(expect.objectContaining({ priority: 73, ready: 1 }));
+    await expect(
+      client.dashboard.enqueueTest({
+        kind: "success",
+        priority: 101,
+        audit: {
+          actor: "operator",
+          reason: "reject invalid priority",
+          requestId: "invalid-priority",
+        },
+      }),
+    ).rejects.toThrow(/input validation/i);
 
     const timer = await client.dashboard.enqueueTest({
       kind: "timer",
