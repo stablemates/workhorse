@@ -733,6 +733,13 @@ export interface ClaimedJob<TPayload = Json> {
   leaseExpiresAt: Date;
 }
 
+/** Ordered claims that one worker coordinator delivers to a shared batch callback. */
+export interface BatchExecutionRecord {
+  batchId: string;
+  jobs: readonly ClaimedJob<unknown>[];
+  workerId: string;
+}
+
 /** One immutable named result persisted at an explicit handler restart boundary. */
 export interface JobCheckpoint<TValue extends Json = Json> {
   jobId: string;

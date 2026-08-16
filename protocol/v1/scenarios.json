@@ -9,7 +9,7 @@
         "parameters": [
           [
             { "queue": "protocol-batch", "type": "protocol.first", "payload": { "index": 1 } },
-            { "queue": "protocol-batch", "type": "protocol.second", "payload": { "index": 2 } }
+            { "queue": "protocol-batch", "type": "protocol.first", "payload": { "index": 2 } }
           ]
         ],
         "expect": {
@@ -18,7 +18,10 @@
             { "value": { "jobId": { "$type": "uuid" }, "ordinal": 2, "outcome": "accepted" } }
           ]
         },
-        "capture": { "successfulJob": "0.value.jobId" }
+        "capture": {
+          "successfulJob": "0.value.jobId",
+          "batchPeerJob": "1.value.jobId"
+        }
       },
       {
         "id": "claim",
@@ -39,6 +42,49 @@
           ]
         },
         "capture": { "successfulFence": "0.value.fenceToken" }
+      },
+      {
+        "id": "claim-batch-peer",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'jobType', job_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+        "parameters": ["protocol-batch", "protocol-success", 30000],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "fenceToken": { "$type": "integer" },
+                "jobId": { "$ref": "batchPeerJob" },
+                "jobType": "protocol.first",
+                "payload": { "index": 2 }
+              }
+            }
+          ]
+        },
+        "capture": { "batchPeerFence": "0.value.fenceToken" }
+      },
+      {
+        "id": "record-batch-dispatch",
+        "sql": "SELECT workhorse.record_batch_dispatch_v1($1::uuid, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid), ARRAY(SELECT jsonb_array_elements_text($3::jsonb)::integer), ARRAY(SELECT jsonb_array_elements_text($4::jsonb)::bigint), $5::text) AS recorded",
+        "parameters": [
+          "11111111-1111-4111-8111-111111111111",
+          [{ "$ref": "successfulJob" }, { "$ref": "batchPeerJob" }],
+          [1, 1],
+          [{ "$ref": "successfulFence" }, { "$ref": "batchPeerFence" }],
+          "protocol-success"
+        ],
+        "expect": { "rows": [{ "recorded": 2 }] }
+      },
+      {
+        "id": "record-batch-failure",
+        "sql": "SELECT workhorse.record_batch_failure_v1($1::uuid, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid), ARRAY(SELECT jsonb_array_elements_text($3::jsonb)::integer), ARRAY(SELECT jsonb_array_elements_text($4::jsonb)::bigint), $5::text) AS recorded",
+        "parameters": [
+          "11111111-1111-4111-8111-111111111111",
+          [{ "$ref": "successfulJob" }, { "$ref": "batchPeerJob" }],
+          [1, 1],
+          [{ "$ref": "successfulFence" }, { "$ref": "batchPeerFence" }],
+          "protocol-success"
+        ],
+        "expect": { "rows": [{ "recorded": 2 }] }
       },
       {
         "id": "heartbeat",

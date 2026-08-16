@@ -2331,6 +2331,7 @@ export async function readDashboardJobDetail(
     checkpointRows,
     waitRows,
     eventRows,
+    batchRows,
     dependencyRows,
     childRows,
     redriveRows,
@@ -2486,6 +2487,43 @@ export async function readDashboardJobDetail(
       ORDER BY occurred_at, event_id
     `),
     database.execute<{
+      batch_id: string;
+      selected_attempt: number;
+      dispatched_at: Date | string;
+      batch_wide_failure: boolean;
+      ordinal: string | number;
+      job_id: string;
+      job_type: string;
+      attempt: number;
+      outcome: string | null;
+      error: unknown;
+    }>(sql`
+      SELECT dispatch.details->>'batch_id' AS batch_id,
+             dispatch.attempt AS selected_attempt,
+             dispatch.occurred_at AS dispatched_at,
+             EXISTS (
+               SELECT 1 FROM workhorse.dashboard_job_event_v1 failure
+                WHERE failure.job_id = dispatch.job_id
+                  AND failure.attempt = dispatch.attempt
+                  AND failure.event_type = 'batch_failed'
+                  AND failure.details->>'batch_id' = dispatch.details->>'batch_id'
+             ) AS batch_wide_failure,
+             member.ordinal, member.value->>'job_id' AS job_id,
+             COALESCE(job.job_type, selected_job.job_type) AS job_type,
+             (member.value->>'attempt')::integer AS attempt,
+             history.outcome, history.error
+        FROM workhorse.dashboard_job_event_v1 dispatch
+        CROSS JOIN LATERAL jsonb_array_elements(dispatch.details->'members')
+          WITH ORDINALITY AS member(value, ordinal)
+        JOIN workhorse.dashboard_job_v1 selected_job ON selected_job.id = dispatch.job_id
+        LEFT JOIN workhorse.dashboard_job_v1 job ON job.id = (member.value->>'job_id')::uuid
+        LEFT JOIN workhorse.dashboard_attempt_history_v1 history
+          ON history.job_id = (member.value->>'job_id')::uuid
+         AND history.attempt = (member.value->>'attempt')::integer
+       WHERE dispatch.job_id = ${id} AND dispatch.event_type = 'batch_dispatched'
+       ORDER BY dispatch.occurred_at, dispatch.event_id, member.ordinal
+    `),
+    database.execute<{
       dependent_job_id: string;
       prerequisite_job_id: string;
       on_success: "release" | "cancel" | "fail";
@@ -2574,6 +2612,29 @@ export async function readDashboardJobDetail(
         highestKeyActive: healthPolicy?.highestKeyActive ?? 0,
       }
     : null;
+  const batchExecutions: DashboardJobDetail["batchExecutions"] = [];
+  const executionsById = new Map<string, DashboardJobDetail["batchExecutions"][number]>();
+  for (const row of batchRows.rows) {
+    let execution = executionsById.get(row.batch_id);
+    if (!execution) {
+      execution = {
+        id: row.batch_id,
+        attempt: row.selected_attempt,
+        dispatchedAt: toIso(row.dispatched_at),
+        batchWideFailure: row.batch_wide_failure,
+        members: [],
+      };
+      executionsById.set(row.batch_id, execution);
+      batchExecutions.push(execution);
+    }
+    execution.members.push({
+      id: row.job_id,
+      type: row.job_type,
+      attempt: row.attempt,
+      outcome: row.outcome,
+      error: row.error,
+    });
+  }
   return {
     identity: {
       id: job.id,
@@ -2700,6 +2761,7 @@ export async function readDashboardJobDetail(
       result: job.result,
       error: job.outcome_error ?? job.runtime_error,
     },
+    batchExecutions,
     attempts: attemptRows.rows.map((row) => ({
       attempt: row.attempt,
       workerId: row.worker_id,

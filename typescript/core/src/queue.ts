@@ -7,6 +7,7 @@ import type {
   ChildJobRequest,
   CancellationRequest,
   CancelResult,
+  BatchExecutionRecord,
   ClaimedJob,
   CreateChildResult,
   CreateChildrenResult,
@@ -580,6 +581,16 @@ export class Queue {
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedJob<TPayload> | null> {
     return this.modules.claimLeaseFence.claim<TPayload>(workerId, options);
+  }
+
+  /** @internal Persist the ordered membership chosen by a worker's batch coordinator. */
+  async recordBatchDispatch(batch: BatchExecutionRecord): Promise<void> {
+    return this.modules.claimLeaseFence.recordBatchDispatch(batch);
+  }
+
+  /** @internal Persist that the shared callback failed before returning per-member outcomes. */
+  async recordBatchFailure(batch: BatchExecutionRecord): Promise<void> {
+    return this.modules.claimLeaseFence.recordBatchFailure(batch);
   }
 
   async heartbeat(job: ClaimedJob<unknown>, workerId: string, leaseMs = 30_000): Promise<boolean> {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
@@ -6,6 +7,8 @@ import { Worker } from "../../core/src/index.js";
 import { createIntegrationTestContext } from "../../core/test/support/integration.js";
 import { createDashboardHost } from "../src/server/host.js";
 import { createDashboardOperatorControllers } from "../src/server/operator-controllers.js";
+import { readDashboardJobDetail } from "../src/server/read-model.js";
+import { dashboardDatabase } from "../src/server/sql.js";
 import type { DashboardRouter } from "../src/server/router.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -68,5 +71,42 @@ describe("dashboard signal integration", () => {
       state: "succeeded",
       result: { approved: true },
     });
+  });
+});
+
+describe("dashboard batch execution detail", () => {
+  it("returns ordered peers and their matching attempt failures", async () => {
+    const queueName = `dashboard-batch-${randomUUID()}`;
+    const jobIds = await Promise.all(
+      [1, 2].map((value) =>
+        queue.enqueue("dashboard-batch", { value }, { queue: queueName, maxAttempts: 1 }),
+      ),
+    );
+    const worker = new Worker(queue, {
+      workerId: "dashboard-batch-worker",
+      queue: queueName,
+      concurrency: 2,
+    }).handleBatch("dashboard-batch", { maxSize: 2, lingerMs: 100 }, () => {
+      throw new Error("shared provider failure");
+    });
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    const detail = await readDashboardJobDetail(dashboardDatabase(pool), jobIds[0]!);
+
+    expect(detail?.batchExecutions).toEqual([
+      {
+        id: expect.any(String),
+        attempt: 1,
+        dispatchedAt: expect.any(String),
+        batchWideFailure: true,
+        members: jobIds.map((id) => ({
+          id,
+          type: "dashboard-batch",
+          attempt: 1,
+          outcome: "failed",
+          error: expect.objectContaining({ message: "shared provider failure" }),
+        })),
+      },
+    ]);
   });
 });

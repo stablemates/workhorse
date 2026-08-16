@@ -13,6 +13,7 @@ import {
 import type {
   CancellationRequest,
   CancelResult,
+  BatchExecutionRecord,
   ClaimedJob,
   ExpireOwnedStatus,
   HeartbeatStatus,
@@ -214,6 +215,43 @@ export class ClaimLeaseFenceModule extends QueueModule {
         leaseExpiresAt: rowTimestamp(row.lease_expires_at, "lease_expires_at"),
       };
     });
+  }
+
+  private batchEventParameters(batch: BatchExecutionRecord): readonly unknown[] {
+    return [
+      batch.batchId,
+      batch.jobs.map((job) => job.id),
+      batch.jobs.map((job) => job.attempt),
+      batch.jobs.map((job) => job.fenceToken.toString()),
+      batch.workerId,
+    ];
+  }
+
+  private assertBatchRecorded(
+    result: { rows: Array<{ recorded: number }> },
+    sqlFunction: string,
+    expected: number,
+  ): void {
+    const recorded = Number(expectOneRow(result, `workhorse.${sqlFunction}`).recorded);
+    if (recorded !== expected) {
+      throw new Error(`${sqlFunction} recorded ${recorded} of ${expected} members`);
+    }
+  }
+
+  async recordBatchDispatch(batch: BatchExecutionRecord): Promise<void> {
+    const result = await this.context.database.query<{ recorded: number }>(
+      "SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded",
+      this.batchEventParameters(batch),
+    );
+    this.assertBatchRecorded(result, "record_batch_dispatch_v1", batch.jobs.length);
+  }
+
+  async recordBatchFailure(batch: BatchExecutionRecord): Promise<void> {
+    const result = await this.context.database.query<{ recorded: number }>(
+      "SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded",
+      this.batchEventParameters(batch),
+    );
+    this.assertBatchRecorded(result, "record_batch_failure_v1", batch.jobs.length);
   }
 
   async heartbeat(job: ClaimedJob<unknown>, workerId: string, leaseMs = 30_000): Promise<boolean> {

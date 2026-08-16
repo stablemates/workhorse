@@ -28,6 +28,10 @@ remain partial until its linger ends.
 The callback returns one ordered outcome per member. If it throws or returns an invalid list,
 Workhorse submits the failure for every member, then each job applies its own retry policy.
 
+Workhorse records each shared invocation before the callback starts. The task drawer shows the
+batch size and links the other members. If the shared callback fails, the drawer identifies that
+failure across the group instead of guessing from the individual task errors.
+
 Batch contexts omit timers, signals, human waits, and child joins because one member cannot suspend
 and replay independently inside a shared invocation. Register an ordinary handler when a job needs
 those boundaries.

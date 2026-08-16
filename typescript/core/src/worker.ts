@@ -33,6 +33,7 @@ import {
 import type {
   ChildJobOptions,
   ChildJobRequest,
+  BatchExecutionRecord,
   ClaimedJob,
   CreateChildResult,
   CreateChildrenResult,
@@ -200,6 +201,8 @@ export interface WorkerQueueApi {
     workerId: string,
     options?: { queue?: string; leaseMs?: number },
   ): Promise<ClaimedJob | null>;
+  recordBatchDispatch?(batch: BatchExecutionRecord): Promise<void>;
+  recordBatchFailure?(batch: BatchExecutionRecord): Promise<void>;
   heartbeatStatus(
     job: ClaimedJob<unknown>,
     workerId: string,
@@ -474,6 +477,8 @@ export class Worker {
   private running = false;
   private stopVersion = 0;
   private executionTail: Promise<void> = Promise.resolve();
+  /** Serializes only durable batch announcements; batch callbacks still execute concurrently. */
+  private batchDispatchRecording: Promise<void> = Promise.resolve();
   private wakeController = new AbortController();
   private wakeVersion = 0;
 
@@ -575,6 +580,7 @@ export class Worker {
         else batch.splice(insertionIndex, 0, member);
       }
       const full = batch.length === maxSize;
+      const batchId = randomUUID();
       const firstArrivedAt = Math.min(...batch.map((member) => member.arrivedAt));
       const actualLingerMs = Math.max(0, performance.now() - firstArrivedAt);
       const attributes = {
@@ -591,8 +597,61 @@ export class Worker {
         "workhorse.worker.id": this.workerId,
       });
 
-      void Promise.resolve()
-        .then(() => handler(batch.map(({ item }) => item)))
+      const batchRecord: BatchExecutionRecord = {
+        batchId,
+        jobs: batch.map(({ item }) => item.context.job),
+        workerId: this.workerId,
+      };
+      const recordEvidence = async (
+        phase: "dispatch" | "failure",
+        operation: (() => Promise<void>) | undefined,
+      ): Promise<void> => {
+        if (operation === undefined) {
+          logWarn(
+            "workhorse.handler.batch_evidence_failed",
+            "Batch execution evidence is not supported by the queue implementation",
+            {
+              ...attributes,
+              "workhorse.handler.batch.size": batch.length,
+              "workhorse.handler.batch.evidence_phase": phase,
+              "workhorse.worker.id": this.workerId,
+              "error.type": "UnsupportedOperation",
+            },
+          );
+          return;
+        }
+        try {
+          await operation();
+        } catch (error) {
+          logWarn(
+            "workhorse.handler.batch_evidence_failed",
+            "Batch execution evidence could not be persisted",
+            {
+              ...attributes,
+              "workhorse.handler.batch.size": batch.length,
+              "workhorse.handler.batch.evidence_phase": phase,
+              "workhorse.worker.id": this.workerId,
+              "error.type": error instanceof Error ? error.name : typeof error,
+            },
+          );
+        }
+      };
+      const evidence = this.batchDispatchRecording.then(() =>
+        recordEvidence(
+          "dispatch",
+          this.queue.recordBatchDispatch === undefined
+            ? undefined
+            : () => this.queue.recordBatchDispatch!(batchRecord),
+        ),
+      );
+      const execution = evidence.then(() => {
+        return handler(batch.map(({ item }) => item));
+      });
+      this.batchDispatchRecording = evidence.then(
+        () => undefined,
+        () => undefined,
+      );
+      void execution
         .then((outcomes) => {
           if (!Array.isArray(outcomes) || outcomes.length !== batch.length) {
             throw new Error(
@@ -616,7 +675,13 @@ export class Worker {
             else member.reject(outcome.error);
           }
         })
-        .catch((error: unknown) => {
+        .catch(async (error: unknown) => {
+          await recordEvidence(
+            "failure",
+            this.queue.recordBatchFailure === undefined
+              ? undefined
+              : () => this.queue.recordBatchFailure!(batchRecord),
+          );
           for (const member of batch) member.reject(error);
         });
     };
