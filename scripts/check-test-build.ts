@@ -1,24 +1,12 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
-
-const requiredBuildOutputs = [
-  "typescript/core/dist/src/index.js",
-  "dashboard/app/dist/library/index.js",
-  "typescript/dashboard/dist/index.js",
-  "typescript/dashboard-server/dist/index.js",
-  "dashboard/app/dist/app/index.html",
-  "typescript/dashboard-server/dist/app/index.html",
-  "typescript/drizzle/dist/index.js",
-  "typescript/kysely/dist/index.js",
-  "typescript/prisma/dist/index.js",
-  "typescript/typeorm/dist/index.js",
-] as const;
+import { requiredTestBuildOutputs } from "./test-build-outputs.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const root = path.resolve(process.argv[2] ?? repositoryRoot);
 const missing = (
   await Promise.all(
-    requiredBuildOutputs.map(async (output) => {
+    requiredTestBuildOutputs.map(async (output) => {
       try {
         await access(path.join(root, output));
         return undefined;
@@ -27,7 +15,7 @@ const missing = (
       }
     }),
   )
-).filter((output): output is (typeof requiredBuildOutputs)[number] => output !== undefined);
+).filter((output): output is (typeof requiredTestBuildOutputs)[number] => output !== undefined);
 
 if (missing.length > 0) {
   process.stderr.write(

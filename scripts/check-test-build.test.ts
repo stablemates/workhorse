@@ -3,23 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { requiredTestBuildOutputs } from "./test-build-outputs.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const scriptPath = path.join(repositoryRoot, "scripts/check-test-build.ts");
 const fixtureRoots: string[] = [];
-
-const expectedBuildOutputs = [
-  "typescript/core/dist/src/index.js",
-  "dashboard/app/dist/library/index.js",
-  "typescript/dashboard/dist/index.js",
-  "typescript/dashboard-server/dist/index.js",
-  "dashboard/app/dist/app/index.html",
-  "typescript/dashboard-server/dist/app/index.html",
-  "typescript/drizzle/dist/index.js",
-  "typescript/kysely/dist/index.js",
-  "typescript/prisma/dist/index.js",
-  "typescript/typeorm/dist/index.js",
-];
 
 afterEach(async () => {
   await Promise.all(
@@ -31,7 +19,7 @@ async function makeBuiltFixture() {
   const root = await mkdtemp(path.join(tmpdir(), "workhorse-test-build-"));
   fixtureRoots.push(root);
   await Promise.all(
-    expectedBuildOutputs.map(async (output) => {
+    requiredTestBuildOutputs.map(async (output) => {
       const absolutePath = path.join(root, output);
       await mkdir(path.dirname(absolutePath), { recursive: true });
       await writeFile(absolutePath, "built");
