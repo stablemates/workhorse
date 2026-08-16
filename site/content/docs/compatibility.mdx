@@ -59,6 +59,11 @@ earlier supported source, so older development schemas still require a reset.
 The dashboard transport can change without a schema bump because it is private to matching package
 versions. Use the public `Queue` read API for application integrations.
 
+Clients in other languages use the versioned SQL functions and JSON fixtures under `protocol/v1/`
+as their compatibility boundary. The fixtures require clients to reject an incompatible schema or
+protocol before mutation, then verify canonical requests, results, transitions, and structured
+errors. See [Language clients](/docs/language-clients) for the ownership split.
+
 ## Treat releases as one package set
 
 Core and its integration packages release together. Keep their versions aligned so adapters,
@@ -76,6 +81,7 @@ throughput level for your database, payloads, handlers, or deployment topology.
 ## Next
 
 - [Installation](/docs/installation) — install and check the schema deliberately
+- [Language clients](/docs/language-clients) — implement the versioned SQL protocol
 - [Limitations](/docs/limitations) — compare support with your application requirements
 - [Deployment and operations](/docs/operations) — enforce compatibility before workers start
 

@@ -66,6 +66,27 @@ const worker = new Worker(queue, {
 Group handlers that share a queue and operational policy into one multi-slot worker. Add a
 second worker when work needs a different queue, lease, retry override, or schedule namespace.
 
+## Process jobs in batches
+
+`Worker.handleBatch` groups claimed jobs of one type when one provider call can process several
+payloads efficiently. Every member still occupies one concurrency slot and keeps its own lease,
+fence, cancellation signal, progress, retry budget, and final result.
+
+```ts
+worker.handleBatch("email.send", { maxSize: 20, lingerMs: 50 }, async (items) => {
+  const deliveries = await mailer.sendMany(items.map((item) => item.payload));
+  return deliveries.map((delivery) =>
+    delivery.error
+      ? { status: "failed", error: delivery.error }
+      : { status: "succeeded", result: { providerId: delivery.id } },
+  );
+});
+```
+
+The callback must return one ordered outcome per member. Batch contexts omit durable waits,
+signals, human decisions, and child joins because one member cannot suspend independently inside a
+shared invocation. See [Batch handlers](/docs/batch-handlers) for grouping and failure rules.
+
 ## Run workers in a dedicated process
 
 Queue depth and HTTP traffic rarely scale together, so production deployments put workers in
@@ -120,6 +141,7 @@ leases expire and recovery makes them claimable again.
 ## Next
 
 - [Deployment and operations](/docs/operations) — supervise and drain the worker process
+- [Batch handlers](/docs/batch-handlers) — share one application call across jobs
 - [Cancellation](/docs/cancellation) — make handlers stop cooperatively
 - [Schedules](/docs/schedules) — let workers evaluate recurring work
 

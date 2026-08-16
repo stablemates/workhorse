@@ -6,11 +6,21 @@ import { SectionHeading } from "@/components/primitives";
 export const metadata: Metadata = {
   title: "Examples",
   description:
-    "Worked Workhorse examples: transactional enqueue, idempotent provider calls with checkpoints, declarative recurring jobs, deadlines and cooperative cancellation, and audited dead-letter redrive.",
+    "Worked Workhorse examples: transactional enqueue, durable handlers, schedules, cancellation, audited redrive, and a durable agentic flow.",
   alternates: { canonical: "/examples" },
 };
 
-const examples = [
+interface Example {
+  id: string;
+  tag: string;
+  title: string;
+  lede: string;
+  file: string;
+  code: string;
+  sourceHref?: string;
+}
+
+const examples: readonly Example[] = [
   {
     id: "transactional-enqueue",
     tag: "Transactional enqueue",
@@ -161,6 +171,33 @@ const applied = await queue.redriveMany({
   requestId: "incident-2026-08-03:billing",
 });`,
   },
+  {
+    id: "agentic-flow",
+    tag: "Agentic flow",
+    title: "Let tools, cooldowns, and approval survive the process",
+    lede: "A model plan becomes a checkpoint, independent tools become child jobs, cooldown becomes a durable timer, and approval becomes a signal. Every boundary releases the lease and restarts safely from retained evidence.",
+    file: "agentic-flow.mjs",
+    sourceHref:
+      "https://github.com/stablemates/workhorse/blob/main/typescript/examples/agentic-flow.mjs",
+    code: `worker.handle("agent.run", async ({ prompt, conversationId }, ctx) => {
+  const plan = await ctx.checkpoint("plan", () =>
+    model.plan(prompt, { idempotencyKey: \`plan:\${ctx.job.id}\` }),
+  );
+
+  const tools = await ctx.runChildren(
+    plan.tools.map((tool) => ({
+      name: tool.id,
+      type: "agent.tool",
+      payload: tool,
+      options: { queue: "tools", concurrencyKey: conversationId },
+    })),
+  );
+
+  await ctx.sleep("model-cooldown", cooldownMs);
+  const approval = await ctx.waitForSignal("approval");
+  return { plan, tools, approval };
+});`,
+  },
 ];
 
 export default function ExamplesPage() {
@@ -168,12 +205,12 @@ export default function ExamplesPage() {
     <div className="mx-auto w-full max-w-6xl px-5 py-14 lg:px-8">
       <p className="wh-mono-label">Examples</p>
       <h1 className="mt-4 max-w-3xl text-balance text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">
-        The five problems people actually bring to a job queue.
+        Six complete shapes for work that must survive failure.
       </h1>
       <p className="mt-5 max-w-3xl text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
         Each example is a complete, runnable shape rather than a fragment. They are ordered the way
         a service usually grows: commit safely, make effects idempotent, add schedules, add bounds,
-        then handle the failures you did not prevent.
+        handle the failures you did not prevent, then compose those boundaries into an agent loop.
       </p>
 
       <nav
@@ -203,7 +240,17 @@ export default function ExamplesPage() {
               title={example.title}
               lede={example.lede}
             />
-            <CodeSample code={example.code} title={example.file} meta="server" />
+            <div>
+              <CodeSample code={example.code} title={example.file} meta="server" />
+              {example.sourceHref ? (
+                <a
+                  href={example.sourceHref}
+                  className="wh-link-underline mt-4 inline-block text-[13.5px] font-medium"
+                >
+                  Open the complete repository example
+                </a>
+              ) : null}
+            </div>
           </section>
         ))}
       </div>

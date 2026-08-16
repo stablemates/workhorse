@@ -1,0 +1,38 @@
+---
+title: Language clients
+description: Implement another Workhorse runtime against the versioned SQL protocol and shared conformance fixtures.
+---
+
+PostgreSQL owns Workhorse's durable behavior. A language client translates application calls into
+the stable SQL protocol and runs handlers; it should not recreate queue transitions in memory.
+
+## Start with the conformance fixtures
+
+The files under `protocol/v1/` describe canonical requests, results, transitions, and structured
+errors as JSON. `scenarios.json` exercises versioned PostgreSQL functions directly, `requests.json`
+drives transactional enqueue, and `runtime.json` drives worker lifecycle behavior.
+
+A client should run every fixture against its test database. Before any mutation, it should read
+`workhorse.schema_version` and compare both the installed schema and its supported protocol against
+the fixture manifest. An incompatible client must stop before enqueueing or claiming work.
+
+## Keep ownership in the right layer
+
+PostgreSQL decides whether enqueue accepts or coalesces, issues every fence, extends leases, and
+commits retries, cancellation, checkpoints, timers, dependencies, child joins, signals, and human
+decisions. Clients send canonical JSON and map the returned status or SQLSTATE into native types.
+
+The runtime owns handler registration, bounded concurrency, notifications or polling, heartbeats,
+local cancellation signals, telemetry, and graceful drain. It may group individually claimed jobs
+for a batch handler, but every member keeps its PostgreSQL-owned fence and lifecycle.
+
+## Next
+
+- [Compatibility](/docs/compatibility) — enforce schema and runtime support before mutation
+- [API overview](/docs/api) — map the public TypeScript surface by concern
+- [Workers](/docs/workers) — see what a language runtime must supply
+
+---
+
+Exact SQL protocol and ownership rules:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#sql-protocol-conformance).

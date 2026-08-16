@@ -1,9 +1,9 @@
 ---
 title: Examples
-description: Six end-to-end patterns, from transactional enqueue in a route to an incident redrive script.
+description: Seven end-to-end patterns, from transactional enqueue to a durable agentic flow.
 ---
 
-Documentation explains one concept at a time; real code combines several. This page shows six
+Documentation explains one concept at a time; real code combines several. This page shows seven
 complete patterns you can adapt directly. Every snippet uses the public API as shipped — the
 concept guides linked from each pattern explain the behavior behind it.
 
@@ -183,10 +183,42 @@ it is active, the worker's heartbeat delivers the request and aborts `context.si
 `CancellationRequestedError`. A handler that ignores the signal loses its lease eventually, and
 recovery materializes the cancellation instead of retrying.
 
+## Durable agentic flow
+
+The problem: a model plans work, several tools run independently, and execution must survive a
+deploy while waiting for approval. Checkpoint the model call, join tools as child jobs, cross a
+durable timer, then wait for an idempotent signal.
+
+```ts
+worker.handle("agent.run", async ({ prompt, conversationId }, context) => {
+  const plan = await context.checkpoint("plan", () =>
+    model.plan(prompt, { idempotencyKey: `plan:${context.job.id}` }),
+  );
+
+  const tools = await context.runChildren(
+    plan.tools.map((tool) => ({
+      name: tool.id,
+      type: "agent.tool",
+      payload: tool,
+      options: { queue: "tools", concurrencyKey: conversationId },
+    })),
+  );
+
+  await context.sleep("model-cooldown", cooldownMs);
+  const approval = await context.waitForSignal<{ approved: boolean }>("approval");
+  return { plan, tools, approved: approval.approved };
+});
+```
+
+Every boundary releases the lease and restarts the handler later, so names and child requests must
+stay stable across replay. The repository's `typescript/examples/agentic-flow.mjs` demonstrates the
+whole lifecycle; run it with `pnpm example:agentic-flow` against an installed Workhorse database.
+
 ## Next
 
 - [Quickstart](/docs/quickstart) — run the crash-survival demo these patterns build on
 - [Durable execution](/docs/durable-execution) — the rules behind checkpoints and sleeps
+- [Agentic flow](/docs/agentic-flow) — child tools, timers, and approval signals together
 - [Dead letters](/docs/dead-letters) — the full redrive model behind the incident script
 
 ---

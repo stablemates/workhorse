@@ -91,9 +91,30 @@ For inspection, `HandlerContext.getCheckpoint` and `getWait` read one boundary f
 handler, and `Queue.listCheckpoints` and `Queue.listWaits` expose the retained evidence to
 operator code.
 
+## Wait for an external result
+
+Timers resume because time passed. Signals and human waits resume because another actor supplied a
+JSON value:
+
+```ts
+const event = await ctx.waitForSignal<{ id: string; delivered: boolean }>("provider-event");
+const review = await ctx.waitForHuman<{ eventId: string }, { approved: boolean }>(
+  "operator-review",
+  { eventId: event.id },
+);
+```
+
+Both calls store a named boundary, release the lease, and restart the handler after delivery.
+Applications deliver signals through `Queue.sendSignal`; authenticated operator surfaces complete
+human waits through `Queue.completeHumanWait`. Each delivery is idempotent and retained, so a
+network retry cannot resume the job twice. Read [Signals](/docs/signals) and
+[Human waits](/docs/human-waits) for timeout and authorization rules.
+
 ## Next
 
 - [Progress](/docs/progress) — report mutable status without creating a restart boundary
+- [Signals](/docs/signals) — resume from another process
+- [Human waits](/docs/human-waits) — pause for an operator decision
 - [Retries](/docs/retries) — understand why the handler starts again
 - [Cancellation](/docs/cancellation) — stop a job during execution or a durable wait
 

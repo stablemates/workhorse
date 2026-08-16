@@ -7,31 +7,30 @@
     "110-retries": "retries",
     "120-cancellation": "cancellation",
     "130-durable-waits": "durable-execution",
+    "135-signals": "signals",
     "140-deadlines-and-timeouts": "deadlines",
+    "145-human-decisions": "human-waits",
+    "150-priority": "priority",
+    "160-job-dependencies": "job-dependencies",
+    "170-child-jobs": "child-jobs",
+    "180-agentic-flow": "agentic-flow",
     "210-enqueue-idempotency": "idempotency",
+    "215-debounce": "debounce",
+    "217-throttle": "throttle",
     "220-schedules": "schedules",
     "230-payload-contracts": "contracts",
     "240-concurrency-policies": "concurrency-policies",
     "250-rate-limits": "rate-limits",
     "310-workers": "workers",
+    "315-batch-handlers": "batch-handlers",
     "320-statistics": "operations",
     "330-retention": "maintenance",
     "340-redrive": "dead-letters",
     "350-production-telemetry": "operations",
     "355-observability": "operations",
-    "360-queue-health": "operations",
+    "360-queue-health": "queue-health",
     "370-dashboard-authentication": "dashboard",
-    "390-language-clients": "compatibility"
+    "390-language-clients": "language-clients"
   },
-  "exclusions": {
-    "135-signals": { "issue": "WOR-107", "reason": "Add the signals page." },
-    "145-human-decisions": { "issue": "WOR-107", "reason": "Add the human decisions page." },
-    "150-priority": { "issue": "WOR-107", "reason": "Add the priority page." },
-    "160-job-dependencies": { "issue": "WOR-107", "reason": "Add the job dependencies page." },
-    "170-child-jobs": { "issue": "WOR-107", "reason": "Add the child jobs page." },
-    "180-agentic-flow": { "issue": "WOR-107", "reason": "Add the agentic flow page." },
-    "215-debounce": { "issue": "WOR-107", "reason": "Add the debounce page." },
-    "217-throttle": { "issue": "WOR-107", "reason": "Add the throttle page." },
-    "315-batch-handlers": { "issue": "WOR-107", "reason": "Add the batch handlers page." }
-  }
+  "exclusions": {}
 }

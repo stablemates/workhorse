@@ -268,8 +268,140 @@ await queue.enqueue(
     linkLabel: "Concurrency policies",
   },
   {
+    id: "dependencies",
+    index: "08 / dependencies and children",
+    title: "Release downstream work only when its inputs settle.",
+    lede: (
+      <>
+        Producers can declare prerequisites, and handlers can create named child jobs then join
+        their results. Parents and dependents leave dispatch while they wait, so orchestration uses
+        no worker slot and survives every restart.
+      </>
+    ),
+    file: "checkout.ts",
+    code: `const inventoryId = await queue.enqueue(
+  "inventory.reserve",
+  { orderId },
+);
+
+await queue.enqueue(
+  "order.confirm",
+  { orderId },
+  { prerequisiteJobId: inventoryId },
+);
+
+worker.handle("order.fulfill", async (order, ctx) => {
+  const receipt = await ctx.runChild(
+    "charge",
+    "payment.capture",
+    { orderId: order.id },
+    { queue: "payments" },
+  );
+  return { receipt };
+});`,
+    href: "/docs/job-dependencies",
+    linkLabel: "Dependencies and child jobs",
+  },
+  {
+    id: "coalescing",
+    index: "09 / debounce and throttle",
+    title: "Absorb repeated work without hiding what happened.",
+    lede: (
+      <>
+        Debounce replaces a pending payload while updates settle. Throttle keeps one equivalent job
+        for a busy window. <code>enqueueWithResult</code> returns the retained identity and a typed
+        outcome, so diagnostics can distinguish acceptance from replacement or coalescing.
+      </>
+    ),
+    file: "indexing.ts",
+    code: `const options = {
+  debounce: {
+    key: documentId,
+    scope: "search-index",
+    windowMs: quietPeriodMs,
+    schedule: "reset",
+  },
+};
+
+const first = await queue.enqueueWithResult(
+  "search.reindex",
+  { documentId, revision: 1 },
+  options,
+);
+const latest = await queue.enqueueWithResult(
+  "search.reindex",
+  { documentId, revision: 2 },
+  options,
+);
+
+logger.info(first.outcome, latest.outcome);
+// accepted, then replaced while the job remains pending`,
+    href: "/docs/debounce",
+    linkLabel: "Debounce and throttle",
+  },
+  {
+    id: "external-waits",
+    index: "10 / signals and human waits",
+    title: "Wait for another system or a person, while holding nothing.",
+    lede: (
+      <>
+        Signals carry application events, while human waits carry stored decision context into an
+        authenticated operator surface. Both release the lease, then restart the handler with one
+        retained, idempotently delivered result.
+      </>
+    ),
+    file: "approval.ts",
+    code: `worker.handle("release.publish", async (release, ctx) => {
+  const scan = await ctx.waitForSignal("security-scan");
+
+  const review = await ctx.waitForHuman(
+    "release-approval",
+    { releaseId: release.id, scan },
+  );
+
+  return { published: review.approved };
+});
+
+await queue.sendSignal(jobId, "security-scan", scanResult, {
+  idempotencyKey: scanResult.deliveryId,
+  requestedBy: "security-scanner",
+});`,
+    href: "/docs/signals",
+    linkLabel: "Signals and human waits",
+  },
+  {
+    id: "batch-handlers",
+    index: "11 / batch handlers",
+    title: "Share the provider call, keep every job independent.",
+    lede: (
+      <>
+        A batch handler groups jobs of one type for efficient bulk I/O. Every member keeps its own
+        lease, cancellation, retry budget, and result, so one provider response does not collapse
+        separate durable identities.
+      </>
+    ),
+    file: "email-worker.ts",
+    code: `worker.handleBatch(
+  "email.send",
+  { maxSize: batchSize, lingerMs: batchLingerMs },
+  async (items) => {
+    const sent = await provider.sendMany(
+      items.map(({ payload }) => payload),
+    );
+
+    return sent.map((delivery) =>
+      delivery.error
+        ? { status: "failed", error: delivery.error }
+        : { status: "succeeded", result: delivery.id },
+    );
+  },
+);`,
+    href: "/docs/batch-handlers",
+    linkLabel: "Batch handlers",
+  },
+  {
     id: "cancellation",
-    index: "08 / cancellation",
+    index: "12 / cancellation",
     title: "Cancel work that is already running.",
     lede: (
       <>
@@ -300,7 +432,7 @@ await queue.cancel(jobId, {
   },
   {
     id: "dead-letters",
-    index: "09 / dead letters",
+    index: "13 / dead letters",
     title: "Failures leave evidence, and redrive leaves an audit trail.",
     lede: (
       <>
