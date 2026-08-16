@@ -21,7 +21,9 @@ export const taskDrawerModelessProps = {
 
 /** Responsive drawer policy for task details. */
 export function taskDrawerViewportProps(narrow: boolean) {
-  if (!narrow) return { ...taskDrawerModelessProps, size: "lg" as const };
+  // "xl" rather than "lg": the drawer lays metadata out as a label/value grid and shows JSON
+  // evidence blocks, both of which wrap badly one step narrower.
+  if (!narrow) return { ...taskDrawerModelessProps, size: "xl" as const };
   return {
     withOverlay: true,
     lockScroll: true,
