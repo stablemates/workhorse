@@ -1,7 +1,17 @@
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import type { ClaimedJob, Json } from "../types.js";
-import { type ExternalWaitOptions, validateExternalWaitOptions } from "./external-waits.js";
+import {
+  externalWaitCursor,
+  externalWaitRecord,
+  type ExternalWaitCursor,
+  type ExternalWaitListOptions,
+  type ExternalWaitOptions,
+  type ExternalWaitRecord,
+  type ExternalWaitRow,
+  validateExternalWaitListOptions,
+  validateExternalWaitOptions,
+} from "./external-waits.js";
 import { QueueModule } from "./module-context.js";
 
 const MAX_SIGNAL_NAME_CHARACTERS = 200;
@@ -36,6 +46,13 @@ export interface SendSignalResult<TPayload extends Json = Json> {
   payload: TPayload | null;
   deliveredAt: Date | null;
   deliveredBy: string | null;
+}
+
+export type SignalWait = ExternalWaitRecord;
+
+export interface SignalWaitPage {
+  items: SignalWait[];
+  nextCursor: ExternalWaitCursor | null;
 }
 
 type WaitForSignalRow = {
@@ -116,6 +133,26 @@ export class SignalIdempotencyConflictError extends WorkhorseError {
 
 /** Owns durable named signal waits and idempotent external delivery. */
 export class SignalsModule extends QueueModule {
+  async listSignalWaits(options: ExternalWaitListOptions = {}): Promise<SignalWaitPage> {
+    const { limit, cursor } = validateExternalWaitListOptions(options);
+    const result = await this.context.database.query<ExternalWaitRow>(
+      `SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt,
+              created_at, deadline_at, created_at::text AS cursor_created_at
+         FROM workhorse.dashboard_signal_wait_v1
+        WHERE ($2::timestamptz IS NULL OR (created_at, job_id, signal_name) >
+              ($2::timestamptz, $3::uuid, $4::text))
+        ORDER BY created_at, job_id, signal_name
+        LIMIT $1::integer`,
+      [limit + 1, cursor?.createdAt ?? null, cursor?.jobId ?? null, cursor?.name ?? null],
+    );
+    const pageRows = result.rows.slice(0, limit);
+    return {
+      items: pageRows.map(externalWaitRecord),
+      nextCursor:
+        result.rows.length > limit ? externalWaitCursor(pageRows[pageRows.length - 1]!) : null,
+    };
+  }
+
   async waitForSignal<TPayload extends Json = Json>(
     job: ClaimedJob<unknown>,
     workerId: string,

@@ -32,6 +32,11 @@ The dashboard uses the same queue operation, but its server replaces browser att
 authenticated principal. Application-owned callers must establish authorization before calling
 the core API.
 
+Operator tools can call `Queue.listSignalWaits()` to read the current actionable boundaries. Each
+row identifies the job, queue, job type, signal name, attempt, creation time, and effective
+deadline without exposing a delivered payload. If a page returns `nextCursor`, pass it back to
+continue without hiding waits beyond the page bound.
+
 ## PostgreSQL closes an unanswered boundary
 
 PostgreSQL applies a finite [timeout](140-deadlines-and-timeouts.md), and a caller can choose a

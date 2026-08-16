@@ -109,6 +109,8 @@ import {
   type SendSignalRequest,
   type SendSignalResult,
   type SendSignalStatus,
+  type SignalWait,
+  type SignalWaitPage,
   type WaitForSignalResult,
   type WaitForSignalStatus,
 } from "./queue/signals.js";
@@ -120,10 +122,16 @@ import {
   type CompleteHumanWaitRequest,
   type CompleteHumanWaitResult,
   type CompleteHumanWaitStatus,
+  type HumanWait,
+  type HumanWaitPage,
   type WaitForHumanResult,
   type WaitForHumanStatus,
 } from "./queue/human-waits.js";
-import type { ExternalWaitOptions } from "./queue/external-waits.js";
+import type {
+  ExternalWaitCursor,
+  ExternalWaitListOptions,
+  ExternalWaitOptions,
+} from "./queue/external-waits.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -162,14 +170,20 @@ export type {
   SendSignalRequest,
   SendSignalResult,
   SendSignalStatus,
+  SignalWait,
+  SignalWaitPage,
   WaitForSignalResult,
   WaitForSignalStatus,
   CompleteHumanWaitRequest,
   CompleteHumanWaitResult,
   CompleteHumanWaitStatus,
+  HumanWait,
+  HumanWaitPage,
   WaitForHumanResult,
   WaitForHumanStatus,
   ExternalWaitOptions,
+  ExternalWaitCursor,
+  ExternalWaitListOptions,
 };
 export type { ScheduleDefinition, ScheduleJobDefinition, StoredSchedule };
 import { nullableRowTimestamp } from "./queue/row-mapping.js";
@@ -644,6 +658,10 @@ export class Queue {
     return this.modules.signals.waitForSignal<TPayload>(job, workerId, name, options);
   }
 
+  async listSignalWaits(options: ExternalWaitListOptions = {}): Promise<SignalWaitPage> {
+    return this.modules.signals.listSignalWaits(options);
+  }
+
   async sendSignal<TPayload extends Json>(
     jobId: string,
     name: string,
@@ -667,6 +685,12 @@ export class Queue {
       context,
       options,
     );
+  }
+
+  async listHumanWaits<TContext extends Json = Json>(
+    options: ExternalWaitListOptions = {},
+  ): Promise<HumanWaitPage<TContext>> {
+    return this.modules.humanWaits.listHumanWaits<TContext>(options);
   }
 
   async completeHumanWait<TResult extends Json>(

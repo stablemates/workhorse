@@ -8536,6 +8536,18 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE VIEW workhorse.dashboard_signal_wait_v1 AS
+  SELECT wait.job_id, job.queue_name, job.job_type, wait.signal_name,
+         wait.attempt, wait.created_at, runtime.deadline_at
+    FROM workhorse.job_signal_wait wait
+    JOIN workhorse.job job ON job.id = wait.job_id
+    JOIN workhorse.job_runtime runtime
+      ON runtime.job_id = wait.job_id
+     AND runtime.state = 'scheduled'
+     AND runtime.wait_name = wait.signal_name
+     AND runtime.current_attempt = wait.attempt
+   WHERE wait.delivered_at IS NULL;
+
 CREATE OR REPLACE VIEW workhorse.dashboard_human_wait_v1 AS
   SELECT wait.job_id, job.queue_name, job.job_type, wait.token_name, wait.context,
          wait.attempt, wait.created_at, wait.completed_at, wait.completed_by,

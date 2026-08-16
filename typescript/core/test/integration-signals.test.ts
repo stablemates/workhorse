@@ -6,6 +6,54 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("signals", () => {
+  it("lists actionable signal waits through the public read API", async () => {
+    const id = await queue.enqueue("signal-list", {});
+    const worker = new Worker(queue, { workerId: "signal-list-worker" }).handle(
+      "signal-list",
+      async (_payload, context) => context.waitForSignal("approval"),
+    );
+
+    expect(await worker.runOnce()).toBe(true);
+    const secondId = await queue.enqueue("signal-list", {});
+    expect(await worker.runOnce()).toBe(true);
+
+    const firstPage = await queue.listSignalWaits({ limit: 1 });
+    expect(firstPage).toEqual({
+      items: [
+        {
+          jobId: id,
+          queue: "default",
+          jobType: "signal-list",
+          name: "approval",
+          attempt: 1,
+          createdAt: expect.any(Date),
+          deadlineAt: expect.any(Date),
+        },
+      ],
+      nextCursor: { createdAt: expect.any(String), jobId: id, name: "approval" },
+    });
+    await expect(
+      queue.listSignalWaits({ limit: 1, cursor: firstPage.nextCursor! }),
+    ).resolves.toEqual({
+      items: [expect.objectContaining({ jobId: secondId, name: "approval" })],
+      nextCursor: null,
+    });
+
+    await queue.sendSignal(
+      id,
+      "approval",
+      { approved: true },
+      { idempotencyKey: "signal-list-delivery", requestedBy: "operator" },
+    );
+    await queue.sendSignal(
+      secondId,
+      "approval",
+      { approved: true },
+      { idempotencyKey: "signal-list-delivery-2", requestedBy: "operator" },
+    );
+    await expect(queue.listSignalWaits()).resolves.toEqual({ items: [], nextCursor: null });
+  });
+
   it("resumes one waiting execution with the retained signal payload", async () => {
     const id = await queue.enqueue("signal-order", { orderId: "order-1" });
     const worker = new Worker(queue, { workerId: "signal-worker" }).handle(

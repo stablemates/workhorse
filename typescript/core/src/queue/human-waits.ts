@@ -1,7 +1,17 @@
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import type { ClaimedJob, Json } from "../types.js";
-import { type ExternalWaitOptions, validateExternalWaitOptions } from "./external-waits.js";
+import {
+  externalWaitCursor,
+  externalWaitRecord,
+  type ExternalWaitCursor,
+  type ExternalWaitListOptions,
+  type ExternalWaitOptions,
+  type ExternalWaitRecord,
+  type ExternalWaitRow,
+  validateExternalWaitListOptions,
+  validateExternalWaitOptions,
+} from "./external-waits.js";
 import { QueueModule } from "./module-context.js";
 
 const MAX_NAME_CHARACTERS = 200;
@@ -33,6 +43,19 @@ export interface CompleteHumanWaitResult<TResult extends Json = Json> {
   completedAt: Date | null;
   completedBy: string | null;
 }
+
+export interface HumanWait<TContext extends Json = Json> extends ExternalWaitRecord {
+  context: TContext;
+}
+
+export interface HumanWaitPage<TContext extends Json = Json> {
+  items: HumanWait<TContext>[];
+  nextCursor: ExternalWaitCursor | null;
+}
+
+type HumanWaitRow = ExternalWaitRow & {
+  context: Json;
+};
 
 type WaitRow = {
   status: WaitForHumanStatus | "stale" | "limit_exceeded" | "conflict";
@@ -121,6 +144,31 @@ export class HumanWaitIdempotencyConflictError extends WorkhorseError {
 
 /** Owns named human decisions that suspend a handler until an attributed completion. */
 export class HumanWaitsModule extends QueueModule {
+  async listHumanWaits<TContext extends Json = Json>(
+    options: ExternalWaitListOptions = {},
+  ): Promise<HumanWaitPage<TContext>> {
+    const { limit, cursor } = validateExternalWaitListOptions(options);
+    const result = await this.context.database.query<HumanWaitRow>(
+      `SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt,
+              created_at, deadline_at, created_at::text AS cursor_created_at
+         FROM workhorse.dashboard_human_wait_v1
+        WHERE ($2::timestamptz IS NULL OR (created_at, job_id, token_name) >
+              ($2::timestamptz, $3::uuid, $4::text))
+        ORDER BY created_at, job_id, token_name
+        LIMIT $1::integer`,
+      [limit + 1, cursor?.createdAt ?? null, cursor?.jobId ?? null, cursor?.name ?? null],
+    );
+    const pageRows = result.rows.slice(0, limit);
+    return {
+      items: pageRows.map((row) => ({
+        ...externalWaitRecord(row),
+        context: row.context as TContext,
+      })),
+      nextCursor:
+        result.rows.length > limit ? externalWaitCursor(pageRows[pageRows.length - 1]!) : null,
+    };
+  }
+
   async waitForHuman<TContext extends Json, TResult extends Json = Json>(
     job: ClaimedJob<unknown>,
     workerId: string,

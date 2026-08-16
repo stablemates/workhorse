@@ -349,7 +349,6 @@ export const dashboardRouter = {
     }),
     humanWaits: procedure.handler(({ context }) =>
       readDashboardHumanWaits(
-        context.database,
         context.queue,
         context.operator.mode === "writable" && Boolean(context.taskController?.completeHumanWait),
       ),
@@ -367,7 +366,10 @@ export const dashboardRouter = {
     setScheduleEnabled: mutationProcedure
       .input(setScheduleEnabledInput)
       .handler(async ({ context, input }) => {
-        if (context.operator.mode !== "writable" || !context.scheduleController?.setScheduleEnabled) {
+        if (
+          context.operator.mode !== "writable" ||
+          !context.scheduleController?.setScheduleEnabled
+        ) {
           throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
         }
         return context.scheduleController.setScheduleEnabled(
