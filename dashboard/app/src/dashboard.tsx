@@ -1234,7 +1234,7 @@ export function CoalescingSection({ job }: { job: DashboardJobDetail }) {
  * How one recorded cancellation boundary reads.
  *
  * `cancel_requested` is only a request. `canceled` is final, and its `source` says how it became
- * final: `immediate` when PostgreSQL removed a task that had not started, `acknowledged` when the
+ * final: `immediate` when Workhorse removed a task that had not started, `acknowledged` when the
  * running handler observed the signal and stopped, and `recovered` when the lease expired after a
  * request. None of these claim that external effects were undone.
  */
@@ -1249,7 +1249,7 @@ function cancelEventDescription(event: JobEvent): { text: string; title: string 
     return {
       text: "handler observed the signal",
       title:
-        "The running handler observed the cancellation signal and stopped, and PostgreSQL recorded " +
+        "The running handler observed the cancellation signal and stopped, and Workhorse recorded " +
         "an immutable canceled outcome. External effects the handler had already started are not " +
         "undone by cancellation.",
     };
@@ -1268,7 +1268,7 @@ function cancelEventDescription(event: JobEvent): { text: string; title: string 
 }
 
 /**
- * Accepted deduplication evidence for one task, if PostgreSQL recorded any.
+ * Accepted deduplication evidence for one task, if Workhorse recorded any.
  *
  * Everything shown here comes from the safe metadata on the single initial `enqueued` event. The
  * raw key is not stored there and is therefore never available to render.
@@ -3473,7 +3473,7 @@ export function QueuesPage({
                       <span>Start rate</span>
                       <HelpButton
                         label="Start rate"
-                        help="A token bucket limits how quickly tasks start across the fleet. The sustained rate refills tokens continuously, while burst is the most idle capacity PostgreSQL retains."
+                        help="A token bucket limits how quickly tasks start across the fleet. The sustained rate refills tokens continuously, while burst is the most idle capacity Workhorse retains."
                       />
                     </Group>
                   </Table.Th>
@@ -5275,7 +5275,7 @@ export function EventDetails({
   );
 }
 
-function WorkersPage({
+export function WorkersPage({
   data,
   togglingWorker,
   setWorkerPaused,
@@ -5423,8 +5423,8 @@ function WorkersPage({
         </Paper>
       )}
       <Text c="dimmed" size="xs">
-        This page covers the whole fleet because workers register in PostgreSQL. A worker reports
-        busy slots, while PostgreSQL counts active tasks, so the values can differ briefly. Startup
+        This page covers the whole fleet because workers register with Workhorse. A worker reports
+        busy slots, while Workhorse counts active tasks, so the values can differ briefly. Startup
         sets capacity, and the dashboard cannot change it. A draining worker stops after its active
         handlers finish. If a worker stops registering, Workhorse marks it offline and later removes
         it from the fleet.
@@ -6710,7 +6710,7 @@ function useDashboardController(
   }, [location.route, location.events.eventId, showEventDetail]);
 
   /**
-   * Request cancellation of one task and report exactly what PostgreSQL did.
+   * Request cancellation of one task and report exactly what Workhorse did.
    *
    * When the operator supplies a reason, it is sent as the audit reason and stored as the
    * cancellation reason, so the two can never disagree. The drawer is refreshed from the server afterwards

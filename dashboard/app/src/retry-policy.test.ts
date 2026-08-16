@@ -5,7 +5,7 @@ describe("retry policy vocabulary", () => {
   it("never shows a raw stored kind and always keeps exact values available", () => {
     expect(describeRetryPolicy({ type: "fixed", delayMs: 300_000 })).toMatchObject({
       label: "Fixed",
-      summary: "PostgreSQL adds a 5m delay before every retry",
+      summary: "Workhorse adds a 5m delay before every retry",
       exact: "Fixed delay 300000 ms",
     });
     expect(
@@ -34,10 +34,13 @@ describe("retry policy vocabulary", () => {
   });
 
   it("explains a missing policy instead of hiding it", () => {
-    expect(describeRetryPolicy(null)).toMatchObject({
+    const described = describeRetryPolicy(null);
+    expect(described).toMatchObject({
       label: "Default backoff",
       exact: "No persisted retry policy",
     });
+    expect(described.summary).toContain("Workhorse");
+    expect(described.summary).not.toContain("PostgreSQL");
   });
 
   it("states plainly when a cap removes all variation or growth", () => {
@@ -65,6 +68,9 @@ describe("retry policy vocabulary", () => {
     expect(describeRetryEventSource("legacy-handler", null).label).toBe("Default backoff");
     expect(describeRetryEventSource("lease-recovery-immediate", null).label).toBe(
       "Immediate recovery",
+    );
+    expect(describeRetryEventSource("lease-recovery-immediate", null).summary).not.toContain(
+      "PostgreSQL",
     );
     expect(describeRetryEventSource(null, null).label).toBe("Default backoff");
   });

@@ -258,6 +258,8 @@ describe("queues page rate-limit columns", () => {
     expect(html).toContain("2/1s · burst 1 per key");
     expect(html).toContain("4 · 2 keys");
     expect(html).toContain("The earliest can start at 2026-08-11T12:00:01.000Z");
+    expect(html).toContain("the most idle capacity Workhorse retains");
+    expect(html).not.toContain("the most idle capacity PostgreSQL retains");
   });
 });
 

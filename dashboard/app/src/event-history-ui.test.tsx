@@ -130,6 +130,24 @@ describe("dashboard event history", () => {
     expect(html).toContain("stuck deployment");
   });
 
+  it("attributes a finalized cancellation to Workhorse", async () => {
+    const html = await renderExport(
+      "BoundaryTimeline",
+      jobWithEvents([
+        {
+          id: "canceled",
+          attempt: 2,
+          type: "canceled",
+          details: { source: "acknowledged" },
+          occurredAt: "2026-08-15T12:01:00.000Z",
+        },
+      ]),
+    );
+
+    expect(html).toContain("Workhorse recorded");
+    expect(html).not.toContain("PostgreSQL recorded");
+  });
+
   it("gives the new Events feed categories meaningful colors", async () => {
     const { eventTypeColor } = await import("./dashboard.js");
     expect(eventTypeColor("dependency_blocked")).toBe("orange");
