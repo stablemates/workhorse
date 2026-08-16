@@ -1,6 +1,6 @@
 # Feature support matrix
 
-This is the authoritative implementation snapshot for schema version 40. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
+This is the authoritative implementation snapshot for schema version 41. “Supported” means exposed through the current SQL or TypeScript contract and covered by live PostgreSQL integration tests where applicable.
 
 ## At a glance
 
@@ -139,7 +139,7 @@ These primitives make selected handler boundaries durable while preserving Workh
 | Bounded payload projection        | Supported | Listing omits payload by default. PostgreSQL applies up to 50 unique top-level redaction keys before enforcing a caller-selected 1-byte through 1-MiB response ceiling and reports `omitted`, `included`, or `too_large`.                                                                    |
 | Merged lifecycle timeline         | Supported | `Queue.getJobTimeline()` returns retained events and closed attempts in one latest-first cursor stream. Event and attempt retention remain independent, so known jobs can have partial or empty timelines.                                                                                   |
 | Terminal result inspection        | Supported | Terminal outcomes and their JSON results persist in `job_outcome`; the demo task drawer exposes result or terminal failure evidence alongside immutable attempt history.                                                                                                                     |
-| Queue health                      | Supported | One snapshot reports schema version 40, bounded counts, and lifecycle pressure. It includes external waits, retained delivery rejections, retention, partitions, evaluated status reasons, and separate PostgreSQL observations.                                                             |
+| Queue health                      | Supported | One snapshot reports schema version 41, bounded counts, and lifecycle pressure. It includes external waits, recent delivery rejections, retention, partitions, evaluated status reasons, and separate PostgreSQL observations.                                                               |
 | Crash-boundary harness            | Supported | Worker failpoints model process loss before and after handler/completion boundaries.                                                                                                                                                                                                         |
 | Job/outcome retention             | Supported | Configurable 14-day defaults drive bounded terminal-only deletion. A retained-history watermark prevents identity cleanup from outrunning event or attempt retention.                                                                                                                        |
 | Event and attempt retention       | Supported | Independent configurable windows drop only fully expired completed daily partitions and bounded-delete expired fallback rows.                                                                                                                                                                |

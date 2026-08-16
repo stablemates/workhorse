@@ -2,14 +2,14 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol and pre-release baseline are schema version 40. No earlier
+The current clean-install protocol and pre-release baseline are schema version 41. No earlier
 schema version has been published or remains a supported upgrade source.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 40 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It accepts
-version 40 without mutation and rejects every other version on the unreleased line.
+version 41 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It accepts
+version 41 without mutation and rejects every other version on the unreleased line.
 
-A clean installation records `(40, 'pre-release baseline')` in
+A clean installation records `(41, 'pre-release baseline')` in
 `workhorse.schema_migration`. `migrateSchema` delegates ordered execution to the internal
 `applySchemaMigrationPlan` function. Its `SchemaMigrationPlan` has `baselineVersion`,
 `currentVersion`, `steps`, and `readStep` fields. Each `SchemaMigrationStep` has `fromVersion`,
@@ -20,14 +20,14 @@ After the first public release, each migration takes the transaction advisory lo
 `workhorse.schema_migration`, and advances the single `workhorse.schema_version` row. A migration
 is safe to replay after its target version commits.
 
-Versions below 40, versions above 40, gaps, and mixed version rows fail without running a migration.
+Versions below 41, versions above 41, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 1. It accepts installed
-schema version 40 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
+schema version 41 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -914,9 +914,11 @@ or another lifecycle transition makes an undelivered row stale. A delivered row 
 through later handler retries and follows parent-job retention.
 
 `QueueHealth.externalWaits` reports `pendingSignals`, `pendingHumanDecisions`, `overdue`,
-`oldestPendingAgeMs`, `rejectedDeliveries`, and `capped`. Separate scans inspect at most 10,001
-pending signals, pending human decisions, overdue signals, overdue human decisions, and retained
-rejection events. Counts cap at 10,000. An overdue row adds the critical
+`oldestPendingAgeMs`, `rejectedDeliveries`, and `capped`. `rejectedDeliveries` counts rejection
+events from the trailing 24 hours. Separate scans inspect at most 10,001 pending signals, pending
+human decisions, overdue signals, overdue human decisions, and recent rejection events. Counts cap
+at 10,000. `job_event_rejected_delivery_idx` restricts rejection scans by event type and time, so
+health and metrics never scan unrelated retained events. An overdue row adds the critical
 `overdue-external-waits` reason until the deadline reaper materializes it. `WorkhorseMetricsObserver`
 exports `workhorse.wait.pending`, `workhorse.wait.overdue`, and
 `workhorse.wait.delivery.rejected` by queue and the bounded `signal` or `human` kind only.
@@ -1432,7 +1434,7 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 
 `typescript/examples/agentic-flow.mjs` composes the public SQL-backed primitives without adding a workflow
 runtime. `pnpm example:agentic-flow` builds the publishable packages, loads this worktree's
-`DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 40 with
+`DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 41 with
 `assertSchemaCompatible`, and runs the example as a package consumer. The controller advances the
 two `Worker` instances through `Worker.runOnce` and reads completion through `Queue.getJob`.
 `typescript/core/test/packed-packages.ts`
@@ -1521,7 +1523,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 40. Forward migration starts with the first public
+- The canonical artifact installs version 41. Forward migration starts with the first public
   release; every pre-release database must install the current schema from scratch.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

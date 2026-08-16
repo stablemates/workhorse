@@ -9,11 +9,66 @@ import {
 } from "@opentelemetry/sdk-metrics";
 import { describe, expect, it } from "vitest";
 import { WorkhorseMetricsObserver } from "../src/index.js";
+import { EXTERNAL_WAIT_REJECTION_WINDOW_MS } from "../src/types.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { defaultRetentionPolicy, pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("health snapshots", () => {
+  it("counts only recent external-wait rejections through the partial event index", async () => {
+    const jobId = await queue.enqueue("rejection-health", {});
+    const oldDay = "2016-01-04";
+    await pool.query("SELECT workhorse.create_history_day_v1($1)", [oldDay]);
+    await pool.query(
+      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+       VALUES ($1, 'signal_rejected', $2::date),
+              ($1, 'human_wait_rejected', clock_timestamp())`,
+      [jobId, oldDay],
+    );
+
+    await expect(queue.health()).resolves.toMatchObject({
+      externalWaits: { rejectedDeliveries: 1, capped: false },
+    });
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL enable_seqscan = off");
+      const indexNames = (
+        await client.query<{ index_name: string }>(
+          `SELECT child.relname AS index_name
+             FROM pg_class parent
+             JOIN pg_inherits inheritance ON inheritance.inhparent = parent.oid
+             JOIN pg_class child ON child.oid = inheritance.inhrelid
+            WHERE parent.oid = 'workhorse.job_event_rejected_delivery_idx'::regclass`,
+        )
+      ).rows.map((row) => row.index_name);
+      const plan = (
+        await client.query<{ "QUERY PLAN": string }>(
+          `EXPLAIN (COSTS OFF)
+          SELECT 1
+            FROM workhorse.job_event
+           WHERE event_type IN ('signal_rejected', 'human_wait_rejected')
+             AND occurred_at >= $1::timestamptz
+           ORDER BY occurred_at DESC, event_id DESC
+           LIMIT 10001`,
+          [new Date(Date.now() - EXTERNAL_WAIT_REJECTION_WINDOW_MS)],
+        )
+      ).rows
+        .map((row) => row["QUERY PLAN"])
+        .join("\n");
+
+      expect(indexNames.length).toBeGreaterThan(0);
+      expect(indexNames.some((indexName) => plan.includes(indexName))).toBe(true);
+      expect(plan).not.toContain("job_event_20160104");
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => undefined);
+      client.release();
+    }
+    await pool.query("SELECT workhorse.retire_history_day_v1($1)", [oldDay]);
+  });
+
   it("reports exact retry and expired-lease counts from the production tick recovery phase", async () => {
     const retryId = await queue.enqueue("telemetry-retry", null, { maxAttempts: 2 });
     const terminalId = await queue.enqueue("telemetry-terminal", null, { maxAttempts: 1 });
@@ -234,7 +289,7 @@ describe("health snapshots", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(40);
+    expect(health.schemaVersion).toBe(41);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);
@@ -285,6 +340,12 @@ describe("health snapshots", () => {
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const claimed = await queue.claim("observer-worker");
     expect(claimed).not.toBeNull();
+    await pool.query(
+      `INSERT INTO workhorse.job_event(job_id, event_type, occurred_at)
+       VALUES ($1, 'signal_rejected', clock_timestamp() - interval '25 hours'),
+              ($1, 'signal_rejected', clock_timestamp() - interval '23 hours')`,
+      [claimed!.id],
+    );
     await queue.pauseQueue("idle-paused");
 
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
@@ -320,6 +381,19 @@ describe("health snapshots", () => {
     expect(depth("idle-paused", "ready")).toBe(0);
     expect(depth("idle-paused", "scheduled")).toBe(0);
     expect(depth("idle-paused", "active")).toBe(0);
+    const rejectedPoints = (exporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics)
+      .flatMap((scope) => scope.metrics)
+      .find((candidate) => candidate.descriptor.name === "workhorse.wait.delivery.rejected")
+      ?.dataPoints ?? []) as DataPoint<number>[];
+    expect(
+      rejectedPoints.find(
+        (point) =>
+          point.attributes["workhorse.queue.name"] === "default" &&
+          point.attributes["workhorse.wait.kind"] === "signal",
+      )?.value,
+    ).toBe(1);
   });
 
   it("evaluates caller-overridable health budgets into machine-readable status reasons", async () => {

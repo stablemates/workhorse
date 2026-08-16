@@ -42,7 +42,7 @@ describe("cron schedules", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(40);
+    expect(health.schemaVersion).toBe(41);
     expect(health.counts).toEqual({
       blocked: 0,
       scheduled: 0,

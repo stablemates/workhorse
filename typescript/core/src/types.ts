@@ -257,6 +257,8 @@ export const MAX_ENQUEUE_BATCH_SIZE = 1_000;
 export const MAX_JOB_DEPENDENCIES = 100;
 /** Maximum dependent edges accepted for one prerequisite job. */
 export const MAX_JOB_DEPENDENTS = 100;
+/** Trailing window used by health and metrics for rejected external-wait deliveries (24 hours). */
+export const EXTERNAL_WAIT_REJECTION_WINDOW_MS = 86_400_000;
 /** Highest accepted job priority. Priority zero is the default. */
 export const MAX_JOB_PRIORITY = 100;
 /** Default namespace for enqueue idempotency keys whose caller omits an explicit scope. */
@@ -1015,8 +1017,9 @@ export interface QueueHealth {
     pendingHumanDecisions: number;
     overdue: number;
     oldestPendingAgeMs: number | null;
+    /** Rejected signal deliveries and human decisions in the trailing 24 hours. */
     rejectedDeliveries: number;
-    /** True when any pending or rejection sample reached the operations scan limit. */
+    /** True when any pending or recent-rejection sample reached the operations scan limit. */
     capped: boolean;
   };
   oldestReadyAgeMs: number | null;

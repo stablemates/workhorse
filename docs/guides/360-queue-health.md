@@ -37,6 +37,10 @@ and marks the value as a lower bound with an explicit `capped` flag. The same tr
 to the statistics buckets. The result is a snapshot whose cost tracks live work, not lifetime
 history.
 
+Rejected signal deliveries and human decisions describe a recent rolling window instead of all
+retained history. The window keeps this operational signal relevant and lets its partial index
+skip unrelated lifecycle events during every health poll.
+
 ## Budgets and reasons
 
 Raw numbers ask the operator to know what normal looks like. Health budgets encode that
