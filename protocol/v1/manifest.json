@@ -45,6 +45,16 @@
       "contract": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
     },
     {
+      "name": "expire_owned_telemetry_v1",
+      "arity": 3,
+      "contract": "SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)"
+    },
+    {
+      "name": "recover_expired_telemetry_v1",
+      "arity": 2,
+      "contract": "SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)"
+    },
+    {
       "name": "complete_v1",
       "arity": 4,
       "contract": "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted"
@@ -60,9 +70,19 @@
       "contract": "SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)"
     },
     {
+      "name": "acknowledge_cancel_v1",
+      "arity": 3,
+      "contract": "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted"
+    },
+    {
       "name": "save_checkpoint_v1",
       "arity": 5,
       "contract": "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
+    },
+    {
+      "name": "update_progress_v1",
+      "arity": 4,
+      "contract": "SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)"
     },
     {
       "name": "schedule_wait_v1",
@@ -73,6 +93,11 @@
       "name": "create_children_v1",
       "arity": 4,
       "contract": "SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)"
+    },
+    {
+      "name": "create_child_v1",
+      "arity": 5,
+      "contract": "SELECT status, child_job_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
     },
     {
       "name": "wait_for_signal_v1",
