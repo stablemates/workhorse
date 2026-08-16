@@ -26,9 +26,9 @@ packaged bundle through that same host, so the two differ only in where modules 
 `workhorse dashboard` console pointed at a different database.
 
 The implementation findings and remaining product gaps are recorded in
-[`docs/demo-findings.md`](../docs/demo-findings.md).
+[`docs/demo-findings.md`](../../docs/demo-findings.md).
 
-The demo installs schema version 26, including daily retained history, split scheduled maintenance,
+The demo installs the current schema, including daily retained history, split scheduled maintenance,
 a dedicated operator query projection with bounded payload controls and merged timelines,
 scoped enqueue idempotency, cooperative cancellation, absolute deadlines, and per-attempt execution
 timeouts. PostgreSQL also owns a fleet-wide demo dispatch budget with a queue cap and a per-key cap.
@@ -74,12 +74,10 @@ The command recreates only the purpose-guarded `workhorse_demo` database, compil
 packages, then starts a watched Hono server and three watched dedicated worker processes. Everything is served from
 `http://workhorse.localhost:43155/`, mounted at `/`; the demo intentionally exposes no ad hoc public job
 API. Set `WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay.
-Startup also creates a living feature showcase: eight task-visible feature families each contribute three
-one-off scenarios and one recurring definition. The 24 scenarios cover ingress and routing, retry policies,
-durable checkpoints, durable waits, mutable progress, timing controls, cancellation, and dead letters with
-redrive. Each recurring occurrence deterministically selects a success, recovery, cancellation, or terminal
-failure variant as appropriate, so the dashboard continues changing while it is open. See
-[`docs/demo-feature-coverage.md`](../docs/demo-feature-coverage.md) for the complete mapping and the
+Startup also creates a living feature showcase with one-off scenarios and staggered recurring definitions.
+Each recurring occurrence deterministically selects a stable variant, so the dashboard continues changing
+while it is open. See
+[`docs/demo-feature-coverage.md`](../../docs/demo-feature-coverage.md) for the complete mapping and the
 operational features intentionally represented outside task rows.
 
 The earlier representative layer still seeds one successful transactional order, one named durable timer, fixed, exponential, and
@@ -169,8 +167,8 @@ not authorization, and the demo does not claim exactly-once external effects. Ca
 changes only that occurrence, not the schedule or its next fire.
 
 Startup synchronizes a namespaced one-minute heartbeat, a five-minute report, a one-minute lightweight
-long-running schedule, and one one-minute definition for each of the eight feature families through
-`Queue.syncSchedules`. The workers evaluate due schedules
+long-running schedule, and the staggered feature-family definitions through `Queue.syncSchedules`.
+The workers evaluate due schedules
 in-process with advisory-lock coordination and SQL-level occurrence deduplication. The Cron view distinguishes the application heartbeat from four worker-owned maintenance entries: the fast tick, partition preparation, daily history retention at the configured local time, and terminal/idempotency cleanup. PostgreSQL stores the global IANA maintenance timezone, local retention time, and task due state. The heartbeat's
 audited control updates the durable schedule definition, and Jobs and Workers show each resulting
 execution.
