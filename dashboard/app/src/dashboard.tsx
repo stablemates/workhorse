@@ -5206,13 +5206,33 @@ function EventRow({
   );
 }
 
-function EventDetails({ event }: { event: DashboardEventDetail }) {
+export function EventDetails({
+  event,
+  taskLinkHref,
+}: {
+  event: DashboardEventDetail;
+  taskLinkHref: (id: string) => string;
+}) {
+  const taskId =
+    event.jobType === null ? (
+      <Code>{event.jobId}</Code>
+    ) : (
+      <Text
+        component="a"
+        href={taskLinkHref(event.jobId)}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Open task ${event.jobId} in a new window`}
+      >
+        <Code>{event.jobId}</Code>
+      </Text>
+    );
   const fields: Array<[string, ReactNode]> = [
     ["Event", event.type.replaceAll("_", " ")],
     ["Source", event.kind === "event" ? "Lifecycle" : "Attempt history"],
     ["Occurred", formatExact(event.occurredAt)],
     ["Task", event.jobType ?? "Retained away"],
-    ["Task ID", <Code key="job-id">{event.jobId}</Code>],
+    ["Task ID", taskId],
     ["Queue", event.queue ?? "Retained away"],
     ["Attempt", event.attempt ?? "—"],
     ["Worker", event.workerId ?? "—"],
@@ -7462,7 +7482,7 @@ function DashboardContent({
             {eventDetailError}
           </Text>
         ) : selectedEvent ? (
-          <EventDetails event={selectedEvent} />
+          <EventDetails event={selectedEvent} taskLinkHref={lineageTaskHref} />
         ) : (
           <Center mih={200}>
             <Loader size="sm" />

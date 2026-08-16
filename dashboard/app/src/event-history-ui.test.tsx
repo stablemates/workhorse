@@ -2,7 +2,7 @@ import { MantineProvider } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { DashboardJobDetail } from "@workhorse/dashboard-server/wire";
+import type { DashboardEventRow, DashboardJobDetail } from "@workhorse/dashboard-server/wire";
 import { dashboardJobEventTypes } from "./presentation.js";
 
 Object.defineProperty(globalThis, "localStorage", {
@@ -47,6 +47,41 @@ async function renderExport(
 }
 
 describe("dashboard event history", () => {
+  it("opens the event task in a new window without replacing the Events page", async () => {
+    const { EventDetails } = await import("./dashboard.js");
+    const event = {
+      id: "event:42",
+      kind: "event",
+      recordId: "42",
+      jobId: "job-123",
+      queue: "billing",
+      jobType: "invoice.send",
+      occurredAt: "2026-08-16T12:00:00.000Z",
+      attempt: 1,
+      type: "claimed",
+      details: null,
+      workerId: null,
+      fenceToken: null,
+      durationMs: null,
+      errorMessage: null,
+    } satisfies DashboardEventRow;
+    const html = renderToStaticMarkup(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(EventDetails, {
+          event,
+          taskLinkHref: (jobId: string) => `/dashboard/tasks?task=${jobId}`,
+        }),
+      ),
+    );
+
+    expect(html).toContain('href="/dashboard/tasks?task=job-123"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('aria-label="Open task job-123 in a new window"');
+  });
+
   it("offers every new lifecycle type as an Events feed filter", () => {
     expect(dashboardJobEventTypes).toEqual(expect.arrayContaining(newlyPersistedEventTypes));
   });
