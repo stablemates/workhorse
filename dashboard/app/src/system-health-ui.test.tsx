@@ -88,7 +88,7 @@ describe("system health counters", () => {
     expect(html).toContain("9 human decisions");
     expect(html).toContain("2 overdue");
     expect(html).toContain("3 rejected deliveries/24h");
-    expect(html).toContain("Review human waits");
+    expect(html).toContain("Review waiting tasks");
     expect(html).toContain("Counts reached the scan limit");
   });
 
@@ -107,7 +107,7 @@ describe("system health counters", () => {
 
     expect(html).toContain("External waits are overdue");
     expect(html).toContain("A signal or human decision passed its deadline");
-    expect(html).toContain("Review human waits");
+    expect(html).toContain("Review waiting tasks");
   });
 
   it("shows ready age per priority so lower lanes cannot starve invisibly", async () => {

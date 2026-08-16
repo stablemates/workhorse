@@ -33,6 +33,14 @@ The dashboard lists pending decisions with their job identity, name, and stored 
 a JSON result only when the host exposes operator mutations, and its server replaces browser
 attribution with the authenticated principal.
 
+The `Waiting` task filter includes open signal and human-decision waits. The `Blocked` filter keeps
+tasks held by dependencies or child joins separate, because an operator cannot resume those tasks
+by supplying a decision.
+
+If one common result should be a button, add `dashboard.quickAction` to the context. Give it the
+button `label` and the exact JSON `result`. The dashboard only shows the button when the application
+opts in, so the dashboard never assumes that `{ approved: true }` is valid.
+
 Custom operator tools can call `Queue.listHumanWaits()` for the same actionable projection. The
 dashboard uses this public method, so both surfaces see the same context and effective deadline.
 If `nextCursor` is present, pass it to the next call to continue through every pending decision.

@@ -249,6 +249,7 @@ function textArrayExpression(values: readonly string[]) {
 
 function taskFilterCondition(filter: DashboardTaskFilter) {
   if (filter === "blocked") return sql`state = 'blocked'`;
+  if (filter === "waiting") return sql`external_wait`;
   if (filter === "scheduled") return sql`state = 'scheduled'`;
   if (filter === "retried") return sql`attempt > 1`;
   if (filter === "queued") return sql`state = 'ready'`;
@@ -259,6 +260,15 @@ function taskFilterCondition(filter: DashboardTaskFilter) {
   if (filter === "discarded") return sql`state = 'failed'`;
   if (filter === "canceled") return sql`state = 'canceled'`;
   return sql`true`;
+}
+
+function externalWaitExists(jobId: DashboardSql) {
+  return sql`
+    EXISTS (SELECT 1 FROM workhorse.dashboard_signal_wait_v1 signal_wait
+             WHERE signal_wait.job_id = ${jobId})
+    OR EXISTS (SELECT 1 FROM workhorse.dashboard_human_wait_v1 human_wait
+                WHERE human_wait.job_id = ${jobId})
+  `;
 }
 
 function taskSearchPattern(search: string | null): string | null {
@@ -322,17 +332,20 @@ export async function readDashboardTaskCounts(
 
   const runtimeRows = await database.execute<{
     blocked_count: number;
+    waiting_count: number;
     scheduled_count: number;
     queued_count: number;
     running_count: number;
     retried_live_count: number;
   }>(sql`
     SELECT count(*) FILTER (WHERE state = 'blocked')::integer AS blocked_count,
+           count(*) FILTER (WHERE ${externalWaitExists(sql`runtime.job_id`)})::integer
+             AS waiting_count,
            count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
            count(*) FILTER (WHERE state = 'ready')::integer AS queued_count,
            count(*) FILTER (WHERE state = 'active')::integer AS running_count,
            count(*) FILTER (WHERE current_attempt > 1)::integer AS retried_live_count
-      FROM workhorse.dashboard_job_runtime_v1
+      FROM workhorse.dashboard_job_runtime_v1 runtime
   `);
   const live = expectOneRow(runtimeRows, "the live job runtime counts");
   const [completed, discarded, canceled, retriedTerminal] = await Promise.all([
@@ -357,6 +370,7 @@ export async function readDashboardTaskCounts(
   return {
     all: jobEstimate,
     blocked: live.blocked_count,
+    waiting: live.waiting_count,
     scheduled: live.scheduled_count,
     retried: live.retried_live_count + retriedTerminal,
     queued: live.queued_count,
@@ -373,6 +387,7 @@ async function readDashboardTaskCountsExact(
   const countRows = await database.execute<{
     all_count: number;
     blocked_count: number;
+    waiting_count: number;
     scheduled_count: number;
     retried_count: number;
     queued_count: number;
@@ -383,6 +398,7 @@ async function readDashboardTaskCountsExact(
   }>(sql`
     WITH tasks AS (
       SELECT COALESCE(r.state, o.state) AS state,
+             ${externalWaitExists(sql`j.id`)} AS external_wait,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt
         FROM workhorse.dashboard_job_v1 j
         LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
@@ -390,6 +406,7 @@ async function readDashboardTaskCountsExact(
     )
     SELECT count(*)::integer AS all_count,
            count(*) FILTER (WHERE state = 'blocked')::integer AS blocked_count,
+           count(*) FILTER (WHERE external_wait)::integer AS waiting_count,
            count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
            count(*) FILTER (WHERE attempt > 1)::integer AS retried_count,
            count(*) FILTER (WHERE state = 'ready')::integer AS queued_count,
@@ -404,6 +421,7 @@ async function readDashboardTaskCountsExact(
   return {
     all: counts.all_count,
     blocked: counts.blocked_count,
+    waiting: counts.waiting_count,
     scheduled: counts.scheduled_count,
     retried: counts.retried_count,
     queued: counts.queued_count,
@@ -600,6 +618,7 @@ export async function readDashboardActivity(
     ), tasks AS (
       SELECT ${groupExpression} AS group_key,
              COALESCE(r.state, o.state) AS state,
+             ${externalWaitExists(sql`candidate.job_id`)} AS external_wait,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt,
              COALESCE(r.updated_at, o.updated_at) AS updated_at,
              j.tags, j.queue_name AS queue,
@@ -713,6 +732,7 @@ export async function readDashboardTasks(
       WITH tasks AS (
         SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.tags, j.priority,
                COALESCE(r.state, o.state) AS state,
+               ${externalWaitExists(sql`j.id`)} AS external_wait,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                COALESCE(r.worker_id, current_wait.worker_id, attempt_worker.worker_id,
                         'unassigned') AS worker_id
@@ -764,6 +784,7 @@ export async function readDashboardTasks(
       WITH tasks AS (
         SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
                COALESCE(r.state, o.state) AS state,
+               ${externalWaitExists(sql`j.id`)} AS external_wait,
                CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
                ARRAY(
                  SELECT dependency.prerequisite_job_id
