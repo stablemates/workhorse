@@ -40,6 +40,16 @@
       "contract": "SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)"
     },
     {
+      "name": "record_batch_dispatch_v1",
+      "arity": 5,
+      "contract": "SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded"
+    },
+    {
+      "name": "record_batch_failure_v1",
+      "arity": 5,
+      "contract": "SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded"
+    },
+    {
       "name": "heartbeat_v2",
       "arity": 4,
       "contract": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status"

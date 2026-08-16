@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { type BatchHandlerItem, Worker } from "../src/index.js";
+import { type BatchHandlerItem, type ClaimedJob, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { deferred, pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -157,6 +157,150 @@ describe("batch handlers", () => {
         }),
       ),
     );
+
+    const dispatches = await pool.query<{
+      job_id: string;
+      attempt: number;
+      batch_id: string;
+      batch_size: number;
+      members: Array<{ job_id: string; attempt: number }>;
+    }>(
+      `SELECT job_id::text, attempt, details->>'batch_id' AS batch_id,
+              (details->>'size')::integer AS batch_size, details->'members' AS members
+         FROM workhorse.job_event
+        WHERE job_id = ANY($1::uuid[]) AND event_type = 'batch_dispatched'
+        ORDER BY job_id`,
+      [jobIds],
+    );
+    expect(dispatches.rows).toHaveLength(2);
+    expect(new Set(dispatches.rows.map((row) => row.batch_id)).size).toBe(1);
+    const orderedMembers = dispatches.rows[0]!.members;
+    expect(new Set(orderedMembers.map((member) => member.job_id))).toEqual(new Set(jobIds));
+    expect(orderedMembers.map((member) => member.attempt)).toEqual([1, 1]);
+    expect(dispatches.rows).toEqual(
+      expect.arrayContaining(
+        jobIds.map((jobId) =>
+          expect.objectContaining({
+            job_id: jobId,
+            attempt: 1,
+            batch_size: 2,
+            members: orderedMembers,
+          }),
+        ),
+      ),
+    );
+    const failures = await pool.query<{ job_id: string; batch_id: string }>(
+      `SELECT job_id::text, details->>'batch_id' AS batch_id
+         FROM workhorse.job_event
+        WHERE job_id = ANY($1::uuid[]) AND event_type = 'batch_failed'
+        ORDER BY job_id`,
+      [jobIds],
+    );
+    expect(failures.rows).toEqual(
+      dispatches.rows.map(({ job_id, batch_id }) => ({ job_id, batch_id })),
+    );
+  });
+
+  it("runs the shared callback when dispatch evidence cannot be persisted", async () => {
+    const queueName = `batch-evidence-failure-${randomUUID()}`;
+    const jobIds = await Promise.all(
+      [1, 2].map((value) =>
+        queue.enqueue("batch-evidence-failure", { value }, { queue: queueName }),
+      ),
+    );
+    const evidence = vi
+      .spyOn(queue, "recordBatchDispatch")
+      .mockRejectedValueOnce(new Error("evidence unavailable"));
+    const handler = vi.fn<
+      (items: readonly BatchHandlerItem[]) => Array<{ status: "succeeded"; result: null }>
+    >((items) => items.map(() => ({ status: "succeeded", result: null })));
+    const worker = new Worker(queue, {
+      workerId: "batch-evidence-failure-worker",
+      queue: queueName,
+      concurrency: 2,
+    }).handleBatch("batch-evidence-failure", { maxSize: 2, lingerMs: 100 }, handler);
+
+    try {
+      await expect(worker.runOnce()).resolves.toBe(true);
+      expect(handler).toHaveBeenCalledOnce();
+      await expect(Promise.all(jobIds.map((id) => queue.getJob(id)))).resolves.toEqual(
+        jobIds.map(() => expect.objectContaining({ state: "succeeded" })),
+      );
+    } finally {
+      evidence.mockRestore();
+    }
+  });
+
+  it("records a dispatched member from its retained claim after ownership changes", async () => {
+    const queueName = `batch-retained-claim-${randomUUID()}`;
+    const jobId = await queue.enqueue(
+      "batch-retained-claim",
+      {},
+      { queue: queueName, maxAttempts: 2 },
+    );
+    const claimed = await queue.claim("batch-retained-claim-worker", {
+      queue: queueName,
+      leaseMs: 100,
+    });
+    expect(claimed).not.toBeNull();
+    await sleep(120);
+    await expect(queue.recoverExpired(1, 0)).resolves.toBe(1);
+
+    await expect(
+      queue.recordBatchDispatch({
+        batchId: randomUUID(),
+        jobs: [claimed!],
+        workerId: "batch-retained-claim-worker",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      pool.query(
+        `SELECT 1 FROM workhorse.job_event
+          WHERE job_id = $1 AND attempt = 1 AND event_type = 'batch_dispatched'`,
+        [jobId],
+      ),
+    ).resolves.toMatchObject({ rowCount: 1 });
+  });
+
+  it("records retried batch evidence once per member", async () => {
+    const queueName = `batch-evidence-retry-${randomUUID()}`;
+    await Promise.all(
+      [1, 2, 3].map((value) =>
+        queue.enqueue("batch-evidence-retry", { value }, { queue: queueName }),
+      ),
+    );
+    const jobs = await Promise.all([
+      queue.claim("batch-evidence-retry-worker", { queue: queueName }),
+      queue.claim("batch-evidence-retry-worker", { queue: queueName }),
+      queue.claim("batch-evidence-retry-worker", { queue: queueName }),
+    ]);
+    expect(jobs).not.toContain(null);
+    const batch = {
+      batchId: randomUUID(),
+      jobs: [jobs[0]!, jobs[1]!] as [ClaimedJob, ClaimedJob],
+      workerId: "batch-evidence-retry-worker",
+    };
+
+    await queue.recordBatchDispatch(batch);
+    await queue.recordBatchDispatch(batch);
+    await expect(
+      queue.recordBatchFailure({ ...batch, jobs: [jobs[0]!, jobs[2]!] }),
+    ).rejects.toThrow("batch id already records different evidence");
+    await queue.recordBatchFailure(batch);
+    await queue.recordBatchFailure(batch);
+
+    const evidence = await pool.query<{ event_type: string; event_count: number }>(
+      `SELECT event_type, count(*)::integer AS event_count
+         FROM workhorse.job_event
+        WHERE details->>'batch_id' = $1
+        GROUP BY event_type
+        ORDER BY event_type`,
+      [batch.batchId],
+    );
+    expect(evidence.rows).toEqual([
+      { event_type: "batch_dispatched", event_count: 2 },
+      { event_type: "batch_failed", event_count: 2 },
+    ]);
   });
 
   it("rejects every member when the handler omits an outcome payload", async () => {

@@ -1212,6 +1212,9 @@ CREATE INDEX IF NOT EXISTS job_event_rejected_delivery_idx
   ON workhorse.job_event (occurred_at DESC, event_id DESC)
   INCLUDE (job_id, event_type)
   WHERE event_type IN ('signal_rejected', 'human_wait_rejected');
+CREATE INDEX IF NOT EXISTS job_event_batch_id_idx
+  ON workhorse.job_event ((details->>'batch_id'), event_type)
+  WHERE event_type IN ('batch_dispatched', 'batch_failed');
 
 -- One immutable row for every closed attempt.
 CREATE TABLE IF NOT EXISTS workhorse.attempt_history (
@@ -4636,6 +4639,153 @@ BEGIN
            v_runtime.attempt_timeout_at, v_fence, v_expires
       FROM workhorse.job job WHERE job.id = v_runtime.job_id;
 END;
+$$;
+
+-- Record process-local batch evidence against the immutable claims that entered the coordinator.
+CREATE OR REPLACE FUNCTION workhorse.record_batch_event_v1(
+  p_event_type text,
+  p_batch_id uuid,
+  p_job_ids uuid[],
+  p_attempts integer[],
+  p_fence_tokens bigint[],
+  p_worker_id text
+) RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_size integer := cardinality(p_job_ids);
+  v_members jsonb;
+  v_existing integer;
+  v_matching integer;
+  v_requested integer;
+  v_authorized integer;
+BEGIN
+  IF p_event_type NOT IN ('batch_dispatched', 'batch_failed') THEN
+    RAISE EXCEPTION 'unsupported batch event type';
+  END IF;
+  IF p_batch_id IS NULL THEN RAISE EXCEPTION 'batch_id must not be null'; END IF;
+  IF p_worker_id IS NULL OR p_worker_id = '' THEN
+    RAISE EXCEPTION 'worker_id must not be empty';
+  END IF;
+  IF v_size IS NULL OR v_size NOT BETWEEN 1 AND 100 THEN
+    RAISE EXCEPTION 'batch size must be between 1 and 100';
+  END IF;
+  IF cardinality(p_attempts) <> v_size OR cardinality(p_fence_tokens) <> v_size THEN
+    RAISE EXCEPTION 'batch member arrays must have equal lengths';
+  END IF;
+  IF array_position(p_job_ids, NULL) IS NOT NULL
+     OR array_position(p_attempts, NULL) IS NOT NULL
+     OR array_position(p_fence_tokens, NULL) IS NOT NULL THEN
+    RAISE EXCEPTION 'batch member arrays must not contain nulls';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM unnest(p_job_ids) member(job_id)
+     GROUP BY member.job_id HAVING count(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'batch job ids must be unique';
+  END IF;
+
+  SELECT jsonb_agg(
+           jsonb_build_object('job_id', member.job_id, 'attempt', member.attempt)
+           ORDER BY member.ordinal
+         )
+    INTO v_members
+    FROM unnest(p_job_ids, p_attempts) WITH ORDINALITY
+      AS member(job_id, attempt, ordinal);
+
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_batch_id::text, 0));
+  SELECT count(*)::integer
+    INTO v_existing
+    FROM workhorse.job_event event
+   WHERE event.event_type IN ('batch_dispatched', 'batch_failed')
+     AND event.details->>'batch_id' = p_batch_id::text;
+  IF v_existing > 0 THEN
+    SELECT count(*)::integer
+      INTO v_matching
+      FROM unnest(p_job_ids, p_attempts, p_fence_tokens) AS member(job_id, attempt, fence_token)
+      JOIN workhorse.job_event event
+        ON event.job_id = member.job_id
+       AND event.attempt = member.attempt
+       AND event.event_type IN ('batch_dispatched', 'batch_failed')
+       AND event.details = jsonb_build_object(
+         'batch_id', p_batch_id,
+         'size', v_size,
+         'members', v_members,
+         'worker_id', p_worker_id,
+         'fence_token', member.fence_token::text
+       );
+    IF v_matching <> v_existing THEN
+      RAISE EXCEPTION 'batch id already records different evidence';
+    END IF;
+    SELECT count(*)::integer
+      INTO v_requested
+      FROM workhorse.job_event event
+     WHERE event.event_type = p_event_type
+       AND event.details->>'batch_id' = p_batch_id::text;
+    IF v_requested = v_size THEN RETURN v_size; END IF;
+    IF v_requested <> 0 THEN
+      RAISE EXCEPTION 'batch event records an incomplete member set';
+    END IF;
+  END IF;
+
+  SELECT count(*)::integer
+    INTO v_authorized
+    FROM unnest(p_job_ids, p_attempts, p_fence_tokens) AS member(job_id, attempt, fence_token)
+   WHERE EXISTS (
+     SELECT 1
+       FROM workhorse.job_event claim
+      WHERE claim.job_id = member.job_id
+        AND claim.attempt = member.attempt
+        AND claim.event_type = 'claimed'
+        AND claim.details->>'worker_id' = p_worker_id
+        AND claim.details->>'fence_token' = member.fence_token::text
+   );
+  IF v_authorized <> v_size THEN
+    RAISE EXCEPTION 'batch members must match retained claims';
+  END IF;
+
+  INSERT INTO workhorse.job_event(job_id, attempt, event_type, details)
+    SELECT member.job_id, member.attempt, p_event_type,
+           jsonb_build_object(
+             'batch_id', p_batch_id,
+             'size', v_size,
+             'members', v_members,
+             'worker_id', p_worker_id,
+             'fence_token', member.fence_token::text
+           )
+      FROM unnest(p_job_ids, p_attempts, p_fence_tokens) WITH ORDINALITY
+        AS member(job_id, attempt, fence_token, ordinal)
+     ORDER BY member.ordinal;
+  RETURN v_size;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.record_batch_dispatch_v1(
+  p_batch_id uuid,
+  p_job_ids uuid[],
+  p_attempts integer[],
+  p_fence_tokens bigint[],
+  p_worker_id text
+) RETURNS integer
+LANGUAGE sql
+AS $$
+  SELECT workhorse.record_batch_event_v1(
+    'batch_dispatched', p_batch_id, p_job_ids, p_attempts, p_fence_tokens, p_worker_id
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.record_batch_failure_v1(
+  p_batch_id uuid,
+  p_job_ids uuid[],
+  p_attempts integer[],
+  p_fence_tokens bigint[],
+  p_worker_id text
+) RETURNS integer
+LANGUAGE sql
+AS $$
+  SELECT workhorse.record_batch_event_v1(
+    'batch_failed', p_batch_id, p_job_ids, p_attempts, p_fence_tokens, p_worker_id
+  );
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.deadline_envelope_v1(p_deadline_at timestamptz)

@@ -54,6 +54,7 @@ const telemetryLogger = lazyLogger();
 
 type WorkhorseLogEvent =
   | "workhorse.handler.batch_dispatched"
+  | "workhorse.handler.batch_evidence_failed"
   | "workhorse.handler.finished"
   | "workhorse.handler.registered"
   | "workhorse.handler.signal_swallowed"

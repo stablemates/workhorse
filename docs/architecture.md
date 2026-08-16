@@ -1089,8 +1089,36 @@ members that were already admitted. The fenced SQL transitions release each memb
 completion, failure, cancellation, expiry, or recovery. A stale fence rejects only its member. `Worker.stop()`
 drains admitted members and their heartbeats but prevents another claim pass.
 
+At dispatch, the coordinator generates one UUID and calls `record_batch_dispatch_v1(batch_id,
+job_ids, attempts, fence_tokens, worker_id)` before invoking the callback. The function accepts 1
+through 100 unique job IDs with equal-length attempt and fence arrays. PostgreSQL verifies every
+member against its immutable `claimed` event, so cancellation or lease loss during the linger does
+not erase an actual dispatch. The wrapper delegates to `record_batch_event_v1`, which validates all
+members before it writes any event. The helper locks the batch ID while it writes, so a retry returns
+the original member count without appending duplicate evidence. The `job_event_batch_id_idx` partial
+expression index bounds the lookup to matching batch evidence. Dispatch and failure evidence must
+name identical members. If the same batch ID already names different evidence, PostgreSQL rejects
+the write. PostgreSQL then appends one
+`batch_dispatched` `job_event` per member.
+Each event records `batch_id`, ordered `members` containing `job_id` and `attempt`, `size`,
+`worker_id`, and that member's `fence_token`. `Worker` serializes these announcements, but callbacks
+execute with its ordinary concurrency. If PostgreSQL rejects the evidence write, `Worker` logs the
+failure and still invokes the callback, so an observability failure does not become a job failure.
+
+If the callback throws or returns an invalid outcome list, `Worker` calls
+`record_batch_failure_v1` before it rejects the members. PostgreSQL appends one `batch_failed`
+event per claimed member with the same batch fields. A failure to append this evidence does not
+replace the callback error or prevent per-job settlement.
+
+`DashboardJobDetail.batchExecutions` projects every retained `batch_dispatched` event for the
+selected task. Each execution includes the batch ID, selected attempt, dispatch time, and ordered
+member identities. If a member's matching attempt has closed, the execution also includes its
+outcome and error. The task drawer links the other member identities. It labels a batch-wide
+failure only when the selected task has a retained `batch_failed` event for that batch ID.
+
 `workhorse.handler.batch_dispatched` logs the bounded size, measured linger, full/partial flag, queue, type,
-and worker identity without payloads or job IDs.
+and worker identity without payloads or job IDs. `workhorse.handler.batch_evidence_failed` warns
+when PostgreSQL cannot record either the dispatch or its shared callback failure.
 
 `pause()` prevents later claims while maintenance and active jobs continue. `resume()` clears the pause and
 makes claims immediately eligible. `stop()` enters draining state, prevents later claims, and allows every

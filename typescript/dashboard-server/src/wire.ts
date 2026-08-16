@@ -688,6 +688,8 @@ export const dashboardJobEventTypes = [
   "debounce_rejected",
   "throttled",
   "claimed",
+  "batch_dispatched",
+  "batch_failed",
   "succeeded",
   "failed",
   "retry_scheduled",
@@ -974,6 +976,22 @@ export interface DashboardJobDetail {
     result: unknown;
     error: unknown;
   };
+  batchExecutions: Array<{
+    id: string;
+    /** Attempt of the selected task that joined this execution. */
+    attempt: number;
+    dispatchedAt: string;
+    /** True only when the shared callback threw or returned an invalid outcome list. */
+    batchWideFailure: boolean;
+    members: Array<{
+      id: string;
+      type: string;
+      attempt: number;
+      /** Matching closed-attempt outcome, or null while that member is still active. */
+      outcome: string | null;
+      error: unknown;
+    }>;
+  }>;
   attempts: Array<{
     attempt: number;
     workerId: string;

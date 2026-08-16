@@ -43,6 +43,10 @@ PostgreSQL admits jobs one at a time before they enter the group. Priority, queu
 
 Cancellation, timeouts, lost leases, and shutdown remain per-job decisions. One member can be canceled or lose its fence while peers complete normally.
 
+Workhorse records each shared invocation before the callback starts. The task drawer shows that a
+task ran in a batch and links its peers. If the shared callback fails, the drawer groups that
+failure across the members instead of guessing from their individual errors.
+
 ## Next
 
 - [310-workers.md](310-workers.md) — the process that owns batch capacity

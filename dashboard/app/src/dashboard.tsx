@@ -1579,6 +1579,95 @@ function RelatedTaskLinks({ ids, ...navigation }: { ids: string[] } & LineageNav
   ));
 }
 
+function batchFailureMessage(batch: DashboardJobDetail["batchExecutions"][number]): string | null {
+  if (!batch.batchWideFailure) return null;
+  for (const member of batch.members) {
+    const error = member.error;
+    if (typeof error === "object" && error !== null && "message" in error) {
+      const message = (error as { message: unknown }).message;
+      if (typeof message === "string" && message.length > 0) return message;
+    }
+  }
+  return "The shared batch callback failed before every task stored an attempt error.";
+}
+
+/** One durable batch dispatch, including links to every other member's task detail. */
+export function BatchExecutionLine({
+  batch,
+  selectedJobId,
+  ...navigation
+}: {
+  batch: DashboardJobDetail["batchExecutions"][number];
+  selectedJobId: string;
+} & LineageNavigationProps) {
+  const otherMembers = batch.members.filter((member) => member.id !== selectedJobId);
+  const sharedFailure = batchFailureMessage(batch);
+  return (
+    <Paper withBorder p="sm">
+      <Group justify="space-between" align="flex-start" gap="xs">
+        <Box>
+          <Text fw={600} size="sm">
+            Processed in a batch of {batch.members.length}
+          </Text>
+          <Text c="dimmed" size="xs" title={formatExact(batch.dispatchedAt)}>
+            Attempt {batch.attempt} · dispatched {formatRelative(batch.dispatchedAt)}
+          </Text>
+        </Box>
+        {sharedFailure === null ? null : (
+          <Badge color="red" variant="light" tt="none">
+            Batch-wide failure
+          </Badge>
+        )}
+      </Group>
+      {sharedFailure === null ? null : (
+        <Text c="red" size="xs" mt="xs">
+          {sharedFailure}
+        </Text>
+      )}
+      <Text c="dimmed" size="xs" mt="xs">
+        {otherMembers.length === 0 ? (
+          "No other tasks joined this dispatch."
+        ) : (
+          <>
+            Peers:{" "}
+            {otherMembers.map((member, index) => (
+              <Fragment key={`${member.id}:${member.attempt}`}>
+                {index === 0 ? null : ", "}
+                <RelatedTaskLink id={member.id} {...navigation} /> (attempt {member.attempt}
+                {member.outcome === null ? " active" : ` ${member.outcome}`})
+              </Fragment>
+            ))}
+          </>
+        )}
+      </Text>
+    </Paper>
+  );
+}
+
+function BatchExecutions({
+  job,
+  ...navigation
+}: { job: DashboardJobDetail } & LineageNavigationProps) {
+  if (job.batchExecutions.length === 0) return null;
+  return (
+    <Box component="section" aria-labelledby="batch-executions-heading" mt="sm">
+      <Text id="batch-executions-heading" component="h3" fw={600} size="sm" mb="xs" my={0}>
+        Batch execution
+      </Text>
+      <Stack gap="sm">
+        {job.batchExecutions.map((batch) => (
+          <BatchExecutionLine
+            key={batch.id}
+            batch={batch}
+            selectedJobId={job.identity.id}
+            {...navigation}
+          />
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
 /** The immutable prerequisite edge and its current release state. */
 export function DependencyLine({
   job,
@@ -7565,6 +7654,11 @@ function DashboardContent({
               </Group>
               <Code fz="xs">{selectedJob.identity.id}</Code>
               <RetryPolicyLine job={selectedJob} />
+              <BatchExecutions
+                job={selectedJob}
+                taskLinkHref={lineageTaskHref}
+                onOpenTask={inspectJob}
+              />
               <DependencyLine
                 job={selectedJob}
                 taskLinkHref={lineageTaskHref}

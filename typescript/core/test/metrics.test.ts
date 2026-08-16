@@ -47,6 +47,8 @@ async function unsupportedWorkerQueueOperation(): Promise<never> {
 const workerQueueDefaults: WorkerQueueApi = {
   defaultQueue: "default",
   claim: async () => null,
+  recordBatchDispatch: async () => undefined,
+  recordBatchFailure: async () => undefined,
   heartbeatStatus: unsupportedWorkerQueueOperation,
   expireOwned: unsupportedWorkerQueueOperation,
   acknowledgeCancel: unsupportedWorkerQueueOperation,

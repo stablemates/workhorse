@@ -137,6 +137,7 @@ export type {
   WorkerProcessWorkerDefinition,
 } from "./worker-process.js";
 export type {
+  BatchExecutionRecord,
   ClaimedJob,
   ChildJob,
   ChildJobRequest,
