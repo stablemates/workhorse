@@ -236,6 +236,7 @@ function textArrayExpression(values: readonly string[]) {
 }
 
 function taskFilterCondition(filter: DashboardTaskFilter) {
+  if (filter === "blocked") return sql`state = 'blocked'`;
   if (filter === "scheduled") return sql`state = 'scheduled'`;
   if (filter === "retried") return sql`attempt > 1`;
   if (filter === "queued") return sql`state = 'ready'`;
@@ -306,12 +307,14 @@ export async function readDashboardTaskCounts(
   }
 
   const runtimeRows = await database.execute<{
+    blocked_count: number;
     scheduled_count: number;
     queued_count: number;
     running_count: number;
     retried_live_count: number;
   }>(sql`
-    SELECT count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
+    SELECT count(*) FILTER (WHERE state = 'blocked')::integer AS blocked_count,
+           count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
            count(*) FILTER (WHERE state = 'ready')::integer AS queued_count,
            count(*) FILTER (WHERE state = 'active')::integer AS running_count,
            count(*) FILTER (WHERE current_attempt > 1)::integer AS retried_live_count
@@ -339,6 +342,7 @@ export async function readDashboardTaskCounts(
 
   return {
     all: jobEstimate,
+    blocked: live.blocked_count,
     scheduled: live.scheduled_count,
     retried: live.retried_live_count + retriedTerminal,
     queued: live.queued_count,
@@ -354,6 +358,7 @@ async function readDashboardTaskCountsExact(
 ): Promise<DashboardTaskCounts> {
   const countRows = await database.execute<{
     all_count: number;
+    blocked_count: number;
     scheduled_count: number;
     retried_count: number;
     queued_count: number;
@@ -370,6 +375,7 @@ async function readDashboardTaskCountsExact(
         LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
     )
     SELECT count(*)::integer AS all_count,
+           count(*) FILTER (WHERE state = 'blocked')::integer AS blocked_count,
            count(*) FILTER (WHERE state = 'scheduled')::integer AS scheduled_count,
            count(*) FILTER (WHERE attempt > 1)::integer AS retried_count,
            count(*) FILTER (WHERE state = 'ready')::integer AS queued_count,
@@ -383,6 +389,7 @@ async function readDashboardTaskCountsExact(
 
   return {
     all: counts.all_count,
+    blocked: counts.blocked_count,
     scheduled: counts.scheduled_count,
     retried: counts.retried_count,
     queued: counts.queued_count,
@@ -696,6 +703,8 @@ export async function readDashboardTasks(
       type: string;
       priority: number;
       state: string;
+      blocked_reason: "prerequisite_pending" | null;
+      prerequisite_job_ids: string[];
       attempt: number;
       max_attempts: number;
       retry_policy: RetryPolicy | null;
@@ -722,6 +731,14 @@ export async function readDashboardTasks(
       WITH tasks AS (
         SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
                COALESCE(r.state, o.state) AS state,
+               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
+               ARRAY(
+                 SELECT dependency.prerequisite_job_id
+                   FROM workhorse.dashboard_job_dependency_v1 dependency
+                  WHERE dependency.dependent_job_id = j.id
+                    AND dependency.released_at IS NULL
+                  ORDER BY dependency.prerequisite_job_id
+               ) AS prerequisite_job_ids,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.payload, j.tags,
                COALESCE(r.run_at, o.run_at) AS run_at,
@@ -787,6 +804,8 @@ export async function readDashboardTasks(
         type: row.type,
         priority: row.priority,
         state: row.state,
+        blockedReason: row.blocked_reason,
+        prerequisiteJobIds: row.prerequisite_job_ids,
         attempt: row.attempt,
         maxAttempts: row.max_attempts,
         retryPolicy: row.retry_policy,
@@ -1890,6 +1909,8 @@ export async function readDashboardSnapshot(
         type: string;
         priority: number;
         state: string;
+        blocked_reason: "prerequisite_pending" | null;
+        prerequisite_job_ids: string[];
         attempt: number;
         max_attempts: number;
         retry_policy: RetryPolicy | null;
@@ -1907,6 +1928,14 @@ export async function readDashboardSnapshot(
       }>(sql`
         SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
                COALESCE(r.state, o.state) AS state,
+               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
+               ARRAY(
+                 SELECT dependency.prerequisite_job_id
+                   FROM workhorse.dashboard_job_dependency_v1 dependency
+                  WHERE dependency.dependent_job_id = j.id
+                    AND dependency.released_at IS NULL
+                  ORDER BY dependency.prerequisite_job_id
+               ) AS prerequisite_job_ids,
                COALESCE(r.current_attempt, o.current_attempt) AS attempt,
                j.max_attempts, j.retry_policy, j.payload,
                COALESCE(r.run_at, o.run_at) AS run_at,
@@ -2086,6 +2115,8 @@ export async function readDashboardSnapshot(
       type: row.type,
       priority: row.priority,
       state: row.state,
+      blockedReason: row.blocked_reason,
+      prerequisiteJobIds: row.prerequisite_job_ids,
       attempt: row.attempt,
       maxAttempts: row.max_attempts,
       retryPolicy: row.retry_policy,
@@ -2389,7 +2420,7 @@ export async function readDashboardJobDetail(
         LEFT JOIN workhorse.dashboard_job_outcome_v1 outcome ON outcome.job_id = edge.child_job_id
        WHERE edge.parent_job_id = ${id} OR edge.child_job_id = ${id}
        ORDER BY edge.created_at, edge.parent_job_id, edge.child_job_id
-       LIMIT 101
+       LIMIT 102
     `),
     database.execute<{
       source_job_id: string;
@@ -2487,7 +2518,7 @@ export async function readDashboardJobDetail(
       truncated: dependencyRows.rows.length > 100,
     },
     childLineage: {
-      records: childRows.rows.slice(0, 100).map((edge) => ({
+      records: childRows.rows.slice(0, 101).map((edge) => ({
         parentJobId: edge.parent_job_id,
         childJobId: edge.child_job_id,
         name: edge.child_name,
@@ -2497,7 +2528,7 @@ export async function readDashboardJobDetail(
         outcomeState: edge.outcome_state,
         error: edge.outcome_error,
       })),
-      truncated: childRows.rows.length > 100,
+      truncated: childRows.rows.length > 101,
     },
     redriveLineage: {
       records: redriveRows.rows.slice(0, 100).map((edge) => ({

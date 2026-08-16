@@ -1,4 +1,4 @@
-import type { DashboardTaskFilter } from "@workhorse/dashboard-server/wire";
+import { dashboardTaskFilters, type DashboardTaskFilter } from "@workhorse/dashboard-server/wire";
 
 export const taskPageSizes = [25, 50, 100] as const;
 export type TaskPageSize = (typeof taskPageSizes)[number];
@@ -26,16 +26,7 @@ export interface TaskLocationState {
   taskId: string | null;
 }
 
-const filters = new Set<DashboardTaskFilter>([
-  "all",
-  "scheduled",
-  "retried",
-  "queued",
-  "running",
-  "completed",
-  "discarded",
-  "canceled",
-]);
+const filters = new Set<DashboardTaskFilter>(dashboardTaskFilters);
 
 function optionalValue(parameters: URLSearchParams, key: string): string | null {
   return parameters.get(key)?.trim() || null;

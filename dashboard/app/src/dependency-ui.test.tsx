@@ -29,7 +29,11 @@ async function renderDependency(
     dependencyLineage,
   } as DashboardJobDetail;
   return renderToStaticMarkup(
-    createElement(MantineProvider, null, createElement(DependencyLine, { job })),
+    createElement(
+      MantineProvider,
+      null,
+      createElement(DependencyLine, { job, taskLinkHref: (id: string) => `/tasks?task=${id}` }),
+    ),
   );
 }
 
@@ -40,7 +44,14 @@ async function renderRedrive(
   const { RedriveLine } = await import("./dashboard.js");
   const job = { identity: { id }, redriveLineage } as DashboardJobDetail;
   return renderToStaticMarkup(
-    createElement(MantineProvider, null, createElement(RedriveLine, { job })),
+    createElement(
+      MantineProvider,
+      null,
+      createElement(RedriveLine, {
+        job,
+        taskLinkHref: (taskId: string) => `/tasks?task=${taskId}`,
+      }),
+    ),
   );
 }
 
@@ -48,7 +59,14 @@ async function renderChild(childLineage: DashboardJobDetail["childLineage"]): Pr
   const { ChildLine } = await import("./dashboard.js");
   const job = { identity: { id: "parent-job" }, childLineage } as DashboardJobDetail;
   return renderToStaticMarkup(
-    createElement(MantineProvider, null, createElement(ChildLine, { job })),
+    createElement(
+      MantineProvider,
+      null,
+      createElement(ChildLine, {
+        job,
+        taskLinkHref: (taskId: string) => `/tasks?task=${taskId}`,
+      }),
+    ),
   );
 }
 
@@ -62,6 +80,7 @@ describe("task dependency detail", () => {
     expect(html).toContain("prerequisite-job");
     expect(html).toContain("blocked");
     expect(html).toContain("Blocked until every prerequisite satisfies the dependency policy");
+    expect(html).toContain('href="/tasks?task=prerequisite-job"');
   });
 
   it("shows when PostgreSQL released the dependency", async () => {
@@ -112,6 +131,8 @@ describe("task dependency detail", () => {
     expect(html).toContain("other-dependent-job");
     expect(html).toContain("success: cancel");
     expect(html).toContain("failure: release");
+    expect(html).toContain('href="/tasks?task=dependent-job"');
+    expect(html).toContain('href="/tasks?task=other-dependent-job"');
   });
 
   it("renders nothing for an independent task", async () => {
@@ -144,12 +165,14 @@ describe("task redrive detail", () => {
     expect(html).toContain("fresh-job");
     expect(html).toContain("operator");
     expect(html).toContain("dependency repaired");
+    expect(html).toContain('href="/tasks?task=fresh-job"');
   });
 
   it("shows the immutable source from the fresh target", async () => {
     const html = await renderRedrive(lineage, "fresh-job");
     expect(html).toContain("Redriven from");
     expect(html).toContain("selected-job");
+    expect(html).toContain('href="/tasks?task=selected-job"');
   });
 });
 
@@ -174,5 +197,35 @@ describe("task child detail", () => {
     expect(html).toContain("failed");
     expect(html).toContain("PaymentDeclined");
     expect(html).not.toContain("waiting");
+    expect(html).toContain('href="/tasks?task=failed-child"');
+  });
+
+  it("summarizes join progress across a parent's child set", async () => {
+    const html = await renderChild({
+      records: [
+        {
+          parentJobId: "parent-job",
+          childJobId: "joined-child",
+          name: "research",
+          type: "agent.tool",
+          createdAt: "2026-08-15T12:00:00.000Z",
+          joinedAt: "2026-08-15T12:01:00.000Z",
+          outcomeState: "succeeded",
+          error: null,
+        },
+        {
+          parentJobId: "parent-job",
+          childJobId: "waiting-child",
+          name: "calculate",
+          type: "agent.tool",
+          createdAt: "2026-08-15T12:00:00.000Z",
+          joinedAt: null,
+          outcomeState: null,
+          error: null,
+        },
+      ],
+      truncated: false,
+    });
+    expect(html).toContain("1 of 2 children joined");
   });
 });

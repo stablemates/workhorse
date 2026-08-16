@@ -843,6 +843,47 @@ describe("child jobs", () => {
     });
   });
 
+  it("returns complete dashboard lineage for a child that owns a full child set", async () => {
+    const rootId = await queue.enqueue("lineage-root", null);
+    const root = await queue.claim("lineage-root-worker");
+    const middleResult = await queue.createChild(
+      root!,
+      "lineage-root-worker",
+      "middle",
+      "lineage-middle",
+      null,
+    );
+    const middle = await queue.claim("lineage-middle-worker");
+    expect(middle?.id).toBe(middleResult.child.childJobId);
+    await queue.createChildren(
+      middle!,
+      "lineage-middle-worker",
+      Array.from({ length: 100 }, (_, index) => ({
+        name: `leaf-${index}`,
+        type: "lineage-leaf",
+        payload: { index },
+      })),
+    );
+
+    const detail = await readDashboardJobDetail(
+      dashboardDatabase(pool),
+      middleResult.child.childJobId,
+    );
+    expect(detail).not.toBeNull();
+    expect(detail).toMatchObject({
+      childLineage: {
+        records: expect.arrayContaining([
+          expect.objectContaining({
+            parentJobId: rootId,
+            childJobId: middleResult.child.childJobId,
+          }),
+        ]),
+        truncated: false,
+      },
+    });
+    expect(detail?.childLineage.records).toHaveLength(101);
+  });
+
   it("reports bounded child pressure and retained failure evidence by parent queue", async () => {
     const parentId = await queue.enqueue("observed-child-parent", null, {
       queue: "observed-parents",

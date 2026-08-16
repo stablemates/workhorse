@@ -8,7 +8,7 @@ import type {
   DashboardSystemWindow,
   MaintenanceLoopCadences,
 } from "../wire.js";
-import { dashboardAttemptOutcomes, dashboardJobEventTypes } from "../wire.js";
+import { dashboardAttemptOutcomes, dashboardJobEventTypes, dashboardTaskFilters } from "../wire.js";
 import { z } from "zod";
 import type {
   DashboardDurabilityProjector,
@@ -78,18 +78,7 @@ const cancellationAuditSchema = z.object({
 
 const jobDetailInput = z.object({ id: z.uuid() });
 const eventDetailInput = z.object({ id: z.string().regex(/^(event|attempt):\d+$/) });
-const taskFilter = z.enum([
-  "all",
-  "scheduled",
-  "retried",
-  "queued",
-  "running",
-  "completed",
-  "discarded",
-  // Cancellation is its own terminal filter. It is never merged into "discarded", which means a
-  // task that exhausted its attempts.
-  "canceled",
-]);
+const taskFilter = z.enum(dashboardTaskFilters);
 const tasksInput = z.object({
   filter: taskFilter.default("all"),
   queue: z.string().trim().min(1).nullable().default(null),
