@@ -3,6 +3,7 @@ import type { DependencyTerminalPolicy, Json, RetryPolicy } from "@workhorse/cor
 export const DEMO_FEATURE_SHOWCASE_SEED_NAME = "feature-showcase-v2";
 export const DEMO_FEATURE_SHOWCASE_SOURCE = "feature-showcase-seed";
 export const DEMO_FEATURE_RECURRING_SOURCE = "feature-showcase-recurring";
+export const DEMO_FEATURE_OPERATOR_SOURCE = "feature-showcase-operator";
 
 export type DemoFeatureFamily =
   | "ingress-routing"
@@ -55,7 +56,10 @@ export type DemoFeatureBehavior =
 
 export type DemoFeaturePayload = {
   [key: string]: Json;
-  source: typeof DEMO_FEATURE_SHOWCASE_SOURCE | typeof DEMO_FEATURE_RECURRING_SOURCE;
+  source:
+    | typeof DEMO_FEATURE_SHOWCASE_SOURCE
+    | typeof DEMO_FEATURE_RECURRING_SOURCE
+    | typeof DEMO_FEATURE_OPERATOR_SOURCE;
   family: DemoFeatureFamily;
   scenario: string;
   behavior: DemoFeatureBehavior;
@@ -801,6 +805,73 @@ export function demoFeatureShowcaseFamily(key: DemoFeatureFamily): DemoFeatureSh
   if (!family) throw new Error(`Unknown demo feature family ${key}`);
   return family;
 }
+
+function declaredExample(key: DemoFeatureFamily, scenario: string): DemoFeatureExample {
+  const example = demoFeatureShowcaseFamily(key).examples.find(
+    (candidate) => candidate.scenario === scenario,
+  );
+  if (!example) throw new Error(`Unknown demo feature example ${key}/${scenario}`);
+  return example;
+}
+
+/**
+ * The one example per family the dashboard's "Enqueue test task" menu enqueues.
+ *
+ * Every entry runs live through the ordinary worker path, so a repeat click is always safe:
+ * families whose declared examples only make sense as one-time seeds (claimed-and-failed dead
+ * letters, forever-blocked dependents, asserted debounce replacements) get a driver example with
+ * the `rotating` behavior their handler already runs for the recurring schedules, or a plain
+ * example that produces the state on its own.
+ */
+export const DEMO_FEATURE_MENU_EXAMPLES: Readonly<Record<DemoFeatureFamily, DemoFeatureExample>> = {
+  "ingress-routing": declaredExample("ingress-routing", "immediate-tagged"),
+  "retry-policies": declaredExample("retry-policies", "fixed-recovery"),
+  "durable-checkpoints": declaredExample("durable-checkpoints", "multi-checkpoint"),
+  "durable-waits": declaredExample("durable-waits", "short-provider-wait"),
+  progress: declaredExample("progress", "progress-success"),
+  "timing-controls": declaredExample("timing-controls", "within-budgets"),
+  cancellation: declaredExample("cancellation", "cancel-active"),
+  "dead-letters-redrive": {
+    scenario: "operator-dead-letter",
+    label: "Fresh dead letter awaiting redrive",
+    behavior: "always-fail",
+    maxAttempts: 1,
+    tags: ["showcase", "dead-letter", "operator", "intentionally-failing"],
+  },
+  "job-dependencies": {
+    scenario: "operator-dependency-chain",
+    label: "Driver spawning a prerequisite and its dependent",
+    behavior: "rotating",
+    maxAttempts: 1,
+    tags: ["showcase", "dependency", "operator"],
+  },
+  "child-workflows": declaredExample("child-workflows", "single-child"),
+  signals: declaredExample("signals", "operator-handoff"),
+  "human-decisions": declaredExample("human-decisions", "refund-approval"),
+  "keyed-debounce": {
+    scenario: "operator-debounce-window",
+    label: "Driver reporting a keyed replacement",
+    behavior: "rotating",
+    maxAttempts: 1,
+    tags: ["showcase", "debounce", "operator"],
+  },
+  "keyed-throttle": {
+    scenario: "operator-throttle-window",
+    label: "Driver reporting coalesced repeats",
+    behavior: "rotating",
+    maxAttempts: 1,
+    tags: ["showcase", "throttle", "operator"],
+  },
+  "priority-lanes": {
+    scenario: "operator-priority-lanes",
+    label: "Driver filling three priority lanes",
+    behavior: "rotating",
+    maxAttempts: 1,
+    tags: ["showcase", "priority", "operator"],
+  },
+  "batch-handlers": declaredExample("batch-handlers", "grouped-digest"),
+  "payload-contracts": declaredExample("payload-contracts", "validated-acceptance"),
+};
 
 /** Stable per-job rotation so each recurring family naturally produces mixed outcomes over time. */
 export function demoFeatureRecurringVariant(jobId: string): 0 | 1 | 2 {

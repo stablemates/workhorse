@@ -11,6 +11,7 @@ export {
 export type {
   DashboardAuditInput,
   DashboardClient,
+  DashboardDemoFeature,
   DashboardDemoJobKind,
   DashboardDemoScenario,
   DashboardDemoTools,

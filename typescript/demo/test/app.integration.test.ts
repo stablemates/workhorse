@@ -2406,6 +2406,116 @@ describe("Workhorse demo", () => {
     }
   });
 
+  it("enqueues the declared live example for a feature family with its audit trail", async () => {
+    const { app } = createTestApplication({ operator: createLocalOperator(database) });
+    const client = dashboardClient(app);
+
+    const contract = await client.dashboard.enqueueTest({
+      kind: "feature",
+      feature: "payload-contracts",
+      priority: 12,
+      audit: {
+        actor: "operator",
+        reason: "show contract validation",
+        requestId: "audit-feature-contract",
+      },
+    });
+    expect(await client.dashboard.jobDetail({ id: contract.jobId })).toMatchObject({
+      identity: {
+        id: contract.jobId,
+        type: "demo.contract-check",
+        state: "ready",
+        priority: 12,
+      },
+      payload: {
+        source: "feature-showcase-operator",
+        family: "payload-contracts",
+        scenario: "validated-acceptance",
+        invoiceId: "INV-validated-acceptance",
+      },
+    });
+    expect(
+      await pool.query(
+        `SELECT action, target, after FROM public.workhorse_demo_audit WHERE request_id = $1`,
+        ["audit-feature-contract"],
+      ),
+    ).toMatchObject({
+      rows: [
+        {
+          action: "enqueueTest",
+          target: "job:feature:payload-contracts",
+          after: expect.objectContaining({ jobId: contract.jobId, memberCount: 1 }),
+        },
+      ],
+    });
+
+    // The batch example accepts its whole member group in one click, so a digest can form.
+    const batch = await client.dashboard.enqueueTest({
+      kind: "feature",
+      feature: "batch-handlers",
+      audit: {
+        actor: "operator",
+        reason: "show one grouped digest",
+        requestId: "audit-feature-batch",
+      },
+    });
+    expect(batch.jobId).toEqual(expect.any(String));
+    expect(
+      await pool.query(
+        `SELECT count(*)::integer AS members FROM workhorse.job
+          WHERE job_type = 'demo.batch-digest'
+            AND payload->>'source' = 'feature-showcase-operator'`,
+      ),
+    ).toMatchObject({ rows: [{ members: 3 }] });
+
+    await expect(
+      client.dashboard.enqueueTest({
+        kind: "feature",
+        audit: {
+          actor: "operator",
+          reason: "reject a missing family",
+          requestId: "audit-feature-missing",
+        },
+      }),
+    ).rejects.toThrow(/input validation/i);
+  });
+
+  it("runs an operator feature example through the ordinary worker path", async () => {
+    const { app, workhorse } = createTestApplication({
+      operator: createLocalOperator(database),
+      workerPollMs: 5,
+    });
+    const client = dashboardClient(app);
+    workhorse.start();
+
+    try {
+      const enqueued = await client.dashboard.enqueueTest({
+        kind: "feature",
+        feature: "ingress-routing",
+        audit: {
+          actor: "operator",
+          reason: "run one live ingress example",
+          requestId: "audit-feature-ingress",
+        },
+      });
+      let detail = await client.dashboard.jobDetail({ id: enqueued.jobId });
+      for (let attempt = 0; attempt < 200 && detail.identity.state !== "succeeded"; attempt += 1) {
+        await sleep(10);
+        detail = await client.dashboard.jobDetail({ id: enqueued.jobId });
+      }
+      expect(detail).toMatchObject({
+        identity: { id: enqueued.jobId, type: "demo.ingress-routing", state: "succeeded" },
+        payload: {
+          source: "feature-showcase-operator",
+          family: "ingress-routing",
+          scenario: "immediate-tagged",
+        },
+      });
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
   it("supports audited local enqueue and schedule toggles", async () => {
     await syncDemoSchedules(pool);
     const { app } = createTestApplication({

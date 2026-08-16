@@ -2,6 +2,7 @@ import type { Json, RetryPolicy } from "@workhorse/core";
 import type {
   DashboardCancellationRequest,
   DashboardCancelStatus,
+  DashboardDemoFeature,
   DashboardDemoJobKind,
   DashboardDemoScenario,
   DashboardJobRow,
@@ -114,6 +115,7 @@ const demoJobKinds = [
   "idempotent",
   "long-running",
   "redrive",
+  "feature",
 ] as const;
 export const dashboardDemoJobKinds: CompleteDashboardOptions<
   DashboardDemoJobKind,
@@ -125,6 +127,59 @@ export const dashboardDemoScenarios: CompleteDashboardOptions<
   DashboardDemoScenario,
   typeof demoScenarios
 > = demoScenarios;
+
+const demoFeatures = [
+  "ingress-routing",
+  "retry-policies",
+  "durable-checkpoints",
+  "durable-waits",
+  "progress",
+  "timing-controls",
+  "cancellation",
+  "dead-letters-redrive",
+  "job-dependencies",
+  "child-workflows",
+  "signals",
+  "human-decisions",
+  "keyed-debounce",
+  "keyed-throttle",
+  "priority-lanes",
+  "batch-handlers",
+  "payload-contracts",
+] as const;
+const checkedDemoFeatures: CompleteDashboardOptions<DashboardDemoFeature, typeof demoFeatures> =
+  demoFeatures;
+
+/**
+ * Menu copy for every feature family the demo host can enqueue one live example of.
+ *
+ * The list is checked complete against the wire union, so a family added to the contract cannot
+ * be forgotten here: the enqueue menu always offers every showcased feature.
+ */
+const demoFeatureLabels: Record<DashboardDemoFeature, string> = {
+  "ingress-routing": "Ingress · immediate tagged acceptance",
+  "retry-policies": "Retry policy · fixed backoff recovery",
+  "durable-checkpoints": "Checkpoints · three-stage durable export",
+  "durable-waits": "Durable wait · short provider cooldown",
+  progress: "Progress · mutable catalog scan",
+  "timing-controls": "Timing · completes within its budgets",
+  cancellation: "Cancellation · cooperative self-cancel",
+  "dead-letters-redrive": "Dead letter · fresh failure to redrive",
+  "job-dependencies": "Dependencies · prerequisite then dependent",
+  "child-workflows": "Child workflow · parent awaiting one child",
+  signals: "Signal · waits for an operator delivery",
+  "human-decisions": "Human decision · refund approval",
+  "keyed-debounce": "Debounce · keyed replacement report",
+  "keyed-throttle": "Throttle · coalesced repeats report",
+  "priority-lanes": "Priority · three lanes claimed by rank",
+  "batch-handlers": "Batch · three members in one digest",
+  "payload-contracts": "Contract · validated v1 acceptance",
+};
+
+export const dashboardDemoFeatureExamples: ReadonlyArray<{
+  feature: DashboardDemoFeature;
+  label: string;
+}> = checkedDemoFeatures.map((feature) => ({ feature, label: demoFeatureLabels[feature] }));
 
 export interface RetryPolicyDescription {
   label: string;
