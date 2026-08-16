@@ -1,6 +1,6 @@
 ---
 title: Dashboard
-description: Mount the packaged operator interface in any framework, behind your own authorization, with mutations under host control.
+description: Mount the operator interface behind application authorization, or run it standalone with a built-in administrator login.
 ---
 
 `@workhorse/dashboard` gives your operators a full interface — jobs, attempts, checkpoints,
@@ -55,12 +55,11 @@ unrelated routes. On every owned request, the host checks schema compatibility a
 clear error rather than serving against a mismatched database. It never installs or migrates
 anything.
 
-## Authorization is yours
+## Choose the authentication boundary
 
-Workhorse ships no authentication, no role model, and no tenant boundary — an honest gap, not an
-oversight. The `authorize` callback is the entire security boundary: it runs before the
-interface, the assets, and every RPC method. Return `false` for a 403, or return your own
-`Response` to redirect to a login flow.
+An embedded dashboard uses your application's authentication through `authorize`. The callback
+runs before the interface, assets, and every RPC method. Return a verified principal for an
+authenticated operator, `false` for a 403, or your own `Response` to redirect to a login flow.
 
 Mutations go further. The `operator`, `queueController`, `taskController`, `workerController`,
 `scheduleController`, and `settingsController` options let each mutation pass through your own
@@ -79,10 +78,14 @@ For a quick local console, skip the mounting entirely:
 workhorse dashboard --port 3000
 ```
 
-It binds `127.0.0.1`, serves read-only, and performs no authentication. `--host` and
-`--allow-mutations` exist, but each publishes an unauthenticated control surface and warns when
-used. Treat the CLI as a developer tool; an authenticated embedded mount is the production
-choice.
+It binds `127.0.0.1` and serves read-only by default. Without credentials, that loopback listener
+is an explicit development bypass and cannot bind to a remotely reachable address.
+
+Set `WORKHORSE_DASHBOARD_USERNAME` and `WORKHORSE_DASHBOARD_PASSWORD_HASH` to enable the built-in
+administrator login. The standalone server owns session expiry, logout, password rotation, origin
+checks, and login throttling. A remote listener also requires an HTTPS public origin. Installations
+that need multiple users, roles, SSO, or tenant isolation should use an embedded host and its
+`authorize` callback.
 
 ## Customize without forking
 

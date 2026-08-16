@@ -55,8 +55,9 @@ queue pause when work must stop durably.
 
 [Queries and timelines](/docs/queries) owns read-only inspection: point lookups, bounded
 listings, lifecycle evidence, and `queue.health`. [Dashboard](/docs/dashboard) renders the same
-read models for humans and owns the authorization boundary for operator mutations — Workhorse has
-no built-in authentication, so your host supplies it.
+read models for humans and owns the authorization boundary for operator mutations. Embedded hosts
+return a verified principal through `authorize`, while the standalone dashboard can enable its
+built-in administrator login.
 
 ## Next
 

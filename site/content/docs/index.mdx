@@ -65,8 +65,9 @@ If your application already runs on PostgreSQL and needs reliable background wor
 It needs Node.js 22 or newer and PostgreSQL 15 or newer, and it installs with two commands.
 
 Be aware of what it is not. This is an evidence-first validation release, not a battle-hardened
-platform. Workhorse has no workflow or DAG engine, no job priorities, and no exactly-once external
-effects — external calls still need provider idempotency keys. If you need a queue that scales
+platform. Workhorse supports strict priority, dependency fan-in, child jobs, external signals, and
+human decisions, but orchestration remains application code rather than a separate workflow
+definition. External calls still need provider idempotency keys. If you need a queue that scales
 independently of your database, a dedicated broker remains the right tool.
 
 ## Which package do I need?

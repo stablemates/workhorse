@@ -36,6 +36,7 @@ await queue.enqueue(
     queue: "reports",
     tags: ["tenant:acme"],
     concurrencyKey: "acme",
+    priority: 10,
     maxAttempts: 5, // default is 25
     retryPolicy: { type: "exponential", initialDelayMs: 1_000, multiplier: 2, maxDelayMs: 60_000 },
     deadline: endOfMonth, // terminal once reached, even with retries left
@@ -97,14 +98,17 @@ accepts at most 1,000 requests; split larger input into several bounded calls. I
 repeat part of the batch, give each request an idempotency key so the repeat converges instead of
 duplicating.
 
-## Separate queues without adding priorities
+## Prioritize work within a queue
 
 `new Queue(pool, "billing")` sets the client default queue; `options.queue` overrides one job. A
 `Worker` claims from its configured queue only.
 
-Workhorse orders ready jobs by FIFO sequence and has no priority layer. When different work needs
-different capacity, latency, or worker policy, give it its own queue name and its own workers —
-that isolation is explicit and observable where a priority number is not.
+Set `options.priority` when urgent ready work should run before ordinary work in the same queue.
+Workhorse dispatches higher-priority jobs first, and it keeps FIFO order among jobs with the same
+value. Priority is strict, so a sustained stream of urgent work can delay lower-priority jobs.
+
+Use separate queue names when work needs independent capacity or worker policy. Priority changes
+dispatch order within one queue; it does not reserve capacity for lower-priority work.
 
 Three controls operate on a whole queue:
 

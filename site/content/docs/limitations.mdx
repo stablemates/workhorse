@@ -4,38 +4,21 @@ description: What Workhorse does not do today — with the workaround for each b
 ---
 
 Choosing infrastructure means knowing what it will not do before it is load-bearing. Workhorse fits
-PostgreSQL-backed applications that accept at-least-once handlers and a clean-install schema. This
-page lists every boundary honestly, with the workaround where one exists.
+PostgreSQL-backed applications that accept at-least-once handlers and exact schema compatibility.
+This page lists every boundary honestly, with the workaround where one exists.
 
 Workhorse currently positions itself as an evidence-first validation release, not a
 production-support promise. Its purpose is to validate the durable-execution protocol —
 transactional enqueue, fenced ownership, checkpoint replay, cooperative cancellation, audited
 redrive — with recorded evidence, before hardening claims are made.
 
-## No workflows, DAGs, or job dependencies
+## Workflow orchestration lives in handlers
 
-Workhorse is a queue, not a workflow engine. There is no dependency graph, no child-job runtime,
-and no fan-out/fan-in primitive. A job cannot declare "run after those three finish".
+Workhorse supports job prerequisites, fan-in policies, child jobs, external signals, and human
+decisions. It does not provide a separate workflow definition language or graph deployment model.
 
-Workaround: model orchestration explicitly. A handler can enqueue its successors transactionally,
-and checkpoints make a multi-stage handler behave like a small linear workflow. For real DAGs, use
-a workflow system on top or instead.
-
-## No priorities
-
-Queues are FIFO by ready time. There is no priority field, so an urgent job cannot jump a backlog.
-
-Workaround: separate queues. Give latency-sensitive work its own queue and its own workers, and use
-concurrency policies to keep bulk work from starving it.
-
-## No signals or early wake
-
-Durable waits are time-based. A sleeping job wakes when its timer is due — not when an external
-event arrives — and an operator cannot wake it early, except that `runTaskNow` can release one
-scheduled job.
-
-Workaround: poll from the handler. Sleep in bounded intervals and check the external condition on
-each activation; each check is one cheap handler pass.
+Workaround: compose those durable boundaries in ordinary handler code. If a workflow must be
+defined and deployed independently of application code, use a workflow system on top or instead.
 
 ## No cross-queue concurrency policies
 
@@ -79,22 +62,23 @@ Nothing accepts jobs over HTTP. Producers need a database connection and the SDK
 Workaround: enqueue from your own API routes — which is also where transactional enqueue with your
 business writes lives.
 
-## No online schema migrations
+## Pre-release schemas have no upgrade source
 
-The schema installs cleanly and requires an exact runtime match. There is no online migration path
-or compatibility layer between protocol versions, which matters most for long-lived production
-data.
+`migrateSchema` applies ordered, forward-only migrations from the supported baseline. The current
+pre-release line has no earlier supported baseline, so operators must reset older development
+schemas instead of upgrading them.
 
-Workaround: plan the drain, cutover, and evidence retention before adopting a release that changes
-the schema. The changelog records which releases do.
+Workaround: keep schema changes in the deployment path and call `migrateSchema` before starting a
+new runtime. The changelog records which released versions can migrate forward.
 
-## No built-in dashboard auth
+## Dashboard authentication has one built-in role
 
-The dashboard and mutation APIs record attribution — who asked, why — but provide no
-authentication, authorization, roles, or tenant isolation.
+The standalone dashboard provides one administrator login with expiring sessions, logout,
+credential rotation, and login throttling. It does not provide multiple users, roles, SSO, or
+tenant isolation.
 
-Workaround: mount the dashboard behind your application's existing auth boundary, and authorize
-actors before calling `cancel`, `redrive`, or `setWorkerPaused`.
+Workaround: mount the dashboard behind your application's existing authentication boundary and
+return its verified operator from `authorize`.
 
 ## Next
 
