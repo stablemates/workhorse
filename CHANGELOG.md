@@ -93,6 +93,11 @@ The line is unreleased, so these changes precede first publication and no deploy
 through them. They are recorded because the pre-release dashboards and ADRs in this repository
 name the retired instruments.
 
+- `@workhorse/core`: schema versions 23 through 40 are squashed into the version 40 pre-release
+  baseline. No published deployment can consume that history, so schema changes edit the canonical
+  artifact directly until the first public release. Existing development worktrees must run
+  `pnpm worktree:setup` once to recreate their dedicated databases.
+
 - `@workhorse/core`: metric instruments are created on first emission and re-created when the
   global meter provider changes. An application may now install its OpenTelemetry SDK after
   importing `@workhorse/core` and still receive metrics; previously every instrument bound to

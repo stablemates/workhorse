@@ -8672,24 +8672,7 @@ AS $$
 $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (23, 'forward migration baseline'),
-  (24, 'add schema migration ledger'),
-  (25, 'make schedule occurrence replay a no-op'),
-  (26, 'add versioned dashboard read surface'),
-  (27, 'add strict-priority job dispatch'),
-  (28, 'add keyed debounce enqueue'),
-  (29, 'add keyed throttle enqueue'),
-  (30, 'add one-prerequisite job dependencies'),
-  (31, 'add fan-in dependency policies'),
-  (32, 'index dependency failure operations'),
-  (33, 'add single linked child jobs'),
-  (34, 'add bounded child fan-out and joins'),
-  (35, 'preserve child lineage through lifecycle changes'),
-  (36, 'add idempotent signals to waiting executions'),
-  (37, 'add completable human wait tokens'),
-  (38, 'harden signal and human wait lifecycles'),
-  (39, 'fix dependency release event reasons'),
-  (40, 'bound dependency fan-out and index dependency health')
+  (40, 'pre-release baseline')
 ON CONFLICT DO NOTHING;
 INSERT INTO workhorse.schema_version(version) VALUES (40) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

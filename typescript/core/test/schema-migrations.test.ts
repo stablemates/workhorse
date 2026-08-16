@@ -1,23 +1,21 @@
 import { execFile } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { verifySqlProtocolFixtures } from "../../../scripts/verify-sql-protocol.js";
-import {
-  migrateSchema,
-  readSchemaVersion,
-  WORKHORSE_SCHEMA_BASELINE_VERSION,
-  WORKHORSE_SCHEMA_VERSION,
-} from "../src/index.js";
+import { migrateSchema } from "../src/index.js";
+import { applySchemaMigrationPlan } from "../src/schema-migrations.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 
-const database = createDatabaseTestHarness(import.meta.url);
 const cleanDatabase = createDatabaseTestHarness(new URL("?clean-install", import.meta.url).href);
+const fixtureDatabase = createDatabaseTestHarness(new URL("?fixture", import.meta.url).href);
+const fixtureCleanDatabase = createDatabaseTestHarness(
+  new URL("?fixture-clean", import.meta.url).href,
+);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const executeFile = promisify(execFile);
-let cleanInstallSchema: string;
 
 async function dumpNormalizedSchema(databaseUrl: string): Promise<string> {
   const { stdout } = await executeFile(
@@ -50,80 +48,83 @@ async function dumpNormalizedSchema(databaseUrl: string): Promise<string> {
 
 describe("schema migrations", () => {
   beforeAll(async () => {
-    await Promise.all([database.setup(), cleanDatabase.setup()]);
-    cleanInstallSchema = await dumpNormalizedSchema(cleanDatabase.databaseUrl);
-
-    const baseline = await readFile(
-      path.join(repository, "sql", "schema", "versions", "0023.sql"),
-      "utf8",
-    );
-    await database.pool.query("DROP SCHEMA workhorse CASCADE");
-    await database.pool.query(baseline);
-    await migrateSchema(database.pool);
-  });
-
-  afterAll(async () => {
-    await Promise.all([database.teardown(), cleanDatabase.teardown()]);
-  });
-
-  it("starts after the declared baseline and has no version gaps", async () => {
-    const directory = path.join(repository, "sql", "migrations");
-    const files = await readdir(directory);
-    const versions = files.map((file) => Number.parseInt(file.slice(0, 4), 10));
-
-    expect(Math.min(...versions)).toBe(WORKHORSE_SCHEMA_BASELINE_VERSION + 1);
-    expect(Math.max(...versions)).toBe(WORKHORSE_SCHEMA_VERSION);
-    expect(new Set(versions)).toEqual(
-      new Set(
-        Array.from(
-          { length: WORKHORSE_SCHEMA_VERSION - WORKHORSE_SCHEMA_BASELINE_VERSION },
-          (_, index) => WORKHORSE_SCHEMA_BASELINE_VERSION + index + 1,
-        ),
-      ),
-    );
-
-    for (const file of files) {
-      const sql = await readFile(path.join(directory, file), "utf8");
-      const functionNames = [
-        ...sql.matchAll(/CREATE(?: OR REPLACE)? FUNCTION workhorse\.([a-z0-9_]+)/g),
-      ].map((match) => match[1]);
-      expect(functionNames.filter((name) => !/_v\d+$/.test(name ?? ""))).toEqual([]);
-    }
-  });
-
-  it("migrates the supported v23 baseline to the current schema", async () => {
-    expect(await readSchemaVersion(database.pool)).toBe(WORKHORSE_SCHEMA_VERSION);
-    const migrations = await database.pool.query<{ version: number; description: string }>(
-      "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
-    );
-    expect(migrations.rows).toEqual([
-      { version: 23, description: "forward migration baseline" },
-      { version: 24, description: "add schema migration ledger" },
-      { version: 25, description: "make schedule occurrence replay a no-op" },
-      { version: 26, description: "add versioned dashboard read surface" },
-      { version: 27, description: "add strict-priority job dispatch" },
-      { version: 28, description: "add keyed debounce enqueue" },
-      { version: 29, description: "add keyed throttle enqueue" },
-      { version: 30, description: "add one-prerequisite job dependencies" },
-      { version: 31, description: "add fan-in dependency policies" },
-      { version: 32, description: "index dependency failure operations" },
-      { version: 33, description: "add single linked child jobs" },
-      { version: 34, description: "add bounded child fan-out and joins" },
-      { version: 35, description: "preserve child lineage through lifecycle changes" },
-      { version: 36, description: "add idempotent signals to waiting executions" },
-      { version: 37, description: "add completable human wait tokens" },
-      { version: 38, description: "harden signal and human wait lifecycles" },
-      { version: 39, description: "fix dependency release event reasons" },
-      { version: 40, description: "bound dependency fan-out and index dependency health" },
+    await Promise.all([
+      cleanDatabase.setup(),
+      fixtureDatabase.setup(),
+      fixtureCleanDatabase.setup(),
+    ]);
+    await Promise.all([
+      fixtureDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
+      fixtureCleanDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
     ]);
   });
 
-  it("produces the same schema through clean installation and forward migration", async () => {
-    expect(await dumpNormalizedSchema(database.databaseUrl)).toBe(cleanInstallSchema);
+  afterAll(async () => {
+    await Promise.all([
+      cleanDatabase.teardown(),
+      fixtureDatabase.teardown(),
+      fixtureCleanDatabase.teardown(),
+    ]);
   });
 
-  it("satisfies the SQL protocol fixtures after forward migration", async () => {
-    const report = await verifySqlProtocolFixtures(database.pool, repository);
+  it("produces the same schema through a synthetic forward migration and clean installation", async () => {
+    const directory = path.join(
+      repository,
+      "typescript",
+      "core",
+      "test",
+      "fixtures",
+      "schema-migrations",
+    );
+    await fixtureDatabase.pool.query(await readFile(path.join(directory, "0001.sql"), "utf8"));
+    await fixtureCleanDatabase.pool.query(
+      await readFile(path.join(directory, "current.sql"), "utf8"),
+    );
+
+    await applySchemaMigrationPlan(fixtureDatabase.pool, {
+      baselineVersion: 1,
+      currentVersion: 3,
+      steps: [
+        { fromVersion: 1, toVersion: 2, file: "0002-add-name.sql" },
+        { fromVersion: 2, toVersion: 3, file: "0003-add-created-at.sql" },
+      ],
+      readStep: (file) => readFile(path.join(directory, file), "utf8"),
+    });
+
+    expect(await dumpNormalizedSchema(fixtureDatabase.databaseUrl)).toBe(
+      await dumpNormalizedSchema(fixtureCleanDatabase.databaseUrl),
+    );
+  });
+
+  it("rejects a gap in a synthetic forward migration plan", async () => {
+    await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 1");
+    try {
+      await expect(
+        applySchemaMigrationPlan(fixtureDatabase.pool, {
+          baselineVersion: 1,
+          currentVersion: 3,
+          steps: [{ fromVersion: 2, toVersion: 3, file: "unused.sql" }],
+          readStep: () => Promise.reject(new Error("a missing step must fail before reading SQL")),
+        }),
+      ).rejects.toThrow("No Workhorse schema migration starts at version 1");
+    } finally {
+      await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 3");
+    }
+  });
+
+  it("rejects retired pre-release schema versions", async () => {
+    await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 39");
+    try {
+      await expect(migrateSchema(fixtureDatabase.pool)).rejects.toThrow(
+        "Workhorse schema version 39 predates the supported migration baseline 40",
+      );
+    } finally {
+      await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 3");
+    }
+  });
+
+  it("satisfies the SQL protocol fixtures on the pre-release baseline", async () => {
+    const report = await verifySqlProtocolFixtures(cleanDatabase.pool, repository);
     expect(report.coverage).toEqual(
       new Set(
         report.manifest.coverage.filter(
@@ -134,27 +135,15 @@ describe("schema migrations", () => {
   });
 
   it("leaves an already-current schema unchanged", async () => {
-    const before = await database.pool.query<{ applied_at: Date }>(
+    const before = await cleanDatabase.pool.query<{ applied_at: Date }>(
       "SELECT applied_at FROM workhorse.schema_migration WHERE version = 40",
     );
 
-    await migrateSchema(database.pool);
+    await migrateSchema(cleanDatabase.pool);
 
-    const after = await database.pool.query<{ applied_at: Date }>(
+    const after = await cleanDatabase.pool.query<{ applied_at: Date }>(
       "SELECT applied_at FROM workhorse.schema_migration WHERE version = 40",
     );
     expect(after.rows).toEqual(before.rows);
-  });
-
-  it("safely replays the latest migration after its target version commits", async () => {
-    const migration = await readFile(
-      path.join(repository, "sql", "migrations", "0040-bound-dependency-fan-out.sql"),
-      "utf8",
-    );
-
-    await database.pool.query(migration);
-
-    expect(await readSchemaVersion(database.pool)).toBe(WORKHORSE_SCHEMA_VERSION);
-    expect(await dumpNormalizedSchema(database.databaseUrl)).toBe(cleanInstallSchema);
   });
 });

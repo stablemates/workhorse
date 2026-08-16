@@ -217,8 +217,8 @@ for each task.
 
 ## Validation limits
 
-- `installSchema` supports clean installation. `migrateSchema` supports ordered forward migration
-  from the version 23 baseline; earlier versions have no derived historical migration chain.
+- `installSchema` supports clean installation. `migrateSchema` validates the current pre-release
+  baseline; ordered forward migrations begin after the first public release.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` runs; drift is bounded by the worker tick cadence.
 - Schedule precision is one second and cron expressions are evaluated in the worker's configured timezone.
 - `Worker.run()` shares one `LISTEN workhorse_jobs` connection per node-postgres pool. Queue payloads

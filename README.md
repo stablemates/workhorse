@@ -510,8 +510,8 @@ variables instead of environment values when your container platform supports fi
 prints the dashboard mount for your framework. Nothing about the mount needs to know where the
 workers run: they register themselves in PostgreSQL.
 
-Schema installation is clean-database only. Existing databases at the supported version 23 baseline
-advance through immutable ordered steps by calling `migrateSchema` before version 40 processes start.
+Schema installation is clean-database only. The unreleased line has no supported upgrade source,
+so existing development databases must be reset before version 40 processes start.
 
 ## Minimal usage
 
