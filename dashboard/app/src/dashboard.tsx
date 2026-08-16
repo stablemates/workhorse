@@ -93,7 +93,7 @@ import {
   taskRowActionGroups,
   type TaskResultState,
 } from "./presentation.js";
-import { readIdempotencyEvidence } from "@workhorse/dashboard-server/wire";
+import { dashboardTaskFilters, readIdempotencyEvidence } from "@workhorse/dashboard-server/wire";
 import type {
   DashboardCancellationRequest,
   DashboardCronPage,
@@ -335,24 +335,32 @@ const pageRoutes = new Set<PageRoute>([
   "/workers",
   "/settings",
 ]);
-const taskFilters: ReadonlyArray<{
-  value: DashboardTaskFilter;
-  label: string;
-  icon: typeof ListChecks;
-}> = [
-  { value: "all", label: "All tasks", icon: ListChecks },
-  { value: "scheduled", label: "Scheduled", icon: Clock },
-  { value: "retried", label: "Retried", icon: ArrowCounterClockwise },
-  { value: "queued", label: "Queued", icon: ListDashes },
-  { value: "running", label: "Running", icon: PlayCircle },
-  { value: "completed", label: "Completed", icon: CheckCircle },
-  { value: "discarded", label: "Discarded", icon: XCircle },
+const taskFilterPresentation: Record<
+  DashboardTaskFilter,
+  {
+    label: string;
+    icon: typeof ListChecks;
+  }
+> = {
+  all: { label: "All tasks", icon: ListChecks },
+  blocked: { label: "Blocked", icon: WarningCircle },
+  scheduled: { label: "Scheduled", icon: Clock },
+  retried: { label: "Retried", icon: ArrowCounterClockwise },
+  queued: { label: "Queued", icon: ListDashes },
+  running: { label: "Running", icon: PlayCircle },
+  completed: { label: "Completed", icon: CheckCircle },
+  discarded: { label: "Discarded", icon: XCircle },
   // Cancellation is a distinct terminal state, never folded into discarded work.
-  { value: "canceled", label: "Canceled", icon: Prohibit },
-];
+  canceled: { label: "Canceled", icon: Prohibit },
+};
+const taskFilters = dashboardTaskFilters.map((value) => ({
+  value,
+  label: taskFilterPresentation[value].label,
+  icon: taskFilterPresentation[value].icon,
+}));
 const healthyStates = new Set(["succeeded", "ready", "active", "busy"]);
 const failureStates = new Set(["failed", "discarded", "incomplete"]);
-const warningStates = new Set(["scheduled", "retryable", "recent", "due"]);
+const warningStates = new Set(["blocked", "scheduled", "retryable", "recent", "due"]);
 /**
  * Cancellation is neither success nor failure, so it gets its own neutral treatment. Colour is
  * decoration only; the badge text still says "Canceled" on its own.
@@ -1501,8 +1509,58 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
   );
 }
 
+interface LineageNavigationProps {
+  taskLinkHref: (id: string) => string;
+  onOpenTask?: (id: string) => void;
+}
+
+/** A related task identity that preserves ordinary browser link behavior and swaps an open drawer. */
+function RelatedTaskLink({
+  id,
+  taskLinkHref,
+  onOpenTask,
+}: { id: string } & LineageNavigationProps) {
+  return (
+    <Text
+      component="a"
+      href={taskLinkHref(id)}
+      fz="xs"
+      ff="monospace"
+      onClick={(event) => {
+        if (
+          onOpenTask === undefined ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenTask(id);
+      }}
+    >
+      {id}
+    </Text>
+  );
+}
+
+function RelatedTaskLinks({ ids, ...navigation }: { ids: string[] } & LineageNavigationProps) {
+  return ids.map((id, index) => (
+    <Fragment key={id}>
+      {index === 0 ? null : ", "}
+      <RelatedTaskLink id={id} {...navigation} />
+    </Fragment>
+  ));
+}
+
 /** The immutable prerequisite edge and its current release state. */
-export function DependencyLine({ job }: { job: DashboardJobDetail }) {
+export function DependencyLine({
+  job,
+  ...navigation
+}: { job: DashboardJobDetail } & LineageNavigationProps) {
   if (job.identity.prerequisiteJobIds.length === 0 && job.dependencyLineage.records.length === 0)
     return null;
   const blocked = job.identity.blockedReason === "prerequisite_pending";
@@ -1525,7 +1583,9 @@ export function DependencyLine({ job }: { job: DashboardJobDetail }) {
           <Text c="dimmed" size="xs" fw={600}>
             {job.identity.prerequisiteJobIds.length === 1 ? "Prerequisite" : "Prerequisites"}
           </Text>
-          <Code fz="xs">{job.identity.prerequisiteJobIds.join(", ")}</Code>
+          <span>
+            <RelatedTaskLinks ids={job.identity.prerequisiteJobIds} {...navigation} />
+          </span>
           <Badge size="xs" variant="light" color={blocked ? "yellow" : "teal"} tt="none">
             {blocked ? "blocked" : "released"}
           </Badge>
@@ -1539,14 +1599,20 @@ export function DependencyLine({ job }: { job: DashboardJobDetail }) {
           <Text c="dimmed" size="xs" fw={600}>
             {dependentIds.length === 1 ? "Dependent" : "Dependents"}
           </Text>
-          <Code fz="xs">{dependentIds.join(", ")}</Code>
+          <span>
+            <RelatedTaskLinks ids={dependentIds} {...navigation} />
+          </span>
         </Group>
       ) : null}
       {job.dependencyLineage.records.map((edge) => (
         <Text c="dimmed" size="xs" key={`${edge.dependentJobId}:${edge.prerequisiteJobId}`}>
-          {edge.dependentJobId === job.identity.id
-            ? `Prerequisite ${edge.prerequisiteJobId}`
-            : `Dependent ${edge.dependentJobId}`}
+          {edge.dependentJobId === job.identity.id ? "Prerequisite " : "Dependent "}
+          <RelatedTaskLink
+            id={
+              edge.dependentJobId === job.identity.id ? edge.prerequisiteJobId : edge.dependentJobId
+            }
+            {...navigation}
+          />
           : success: {edge.onSuccess}, failure: {edge.onFailure}, cancellation:{" "}
           {edge.onCancellation}
           {edge.releasedAt === null
@@ -1564,10 +1630,21 @@ export function DependencyLine({ job }: { job: DashboardJobDetail }) {
 }
 
 /** The immutable parent-child edge and whether the parent has consumed the child result. */
-export function ChildLine({ job }: { job: DashboardJobDetail }) {
+export function ChildLine({
+  job,
+  ...navigation
+}: { job: DashboardJobDetail } & LineageNavigationProps) {
   if (job.childLineage.records.length === 0) return null;
+  const children = job.childLineage.records.filter((edge) => edge.parentJobId === job.identity.id);
+  const joinedChildren = children.filter((edge) => edge.joinedAt !== null).length;
   return (
     <Stack gap={4} mt="sm">
+      {children.length > 0 ? (
+        <Text c="dimmed" size="xs" fw={600}>
+          {joinedChildren} of {children.length} {children.length === 1 ? "child" : "children"}{" "}
+          joined
+        </Text>
+      ) : null}
       {job.childLineage.records.map((edge) => {
         const isParent = edge.parentJobId === job.identity.id;
         const state =
@@ -1581,7 +1658,7 @@ export function ChildLine({ job }: { job: DashboardJobDetail }) {
             <Text c="dimmed" size="xs" fw={600}>
               {isParent ? "Child" : "Parent"}
             </Text>
-            <Code fz="xs">{isParent ? edge.childJobId : edge.parentJobId}</Code>
+            <RelatedTaskLink id={isParent ? edge.childJobId : edge.parentJobId} {...navigation} />
             <Text c="dimmed" size="xs">
               {edge.name} · {edge.type} · {state}
             </Text>
@@ -1599,7 +1676,10 @@ export function ChildLine({ job }: { job: DashboardJobDetail }) {
 }
 
 /** Fresh execution identities linked to the immutable failed source they replay. */
-export function RedriveLine({ job }: { job: DashboardJobDetail }) {
+export function RedriveLine({
+  job,
+  ...navigation
+}: { job: DashboardJobDetail } & LineageNavigationProps) {
   if (job.redriveLineage.records.length === 0) return null;
   return (
     <Stack gap={4} mt="sm">
@@ -1615,7 +1695,7 @@ export function RedriveLine({ job }: { job: DashboardJobDetail }) {
             <Text c="dimmed" size="xs" fw={600}>
               {isSource ? "Redrive" : "Redriven from"}
             </Text>
-            <Code fz="xs">{isSource ? edge.targetJobId : edge.sourceJobId}</Code>
+            <RelatedTaskLink id={isSource ? edge.targetJobId : edge.sourceJobId} {...navigation} />
             <Text c="dimmed" size="xs">
               {edge.requestedBy} · {edge.reason} · {formatRelative(edge.requestedAt)}
             </Text>
@@ -1997,6 +2077,7 @@ function statusColor(state: string): string {
 }
 
 const activityStatusColors: Record<string, string> = {
+  blocked: "yellow.7",
   scheduled: "yellow.6",
   ready: "cyan.6",
   active: "blue.6",
@@ -2046,7 +2127,9 @@ function CancelRequestedBadge({
 function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
   let detail: string | null = null;
   let exactTime: string | null = null;
-  if (job.state === "scheduled" && job.wait) {
+  if (job.blockedReason === "prerequisite_pending") {
+    detail = `${job.prerequisiteJobIds.length} unresolved ${job.prerequisiteJobIds.length === 1 ? "prerequisite" : "prerequisites"}`;
+  } else if (job.state === "scheduled" && job.wait) {
     // A durable wait is a scheduled restart boundary, not an owned execution.
     detail = `sleeping until ${formatClock(job.wait.wakeAt)} · ${job.wait.name}`;
     exactTime = formatExact(job.wait.wakeAt);
@@ -2076,6 +2159,27 @@ function TaskStatusDetail({ job }: { job: DashboardJobRow }) {
     >
       {detail}
     </Text>
+  );
+}
+
+/** The unresolved dependency which keeps a list row outside dispatch. */
+function TaskBlockedBy({ job }: { job: DashboardJobRow }) {
+  if (job.blockedReason !== "prerequisite_pending") {
+    return (
+      <Text size="sm" c="dimmed">
+        —
+      </Text>
+    );
+  }
+  return (
+    <Stack gap={2}>
+      <Badge size="xs" variant="light" color="yellow" tt="none">
+        Prerequisite pending
+      </Badge>
+      <Text size="xs" c="dimmed" lineClamp={1}>
+        <Code fz="xs">{job.prerequisiteJobIds.join(", ")}</Code>
+      </Text>
+    </Stack>
   );
 }
 
@@ -2803,6 +2907,7 @@ function TasksPage({
                 <Table.Th>Queue</Table.Th>
                 <Table.Th>Input</Table.Th>
                 <Table.Th miw={280}>Status</Table.Th>
+                <Table.Th miw={180}>Blocked by</Table.Th>
                 <Table.Th ta="right">Steps</Table.Th>
                 <Table.Th ta="right">Attempt</Table.Th>
                 <Table.Th ta="right">Duration</Table.Th>
@@ -2815,7 +2920,7 @@ function TasksPage({
             <Table.Tbody>
               {data.jobs.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={10}>
+                  <Table.Td colSpan={11}>
                     <Center mih={120}>
                       <Text c="dimmed" size="sm">
                         No tasks match this filter.
@@ -2894,6 +2999,9 @@ function TasksPage({
                         <TaskWaitBadge job={job} />
                         <TaskStatusDetail job={job} />
                       </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <TaskBlockedBy job={job} />
                     </Table.Td>
                     <Table.Td ta="right">
                       <DurableProgressBadge job={job} />
@@ -6463,6 +6571,7 @@ function useDashboardController(
     eventDetailError,
     selectedJob,
     jobDetailError,
+    inspectJob,
     closeJobDetail,
     closeEventDetail,
     confirmingCancel,
@@ -6509,6 +6618,7 @@ function DashboardContent({
     eventDetailError,
     selectedJob,
     jobDetailError,
+    inspectJob,
     closeJobDetail,
     closeEventDetail,
     confirmingCancel,
@@ -6523,6 +6633,10 @@ function DashboardContent({
     ...taskDrawerModelessProps,
     closeOnEscape: taskDrawerCloseOnEscape(dropdownOpened),
   };
+  const lineageTaskHref = useCallback(
+    (id: string) => mountedHref(basePath, taskHref({ ...location, taskId: id })),
+    [basePath, location],
+  );
 
   return (
     <AppShell
@@ -6788,9 +6902,17 @@ function DashboardContent({
               </Group>
               <Code fz="xs">{selectedJob.identity.id}</Code>
               <RetryPolicyLine job={selectedJob} />
-              <DependencyLine job={selectedJob} />
-              <ChildLine job={selectedJob} />
-              <RedriveLine job={selectedJob} />
+              <DependencyLine
+                job={selectedJob}
+                taskLinkHref={lineageTaskHref}
+                onOpenTask={inspectJob}
+              />
+              <ChildLine job={selectedJob} taskLinkHref={lineageTaskHref} onOpenTask={inspectJob} />
+              <RedriveLine
+                job={selectedJob}
+                taskLinkHref={lineageTaskHref}
+                onOpenTask={inspectJob}
+              />
               <Group gap="xs" mt="sm" align="baseline">
                 <Text c="dimmed" size="xs" fw={600}>
                   Priority

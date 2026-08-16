@@ -3619,6 +3619,33 @@ describe("Workhorse demo", () => {
     expect(queuedPage.jobs.map((job) => job.id)).toEqual([readyId]);
   });
 
+  it("counts and filters blocked tasks with their prerequisite reason", async () => {
+    const { app } = createTestApplication();
+    const client = dashboardClient(app);
+    const queue = new Queue(pool, "demo");
+    const prerequisiteId = await queue.enqueue("demo.success", { label: "prerequisite" });
+    const blockedId = await queue.enqueue(
+      "demo.success",
+      { label: "dependent" },
+      { prerequisiteJobId: prerequisiteId },
+    );
+
+    await expect(client.dashboard.taskCounts()).resolves.toMatchObject({ all: 2, blocked: 1 });
+    const page = await client.dashboard.tasks({ filter: "blocked", page: 1, pageSize: 25 });
+    expect(page).toMatchObject({
+      filter: "blocked",
+      total: 1,
+      jobs: [
+        {
+          id: blockedId,
+          state: "blocked",
+          blockedReason: "prerequisite_pending",
+          prerequisiteJobIds: [prerequisiteId],
+        },
+      ],
+    });
+  });
+
   it("cancels one recurring occurrence without disabling its schedule", async () => {
     const { app } = createTestApplication({
       operator: createLocalOperator(database),

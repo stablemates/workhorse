@@ -93,6 +93,9 @@ The dashboard task detail shows prerequisites and dependents with the policy and
 evidence. This lets an operator explain why work remains blocked or why PostgreSQL released,
 canceled, or failed it.
 
+The dashboard's `Blocked` filter lists blocked tasks with `blockedReason` and unresolved
+`prerequisiteJobIds`. Related ids in the task detail open that task without closing the drawer.
+
 `Queue.health()` reports blocked jobs, pending edges, retained failures, and whether dependency
 edges stopped the latest retention pass from deleting jobs. OpenTelemetry exports queue pressure
 without job ids, prerequisite ids, or other unbounded labels.

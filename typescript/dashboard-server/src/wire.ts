@@ -277,6 +277,10 @@ export interface DashboardJobRow extends Record<string, unknown> {
   type: string;
   priority: number;
   state: string;
+  /** Why this live task cannot enter dispatch. Null for every non-blocked task. */
+  blockedReason: "prerequisite_pending" | null;
+  /** Unresolved prerequisite identities which currently keep this task blocked. */
+  prerequisiteJobIds: string[];
   attempt: number;
   maxAttempts: number;
   /** Retry scheduling persisted with the job identity. Null means the default SQL-owned backoff. */
@@ -392,15 +396,19 @@ export interface DashboardFailureRow {
   error: unknown;
 }
 
-export type DashboardTaskFilter =
-  | "all"
-  | "scheduled"
-  | "retried"
-  | "queued"
-  | "running"
-  | "completed"
-  | "discarded"
-  | "canceled";
+export const dashboardTaskFilters = [
+  "all",
+  "blocked",
+  "scheduled",
+  "retried",
+  "queued",
+  "running",
+  "completed",
+  "discarded",
+  "canceled",
+] as const;
+
+export type DashboardTaskFilter = (typeof dashboardTaskFilters)[number];
 
 export type DashboardTaskCounts = Record<DashboardTaskFilter, number>;
 
