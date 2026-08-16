@@ -122,7 +122,7 @@ export interface CancellationAuditContext extends Omit<AuditContext, "reason"> {
 }
 
 export interface DashboardOperator {
-  mode: "read-only" | "local";
+  mode: "read-only" | "writable";
   enqueueTest?: (
     kind: "success" | "retry" | "durable" | "timer" | "failure" | "idempotent" | "long-running",
     audit: AuditContext,
@@ -663,7 +663,7 @@ function demoTestJob(
 
 export function createLocalOperator(database: DemoDatabase): DashboardOperator {
   return {
-    mode: "local",
+    mode: "writable",
     async enqueueTest(kind, audit, scenario) {
       const target = `job:${kind}`;
       return database.transaction(async (transaction) => {
@@ -906,10 +906,10 @@ export function createDemoApplication(
   // deployment keeps exactly the dashboard it had, with no cancel action anywhere.
   const taskController =
     options.taskController ??
-    (options.operator?.mode === "local" ? localControllers.taskController : undefined);
+    (options.operator?.mode === "writable" ? localControllers.taskController : undefined);
   const settingsController =
     options.settingsController ??
-    (options.operator?.mode === "local" ? createLocalSettingsController(database) : undefined);
+    (options.operator?.mode === "writable" ? createLocalSettingsController(database) : undefined);
   const adapter = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
   const app = new Hono();
 

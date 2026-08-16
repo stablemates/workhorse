@@ -209,7 +209,7 @@ The operator dashboard is a separate boundary from the worker fleet. It is a fra
 request host that reads everything it shows from PostgreSQL, including worker identity, runtime
 state, and policy provenance, so it can be mounted in a process that runs no workers at all.
 Mounting requires only a database connection. Policy mutation additionally requires `operator.mode
-=== "local"` and a `DashboardSettingsController`; every call carries actor, reason, request ID, and
+=== "writable"` and a `DashboardSettingsController`; every call carries actor, reason, request ID, and
 server-assigned occurrence time.
 
 ## Data model

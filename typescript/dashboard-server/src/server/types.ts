@@ -28,7 +28,7 @@ export interface DashboardCancellationAuditContext extends Omit<DashboardAuditCo
 }
 
 export interface DashboardOperator {
-  mode: "read-only" | "local";
+  mode: "read-only" | "writable";
   enqueueTest?: (
     kind: DashboardDemoJobKind,
     audit: DashboardAuditContext,

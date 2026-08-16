@@ -980,7 +980,7 @@ export interface DashboardJobDetail {
 export interface DashboardSnapshot {
   capturedAt: string;
   operatorPolicy: {
-    mode: "read-only" | "local";
+    mode: "read-only" | "writable";
     supportedMutations: Array<
       | "enqueueTest"
       | "setScheduleEnabled"

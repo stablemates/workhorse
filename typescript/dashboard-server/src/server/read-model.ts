@@ -179,7 +179,7 @@ function operatorPolicy(
   operator: DashboardOperator | undefined,
   canManageSettings: boolean,
 ): DashboardSnapshot["operatorPolicy"] {
-  if (operator?.mode !== "local") {
+  if (operator?.mode !== "writable") {
     return {
       mode: "read-only",
       supportedMutations: [],
@@ -187,7 +187,7 @@ function operatorPolicy(
     };
   }
   return {
-    mode: "local",
+    mode: "writable",
     supportedMutations: [
       "enqueueTest",
       "setScheduleEnabled",

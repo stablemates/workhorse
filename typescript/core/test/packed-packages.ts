@@ -338,7 +338,7 @@ const host = createDashboardHost({
   database,
   path: "/",
   singleAdmin: { username: "operator", passwordHash, sessionTtlSeconds: 60 },
-  operator: { mode: "local" },
+  operator: { mode: "writable" },
   queueController: {
     setQueuePaused: async (_queue, paused, audit) => {
       audits.push(audit);

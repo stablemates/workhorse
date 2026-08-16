@@ -306,7 +306,7 @@ describe("dashboard single-admin authentication", () => {
       database,
       path: "/",
       singleAdmin: { username: "operator", passwordHash },
-      operator: { mode: "local" },
+      operator: { mode: "writable" },
       queueController: {
         setQueuePaused: async (_queue, paused, audit) => {
           audits.push(audit);
@@ -352,7 +352,7 @@ describe("dashboard single-admin authentication", () => {
       database,
       path: "/workhorse",
       authorize: () => ({ actor: "application-admin" }),
-      operator: { mode: "local" },
+      operator: { mode: "writable" },
       queueController: {
         setQueuePaused: async (_queue, paused, audit) => {
           audits.push(audit);

@@ -18,7 +18,7 @@ describe("signal RPC authentication", () => {
       database,
       path: "/",
       authorize: () => false,
-      operator: { mode: "local" },
+      operator: { mode: "writable" },
       taskController: { signalTask },
     });
     const client: RouterClient<DashboardRouter> = createORPCClient(
@@ -57,7 +57,7 @@ describe("signal RPC authentication", () => {
       path: "/",
       authorize: (request) =>
         request.headers.get("authorization") === "Bearer valid" ? { actor: "server-user" } : false,
-      operator: { mode: "local" },
+      operator: { mode: "writable" },
       taskController: { signalTask },
     });
     const client: RouterClient<DashboardRouter> = createORPCClient(
