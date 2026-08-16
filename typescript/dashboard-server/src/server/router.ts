@@ -318,7 +318,13 @@ export const dashboardRouter = {
     tasks: procedure
       .input(tasksInput)
       .handler(({ context, input }) =>
-        readDashboardTasks(context.database, input, context.projectDurability),
+        readDashboardTasks(
+          context.database,
+          input,
+          context.projectDurability,
+          context.operator.mode === "writable" &&
+            Boolean(context.taskController?.completeHumanWait),
+        ),
       ),
     taskFacets: procedure.handler(({ context }) =>
       readDashboardTaskFacets(context.database, context.configuredWorkers),

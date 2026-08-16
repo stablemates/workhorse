@@ -653,11 +653,13 @@ or stale rows.
 
 `dashboard.humanWaits` reads the first default page from both `Queue.listSignalWaits()` and
 `Queue.listHumanWaits()`. Its `DashboardHumanWaitPage` returns `signalWaits`, `waits`, `canSignal`,
-`canComplete`, and the bounded `QueueHealth.externalWaits` diagnostics. Dashboard task rows and
-task detail join the current runtime name to `dashboard_signal_wait_v1` and expose `signalWait` as
-`{ name, deadlineAt }`. Task detail also returns `canSignal` from the server-owned operator
-capability. The React application shows signal waits beside human decisions on `/human-waits`,
-marks matching task rows, and calls `dashboard.signalTask` from both the page and task drawer.
+`canComplete`, and the bounded `QueueHealth.externalWaits` diagnostics. Dashboard task rows join
+the current runtime name to `dashboard_signal_wait_v1` and `dashboard_human_wait_v1`. They expose
+`signalWait` as `{ name, deadlineAt }` and `humanWait` as `{ name, context, deadlineAt }`.
+`DashboardTasksPage.canCompleteHumanWait` reports the server-owned operator capability. Task detail
+also returns `canSignal`. The React application marks both wait kinds in `/tasks?filter=waiting`.
+It calls `dashboard.signalTask` from the task drawer and offers an application-defined human quick
+action in each task-row menu.
 
 If the caller omits `timeoutMs`, PostgreSQL gives the undelivered signal a seven-day `timeout_at`.
 A shorter caller timeout or earlier `job.deadline_at` wins. The waiting runtime temporarily stores
@@ -694,13 +696,15 @@ decision, matching signal delivery vocabulary. Its `completedBy` reports the act
 PostgreSQL retained.
 `Queue.listHumanWaits<TContext>({ limit, cursor })` returns a `HumanWaitPage<TContext>` with the
 same page bounds, cursor fields, and order. Each `HumanWait<TContext>` adds the stored `context` to
-the signal-wait projection. The dashboard calls this method, validates result JSON, and derives
-`requestedBy` from the authenticated principal. `human_wait_created`, `human_wait_completed`,
+the signal-wait projection. Custom operator tools can use this method. The dashboard task query
+reads the matching `dashboard_human_wait_v1` row and derives `requestedBy` from the authenticated
+principal when it completes a decision. `human_wait_created`, `human_wait_completed`,
 `human_wait_replayed`, and `human_wait_rejected` retain value-free lifecycle evidence.
 
 The dashboard recognizes an optional `context.dashboard.quickAction` object with `label` and
-`result` fields. It renders `label` as a decision button and submits the stored JSON `result` only
-after confirmation. A missing or malformed object leaves only the custom JSON result control.
+`result` fields. It renders `label` in the task-row menu and submits the stored JSON `result` only
+after confirmation. A missing or malformed object leaves the menu action disabled, because the
+dashboard does not invent a result for a generic decision.
 
 Human decisions use the same default PostgreSQL timeout and parent-identity retention contract.
 Immediate cancellation and deadline terminalization read `job_human_wait` to preserve the original

@@ -23,16 +23,15 @@ Code before the wait runs again, so checkpoint earlier effects or make them idem
 
 ## Complete a decision
 
-The dashboard lists pending decisions with their job identity, name, stored context, and effective
-deadline. Its server replaces browser attribution with the authenticated principal before calling
-the queue mutation.
+The dashboard marks pending decisions in the `Waiting` task list. Its server replaces browser
+attribution with the authenticated principal before calling the queue mutation.
 
 The `Waiting` task filter includes open signal and human-decision waits. Dependency and child-join
 work stays under `Blocked`, because operator input cannot resume it.
 
-An application can put `dashboard.quickAction` in the stored context with a button `label` and JSON
-`result`. The dashboard then offers that result without asking the operator to type JSON. It never
-invents a quick action for generic decisions.
+An application can put `dashboard.quickAction` in the stored context with a menu `label` and JSON
+`result`. The task menu asks the operator to confirm that result before completion. It never invents
+a quick action for generic decisions.
 
 Applications can call `Queue.completeHumanWait(jobId, name, result, request)` after enforcing their
 own authorization. The request records its trusted actor as `requestedBy`. The first accepted result

@@ -321,6 +321,7 @@ export interface DashboardJobRow extends Record<string, unknown> {
   wakeAt: string | null;
   wait: { name: string; wakeAt: string; mode: "relative" | "absolute" } | null;
   signalWait: DashboardSignalWaitSummary | null;
+  humanWait: DashboardHumanWaitSummary | null;
 }
 
 export interface DashboardScheduleRow {
@@ -452,6 +453,7 @@ export interface DashboardActivityPage {
 
 export interface DashboardTasksPage {
   capturedAt: string;
+  canCompleteHumanWait: boolean;
   filter: DashboardTaskFilter;
   queue: string | null;
   worker: string | null;
@@ -1116,6 +1118,12 @@ export interface DashboardSignalWaitRow {
 
 export interface DashboardSignalWaitSummary {
   name: string;
+  deadlineAt: string;
+}
+
+export interface DashboardHumanWaitSummary {
+  name: string;
+  context: unknown;
   deadlineAt: string;
 }
 

@@ -217,4 +217,25 @@ describe("task row actions", () => {
       .map((candidate) => candidate.id);
     expect(destructive).toEqual(["cancel"]);
   });
+
+  it("offers an application-defined human decision from the stable row menu", () => {
+    expect(
+      action(
+        row({
+          humanWait: {
+            name: "account-review",
+            context: {
+              dashboard: { quickAction: { label: "Approve", result: { approved: true } } },
+            },
+            deadlineAt: "2026-01-02T00:00:00.000Z",
+          },
+        }),
+        "complete-human-wait",
+      ),
+    ).toMatchObject({ label: "Approve…", unavailable: null, destructive: false });
+
+    expect(action(row(), "complete-human-wait").unavailable).toContain(
+      "not waiting for a human decision",
+    );
+  });
 });
