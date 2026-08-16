@@ -760,13 +760,39 @@ export type DashboardDemoJobKind =
   | "failure"
   | "idempotent"
   | "long-running"
-  | "redrive";
+  | "redrive"
+  | "feature";
 
 /** The multi-step demo scenarios, each of which enqueues its own shape of work. */
 export type DashboardDemoScenario =
   | "order-fulfillment"
   | "customer-onboarding"
   | "report-publication";
+
+/**
+ * The feature families a demo host can enqueue one live example of, for the `feature` demo kind.
+ *
+ * The values name the demo's feature-showcase families one for one, so the enqueue menu can offer
+ * every showcased capability without the wire contract knowing how each example is built.
+ */
+export type DashboardDemoFeature =
+  | "ingress-routing"
+  | "retry-policies"
+  | "durable-checkpoints"
+  | "durable-waits"
+  | "progress"
+  | "timing-controls"
+  | "cancellation"
+  | "dead-letters-redrive"
+  | "job-dependencies"
+  | "child-workflows"
+  | "signals"
+  | "human-decisions"
+  | "keyed-debounce"
+  | "keyed-throttle"
+  | "priority-lanes"
+  | "batch-handlers"
+  | "payload-contracts";
 
 /** Which of the two append-only history tables a feed row came from. */
 export type DashboardEventKind = "event" | "attempt";

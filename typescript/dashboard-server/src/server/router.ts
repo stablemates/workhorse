@@ -2,6 +2,7 @@ import { isProcedure, ORPCError, os } from "@orpc/server";
 import { MAX_JOB_PRIORITY, type Queue } from "@workhorse/core";
 import type {
   CompleteDashboardOptions,
+  DashboardDemoFeature,
   DashboardDemoJobKind,
   DashboardDemoScenario,
   DashboardEventTypeFilter,
@@ -130,6 +131,7 @@ const demoJobKindValues = [
   "idempotent",
   "long-running",
   "redrive",
+  "feature",
 ] as const;
 const checkedDemoJobKindValues: CompleteDashboardOptions<
   DashboardDemoJobKind,
@@ -144,6 +146,29 @@ const checkedDemoScenarioValues: CompleteDashboardOptions<
   DashboardDemoScenario,
   typeof demoScenarioValues
 > = demoScenarioValues;
+const demoFeatureValues = [
+  "ingress-routing",
+  "retry-policies",
+  "durable-checkpoints",
+  "durable-waits",
+  "progress",
+  "timing-controls",
+  "cancellation",
+  "dead-letters-redrive",
+  "job-dependencies",
+  "child-workflows",
+  "signals",
+  "human-decisions",
+  "keyed-debounce",
+  "keyed-throttle",
+  "priority-lanes",
+  "batch-handlers",
+  "payload-contracts",
+] as const;
+const checkedDemoFeatureValues: CompleteDashboardOptions<
+  DashboardDemoFeature,
+  typeof demoFeatureValues
+> = demoFeatureValues;
 /**
  * The event feed is bounded by a window and paged by offset, like the task listing.
  *
@@ -161,12 +186,18 @@ const eventsInput = z.object({
   types: z.array(eventType).max(eventType.options.length).default([]),
   jobId: z.uuid().nullable().default(null),
 });
-const enqueueTestInput = z.object({
-  kind: z.enum(checkedDemoJobKindValues),
-  scenario: z.enum(checkedDemoScenarioValues).optional(),
-  priority: z.number().int().min(0).max(checkedDashboardTaskPriorityMax).default(0),
-  audit: auditSchema,
-});
+const enqueueTestInput = z
+  .object({
+    kind: z.enum(checkedDemoJobKindValues),
+    scenario: z.enum(checkedDemoScenarioValues).optional(),
+    feature: z.enum(checkedDemoFeatureValues).optional(),
+    priority: z.number().int().min(0).max(checkedDashboardTaskPriorityMax).default(0),
+    audit: auditSchema,
+  })
+  .refine((input) => input.kind !== "feature" || input.feature !== undefined, {
+    message: "The feature demo kind requires a feature family",
+    path: ["feature"],
+  });
 const setScheduleEnabledInput = z.object({
   kind: z.literal("user"),
   namespace: z.string().trim().min(1),
@@ -366,6 +397,7 @@ export const dashboardRouter = {
         auditWithOccurredAt(input.audit, context.authenticatedActor),
         input.scenario,
         input.priority,
+        input.feature,
       );
     }),
     setScheduleEnabled: mutationProcedure

@@ -113,7 +113,8 @@ every attempt and never execute a later stage:
 Their immutable checkpoint artifacts and per-attempt failure evidence remain visible between retries in the
 existing task drawer. Timing seeds expose deadline and timeout policy in the same drawer, while the
 System page shows current deadline pressure. Use the dashboard's **enqueue test job** menu to create fresh success, retry,
-durable pipeline, durable timer, failure, and 20-second long-running paths. The dedicated Steps column shows
+durable pipeline, durable timer, failure, and 20-second long-running paths, plus one live example of every showcased
+feature family — from durable waits and signals to keyed throttles and payload contracts. The dedicated Steps column shows
 **N/M** for durable rows, and their task drawer uses a Mantine Stepper to show saved, running, and pending
 restart boundaries. Each new durable operation takes two seconds so progress remains visible. Set
 `SEED_DEMO_DATA=false` to start empty instead. The versioned seed marker makes direct application restarts

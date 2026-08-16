@@ -10,6 +10,7 @@ import type {
 import type { SendSignalStatus } from "@workhorse/core";
 import type { CompleteHumanWaitStatus } from "@workhorse/core";
 import type {
+  DashboardDemoFeature,
   DashboardDemoJobKind,
   DashboardDemoScenario,
   DashboardDurabilityPlan,
@@ -34,6 +35,7 @@ export interface DashboardOperator {
     audit: DashboardAuditContext,
     scenario?: DashboardDemoScenario,
     priority?: number,
+    feature?: DashboardDemoFeature,
   ) => Promise<{ jobId: string }>;
 }
 

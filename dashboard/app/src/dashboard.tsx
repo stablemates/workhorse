@@ -79,6 +79,7 @@ import type {
 } from "@workhorse/core";
 import {
   dashboardAttemptOutcomes,
+  dashboardDemoFeatureExamples,
   dashboardJobEventTypes,
   describeCancellationRequest,
   describeCancelOutcome,
@@ -107,6 +108,7 @@ import {
 import type {
   DashboardCancellationRequest,
   DashboardCronPage,
+  DashboardDemoFeature,
   DashboardEventDetail,
   DashboardEventRow,
   DashboardEventsPage,
@@ -338,7 +340,8 @@ type DemoJobKind =
   | "failure"
   | "idempotent"
   | "long-running"
-  | "redrive";
+  | "redrive"
+  | "feature";
 type DurableDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
@@ -2900,7 +2903,12 @@ function TasksPage({
   replace: (href: string) => void;
   taskLocation: TaskLocationState;
   runDemoJob:
-    | ((kind: DemoJobKind, scenario?: DurableDemoScenario, priority?: number) => Promise<void>)
+    | ((
+        kind: DemoJobKind,
+        scenario?: DurableDemoScenario,
+        priority?: number,
+        feature?: DashboardDemoFeature,
+      ) => Promise<void>)
     | null;
   runningDemoJob: DemoJobKind | null;
   inspectJob: (id: string, options?: { confirmCancel?: boolean }) => void;
@@ -2992,8 +3000,11 @@ function TasksPage({
       aria-label="Tasks pagination"
     />
   );
-  const enqueueTestTask = (kind: DemoJobKind, scenario?: DurableDemoScenario) =>
-    runDemoJob?.(kind, scenario, enqueuePriority);
+  const enqueueTestTask = (
+    kind: DemoJobKind,
+    scenario?: DurableDemoScenario,
+    feature?: DashboardDemoFeature,
+  ) => runDemoJob?.(kind, scenario, enqueuePriority, feature);
 
   return (
     <Stack gap="xl">
@@ -3054,7 +3065,8 @@ function TasksPage({
                       Enqueue test task
                     </Button>
                   </Menu.Target>
-                  <Menu.Dropdown>
+                  {/* The feature list makes this menu taller than small screens; it scrolls. */}
+                  <Menu.Dropdown style={{ maxHeight: "min(560px, 80vh)", overflowY: "auto" }}>
                     <Menu.Label>Priority</Menu.Label>
                     <Box px="xs" pb="xs" onClick={(event) => event.stopPropagation()}>
                       <EnqueuePriorityInput value={enqueuePriority} onChange={setEnqueuePriority} />
@@ -3122,6 +3134,17 @@ function TasksPage({
                     >
                       Long-running · 20s
                     </Menu.Item>
+                    <Menu.Divider />
+                    <Menu.Label>Feature examples</Menu.Label>
+                    {dashboardDemoFeatureExamples.map(({ feature, label }) => (
+                      <Menu.Item
+                        key={feature}
+                        leftSection={<Lightning size={16} />}
+                        onClick={() => void enqueueTestTask("feature", undefined, feature)}
+                      >
+                        {label}
+                      </Menu.Item>
+                    ))}
                   </Menu.Dropdown>
                 </Menu>
               ) : null}
@@ -6634,17 +6657,23 @@ function useDashboardController(
   }, [client]);
 
   const runDemoJob = useCallback(
-    async (kind: DemoJobKind, scenario?: DurableDemoScenario, priority = 0) => {
+    async (
+      kind: DemoJobKind,
+      scenario?: DurableDemoScenario,
+      priority = 0,
+      feature?: DashboardDemoFeature,
+    ) => {
       setRunningDemoJob(kind);
       try {
         if (!demoTools) return;
         await demoTools.enqueueTest({
           kind,
           ...(scenario ? { scenario } : {}),
+          ...(feature ? { feature } : {}),
           priority,
           audit: {
             actor: auditActor,
-            reason: `Demonstrate the ${scenario ?? kind} execution path`,
+            reason: `Demonstrate the ${feature ?? scenario ?? kind} execution path`,
             requestId: crypto.randomUUID(),
           },
         });

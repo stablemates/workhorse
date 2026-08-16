@@ -27,11 +27,15 @@ import {
   durableDemoScenarios,
 } from "./durable-demo.js";
 import {
+  DEMO_FEATURE_MENU_EXAMPLES,
+  DEMO_FEATURE_OPERATOR_SOURCE,
   DEMO_FEATURE_RECURRING_SOURCE,
   DEMO_FEATURE_SHOWCASE_FAMILIES,
   DEMO_FEATURE_SHOWCASE_SEED_NAME,
   DEMO_FEATURE_SHOWCASE_SOURCE,
+  demoFeatureShowcaseFamily,
   type DemoFeatureExample,
+  type DemoFeatureFamily,
   type DemoFeaturePayload,
   type DemoFeatureShowcaseFamily,
 } from "./feature-showcase.js";
@@ -141,9 +145,12 @@ export interface DashboardOperator {
       | "failure"
       | "idempotent"
       | "long-running"
-      | "redrive",
+      | "redrive"
+      | "feature",
     audit: AuditContext,
     scenario?: DurableDemoScenario,
+    priority?: number,
+    feature?: DemoFeatureFamily,
   ) => Promise<{ jobId: string }>;
 }
 
@@ -728,31 +735,100 @@ async function redriveLatestDeadLetter(
   });
 }
 
+/**
+ * Enqueue the one live example the dashboard menu declares for a showcase feature family.
+ *
+ * Every example runs through the ordinary worker path — nothing is claimed or failed on the
+ * operator's behalf — so a repeat click always produces a fresh, inspectable demonstration. The
+ * batch example enqueues its whole member group in one acceptance so the digest is visible from a
+ * single click.
+ */
+async function enqueueFeatureMenuExample(
+  queue: Queue,
+  feature: DemoFeatureFamily | undefined,
+  priority: number,
+): Promise<{ jobId: string; record: unknown }> {
+  if (feature === undefined) throw new Error("The feature demo kind requires a feature family");
+  const family = demoFeatureShowcaseFamily(feature);
+  const example = DEMO_FEATURE_MENU_EXAMPLES[feature];
+  const payload = showcaseSeedPayload(family, example, DEMO_FEATURE_OPERATOR_SOURCE);
+  const now = Date.now();
+  const options: EnqueueOptions = {
+    maxAttempts: example.maxAttempts,
+    retryPolicy: example.retryPolicy,
+    tags: example.tags,
+    priority: example.priority ?? priority,
+    ...(example.runAfterMs === undefined ? {} : { runAt: new Date(now + example.runAfterMs) }),
+    ...(example.deadlineAfterMs === undefined
+      ? {}
+      : { deadline: new Date(now + example.deadlineAfterMs) }),
+    ...(example.executionTimeoutMs === undefined
+      ? {}
+      : { executionTimeoutMs: example.executionTimeoutMs }),
+  };
+  const memberCount = example.seedCount ?? 1;
+  const jobIds =
+    memberCount === 1
+      ? [await queue.enqueue(family.jobType, payload, options)]
+      : await queue.enqueueMany(
+          Array.from({ length: memberCount }, (_, index) => ({
+            type: family.jobType,
+            payload: { ...payload, memberIndex: index + 1 },
+            options,
+          })),
+        );
+  const jobId = jobIds[0]!;
+  return {
+    jobId,
+    record: {
+      jobId,
+      family: feature,
+      scenario: example.scenario,
+      type: family.jobType,
+      priority: example.priority ?? priority,
+      memberCount,
+    },
+  };
+}
+
+async function enqueueOutcomeTestJob(
+  queue: Queue,
+  kind: Parameters<typeof demoTestJob>[0],
+  scenario: DurableDemoScenario | undefined,
+  priority: number,
+): Promise<{ jobId: string; record: unknown }> {
+  const definition = demoTestJob(kind, scenario);
+  const jobId = await queue.enqueue(definition.type, definition.payload, {
+    ...(definition.maxAttempts === undefined ? {} : { maxAttempts: definition.maxAttempts }),
+    ...(definition.idempotency === undefined ? {} : { idempotency: definition.idempotency }),
+    priority,
+    tags: definition.tags,
+  });
+  return { jobId, record: { jobId, ...definition, priority } };
+}
+
 export function createLocalOperator(database: DemoDatabase): DashboardOperator {
   return {
     mode: "writable",
-    async enqueueTest(kind, audit, scenario, priority = 0) {
+    async enqueueTest(kind, audit, scenario, priority = 0, feature) {
       if (kind === "redrive") return redriveLatestDeadLetter(database, audit);
-      const target = `job:${kind}`;
+      const target = kind === "feature" ? `job:feature:${feature}` : `job:${kind}`;
       return database.transaction(async (transaction) => {
         const workhorse = createDrizzleAdapter(transaction, {
           defaultQueue: DEMO_QUEUE,
           queueOptions: DEMO_QUEUE_OPTIONS,
         });
-        const definition = demoTestJob(kind, scenario);
-        const jobId = await workhorse.queue.enqueue(definition.type, definition.payload, {
-          ...(definition.maxAttempts === undefined ? {} : { maxAttempts: definition.maxAttempts }),
-          ...(definition.idempotency === undefined ? {} : { idempotency: definition.idempotency }),
-          priority,
-          tags: definition.tags,
-        });
+        const { jobId, record } =
+          kind === "feature"
+            ? await enqueueFeatureMenuExample(workhorse.queue, feature, priority)
+            : await enqueueOutcomeTestJob(workhorse.queue, kind, scenario, priority);
         await transaction.execute(sql`
           INSERT INTO public.workhorse_demo_audit
             (actor, reason, request_id, occurred_at, action, target, before, after, status)
           VALUES
             (${audit.actor}, ${audit.reason}, ${audit.requestId},
              ${audit.occurredAt ?? new Date().toISOString()}, 'enqueueTest', ${target},
-             NULL, ${JSON.stringify({ jobId, ...definition, priority })}::jsonb, 'succeeded')
+             NULL, ${JSON.stringify(record)}::jsonb, 'succeeded')
         `);
         return { jobId };
       });
@@ -1184,9 +1260,10 @@ async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> 
 function showcaseSeedPayload(
   family: DemoFeatureShowcaseFamily,
   example: DemoFeatureExample,
+  source: DemoFeaturePayload["source"] = DEMO_FEATURE_SHOWCASE_SOURCE,
 ): DemoFeaturePayload {
   return {
-    source: DEMO_FEATURE_SHOWCASE_SOURCE,
+    source,
     family: family.key,
     scenario: example.scenario,
     behavior: example.behavior,

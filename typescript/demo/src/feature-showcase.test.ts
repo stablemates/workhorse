@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEMO_FEATURE_MENU_EXAMPLES,
   DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT,
   DEMO_FEATURE_SHOWCASE_FAMILIES,
   demoFeatureRecurringVariant,
@@ -19,6 +20,24 @@ describe("demo feature showcase catalog", () => {
       expect(family.examples).toHaveLength(3);
       expect(new Set(family.examples.map((example) => example.scenario)).size).toBe(3);
       expect(family.schedule).toBe(`${index}-59/17 * * * *`);
+    }
+  });
+
+  it("declares one repeat-safe menu example for every family", () => {
+    expect(Object.keys(DEMO_FEATURE_MENU_EXAMPLES).sort()).toEqual(
+      DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => family.key).sort(),
+    );
+    for (const example of Object.values(DEMO_FEATURE_MENU_EXAMPLES)) {
+      // The operator enqueue path only performs plain acceptances (plus enqueueMany for the batch
+      // group). Seed-only mechanics would either throw on a repeat click or need claim/fail calls
+      // the operator path deliberately does not make.
+      expect(example.seedTransition).toBeUndefined();
+      expect(example.seedDependency).toBeUndefined();
+      expect(example.seedDebounce).toBeUndefined();
+      expect(example.seedThrottle).toBeUndefined();
+      expect(example.afterEnqueue).toBeUndefined();
+      expect(example.idempotencyKey).toBeUndefined();
+      expect(example.failLastMember).toBeUndefined();
     }
   });
 
