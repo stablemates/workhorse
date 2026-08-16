@@ -19,8 +19,10 @@ not know whether changed payload meant conflict, replacement, or intentional sup
 
 ## Decision
 
-Keep `idempotency`, `debounce`, and `throttle` mutually exclusive in `EnqueueOptions`. A scoped key
-may own only one mode until its binding expires or purge releases it.
+Keep `idempotency`, `debounce`, and `throttle` mutually exclusive in the `EnqueueOptions` union.
+TypeScript rejects combined modes before runtime. PostgreSQL retains the same validation for direct
+SQL and untyped JavaScript callers. A scoped key may own only one mode until its binding expires or
+purge releases it.
 
 Each mode keeps one meaning:
 
@@ -28,7 +30,7 @@ Each mode keeps one meaning:
   retained identity with `replayed`. A changed request raises `EnqueueIdempotencyConflictError`.
 - **Debounce** owns one pending definition while arrivals continue. An eligible request may change
   the payload and other accepted fields, returning `replaced`. An ineligible replacement returns
-  `non_replaceable` without changing the retained job.
+  `non_replaceable` with a structured refusal reason without changing the retained job.
 - **Throttle** owns one materially equivalent acceptance for its window. Reuse returns
   `coalesced` whether the retained job is scheduled, ready, active, or terminal. A changed request
   raises `EnqueueIdempotencyConflictError`.

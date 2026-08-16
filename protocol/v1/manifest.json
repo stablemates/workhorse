@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 1,
   "schema": {
-    "installedVersion": 42,
-    "minimumVersion": 42,
-    "maximumVersion": 42
+    "installedVersion": 43,
+    "minimumVersion": 43,
+    "maximumVersion": 43
   },
   "supportedClientProtocol": {
     "minimumVersion": 1,
@@ -32,7 +32,7 @@
     {
       "name": "enqueue_many_v2",
       "arity": 1,
-      "contract": "SELECT ordinal, job_id, outcome FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal"
+      "contract": "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal"
     },
     {
       "name": "claim_v3",

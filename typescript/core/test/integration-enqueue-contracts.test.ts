@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
@@ -58,10 +58,45 @@ function dependencyBearingCoalescingOptions(
           },
         }
       : { throttle: { key: dependencyOption, scope, windowMs: 60_000 } };
-  return { ...coalescing, ...dependency };
+  return { ...coalescing, ...dependency } as unknown as EnqueueOptions;
 }
 
 describe("enqueue contracts", () => {
+  it("makes keyed ingress modes and dependency forms mutually exclusive in EnqueueOptions", () => {
+    type IdempotencyAndDebounce = {
+      idempotency: { key: string };
+      debounce: { key: string; windowMs: number; schedule: "reset" };
+    } extends EnqueueOptions
+      ? true
+      : false;
+    type DebounceWithDependencies = {
+      debounce: { key: string; windowMs: number; schedule: "reset" };
+      dependencies: {
+        prerequisiteJobIds: readonly string[];
+        onSuccess: "release";
+        onFailure: "fail";
+        onCancellation: "cancel";
+      };
+    } extends EnqueueOptions
+      ? true
+      : false;
+    type DualDependencyForms = {
+      prerequisiteJobId: string;
+      dependencies: {
+        prerequisiteJobIds: readonly string[];
+        onSuccess: "release";
+        onFailure: "fail";
+        onCancellation: "cancel";
+      };
+    } extends EnqueueOptions
+      ? true
+      : false;
+
+    expectTypeOf<IdempotencyAndDebounce>().toEqualTypeOf<false>();
+    expectTypeOf<DebounceWithDependencies>().toEqualTypeOf<false>();
+    expectTypeOf<DualDependencyForms>().toEqualTypeOf<false>();
+  });
+
   it("rejects invalid and oversized payloads before accepting a durable job", async () => {
     const contractedQueue = new Queue(pool, "default", {
       contracts: {
@@ -334,7 +369,7 @@ describe("enqueue contracts", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v42 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v43 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -922,13 +957,21 @@ describe("enqueue contracts", () => {
 
     await expect(
       queue.enqueueWithResult("debounce-lifecycle", { revision: 2 }, { debounce }),
-    ).resolves.toEqual({ jobId: accepted.jobId, outcome: "non_replaceable" });
+    ).resolves.toEqual({
+      jobId: accepted.jobId,
+      outcome: "non_replaceable",
+      reason: "not_pending",
+    });
     await expect(queue.complete(claimed!, "debounce-lifecycle-worker", { ok: true })).resolves.toBe(
       true,
     );
     await expect(
       queue.enqueueWithResult("debounce-lifecycle", { revision: 3 }, { debounce }),
-    ).resolves.toEqual({ jobId: accepted.jobId, outcome: "non_replaceable" });
+    ).resolves.toEqual({
+      jobId: accepted.jobId,
+      outcome: "non_replaceable",
+      reason: "not_pending",
+    });
     await expect(queue.getJob(accepted.jobId)).resolves.toMatchObject({
       state: "succeeded",
       payload: { revision: 1 },
@@ -948,7 +991,36 @@ describe("enqueue contracts", () => {
     await sleep(10);
     await expect(
       queue.enqueueWithResult("debounce-elapsed", { revision: 2 }, { debounce: elapsed }),
-    ).resolves.toEqual({ jobId: elapsedAccepted.jobId, outcome: "non_replaceable" });
+    ).resolves.toEqual({
+      jobId: elapsedAccepted.jobId,
+      outcome: "non_replaceable",
+      reason: "window_elapsed_pending",
+    });
+
+    const incompatibleKey = { key: "incompatible", scope: "debounce", ttlMs: 60_000 };
+    const incompatibleAccepted = await queue.enqueueWithResult(
+      "debounce-incompatible",
+      { revision: 1 },
+      { idempotency: incompatibleKey },
+    );
+    await expect(
+      queue.enqueueWithResult(
+        "debounce-incompatible",
+        { revision: 2 },
+        {
+          debounce: {
+            key: incompatibleKey.key,
+            scope: incompatibleKey.scope,
+            windowMs: 60_000,
+            schedule: "reset",
+          },
+        },
+      ),
+    ).resolves.toEqual({
+      jobId: incompatibleAccepted.jobId,
+      outcome: "non_replaceable",
+      reason: "incompatible_key_mode",
+    });
   });
 
   it("accepts a fresh debounced job after the retained job is purged", async () => {
@@ -1054,6 +1126,7 @@ describe("enqueue contracts", () => {
         await expect(replacement).resolves.toEqual({
           jobId: accepted.jobId,
           outcome: "non_replaceable",
+          reason: "not_pending",
         });
       } finally {
         await transitionClient.query("ROLLBACK").catch(() => undefined);
@@ -1104,14 +1177,10 @@ describe("enqueue contracts", () => {
       ).rejects.toThrow(/debounce/);
     }
     await expect(
-      queue.enqueueWithResult(
-        "debounce-bounds",
-        {},
-        {
-          debounce: base,
-          idempotency: { key: "combined" },
-        },
-      ),
+      queue.enqueueWithResult("debounce-bounds", {}, {
+        debounce: base,
+        idempotency: { key: "combined" },
+      } as unknown as EnqueueOptions),
     ).rejects.toThrow(/cannot combine/);
 
     const before = await pool.query<{ count: number }>(
@@ -1465,11 +1534,10 @@ describe("enqueue contracts", () => {
       ).rejects.toThrow(/throttle/);
     }
     await expect(
-      queue.enqueueWithResult(
-        "throttle-combined",
-        {},
-        { throttle, idempotency: { key: "combined" } },
-      ),
+      queue.enqueueWithResult("throttle-combined", {}, {
+        throttle,
+        idempotency: { key: "combined" },
+      } as unknown as EnqueueOptions),
     ).rejects.toThrow(/cannot combine/);
     await expect(
       pool.query("SELECT * FROM workhorse.enqueue_many_v2($1::jsonb)", [

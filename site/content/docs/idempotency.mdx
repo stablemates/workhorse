@@ -83,6 +83,17 @@ try {
 An omitted `runAt` remains omitted in the fingerprint. A later replay of an immediate job
 therefore does not conflict with the original acceptance time.
 
+## Read the enqueue decision
+
+Use `queue.enqueueWithResult` when the caller needs to distinguish a new acceptance from a replay,
+debounce replacement, debounce refusal, or throttled request. It returns the retained `jobId` and
+an `outcome` describing PostgreSQL's decision.
+
+If debounce returns `non_replaceable`, the result also carries a `reason`. That reason tells the
+caller whether the key belongs to an incompatible mode, the retained job is no longer pending, or
+the pending window elapsed. Other outcomes omit `reason`, so TypeScript narrows the result from its
+`outcome`.
+
 ## Keys expire
 
 Each binding lives for a retention window — 24 hours by default, configurable per request through

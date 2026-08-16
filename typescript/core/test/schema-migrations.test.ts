@@ -113,10 +113,10 @@ describe("schema migrations", () => {
   });
 
   it("rejects retired pre-release schema versions", async () => {
-    await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 41");
+    await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 42");
     try {
       await expect(migrateSchema(fixtureDatabase.pool)).rejects.toThrow(
-        "Workhorse schema version 41 predates the supported migration baseline 42",
+        "Workhorse schema version 42 predates the supported migration baseline 43",
       );
     } finally {
       await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 3");
@@ -136,13 +136,13 @@ describe("schema migrations", () => {
 
   it("leaves an already-current schema unchanged", async () => {
     const before = await cleanDatabase.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 42",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 43",
     );
 
     await migrateSchema(cleanDatabase.pool);
 
     const after = await cleanDatabase.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 42",
+      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 43",
     );
     expect(after.rows).toEqual(before.rows);
   });

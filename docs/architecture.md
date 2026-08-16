@@ -2,14 +2,14 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol and pre-release baseline are schema version 42. No earlier
+The current clean-install protocol and pre-release baseline are schema version 43. No earlier
 schema version has been published or remains a supported upgrade source.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 42 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It accepts
-version 42 without mutation and rejects every other version on the unreleased line.
+version 43 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It accepts
+version 43 without mutation and rejects every other version on the unreleased line.
 
-A clean installation records `(42, 'pre-release baseline')` in
+A clean installation records `(43, 'pre-release baseline')` in
 `workhorse.schema_migration`. `migrateSchema` delegates ordered execution to the internal
 `applySchemaMigrationPlan` function. Its `SchemaMigrationPlan` has `baselineVersion`,
 `currentVersion`, `steps`, and `readStep` fields. Each `SchemaMigrationStep` has `fromVersion`,
@@ -20,14 +20,14 @@ After the first public release, each migration takes the transaction advisory lo
 `workhorse.schema_migration`, and advances the single `workhorse.schema_version` row. A migration
 is safe to replay after its target version commits.
 
-Versions below 42, versions above 42, gaps, and mixed version rows fail without running a migration.
+Versions below 43, versions above 43, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 1. It accepts installed
-schema version 42 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
+schema version 43 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -414,7 +414,7 @@ Each prerequisite may reach at most 100 distinct dependents through unresolved e
 includes direct and transitive descendants. PostgreSQL checks every affected ancestor while the
 touched-component advisory locks keep the pending graph stable.
 
-`EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteJobId` remains the compatible success-oriented shorthand. `enqueue_many_v1` sorts and locks every prerequisite identity inside the caller's transaction. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
+`EnqueueOptions.dependencies` accepts 1 through 100 unique stable identities plus success, failure, and cancellation policies. `EnqueueOptions.prerequisiteJobId` remains a deprecated success-oriented shorthand. The TypeScript union rejects both fields on one request. `enqueue_many_v1` keeps runtime validation for direct SQL and untyped JavaScript callers. It sorts and locks every prerequisite identity inside the caller's transaction. A live prerequisite creates a `blocked` runtime plus `dependency_blocked`. Each terminal prerequisite resolves its edge according to policy. After every edge resolves, `fail` precedes `cancel`, which precedes `release`.
 
 `resolve_job_outcome_dependencies_v1` runs after every `job_outcome` insert and calls `resolve_dependents_v1`. That function locks at most 100 direct dependents in identity order and records each edge's `released_at` plus `resolution`. The dependent stays blocked until every edge resolves. It then chooses `fail`, `cancel`, or `release` by fixed precedence. Release moves the blocked runtime to ready or scheduled, appends one `dependency_released`, and notifies a queue that gained ready work. `dependency_released.details.reason` is `prerequisite_succeeded` after success. It is `prerequisite_failed_policy` when `on_failure` selects `release`. It is `prerequisite_canceled_policy` when `on_cancellation` selects `release`. The enqueue-time terminal short circuit uses `prerequisite_already_succeeded` after success. It uses `prerequisite_terminal_policy` after a failure or cancellation policy release. Failure or cancellation removes the runtime and inserts a synthetic terminal outcome with `DependencyFailed` or `DependencyCanceled`. The outcome trigger applies the same policy recursively to downstream jobs. One outcome transaction can recurse through at most 100 unresolved descendants. It can invoke at most 101 resolver calls. Those calls can inspect at most 10,100 direct pending-edge slots. Runtime locks serialize concurrent prerequisite outcomes at the one state transition, so evidence, FIFO allocation, and notification happen once.
 
@@ -827,13 +827,13 @@ stateDiagram-v2
 
 `enqueue_many_v1` parses and validates at most 1,000 requests against one timestamp, including optional priority, persisted retry policies, and up to 100 dependency identities. Priority defaults to 0 and must be an integer from 0 through 100. It returns `(ordinal, job_id, accepted)` for each input; `accepted` is true only when the statement created the durable job. One statement inserts `job`, optional `job_dependency` edges, `job_runtime` or a policy-selected terminal outcome, and acceptance events. Input ordinality controls returned IDs and ready sequence allocation. Any invalid member rolls back the entire batch. Commit-delivered `NOTIFY workhorse_jobs` is coalesced to one notification per distinct queue that gained ready work.
 
-`enqueue_many_v2` preserves that contract and returns `(ordinal, job_id, outcome)`. Ordinary requests map `accepted` to `accepted` or `replayed` and stay on the set-based `enqueue_many_v1` path. A batch containing `debounce` or `throttle` requests locks every scoped idempotency, debounce, or throttle key in bytewise order before processing requests in caller order. This keeps mixed batches atomic and prevents overlapping batches from reversing key-lock order.
+`enqueue_many_v2` preserves that contract and returns `(ordinal, job_id, outcome, reason)`. Ordinary requests map `accepted` to `accepted` or `replayed` and return a null `reason`. A batch containing `debounce` or `throttle` requests locks every scoped idempotency, debounce, or throttle key in bytewise order before processing requests in caller order. This keeps mixed batches atomic and prevents overlapping batches from reversing key-lock order.
 
-`Queue.enqueueWithResult` and `Queue.enqueueManyWithResults` expose `EnqueueResult`, whose `outcome` is `accepted`, `replayed`, `replaced`, `non_replaceable`, or `coalesced`. `Queue.enqueue` and `Queue.enqueueMany` preserve their string-ID return values by projecting the same structured results.
+`Queue.enqueueWithResult` and `Queue.enqueueManyWithResults` expose the discriminated `EnqueueResult` union. Its `outcome` is `accepted`, `replayed`, `replaced`, `non_replaceable`, or `coalesced`. Only `non_replaceable` carries `reason`, whose `EnqueueNonReplaceableReason` is `incompatible_key_mode`, `not_pending`, or `window_elapsed_pending`. `Queue.enqueue` and `Queue.enqueueMany` preserve their string-ID return values by projecting the same structured results.
 
 Idempotency replays one materially equivalent request and rejects a conflicting reuse. Debounce replaces one pending definition while arrivals continue. Throttle reuses one accepted identity without changing it. These contracts serialize acceptance in PostgreSQL, but they do not make handler effects exactly once. A handler can repeat after a lost lease or process failure, so external effects still require their own idempotency boundary.
 
-ADR 0031 keeps these keyed ingress modes mutually exclusive. Their shared ownership table, hash,
+ADR 0031 keeps these keyed ingress modes mutually exclusive. The `EnqueueOptions` union rejects invalid combinations during TypeScript compilation, while PostgreSQL rejects malformed direct requests. Their shared ownership table, hash,
 and lock ordering do not collapse `replayed`, `replaced`, `non_replaceable`, and `coalesced` into one
 outcome.
 
@@ -845,7 +845,7 @@ outcome.
 
 If the retained runtime is `scheduled` or `ready`, PostgreSQL validates the replacement through `enqueue_many_v1`. The key window must still be active. PostgreSQL then updates the accepted job definition and runtime atomically. `reset` derives a new run time and key expiry from the statement clock. `preserve` retains both. The stable job ID and current attempt remain unchanged. A `debounced` event records the safe key preview and digest, schedule policy, window, expiry, prior request digest, and replacement request digest.
 
-An active runtime, terminal outcome, incompatible idempotency key, or elapsed-but-still-pending runtime returns `non_replaceable` with the retained job ID. PostgreSQL discards the new request's payload and leaves the accepted definition unchanged. It appends `debounce_rejected` with a bounded reason. If the key window elapsed after the old job became active or terminal, a new pending identity can be accepted. Queue purge removes the key before the job identity, so a purged key can also accept fresh work. These rules preserve one runtime or outcome for every accepted identity and prevent promotion lag from creating two pending jobs for one elapsed key.
+An active runtime, terminal outcome, incompatible idempotency key, or elapsed-but-still-pending runtime returns `non_replaceable` with the retained job ID. `enqueue_many_v2` also returns `not_pending`, `incompatible_key_mode`, or `window_elapsed_pending` as its reason. PostgreSQL discards the new request's payload and leaves the accepted definition unchanged. It appends `debounce_rejected` with the same bounded reason. If the key window elapsed after the old job became active or terminal, a new pending identity can be accepted. Queue purge removes the key before the job identity, so a purged key can also accept fresh work. These rules preserve one runtime or outcome for every accepted identity and prevent promotion lag from creating two pending jobs for one elapsed key.
 
 #### Keyed throttle
 
@@ -1497,7 +1497,7 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 
 `typescript/examples/agentic-flow.mjs` composes the public SQL-backed primitives without adding a workflow
 runtime. `pnpm example:agentic-flow` builds the publishable packages, loads this worktree's
-`DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 42 with
+`DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 43 with
 `assertSchemaCompatible`, and runs the example as a package consumer. The controller advances the
 two `Worker` instances through `Worker.runOnce` and reads completion through `Queue.getJob`.
 `typescript/core/test/packed-packages.ts`
@@ -1587,7 +1587,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 42. Forward migration starts with the first public
+- The canonical artifact installs version 43. Forward migration starts with the first public
   release; every pre-release database must install the current schema from scratch.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

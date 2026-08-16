@@ -302,7 +302,7 @@ describe("SQL protocol conformance fixtures", () => {
           async query() {
             serialized = JSON.parse(String(arguments[1]?.[0]));
             return {
-              rows: [{ ordinal: 1, job_id: fixture.id, outcome: "accepted" }],
+              rows: [{ ordinal: 1, job_id: fixture.id, outcome: "accepted", reason: null }],
             } as never;
           },
         };
@@ -314,12 +314,13 @@ describe("SQL protocol conformance fixtures", () => {
           ordinal: number;
           job_id: string;
           outcome: string;
+          reason: string | null;
         }>(
-          "SELECT ordinal, job_id, outcome FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal",
+          "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal",
           [JSON.stringify(serialized)],
         );
         expect(accepted.rows).toEqual([
-          { ordinal: 1, job_id: expect.any(String), outcome: "accepted" },
+          { ordinal: 1, job_id: expect.any(String), outcome: "accepted", reason: null },
         ]);
         const stored = await requestDatabase.pool.query(
           "SELECT queue_name, job_type, payload, priority, concurrency_key, max_attempts, retry_policy, tags FROM workhorse.dashboard_job_v1 WHERE id = $1::uuid",

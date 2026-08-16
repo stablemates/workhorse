@@ -3443,7 +3443,7 @@ async function dependencyOperations(
           "dependency-contention-dependent",
           { index },
           {
-            prerequisiteJobId: contentionPrerequisiteIds[index],
+            prerequisiteJobId: contentionPrerequisiteIds[index]!,
           },
         ),
       );

@@ -13,7 +13,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v42**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v43**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -108,7 +108,7 @@ name the retired instruments.
   and human decisions over a trailing 24-hour window. A partial event index bounds these polling
   reads to recent rejection evidence instead of scanning all retained event history.
 
-- `@workhorse/core`: schema versions 23 through 41 are replaced by the version 42 pre-release
+- `@workhorse/core`: schema versions 23 through 42 are replaced by the version 43 pre-release
   baseline. No published deployment can consume that history, so schema changes edit the canonical
   artifact directly until the first public release. Existing development worktrees must run
   `pnpm worktree:setup` once to recreate their dedicated databases.

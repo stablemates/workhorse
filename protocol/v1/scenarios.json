@@ -415,6 +415,59 @@
         }
       },
       {
+        "id": "debounce-refusal-accepted",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-coalesce",
+              "type": "protocol.debounce-refusal",
+              "payload": { "version": 1 },
+              "debounce": {
+                "scope": "protocol",
+                "key": "debounce-refusal",
+                "windowMs": 1,
+                "schedule": "reset"
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [{ "value": { "jobId": { "$type": "uuid" }, "outcome": "accepted" } }]
+        },
+        "capture": { "debounceRefusalJob": "0.value.jobId" }
+      },
+      {
+        "id": "debounce-refusal-reason",
+        "sql": "WITH paused AS MATERIALIZED (SELECT pg_sleep(0.01)) SELECT jsonb_build_object('jobId', result.job_id, 'outcome', result.outcome, 'reason', result.reason) AS value FROM paused CROSS JOIN LATERAL workhorse.enqueue_many_v2($1::jsonb) result",
+        "parameters": [
+          [
+            {
+              "queue": "protocol-coalesce",
+              "type": "protocol.debounce-refusal",
+              "payload": { "version": 2 },
+              "debounce": {
+                "scope": "protocol",
+                "key": "debounce-refusal",
+                "windowMs": 1,
+                "schedule": "reset"
+              }
+            }
+          ]
+        ],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "jobId": { "$ref": "debounceRefusalJob" },
+                "outcome": "non_replaceable",
+                "reason": "window_elapsed_pending"
+              }
+            }
+          ]
+        }
+      },
+      {
         "id": "throttle-accepted",
         "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
         "parameters": [

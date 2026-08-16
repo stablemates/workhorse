@@ -2,8 +2,8 @@
 
 ## Current pre-release policy
 
-Schema version 42 is the current pre-release baseline. Workhorse has no published database to
-upgrade, so versions 1 through 41 are unsupported and have no derived migration history.
+Schema version 43 is the current pre-release baseline. Workhorse has no published database to
+upgrade, so versions 1 through 42 are unsupported and have no derived migration history.
 
 Until the first public release, each schema change updates `sql/schema/current.sql` directly and
 increments `WORKHORSE_SCHEMA_VERSION`. `pnpm schema:generate` derives the shipped clean-install

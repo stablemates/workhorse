@@ -6,6 +6,7 @@ import type {
   EnqueueIdempotencyConflictDetails,
   EnqueueIdempotencyConflictField,
   EnqueueOptions,
+  EnqueueNonReplaceableReason,
   EnqueueOutcome,
   EnqueueRequest,
   EnqueueResult,
@@ -187,6 +188,11 @@ const sanitizedEnqueueConflictDetails: EnqueueIdempotencyConflictDetails = {
 };
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const enqueueNonReplaceableReasons = new Set<EnqueueNonReplaceableReason>([
+  "incompatible_key_mode",
+  "not_pending",
+  "window_elapsed_pending",
+]);
 
 function parsedErrorDetails<T>(
   error: unknown,
@@ -646,14 +652,26 @@ export class EnqueueContractsModule extends QueueModule {
             ordinal: number;
             job_id: string;
             outcome: EnqueueOutcome;
+            reason: string | null;
           }>(
-            "SELECT ordinal, job_id, outcome FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal",
+            "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal",
             [JSON.stringify(input)],
           );
-          const enqueueResults = result.rows.map((row) => ({
-            jobId: row.job_id,
-            outcome: row.outcome,
-          }));
+          const enqueueResults = result.rows.map((row): EnqueueResult => {
+            if (row.outcome !== "non_replaceable") {
+              return { jobId: row.job_id, outcome: row.outcome };
+            }
+            if (!enqueueNonReplaceableReasons.has(row.reason as EnqueueNonReplaceableReason)) {
+              throw new Error(
+                "PostgreSQL returned a non_replaceable enqueue without a valid reason",
+              );
+            }
+            return {
+              jobId: row.job_id,
+              outcome: row.outcome,
+              reason: row.reason as EnqueueNonReplaceableReason,
+            };
+          });
           for (const [index, row] of result.rows.entries()) {
             const request = requests[(row.ordinal ?? index + 1) - 1];
             if (!request) continue;

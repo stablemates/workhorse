@@ -3551,7 +3551,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION workhorse.enqueue_many_v2(p_requests jsonb)
-RETURNS TABLE (ordinal integer, job_id uuid, outcome text)
+RETURNS TABLE (ordinal integer, job_id uuid, outcome text, reason text)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -3649,7 +3649,8 @@ BEGIN
   ) THEN
     RETURN QUERY
       SELECT result.ordinal, result.job_id,
-             CASE WHEN result.accepted THEN 'accepted' ELSE 'replayed' END
+             CASE WHEN result.accepted THEN 'accepted' ELSE 'replayed' END,
+             NULL::text
         FROM workhorse.enqueue_many_v1(p_requests) result ORDER BY result.ordinal;
     RETURN;
   END IF;
@@ -3664,6 +3665,14 @@ BEGIN
       ordinal := v_ordinal;
       job_id := v_row.job_id;
       outcome := v_row.outcome;
+      reason := CASE WHEN outcome = 'non_replaceable' THEN (
+        SELECT event.details->>'reason'
+          FROM workhorse.job_event event
+         WHERE event.job_id = v_row.job_id
+           AND event.event_type = 'debounce_rejected'
+         ORDER BY event.occurred_at DESC, event.event_id DESC
+         LIMIT 1
+      ) ELSE NULL END;
     ELSIF v_request ? 'throttle' THEN
       BEGIN
         SELECT * INTO v_row FROM workhorse.enqueue_throttle_v1(v_request);
@@ -3679,6 +3688,7 @@ BEGIN
       ordinal := v_ordinal;
       job_id := v_row.job_id;
       outcome := v_row.outcome;
+      reason := NULL;
     ELSE
       BEGIN
         SELECT * INTO v_row FROM workhorse.enqueue_many_v1(jsonb_build_array(v_request));
@@ -3694,6 +3704,7 @@ BEGIN
       ordinal := v_ordinal;
       job_id := v_row.job_id;
       outcome := CASE WHEN v_row.accepted THEN 'accepted' ELSE 'replayed' END;
+      reason := NULL;
     END IF;
     RETURN NEXT;
   END LOOP;
@@ -8901,9 +8912,9 @@ AS $$
 $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (42, 'pre-release baseline')
+  (43, 'pre-release baseline')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (42) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (43) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

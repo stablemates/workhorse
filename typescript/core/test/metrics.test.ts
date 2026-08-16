@@ -129,6 +129,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
             ordinal: index + 1,
             job_id: `job-${index + 1}`,
             outcome,
+            reason: outcome === "non_replaceable" ? "not_pending" : null,
           })) as unknown as R[],
         ),
     };
