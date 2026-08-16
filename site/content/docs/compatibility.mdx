@@ -64,6 +64,11 @@ as their compatibility boundary. The fixtures require clients to reject an incom
 protocol before mutation, then verify canonical requests, results, transitions, and structured
 errors. See [Language clients](/docs/language-clients) for the ownership split.
 
+The Python `workhorse-pg` package supports Python 3.10 through 3.14. It uses Psycopg synchronously
+or asynchronously and asyncpg asynchronously, and its tests run the shared SQL scenarios plus
+caller-owned commit and rollback cases. The Python package version floats independently from the
+TypeScript packages because schema and SQL protocol versions define their compatibility.
+
 ## Treat releases as one package set
 
 Core and its integration packages release together. Keep their versions aligned so adapters,

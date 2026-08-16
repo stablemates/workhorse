@@ -1,6 +1,11 @@
 docs/research
 node_modules/
 dist/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
 /typescript/dashboard/development/
 coverage/
 .next/

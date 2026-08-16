@@ -3,7 +3,9 @@
 Eight published packages are versioned in lockstep and released from one tag. They are
 `@workhorse/core`, `@workhorse/drizzle`, `@workhorse/prisma`, `@workhorse/typeorm`,
 `@workhorse/kysely`, `@workhorse/dashboard`, `@workhorse/dashboard-server`, and
-`@workhorse/dashboard-contract`. Each entry states its required schema version and upgrade steps.
+`@workhorse/dashboard-contract`. The `workhorse-pg` Python distribution floats independently and
+declares compatibility through the SQL protocol. Each entry states its required schema version and
+upgrade steps.
 
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
@@ -75,6 +77,9 @@ First published line. Requires **schema v43**, Node.js **22 or 24**, PostgreSQL 
   files, and a supported container that requires an HTTPS public origin for remote listeners.
 - `@workhorse/dashboard-contract`: the type-only standalone server contract shared by the core CLI
   and dashboard package, so both compile against one optional embedding boundary.
+- `workhorse-pg`: typed synchronous Psycopg and asynchronous Psycopg/asyncpg enqueue clients with
+  delayed and recurring work, priority, atomic batches, idempotency, debounce, throttle,
+  dependencies, caller-owned transactions, compatibility refusal, and shared SQL conformance.
 - Language-neutral SQL protocol conformance fixtures under `protocol/v1`, covering compatibility,
   canonical enqueue requests, lifecycle scenarios, runtime behavior, and structured errors for
   TypeScript and future language clients.

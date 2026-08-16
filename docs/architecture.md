@@ -47,7 +47,28 @@ suite runs it through `Worker`; Python and Go runtimes must run the same fixture
 
 `protocol/v1/requests.json` maps public enqueue inputs to exact PostgreSQL JSON. The TypeScript
 suite runs each mapping through `Queue.enqueueMany`, then compares its positional SQL parameter to
-the fixture.
+the fixture. `python/tests/test_enqueue.py` runs the same mapping through Python `Queue`.
+
+The Python distribution is `workhorse-pg`, and its import package is `workhorse`. It requires
+Python 3.10 or newer. `python/src/workhorse/client.py` exports synchronous `Queue` for Psycopg and
+asynchronous `AsyncQueue.from_psycopg` and `AsyncQueue.from_asyncpg` constructors. Both clients
+expose `enqueue`, `enqueue_with_result`, `enqueue_many`, `enqueue_many_with_results`, and
+`sync_schedules`. Enqueue calls use `enqueue_many_v2`; recurring definitions use
+`sync_schedule_definitions_v1`.
+
+Every non-empty Python mutation first executes `SELECT version FROM workhorse.schema_version ORDER
+BY version`. `python/src/workhorse/_protocol.py` accepts schema version 43 and client protocol 1.
+It refuses an unreadable, missing, older, or newer schema before the mutating statement. Enqueue
+batches contain at most 1000 requests. Default priority is 0, default attempt budget is 25, default
+payload and result limits are 1048576 bytes, and default idempotency retention is 86400000
+milliseconds.
+
+Python `Queue` accepts a caller-owned Psycopg connection. `AsyncQueue` accepts a caller-owned
+Psycopg `AsyncConnection` or asyncpg `Connection`. The clients never call `commit`, `rollback`, or
+`close`. `python/tests/test_driver_integration.py` verifies commit and rollback visibility through
+independent connections. `python/tests/test_protocol_conformance.py` executes every
+`protocol/v1/scenarios.json` step and verifies compatibility fixtures, canonical rows, captures,
+SQLSTATE values, messages, and JSON details.
 
 `scripts/verify-sql-protocol.ts` interprets the language-neutral files. It reads
 `workhorse.schema_version` and rejects incompatible schema or client protocol versions before a

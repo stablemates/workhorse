@@ -12,9 +12,25 @@ The files under `protocol/v1/` describe canonical requests, results, transitions
 errors as JSON. `scenarios.json` exercises versioned PostgreSQL functions directly, `requests.json`
 drives transactional enqueue, and `runtime.json` drives worker lifecycle behavior.
 
-A client should run every fixture against its test database. Before any mutation, it should read
-`workhorse.schema_version` and compare both the installed schema and its supported protocol against
-the fixture manifest. An incompatible client must stop before enqueueing or claiming work.
+A client should run every fixture against its test database. The Python enqueue client does this
+for Psycopg and also verifies its public request mapping. Before any mutation, it reads
+`workhorse.schema_version` and compares both the installed schema and its supported protocol against
+the fixture manifest. An incompatible client stops before enqueueing work.
+
+## Keep application transactions in charge
+
+The Python `Queue` wraps a connection that the application already owns. It sends enqueue SQL on
+that connection, so application writes and the accepted job commit or roll back together.
+
+```python
+with psycopg.connect(database_url) as connection:
+    with connection.transaction():
+        connection.execute("INSERT INTO orders (id) VALUES (%s)", (order_id,))
+        Queue(connection).enqueue("order.accepted", {"orderId": order_id})
+```
+
+The asynchronous client follows the same rule for Psycopg and asyncpg. The surrounding transaction
+block decides the outcome; Workhorse does not commit, roll back, or close the connection.
 
 ## Keep ownership in the right layer
 

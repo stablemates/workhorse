@@ -361,10 +361,10 @@ persisted policy. `retry_scheduled` and `lease_expired` event details expose `re
 
 ## Development
 
-Requirements: Node.js **>= 22**, pnpm, and PostgreSQL **15 or newer**. No PostgreSQL extension is
-required. CI runs the full suite against every combination of Node.js 22, 24 and PostgreSQL 15, 16,
-17, 18; see [`docs/compatibility.md`](docs/compatibility.md) for what that support boundary does and
-does not promise.
+Requirements: Node.js **>= 22**, pnpm, Python **>= 3.10**, uv, and PostgreSQL **15 or newer**. No
+PostgreSQL extension is required. CI runs the TypeScript suite against every combination of Node.js
+22, 24 and PostgreSQL 15, 16, 17, 18; see [`docs/compatibility.md`](docs/compatibility.md) for the
+Python package matrix and what the support boundary does and does not promise.
 
 The repository keeps language implementations under `typescript/`, `python/`, and `go/`. Shared
 contracts and product artifacts remain at the root: PostgreSQL under `sql/`, protocol fixtures under
@@ -376,6 +376,10 @@ pnpm install
 pnpm db:reset:all
 pnpm check
 ```
+
+`pnpm check` includes the Python format, lint, type, real-driver, shared-protocol, and distribution
+build checks. The Python package can also be checked alone with the `pnpm python:*` scripts listed
+in [`python/README.md`](python/README.md).
 
 Run `pnpm demo` for the project at `http://workhorse.localhost:43155`. Portless assigns the application port and
 automatically prefixes linked worktrees with their branch name, for example

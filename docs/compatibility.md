@@ -26,33 +26,44 @@ This boundary is about correctness only. It is not a performance claim; see
 | Runtime    | Supported      | Minimum | Notes                                                   |
 | ---------- | -------------- | ------- | ------------------------------------------------------- |
 | Node.js    | 22, 24         | 22      | Even-numbered releases only. `engines.node` is `>=22`.  |
+| Python     | 3.10–3.14      | 3.10    | `workhorse-pg` ships one `py3-none-any` wheel.          |
 | PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
 
-The full test suite, including the PostgreSQL integration suite, runs against every combination of
-those two lists. The packed-package install test runs on both Node majors against the newest
+The TypeScript suite, including PostgreSQL integration, runs against every combination of the Node
+and PostgreSQL lists. The packed-package install test runs on both Node majors against the newest
 supported PostgreSQL. The demo smoke test runs on the lowest supported Node major.
 
 Package managers: the repository is developed with pnpm, and the packed-install test installs the
 published tarballs with pnpm. npm and yarn are not exercised in CI; the packages are plain ESM with
 no install scripts, so nothing in them is package-manager specific.
 
+The Python package declares Python 3.10 through 3.14 and requires Psycopg 3.3 through the next
+major or asyncpg 0.31 through the next major. Its package lane builds the source distribution and
+universal wheel, checks inline types, runs both real drivers, and executes every shared SQL
+scenario. GitHub Actions remain intentionally disabled while the repository is private; when they
+are restored, each declared Python version must run this lane before publication.
+
 ## Packages and versioning
 
-Six packages ship from this repository. `@workhorse/core` is the durable queue; the rest are
-optional.
+Nine packages ship from this repository. `@workhorse/core` is the TypeScript durable queue;
+`workhorse-pg` is the Python enqueue client; the rest are optional TypeScript packages.
 
-| Package                | Purpose                                           | Peer requirements                                |
-| ---------------------- | ------------------------------------------------- | ------------------------------------------------ |
-| `@workhorse/core`      | Queue, worker, schema, CLI                        | `pg` >= 8.13                                     |
-| `@workhorse/drizzle`   | Drizzle ORM provider                              | `@workhorse/core`, `drizzle-orm` >= 0.45, `pg`   |
-| `@workhorse/prisma`    | Prisma ORM provider                               | `@workhorse/core`, `@prisma/client` >= 6 and < 7 |
-| `@workhorse/typeorm`   | TypeORM provider                                  | `@workhorse/core`, `typeorm` >= 0.3 and < 2      |
-| `@workhorse/kysely`    | Kysely provider                                   | `@workhorse/core`, `kysely` >= 0.29 and < 0.30   |
-| `@workhorse/dashboard` | Operator dashboard and its framework-neutral host | `@workhorse/core` >= 0.1 and < 0.2, React 19     |
+| Package                         | Purpose                                           | Peer requirements                                  |
+| ------------------------------- | ------------------------------------------------- | -------------------------------------------------- |
+| `@workhorse/core`               | Queue, worker, schema, CLI                        | `pg` >= 8.13                                       |
+| `@workhorse/drizzle`            | Drizzle ORM provider                              | `@workhorse/core`, `drizzle-orm` >= 0.45, `pg`     |
+| `@workhorse/prisma`             | Prisma ORM provider                               | `@workhorse/core`, `@prisma/client` >= 6 and < 7   |
+| `@workhorse/typeorm`            | TypeORM provider                                  | `@workhorse/core`, `typeorm` >= 0.3 and < 2        |
+| `@workhorse/kysely`             | Kysely provider                                   | `@workhorse/core`, `kysely` >= 0.29 and < 0.30     |
+| `@workhorse/dashboard`          | Operator dashboard and its framework-neutral host | `@workhorse/core` >= 0.1 and < 0.2, React 19       |
+| `@workhorse/dashboard-server`   | Authenticated standalone dashboard server         | `@workhorse/dashboard-contract`                    |
+| `@workhorse/dashboard-contract` | Type-only dashboard server boundary               | None                                               |
+| `workhorse-pg`                  | Python transactional enqueue client               | Psycopg >= 3.3 and < 4, or asyncpg >= 0.31 and < 1 |
 
-The seven published packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
-optional package always declares the core version it was released with as a peer range. Mixing
-versions across the set is not supported.
+The eight TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
+optional TypeScript package always declares the core version it was released with as a peer range.
+The Python package version floats independently and declares compatibility through SQL protocol 1
+and schema version 43 instead of a TypeScript peer range.
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
 server reads `workhorse.dashboard_*_v1` views and versioned functions, so a core patch remains
@@ -82,10 +93,10 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   `@workhorse/dashboard` and its own client, and it changes without a schema version bump. Do not
   build against it; the supported operator surface is the `Queue` query API.
 
-Only the TypeScript client and worker implement this protocol as a supported SDK today. Protocol
-portability does not make an untested language implementation supported. Python and Go become
-supported only after their own runtime, driver, PostgreSQL, packed-artifact, and compatibility
-matrices run in CI.
+The TypeScript client and worker and the Python enqueue client implement this protocol. Python runs
+the same canonical SQL fixtures and request mapping through Psycopg, plus transaction integration
+through Psycopg async and asyncpg. The Python worker and both Go packages remain unsupported until
+their runtime, driver, PostgreSQL, packed-artifact, and compatibility matrices exist.
 
 ## Release process
 

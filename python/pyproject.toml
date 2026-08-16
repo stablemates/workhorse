@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "workhorse-pg"
+version = "0.1.0"
+description = "Python client for the Workhorse PostgreSQL durable execution protocol"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Stablemates" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Database :: Front-Ends",
+]
+dependencies = []
+
+[project.urls]
+Documentation = "https://workhorse.run/docs/language-clients"
+Repository = "https://github.com/stablemates/workhorse"
+Issues = "https://github.com/stablemates/workhorse/issues"
+
+[project.optional-dependencies]
+psycopg = ["psycopg>=3.3,<4"]
+asyncpg = ["asyncpg>=0.31,<1"]
+
+[dependency-groups]
+dev = [
+  "asyncpg>=0.31,<1",
+  "build>=1.3,<2",
+  "mypy>=1.18,<2",
+  "psycopg[binary]>=3.3,<4",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.2,<2",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/workhorse"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["integration: requires the worktree's local PostgreSQL test database"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["workhorse"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
