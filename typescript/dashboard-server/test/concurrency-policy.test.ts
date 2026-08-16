@@ -39,6 +39,12 @@ describe("dashboard concurrency policy read model", () => {
           reasons: [
             { code: "expired-leases", severity: "critical", observed: 1, budget: 0 },
             {
+              code: "overdue-external-waits",
+              severity: "critical",
+              observed: 2,
+              budget: 0,
+            },
+            {
               code: "concurrency-blocked",
               severity: "degraded",
               observed: 3,
@@ -70,7 +76,7 @@ describe("dashboard concurrency policy read model", () => {
         },
       }),
     ).toEqual({
-      criticalChecks: ["Expired leases"],
+      criticalChecks: ["Expired leases", "External waits are overdue (2)"],
       degradedChecks: [
         "Concurrency policy blocks ready tasks on payments",
         "Queue emails has 2+ ready tasks waiting for rate-limit tokens",

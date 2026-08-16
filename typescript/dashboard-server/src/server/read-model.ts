@@ -1365,6 +1365,9 @@ export function healthCheckMessages(health: Pick<QueueHealthSnapshot, "status">)
       case "overdue-execution-timeouts":
         criticalChecks.push("Attempts are past their execution limits");
         break;
+      case "overdue-external-waits":
+        criticalChecks.push(`External waits are overdue (${reason.observed})`);
+        break;
       case "stalled-promotion":
         criticalChecks.push("Scheduled tasks are overdue");
         break;
@@ -1728,6 +1731,9 @@ export async function readDashboardSystem(
         expiringSoon: runtime.expiring_soon,
         recovered: summary.recovered,
       },
+      dependencies: { ...health.dependencies },
+      children: { ...health.children },
+      externalWaits: { ...health.externalWaits },
       deadline: {
         pending: health.deadlinePressure.pending,
         overdue: health.deadlinePressure.overdue,

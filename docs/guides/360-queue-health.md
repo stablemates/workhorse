@@ -50,9 +50,8 @@ generous against its maintenance cadence so routine jitter never alerts.
 When a budget is exceeded, the verdict carries a reason — a stable code plus the observed value
 and the budget it broke. Codes split into two severities:
 
-- **Critical** means work is stopping or being lost right now: an expired lease, a job past its
-  deadline or execution timeout, due work that promotion is not picking up, or a missing daily
-  history partition.
+- **Critical** means work is stopping or being lost right now. Examples include an expired lease,
+  an overdue external wait, stalled promotion, or missing daily history storage.
 - **Degraded** means the queue still runs but something is falling behind: a stalled statistics
   rollup, late retention cleanup, history spilling into fallback storage, or ready work blocked
   by concurrency or rate-limit policies.
