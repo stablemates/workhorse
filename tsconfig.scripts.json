@@ -4,7 +4,8 @@
     "declaration": false,
     "declarationMap": false,
     "noEmit": true,
-    "rootDir": "."
+    "rootDir": ".",
+    "incremental": false
   },
   "include": ["scripts/**/*.ts", "typescript/core/src/local-database.ts"]
 }

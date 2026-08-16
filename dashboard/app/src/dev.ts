@@ -80,7 +80,13 @@ export async function createDashboardDevServer(
     // The host owns HTML, so Vite must not try to serve an index itself.
     appType: "custom",
     server: { middlewareMode: true },
-    resolve: { alias: { "/src": source } },
+    // `workhorse-source` is how this repository's own packages offer their TypeScript source. A
+    // published package declares no such condition, so a consumer resolves `dist` exactly as
+    // before and only this repository skips the build.
+    resolve: {
+      alias: { "/src": source },
+      conditions: ["workhorse-source", ...vite.defaultClientConditions],
+    },
   });
 
   return {

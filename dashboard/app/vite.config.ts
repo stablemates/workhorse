@@ -1,6 +1,6 @@
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
-import { defineConfig } from "vite";
+import { defaultClientConditions, defineConfig } from "vite";
 import { renderDashboardHtml } from "@workhorse/dashboard-server/server";
 
 /**
@@ -54,7 +54,13 @@ export default defineConfig({
     },
   ],
   build: { outDir: "../dist/app", emptyOutDir: false },
-  resolve: { alias: { "/src": new URL("./src", import.meta.url).pathname } },
+  // The workspace packages expose their TypeScript source under `workhorse-source`, so this
+  // harness compiles them from source instead of waiting for a build. The published packages keep
+  // resolving to `dist`, because nothing outside this repository asks for that condition.
+  resolve: {
+    alias: { "/src": new URL("./src", import.meta.url).pathname },
+    conditions: ["workhorse-source", ...defaultClientConditions],
+  },
   server: {
     host: "127.0.0.1",
     port,

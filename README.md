@@ -381,7 +381,7 @@ pnpm check
 build checks. The Python package can also be checked alone with the `pnpm python:*` scripts listed
 in [`python/README.md`](python/README.md).
 
-Run `pnpm demo` for the project at `http://workhorse.localhost:43155`. Portless assigns the application port and
+Run `pnpm dev` for the project at `http://workhorse.localhost:43155`. Portless assigns the application port and
 automatically prefixes linked worktrees with their branch name, for example
 `http://feature-name.workhorse.localhost:43155`. Workhorse keeps Portless state in
 `~/.portless-workhorse`, uses plain HTTP on an unprivileged high port, and therefore never needs
@@ -398,7 +398,7 @@ Local tooling keeps four databases separate:
 | `workhorse_dev`   | Manual development and `pnpm health`         | `pnpm db:reset` or `pnpm db:reset:dev`  |
 | `workhorse_test`  | Automated integration tests only             | `pnpm db:reset:test`, `pnpm test`       |
 | `workhorse_bench` | Destructive benchmark runs and their history | `pnpm db:reset:bench`, `pnpm benchmark` |
-| `workhorse_demo`  | Reproducible local demo data                 | `pnpm db:reset:demo`, `pnpm demo`       |
+| `workhorse_demo`  | Reproducible local demo data                 | `pnpm db:reset:demo`, `pnpm dev:reset`  |
 
 `pnpm db:reset:all` recreates all four databases and installs canonical `sql/schema.sql`. Run it after every schema change. Each destructive command verifies its purpose-specific `_dev`, `_test`, `_bench`, or `_demo` suffix, requires confirmation internally, and refuses remote hosts unless `WORKHORSE_ALLOW_REMOTE_RESET=1` is deliberately set.
 
@@ -421,13 +421,15 @@ drop its databases without removing the checkout.
 ## Run the demo
 
 After `pnpm install`, the demo needs only PostgreSQL 15+ and the local `workhorse` role described above.
-One command safely recreates the purpose-guarded `workhorse_demo` database, installs the application
-schema, builds the development runtime artifacts, starts the Hono server, starts **two dedicated
-worker processes**, and serves `@workhorse/dashboard` from source through Vite:
+`pnpm dev` starts the Hono server, **two dedicated worker processes**, and the dashboard from source
+through Vite. It does not reset the demo database or build workspace artifacts:
 
 ```bash
-pnpm demo
+pnpm dev
 ```
+
+Run `pnpm dev:reset` when you need a clean `workhorse_demo` database. `pnpm demo` remains an alias
+for `pnpm dev`.
 
 The demo deliberately runs each worker in its own process. The server and workers share nothing but
 PostgreSQL: the workers

@@ -1,6 +1,9 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "rootDir": "typescript/core" },
+  "compilerOptions": {
+    "rootDir": "typescript/core",
+    "tsBuildInfoFile": ".build/core.tsbuildinfo"
+  },
   "include": ["typescript/core/src/**/*.ts", "typescript/core/benchmarks/**/*.ts"],
   "exclude": ["typescript/core/test", "vitest.config.ts", "typescript/core/src/cli/reset-db.ts"]
 }

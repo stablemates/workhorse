@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -18,6 +18,10 @@ const core = await corePackage();
 
 async function read(relativePath: string): Promise<string> {
   return readFile(path.join(repositoryRoot, relativePath), "utf8");
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 describe("the derived package list", () => {
@@ -87,6 +91,7 @@ describe("published package manifests", () => {
     expect(coreManifest.peerDependenciesMeta?.["@workhorse/dashboard"]?.optional).toBe(true);
     expect(dashboardManifest.dependencies?.["@workhorse/dashboard-contract"]).toBe("workspace:*");
     expect(dashboardManifest.exports?.["./standalone"]).toEqual({
+      "workhorse-source": "./src/server/standalone.ts",
       types: "./dist/server/standalone.d.ts",
       import: "./dist/server/standalone.js",
     });
@@ -95,6 +100,61 @@ describe("published package manifests", () => {
     expect(coreDashboardSource).not.toContain('.join("/")');
     expect(coreDashboardSource).not.toContain("interface DashboardServerModule");
     expect(standaloneSource).toContain("DashboardStandaloneModule<Queryable>");
+  });
+
+  it("keeps source exports ahead of the published dist exports", async () => {
+    for (const entry of [core, ...packages]) {
+      const manifest = JSON.parse(await read(entry.manifest)) as {
+        exports?: Record<string, unknown>;
+      };
+      if (!manifest.exports) continue;
+
+      for (const [subpath, target] of Object.entries(manifest.exports)) {
+        if (!isRecord(target) || typeof target.import !== "string") continue;
+        const types = target.types;
+        const source = target["workhorse-source"];
+        if (typeof types !== "string" || typeof source !== "string") {
+          throw new Error(`${entry.name}${subpath} needs types and workhorse-source exports`);
+        }
+        expect(types, `${entry.name}${subpath} types export`).toMatch(/^\.\/dist\/.*\.d\.ts$/);
+        expect(target.import, `${entry.name}${subpath} import export`).toMatch(
+          /^\.\/dist\/.*\.js$/,
+        );
+        expect(source, `${entry.name}${subpath} workhorse-source export`).toMatch(
+          /^\.\/src\/.*\.ts$/,
+        );
+
+        const conditions = Object.keys(target);
+        expect(conditions.indexOf("workhorse-source")).toBeLessThan(conditions.indexOf("types"));
+        expect(conditions.indexOf("workhorse-source")).toBeLessThan(conditions.indexOf("import"));
+        await access(path.join(repositoryRoot, entry.location, source));
+      }
+    }
+  });
+
+  /**
+   * A published package ships `dist`, not `src`. Vite resolves the conventional `development`
+   * condition on its own, so naming a source path under it would send every consumer's development
+   * server to a directory the tarball does not contain. `workhorse-source` is private to this
+   * repository, and nothing outside it asks for that condition.
+   */
+  it("names no source condition a bundler applies by itself", async () => {
+    const applied = new Set(["development", "production", "browser", "module", "node", "default"]);
+    for (const entry of [core, ...packages]) {
+      const manifest = JSON.parse(await read(entry.manifest)) as {
+        exports?: Record<string, unknown>;
+        files?: string[];
+      };
+      expect(manifest.files ?? [], `${entry.name} files`).not.toContain("src");
+
+      for (const [subpath, target] of Object.entries(manifest.exports ?? {})) {
+        if (!isRecord(target)) continue;
+        for (const [condition, value] of Object.entries(target)) {
+          if (typeof value !== "string" || !value.startsWith("./src/")) continue;
+          expect(applied.has(condition), `${entry.name}${subpath} ${condition} export`).toBe(false);
+        }
+      }
+    }
   });
 
   it("allows dashboard and core patch releases to move independently", async () => {

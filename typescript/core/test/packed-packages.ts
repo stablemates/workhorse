@@ -60,7 +60,6 @@ async function filesBelow(directory: string): Promise<string[]> {
 }
 
 try {
-  await run("pnpm", ["build"]);
   const tarballs = path.join(scratch, "tarballs");
   await mkdir(tarballs);
   await run("pnpm", [
