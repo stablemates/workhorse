@@ -269,6 +269,50 @@ describe("signals", () => {
     });
   });
 
+  it("redrives a failed signal consumer without copying its delivered signal", async () => {
+    const sourceId = await queue.enqueue("signal-redrive", {}, { maxAttempts: 1 });
+    const worker = new Worker(queue, { workerId: "signal-redrive-worker" }).handle(
+      "signal-redrive",
+      async (_payload, context) => {
+        const received = await context.waitForSignal<{ approved: boolean }>("approval");
+        if (context.job.id === sourceId) throw new Error("fail after source delivery");
+        return received;
+      },
+    );
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await queue.sendSignal(
+      sourceId,
+      "approval",
+      { approved: true },
+      { idempotencyKey: "signal-redrive-source", requestedBy: "approval-service" },
+    );
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(queue.getJob(sourceId)).resolves.toMatchObject({ state: "failed" });
+
+    const redrive = await queue.redrive(sourceId, {
+      requestedBy: "signal-test",
+      reason: "retry signal workflow",
+      requestId: `signal-redrive-${sourceId}`,
+    });
+    expect(redrive.status).toBe("redriven");
+    const targetId = redrive.targetJobId!;
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(queue.getJob(targetId)).resolves.toMatchObject({ state: "scheduled" });
+    await queue.sendSignal(
+      targetId,
+      "approval",
+      { approved: false },
+      { idempotencyKey: "signal-redrive-target", requestedBy: "approval-service" },
+    );
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(queue.getJob(targetId)).resolves.toMatchObject({
+      state: "succeeded",
+      result: { approved: false },
+    });
+  });
+
   it("records bounded attribution for accepted and rejected deliveries", async () => {
     const id = await queue.enqueue("signal-audit", {});
     await queue.sendSignal(

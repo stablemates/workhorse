@@ -572,6 +572,7 @@ describe("job dependencies", () => {
         payload: { index },
       })),
     );
+    // oxlint-disable-next-line unicorn/no-array-sort -- this package targets ES2022 without Array.toSorted.
     const [lowerId, upperId, thirdId, fourthId] = [...ids].sort();
     if (!lowerId || !upperId || !thirdId || !fourthId) {
       throw new Error("component merge setup did not enqueue every job");
@@ -827,6 +828,98 @@ describe("job dependencies", () => {
       { event_type: "dependency_blocked", prerequisite_job_id: prerequisiteId },
       { event_type: "dependency_released", prerequisite_job_id: prerequisiteId },
     ]);
+  });
+
+  it("dispatches a released dependent by its stored priority", async () => {
+    const prerequisiteQueue = "dependency-priority-prerequisite";
+    const workQueue = "dependency-priority-work";
+    const prerequisiteId = await queue.enqueue("dependency-priority-prerequisite", null, {
+      queue: prerequisiteQueue,
+    });
+    const ordinaryId = await queue.enqueue(
+      "dependency-priority-work",
+      { class: "ordinary" },
+      {
+        queue: workQueue,
+        priority: 50,
+      },
+    );
+    const urgentId = await queue.enqueue(
+      "dependency-priority-work",
+      { class: "urgent" },
+      {
+        queue: workQueue,
+        priority: 90,
+        prerequisiteJobId: prerequisiteId,
+      },
+    );
+
+    const prerequisite = await queue.claim("dependency-priority-prerequisite-worker", {
+      queue: prerequisiteQueue,
+    });
+    expect(prerequisite?.id).toBe(prerequisiteId);
+    await expect(
+      queue.complete(prerequisite!, "dependency-priority-prerequisite-worker", null),
+    ).resolves.toBe(true);
+
+    const first = await queue.claim("dependency-priority-work-worker", { queue: workQueue });
+    expect(first).toMatchObject({ id: urgentId, priority: 90 });
+    await expect(queue.complete(first!, "dependency-priority-work-worker", null)).resolves.toBe(
+      true,
+    );
+    await expect(
+      queue.claim("dependency-priority-work-worker", { queue: workQueue }),
+    ).resolves.toMatchObject({ id: ordinaryId, priority: 50 });
+  });
+
+  it("redrives a failed dependent without copying its dependency edges", async () => {
+    const prerequisiteQueue = "dependency-redrive-prerequisite";
+    const workQueue = "dependency-redrive-work";
+    const prerequisiteId = await queue.enqueue("dependency-redrive-prerequisite", null, {
+      queue: prerequisiteQueue,
+    });
+    const dependentId = await queue.enqueue("dependency-redrive-work", null, {
+      queue: workQueue,
+      maxAttempts: 1,
+      prerequisiteJobId: prerequisiteId,
+    });
+    const prerequisite = await queue.claim("dependency-redrive-prerequisite-worker", {
+      queue: prerequisiteQueue,
+    });
+    await queue.complete(prerequisite!, "dependency-redrive-prerequisite-worker", null);
+    const dependent = await queue.claim("dependency-redrive-work-worker", { queue: workQueue });
+    await expect(
+      queue.fail(dependent!, "dependency-redrive-work-worker", new Error("dependency work failed")),
+    ).resolves.toBe("failed");
+
+    const redrive = await queue.redrive(dependentId, {
+      requestedBy: "dependency-test",
+      reason: "retry with repaired input",
+      requestId: `dependency-redrive-${dependentId}`,
+    });
+    expect(redrive.status).toBe("redriven");
+    const targetId = redrive.targetJobId!;
+    await expect(queue.getJob(targetId)).resolves.toMatchObject({
+      state: "ready",
+      prerequisiteJobId: null,
+      prerequisiteJobIds: [],
+    });
+    await expect(queue.getDependencyLineage(targetId)).resolves.toEqual({
+      records: [],
+      truncated: false,
+    });
+    await expect(queue.getDependencyLineage(dependentId)).resolves.toMatchObject({
+      records: [
+        expect.objectContaining({
+          dependentJobId: dependentId,
+          prerequisiteJobId: prerequisiteId,
+        }),
+      ],
+      truncated: false,
+    });
+    await expect(
+      queue.claim("dependency-redrive-target-worker", { queue: workQueue }),
+    ).resolves.toMatchObject({ id: targetId });
   });
 
   it("preserves a dependent schedule when success releases it", async () => {
