@@ -1,6 +1,5 @@
 import {
   dashboardTaskFilters,
-  dashboardTaskPriorityMax,
   dashboardTaskSorts,
   type DashboardTaskFilter,
   type DashboardTaskSort,
@@ -16,7 +15,6 @@ export interface TaskLocationState {
   queue: string | null;
   worker: string | null;
   jobType: string | null;
-  priority: number | null;
   sort: DashboardTaskSort;
   tags: string[];
   search: string | null;
@@ -71,8 +69,6 @@ export function parseTaskLocation(
   const requestedPageSize = Number(parameters.get("per") ?? "50");
   const requestedPeriod = optionalValue(parameters, "period") as TaskActivityPeriod | null;
   const requestedGroup = optionalValue(parameters, "group") as TaskActivityGroup | null;
-  const requestedPriorityInput = optionalValue(parameters, "priority");
-  const requestedPriority = Number(requestedPriorityInput);
   const requestedSort = optionalValue(parameters, "sort") as DashboardTaskSort | null;
   const tags = (parameters.get("tags") ?? "")
     .split(",")
@@ -88,13 +84,6 @@ export function parseTaskLocation(
     queue: optionalValue(parameters, "queue"),
     worker: optionalValue(parameters, "worker"),
     jobType: optionalValue(parameters, "type"),
-    priority:
-      requestedPriorityInput !== null &&
-      Number.isInteger(requestedPriority) &&
-      requestedPriority >= 0 &&
-      requestedPriority <= dashboardTaskPriorityMax
-        ? requestedPriority
-        : null,
     sort: requestedSort && sorts.has(requestedSort) ? requestedSort : "updated",
     tags,
     search: optionalValue(parameters, "q"),
@@ -122,7 +111,6 @@ export function taskLocationHref(state: TaskLocationState): string {
   if (state.queue) parameters.set("queue", state.queue);
   if (state.worker) parameters.set("worker", state.worker);
   if (state.jobType) parameters.set("type", state.jobType);
-  if (state.priority !== null) parameters.set("priority", String(state.priority));
   if (state.sort !== "updated") parameters.set("sort", state.sort);
   if (state.page > 1) parameters.set("page", String(state.page));
   if (state.pageSize !== 50) parameters.set("per", String(state.pageSize));
@@ -149,7 +137,6 @@ export function taskListingKey(state: TaskLocationState): string {
     state.jobType,
     state.tags,
     state.search,
-    state.priority,
     state.sort,
     state.page,
     state.pageSize,

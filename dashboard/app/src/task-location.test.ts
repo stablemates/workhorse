@@ -9,7 +9,7 @@ import {
 describe("task location state", () => {
   it("round-trips shareable task filters and omits defaults", () => {
     const state = parseTaskLocation(
-      "?filter=retried&tags=billing,weekly&q=invoice*&queue=orders&worker=worker-1&type=order.process&priority=75&sort=priority&page=3&per=100&period=7d&group=task",
+      "?filter=retried&tags=billing,weekly&q=invoice*&queue=orders&worker=worker-1&type=order.process&sort=priority&page=3&per=100&period=7d&group=task",
     );
     expect(state).toEqual({
       filter: "retried",
@@ -18,7 +18,6 @@ describe("task location state", () => {
       queue: "orders",
       worker: "worker-1",
       jobType: "order.process",
-      priority: 75,
       sort: "priority",
       page: 3,
       pageSize: 100,
@@ -35,7 +34,6 @@ describe("task location state", () => {
         queue: null,
         worker: null,
         jobType: null,
-        priority: null,
         sort: "updated",
         page: 1,
         pageSize: 50,
@@ -48,16 +46,12 @@ describe("task location state", () => {
 
   it("silently falls back for invalid URL values and accepts remembered chart defaults", () => {
     expect(
-      parseTaskLocation(
-        "?filter=unknown&priority=101&sort=oldest&page=-2&per=10&period=bad&group=bad",
-        {
-          period: "24h",
-          group: "worker",
-        },
-      ),
+      parseTaskLocation("?filter=unknown&sort=oldest&page=-2&per=10&period=bad&group=bad", {
+        period: "24h",
+        group: "worker",
+      }),
     ).toMatchObject({
       filter: "all",
-      priority: null,
       sort: "updated",
       page: 1,
       pageSize: 50,
@@ -66,9 +60,9 @@ describe("task location state", () => {
     });
   });
 
-  it("accepts default priority as an explicit filter and rejects fractional values", () => {
-    expect(parseTaskLocation("?priority=0").priority).toBe(0);
-    expect(parseTaskLocation("?priority=1.5").priority).toBeNull();
+  it("ignores retired priority filters in old task URLs", () => {
+    const state = parseTaskLocation("?priority=75");
+    expect(taskLocationHref(state)).toBe("/tasks");
   });
 
   it("round-trips status activity grouping", () => {
@@ -154,7 +148,6 @@ describe("task location state", () => {
       taskListingKey(closed),
     );
     expect(taskListingKey({ ...closed, search: "invoice" })).not.toBe(taskListingKey(closed));
-    expect(taskListingKey({ ...closed, priority: 50 })).not.toBe(taskListingKey(closed));
     expect(taskListingKey({ ...closed, sort: "priority" })).not.toBe(taskListingKey(closed));
   });
 });

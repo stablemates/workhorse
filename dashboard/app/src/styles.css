@@ -116,8 +116,9 @@ body {
   min-width: 1124px;
 }
 
-.task-table.task-table--full-input {
-  min-width: 1244px;
+.task-table__col--tags {
+  max-width: 180px;
+  width: 180px;
 }
 
 @media (max-width: 75em) {
@@ -126,21 +127,18 @@ body {
     display: none;
   }
 
-  .task-table,
-  .task-table.task-table--full-input {
+  .task-table {
     min-width: 920px;
   }
 }
 
 @media (max-width: 62em) {
-  .task-table__col--input,
   .task-table__col--blocked,
   .task-table__col--duration {
     display: none;
   }
 
-  .task-table,
-  .task-table.task-table--full-input {
+  .task-table {
     min-width: 680px;
   }
 }
@@ -158,8 +156,7 @@ body {
     display: none;
   }
 
-  .task-table,
-  .task-table.task-table--full-input {
+  .task-table {
     min-width: 0;
     table-layout: fixed;
     width: 100%;

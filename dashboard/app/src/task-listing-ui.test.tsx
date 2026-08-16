@@ -27,15 +27,17 @@ describe("task listing identity", () => {
     expect(html).toContain("text-overflow:ellipsis");
   });
 
-  it("renders tags independently and gives every visible tag a title", async () => {
+  it("keeps tags on one line and exposes the full visible list on hover", async () => {
     const { TaskTags } = await import("./dashboard.js");
     const html = render(TaskTags, {
       tags: ["billing", "weekly", "durable-checkpoint"],
     });
 
-    expect(html).toContain('title="billing"');
-    expect(html).toContain('title="weekly"');
-    expect(html).not.toContain("durable-checkpoint");
+    expect(html).toContain('title="billing, weekly, durable-checkpoint"');
+    expect(html).toContain("white-space:nowrap");
+    expect(html).toContain("overflow:hidden");
+    expect(html).toContain("text-overflow:ellipsis");
+    expect(html).toContain("durable-checkpoint");
   });
 
   it("uses a named button to open task details from the table", async () => {
@@ -50,6 +52,33 @@ describe("task listing identity", () => {
     expect(html).toContain("<button");
     expect(html).toContain('id="task-open-job-123"');
     expect(html).toContain('aria-label="View task billing.invoice, job-123"');
+  });
+
+  it("places ordering after task type and omits the priority filter", async () => {
+    const { TaskListingFilters } = await import("./dashboard.js");
+    const html = render(TaskListingFilters, {
+      data: {
+        tags: [],
+        sort: "updated",
+        queue: null,
+        worker: null,
+        jobType: null,
+      },
+      searchInput: "",
+      setSearchInput: () => undefined,
+      taskFacets: {
+        facets: { queues: [], workers: [], jobTypes: [], tags: [] },
+        loading: false,
+        error: null,
+        load: () => undefined,
+      },
+      updateLocation: () => undefined,
+    });
+
+    expect(html).not.toContain('aria-label="Filter tasks by exact priority"');
+    expect(html.indexOf('aria-label="Filter tasks by task type"')).toBeLessThan(
+      html.indexOf('aria-label="Sort tasks"'),
+    );
   });
 
   it("announces task state without relying on badge color", async () => {
