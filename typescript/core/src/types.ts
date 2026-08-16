@@ -109,11 +109,24 @@ export interface EnqueueThrottle {
 /** PostgreSQL's durable disposition for one enqueue request. */
 export type EnqueueOutcome = "accepted" | "replayed" | "replaced" | "non_replaceable" | "coalesced";
 
+/** Why PostgreSQL retained a debounced job instead of applying the proposed replacement. */
+export type EnqueueNonReplaceableReason =
+  | "incompatible_key_mode"
+  | "not_pending"
+  | "window_elapsed_pending";
+
 /** Stable identity plus the durable disposition of one enqueue request. */
-export interface EnqueueResult {
-  jobId: string;
-  outcome: EnqueueOutcome;
-}
+export type EnqueueResult =
+  | {
+      jobId: string;
+      outcome: Exclude<EnqueueOutcome, "non_replaceable">;
+      reason?: never;
+    }
+  | {
+      jobId: string;
+      outcome: "non_replaceable";
+      reason: EnqueueNonReplaceableReason;
+    };
 
 /** Top-level accepted request fields whose normalized semantics can conflict on replay. */
 export type EnqueueIdempotencyConflictField =
@@ -150,8 +163,8 @@ export interface EnqueueIdempotencyConflictDetails {
   rejectedRequestDigest: string;
 }
 
-/** Options persisted as part of the accepted job definition or initial dispatch projection. */
-export interface EnqueueOptions {
+/** Options shared by every enqueue ingress mode. */
+interface EnqueueBaseOptions {
   queue?: string;
   /** Dispatch rank from 0 through 100. Higher values are claimed first. */
   priority?: number;
@@ -165,16 +178,45 @@ export interface EnqueueOptions {
   maxAttempts?: number;
   retryPolicy?: RetryPolicy;
   tags?: string[];
-  idempotency?: EnqueueIdempotency;
-  /** Replace one still-pending keyed job without dependencies during a PostgreSQL-owned window. */
-  debounce?: EnqueueDebounce;
-  /** Accept at most one equivalent job without dependencies per PostgreSQL-owned window. */
-  throttle?: EnqueueThrottle;
-  /** Stable job identity that must succeed before this job can enter dispatch. */
-  prerequisiteJobId?: string;
-  /** Bounded fan-in and the terminal outcomes accepted from each prerequisite. */
-  dependencies?: JobDependencies;
 }
+
+type EnqueueDependencyOptions =
+  | {
+      /** @deprecated Use `dependencies` with one prerequisite and explicit terminal policies. */
+      prerequisiteJobId: string;
+      dependencies?: never;
+    }
+  | {
+      prerequisiteJobId?: never;
+      /** Bounded fan-in and the terminal outcomes accepted from each prerequisite. */
+      dependencies?: JobDependencies;
+    };
+
+/** Options persisted as part of the accepted job definition or initial dispatch projection. */
+export type EnqueueOptions = EnqueueBaseOptions &
+  (
+    | (EnqueueDependencyOptions & {
+        idempotency?: EnqueueIdempotency;
+        debounce?: never;
+        throttle?: never;
+      })
+    | {
+        idempotency?: never;
+        /** Replace one still-pending keyed job during a PostgreSQL-owned window. */
+        debounce: EnqueueDebounce;
+        throttle?: never;
+        prerequisiteJobId?: never;
+        dependencies?: never;
+      }
+    | {
+        idempotency?: never;
+        debounce?: never;
+        /** Accept at most one equivalent job per PostgreSQL-owned window. */
+        throttle: EnqueueThrottle;
+        prerequisiteJobId?: never;
+        dependencies?: never;
+      }
+  );
 
 /** What a dependent does when one prerequisite reaches a non-success terminal state. */
 export type DependencyTerminalPolicy = "release" | "cancel" | "fail";

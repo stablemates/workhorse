@@ -34,7 +34,7 @@ key. One request cannot combine throttle with
 [enqueue idempotency](210-enqueue-idempotency.md) or [debounce](215-debounce.md), because each mode
 gives a repeated key a different meaning.
 
-A throttled job cannot declare `prerequisiteJobId` or `dependencies`. Use a regular
+A throttled job cannot declare the deprecated `prerequisiteJobId` or `dependencies`. Use a regular
 [dependent job](160-job-dependencies.md) when dispatch must wait for other work.
 
 ## Next

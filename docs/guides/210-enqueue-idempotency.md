@@ -46,7 +46,9 @@ its `outcome` field is an `EnqueueOutcome` that explains what PostgreSQL did wit
 - `accepted` means PostgreSQL created a new job.
 - `replayed` means an idempotency key found an equivalent retained job.
 - `replaced` means [debounce](215-debounce.md) updated a pending job.
-- `non_replaceable` means debounce retained a job that could no longer accept an update.
+- `non_replaceable` means debounce retained a job that could no longer accept an update. This
+  result also carries `reason`, so callers can distinguish an incompatible key mode, a job that is
+  no longer pending, and a pending job whose window elapsed.
 - `coalesced` means [throttle](217-throttle.md) reused the job for its active window.
 
 Use `Queue.enqueue` when the stable job id is enough. It returns the same `jobId` and hides the

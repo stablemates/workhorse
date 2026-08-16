@@ -34,7 +34,9 @@ A pending replacement is `replaced`.
 
 Only a `scheduled` or `ready` job can be replaced. If a worker owns the job, or the job is already
 terminal, the outcome is `non_replaceable`. Workhorse discards the new request's payload and
-returns the retained job's stable `jobId`, while its accepted payload stays unchanged.
+returns the retained job's stable `jobId`, while its accepted payload stays unchanged. The result's
+`reason` distinguishes a job that is no longer pending, an incompatible key mode, and a pending job
+whose window elapsed.
 
 If the window elapses before promotion runs, Workhorse also refuses replacement. This prevents a
 late request from creating a second live job beside overdue work. After an operator purges the old
@@ -44,7 +46,7 @@ Debounce and [enqueue idempotency](210-enqueue-idempotency.md) solve different p
 replays an equivalent request and rejects a changed one. Debounce deliberately accepts changed
 payloads while one job remains pending, so one request cannot enable both options.
 
-A debounced job cannot declare `prerequisiteJobId` or `dependencies`. Replacement changes the
+A debounced job cannot declare the deprecated `prerequisiteJobId` or `dependencies`. Replacement changes the
 accepted job, but dependency edges must stay stable after acceptance. Use a regular
 [dependent job](160-job-dependencies.md) when dispatch must wait for other work.
 

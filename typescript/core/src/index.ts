@@ -164,6 +164,7 @@ export type {
   EnqueueThrottle,
   EnqueueIdempotencyConflictDetails,
   EnqueueIdempotencyConflictField,
+  EnqueueNonReplaceableReason,
   EnqueueOutcome,
   EnqueueOptions,
   EnqueueRequest,

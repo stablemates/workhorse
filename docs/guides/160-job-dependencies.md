@@ -5,8 +5,9 @@ Use them when downstream work would be invalid or wasteful before its inputs fin
 
 ## Declare the prerequisite
 
-First enqueue the prerequisite and keep its stable job id. Pass that id as
-`EnqueueOptions.prerequisiteJobId` when you enqueue the dependent:
+First enqueue the prerequisite and keep its stable job id. Put that id in
+`EnqueueOptions.dependencies` when you enqueue the dependent. The older `prerequisiteJobId`
+shorthand is deprecated because it hides the terminal policies:
 
 ```ts
 const importId = await queue.enqueue("contacts.import", { source: "upload" });
@@ -14,7 +15,14 @@ const importId = await queue.enqueue("contacts.import", { source: "upload" });
 const notifyId = await queue.enqueue(
   "contacts.notify",
   { importId },
-  { prerequisiteJobId: importId },
+  {
+    dependencies: {
+      prerequisiteJobIds: [importId],
+      onSuccess: "release",
+      onFailure: "fail",
+      onCancellation: "cancel",
+    },
+  },
 );
 ```
 

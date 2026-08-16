@@ -11,10 +11,10 @@ import { assertSupportedPostgres } from "./support.js";
 import type { Queryable } from "./types.js";
 
 /** Current pre-release baseline, and later the oldest version covered by migrations. */
-export const WORKHORSE_SCHEMA_BASELINE_VERSION = 42;
+export const WORKHORSE_SCHEMA_BASELINE_VERSION = 43;
 
 /** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 42;
+export const WORKHORSE_SCHEMA_VERSION = 43;
 
 const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
 

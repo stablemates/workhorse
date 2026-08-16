@@ -245,16 +245,16 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v42 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v43 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(42);
+    expect(version.rows[0]?.version).toBe(43);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
     );
-    expect(migrations.rows).toEqual([{ version: 42, description: "pre-release baseline" }]);
+    expect(migrations.rows).toEqual([{ version: 43, description: "pre-release baseline" }]);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;

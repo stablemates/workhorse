@@ -299,8 +299,10 @@ const result = await queue.enqueueWithResult(
 );
 ```
 
-The structured result reports `accepted`, `replaced`, or `non_replaceable`. Active and terminal jobs
-are never rewritten, and an elapsed pending job remains protected until promotion or purge resolves it.
+The structured result reports `accepted`, `replaced`, or `non_replaceable`. A non-replaceable
+result also explains whether the retained key has an incompatible mode, the job is no longer
+pending, or its pending window elapsed. Active and terminal jobs are never rewritten, and an
+elapsed pending job remains protected until promotion or purge resolves it.
 
 ### Keyed throttle
 
