@@ -319,7 +319,7 @@ describe("operational scenario contracts", () => {
     expect(contract).toBeDefined();
     expect(contract!.invariants.join("\n")).toMatch(/fan-in/);
     expect(contract!.invariants.join("\n")).toMatch(/fan-out/);
-    expect(contract!.invariants.join("\n")).toMatch(/concurrent dependency/);
+    expect(contract!.invariants.join("\n")).toMatch(/concurrent disconnected dependency/);
     expect(contract!.invariants.join("\n")).toMatch(/cancellation/);
     expect(contract!.invariants.join("\n")).toMatch(/retained terminal history/);
     expect(contract!.metrics).toEqual(
