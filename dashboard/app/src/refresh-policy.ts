@@ -11,6 +11,27 @@ export type DashboardRefreshIntervalValue = (typeof dashboardRefreshIntervals)[n
 
 export const defaultDashboardRefreshInterval: DashboardRefreshIntervalValue = "15s";
 
+type DashboardWindowState = Pick<Document, "hasFocus" | "visibilityState">;
+
+export function dashboardWindowIsActive(windowState: DashboardWindowState = document): boolean {
+  return windowState.visibilityState === "visible" && windowState.hasFocus();
+}
+
+export function subscribeDashboardWindowActivity(
+  changed: () => void,
+  browserWindow: EventTarget = window,
+  browserDocument: EventTarget = document,
+): () => void {
+  browserWindow.addEventListener("focus", changed);
+  browserWindow.addEventListener("blur", changed);
+  browserDocument.addEventListener("visibilitychange", changed);
+  return () => {
+    browserWindow.removeEventListener("focus", changed);
+    browserWindow.removeEventListener("blur", changed);
+    browserDocument.removeEventListener("visibilitychange", changed);
+  };
+}
+
 export function dashboardRefreshIntervalMs(value: DashboardRefreshIntervalValue): number | null {
   return dashboardRefreshIntervals.find((option) => option.value === value)?.ms ?? null;
 }

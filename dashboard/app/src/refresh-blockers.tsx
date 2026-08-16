@@ -8,6 +8,7 @@ import {
   type FocusEvent,
   type ReactNode,
 } from "react";
+import { dashboardWindowIsActive, subscribeDashboardWindowActivity } from "./refresh-policy.js";
 
 export interface RefreshBlocker {
   description: string;
@@ -112,6 +113,10 @@ export function useRefreshBlockers(): RefreshBlockerSnapshot & {
 }
 
 export const dashboardRefreshBlockers = {
+  inactiveWindow: {
+    description: "Auto refresh paused while this dashboard window is inactive",
+    priority: 30,
+  },
   focusedInput: {
     description: "Auto refresh paused while a dashboard input is focused",
     priority: 0,
@@ -133,6 +138,17 @@ export const dashboardRefreshBlockers = {
     priority: 20,
   },
 } as const satisfies Record<string, RefreshBlocker>;
+
+const dashboardWindowIsActiveOnServer = () => false;
+
+export function useDashboardWindowActivityRefreshBlocker(): void {
+  const active = useSyncExternalStore(
+    subscribeDashboardWindowActivity,
+    dashboardWindowIsActive,
+    dashboardWindowIsActiveOnServer,
+  );
+  useRefreshBlocker(!active, dashboardRefreshBlockers.inactiveWindow);
+}
 
 function isRefreshBlockingInput(target: EventTarget | null): boolean {
   return (

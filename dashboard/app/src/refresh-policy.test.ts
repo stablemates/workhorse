@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDashboardPollingClock,
   createDashboardRefreshResumePolicy,
+  dashboardWindowIsActive,
   dashboardAutoRefreshPaused,
   dashboardPollingIntervalMs,
   dashboardRefreshIntervalMs,
@@ -9,11 +10,59 @@ import {
   discardBackgroundRefresh,
   startDashboardResumeCountdown,
   startDashboardPolling,
+  subscribeDashboardWindowActivity,
 } from "./refresh-policy.js";
 
 afterEach(() => vi.useRealTimers());
 
 describe("dashboard refresh policy", () => {
+  it("allows auto refresh only while the dashboard window is focused and visible", () => {
+    expect(dashboardWindowIsActive({ hasFocus: () => true, visibilityState: "visible" })).toBe(
+      true,
+    );
+    expect(dashboardWindowIsActive({ hasFocus: () => false, visibilityState: "visible" })).toBe(
+      false,
+    );
+    expect(dashboardWindowIsActive({ hasFocus: () => true, visibilityState: "hidden" })).toBe(
+      false,
+    );
+  });
+
+  it("tracks focus and visibility changes until the dashboard unmounts", () => {
+    const browserWindow = new EventTarget();
+    const browserDocument = new EventTarget();
+    let focused = true;
+    let visibilityState: DocumentVisibilityState = "visible";
+    const windowState = {
+      hasFocus: () => focused,
+      get visibilityState() {
+        return visibilityState;
+      },
+    };
+    const activity: boolean[] = [];
+    const changed = vi.fn<() => void>(() => {
+      activity.push(dashboardWindowIsActive(windowState));
+    });
+    const unsubscribe = subscribeDashboardWindowActivity(changed, browserWindow, browserDocument);
+
+    focused = false;
+    browserWindow.dispatchEvent(new Event("blur"));
+    focused = true;
+    browserWindow.dispatchEvent(new Event("focus"));
+    visibilityState = "hidden";
+    browserDocument.dispatchEvent(new Event("visibilitychange"));
+    visibilityState = "visible";
+    browserDocument.dispatchEvent(new Event("visibilitychange"));
+    expect(activity).toEqual([false, true, false, true]);
+    expect(changed).toHaveBeenCalledTimes(4);
+
+    unsubscribe();
+    focused = false;
+    browserWindow.dispatchEvent(new Event("blur"));
+    browserDocument.dispatchEvent(new Event("visibilitychange"));
+    expect(activity).toEqual([false, true, false, true]);
+  });
+
   it("defaults to one bounded refresh every 15 seconds", () => {
     vi.useFakeTimers();
     const refresh = vi.fn<() => void>();

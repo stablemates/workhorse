@@ -190,6 +190,7 @@ import {
   useRefreshBlocker,
   useRefreshBlockers,
   useRefreshBlockingInputCapture,
+  useDashboardWindowActivityRefreshBlocker,
 } from "./refresh-blockers.js";
 
 const DashboardClientContext = createContext<DashboardClient | null>(null);
@@ -6202,6 +6203,10 @@ function useDashboardController(
     localStorage.setItem(refreshStorageKey, value);
   }, []);
   const requestId = useRef(0);
+  const shouldDiscardBackgroundRefresh = useCallback(
+    (background: boolean) => discardBackgroundRefresh(background, refreshBlockers.isBlocked()),
+    [refreshBlockers.isBlocked],
+  );
 
   const navigate = useCallback(
     (href: string) => {
@@ -6253,9 +6258,7 @@ function useDashboardController(
 
   const loadPage = useCallback(
     async ({ background = false }: { background?: boolean } = {}) => {
-      const discardBlockedBackgroundRefresh = () =>
-        discardBackgroundRefresh(background, refreshBlockers.isBlocked());
-      if (discardBlockedBackgroundRefresh()) return;
+      if (shouldDiscardBackgroundRefresh(background)) return;
       const activeRequest = ++requestId.current;
       setLoadState((current) => ({
         status: "loading",
@@ -6312,7 +6315,7 @@ function useDashboardController(
           };
         }
         if (activeRequest === requestId.current) {
-          if (discardBlockedBackgroundRefresh()) {
+          if (shouldDiscardBackgroundRefresh(background)) {
             setLoadState((current) =>
               current.data ? { status: "ready", data: current.data, error: null } : current,
             );
@@ -6323,7 +6326,7 @@ function useDashboardController(
         }
       } catch (cause) {
         if (activeRequest === requestId.current) {
-          if (discardBlockedBackgroundRefresh()) {
+          if (shouldDiscardBackgroundRefresh(background)) {
             setLoadState((current) =>
               current.data ? { status: "ready", data: current.data, error: null } : current,
             );
@@ -6339,16 +6342,21 @@ function useDashboardController(
       // `listingKey` is the dependency the task listing actually has; the values themselves are
       // read from a ref so that a re-render for an unrelated reason cannot send a stale request.
     },
-    [client, route, listingKey, systemWindow, eventsKey, refreshBlockers.isBlocked],
+    [client, route, listingKey, systemWindow, eventsKey, shouldDiscardBackgroundRefresh],
   );
 
-  const loadTaskCounts = useCallback(async () => {
-    try {
-      setTaskCounts(await client.taskCounts());
-    } catch {
-      // The active page owns the connection state; keep the last navigation counts on failure.
-    }
-  }, [client]);
+  const loadTaskCounts = useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      if (shouldDiscardBackgroundRefresh(background)) return;
+      try {
+        const counts = await client.taskCounts();
+        if (!shouldDiscardBackgroundRefresh(background)) setTaskCounts(counts);
+      } catch {
+        // The active page owns the connection state; keep the last navigation counts on failure.
+      }
+    },
+    [client, shouldDiscardBackgroundRefresh],
+  );
 
   const runDemoJob = useCallback(
     async (kind: DemoJobKind, options: DemoJobOptions = {}) => {
@@ -6836,7 +6844,7 @@ function useDashboardController(
   useEffect(() => {
     pollingClock.setRefresh(() => {
       void loadPage({ background: true });
-      if (location.route !== "/tasks") void loadTaskCounts();
+      if (location.route !== "/tasks") void loadTaskCounts({ background: true });
     });
   }, [loadPage, loadTaskCounts, location.route, pollingClock]);
   useEffect(() => {
@@ -6995,6 +7003,7 @@ function DashboardContent({
   demoTools: DashboardDemoTools | null;
   basePath: string;
 }) {
+  useDashboardWindowActivityRefreshBlocker();
   const controller = useDashboardController(auditActor, demoTools, basePath);
   const dropdownOpened = useDropdownActivity();
   const narrowDetailDrawer = useMediaQuery("(max-width: 47.99em)");
