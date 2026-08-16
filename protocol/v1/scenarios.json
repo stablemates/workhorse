@@ -700,6 +700,24 @@
         "expect": { "rows": [{ "value": { "payload": null, "status": "waiting" } }] }
       },
       {
+        "id": "list-waits",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'queue', queue_name, 'jobType', job_type, 'name', signal_name, 'attempt', attempt) AS value FROM workhorse.dashboard_signal_wait_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "signalJob" }],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "jobId": { "$type": "uuid" },
+                "jobType": "protocol.signal",
+                "name": "approval",
+                "queue": "protocol-signal"
+              }
+            }
+          ]
+        }
+      },
+      {
         "id": "send",
         "sql": "SELECT jsonb_build_object('status', status, 'payload', payload, 'requestedBy', delivered_by) AS value FROM workhorse.send_signal_v1($1::uuid, $2, $3::jsonb, $4, $5)",
         "parameters": [
@@ -756,6 +774,25 @@
           null
         ],
         "expect": { "rows": [{ "value": { "result": null, "status": "waiting" } }] }
+      },
+      {
+        "id": "list-waits",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'queue', queue_name, 'jobType', job_type, 'name', token_name, 'context', context, 'attempt', attempt) AS value FROM workhorse.dashboard_human_wait_v1 WHERE job_id = $1::uuid",
+        "parameters": [{ "$ref": "humanJob" }],
+        "expect": {
+          "rows": [
+            {
+              "value": {
+                "attempt": 1,
+                "context": { "question": "Ship?" },
+                "jobId": { "$type": "uuid" },
+                "jobType": "protocol.human",
+                "name": "review",
+                "queue": "protocol-human"
+              }
+            }
+          ]
+        }
       },
       {
         "id": "complete",

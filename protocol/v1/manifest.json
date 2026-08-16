@@ -120,6 +120,16 @@
       "contract": "SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"
     }
   ],
+  "views": [
+    {
+      "name": "dashboard_signal_wait_v1",
+      "contract": "SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, signal_name LIMIT $1::integer"
+    },
+    {
+      "name": "dashboard_human_wait_v1",
+      "contract": "SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, token_name LIMIT $1::integer"
+    }
+  ],
   "typescriptContractSources": [
     "typescript/core/src/queue/enqueue-contracts.ts",
     "typescript/core/src/queue/claim-lease-fence.ts",

@@ -82,6 +82,10 @@ describe("SQL protocol conformance fixtures", () => {
         maximumVersion: WORKHORSE_SCHEMA_VERSION,
       },
       supportedClientProtocol: { minimumVersion: 1, maximumVersion: 1 },
+      views: [
+        expect.objectContaining({ name: "dashboard_signal_wait_v1" }),
+        expect.objectContaining({ name: "dashboard_human_wait_v1" }),
+      ],
     });
     expect(new Set(fixtures.manifest.coverage)).toEqual(
       new Set([
@@ -231,8 +235,14 @@ describe("SQL protocol conformance fixtures", () => {
       .join("\n");
     const intentionallyUnpinnedSqlFunctions = new Set<string>();
     const pinnedFunctions = new Set(fixtures.manifest.functions.map(({ name }) => name));
+    const pinnedViews = new Set(fixtures.manifest.views.map(({ name }) => name));
     const contractFunctions = new Set(
       [...contract.matchAll(/workhorse\.([a-z0-9_]+_v\d+)\s*\(/g)].map((match) => match[1]!),
+    );
+    const contractViews = new Set(
+      [...contract.matchAll(/FROM workhorse\.(dashboard_[a-z0-9_]+_v\d+)/g)].map(
+        (match) => match[1]!,
+      ),
     );
 
     expect(
@@ -242,6 +252,11 @@ describe("SQL protocol conformance fixtures", () => {
           !intentionallyUnpinnedSqlFunctions.has(functionName),
       ),
       "TypeScript SQL contract functions are absent from the language-neutral manifest",
+    ).toEqual([]);
+
+    expect(
+      [...contractViews].filter((viewName) => !pinnedViews.has(viewName)),
+      "TypeScript SQL contract views are absent from the language-neutral manifest",
     ).toEqual([]);
 
     for (const { name: functionName, arity, contract: callContract } of fixtures.manifest
@@ -261,6 +276,19 @@ describe("SQL protocol conformance fixtures", () => {
         normalizedContract,
         `${functionName} TypeScript projection or casts drifted`,
       ).toContain(callContract);
+    }
+
+    for (const { name: viewName, contract: readContract } of fixtures.manifest.views) {
+      expect(
+        scenarioContract,
+        `${viewName} has no language-neutral conformance scenario`,
+      ).toContain(`FROM workhorse.${viewName}`);
+      expect(contract, `${viewName} is absent from the TypeScript SQL contract`).toContain(
+        `FROM workhorse.${viewName}`,
+      );
+      expect(normalizedContract, `${viewName} TypeScript projection drifted`).toContain(
+        readContract,
+      );
     }
   });
 

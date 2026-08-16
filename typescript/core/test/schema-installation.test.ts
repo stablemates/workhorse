@@ -46,6 +46,15 @@ describe("schema installation", () => {
         "completed_by",
         "deadline_at",
       ],
+      dashboard_signal_wait_v1: [
+        "job_id",
+        "queue_name",
+        "job_type",
+        "signal_name",
+        "attempt",
+        "created_at",
+        "deadline_at",
+      ],
       dashboard_job_checkpoint_v1: [
         "job_id",
         "checkpoint_name",

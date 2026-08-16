@@ -31,6 +31,9 @@ schema version 42 and client protocol 1. `protocol/v1/compatibility.json` distin
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
+The manifest also pins `dashboard_signal_wait_v1` and `dashboard_human_wait_v1` as read contracts.
+Their projections support public external-wait lists without exposing private tables.
+
 `protocol/v1/scenarios.json` executes raw versioned PostgreSQL functions and versioned dashboard
 views. It covers enqueue, claim, heartbeat, completion, failure, cancellation, retry, checkpoint,
 timer boundaries, coalescing, dependencies, child jobs, signals, and human decisions. Exact JSON
@@ -49,9 +52,9 @@ the fixture.
 `scripts/verify-sql-protocol.ts` interprets the language-neutral files. It reads
 `workhorse.schema_version` and rejects incompatible schema or client protocol versions before a
 scenario can mutate the database. The clean-install and forward-migration suites both run the
-interpreter. The suite also pins every TypeScript function call's projection, casts, argument
-order, and arity. A clean-schema, migration, TypeScript-call, or fixture change therefore fails the
-same conformance command.
+interpreter. The suite pins every TypeScript function call's projection, casts, argument order,
+and arity. It also pins each TypeScript view read's projection and ordering. A clean-schema,
+migration, TypeScript-call, or fixture change therefore fails the same conformance command.
 
 PostgreSQL owns canonical JSONB values, enqueue outcomes, claim selection, leases, fence tokens,
 retry timing, lifecycle transitions, checkpoints, waits, dependency resolution, child lineage,
@@ -594,6 +597,13 @@ calls the same queue operation. `signal_waiting`, `signal_received`, `signal_rep
 `signal_rejected` events retain bounded lifecycle evidence. Events include the actor and a short
 key digest but never the raw key or payload.
 
+`Queue.listSignalWaits({ limit, cursor })` returns a `SignalWaitPage` in ascending `createdAt`,
+`jobId`, and `name` order. The default page size is 100 and the maximum is 1,000. Each
+`SignalWait` contains `jobId`, `queue`, `jobType`, `name`, `attempt`, `createdAt`, and `deadlineAt`.
+`nextCursor` contains the exact PostgreSQL `created_at` text, job identity, and name when another
+page exists. `dashboard_signal_wait_v1` owns the matching SQL projection and excludes delivered
+or stale rows.
+
 If the caller omits `timeoutMs`, PostgreSQL gives the undelivered signal a seven-day `timeout_at`.
 A shorter caller timeout or earlier `job.deadline_at` wins. The waiting runtime temporarily stores
 that effective bound in `job_runtime.deadline_at`. Expiry terminally fails the job with
@@ -620,10 +630,12 @@ dispatch state.
 
 `HandlerContext.waitForHuman(name, context, { timeoutMs })` suspends and returns the retained result
 after replay. `timeoutMs` has the same optional range and terminal failure outcome as a signal wait.
-`Queue.completeHumanWait` is the application completion surface. The dashboard lists at most 100
-actionable rows from `dashboard_human_wait_v1`, validates result JSON, and derives `completedBy` from
-the authenticated principal. `human_wait_created`, `human_wait_completed`, `human_wait_replayed`,
-and `human_wait_rejected` retain value-free lifecycle evidence.
+`Queue.completeHumanWait` is the application completion surface.
+`Queue.listHumanWaits<TContext>({ limit, cursor })` returns a `HumanWaitPage<TContext>` with the
+same page bounds, cursor fields, and order. Each `HumanWait<TContext>` adds the stored `context` to
+the signal-wait projection. The dashboard calls this method, validates result JSON, and derives
+`completedBy` from the authenticated principal. `human_wait_created`, `human_wait_completed`,
+`human_wait_replayed`, and `human_wait_rejected` retain value-free lifecycle evidence.
 
 Human decisions use the same default PostgreSQL timeout and parent-identity retention contract.
 Immediate cancellation and deadline terminalization read `job_human_wait` to preserve the original
@@ -1110,6 +1122,7 @@ Core owns the dashboard's relational read contract. The version 1 views expose t
 
 - `dashboard_attempt_history_v1`: `attempt_id`, `job_id`, `attempt`, `fence_token`, `worker_id`, `outcome`, `started_at`, `claimed_at`, `finished_at`, `error`, `occurred_at`.
 - `dashboard_concurrency_policy_v1`: `queue_name`.
+- `dashboard_human_wait_v1`: `job_id`, `queue_name`, `job_type`, `token_name`, `context`, `attempt`, `created_at`, `completed_at`, `completed_by`, `deadline_at`.
 - `dashboard_job_checkpoint_v1`: `job_id`, `checkpoint_name`, `checkpoint_value`, `attempt`, `fence_token`, `worker_id`, `created_at`.
 - `dashboard_job_child_v1`: `parent_job_id`, `child_job_id`, `child_name`, `created_at`, `joined_at`.
 - `dashboard_job_redrive_v1`: `source_job_id`, `target_job_id`, `request_id_preview`, `request_id_digest`, `request_id_length`, `requested_by`, `reason`, `source_state`, `target_initial_state`, `requested_at`.
@@ -1126,6 +1139,7 @@ Core owns the dashboard's relational read contract. The version 1 views expose t
 - `dashboard_retention_policy_v1`: `singleton`, `job_event_retention_days`, `attempt_history_retention_days`.
 - `dashboard_schedule_definition_v1`: `namespace`, `schedule_name`, `cron_expression`, `queue_name`, `job_type`, `enabled`, `revision`, `updated_at`.
 - `dashboard_schedule_occurrence_v1`: `namespace`, `schedule_name`, `occurrence_at`, `fired_at`.
+- `dashboard_signal_wait_v1`: `job_id`, `queue_name`, `job_type`, `signal_name`, `attempt`, `created_at`, `deadline_at`.
 - `dashboard_worker_registry_v1`: `worker_id`, `hostname`, `pid`, `queue_name`, `concurrency`, `lease_ms`, `heartbeat_ms`, `poll_ms`, `maintenance_interval_ms`, `maintenance_task_poll_ms`, `registry_interval_ms`, `active_slots`, `draining`, `paused`, `started_at`, `last_heartbeat_at`.
 
 `dashboard_job_estimate_v1()` returns the planner tuple estimate for the private `job` table. The

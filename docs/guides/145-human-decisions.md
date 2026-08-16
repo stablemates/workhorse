@@ -33,6 +33,10 @@ The dashboard lists pending decisions with their job identity, name, and stored 
 a JSON result only when the host exposes operator mutations, and its server replaces browser
 attribution with the authenticated principal.
 
+Custom operator tools can call `Queue.listHumanWaits()` for the same actionable projection. The
+dashboard uses this public method, so both surfaces see the same context and effective deadline.
+If `nextCursor` is present, pass it to the next call to continue through every pending decision.
+
 Applications can complete the same decision through `Queue.completeHumanWait`. They must establish
 their own authorization before passing the stable job identity, token name, result, idempotency key,
 and trusted actor.

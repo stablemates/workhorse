@@ -6,6 +6,40 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { queue } = createIntegrationTestContext(import.meta.url);
 
 describe("human waits", () => {
+  it("lists actionable human waits through the public read API", async () => {
+    const id = await queue.enqueue("human-list", {});
+    const worker = new Worker(queue, { workerId: "human-list-worker" }).handle(
+      "human-list",
+      async (_payload, context) =>
+        context.waitForHuman("approval", { prompt: "Approve this account?" }),
+    );
+
+    expect(await worker.runOnce()).toBe(true);
+    await expect(queue.listHumanWaits()).resolves.toEqual({
+      items: [
+        {
+          jobId: id,
+          queue: "default",
+          jobType: "human-list",
+          name: "approval",
+          context: { prompt: "Approve this account?" },
+          attempt: 1,
+          createdAt: expect.any(Date),
+          deadlineAt: expect.any(Date),
+        },
+      ],
+      nextCursor: null,
+    });
+
+    await queue.completeHumanWait(
+      id,
+      "approval",
+      { approved: true },
+      { idempotencyKey: "human-list-completion", completedBy: "operator" },
+    );
+    await expect(queue.listHumanWaits()).resolves.toEqual({ items: [], nextCursor: null });
+  });
+
   it("rejects token names the dashboard would normalize to another identity", async () => {
     const id = await queue.enqueue("human-name", {});
     const claimed = await queue.claim("human-name-worker");
