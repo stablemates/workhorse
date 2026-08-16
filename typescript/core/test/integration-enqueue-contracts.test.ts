@@ -4,6 +4,7 @@ import {
   DEFAULT_IDEMPOTENCY_SCOPE,
   DEFAULT_IDEMPOTENCY_TTL_MS,
   EnqueueIdempotencyConflictError,
+  type EnqueueOptions,
   installSchema,
   type Json,
   MAX_ENQUEUE_BATCH_SIZE,
@@ -21,6 +22,44 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { pool, queue, safeKeyDigest, safeKeyPreview } = createIntegrationTestContext(
   import.meta.url,
 );
+
+const dependencyCoalescingCases = [
+  ["debounce", "prerequisiteJobId"],
+  ["debounce", "dependencies"],
+  ["throttle", "prerequisiteJobId"],
+  ["throttle", "dependencies"],
+] as const;
+
+function dependencyBearingCoalescingOptions(
+  coalescingMode: (typeof dependencyCoalescingCases)[number][0],
+  dependencyOption: (typeof dependencyCoalescingCases)[number][1],
+  prerequisiteJobId: string,
+  scope: string,
+): EnqueueOptions {
+  const dependency =
+    dependencyOption === "prerequisiteJobId"
+      ? { prerequisiteJobId }
+      : {
+          dependencies: {
+            prerequisiteJobIds: [prerequisiteJobId],
+            onSuccess: "release" as const,
+            onFailure: "fail" as const,
+            onCancellation: "cancel" as const,
+          },
+        };
+  const coalescing =
+    coalescingMode === "debounce"
+      ? {
+          debounce: {
+            key: dependencyOption,
+            scope,
+            windowMs: 60_000,
+            schedule: "reset" as const,
+          },
+        }
+      : { throttle: { key: dependencyOption, scope, windowMs: 60_000 } };
+  return { ...coalescing, ...dependency };
+}
 
 describe("enqueue contracts", () => {
   it("rejects invalid and oversized payloads before accepting a durable job", async () => {
@@ -1094,6 +1133,51 @@ describe("enqueue contracts", () => {
       pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM workhorse.job"),
     ).resolves.toMatchObject({ rows: before.rows });
   });
+
+  it.each(dependencyCoalescingCases)(
+    "rejects %s combined with %s",
+    async (coalescingMode, dependencyOption) => {
+      const prerequisiteJobId = await queue.enqueue("coalescing-prerequisite", {});
+      const options = dependencyBearingCoalescingOptions(
+        coalescingMode,
+        dependencyOption,
+        prerequisiteJobId,
+        "coalescing-dependencies",
+      );
+
+      await expect(queue.enqueueWithResult("coalescing-dependent", {}, options)).rejects.toThrow(
+        /cannot combine debounce or throttle with prerequisiteJobId or dependencies/,
+      );
+    },
+  );
+
+  it.each(dependencyCoalescingCases)(
+    "rejects direct SQL %s combined with %s",
+    async (coalescingMode, dependencyOption) => {
+      const prerequisiteJobId = await queue.enqueue("direct-coalescing-prerequisite", {});
+      const options = dependencyBearingCoalescingOptions(
+        coalescingMode,
+        dependencyOption,
+        prerequisiteJobId,
+        "direct-coalescing-dependencies",
+      );
+
+      await expect(
+        pool.query("SELECT * FROM workhorse.enqueue_many_v2($1::jsonb)", [
+          JSON.stringify([
+            {
+              queue: "default",
+              type: "direct-coalescing-dependent",
+              payload: {},
+              ...options,
+            },
+          ]),
+        ]),
+      ).rejects.toThrow(
+        /cannot combine debounce or throttle with prerequisiteJobId or dependencies/,
+      );
+    },
+  );
 
   it("coalesces an equivalent throttled request into one accepted job", async () => {
     const throttle = { key: "account-42", scope: "email-digest", windowMs: 60_000 };

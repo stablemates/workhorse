@@ -433,6 +433,14 @@ export class EnqueueContractsModule extends QueueModule {
               "debounced enqueue uses its PostgreSQL-owned window instead of runAt",
             );
           }
+          if (
+            (options.debounce !== undefined || options.throttle !== undefined) &&
+            (options.prerequisiteJobId !== undefined || options.dependencies !== undefined)
+          ) {
+            throw new TypeError(
+              "enqueue options cannot combine debounce or throttle with prerequisiteJobId or dependencies",
+            );
+          }
           const acceptance = this.jobAcceptance(type, payload);
           if (options.prerequisiteJobId !== undefined && options.dependencies !== undefined) {
             throw new TypeError(

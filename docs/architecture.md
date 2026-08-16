@@ -806,7 +806,7 @@ Idempotency replays one materially equivalent request and rejects a conflicting 
 
 #### Keyed debounce
 
-`EnqueueOptions.debounce` contains `key`, optional `scope`, `windowMs`, and `schedule`. Keys and scopes share the idempotency limits of 512 and 256 UTF-8 bytes. `windowMs` is an integer from 1 through 31,536,000,000. `schedule` is `reset` or `preserve`. A request with `debounce` cannot also supply `idempotency` or `runAt`. PostgreSQL derives the initial run time from `clock_timestamp() + windowMs`.
+`EnqueueOptions.debounce` contains `key`, optional `scope`, `windowMs`, and `schedule`. Keys and scopes share the idempotency limits of 512 and 256 UTF-8 bytes. `windowMs` is an integer from 1 through 31,536,000,000. `schedule` is `reset` or `preserve`. A request with `debounce` cannot also supply `idempotency`, `runAt`, `prerequisiteJobId`, or `dependencies`. `Queue.enqueueManyWithResults` rejects these combinations before querying PostgreSQL, and `enqueue_debounce_v1` rejects them for direct SQL callers. PostgreSQL derives the initial run time from `clock_timestamp() + windowMs`.
 
 `enqueue_debounce_v1` hashes the scoped key, takes the same transaction advisory lock as enqueue idempotency, and stores `coalescing_mode = 'debounce'` on `enqueue_idempotency`. It never persists the raw key. A new key creates one scheduled job through `enqueue_many_v1` and returns `accepted`.
 
@@ -816,7 +816,7 @@ An active runtime, terminal outcome, incompatible idempotency key, or elapsed-bu
 
 #### Keyed throttle
 
-`EnqueueOptions.throttle` contains `key`, optional `scope`, and `windowMs`. Keys and scopes share the idempotency limits of 512 and 256 UTF-8 bytes. `windowMs` is an integer from 1 through 31,536,000,000. A request cannot combine `throttle` with `idempotency` or `debounce`. It may supply `runAt`; explicit scheduling remains material to request equivalence.
+`EnqueueOptions.throttle` contains `key`, optional `scope`, and `windowMs`. Keys and scopes share the idempotency limits of 512 and 256 UTF-8 bytes. `windowMs` is an integer from 1 through 31,536,000,000. A request cannot combine `throttle` with `idempotency`, `debounce`, `prerequisiteJobId`, or `dependencies`. `Queue.enqueueManyWithResults` and `enqueue_throttle_v1` enforce the dependency exclusions. A throttled request may supply `runAt`; explicit scheduling remains material to request equivalence.
 
 `enqueue_throttle_v1` hashes the scoped key, takes the shared transaction advisory lock, and converts the throttle window into the `enqueue_many_v1` idempotency retention contract. PostgreSQL stores `coalescing_mode = 'throttle'` and derives expiry from `clock_timestamp() + windowMs`. The first request returns `accepted`. An equivalent request before expiry returns the retained job ID with `coalesced` and creates no job, runtime, ready sequence, or notification effect. It deliberately writes no `job_event`, because repeated requests do not change the retained job and could amplify audit writes without bound. The caller emits a `workhorse.job.throttled` debug log and increments `workhorse.jobs.enqueue.outcomes` instead.
 

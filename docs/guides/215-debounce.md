@@ -44,6 +44,10 @@ Debounce and [enqueue idempotency](210-enqueue-idempotency.md) solve different p
 replays an equivalent request and rejects a changed one. Debounce deliberately accepts changed
 payloads while one job remains pending, so one request cannot enable both options.
 
+A debounced job cannot declare `prerequisiteJobId` or `dependencies`. Replacement changes the
+accepted job, but dependency edges must stay stable after acceptance. Use a regular
+[dependent job](160-job-dependencies.md) when dispatch must wait for other work.
+
 ## Next
 
 - [210-enqueue-idempotency.md](210-enqueue-idempotency.md) — replaying an identical request safely

@@ -3150,6 +3150,11 @@ BEGIN
   IF p_request ? 'runAt' THEN
     RAISE EXCEPTION 'debounced enqueue uses its PostgreSQL-owned window instead of runAt';
   END IF;
+  IF COALESCE(p_request->'prerequisiteJobId', 'null'::jsonb) <> 'null'::jsonb
+     OR COALESCE(p_request->'dependencies', 'null'::jsonb) <> 'null'::jsonb THEN
+    RAISE EXCEPTION
+      'enqueue requests cannot combine debounce or throttle with prerequisiteJobId or dependencies';
+  END IF;
 
   v_key := v_debounce->>'key';
   v_scope := COALESCE(v_debounce->>'scope', 'default');
@@ -3400,6 +3405,11 @@ BEGIN
   END IF;
   IF p_request ? 'idempotency' OR p_request ? 'debounce' THEN
     RAISE EXCEPTION 'enqueue requests cannot combine idempotency, debounce, or throttle';
+  END IF;
+  IF COALESCE(p_request->'prerequisiteJobId', 'null'::jsonb) <> 'null'::jsonb
+     OR COALESCE(p_request->'dependencies', 'null'::jsonb) <> 'null'::jsonb THEN
+    RAISE EXCEPTION
+      'enqueue requests cannot combine debounce or throttle with prerequisiteJobId or dependencies';
   END IF;
 
   v_key := v_throttle->>'key';
