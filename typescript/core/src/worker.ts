@@ -89,7 +89,7 @@ export type Failpoint =
   | "afterHandler"
   | "beforeComplete"
   | "afterComplete";
-export interface HandlerContext<TPayload = Json> {
+export interface HandlerContext<TPayload extends Json = Json> {
   job: ClaimedJob<TPayload>;
   signal: AbortSignal;
   /** Read a previously persisted restart boundary without executing user code. */
@@ -136,19 +136,19 @@ export interface HandlerContext<TPayload = Json> {
   ): Promise<TResult>;
 }
 
-export type Handler<TPayload = Json, TResult extends Json = Json> = (
+export type Handler<TPayload extends Json = Json, TResult extends Json = Json> = (
   payload: TPayload,
   context: HandlerContext<TPayload>,
 ) => Promise<TResult> | TResult;
 
 /** Per-job batch context without APIs that suspend and replay an individual handler. */
-export type BatchHandlerContext<TPayload = Json> = Omit<
+export type BatchHandlerContext<TPayload extends Json = Json> = Omit<
   HandlerContext<TPayload>,
   "sleep" | "sleepUntil" | "waitForSignal" | "waitForHuman" | "runChild" | "runChildren"
 >;
 
 /** One independently leased job delivered to a shared batch-handler invocation. */
-export interface BatchHandlerItem<TPayload = Json> {
+export interface BatchHandlerItem<TPayload extends Json = Json> {
   payload: TPayload;
   context: BatchHandlerContext<TPayload>;
 }
@@ -162,7 +162,7 @@ export type BatchHandlerOutcome<TResult extends Json = Json> =
  * A compatible group of jobs from one queue and job type. Outcomes correspond by array position;
  * throwing or returning an invalid outcome list fails every member through its own fenced lifecycle.
  */
-export type BatchHandler<TPayload = Json, TResult extends Json = Json> = (
+export type BatchHandler<TPayload extends Json = Json, TResult extends Json = Json> = (
   items: readonly BatchHandlerItem<TPayload>[],
 ) => Promise<readonly BatchHandlerOutcome<TResult>[]> | readonly BatchHandlerOutcome<TResult>[];
 
@@ -203,48 +203,44 @@ export interface WorkerQueueApi {
   ): Promise<ClaimedJob | null>;
   recordBatchDispatch?(batch: BatchExecutionRecord): Promise<void>;
   recordBatchFailure?(batch: BatchExecutionRecord): Promise<void>;
-  heartbeatStatus(
-    job: ClaimedJob<unknown>,
-    workerId: string,
-    leaseMs?: number,
-  ): Promise<HeartbeatStatus>;
-  expireOwned(job: ClaimedJob<unknown>, workerId: string): Promise<ExpireOwnedStatus>;
-  acknowledgeCancel(job: ClaimedJob<unknown>, workerId: string): Promise<boolean>;
+  heartbeatStatus(job: ClaimedJob, workerId: string, leaseMs?: number): Promise<HeartbeatStatus>;
+  expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus>;
+  acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean>;
   listCheckpoints(jobId: string): Promise<JobCheckpoint[]>;
   saveCheckpoint<TValue extends Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     value: TValue,
   ): Promise<JobCheckpoint<TValue>>;
   getProgress(jobId: string): Promise<JobProgress | null>;
   updateProgress<TValue extends Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     value: TValue,
   ): Promise<JobProgress<TValue>>;
   listWaits(jobId: string): Promise<JobWait[]>;
   scheduleWait(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     request: ScheduleWaitRequest,
   ): Promise<ScheduleWaitResult>;
   waitForSignal<TPayload extends Json = Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     options?: ExternalWaitOptions,
   ): Promise<WaitForSignalResult<TPayload>>;
   waitForHuman<TContext extends Json, TResult extends Json = Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     context: TContext,
     options?: ExternalWaitOptions,
   ): Promise<import("./queue/human-waits.js").WaitForHumanResult<TResult>>;
   createChild<TPayload extends Json, TResult extends Json = Json>(
-    parent: ClaimedJob<unknown>,
+    parent: ClaimedJob,
     workerId: string,
     name: string,
     type: string,
@@ -252,17 +248,17 @@ export interface WorkerQueueApi {
     options?: ChildJobOptions,
   ): Promise<CreateChildResult<TResult>>;
   createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
-    parent: ClaimedJob<unknown>,
+    parent: ClaimedJob,
     workerId: string,
     children: readonly ChildJobRequest[],
   ): Promise<CreateChildrenResult<TResult>>;
   complete<TResult extends Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     result: TResult,
   ): Promise<boolean>;
   fail(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     error: unknown,
     retryDelayMs?: number,

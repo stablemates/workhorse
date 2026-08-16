@@ -205,7 +205,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
   }
 
   async saveCheckpoint<TValue extends Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     value: TValue,
@@ -249,7 +249,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
   }
 
   async updateProgress<TValue extends Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     value: TValue,
   ): Promise<JobProgress<TValue>> {
@@ -305,7 +305,7 @@ export class CheckpointsProgressWaitsModule extends QueueModule {
   }
 
   async scheduleWait(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     request: ScheduleWaitRequest,

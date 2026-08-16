@@ -700,7 +700,7 @@ export interface ChildLineage {
   truncated: boolean;
 }
 
-export interface ClaimedJob<TPayload = Json> {
+export interface ClaimedJob<TPayload extends Json = Json> {
   /** Stable job identity across all attempts. */
   id: string;
   /** Queue from which PostgreSQL granted this attempt. */
@@ -736,7 +736,7 @@ export interface ClaimedJob<TPayload = Json> {
 /** Ordered claims that one worker coordinator delivers to a shared batch callback. */
 export interface BatchExecutionRecord {
   batchId: string;
-  jobs: readonly ClaimedJob<unknown>[];
+  jobs: readonly ClaimedJob[];
   workerId: string;
 }
 
@@ -796,7 +796,7 @@ export type JobState =
   | "failed"
   | "canceled";
 
-export interface JobSnapshot<TResult = Json> {
+export interface JobSnapshot<TResult extends Json = Json> {
   id: string;
   queue: string;
   type: string;

@@ -139,7 +139,7 @@ export class HumanWaitsModule extends QueueModule {
   }
 
   async waitForHuman<TContext extends Json, TResult extends Json = Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     context: TContext,

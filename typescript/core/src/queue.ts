@@ -576,7 +576,7 @@ export class Queue {
     return this.modules.operatorReads.getChildLineage(jobId, limit);
   }
 
-  async claim<TPayload = Json>(
+  async claim<TPayload extends Json = Json>(
     workerId: string,
     options: { queue?: string; leaseMs?: number } = {},
   ): Promise<ClaimedJob<TPayload> | null> {
@@ -593,23 +593,23 @@ export class Queue {
     return this.modules.claimLeaseFence.recordBatchFailure(batch);
   }
 
-  async heartbeat(job: ClaimedJob<unknown>, workerId: string, leaseMs = 30_000): Promise<boolean> {
+  async heartbeat(job: ClaimedJob, workerId: string, leaseMs = 30_000): Promise<boolean> {
     return this.modules.claimLeaseFence.heartbeat(job, workerId, leaseMs);
   }
 
   async heartbeatStatus(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     leaseMs = 30_000,
   ): Promise<HeartbeatStatus> {
     return this.modules.claimLeaseFence.heartbeatStatus(job, workerId, leaseMs);
   }
 
-  async expireOwned(job: ClaimedJob<unknown>, workerId: string): Promise<ExpireOwnedStatus> {
+  async expireOwned(job: ClaimedJob, workerId: string): Promise<ExpireOwnedStatus> {
     return this.modules.claimLeaseFence.expireOwned(job, workerId);
   }
 
-  async acknowledgeCancel(job: ClaimedJob<unknown>, workerId: string): Promise<boolean> {
+  async acknowledgeCancel(job: ClaimedJob, workerId: string): Promise<boolean> {
     return this.modules.claimLeaseFence.acknowledgeCancel(job, workerId);
   }
 
@@ -627,7 +627,7 @@ export class Queue {
   }
 
   async saveCheckpoint<TValue extends Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     value: TValue,
@@ -642,7 +642,7 @@ export class Queue {
   }
 
   async updateProgress<TValue extends Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     value: TValue,
   ): Promise<JobProgress<TValue>> {
@@ -658,7 +658,7 @@ export class Queue {
   }
 
   async scheduleWait(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     request: ScheduleWaitRequest,
@@ -667,7 +667,7 @@ export class Queue {
   }
 
   async waitForSignal<TPayload extends Json = Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     options: ExternalWaitOptions = {},
@@ -689,7 +689,7 @@ export class Queue {
   }
 
   async waitForHuman<TContext extends Json, TResult extends Json = Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     name: string,
     context: TContext,
@@ -720,7 +720,7 @@ export class Queue {
   }
 
   async createChild<TPayload extends Json, TResult extends Json = Json>(
-    parent: ClaimedJob<unknown>,
+    parent: ClaimedJob,
     workerId: string,
     name: string,
     type: string,
@@ -731,7 +731,7 @@ export class Queue {
   }
 
   async createChildren<TResult extends Record<string, Json> = Record<string, Json>>(
-    parent: ClaimedJob<unknown>,
+    parent: ClaimedJob,
     workerId: string,
     children: readonly ChildJobRequest[],
   ): Promise<CreateChildrenResult<TResult>> {
@@ -739,7 +739,7 @@ export class Queue {
   }
 
   async complete<TResult extends Json>(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     result: TResult,
   ): Promise<boolean> {
@@ -749,7 +749,7 @@ export class Queue {
   }
 
   async fail(
-    job: ClaimedJob<unknown>,
+    job: ClaimedJob,
     workerId: string,
     error: unknown,
     retryDelayMs?: number,
@@ -769,7 +769,7 @@ export class Queue {
     return this.modules.claimLeaseFence.recoverExpired(limit, retryDelayMs);
   }
 
-  async getJob<TResult = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
+  async getJob<TResult extends Json = Json>(id: string): Promise<JobSnapshot<TResult> | null> {
     return this.modules.operatorReads.getJob<TResult>(id);
   }
 
