@@ -492,7 +492,7 @@ describe("SQL protocol conformance fixtures", () => {
       queue.waitForSignal(adapterJob, workerId, "approval"),
     );
     expect(signalWait).toEqual({
-      parameters: [adapterJob.id, workerId, "17", "approval"],
+      parameters: [adapterJob.id, workerId, "17", "approval", null],
       result: { status: "waiting", payload: null },
     });
     const signalSend = await exerciseQueue(
@@ -532,7 +532,7 @@ describe("SQL protocol conformance fixtures", () => {
       queue.waitForHuman(adapterJob, workerId, "review", { question: "Ship?" }),
     );
     expect(humanWait).toEqual({
-      parameters: [adapterJob.id, workerId, "17", "review", '{"question":"Ship?"}'],
+      parameters: [adapterJob.id, workerId, "17", "review", '{"question":"Ship?"}', null],
       result: { status: "waiting", result: null },
     });
     const humanComplete = await exerciseQueue(

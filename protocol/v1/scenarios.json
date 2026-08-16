@@ -689,12 +689,13 @@
       {
         "id": "wait",
         "covers": ["signals"],
-        "sql": "SELECT jsonb_build_object('status', status, 'payload', payload) AS value FROM workhorse.wait_for_signal_v1($1::uuid, $2, $3::bigint, $4)",
+        "sql": "SELECT jsonb_build_object('status', status, 'payload', payload) AS value FROM workhorse.wait_for_signal_v1($1::uuid, $2, $3::bigint, $4, $5::bigint)",
         "parameters": [
           { "$ref": "signalJob" },
           "protocol-signal-worker",
           { "$ref": "signalFence" },
-          "approval"
+          "approval",
+          null
         ],
         "expect": { "rows": [{ "value": { "payload": null, "status": "waiting" } }] }
       },
@@ -745,13 +746,14 @@
       {
         "id": "wait",
         "covers": ["human-tokens"],
-        "sql": "SELECT jsonb_build_object('status', status, 'result', result) AS value FROM workhorse.wait_for_human_v1($1::uuid, $2, $3::bigint, $4, $5::jsonb)",
+        "sql": "SELECT jsonb_build_object('status', status, 'result', result) AS value FROM workhorse.wait_for_human_v1($1::uuid, $2, $3::bigint, $4, $5::jsonb, $6::bigint)",
         "parameters": [
           { "$ref": "humanJob" },
           "protocol-human-worker",
           { "$ref": "humanFence" },
           "review",
-          { "question": "Ship?" }
+          { "question": "Ship?" },
+          null
         ],
         "expect": { "rows": [{ "value": { "result": null, "status": "waiting" } }] }
       },

@@ -85,6 +85,7 @@ export type {
   CompleteHumanWaitStatus,
   WaitForHumanResult,
   WaitForHumanStatus,
+  ExternalWaitOptions,
   ScheduleDefinition,
   ScheduleJobDefinition,
   StoredSchedule,

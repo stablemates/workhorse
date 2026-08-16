@@ -27,6 +27,7 @@ import {
   MAX_WAIT_DURATION_MS,
   MIN_PROGRESS_UPDATE_INTERVAL_MS,
 } from "../src/types.js";
+import { MAX_EXTERNAL_WAIT_TIMEOUT_MS } from "../src/queue/external-waits.js";
 
 // PostgreSQL enforces every bound in this system, so each named limit exists twice: once as a literal
 // inside sql/schema.sql, and once as an exported constant that callers read before they send work.
@@ -59,6 +60,18 @@ interface LimitRule {
 const gap = String.raw`\s*THEN\s*`;
 
 const rules: readonly LimitRule[] = [
+  {
+    constant: "MAX_EXTERNAL_WAIT_TIMEOUT_MS",
+    value: MAX_EXTERNAL_WAIT_TIMEOUT_MS,
+    bounds: "caller-selected signal and human-decision timeout",
+    patterns: [
+      new RegExp(
+        String.raw`p_timeout_ms NOT BETWEEN 1 AND (\d+)${gap}RAISE EXCEPTION '(?:signal|human wait) timeout_ms must be between 1 and (\d+)'`,
+        "g",
+      ),
+      /COALESCE\(p_timeout_ms, (\d+)\) \* interval '1 millisecond'/g,
+    ],
+  },
   {
     constant: "MAX_ENQUEUE_BATCH_SIZE",
     value: MAX_ENQUEUE_BATCH_SIZE,

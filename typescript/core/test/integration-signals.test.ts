@@ -340,6 +340,22 @@ describe("signals", () => {
     ).resolves.toMatchObject({ status: "stale" });
   });
 
+  it("fails an unanswered signal at the caller's shorter timeout", async () => {
+    const id = await queue.enqueue("signal-custom-timeout", {});
+    const worker = new Worker(queue, { workerId: "signal-custom-timeout-worker" }).handle(
+      "signal-custom-timeout",
+      async (_payload, context) => context.waitForSignal("approval", { timeoutMs: 100 }),
+    );
+    expect(await worker.runOnce()).toBe(true);
+    await sleep(130);
+    await queue.tick();
+
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({ name: "DeadlineExceeded" }),
+    });
+  });
+
   it("serializes cancellation against signal delivery", async () => {
     const id = await queue.enqueue("signal-cancel-race", {});
     const worker = new Worker(queue, { workerId: "signal-cancel-race-worker" }).handle(

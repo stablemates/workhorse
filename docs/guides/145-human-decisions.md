@@ -5,9 +5,9 @@ context, releases the worker lease, and gives the dashboard an actionable decisi
 
 ## The handler names the decision and explains it
 
-Call `ctx.waitForHuman(name, context)` with stable JSON context for the operator. Workhorse parks the
-job without consuming its logical attempt, so the worker can claim other work while the decision is
-pending.
+Call `ctx.waitForHuman` with stable JSON context for the operator. Pass optional `timeoutMs` to
+shorten how long PostgreSQL keeps the decision open. Workhorse parks the job without consuming its
+logical attempt, so the worker can claim other work while the decision is pending.
 
 The handler restarts from its entry point after completion. When replay reaches the same name and
 context, `waitForHuman` returns the retained result.
@@ -42,9 +42,10 @@ competing completion returns the accepted winner without overwriting its audit e
 
 ## PostgreSQL closes an unanswered decision
 
-PostgreSQL applies a finite [timeout](140-deadlines-and-timeouts.md), and an earlier job deadline
-wins. [Cancellation](120-cancellation.md) also closes the decision, so late completion returns
-`stale`. The token row follows the parent job's safe [retention](330-retention.md).
+PostgreSQL applies a finite [timeout](140-deadlines-and-timeouts.md), and a caller can choose a
+shorter one. An earlier job deadline wins. Timeout fails the job because replay cannot continue
+without a result. [Cancellation](120-cancellation.md) also closes the decision, so late completion
+returns `stale`. The token row follows the parent job's safe [retention](330-retention.md).
 
 ## Next
 

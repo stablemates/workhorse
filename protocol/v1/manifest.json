@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 1,
   "schema": {
-    "installedVersion": 41,
-    "minimumVersion": 41,
-    "maximumVersion": 41
+    "installedVersion": 42,
+    "minimumVersion": 42,
+    "maximumVersion": 42
   },
   "supportedClientProtocol": {
     "minimumVersion": 1,
@@ -101,8 +101,8 @@
     },
     {
       "name": "wait_for_signal_v1",
-      "arity": 4,
-      "contract": "SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text)"
+      "arity": 5,
+      "contract": "SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)"
     },
     {
       "name": "send_signal_v1",
@@ -111,8 +111,8 @@
     },
     {
       "name": "wait_for_human_v1",
-      "arity": 5,
-      "contract": "SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
+      "arity": 6,
+      "contract": "SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)"
     },
     {
       "name": "complete_human_wait_v1",

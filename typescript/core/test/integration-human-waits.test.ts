@@ -179,6 +179,23 @@ describe("human waits", () => {
     ).resolves.toMatchObject({ status: "stale" });
   });
 
+  it("fails an unanswered decision at the caller's shorter timeout", async () => {
+    const id = await queue.enqueue("human-custom-timeout", {});
+    const worker = new Worker(queue, { workerId: "human-custom-timeout-worker" }).handle(
+      "human-custom-timeout",
+      async (_payload, context) =>
+        context.waitForHuman("review", { prompt: "Review?" }, { timeoutMs: 100 }),
+    );
+    expect(await worker.runOnce()).toBe(true);
+    await sleep(130);
+    await queue.tick();
+
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: "failed",
+      error: expect.objectContaining({ name: "DeadlineExceeded" }),
+    });
+  });
+
   it("serializes cancellation against human completion", async () => {
     const id = await queue.enqueue("human-cancel-race", {});
     const worker = new Worker(queue, { workerId: "human-cancel-race-worker" }).handle(

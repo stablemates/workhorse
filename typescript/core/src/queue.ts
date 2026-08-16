@@ -119,6 +119,7 @@ import {
   type WaitForHumanResult,
   type WaitForHumanStatus,
 } from "./queue/human-waits.js";
+import type { ExternalWaitOptions } from "./queue/external-waits.js";
 
 export type { MaintenancePhase, MaintenancePhaseResult } from "./queue/retention-maintenance.js";
 
@@ -160,6 +161,7 @@ export type {
   CompleteHumanWaitStatus,
   WaitForHumanResult,
   WaitForHumanStatus,
+  ExternalWaitOptions,
 };
 export type { ScheduleDefinition, ScheduleJobDefinition, StoredSchedule };
 import { nullableRowTimestamp } from "./queue/row-mapping.js";
@@ -629,8 +631,9 @@ export class Queue {
     job: ClaimedJob<unknown>,
     workerId: string,
     name: string,
+    options: ExternalWaitOptions = {},
   ): Promise<WaitForSignalResult<TPayload>> {
-    return this.modules.signals.waitForSignal<TPayload>(job, workerId, name);
+    return this.modules.signals.waitForSignal<TPayload>(job, workerId, name, options);
   }
 
   async sendSignal<TPayload extends Json>(
@@ -647,8 +650,15 @@ export class Queue {
     workerId: string,
     name: string,
     context: TContext,
+    options: ExternalWaitOptions = {},
   ): Promise<WaitForHumanResult<TResult>> {
-    return this.modules.humanWaits.waitForHuman<TContext, TResult>(job, workerId, name, context);
+    return this.modules.humanWaits.waitForHuman<TContext, TResult>(
+      job,
+      workerId,
+      name,
+      context,
+      options,
+    );
   }
 
   async completeHumanWait<TResult extends Json>(

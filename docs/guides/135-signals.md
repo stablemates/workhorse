@@ -5,8 +5,9 @@ worker slot until an application or authenticated operator supplies a named JSON
 
 ## The handler restarts when delivery arrives
 
-`ctx.waitForSignal(name)` records a durable boundary and releases the lease. When a caller delivers
-that signal, Workhorse makes the same logical attempt ready and a worker starts the handler again.
+`ctx.waitForSignal` records a durable boundary and releases the lease. Pass optional `timeoutMs` to
+shorten how long PostgreSQL keeps the boundary open. When a caller delivers that signal, Workhorse
+makes the same logical attempt ready and a worker starts the handler again.
 
 The handler restarts from its entry point, so checkpoint earlier effects or make them idempotent.
 When replay reaches the same name, `waitForSignal` returns the retained payload.
@@ -33,9 +34,10 @@ the core API.
 
 ## PostgreSQL closes an unanswered boundary
 
-PostgreSQL applies a finite [timeout](140-deadlines-and-timeouts.md), and an earlier job deadline
-wins. [Cancellation](120-cancellation.md) also closes the boundary, so late delivery returns
-`stale`. The signal row follows the parent job's safe [retention](330-retention.md).
+PostgreSQL applies a finite [timeout](140-deadlines-and-timeouts.md), and a caller can choose a
+shorter one. An earlier job deadline wins. Timeout fails the job because replay cannot continue
+without a payload. [Cancellation](120-cancellation.md) also closes the boundary, so late delivery
+returns `stale`. The signal row follows the parent job's safe [retention](330-retention.md).
 
 ## Next
 
