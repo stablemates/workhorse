@@ -276,7 +276,7 @@ hint, and polling stays the source of truth.
       server's own version, a newer-than-tested major runs but claims nothing, and benchmark
       evidence stays one fixed configuration that implies neither.
 
-### [ ] P0-08 Built-in single-admin dashboard authentication
+### [x] P0-08 Built-in single-admin dashboard authentication
 
 **Depends on:** P0-03C, P0-06B
 
@@ -295,11 +295,11 @@ without treating one shared administrator as multi-user RBAC.
       `auditActor` or mutation payload as identity evidence.
 - [x] Keep host-supplied authorization as an alternative mode for embedded applications that
       already own sessions. Reject ambiguous configurations that enable both modes.
-- [ ] Publish the authenticated standalone service as a supported container artifact so Python and
+- [x] Publish the authenticated standalone service as a supported container artifact so Python and
       Go users do not need a Node.js application or npm installation to run the dashboard.
-- [ ] Allow an explicit local-development bypass only while the listener is bound to loopback or a
+- [x] Allow an explicit local-development bypass only while the listener is bound to loopback or a
       Unix socket, and refuse that bypass for a remotely reachable listener.
-- [ ] Cover HTML, asset, private RPC, mutation, expiry, rotation, CSRF, brute-force, and proxy/TLS
+- [x] Cover HTML, asset, private RPC, mutation, expiry, rotation, CSRF, brute-force, and proxy/TLS
       behavior in packed-package tests and deployment documentation.
 
 ## P1: job controls and reliability
