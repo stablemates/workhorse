@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev:server": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server tsx watch --require ./telemetry.cjs src/index.ts",
-    "dev:worker": "tsx watch --require ./telemetry.cjs src/worker-main.ts",
+    "dev:server": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server tsx watch --conditions workhorse-source --require ./telemetry.cjs src/index.ts",
+    "dev:worker": "tsx watch --conditions workhorse-source --require ./telemetry.cjs src/worker-main.ts",
     "start": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server node --require ./telemetry.cjs dist/index.js",
     "start:worker": "NODE_OPTIONS=--require=./telemetry.cjs workhorse worker --config dist/worker.js",
     "start:worker:one": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-worker-one WORKHORSE_DEMO_WORKER_PROFILE=default pnpm start:worker",

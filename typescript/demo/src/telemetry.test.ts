@@ -17,10 +17,10 @@ describe("demo telemetry preload", () => {
     };
 
     expect(manifest.scripts["dev:server"]).toContain(
-      "tsx watch --require ./telemetry.cjs src/index.ts",
+      "tsx watch --conditions workhorse-source --require ./telemetry.cjs src/index.ts",
     );
     expect(manifest.scripts["dev:worker"]).toContain(
-      "tsx watch --require ./telemetry.cjs src/worker-main.ts",
+      "tsx watch --conditions workhorse-source --require ./telemetry.cjs src/worker-main.ts",
     );
   });
 

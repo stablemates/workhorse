@@ -18,22 +18,27 @@
   "type": "module",
   "exports": {
     ".": {
+      "workhorse-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
     "./wire": {
+      "workhorse-source": "./src/wire.ts",
       "types": "./dist/wire.d.ts",
       "import": "./dist/wire.js"
     },
     "./server": {
+      "workhorse-source": "./src/server/index.ts",
       "types": "./dist/server/index.d.ts",
       "import": "./dist/server/index.js"
     },
     "./standalone": {
+      "workhorse-source": "./src/server/standalone.ts",
       "types": "./dist/server/standalone.d.ts",
       "import": "./dist/server/standalone.js"
     },
     "./client": {
+      "workhorse-source": "./src/rpc-client.ts",
       "types": "./dist/rpc-client.d.ts",
       "import": "./dist/rpc-client.js"
     }
@@ -43,7 +48,7 @@
     "provenance": true
   },
   "scripts": {
-    "build": "rm -rf dist && pnpm build:library",
+    "build": "rm -f ../../.build/dashboard-server.tsbuildinfo && rm -rf dist && pnpm build:library",
     "build:dev": "pnpm build:library",
     "build:library": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.typecheck.json"

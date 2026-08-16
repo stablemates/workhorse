@@ -25,6 +25,7 @@
   "type": "module",
   "exports": {
     ".": {
+      "workhorse-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js"
     }

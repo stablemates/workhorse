@@ -1,5 +1,9 @@
 {
   "extends": ["./tsconfig.json", "../../tsconfig.source-paths.json"],
-  "compilerOptions": { "noEmit": true, "rootDir": "../.." },
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "incremental": false
+  },
   "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
 }

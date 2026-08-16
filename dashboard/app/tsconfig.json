@@ -12,7 +12,9 @@
     "outDir": "dist/library",
     "rootDir": "src",
     "skipLibCheck": true,
-    "noUncheckedIndexedAccess": true
+    "noUncheckedIndexedAccess": true,
+    "incremental": true,
+    "tsBuildInfoFile": "../../.build/dashboard-app.tsbuildinfo"
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]

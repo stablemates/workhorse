@@ -8,6 +8,15 @@ const dashboardDevPort = Number(process.env.WORKHORSE_DASHBOARD_DEV_PORT ?? 4173
 const mode = process.env.WORKHORSE_DEMO_MODE ?? "development";
 const serverScript = mode === "production" ? "start" : "dev:server";
 const workerScript = mode === "production" ? "start:worker" : "dev:worker";
+// `workhorse-source` rather than the conventional `development`: bundlers apply `development`
+// on their own, so a published package that named it would send a consumer's dev server to a
+// `src/` directory the tarball does not contain. Only this repository asks for this condition.
+const nodeOptions = [
+  process.env.NODE_OPTIONS,
+  ...(mode === "development" ? ["--conditions=workhorse-source"] : []),
+]
+  .filter((option): option is string => option !== undefined)
+  .join(" ");
 const commands: Array<{
   command: string;
   arguments: string[];
@@ -20,6 +29,7 @@ const commands: Array<{
       ...process.env,
       PORT: String(publicPort),
       WORKHORSE_DEMO_MODE: mode,
+      NODE_OPTIONS: nodeOptions,
     },
   },
   {
@@ -31,6 +41,7 @@ const commands: Array<{
       WORKHORSE_DEMO_MODE: mode,
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-one",
       WORKHORSE_DEMO_WORKER_PROFILE: "default",
+      NODE_OPTIONS: nodeOptions,
     },
   },
   {
@@ -41,6 +52,7 @@ const commands: Array<{
       WORKHORSE_DEMO_MODE: mode,
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-partner-api",
       WORKHORSE_DEMO_WORKER_PROFILE: "partner-api",
+      NODE_OPTIONS: nodeOptions,
     },
   },
 ];
@@ -64,6 +76,7 @@ if (mode === "development" && process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true
       // Match what the demo itself records, so the same action is attributed identically
       // regardless of which of the two views an operator used.
       WORKHORSE_DASHBOARD_ACTOR: "local-demo",
+      NODE_OPTIONS: nodeOptions,
     },
   });
 }

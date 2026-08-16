@@ -72,6 +72,13 @@ try {
   }
   installed = true;
 
+  console.log(`JCODE_CHECKPOINT ${JSON.stringify({ message: "Building clean checkout" })}`);
+  const buildResult = await run("pnpm", ["build"], { cwd: checkout });
+  if (buildResult.code !== 0) throw new Error(`Clean checkout build failed\n${buildResult.output}`);
+  const buildCheck = await run("pnpm", ["test:build-check"], { cwd: checkout });
+  if (buildCheck.code !== 0)
+    throw new Error(`Clean checkout build output is incomplete\n${buildCheck.output}`);
+
   console.log(
     `JCODE_CHECKPOINT ${JSON.stringify({ message: "Starting documented pnpm demo path" })}`,
   );
@@ -100,9 +107,8 @@ try {
 
   const baseUrl = `http://127.0.0.1:${port}`;
   let ready = false;
-  // The documented path resets the database, builds the workspace packages, and boots a Vite dev
-  // server inside the demo. Readiness has to allow for all of it, or this test reports a timeout as
-  // a product failure.
+  // The clean checkout builds before this command starts. The demo now only starts its server,
+  // workers, and dashboard Vite middleware, so readiness measures that path rather than compilation.
   for (let attempt = 0; attempt < 1_800; attempt += 1) {
     if (demo.exitCode !== null) throw new Error(`Demo exited before readiness\n${demoOutput}`);
     try {
@@ -119,7 +125,7 @@ try {
         break;
       }
     } catch {
-      // Startup includes a clean build, so connection refusal is expected until Hono is listening.
+      // Hono is not listening yet.
     }
     await sleep(100);
   }
