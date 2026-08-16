@@ -45,8 +45,11 @@ Cancellation, timeouts, lost leases, and shutdown remain per-job decisions. One 
 
 ## Next
 
-- [Workers](310-workers.md)
-- [Priority](150-priority.md)
-- [Leases and fences](020-leases-and-fences.md)
+- [310-workers.md](310-workers.md) — the process that owns batch capacity
+- [150-priority.md](150-priority.md) — how PostgreSQL orders members before batching
+- [020-leases-and-fences.md](020-leases-and-fences.md) — why each member keeps separate ownership
 
-[Exact batch-handler limits and lifecycle rules](../architecture.md)
+---
+
+Exact batch-handler limits and lifecycle rules:
+[`architecture.md`](../architecture.md#worker-concurrency-and-lifecycle).
