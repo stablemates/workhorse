@@ -422,7 +422,7 @@ drop its databases without removing the checkout.
 
 After `pnpm install`, the demo needs only PostgreSQL 15+ and the local `workhorse` role described above.
 One command safely recreates the purpose-guarded `workhorse_demo` database, installs the application
-schema, builds the development runtime artifacts, starts the Hono server, starts **three dedicated
+schema, builds the development runtime artifacts, starts the Hono server, starts **two dedicated
 worker processes**, and serves `@workhorse/dashboard` from source through Vite:
 
 ```bash

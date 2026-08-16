@@ -30,17 +30,7 @@ const commands: Array<{
       ...process.env,
       WORKHORSE_DEMO_MODE: mode,
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-one",
-      WORKHORSE_DEMO_WORKER_PROFILE: "0",
-    },
-  },
-  {
-    command: "pnpm",
-    arguments: ["--filter", "@workhorse/demo", workerScript],
-    env: {
-      ...process.env,
-      WORKHORSE_DEMO_MODE: mode,
-      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-two",
-      WORKHORSE_DEMO_WORKER_PROFILE: "1",
+      WORKHORSE_DEMO_WORKER_PROFILE: "default",
     },
   },
   {
@@ -50,7 +40,7 @@ const commands: Array<{
       ...process.env,
       WORKHORSE_DEMO_MODE: mode,
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-partner-api",
-      WORKHORSE_DEMO_WORKER_PROFILE: "2",
+      WORKHORSE_DEMO_WORKER_PROFILE: "partner-api",
     },
   },
 ];
