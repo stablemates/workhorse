@@ -5,7 +5,7 @@ This is the end-to-end product demo for Workhorse. It lets you create test jobs 
 The demo uses Hono as its web server and Drizzle through Workhorse's ORM adapter. Seed data includes
 a transactionally created order and durable job, and worker-owned scheduling drives recurring work.
 
-**The demo runs each worker in a separate process.** The Hono server and three workers share nothing
+**The demo runs each worker in a separate process.** The Hono server and two workers share nothing
 but PostgreSQL. Workers announce themselves in
 `workhorse.worker_registry`, the dashboard reads the fleet from there, and operator pause travels
 through SQL. The browser refreshes on a bounded polling interval.
@@ -71,7 +71,7 @@ pnpm demo
 ```
 
 The command recreates only the purpose-guarded `workhorse_demo` database, compiles the server-side runtime
-packages, then starts a watched Hono server and three watched dedicated worker processes. Everything is served from
+packages, then starts a watched Hono server and two watched dedicated worker processes. Everything is served from
 `http://workhorse.localhost:43155/`, mounted at `/`; the demo intentionally exposes no ad hoc public job
 API. Set `WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay.
 Startup also creates a living feature showcase: seventeen feature families, each with three one-off
@@ -124,9 +124,9 @@ application shell keeps the header and responsive sidebar in place while browser
 `/tasks`, `/cron`, `/system`, and `/workers`. Task filters are nested under Current Tasks and persist as
 the `filter` query parameter, with pagination persisted as `page`.
 
-The demo runs **three** worker processes. Two serve the default queue, one with three execution
-slots and one strictly serial. The third is a serial `partner-api` worker, so its backlog drains only
-when PostgreSQL refills the displayed rate tokens. Every process owns one `Worker` and one pool.
+The demo runs **two** worker processes. One serves the default queue with three execution slots. The
+other is a serial `partner-api` worker, so its backlog drains only when PostgreSQL refills the
+displayed rate tokens. Every process owns one `Worker` and one pool.
 
 None of the workers is **named**. They take the same generated
 `<hostname>-<pid>-<random>` identity any deployment gets by default, so the dashboard has to
@@ -143,10 +143,10 @@ Pausing a worker from the dashboard writes to `workhorse.worker_registry` rather
 on a local object, so it reaches the worker process. Like cancellation it is cooperative: claiming stops
 at the worker's next registration refresh and any handler already running finishes.
 
-The demo declares three slots for one worker and one slot for the other. Core workers may configure
-an integer from 1 through 100 and publish `{ concurrency, activeSlots, draining }` to the registry, but
-the demo's two-worker shape
-is for lifecycle visibility and failover behavior, not a measured throughput comparison. Use the
+The demo declares three slots for the default-queue worker and one slot for the rate-limited worker.
+Core workers may configure an integer from 1 through 100 and publish
+`{ concurrency, activeSlots, draining }` to the registry, but the demo's two-worker shape is for
+lifecycle and queue visibility, not a measured throughput comparison. Use the
 `worker-concurrency` lifecycle benchmark against a `_bench` database for invariant-gated concurrency
 evidence, and do not infer performance from the dashboard.
 
@@ -193,7 +193,7 @@ For the deployable production shape, build and start the compiled demo explicitl
 pnpm demo:production
 ```
 
-That path creates the optimized dashboard bundle, then starts the Hono process and all three worker
+That path creates the optimized dashboard bundle, then starts the Hono process and both worker
 processes without Vite, HMR, or React Grab. It does not reset the database, which makes it suitable
 as the basis for future public deployment work.
 

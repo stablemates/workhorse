@@ -83,7 +83,7 @@ import { createDemoWorkerDefinition } from "../src/worker-definition.js";
  * drops the demo's own tables. Pointed at the demo database that is destructive to a demo someone
  * is watching: its data disappears mid-session and its tables are gone when the run ends. Worse in
  * the other direction, a running demo registers two workers of its own, and any assertion about the
- * fleet then sees four workers instead of the two the test started.
+ * fleet then sees extra workers beyond the one default-queue worker the test started.
  */
 const databaseUrl = localDatabaseUrl("test");
 assertLocalDatabasePurpose(databaseUrl, "test");
@@ -357,26 +357,23 @@ async function waitForWorker(
 }
 
 /**
- * Wait for the demo's workers to announce themselves and return them by declared capacity.
+ * Wait for the demo's default-queue worker to announce itself.
  *
  * The demo does not name its workers, exactly as a real deployment usually does not, so tests have
- * to discover the fleet from the registry rather than assume identities. Capacity is what
- * distinguishes the two: one worker overlaps handlers, the other is strictly serial.
+ * to discover the fleet from the registry rather than assume an identity.
  */
-async function waitForRegisteredFleet(
+async function waitForRegisteredWorker(
   client: RouterClient<DashboardRouter>,
-): Promise<{ overlapping: DashboardWorkerRow; serial: DashboardWorkerRow }> {
+): Promise<DashboardWorkerRow> {
   const page = await waitFor(
     () => client.dashboard.workers(),
     (value) =>
       value.workers.filter((worker) => worker.registered).length === DEMO_WORKER_CONCURRENCY.length,
   );
   const registered = page.workers.filter((worker) => worker.registered);
-  const overlapping = registered.find((worker) => worker.concurrency === 3);
-  const serial = registered.find((worker) => worker.concurrency === 1);
-  expect(overlapping, "a worker with three declared slots").toBeDefined();
-  expect(serial, "a worker with one declared slot").toBeDefined();
-  return { overlapping: overlapping!, serial: serial! };
+  const defaultQueueWorker = registered.find((worker) => worker.concurrency === 3);
+  expect(defaultQueueWorker, "a worker with three declared slots").toBeDefined();
+  return defaultQueueWorker!;
 }
 
 function showcaseTestPayload(
@@ -1208,7 +1205,7 @@ describe("Workhorse demo", () => {
 
     try {
       let job = await workhorse.context.queue.getJob(jobId);
-      for (let attempt = 0; attempt < 120 && job?.state !== "failed"; attempt += 1) {
+      for (let attempt = 0; attempt < 240 && job?.state !== "failed"; attempt += 1) {
         await sleep(25);
         job = await workhorse.context.queue.getJob(jobId);
       }
@@ -1579,10 +1576,7 @@ describe("Workhorse demo", () => {
         counts: { all: 1, retried: 1, completed: 1 },
       });
       expect(await client.dashboard.workers()).toMatchObject({
-        workers: [
-          { id: expect.stringMatching(GENERATED_WORKER_ID), registered: true },
-          { id: expect.stringMatching(GENERATED_WORKER_ID), registered: true },
-        ],
+        workers: [{ id: expect.stringMatching(GENERATED_WORKER_ID), registered: true }],
       });
       expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
         window: "1h",
@@ -2486,9 +2480,9 @@ describe("Workhorse demo", () => {
 
     try {
       // Workers are unnamed, so the fleet is discovered from the registry rather than assumed.
-      const { overlapping } = await waitForRegisteredFleet(client);
-      const workerId = overlapping.id;
-      expect(overlapping).toMatchObject({ paused: false, status: "idle" });
+      const defaultQueueWorker = await waitForRegisteredWorker(client);
+      const workerId = defaultQueueWorker.id;
+      expect(defaultQueueWorker).toMatchObject({ paused: false, status: "idle" });
       await expect(client.dashboard.workers()).resolves.toMatchObject({ canManageWorkers: true });
       await expect(
         client.dashboard.setWorkerPaused({
@@ -2532,7 +2526,7 @@ describe("Workhorse demo", () => {
   });
 
   it("declares deterministic demo worker concurrency and projects it through RPC", async () => {
-    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 1]);
+    expect(DEMO_WORKER_CONCURRENCY).toEqual([3]);
 
     const { app, workhorse } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);
@@ -2541,25 +2535,16 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      const { overlapping, serial } = await waitForRegisteredFleet(client);
-      expect(overlapping).toMatchObject({
+      const defaultQueueWorker = await waitForRegisteredWorker(client);
+      expect(defaultQueueWorker).toMatchObject({
         concurrency: 3,
         activeSlots: 0,
         activeJobs: 0,
         paused: false,
         draining: false,
       });
-      expect(serial).toMatchObject({
-        concurrency: 1,
-        activeSlots: 0,
-        activeJobs: 0,
-        paused: false,
-        draining: false,
-      });
       // Generated identities, not names the application chose.
-      for (const worker of [overlapping, serial]) {
-        expect(worker.id).toMatch(/^\S+-\d+-[\da-f]{8}$/);
-      }
+      expect(defaultQueueWorker.id).toMatch(/^\S+-\d+-[\da-f]{8}$/);
     } finally {
       await workhorse.stop();
     }
@@ -2575,21 +2560,8 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      // Pause targets a durable registration, so wait for both unnamed workers to announce
-      // themselves before acting on either. An operator cannot hit this from the UI, which lists
-      // registered workers, but a test that starts and immediately pauses can.
-      const { overlapping, serial } = await waitForRegisteredFleet(client);
-
-      // Parking the single-slot worker makes every claim below land on the three-slot worker.
-      await client.dashboard.setWorkerPaused({
-        workerId: serial.id,
-        paused: true,
-        audit: { actor: "operator", reason: "isolate slot use", requestId: "slots-isolate" },
-      });
-      // Pause is durable and cooperative rather than an in-process method call: the request is
-      // committed to PostgreSQL and the worker stops claiming when it next refreshes its
-      // registration. Give it more than one refresh cycle before assuming it will not claim.
-      await sleep(TEST_REGISTRY_INTERVAL_MS * 3);
+      // Wait for the unnamed worker to announce itself before enqueueing work against its slots.
+      const defaultQueueWorker = await waitForRegisteredWorker(client);
 
       const enqueued = await Promise.all([
         client.dashboard.enqueueTest({
@@ -2604,7 +2576,7 @@ describe("Workhorse demo", () => {
 
       const overlapped = await waitForWorker(
         client,
-        overlapping.id,
+        defaultQueueWorker.id,
         (worker) => worker.activeSlots === 2,
       );
       expect(overlapped).toMatchObject({ concurrency: 3, activeSlots: 2, paused: false });
@@ -2613,7 +2585,7 @@ describe("Workhorse demo", () => {
 
       await expect(
         client.dashboard.setWorkerPaused({
-          workerId: overlapping.id,
+          workerId: defaultQueueWorker.id,
           paused: true,
           audit: { actor: "operator", reason: "pause while busy", requestId: "slots-pause" },
         }),
@@ -2621,7 +2593,7 @@ describe("Workhorse demo", () => {
 
       // Pause stops new claims only, so both in-flight handlers keep their slots.
       const paused = (await client.dashboard.workers()).workers.find(
-        (worker) => worker.id === overlapping.id,
+        (worker) => worker.id === defaultQueueWorker.id,
       );
       expect(paused).toMatchObject({ paused: true, activeSlots: 2, concurrency: 3 });
 
@@ -2635,7 +2607,7 @@ describe("Workhorse demo", () => {
 
       const drained = await waitForWorker(
         client,
-        overlapping.id,
+        defaultQueueWorker.id,
         (worker) => worker.activeSlots === 0,
       );
       expect(drained).toMatchObject({ paused: true, activeSlots: 0, draining: false });
@@ -2649,7 +2621,7 @@ describe("Workhorse demo", () => {
         ).rows,
       ).toEqual([
         {
-          target: `worker:${overlapping.id}`,
+          target: `worker:${defaultQueueWorker.id}`,
           before: { paused: false },
           after: { paused: true },
         },
@@ -2721,10 +2693,7 @@ describe("Workhorse demo", () => {
         1,
       );
       expect(snapshot.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
-      const declared = snapshot.workers.map((worker) => worker.concurrency);
-      expect([Math.min(...(declared as number[])), Math.max(...(declared as number[]))]).toEqual([
-        1, 3,
-      ]);
+      expect(snapshot.workers.map((worker) => worker.concurrency)).toEqual([3]);
       for (const worker of snapshot.workers) {
         expect(worker).toMatchObject({ registered: true, draining: false });
         expect(worker.activeSlots).not.toBeNull();

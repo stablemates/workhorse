@@ -33,9 +33,8 @@ export const DEMO_SIGNAL_SENDER_DELAY_MS = 3_000;
  */
 export const DEMO_RECURRING_WAIT_TIMEOUT_MS = 10 * 60_000;
 /**
- * The declared batch ceiling for `demo.batch-digest`. Each worker clamps it to its own declared
- * job concurrency, so the serial worker delivers singleton batches while the overlapping worker
- * groups up to three compatible members per invocation.
+ * The declared batch ceiling for `demo.batch-digest`. The default-queue worker clamps it to its
+ * declared job concurrency and groups up to three compatible members per invocation.
  */
 export const DEMO_BATCH_MAX_SIZE = 3;
 export const DEMO_BATCH_LINGER_MS = 2_000;
@@ -46,18 +45,17 @@ export const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 export const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKER_POLL_MS = 15_000;
 /**
- * Declared execution slots for the demo's two workers.
+ * Declared execution slots for the demo's default-queue worker.
  *
- * The values are deliberately different so the dashboard shows a heterogeneous fleet: one worker
- * overlaps handlers while the other stays strictly serial. Concurrency is configuration, not a
- * runtime control, so nothing mutates it.
+ * The worker overlaps handlers so the dashboard shows active slot use. Concurrency is
+ * configuration, not a runtime control, so nothing mutates it.
  *
  * The demo deliberately does **not** name its workers. Real deployments rarely do either, so
  * letting the default `<hostname>-<pid>-<random>` identity apply keeps the demo an honest picture
  * of what an operator actually sees: a fleet discovered from PostgreSQL rather than a list the web
  * tier was told about in advance.
  */
-export const DEMO_WORKER_CONCURRENCY = [3, 1] as const;
+export const DEMO_WORKER_CONCURRENCY = [3] as const;
 /**
  * Worker identities attached to the seeded historical attempts.
  *

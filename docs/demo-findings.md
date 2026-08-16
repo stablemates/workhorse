@@ -6,7 +6,7 @@ test suite.
 
 ## Application boundary
 
-The Hono process and three worker processes share only PostgreSQL. The web process uses Drizzle for
+The Hono process and two worker processes share only PostgreSQL. The web process uses Drizzle for
 an application-owned transaction that inserts an order and enqueues its job atomically. Each worker
 owns its own pool and registers itself in `workhorse.worker_registry`, so the dashboard discovers
 the fleet without process-local controller objects.
