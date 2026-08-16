@@ -13,10 +13,7 @@
     "directory": "typescript/core"
   },
   "bin": {
-    "workhorse": "./dist/src/cli/workhorse.js",
-    "workhorse-bench": "./dist/src/cli/benchmark.js",
-    "workhorse-bench-competitors": "./dist/src/cli/benchmark-competitors.js",
-    "workhorse-health": "./dist/src/cli/health.js"
+    "workhorse": "./dist/src/cli/workhorse.js"
   },
   "files": [
     "dist",

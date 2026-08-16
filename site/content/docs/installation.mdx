@@ -43,8 +43,8 @@ Workhorse creates every object inside a schema named `workhorse`. The connecting
 to create that schema plus its tables, indexes, partitions, and functions.
 
 Your process supplies the connection through its normal configuration — typically a `pg` `Pool`
-built from `DATABASE_URL`. The CLI accepts `--database-url` and the documented Workhorse or
-application environment variables.
+built from `DATABASE_URL`. The CLI reads `--database-url`, then `WORKHORSE_DATABASE_URL`, then
+`DATABASE_URL`. Repository scripts can select a local purpose with `--database`.
 
 ## Install the schema deliberately
 
@@ -54,7 +54,11 @@ installed version against what the runtime expects.
 ```bash
 npx workhorse schema install
 npx workhorse schema status
+npx workhorse schema status --json
 ```
+
+Every command rejects unknown options and accepts both `--flag value` and `--flag=value`.
+Command-specific help exits before the CLI connects to PostgreSQL.
 
 The same step is available from deployment code as `installSchema`.
 

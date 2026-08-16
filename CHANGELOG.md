@@ -55,10 +55,10 @@ First published line. Requires **schema v43**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse/core`: transactionally consistent `Queue.health()` snapshots — one SQL statement
   for every correctness-sensitive value, size-capped history scans with explicit lower-bound
   flags, PostgreSQL estimates separated under `observations`, and caller-overridable health
-  budgets producing machine-readable `status.reasons` shared by the `workhorse-health` exit
-  code, the benchmark invariants, and the dashboard verdict.
-- `@workhorse/core`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`, and
-  `dashboard`.
+  budgets producing machine-readable `status.reasons` shared by the `workhorse health --json`
+  exit code, the benchmark invariants, and the dashboard verdict.
+- `@workhorse/core`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`,
+  `dashboard`, `health`, `bench`, and `bench competitors`.
 - `@workhorse/core`: notification-assisted worker dispatch through one process-local
   `workhorse_jobs` listener per node-postgres pool, with queue routing, reconnect backoff, and
   jittered bounded polling as the durable fallback.
@@ -108,6 +108,13 @@ First published line. Requires **schema v43**, Node.js **22 or 24**, PostgreSQL 
 The line is unreleased, so these changes precede first publication and no deployment upgrades
 through them. They are recorded because the pre-release dashboards and ADRs in this repository
 name the retired instruments.
+
+- **Breaking:** `@workhorse/core` now publishes only the `workhorse` binary. Replace
+  `workhorse-health`, `workhorse-bench`, and `workhorse-bench-competitors` with `workhorse health`,
+  `workhorse bench`, and `workhorse bench competitors`. The CLI rejects unknown options, supports
+  both string-option spellings, provides help at each command depth, and uses exit 64 for usage
+  errors. `schema status --json` separates schema drift from PostgreSQL support. `health --json`
+  preserves the machine-readable health output; human output is now the default.
 
 - `@workhorse/core`: health snapshots and per-queue metrics now count rejected signal deliveries
   and human decisions over a trailing 24-hour window. A partial event index bounds these polling

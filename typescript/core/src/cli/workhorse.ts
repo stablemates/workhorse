@@ -1,39 +1,170 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { DashboardSingleAdminOptions } from "@workhorse/dashboard-contract";
 import { Pool } from "pg";
 import { installSchema, readSchemaVersion, WORKHORSE_SCHEMA_VERSION } from "../schema.js";
 import { MINIMUM_POSTGRES_MAJOR, readPostgresSupport } from "../support.js";
 import { runWorkerProcess } from "../worker-process.js";
 import type { WorkerProcessDefinition } from "../worker-process.js";
+import {
+  CliUsageError,
+  databaseOptionDefinitions,
+  parseCommandArgs,
+  resolveDatabaseUrl,
+  USAGE_EXIT_CODE,
+} from "./arguments.js";
+import { runCompetitorBenchmarkCommand } from "./benchmark-competitors.js";
+import { runBenchmarkCommand } from "./benchmark.js";
 import { startDashboardServer } from "./dashboard.js";
+import { runHealthCommand } from "./health.js";
 import { initializeProject } from "./init.js";
+import { createSchemaStatusReport } from "./schema-status.js";
 
-const USAGE = `Usage:
-  workhorse init [--dir <path>] [--force]
-  workhorse dashboard [--port <port>] [--host <interface>] [--socket <path>] [--public-origin <origin>] [--allow-mutations] [--actor <name>]
-  workhorse schema install [--database-url <url>]
-  workhorse schema status [--database-url <url>]
-  workhorse worker --config <compiled-module> [--shutdown-timeout-ms <milliseconds>]
-  workhorse --help
+const ROOT_HELP = `Usage: workhorse <command> [options]
 
 Commands:
-  dashboard  Serve the operator dashboard as its own process against any Workhorse database.
-  init    Detect the project and scaffold a worker configuration for an existing application.
-  schema  Install the Workhorse schema into a clean database, or report the installed version.
-  worker  Load a default-exported worker process definition and run it until shutdown.
+  init       Detect a project and scaffold a worker configuration.
+  schema     Install the schema or report schema and PostgreSQL compatibility.
+  worker     Run workers from a compiled configuration module.
+  dashboard  Serve the operator dashboard against a Workhorse database.
+  health     Report queue health.
+  bench      Run Workhorse benchmarks; use "bench competitors" for competitor baselines.
 
-The database URL is read from --database-url, then WORKHORSE_DATABASE_URL, then DATABASE_URL.
+Global options:
+  --help, -h  Show this help.
+  --version   Show the @workhorse/core version.
+
+Exit codes:
+  0   Success.
+  1   Runtime failure, and the state "schema status" reports as drift or unsupported.
+  2   Queue degradation reported by health.
+  64  Usage error, including an unknown command, flag, or missing value.
+`;
+
+const INIT_HELP = `Usage: workhorse init [options]
+
+Options:
+  --dir <path>  Project directory (default: current directory).
+  --force       Overwrite an existing generated configuration.
+  --help, -h    Show this help.
+`;
+
+const SCHEMA_HELP = `Usage:
+  workhorse schema install [options]
+  workhorse schema status [options]
+
+Commands:
+  install  Install the Workhorse schema into a clean database.
+  status   Report the installed schema version and PostgreSQL support separately.
+
+Use "workhorse schema <command> --help" for command options.
+`;
+
+const DATABASE_HELP = `  --database-url <url>  Database URL. This takes precedence over all other sources.
+  --database <purpose>  Repository-local database: dev, test, bench, or demo.
+
+The fallback order is WORKHORSE_DATABASE_URL, then DATABASE_URL. Repository scripts can select a
+local purpose with --database.
+`;
+
+const SCHEMA_INSTALL_HELP = `Usage: workhorse schema install [options]
+
+Options:
+${DATABASE_HELP}  --help, -h              Show this help.
+`;
+
+const SCHEMA_STATUS_HELP = `Usage: workhorse schema status [options]
+
+Options:
+${DATABASE_HELP}  --json                  Emit a machine-readable status object.
+  --help, -h              Show this help.
+
+The default output is human-readable. Schema drift and PostgreSQL support are separate fields in
+JSON output. This command exits 1 when the installed version differs from the expected version, or
+when the server is below the required major. Read the JSON fields to tell the two apart.
+`;
+
+const WORKER_HELP = `Usage: workhorse worker --config <compiled-module> [options]
+
+Options:
+  --config <module>                 Compiled worker configuration module (required).
+  --shutdown-timeout-ms <number>    Graceful shutdown deadline in milliseconds.
+  --help, -h                        Show this help.
+
+The worker configuration must be JavaScript that the current Node.js process can import. Compile
+TypeScript configuration files before invoking the packaged CLI.
+`;
+
+const DASHBOARD_HELP = `Usage: workhorse dashboard [options]
+
+Options:
+${DATABASE_HELP}  --port <port>            TCP port (default: 3000).
+  --host <interface>       TCP interface (default: 127.0.0.1).
+  --socket <path>          Listen on a Unix socket instead of TCP.
+  --public-origin <origin> Public HTTPS origin for a remote authenticated listener.
+  --allow-mutations        Enable dashboard mutations.
+  --actor <name>           Actor recorded for mutations (default: workhorse-cli).
+  --help, -h               Show this help.
 
 The dashboard binds 127.0.0.1 and is read-only unless told otherwise. Set
 WORKHORSE_DASHBOARD_USERNAME and WORKHORSE_DASHBOARD_PASSWORD_HASH, or their _FILE variants, to
 enable single-administrator sessions. Unauthenticated listeners are limited to loopback or a Unix
 socket. A remote authenticated listener requires WORKHORSE_DASHBOARD_PUBLIC_ORIGIN with HTTPS.
+`;
 
-The worker configuration must be JavaScript that the current Node.js process can import. Compile
-TypeScript configuration files before invoking the packaged CLI.
+const HEALTH_HELP = `Usage: workhorse health [options]
+
+Options:
+${DATABASE_HELP}  --json                  Emit the full machine-readable QueueHealth object.
+  --help, -h              Show this help.
+
+The default output is human-readable. Exit 2 means queue degradation; malformed usage exits 64.
+`;
+
+const BENCH_HELP = `Workhorse benchmark suite v3
+
+Usage:
+  workhorse bench [options]
+  workhorse bench competitors [options]
+
+Suite selection:
+  --suite <name>             all, comparative, or lifecycle (default: all).
+  --profile <name>           smoke, default, or full (default: default).
+  --scenario <names>         Comma-separated lifecycle scenarios.
+
+Comparative overrides:
+  --seed <number>            Non-negative deterministic execution-plan seed.
+  --jobs <number>            Jobs per independent run.
+  --enqueue-batch <number>   Jobs per enqueueMany request.
+  --repetitions <number>     Independent reset-and-run repetitions.
+  --rounds <number>          Legacy alias for --repetitions.
+  --workers <numbers>        Comma-separated worker sweep, for example 1,4,16.
+  --churn-rate <number>      Fixed producer target jobs per second.
+  --churn-jobs <number>      Exact jobs produced and completed per design.
+  --sample-ms <number>       Churn telemetry sample interval in milliseconds.
+  --schedule-samples <number>
+                             Recurring occurrences sampled under worker load.
+
+Output and database:
+  --output <path>            Also write the canonical versioned JSON report.
+${DATABASE_HELP}  --help, -h                Show this help.
+
+The suite resets Workhorse and benchmark-only tables while running. It only accepts a _bench
+database. See docs/benchmarking.md.
+`;
+
+const BENCH_COMPETITORS_HELP = `Usage: workhorse bench competitors [options]
+
+Options:
+  --profile <name>             smoke or default (default: default).
+  --output <path>              Also write the JSON report.
+  --pg-boss-batch-size <size>  pg-boss batch size (default: 1).
+${DATABASE_HELP}  --help, -h                  Show this help.
+
+This command resets the isolated workhorse, pgboss_competitor, and graphile_worker_competitor
+schemas. It only accepts a _bench database.
 `;
 
 interface WorkerCommandOptions {
@@ -41,38 +172,33 @@ interface WorkerCommandOptions {
   shutdownTimeoutMs?: number;
 }
 
-function valueAfter(args: readonly string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  if (index === -1) return undefined;
-  const value = args[index + 1];
-  if (!value || value.startsWith("--")) throw new Error(`${flag} requires a value`);
-  return value;
-}
-
 function parsePositiveInteger(value: string, flag: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`${flag} must be a positive safe integer`);
+    throw new CliUsageError(`${flag} must be a positive safe integer`);
   }
   return parsed;
 }
 
-function parseWorkerOptions(args: readonly string[]): WorkerCommandOptions {
-  const config = valueAfter(args, "--config");
-  if (!config) throw new Error("worker requires --config <compiled-module>");
-  const timeout = valueAfter(args, "--shutdown-timeout-ms");
-  const recognized = new Set(["--config", "--shutdown-timeout-ms"]);
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    if (!argument) continue;
-    if (!argument.startsWith("--")) throw new Error(`Unexpected worker argument: ${argument}`);
-    if (!recognized.has(argument)) throw new Error(`Unknown worker option: ${argument}`);
-    index += 1;
-  }
+function parseWorkerOptions(args: readonly string[]): WorkerCommandOptions | null {
+  const { values } = parseCommandArgs("worker", {
+    args,
+    options: {
+      config: { type: "string" },
+      "shutdown-timeout-ms": { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  if (values.help) return null;
+  if (!values.config) throw new CliUsageError("worker requires --config <compiled-module>");
   return {
-    config,
+    config: values.config,
     shutdownTimeoutMs:
-      timeout === undefined ? undefined : parsePositiveInteger(timeout, "--shutdown-timeout-ms"),
+      values["shutdown-timeout-ms"] === undefined
+        ? undefined
+        : parsePositiveInteger(values["shutdown-timeout-ms"], "--shutdown-timeout-ms"),
   };
 }
 
@@ -96,19 +222,6 @@ async function loadDefinition(configPath: string): Promise<WorkerProcessDefiniti
     );
   }
   return module.default;
-}
-
-function resolveDatabaseUrl(args: readonly string[]): string {
-  const url =
-    valueAfter(args, "--database-url") ??
-    process.env.WORKHORSE_DATABASE_URL ??
-    process.env.DATABASE_URL;
-  if (!url) {
-    throw new Error(
-      "No database URL. Pass --database-url, or set WORKHORSE_DATABASE_URL or DATABASE_URL.",
-    );
-  }
-  return url;
 }
 
 async function dashboardSecret(name: string): Promise<string | undefined> {
@@ -158,10 +271,36 @@ async function resolveDashboardAuthentication(): Promise<DashboardSingleAdminOpt
 
 async function runSchemaCommand(args: readonly string[]): Promise<void> {
   const action = args[0];
-  if (action !== "install" && action !== "status") {
-    throw new Error(`Unknown schema command: ${String(action)}\n\n${USAGE}`);
+  if (!action || action === "--help" || action === "-h") {
+    const { values } = parseCommandArgs("schema", {
+      args,
+      options: { help: { type: "boolean", short: "h" } },
+      strict: true,
+      allowPositionals: false,
+    });
+    if (values.help || args.length === 0) {
+      process.stdout.write(SCHEMA_HELP);
+      return;
+    }
   }
-  const databaseUrl = resolveDatabaseUrl(args.slice(1));
+  if (action !== "install" && action !== "status") {
+    throw new CliUsageError(`Unknown schema command: ${String(action)}`);
+  }
+  const { values } = parseCommandArgs(`schema ${action}`, {
+    args: args.slice(1),
+    options: {
+      ...databaseOptionDefinitions,
+      ...(action === "status" ? { json: { type: "boolean" as const } } : {}),
+      help: { type: "boolean", short: "h" },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  if (values.help) {
+    process.stdout.write(action === "install" ? SCHEMA_INSTALL_HELP : SCHEMA_STATUS_HELP);
+    return;
+  }
+  const databaseUrl = resolveDatabaseUrl(values);
   const pool = new Pool({ connectionString: databaseUrl });
   try {
     if (action === "status") {
@@ -173,25 +312,29 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
         if (code === "42P01" || code === "3F000") return null;
         throw error;
       });
-      process.stdout.write(
-        version === null
-          ? `No Workhorse schema is installed. Runtime expects v${WORKHORSE_SCHEMA_VERSION}.\n`
-          : `Installed Workhorse schema v${version}. Runtime expects v${WORKHORSE_SCHEMA_VERSION}.\n`,
-      );
       // Status is also where an operator finds out that the server itself is outside the tested
       // matrix, which no schema version can express.
       const support = await readPostgresSupport(pool);
-      process.stdout.write(
-        `PostgreSQL ${support.version}: ${
-          !support.supported
-            ? `unsupported, below the required major ${MINIMUM_POSTGRES_MAJOR}`
-            : support.tested
-              ? "supported and covered by CI"
-              : "supported, but this major is not covered by CI"
-        }.\n`,
-      );
-      if (version !== null && version !== WORKHORSE_SCHEMA_VERSION) process.exitCode = 1;
-      if (!support.supported) process.exitCode = 1;
+      const report = createSchemaStatusReport(version, support);
+      if (values.json) {
+        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      } else {
+        process.stdout.write(
+          version === null
+            ? `No Workhorse schema is installed. Runtime expects v${WORKHORSE_SCHEMA_VERSION}.\n`
+            : `Installed Workhorse schema v${version}. Runtime expects v${WORKHORSE_SCHEMA_VERSION}.\n`,
+        );
+        process.stdout.write(
+          `PostgreSQL ${support.version}: ${
+            !support.supported
+              ? `unsupported, below the required major ${MINIMUM_POSTGRES_MAJOR}`
+              : support.tested
+                ? "supported and covered by CI"
+                : "supported, but this major is not covered by CI"
+          }.\n`,
+        );
+      }
+      if (report.schema.state === "drift" || !support.supported) process.exitCode = 1;
       return;
     }
     // Installation is clean-database only by design. It refuses to touch an existing schema rather
@@ -204,18 +347,35 @@ async function runSchemaCommand(args: readonly string[]): Promise<void> {
 }
 
 async function runDashboardCommand(args: readonly string[]): Promise<void> {
-  const databaseUrl = resolveDatabaseUrl(args);
-  const portValue = valueAfter(args, "--port");
-  const port = portValue === undefined ? 3000 : parsePositiveInteger(portValue, "--port");
-  const hostname = valueAfter(args, "--host") ?? "127.0.0.1";
-  const socketPath = valueAfter(args, "--socket");
-  if (socketPath && (args.includes("--host") || args.includes("--port"))) {
-    throw new Error("--socket cannot be combined with --host or --port");
+  const { values } = parseCommandArgs("dashboard", {
+    args,
+    options: {
+      ...databaseOptionDefinitions,
+      port: { type: "string" },
+      host: { type: "string" },
+      socket: { type: "string" },
+      "public-origin": { type: "string" },
+      "allow-mutations": { type: "boolean" },
+      actor: { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  if (values.help) {
+    process.stdout.write(DASHBOARD_HELP);
+    return;
   }
-  const publicOrigin =
-    valueAfter(args, "--public-origin") ?? process.env.WORKHORSE_DASHBOARD_PUBLIC_ORIGIN;
-  const allowMutations = args.includes("--allow-mutations");
-  const actor = valueAfter(args, "--actor") ?? "workhorse-cli";
+  const databaseUrl = resolveDatabaseUrl(values);
+  const port = values.port === undefined ? 3000 : parsePositiveInteger(values.port, "--port");
+  const hostname = values.host ?? "127.0.0.1";
+  const socketPath = values.socket;
+  if (socketPath && (values.host !== undefined || values.port !== undefined)) {
+    throw new CliUsageError("--socket cannot be combined with --host or --port");
+  }
+  const publicOrigin = values["public-origin"] ?? process.env.WORKHORSE_DASHBOARD_PUBLIC_ORIGIN;
+  const allowMutations = values["allow-mutations"] ?? false;
+  const actor = values.actor ?? "workhorse-cli";
   const authentication = await resolveDashboardAuthentication();
 
   if (allowMutations) {
@@ -249,8 +409,22 @@ async function runDashboardCommand(args: readonly string[]): Promise<void> {
 }
 
 async function runInitCommand(args: readonly string[]): Promise<void> {
-  const directory = path.resolve(process.cwd(), valueAfter(args, "--dir") ?? ".");
-  const result = await initializeProject(directory, { force: args.includes("--force") });
+  const { values } = parseCommandArgs("init", {
+    args,
+    options: {
+      dir: { type: "string" },
+      force: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  if (values.help) {
+    process.stdout.write(INIT_HELP);
+    return;
+  }
+  const directory = path.resolve(process.cwd(), values.dir ?? ".");
+  const result = await initializeProject(directory, { force: values.force ?? false });
   process.stdout.write(
     result.written
       ? `Wrote ${path.relative(process.cwd(), result.configPath) || result.configPath}\n`
@@ -262,15 +436,162 @@ async function runInitCommand(args: readonly string[]): Promise<void> {
   for (const step of result.nextSteps) process.stdout.write(`${step}\n`);
 }
 
-async function main(args: readonly string[]): Promise<void> {
-  const command = args[0];
-  if (!command || command === "--help" || command === "-h" || command === "help") {
-    process.stdout.write(USAGE);
+async function runHealth(args: readonly string[]): Promise<void> {
+  const { values } = parseCommandArgs("health", {
+    args,
+    options: {
+      ...databaseOptionDefinitions,
+      json: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  if (values.help) {
+    process.stdout.write(HEALTH_HELP);
     return;
   }
-  if (args[1] === "--help" || args[1] === "-h") {
-    process.stdout.write(USAGE);
+  await runHealthCommand({ databaseUrl: resolveDatabaseUrl(values), json: values.json ?? false });
+}
+
+const benchmarkOptionDefinitions = {
+  ...databaseOptionDefinitions,
+  suite: { type: "string" },
+  profile: { type: "string" },
+  scenario: { type: "string" },
+  seed: { type: "string" },
+  jobs: { type: "string" },
+  "enqueue-batch": { type: "string" },
+  repetitions: { type: "string" },
+  rounds: { type: "string" },
+  workers: { type: "string" },
+  "churn-rate": { type: "string" },
+  "churn-jobs": { type: "string" },
+  "sample-ms": { type: "string" },
+  "schedule-samples": { type: "string" },
+  output: { type: "string" },
+  help: { type: "boolean", short: "h" },
+} as const;
+
+async function runBench(args: readonly string[]): Promise<void> {
+  if (args[0] === "competitors") {
+    const { values } = parseCommandArgs("bench competitors", {
+      args: args.slice(1),
+      options: {
+        ...databaseOptionDefinitions,
+        profile: { type: "string" },
+        output: { type: "string" },
+        "pg-boss-batch-size": { type: "string" },
+        help: { type: "boolean", short: "h" },
+      },
+      strict: true,
+      allowPositionals: false,
+    });
+    if (values.help) {
+      process.stdout.write(BENCH_COMPETITORS_HELP);
+      return;
+    }
+    await runCompetitorBenchmarkCommand({
+      databaseUrl: resolveDatabaseUrl(values, "bench"),
+      profile: values.profile,
+      output: values.output,
+      pgBossBatchSize: values["pg-boss-batch-size"],
+    });
     return;
+  }
+  const { values } = parseCommandArgs("bench", {
+    args,
+    options: benchmarkOptionDefinitions,
+    strict: true,
+    allowPositionals: false,
+  });
+  if (values.help) {
+    process.stdout.write(BENCH_HELP);
+    return;
+  }
+  await runBenchmarkCommand({
+    databaseUrl: resolveDatabaseUrl(values, "bench"),
+    suite: values.suite,
+    profile: values.profile,
+    scenario: values.scenario,
+    seed: values.seed,
+    jobs: values.jobs,
+    enqueueBatch: values["enqueue-batch"],
+    repetitions: values.repetitions,
+    rounds: values.rounds,
+    workers: values.workers,
+    churnRate: values["churn-rate"],
+    churnJobs: values["churn-jobs"],
+    sampleMs: values["sample-ms"],
+    scheduleSamples: values["schedule-samples"],
+    output: values.output,
+  });
+}
+
+async function packageVersion(): Promise<string> {
+  let directory = path.dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    const packagePath = path.join(directory, "package.json");
+    try {
+      const manifest = JSON.parse(await readFile(packagePath, "utf8")) as {
+        name?: unknown;
+        version?: unknown;
+      };
+      if (manifest.name === "@workhorse/core" && typeof manifest.version === "string") {
+        return manifest.version;
+      }
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
+      if (code !== "ENOENT") throw error;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) throw new Error("Could not locate @workhorse/core package.json");
+    directory = parent;
+  }
+}
+
+async function main(args: readonly string[]): Promise<void> {
+  const command = args[0];
+  if (!command) {
+    process.stdout.write(ROOT_HELP);
+    return;
+  }
+  if (command === "help") {
+    if (args.length !== 1) throw new CliUsageError(`Unexpected workhorse argument: ${args[1]}`);
+    process.stdout.write(ROOT_HELP);
+    return;
+  }
+  if (command === "--help" || command === "-h") {
+    parseCommandArgs("workhorse", {
+      args,
+      options: { help: { type: "boolean", short: "h" } },
+      strict: true,
+      allowPositionals: false,
+    });
+    process.stdout.write(ROOT_HELP);
+    return;
+  }
+  if (command === "--version") {
+    parseCommandArgs("workhorse", {
+      args,
+      options: { version: { type: "boolean" } },
+      strict: true,
+      allowPositionals: false,
+    });
+    process.stdout.write(`${await packageVersion()}\n`);
+    return;
+  }
+  if (command.startsWith("-")) {
+    parseCommandArgs("workhorse", {
+      args,
+      options: {
+        help: { type: "boolean", short: "h" },
+        version: { type: "boolean" },
+      },
+      strict: true,
+      allowPositionals: false,
+    });
   }
   if (command === "dashboard") {
     await runDashboardCommand(args.slice(1));
@@ -284,15 +605,37 @@ async function main(args: readonly string[]): Promise<void> {
     await runSchemaCommand(args.slice(1));
     return;
   }
-  if (command !== "worker") throw new Error(`Unknown command: ${command}\n\n${USAGE}`);
+  if (command === "health") {
+    await runHealth(args.slice(1));
+    return;
+  }
+  if (command === "bench") {
+    await runBench(args.slice(1));
+    return;
+  }
+  if (command !== "worker") throw new CliUsageError(`Unknown command: ${command}`);
   const options = parseWorkerOptions(args.slice(1));
+  if (!options) {
+    process.stdout.write(WORKER_HELP);
+    return;
+  }
   const definition = await loadDefinition(options.config);
   await runWorkerProcess(definition, { shutdownTimeoutMs: options.shutdownTimeoutMs });
 }
 
 try {
-  await main(process.argv.slice(2));
+  // A package manager forwards its own argument terminator, so `pnpm health -- --json` reaches this
+  // process as a bare `--` in the middle of argv. Node's parser would treat it as a terminator and
+  // push the remaining flags into positionals, which every command rejects. Drop each bare `--` so
+  // the same command works whether a user runs the binary directly or through a script.
+  const args = process.argv.slice(2).filter((argument) => argument !== "--");
+  await main(args);
 } catch (error) {
-  console.error(error instanceof Error ? (error.stack ?? error.message) : error);
-  process.exitCode = 1;
+  if (error instanceof CliUsageError) {
+    process.stderr.write(`Error: ${error.message}\n`);
+    process.exitCode = USAGE_EXIT_CODE;
+  } else {
+    console.error(error instanceof Error ? (error.stack ?? error.message) : error);
+    process.exitCode = 1;
+  }
 }

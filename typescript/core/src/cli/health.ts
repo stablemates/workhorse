@@ -1,34 +1,29 @@
-#!/usr/bin/env node
 import { Pool } from "pg";
 import { Queue } from "../index.js";
-import {
-  isLocalDatabasePurpose,
-  localDatabaseUrl,
-  type LocalDatabasePurpose,
-} from "../local-database.js";
 
-const purposeIndex = process.argv.indexOf("--database");
-let localPurpose: LocalDatabasePurpose | undefined;
-if (purposeIndex !== -1) {
-  const purposeArgument = process.argv[purposeIndex + 1];
-  if (!purposeArgument || !isLocalDatabasePurpose(purposeArgument)) {
-    throw new Error("--database must be dev, test, or bench");
-  }
-  localPurpose = purposeArgument;
+export interface HealthCommandOptions {
+  readonly databaseUrl: string;
+  readonly json: boolean;
 }
 
-// Repository scripts pass an explicit local purpose. The packaged CLI retains DATABASE_URL for
-// inspecting an application-owned database without imposing Workhorse's local naming convention.
-const databaseUrl = localPurpose ? localDatabaseUrl(localPurpose) : process.env.DATABASE_URL;
-if (!databaseUrl)
-  throw new Error("DATABASE_URL is required unless --database selects a local role");
-const pool = new Pool({ connectionString: databaseUrl });
-try {
-  // Emit only JSON so automation can consume stdout. Exit 2 is reserved for recoverable queue
-  // degradation: a health budget is exceeded, with machine-readable reasons in status.reasons.
-  const health = await new Queue(pool).health();
-  console.log(JSON.stringify(health, null, 2));
-  if (health.status.level !== "healthy") process.exitCode = 2;
-} finally {
-  await pool.end();
+export async function runHealthCommand(options: HealthCommandOptions): Promise<void> {
+  const pool = new Pool({ connectionString: options.databaseUrl });
+  try {
+    const health = await new Queue(pool).health();
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(health, null, 2)}\n`);
+    } else {
+      process.stdout.write(`Workhorse queue is ${health.status.level}.\n`);
+      for (const reason of health.status.reasons) {
+        process.stdout.write(
+          `- ${reason.code}: observed ${reason.observed}, budget ${reason.budget}\n`,
+        );
+      }
+    }
+    // Exit 2 is reserved for recoverable queue degradation. Usage errors use EX_USAGE (64), so
+    // automation can distinguish an unhealthy queue from a malformed command.
+    if (health.status.level !== "healthy") process.exitCode = 2;
+  } finally {
+    await pool.end();
+  }
 }

@@ -147,10 +147,16 @@ The `workhorse` CLI covers setup and operations without writing code:
 ```bash
 npx workhorse init                              # scaffold config and wiring
 npx workhorse schema install                    # install the schema
-npx workhorse schema status                     # report installed vs. runtime version
+npx workhorse schema status --json              # report schema and PostgreSQL status
 npx workhorse worker --config workhorse.config.js  # run a supervised worker process
 npx workhorse dashboard --port 3000             # serve the operator dashboard
+npx workhorse health --json                     # emit machine-readable queue health
+npx workhorse bench --database bench            # run the isolated benchmark suite
+npx workhorse bench competitors --database bench  # run competitor baselines
 ```
+
+The package exposes only the `workhorse` binary. Each command rejects unknown options and accepts
+both `--flag value` and `--flag=value`. Run `workhorse <command> --help` for its options.
 
 ## Next
 

@@ -1,38 +1,31 @@
-#!/usr/bin/env node
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Pool } from "pg";
-import {
-  normalizeCompetitorOptions,
-  runCompetitorBaseline,
-  stringifyCompetitorReport,
-  type CompetitorProfileName,
-} from "../../benchmarks/competitor-baseline.js";
-import { databaseName, localDatabaseUrl } from "../local-database.js";
+import type { CompetitorProfileName } from "../../benchmarks/competitor-baseline.js";
+import { assertLocalDatabasePurpose } from "../local-database.js";
+import { CliUsageError } from "./arguments.js";
 
-function argument(name: string): string | undefined {
-  const index = process.argv.indexOf(name);
-  if (index < 0) return undefined;
-  const value = process.argv[index + 1];
-  if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
-  return value;
+export interface CompetitorBenchmarkCommandOptions {
+  readonly databaseUrl: string;
+  readonly profile?: string;
+  readonly output?: string;
+  readonly pgBossBatchSize?: string;
 }
-const help = `Standalone competitor baseline\n\nUsage:\n  pnpm benchmark:competitors -- --profile smoke|default --output PATH [--pg-boss-batch-size N]\n\nThe command only accepts the configured _bench database and resets the isolated schemas workhorse, pgboss_competitor, and graphile_worker_competitor. The controlled baseline uses pg-boss batch size 1; larger values are separately labeled sensitivity runs.`;
-async function main(): Promise<void> {
-  if (process.argv.includes("--help")) {
-    console.log(help);
-    return;
+
+export async function runCompetitorBenchmarkCommand(
+  options: CompetitorBenchmarkCommandOptions,
+): Promise<void> {
+  const { normalizeCompetitorOptions, runCompetitorBaseline, stringifyCompetitorReport } =
+    await import("../../benchmarks/competitor-baseline.js");
+  const profileValue = options.profile ?? "default";
+  if (profileValue !== "smoke" && profileValue !== "default") {
+    throw new CliUsageError("--profile must be smoke or default");
   }
-  const profile = (argument("--profile") ?? "default") as CompetitorProfileName;
-  if (!(["smoke", "default"] as const).includes(profile))
-    throw new Error("--profile must be smoke or default");
-  const output = argument("--output");
-  const pgBossBatchSizeValue = argument("--pg-boss-batch-size");
-  const pgBossBatchSize = pgBossBatchSizeValue === undefined ? 1 : Number(pgBossBatchSizeValue);
-  const url = localDatabaseUrl("bench");
-  if (!databaseName(url).endsWith("_bench"))
-    throw new Error("competitor benchmark requires a database name ending in _bench");
-  const pool = new Pool({ connectionString: url, max: 32 });
+  const profile: CompetitorProfileName = profileValue;
+  const pgBossBatchSize =
+    options.pgBossBatchSize === undefined ? 1 : Number(options.pgBossBatchSize);
+  assertLocalDatabasePurpose(options.databaseUrl, "bench");
+  const pool = new Pool({ connectionString: options.databaseUrl, max: 32 });
   pool.on("error", (error) => {
     console.error("Unexpected competitor benchmark pool error", error);
   });
@@ -47,16 +40,12 @@ async function main(): Promise<void> {
       normalizeCompetitorOptions({ profile, pgBossBatchSize }),
     );
     const json = stringifyCompetitorReport(report);
-    if (output) {
-      await mkdir(dirname(output), { recursive: true });
-      await writeFile(output, json);
+    if (options.output) {
+      await mkdir(dirname(options.output), { recursive: true });
+      await writeFile(options.output, json);
     }
-    console.log(json);
+    process.stdout.write(`${json.replace(/\n$/, "")}\n`);
   } finally {
     await pool.end();
   }
 }
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exitCode = 1;
-});
