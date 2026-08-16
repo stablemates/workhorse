@@ -25,9 +25,19 @@ Install `@workhorse/core` alongside the PostgreSQL client your application alrea
 npm install @workhorse/core pg
 ```
 
-Add a database adapter (`@workhorse/drizzle`, `@workhorse/prisma`, `@workhorse/typeorm`,
-`@workhorse/kysely`) or `@workhorse/dashboard` only when that integration belongs in the same
-process.
+## Which package do you need?
+
+Most applications need the first one only. Add an adapter when you want to enqueue inside your
+ORM's own transactions, and the dashboard when an operator needs to see the queue.
+
+- **`@workhorse/core`**: `Queue`, `Worker`, schema tools, process orchestration, and the CLI.
+- **`@workhorse/dashboard`**: the operator interface and its framework-neutral server host.
+- **`@workhorse/drizzle`**: adapts Drizzle databases and transactions to the core `Queryable` protocol.
+- **`@workhorse/prisma`**: adapts Prisma clients and interactive transactions.
+- **`@workhorse/typeorm`**: adapts TypeORM data sources and transactional entity managers.
+- **`@workhorse/kysely`**: adapts Kysely databases and transactions.
+
+Install an adapter only when that integration belongs in the same process.
 
 If you are adding Workhorse to an existing project, `workhorse init` can scaffold the wiring. It
 inspects the project, writes a worker configuration, and prints a dashboard mount — but it leaves
