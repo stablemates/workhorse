@@ -973,17 +973,22 @@ export class Worker {
       });
       return expirationPromise;
     };
+    const expireOwnershipInBackground = (): void => {
+      // Observe the memoized promise without replacing it: the settlement path still awaits the
+      // original rejection, while a handler that ignores abort cannot cause an unhandled rejection.
+      void expireOwnership().catch((error: unknown) => controller.abort(error));
+    };
     const refreshOwnership = async () => {
       const status = await this.queue.heartbeatStatus(job, this.workerId, this.leaseMs);
       if (status === "cancel_requested") {
         markCancellationRequested();
       } else if (status === "deadline_exceeded") {
         stopHeartbeat();
-        void expireOwnership();
+        expireOwnershipInBackground();
         if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(job.id));
       } else if (status === "timeout_exceeded") {
         stopHeartbeat();
-        void expireOwnership();
+        expireOwnershipInBackground();
         if (!controller.signal.aborted)
           controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
       } else if (status === "stale") {
@@ -1012,7 +1017,7 @@ export class Worker {
               controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
           }
           stopHeartbeat();
-          void expireOwnership();
+          expireOwnershipInBackground();
         },
         // The extra millisecond keeps the timer from leading the database clock: expirationAt was
         // truncated to milliseconds on the way to the client, so firing at it exactly can precede
@@ -1669,8 +1674,11 @@ export class Worker {
     } finally {
       this.running = false;
       this.draining = this.activeSlots > 0;
-      await notificationSubscription?.close();
-      await this.deregister();
+      try {
+        await notificationSubscription?.close();
+      } finally {
+        await this.deregister();
+      }
       logInfo("workhorse.worker.stopped", "Worker stopped", {
         "workhorse.queue.name": this.queueName,
         "workhorse.worker.id": this.workerId,

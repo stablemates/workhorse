@@ -40,6 +40,37 @@ describe("worker registry", () => {
     await expect(registration()).resolves.toBeUndefined();
   });
 
+  it("deregisters when notification subscription cleanup fails", async () => {
+    const closeFailure = new Error("notification close failed");
+    const close = vi.fn<() => Promise<void>>(async () => {
+      throw closeFailure;
+    });
+    const subscribe = vi.spyOn(queue, "subscribeToJobNotifications").mockResolvedValue({ close });
+    const worker = new Worker(queue, {
+      workerId: "registry-notification-close-failure",
+      queue: "default",
+      pollMs: 10,
+      registryIntervalMs: 100,
+    }).handle("registry-notification-close-failure", () => null);
+    const registration = async () =>
+      (await queue.listWorkers()).find(
+        (entry) => entry.workerId === "registry-notification-close-failure",
+      );
+
+    try {
+      const running = worker.run();
+      await vi.waitFor(async () => expect(await registration()).toBeDefined());
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
+
+      worker.stop();
+      await expect(running).rejects.toBe(closeFailure);
+      expect(close).toHaveBeenCalledOnce();
+      await expect(registration()).resolves.toBeUndefined();
+    } finally {
+      subscribe.mockRestore();
+    }
+  });
+
   it("applies an operator pause written to PostgreSQL by another process", async () => {
     // The pause is written through a separate Queue instance holding no reference to the worker
     // object, which is exactly the situation of a dashboard running outside the worker process.
