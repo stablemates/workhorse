@@ -11,14 +11,14 @@ Attach a key when you enqueue. If a job with that key already exists, you get th
 job's id back instead of a new job.
 
 ```ts
-const jobId = await queue.enqueue(
+const result = await queue.enqueueWithResult(
   "send-order-confirmation",
   { orderId },
   { idempotency: { key: `order-confirmation:${orderId}` } },
 );
 ```
 
-Call that twice with the same `orderId` and you get the same job id twice. The second call
+Call that twice with the same `orderId` and you get the same `result.jobId` twice. The second call
 creates nothing: no job, no event, no notification. It just tells you which job already
 owns that key.
 
@@ -38,10 +38,24 @@ separate namespaces:
 Omit it and you land in a shared default scope, which is fine for keys that already carry
 their own prefix.
 
+## Reading the enqueue outcome
+
+`Queue.enqueueWithResult` returns an `EnqueueResult`. Its `jobId` identifies the retained job, while
+its `outcome` field is an `EnqueueOutcome` that explains what PostgreSQL did with this request.
+
+- `accepted` means PostgreSQL created a new job.
+- `replayed` means an idempotency key found an equivalent retained job.
+- `replaced` means [debounce](215-debounce.md) updated a pending job.
+- `non_replaceable` means debounce retained a job that could no longer accept an update.
+- `coalesced` means [throttle](217-throttle.md) reused the job for its active window.
+
+Use `Queue.enqueue` when the stable job id is enough. It returns the same `jobId` and hides the
+outcome. Use `Queue.enqueueWithResult` when logs, metrics, or application behavior need the reason.
+
 ## Keys expire
 
-Each key is retained for a while and then released — a day, by default, and configurable per
-request. That's deliberate: keys are for catching accidental duplicates within a short
+Each key is retained for a configurable period and then released. That's deliberate: keys are for
+catching accidental duplicates within a short
 window, not for permanently reserving a name. Once a key expires, the same key can create a
 new job.
 

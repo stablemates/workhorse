@@ -1,18 +1,31 @@
 # How do I run urgent work first?
 
-Set `EnqueueOptions.priority` when some ready jobs should start before others in the same queue. Existing callers keep FIFO behavior because Workhorse supplies the default.
+Set `EnqueueOptions.priority` when some ready jobs should start before others in the same queue.
+Existing callers keep FIFO behavior because Workhorse supplies the default.
 
-Higher values run first. Jobs with the same value keep their FIFO order. Priority is strict, so a steady stream of urgent work can delay lower-priority jobs.
+## How dispatch uses priority
 
-Workhorse does not age waiting jobs or reserve fair-share capacity across priorities. Use separate queues when lower-priority work needs a guaranteed chance to start.
+PostgreSQL considers higher values first when a worker asks for ready work. Jobs with the same value
+keep their FIFO order, so priority changes which class leads without reordering peers.
 
-PostgreSQL stores priority with the stable job identity. Delays, retries, durable waits, and manual promotion keep the same value.
+Priority is strict. A steady stream of urgent work can delay lower-priority jobs because Workhorse
+does not age waiting jobs or reserve capacity across priorities.
 
-Cancellation changes the job's state, but it does not change priority. Lookup and lifecycle history therefore keep showing the original value.
+If ordinary work must always make progress, put it on a separate queue and give that queue its own
+workers or capacity policy. Priority only chooses among jobs that compete inside one queue.
 
-Redrive copies priority to the new job. Urgent failed work therefore does not become ordinary work.
+## Priority follows the work
 
-Recurring definitions accept the same field on `ScheduleJobDefinition`. Every occurrence receives the stored priority when `fireSchedule` creates its job.
+PostgreSQL stores priority with the stable job identity. Delays, retries, durable waits, and manual
+promotion keep the same value because those transitions continue the same job.
+
+Cancellation changes the job's state without changing its priority. Lookup and lifecycle history
+therefore keep showing the value that controlled dispatch.
+
+Redrive creates a new job but copies the source priority. Urgent failed work therefore does not
+become ordinary work when an operator sends it through the queue again.
+
+## Set priority at enqueue
 
 ```ts
 await queue.enqueue(
@@ -36,14 +49,22 @@ await queue.syncSchedules("billing", [
 ]);
 ```
 
-The dashboard shows non-default priority beside each task and the stored value in task details.
+Recurring definitions accept the same field on `ScheduleJobDefinition`. Every occurrence receives
+the stored priority when `fireSchedule` creates its job.
 
-Priority changes order inside one queue only.
+The dashboard shows non-default priority beside each task and the stored value in task details.
+This lets an operator explain why newer work started before an older ready job.
+
+Priority does not bypass queue pauses, concurrency policies, rate limits, or other admission rules.
+It orders the jobs that PostgreSQL may admit after those rules apply.
 
 ## Next
 
-- [Retries](110-retries.md)
-- [Deadlines and timeouts](140-deadlines-and-timeouts.md)
-- [Concurrency policies](240-concurrency-policies.md)
+- [110-retries.md](110-retries.md) — how another attempt keeps the same priority
+- [140-deadlines-and-timeouts.md](140-deadlines-and-timeouts.md) — when time can end work before dispatch
+- [240-concurrency-policies.md](240-concurrency-policies.md) — how capacity limits interact with ordering
 
-[Exact priority limits and dispatch rules](../architecture.md)
+---
+
+Exact priority limits and dispatch rules:
+[`architecture.md`](../architecture.md#claim).

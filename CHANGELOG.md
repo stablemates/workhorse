@@ -70,8 +70,17 @@ First published line. Requires **schema v42**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse/dashboard`: the operator dashboard, its framework-neutral `Request`/`Response` host,
   a settings page with audited policy changes, and a Connect-style Node bridge for Express,
   Connect, and Fastify.
+- `@workhorse/dashboard-server`: single-administrator sessions protect standalone dashboard reads
+  and mutations, including credential rotation, login throttling, secure cookies, container secret
+  files, and a supported container that requires an HTTPS public origin for remote listeners.
 - `@workhorse/dashboard-contract`: the type-only standalone server contract shared by the core CLI
   and dashboard package, so both compile against one optional embedding boundary.
+- Language-neutral SQL protocol conformance fixtures under `protocol/v1`, covering compatibility,
+  canonical enqueue requests, lifecycle scenarios, runtime behavior, and structured errors for
+  TypeScript and future language clients.
+- `typescript/examples/agentic-flow.mjs` and `pnpm example:agentic-flow`, demonstrating a durable
+  agent loop built from checkpoints, child jobs, a durable timer, rate limits, and an approval
+  signal.
 - A supported-version contract: `MINIMUM_POSTGRES_MAJOR`, `SUPPORTED_POSTGRES_MAJORS`,
   `MINIMUM_NODE_MAJOR`, `SUPPORTED_NODE_MAJORS`, and `readPostgresSupport` are exported from
   `@workhorse/core`, exercised by the CI matrix, and reported by `workhorse schema status`.
