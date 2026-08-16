@@ -12,6 +12,9 @@
  */
 
 @theme {
+  /* Self-hosted through @fontsource-variable, imported in the root route. */
+  --font-geist-sans: "Geist Variable";
+  --font-geist-mono: "Geist Mono Variable";
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
 

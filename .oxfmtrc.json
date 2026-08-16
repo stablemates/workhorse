@@ -1,4 +1,9 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["docs/research/**", "migrations/**", "pnpm-lock.yaml"]
+  "ignorePatterns": [
+    "docs/research/**",
+    "migrations/**",
+    "pnpm-lock.yaml",
+    "site/src/routeTree.gen.ts"
+  ]
 }

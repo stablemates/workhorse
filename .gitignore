@@ -8,9 +8,9 @@ __pycache__/
 .venv/
 /typescript/dashboard/development/
 coverage/
-.next/
-site/next-env.d.ts
 .source/
+/site/public/robots.txt
+/site/public/sitemap.xml
 .env
 .env.*
 !.beans/*
@@ -24,5 +24,7 @@ logs/
 ops/signoz/pours/
 .jcode/
 scripts/with-env-probe.tmp.*
-
 .build/
+/site/public/llms.txt
+/site/public/docs.md
+/site/public/docs/

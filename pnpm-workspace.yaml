@@ -3,5 +3,8 @@ packages:
   - dashboard/*
   - site
 
+autoInstallPeers: false
+
 onlyBuiltDependencies:
   - lefthook
+  - sharp
