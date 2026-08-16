@@ -1,0 +1,91 @@
+# Limitations
+
+> What Workhorse does not do today — with the workaround for each boundary that has one.
+
+Choosing infrastructure means knowing what it will not do before it is load-bearing. Workhorse fits
+PostgreSQL-backed applications that accept at-least-once handlers and exact schema compatibility.
+This page lists every boundary honestly, with the workaround where one exists.
+
+Workhorse currently positions itself as an evidence-first validation release, not a
+production-support promise. Its purpose is to validate the durable-execution protocol —
+transactional enqueue, fenced ownership, checkpoint replay, cooperative cancellation, audited
+redrive — with recorded evidence, before hardening claims are made.
+
+## Workflow orchestration lives in handlers
+
+Workhorse supports job prerequisites, fan-in policies, child jobs, external signals, and human
+decisions. It does not provide a separate workflow definition language or graph deployment model.
+
+Workaround: compose those durable boundaries in ordinary handler code. If a workflow must be
+defined and deployed independently of application code, use a workflow system on top or instead.
+
+## No cross-queue concurrency policies
+
+Concurrency and rate-limit policies are scoped to one queue. You cannot express "at most 10 active
+jobs across these three queues".
+
+Workaround: route work that shares a budget onto one queue, and use `concurrencyKey` for per-tenant
+budgets within it.
+
+## Cancellation is cooperative, never forced
+
+JavaScript cannot be preempted safely, so Workhorse never kills a running handler. Cancellation,
+deadlines, and execution timeouts abort the handler's `AbortSignal`; the code runs until it
+observes that signal or loses its lease. Process shutdown likewise drains handlers rather than
+preempting them.
+
+Workaround: pass `context.signal` into every cancelable operation and check it between units of
+work. If work truly requires forced termination, isolate it in a process you can kill and make its
+effects recoverable.
+
+## External effects are at least once
+
+PostgreSQL cannot commit an HTTP call, email, or payment in the same transaction as job completion.
+A worker can perform the effect and die before recording success, so the effect can happen again.
+Enqueue idempotency keys deduplicate job identities; they cannot make one accepted handler execute
+exactly once. Redrive is another at-least-once execution.
+
+Workaround: this is the designed model, not an accident. Wrap each effect in a named `checkpoint`
+so completed stages never rerun, and give the provider an idempotency key — the job ID or a domain
+ID — to close the final gap between effect and checkpoint commit.
+
+## TypeScript only
+
+There are no SDKs for other languages. The schema is documented SQL, but only the TypeScript
+runtime implements the claim, heartbeat, and completion protocol.
+
+## No public HTTP ingress
+
+Nothing accepts jobs over HTTP. Producers need a database connection and the SDK.
+
+Workaround: enqueue from your own API routes — which is also where transactional enqueue with your
+business writes lives.
+
+## Pre-release schemas have no upgrade source
+
+`migrateSchema` applies ordered, forward-only migrations from the supported baseline. The current
+pre-release line has no earlier supported baseline, so operators must reset older development
+schemas instead of upgrading them.
+
+Workaround: keep schema changes in the deployment path and call `migrateSchema` before starting a
+new runtime. The changelog records which released versions can migrate forward.
+
+## Dashboard authentication has one built-in role
+
+The standalone dashboard provides one administrator login with expiring sessions, logout,
+credential rotation, and login throttling. It does not provide multiple users, roles, SSO, or
+tenant isolation.
+
+Workaround: mount the dashboard behind your application's existing authentication boundary and
+return its verified operator from `authorize`.
+
+## Next
+
+- [Core concepts](/docs/concepts) — the guarantees behind these boundaries
+- [Compatibility](/docs/compatibility) — the tested runtime and schema matrix
+- [Deployment and operations](/docs/operations) — design recovery around cooperative processes
+
+---
+
+Exact delivery guarantees, timing bounds, and unsupported protocol behavior:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#delivery-semantics).

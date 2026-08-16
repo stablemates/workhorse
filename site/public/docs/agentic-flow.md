@@ -1,0 +1,40 @@
+# Durable agentic flow
+
+> Compose checkpoints, child tools, durable timers, and approval signals in an ordinary handler.
+
+An agent loop becomes durable when every restart boundary lives in PostgreSQL. Workhorse provides
+those boundaries while your application continues to own model calls, tool code, and prompts.
+
+```ts
+const plan = await context.checkpoint("plan", () => callModel(prompt));
+await context.setProgress({ stage: "planned" });
+
+const tools = await context.runChildren(toolRequests);
+await context.sleep("model-cooldown", cooldownMs);
+const approval = await context.waitForSignal<{ approved: boolean }>("approval");
+```
+
+Each child name and request must stay stable across replay. Checkpoints reuse stored results, timers
+keep their first wake target, and the approval signal arrives through `Queue.sendSignal`. Every
+boundary releases the lease instead of retaining an in-memory continuation.
+
+Model and tool calls remain at least once. Use provider idempotency, an outbox, an inbox, or a
+compensation path when an external effect cannot safely repeat.
+
+## Run the repository example
+
+`pnpm example:agentic-flow` builds the publishable packages and runs
+`typescript/examples/agentic-flow.mjs` against the configured database. The example creates a
+parent, joins tool children, crosses a durable timer, delivers an idempotent approval signal, and
+prints the final result and progress.
+
+## Next
+
+- [Child jobs](/docs/child-jobs) — delegate and join tool work
+- [Signals](/docs/signals) — deliver approval from another process
+- [Durable execution](/docs/durable-execution) — make replayed stages safe
+
+---
+
+Exact example contracts and durable boundaries:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#agentic-flow-example).

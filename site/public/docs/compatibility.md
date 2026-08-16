@@ -1,0 +1,95 @@
+# Compatibility
+
+> Node.js 22+, PostgreSQL 15+, no extensions, and an exact-match schema — what is tested and what that means.
+
+You need to know two things before adopting a queue: will it run on your stack, and what does
+"supported" actually prove. Workhorse requires Node.js 22 or newer and PostgreSQL 15 or newer, and
+a version counts as supported only when continuous integration runs the full suite against it on
+every change. Workhorse may run elsewhere, but untested versions do not carry the same correctness
+evidence.
+
+## The tested matrix
+
+CI exercises every combination of Node.js 22 and 24 with PostgreSQL 15, 16, 17, and 18. The
+runtime exports the same boundary to tooling: `MINIMUM_NODE_MAJOR` is 22, `MINIMUM_POSTGRES_MAJOR`
+is 15, and `SUPPORTED_NODE_MAJORS` and `SUPPORTED_POSTGRES_MAJORS` list the CI majors. A test in
+the repository fails whenever the CI matrix, the package `engines` fields, and these constants
+drift apart, so the published numbers are always the exercised numbers. The
+[compatibility matrix](https://github.com/stablemates/workhorse/blob/main/docs/compatibility.md)
+tracks them as they change.
+
+You can classify a connected server at runtime. `readPostgresSupport` reports whether it is tested,
+merely newer than tested, or below the minimum; `assertSupportedPostgres` refuses to proceed below
+the minimum before schema installation can fail confusingly.
+
+```ts
+import { readPostgresSupport } from "@workhorse/core";
+
+const support = await readPostgresSupport(pool);
+console.log(support); // { major: 17, version: "17.2 …", supported: true, tested: true }
+```
+
+A server newer than the tested majors is reported as supported but untested rather than rejected —
+refusing to run on a release that did not exist at publish time would strand you on every
+PostgreSQL upgrade.
+
+## Plain PostgreSQL, no extensions
+
+Workhorse requires only stock PostgreSQL with its default procedural language. It installs no
+extension, so it runs on managed services — RDS, Cloud SQL, Neon, Supabase — without an allowlist
+conversation.
+
+Published packages are ESM with TypeScript declarations. Plain JavaScript uses the same runtime;
+CommonJS loading is outside the supported package format.
+
+## Match the schema exactly
+
+The PostgreSQL schema is the durable protocol. The application runtime and the installed schema
+must agree exactly, because mismatched workers could interpret lifecycle state differently.
+
+Call `assertSchemaCompatible` during startup. A mismatch should fail the process before it claims
+or changes work.
+
+Use `installSchema` for a fresh database and `migrateSchema` for an installed schema. The migration
+entrypoint applies immutable, forward-only steps from the supported baseline and refuses missing,
+older-than-baseline, or newer schemas before changing them. The current pre-release line has no
+earlier supported source, so older development schemas still require a reset.
+
+The dashboard transport can change without a schema bump because it is private to matching package
+versions. Use the public `Queue` read API for application integrations.
+
+Clients in other languages use the versioned SQL functions and JSON fixtures under `protocol/v1/`
+as their compatibility boundary. The fixtures require clients to reject an incompatible schema or
+protocol before mutation, then verify canonical requests, results, transitions, and structured
+errors. See [Language clients](/docs/language-clients) for the ownership split.
+
+The Python `workhorse-pg` package supports Python 3.10 through 3.14. It uses Psycopg synchronously
+or asynchronously and asyncpg asynchronously, and its tests run the shared SQL scenarios plus
+caller-owned commit and rollback cases. The Python package version floats independently from the
+TypeScript packages because schema and SQL protocol versions define their compatibility.
+
+## Treat releases as one package set
+
+Core and its integration packages release together. Keep their versions aligned so adapters,
+dashboard contracts, and exported types describe the same source revision. The
+[changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) records breaking
+changes and the schema version each release requires.
+
+The dashboard and core may use different patch releases within the same minor line. The dashboard
+server reads core-owned versioned views and functions, so a core patch remains compatible when its
+migration preserves those contracts.
+
+One honest caveat: support proves correctness under the tested matrix. It does not promise a
+throughput level for your database, payloads, handlers, or deployment topology.
+
+## Next
+
+- [Installation](/docs/installation) — install and check the schema deliberately
+- [Language clients](/docs/language-clients) — implement the versioned SQL protocol
+- [Limitations](/docs/limitations) — compare support with your application requirements
+- [Deployment and operations](/docs/operations) — enforce compatibility before workers start
+
+---
+
+Exact database requirements and schema compatibility boundary:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#operational-limits).

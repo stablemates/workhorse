@@ -5,8 +5,8 @@
   "description": "Workhorse documentation site",
   "type": "module",
   "scripts": {
-    "dev": "tsx scripts/gen-seo.ts && vite dev",
-    "build": "tsx scripts/gen-seo.ts && vite build",
+    "dev": "tsx scripts/gen-docs-index.ts && vite dev",
+    "build": "tsx scripts/gen-docs-index.ts && vite build",
     "start": "vite preview",
     "typecheck": "tsc --noEmit"
   },

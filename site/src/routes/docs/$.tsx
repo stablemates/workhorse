@@ -1,27 +1,27 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 
+import docsIndex from "@/.source/docs-index.json";
 import { clientLoader } from "@/lib/mdx-loader";
 import { siteConfig } from "@/lib/site";
-import { source } from "@/lib/source";
+
+interface PageRecord {
+  readonly slug: string;
+  readonly url: string;
+  readonly path: string;
+  readonly title: string;
+  readonly description: string;
+}
+
+const pages = docsIndex.pages as Record<string, PageRecord>;
 
 export const Route = createFileRoute("/docs/$")({
-  // Everything returned here is serialized into the prerendered payload, so it
-  // must stay plain data. The page body and its table of contents come from the
-  // browser collection instead.
   loader: ({ params }) => {
     // oxlint-disable-next-line no-underscore-dangle -- TanStack Router names the splat parameter.
-    const slugs = params._splat?.split("/").filter(Boolean) ?? [];
-    const page = source.getPage(slugs);
+    const slug = params._splat?.replace(/^\/+|\/+$/g, "") || "index";
+    const page = pages[slug];
     if (!page) throw notFound();
 
-    return {
-      // `page.path` is the file path relative to the content directory, which
-      // is the key the browser collection indexes by.
-      path: page.path,
-      url: page.url,
-      title: page.data.title,
-      description: page.data.description ?? siteConfig.description,
-    };
+    return page;
   },
   head: ({ loaderData }) => {
     if (!loaderData) return {};

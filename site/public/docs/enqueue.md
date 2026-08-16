@@ -1,0 +1,133 @@
+# Enqueue and transactions
+
+> Accept immediate, delayed, batched, or transactional jobs without separating them from application state.
+
+The classic queue bug is a job that disagrees with your data: the order row committed but the
+fulfillment job was lost, or the job exists and the row does not. Workhorse removes that gap by
+living in the same PostgreSQL database as your data — an enqueue is a row your transaction can
+carry. This page covers everything an enqueue can do: run now, run later, join a transaction,
+batch, and target a named queue.
+
+## Enqueue immediate or delayed work
+
+`queue.enqueue(type, payload, options?)` turns a type and JSON payload into a durable job and
+returns its ID. Without `runAt`, PostgreSQL places the job in `ready` and a worker can claim it
+immediately. A future `runAt` places it in `scheduled` until promotion moves it to `ready`.
+
+```ts
+// Run as soon as a worker is free.
+await queue.enqueue("email.send", { to: "person@example.com" });
+
+// Run no earlier than the reminder date, on the billing queue.
+await queue.enqueue("invoice.remind", { invoiceId }, { queue: "billing", runAt: reminderDate });
+```
+
+`runAt` is a not-before boundary, not an appointment. If someone pauses the queue, or workers
+become unavailable, a worker claims the job later than the boundary — never earlier.
+
+`EnqueueOptions` carries everything else a job can be born with:
+
+```ts
+await queue.enqueue(
+  "report.generate",
+  { month: "2026-08" },
+  {
+    queue: "reports",
+    tags: ["tenant:acme"],
+    concurrencyKey: "acme",
+    priority: 10,
+    maxAttempts: 5, // default is 25
+    retryPolicy: { type: "exponential", initialDelayMs: 1_000, multiplier: 2, maxDelayMs: 60_000 },
+    deadline: endOfMonth, // terminal once reached, even with retries left
+    executionTimeoutMs: 120_000, // active-time budget per attempt
+    idempotency: { key: `report:2026-08:acme` },
+  },
+);
+```
+
+Each option is owned by its own page — [retries](/docs/retries), [deadlines](/docs/deadlines),
+[idempotency](/docs/idempotency) — and the architecture reference owns exact bounds and defaults.
+
+## Join an application transaction
+
+This is the option that replaces an outbox. Pass your open transaction client as the fourth
+argument and PostgreSQL commits the job and your business write together — or rolls both back
+together. There is no window where one exists without the other.
+
+```ts
+const client = await pool.connect();
+
+try {
+  await client.query("BEGIN");
+  await client.query("INSERT INTO account (id, email) VALUES ($1, $2)", [id, email]);
+  await queue.enqueue("account.created", { accountId: id }, {}, client);
+  await client.query("COMMIT");
+} catch (error) {
+  await client.query("ROLLBACK");
+  throw error;
+} finally {
+  client.release();
+}
+```
+
+The fourth argument accepts anything with a pg-compatible `query` method, so the ORM adapters
+pass their own transaction handles the same way.
+
+One boundary to keep in mind: the transaction covers durable acceptance only. Handlers run later,
+outside your transaction, so their external effects still need their own idempotency.
+
+## Enqueue a batch
+
+If a single operation produces many jobs — a fan-out to every subscriber, an import — use
+`queue.enqueueMany`. It validates and writes the whole group in one statement, and it also accepts
+a transaction as its second argument.
+
+```ts
+const jobIds = await queue.enqueueMany(
+  recipients.map((recipient) => ({
+    type: "email.digest",
+    payload: { to: recipient.email },
+    options: { queue: "mail", idempotency: { key: `digest:${week}:${recipient.id}` } },
+  })),
+);
+```
+
+Returned IDs preserve input order, and the whole group commits or rolls back together. One call
+accepts at most 1,000 requests; split larger input into several bounded calls. If a caller may
+repeat part of the batch, give each request an idempotency key so the repeat converges instead of
+duplicating.
+
+## Prioritize work within a queue
+
+`new Queue(pool, "billing")` sets the client default queue; `options.queue` overrides one job. A
+`Worker` claims from its configured queue only.
+
+Set `options.priority` when urgent ready work should run before ordinary work in the same queue.
+Workhorse dispatches higher-priority jobs first, and it keeps FIFO order among jobs with the same
+value. Priority is strict, so a sustained stream of urgent work can delay lower-priority jobs.
+
+Use separate queue names when work needs independent capacity or worker policy. Priority changes
+dispatch order within one queue; it does not reserve capacity for lower-priority work.
+
+Three controls operate on a whole queue:
+
+```ts
+await queue.pauseQueue("billing"); // workers stop claiming; jobs are unchanged
+await queue.resumeQueue("billing"); // claiming resumes
+await queue.purgeQueue("billing"); // removes waiting work, releases its enqueue keys
+```
+
+Use `options.concurrencyKey` when a synchronized policy should also limit one application-defined
+group — one tenant, one destination host. Keys are scoped to their queue and remain part of
+idempotent enqueue identity.
+
+## Next
+
+- [Idempotency](/docs/idempotency) — make repeated acceptance converge on one job
+- [Schedules](/docs/schedules) — create recurring jobs from desired state
+- [Workers](/docs/workers) — let a process claim the work you accepted
+
+---
+
+Exact enqueue options, batch bounds, queue transitions, and limits:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#enqueue).

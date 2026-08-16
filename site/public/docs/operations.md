@@ -1,0 +1,70 @@
+# Operations
+
+> A map of Workhorse's operational surface — which page owns each concern, and the fleet controls that live nowhere else.
+
+Running Workhorse in production splits into a few distinct concerns: supervising processes,
+maintaining the database, controlling the fleet, and watching health. Each has its own page. This
+page is the map, plus the fleet controls that belong to no single sibling.
+
+## Process supervision
+
+[Worker processes](/docs/worker-processes) owns startup, termination signals, drain behavior,
+readiness and liveness probes, and database pool ownership. Deploy workers there first; every
+other concern assumes a supervised process already exists.
+
+## Database maintenance
+
+[Maintenance and retention](/docs/maintenance) owns promotion, expired-lease recovery, history
+partitions, cleanup, retention policy, and the health budgets that reveal lag. Workers drive this
+work automatically; the page explains how to observe and tune it.
+
+## Fleet controls
+
+Every worker registers itself in PostgreSQL on its `registryIntervalMs` cadence — 5 seconds by
+default, `0` to opt out. That registry is how you see and steer a fleet you do not host:
+
+```ts
+// See every registered worker, most recently seen first.
+const workers = await queue.listWorkers();
+for (const worker of workers) {
+  console.log(worker.workerId, worker.activeSlots, worker.paused, worker.lastHeartbeatAt);
+}
+
+// Ask one worker to stop claiming. Attribution is recorded, not authorized.
+await queue.setWorkerPaused("billing-worker-1", true, {
+  requestedBy: actor.email,
+  reason: "investigating slow provider",
+});
+
+// Drop registrations whose process stopped heartbeating long ago.
+await queue.pruneWorkerRegistry();
+```
+
+Pause is cooperative: the worker notices on its next registry refresh, stops asking for jobs, and
+any in-flight handler runs to completion. The pause is scoped to the running process — a
+restarted worker comes back running, so a forgotten pause can never idle a future deployment. Use
+queue pause when work must stop durably.
+
+## Job controls
+
+[Cancellation](/docs/cancellation) owns durable requests to stop one job.
+[Dead letters and redrive](/docs/dead-letters) owns replaying jobs that failed terminally.
+
+## Inspection and authorization
+
+[Queries and timelines](/docs/queries) owns read-only inspection: point lookups, bounded
+listings, lifecycle evidence, and `queue.health`. [Dashboard](/docs/dashboard) renders the same
+read models for humans and owns the authorization boundary for operator mutations. Embedded hosts
+return a verified principal through `authorize`, while the standalone dashboard can enable its
+built-in administrator login.
+
+## Next
+
+- [Worker processes](/docs/worker-processes) — deploy and drain runtime processes
+- [Maintenance and retention](/docs/maintenance) — keep PostgreSQL cleanup healthy
+- [Compatibility](/docs/compatibility) — reject a mismatched runtime before startup
+
+---
+
+Exact process and maintenance boundaries:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#worker-process-lifecycle).

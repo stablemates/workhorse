@@ -1,0 +1,53 @@
+# Human waits
+
+> Store decision context and pause a job until an authenticated operator responds.
+
+`HandlerContext.waitForHuman` parks a job without consuming its logical attempt. It stores bounded
+JSON context so an operator can understand the decision, then returns the retained result after the
+handler restarts.
+
+```ts
+const review = await context.waitForHuman<
+  { accountId: string; prompt: string },
+  { approved: boolean }
+>("account-review", {
+  accountId,
+  prompt: "Approve this account?",
+});
+
+if (review.approved) await activateAccount(accountId);
+```
+
+Code before the wait runs again, so checkpoint earlier effects or make them idempotent.
+
+## Complete a decision
+
+The dashboard marks pending decisions in the `Waiting` task list. Its server replaces browser
+attribution with the authenticated principal before calling the queue mutation.
+
+The `Waiting` task filter includes open signal and human-decision waits. Dependency and child-join
+work stays under `Blocked`, because operator input cannot resume it.
+
+An application can put `dashboard.quickAction` in the stored context with a menu `label` and JSON
+`result`. The task menu asks the operator to confirm that result before completion. It never invents
+a quick action for generic decisions.
+
+Applications can call `Queue.completeHumanWait(jobId, name, result, request)` after enforcing their
+own authorization. The request records its trusted actor as `requestedBy`. The first accepted result
+resumes the job. An equivalent retry returns the retained result, while a competing completion
+cannot overwrite the accepted audit evidence.
+The queue response exposes that accepted decision as `payload`, matching signal delivery.
+
+`Queue.listHumanWaits()` exposes the same paginated projection for custom operator tools. A timeout,
+job deadline, or cancellation closes the decision and makes late completion stale.
+
+## Next
+
+- [Dashboard](/docs/dashboard) — protect operator mutations
+- [Signals](/docs/signals) — resume from an application-owned event
+- [Durable execution](/docs/durable-execution) — understand handler replay
+
+---
+
+Exact human-wait statuses, bounds, and transitions:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#human-decision-suspension).

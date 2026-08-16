@@ -1,0 +1,86 @@
+# Cancellation
+
+> Request a cooperative stop and let PostgreSQL preserve the winning terminal outcome.
+
+You cannot forcibly stop running JavaScript — there is no `Thread.kill`. Everything about
+cancellation in Workhorse follows from that fact. A job that is not running can be finished on
+the spot; a job whose handler is executing can only be asked to stop, and your handler decides
+how quickly it listens.
+
+## Request cancellation
+
+Call `Queue.cancel` after your application authorizes the actor.
+
+```ts
+const result = await queue.cancel(jobId, {
+  requestedBy: actor.email,
+  reason: "customer withdrew the order",
+});
+// result.status: "canceled" | "cancel_requested" | "already_terminal" | "not_found"
+```
+
+`requestedBy` and `reason` are audit attribution, nothing more. Workhorse records them but
+never decides whether the actor had permission — that check belongs in your application,
+before the call.
+
+What happens next depends on where the job is:
+
+- **`ready`, `scheduled`, or a [durable wait](/docs/durable-execution)** — no worker holds
+  the job, so PostgreSQL writes the canceled outcome immediately. A job that never started
+  gets no invented attempt history.
+- **`active`** — PostgreSQL records one durable request. The worker's next heartbeat returns
+  `cancel_requested`, and the worker aborts the handler's signal with
+  `CancellationRequestedError`. The handler must notice.
+
+## Make the handler cooperate
+
+Pass `ctx.signal` into every API that accepts an `AbortSignal`, and check it between units of
+work before starting another external effect.
+
+```ts
+worker.handle("export.build", async (payload: { parts: string[] }, ctx) => {
+  for (const part of payload.parts) {
+    if (ctx.signal.aborted) throw ctx.signal.reason;
+    await uploadPart(part, { signal: ctx.signal });
+  }
+
+  return { exported: true };
+});
+```
+
+Throwing `ctx.signal.reason` lets the worker confirm the cancellation and write the canceled
+outcome. The same signal also aborts for [deadlines and timeouts](/docs/deadlines), each with
+its own reason class, so one cooperative pattern handles all three.
+
+Two honest limits:
+
+- Cancellation does not undo effects that already happened. Keep each effect safe for
+  at-least-once execution, and write compensation logic when the domain requires reversal.
+- If a handler ignores the signal, nothing stops it. The job stays active until its lease
+  expires; recovery then sees the durable request and materializes the cancellation instead
+  of scheduling another attempt. The cancellation always lands — how fast is up to your code.
+
+## Which result wins a race
+
+Suppose a cancellation and a completion commit at almost the same moment. Both need the same
+runtime row lock, so exactly one arrives first, and that one wins:
+
+- Cancel first — the later completion is refused; it cannot resurrect the job.
+- Complete first — the cancel call reports `already_terminal`.
+
+Either way the answer is consistent. Repeating a cancellation returns the existing request or
+outcome; PostgreSQL never creates duplicate terminal rows or events.
+
+Canceling a job created by a [schedule](/docs/schedules) affects that occurrence only. The
+schedule definition stays enabled until deployment synchronization changes it.
+
+## Next
+
+- [Deadlines and timeouts](/docs/deadlines) — stop work when a clock expires
+- [Workers](/docs/workers) — pause claiming or drain a process instead
+- [Durable execution](/docs/durable-execution) — understand cancellation during a durable wait
+
+---
+
+Exact cancellation states, acknowledgement fencing, races, and attribution limits:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#cancellation).

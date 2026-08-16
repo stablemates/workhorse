@@ -1,0 +1,68 @@
+# Concurrency policies
+
+> Synchronize durable queue and keyed dispatch budgets that every worker shares.
+
+Some capacity belongs to the application, not to one worker process: a database connection budget,
+a downstream API's connection limit, a per-tenant fairness rule. `WorkerOptions.concurrency`
+limits one process, so adding a worker silently raises the fleet's total. A concurrency policy
+stores the budget in PostgreSQL instead, where every competing worker checks it atomically during
+claim — scale the fleet and the limit holds.
+
+## Synchronize desired policy
+
+`queue.syncConcurrencyPolicies` is a desired-state call, like schedules: declare the policies a
+namespace owns and PostgreSQL reconciles stored state to match.
+
+```ts
+await queue.syncConcurrencyPolicies("workers", [
+  {
+    queue: "mail",
+    maxActive: 20, // at most 20 mail jobs active fleet-wide
+    maxActivePerKey: 3, // and at most 3 per concurrency key
+  },
+]);
+```
+
+Workers need no matching in-memory configuration — admission reads the stored policy, so a policy
+change takes effect without redeploying the fleet. Omitted policies are pruned by default, and
+PostgreSQL rejects another namespace that tries to replace a queue this namespace owns.
+
+`maxActivePerKey` is optional; omit it (or pass `null`) to keep only the queue-wide limit.
+
+## Attach a queue-scoped key
+
+The key names the group a job competes in — a tenant, a destination host, an account.
+
+```ts
+await queue.enqueue("mail.send", { messageId }, { queue: "mail", concurrencyKey: tenantId });
+```
+
+Keyless jobs consume queue capacity only. A keyed job also consumes capacity for its key. The same
+key text in another queue is independent, and one saturated key does not block the queue: admission
+can pass over a full key and claim later ready work for another key, within a bounded FIFO window.
+
+## A dispatch budget, not a mutex
+
+Capacity counts active jobs with unexpired leases. If a worker disappears, its capacity returns
+when the lease expires — the queue cannot be starved by a dead process. The flip side: a stale
+handler can briefly overlap its replacement after expiry, and fence tokens — not the policy —
+prevent that stale generation from recording a result. Handlers keep the ordinary at-least-once
+assumptions.
+
+## Observe pressure
+
+`queue.health()` reports each policy's limit, active count, blocked ready work, and saturated-key
+counts, all bounded. OpenTelemetry publishes the same queue-level gauges without raw key values.
+If ready work sits behind a full policy, it shows up as `blockedReady` rather than as a mystery
+latency.
+
+## Next
+
+- [Rate limits](/docs/rate-limits) — limit how quickly work starts, not how much runs
+- [Workers](/docs/workers) — distinguish process slots from fleet-wide capacity
+- [Operations](/docs/operations) — monitor queue pressure
+
+---
+
+Exact SQL functions, limits, indexes, and admission semantics:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#concurrency_policy).
