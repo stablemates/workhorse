@@ -3,7 +3,12 @@ import type { PoolClient } from "pg";
 import { describe, expect, it } from "vitest";
 import { readDashboardJobDetail } from "../../dashboard-server/src/server/read-model.js";
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
-import { MAX_JOB_DEPENDENTS } from "../src/index.js";
+import {
+  DependencyCycleError,
+  DependencyLimitExceededError,
+  MAX_JOB_DEPENDENTS,
+  type Queryable,
+} from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { defaultRetentionPolicy, pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -17,6 +22,42 @@ const insertDependency = (client: PoolClient, dependentJobId: string, prerequisi
   );
 
 describe("job dependencies", () => {
+  it("maps dependency cycle diagnostics through the public enqueue API", async () => {
+    const details = {
+      dependentJobId: "123e4567-e89b-42d3-a456-426614174000",
+      prerequisiteJobId: "123e4567-e89b-42d3-a456-426614174001",
+      cycleJobIds: ["123e4567-e89b-42d3-a456-426614174000", "123e4567-e89b-42d3-a456-426614174001"],
+      truncated: false,
+    };
+    const transaction: Queryable = {
+      async query() {
+        throw { code: "P1003", detail: JSON.stringify(details) };
+      },
+    };
+
+    const error = await queue
+      .enqueue("cycle-mapping", null, {}, transaction)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DependencyCycleError);
+    expect(error).toMatchObject({ details, ...details });
+  });
+
+  it("does not invent a dependency bound for malformed diagnostics", async () => {
+    const transaction: Queryable = {
+      async query() {
+        throw { code: "P1005", detail: JSON.stringify({ jobId: "partial" }) };
+      },
+    };
+
+    const error = await queue
+      .enqueue("limit-mapping", null, {}, transaction)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DependencyLimitExceededError);
+    expect(error).toMatchObject({ jobId: "unknown", limit: "unknown", max: MAX_JOB_DEPENDENTS });
+  });
+
   it("reports bounded prerequisite and dependent lineage with release evidence", async () => {
     const firstId = await queue.enqueue("lineage-first", null);
     const secondId = await queue.enqueue("lineage-second", null);
@@ -188,9 +229,15 @@ describe("job dependencies", () => {
     );
 
     expect(dependentIds).toHaveLength(MAX_JOB_DEPENDENTS);
-    await expect(
-      queue.enqueue("fan-out-overflow", null, { prerequisiteJobId: prerequisiteId }),
-    ).rejects.toThrow(`a job accepts at most ${MAX_JOB_DEPENDENTS} dependent jobs`);
+    const overflow = await queue
+      .enqueue("fan-out-overflow", null, { prerequisiteJobId: prerequisiteId })
+      .catch((error: unknown) => error);
+    expect(overflow).toBeInstanceOf(DependencyLimitExceededError);
+    expect(overflow).toMatchObject({
+      jobId: prerequisiteId,
+      limit: "dependents",
+      max: MAX_JOB_DEPENDENTS,
+    });
     const lineage = await queue.getDependencyLineage(prerequisiteId);
     expect(lineage.records).toHaveLength(MAX_JOB_DEPENDENTS);
     expect(lineage.truncated).toBe(false);
@@ -209,11 +256,15 @@ describe("job dependencies", () => {
       );
     }
 
-    await expect(
-      queue.enqueue("cascade-overflow", null, { prerequisiteJobId: prerequisiteId }),
-    ).rejects.toThrow(
-      `a job accepts at most ${MAX_JOB_DEPENDENTS} unresolved transitive dependent jobs`,
-    );
+    const overflow = await queue
+      .enqueue("cascade-overflow", null, { prerequisiteJobId: prerequisiteId })
+      .catch((error: unknown) => error);
+    expect(overflow).toBeInstanceOf(DependencyLimitExceededError);
+    expect(overflow).toMatchObject({
+      jobId: rootId,
+      limit: "unresolved_dependents",
+      max: MAX_JOB_DEPENDENTS,
+    });
     await expect(
       queue.cancel(rootId, { requestedBy: "cascade-bound-test" }),
     ).resolves.toMatchObject({ status: "canceled" });
@@ -429,7 +480,7 @@ describe("job dependencies", () => {
       cycleError = error;
     }
     expect(cycleError).toMatchObject({
-      code: "P1002",
+      code: "P1003",
       detail: expect.stringContaining('"cycleJobIds"'),
     });
     const cycleDetails = JSON.parse((cycleError as { detail: string }).detail) as {
@@ -453,7 +504,7 @@ describe("job dependencies", () => {
          ) VALUES ($1, $1, 'release', 'fail', 'cancel')`,
         [firstId],
       ),
-    ).rejects.toMatchObject({ code: "P1002" });
+    ).rejects.toMatchObject({ code: "P1003" });
   });
 
   it("does not serialize dependency inserts across disconnected graph components", async () => {
@@ -506,7 +557,7 @@ describe("job dependencies", () => {
       expect(secondSettled).toBe(false);
 
       await first.query("COMMIT");
-      await expect(oppositeInsert).rejects.toMatchObject({ code: "P1002" });
+      await expect(oppositeInsert).rejects.toMatchObject({ code: "P1003" });
     } finally {
       await Promise.allSettled([first.query("ROLLBACK"), second.query("ROLLBACK")]);
       first.release();
@@ -545,9 +596,9 @@ describe("job dependencies", () => {
 
       await follower.query("BEGIN");
       await follower.query("SET LOCAL lock_timeout = '100ms'");
-      await expect(
-        insertDependency(follower, lowerId, fourthId),
-      ).rejects.toMatchObject({ code: "55P03" });
+      await expect(insertDependency(follower, lowerId, fourthId)).rejects.toMatchObject({
+        code: "55P03",
+      });
     } finally {
       await Promise.allSettled([
         merger.query("ROLLBACK"),

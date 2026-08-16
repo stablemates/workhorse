@@ -49,6 +49,8 @@ export {
   ChildLeaseLostError,
   ChildLimitExceededError,
   ChildResultLimitExceededError,
+  DependencyCycleError,
+  DependencyLimitExceededError,
   EnqueueIdempotencyConflictError,
   JobContractValidationError,
   JobContractUnavailableError,
@@ -69,6 +71,8 @@ export {
   WaitLimitExceededError,
 } from "./queue.js";
 export type {
+  DependencyCycleDetails,
+  DependencyLimit,
   MaintenancePhase,
   MaintenancePhaseResult,
   RunTaskNowResult,

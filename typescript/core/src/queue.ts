@@ -80,6 +80,10 @@ import {
   type ScheduleWaitResult,
 } from "./queue/checkpoints-progress-waits.js";
 import {
+  DependencyCycleError,
+  DependencyLimitExceededError,
+  type DependencyCycleDetails,
+  type DependencyLimit,
   EnqueueIdempotencyConflictError,
   JobContractUnavailableError,
   JobContractValidationError,
@@ -130,6 +134,8 @@ export {
   ChildLeaseLostError,
   ChildLimitExceededError,
   ChildResultLimitExceededError,
+  DependencyCycleError,
+  DependencyLimitExceededError,
   EnqueueIdempotencyConflictError,
   JobContractUnavailableError,
   JobContractValidationError,
@@ -149,6 +155,8 @@ export {
   HumanWaitLimitExceededError,
 };
 export type {
+  DependencyCycleDetails,
+  DependencyLimit,
   ScheduleWaitRequest,
   ScheduleWaitResult,
   SendSignalRequest,
