@@ -16,9 +16,10 @@ outcome.
 | Cancellation             | `demo.cancellation`        | ready cancellation, scheduled cancellation, cooperative active cancellation | success, cooperative cancellation, or failure           |
 | Dead letters and redrive | `demo.dead-letter-redrive` | terminal failure, successful redrive, idempotent redrive replay             | success, retry/recovery, or terminal failure            |
 
-All recurring definitions fire once per minute. Their immutable job identity selects a stable variant for
-that occurrence, so retries preserve one scenario while later occurrences naturally rotate through different
-results. Schedule occurrence deduplication still guarantees one accepted job per definition and second.
+The eight definitions are staggered across an eight-minute cycle, one family per minute. Their immutable
+job identity selects a stable variant for that occurrence, so retries preserve one scenario while later
+occurrences rotate through different results. Schedule occurrence deduplication still guarantees one
+accepted job per definition and second.
 
 ## Coverage of the feature matrix
 
@@ -26,6 +27,12 @@ The eight families exercise immediate and delayed enqueue, tags, named queues, e
 persisted retry policies, recurring schedules, checkpoints, durable waits, progress, deadlines, execution
 timeouts, cancellation, terminal outcomes, dead-letter queries, redrive lineage, and idempotent redrive.
 Every task also remains available through cross-state listing and the merged lifecycle timeline.
+
+This matrix is intentionally incomplete. The current seed has no task-visible scenario for job
+dependencies, child jobs, signals, human decisions, keyed debounce, keyed throttle, coalescing outcomes,
+priority, batch handlers, payload-contract rejection, or `sleepUntil`. Redrive lineage is pre-seeded, but
+the local operator cannot initiate redrive. Built-in dashboard authentication belongs to the standalone
+deployment path and is not enabled by the local demo. WOR-109 tracks these gaps.
 
 Operational capabilities are demonstrated through their own surfaces rather than fabricated task failures:
 
@@ -39,6 +46,7 @@ Operational capabilities are demonstrated through their own surfaces rather than
 - indexes, notification hints, dedicated worker CLI behavior, bounds, and validation remain integration-test
   and benchmark concerns.
 
-The catalog is declared in `typescript/demo/src/feature-showcase.ts`. Seed orchestration and the generic handler live in
-`typescript/demo/src/app.ts`, while `typescript/demo/test/app.integration.test.ts` verifies the three-per-family invariant, schedule
-sync, idempotent startup, redrive artifacts, and dashboard discoverability.
+The catalog is declared in `typescript/demo/src/feature-showcase.ts`. Seed orchestration and the generic
+handler live in `typescript/demo/src/app.ts`. `typescript/demo/test/app.integration.test.ts` verifies the
+three-per-family invariant, schedule sync, idempotent startup, redrive artifacts, and dashboard
+discoverability.
