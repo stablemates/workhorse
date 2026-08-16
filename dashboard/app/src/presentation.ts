@@ -37,18 +37,53 @@ export function orderHumanWaits(
   });
 }
 
-export function filterHumanWaits(
-  waits: readonly DashboardHumanWaitRow[],
+interface ExternalWaitIdentity {
+  name: string;
+  jobId: string;
+  jobType: string;
+  queue: string;
+  deadlineAt: string;
+}
+
+export function filterExternalWaits<TWait extends ExternalWaitIdentity>(
+  waits: readonly TWait[],
   options: { search: string; overdueOnly: boolean; nowMs: number },
-): DashboardHumanWaitRow[] {
+): TWait[] {
   const query = options.search.trim().toLowerCase();
   return waits.filter((wait) => {
-    if (options.overdueOnly && !isHumanWaitOverdue(wait, options.nowMs)) return false;
+    if (options.overdueOnly && Date.parse(wait.deadlineAt) > options.nowMs) return false;
     if (!query) return true;
     return [wait.name, wait.jobId, wait.jobType, wait.queue].some((value) =>
       value.toLowerCase().includes(query),
     );
   });
+}
+
+export interface HumanWaitQuickAction {
+  label: string;
+  result: Json;
+  formatted: string;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** Applications opt into decision buttons through reserved dashboard context. */
+export function humanWaitQuickAction(context: unknown): HumanWaitQuickAction | null {
+  const dashboard = objectValue(objectValue(context)?.["dashboard"]);
+  const action = objectValue(dashboard?.["quickAction"]);
+  const label = typeof action?.["label"] === "string" ? action["label"].trim() : "";
+  if (!label || !action || !Object.hasOwn(action, "result")) return null;
+  try {
+    const result = action["result"] as Json;
+    const formatted = JSON.stringify(result, null, 2);
+    return typeof formatted === "string" ? { label, result, formatted } : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface ParsedHumanWaitResult {

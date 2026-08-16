@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardHumanWaitRow } from "@workhorse/dashboard-server/wire";
 import {
-  filterHumanWaits,
+  filterExternalWaits,
   humanWaitResultsDirty,
+  humanWaitQuickAction,
   isHumanWaitOverdue,
   orderHumanWaits,
   parseHumanWaitResult,
@@ -63,19 +64,51 @@ describe("human wait decisions", () => {
     ];
 
     expect(
-      filterHumanWaits(waits, {
+      filterExternalWaits(waits, {
         search: "finance",
         overdueOnly: false,
         nowMs: Date.parse("2026-08-15T13:00:00.000Z"),
       }).map(({ name }) => name),
     ).toEqual(["finance-approval"]);
     expect(
-      filterHumanWaits(waits, {
+      filterExternalWaits(waits, {
         search: "",
         overdueOnly: true,
         nowMs: Date.parse("2026-08-15T13:00:00.000Z"),
       }).map(({ name }) => name),
     ).toEqual(["finance-approval"]);
+  });
+
+  it("filters every external-wait kind through the same task identity fields", () => {
+    const waits = [
+      wait("finance-approval", "2026-08-15T12:00:00.000Z"),
+      { ...wait("catalog-signal", "2026-08-15T15:00:00.000Z"), queue: "publishing" },
+    ];
+
+    expect(
+      filterExternalWaits(waits, {
+        search: "publishing",
+        overdueOnly: false,
+        nowMs: Date.parse("2026-08-15T13:00:00.000Z"),
+      }).map(({ name }) => name),
+    ).toEqual(["catalog-signal"]);
+  });
+
+  it("exposes only application-defined dashboard quick actions", () => {
+    expect(
+      humanWaitQuickAction({
+        prompt: "Approve this account?",
+        dashboard: { quickAction: { label: "Approve", result: { approved: true } } },
+      }),
+    ).toEqual({
+      label: "Approve",
+      result: { approved: true },
+      formatted: '{\n  "approved": true\n}',
+    });
+    expect(humanWaitQuickAction({ prompt: "Choose a region" })).toBeNull();
+    expect(
+      humanWaitQuickAction({ dashboard: { quickAction: { label: "", result: true } } }),
+    ).toBeNull();
   });
 
   it("blocks refresh only while at least one decision has composed input", () => {

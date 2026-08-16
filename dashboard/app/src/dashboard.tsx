@@ -87,9 +87,10 @@ import {
   describeIdempotency,
   describeRetryEventSource,
   describeRetryPolicy,
-  filterHumanWaits,
+  filterExternalWaits,
   formatRetryDelay,
   humanWaitResultsDirty,
+  humanWaitQuickAction,
   idempotencyEvidenceLine,
   isHumanWaitOverdue,
   isTerminalTaskState,
@@ -363,6 +364,7 @@ const taskFilterPresentation: Record<
 > = {
   all: { label: "All tasks", icon: ListChecks },
   blocked: { label: "Blocked", icon: WarningCircle },
+  waiting: { label: "Waiting", icon: UserFocus },
   scheduled: { label: "Scheduled", icon: Clock },
   retried: { label: "Retried", icon: ArrowCounterClockwise },
   queued: { label: "Queued", icon: ListDashes },
@@ -377,6 +379,8 @@ const taskFilters = dashboardTaskFilters.map((value) => ({
   label: taskFilterPresentation[value].label,
   icon: taskFilterPresentation[value].icon,
 }));
+const blockedTaskDescription =
+  "Blocked tasks are held until their dependencies or child tasks reach the required outcomes. They are not waiting for an operator decision.";
 const healthyStates = new Set(["succeeded", "ready", "active", "busy"]);
 const failureStates = new Set(["failed", "discarded", "incomplete"]);
 const warningStates = new Set(["blocked", "scheduled", "retryable", "recent", "due"]);
@@ -2910,6 +2914,24 @@ function TasksPage({
       />
       <Paper withBorder>
         <Stack gap="xs" p="md">
+          {data.filter === "blocked" ? (
+            <Alert color="blue" title="Why these tasks are blocked">
+              {blockedTaskDescription}
+            </Alert>
+          ) : null}
+          {data.filter === "waiting" ? (
+            <Alert color="blue" title="Tasks waiting outside the worker fleet">
+              <Group justify="space-between" align="center">
+                <Text size="sm">
+                  These tasks need a signal or human decision. Timers and dependency-blocked tasks
+                  stay in their own filters.
+                </Text>
+                <Button size="compact-sm" variant="light" onClick={() => navigate("/human-waits")}>
+                  Review inputs
+                </Button>
+              </Group>
+            </Alert>
+          ) : null}
           <TaskListingFilters
             data={data}
             searchInput={searchInput}
@@ -4049,12 +4071,12 @@ export function SystemKpiList({
         value={
           <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
             <Button
-              aria-label="Review human waits"
+              aria-label="Review waiting tasks"
               size="compact-xs"
               variant="subtle"
               onClick={() => navigate("/human-waits")}
             >
-              Review human waits
+              Review waiting tasks
             </Button>
             <Text fw={750} fz={17} lh={1.2} ta="right">
               {data.kpis.externalWaits.pendingSignals +
@@ -4089,7 +4111,7 @@ export function ExternalWaitAlert({
           suspended task; review pending decisions that an operator can complete now.
         </Text>
         <Button color="red" variant="light" onClick={() => navigate("/human-waits")}>
-          Review human waits
+          Review waiting tasks
         </Button>
       </Group>
     </Alert>
@@ -5950,6 +5972,91 @@ function SignalTaskPanel({
   );
 }
 
+export function HumanDecisionControls({
+  result,
+  quickAction,
+  canComplete,
+  confirming,
+  completing,
+  onQuickAction,
+  onResultChange,
+  onReview,
+  onComplete,
+  onKeepEditing,
+}: {
+  result: string;
+  quickAction: { label: string } | null;
+  canComplete: boolean;
+  confirming: boolean;
+  completing: boolean;
+  onQuickAction: () => void;
+  onResultChange: (value: string) => void;
+  onReview: () => void;
+  onComplete: () => void;
+  onKeepEditing: () => void;
+}) {
+  return (
+    <Stack gap="sm">
+      {quickAction ? (
+        <Group gap="xs">
+          <Button disabled={!canComplete} onClick={onQuickAction}>
+            {quickAction.label}
+          </Button>
+          <Text c="dimmed" size="xs">
+            Resume this task with the application-defined decision.
+          </Text>
+        </Group>
+      ) : null}
+      {confirming ? (
+        <Alert color="orange" title="Confirm this irreversible result">
+          <Text size="sm" mb="sm">
+            The first accepted result resumes the handler. Check the result before completing this
+            wait because it cannot be replaced.
+          </Text>
+          <Code block mb="sm">
+            {result}
+          </Code>
+          <Group gap="xs">
+            <Button color="orange" loading={completing} onClick={onComplete}>
+              Confirm decision
+            </Button>
+            <Button variant="default" disabled={completing} onClick={onKeepEditing}>
+              Keep editing
+            </Button>
+          </Group>
+        </Alert>
+      ) : null}
+      <Accordion variant="contained">
+        <Accordion.Item value="custom-result">
+          <Accordion.Control>Provide a custom JSON result</Accordion.Control>
+          <Accordion.Panel>
+            <Stack gap="xs">
+              <Textarea
+                label="Result (JSON)"
+                description="Use the result shape requested in the decision context. Workhorse validates JSON size, not domain fields."
+                placeholder='{"approved":true}'
+                value={result}
+                disabled={!canComplete}
+                autosize
+                minRows={3}
+                maxRows={12}
+                onChange={(event) => onResultChange(event.currentTarget.value)}
+              />
+              <Button
+                disabled={!canComplete || !result.trim()}
+                onClick={onReview}
+                style={{ alignSelf: "flex-start" }}
+              >
+                Review result
+              </Button>
+            </Stack>
+          </Accordion.Panel>
+        </Accordion.Item>
+      </Accordion>
+    </Stack>
+  );
+}
+
 function HumanWaitsPage({
   data,
   auditActor,
@@ -5969,12 +6076,14 @@ function HumanWaitsPage({
   const [confirming, setConfirming] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [waitFilter, setWaitFilter] = useState<"all" | "overdue">("all");
-  const waits = useMemo(() => orderHumanWaits(data.waits, Date.now()), [data.waits]);
-  const visibleWaits = filterHumanWaits(waits, {
+  const filterOptions = {
     search,
     overdueOnly: waitFilter === "overdue",
     nowMs: Date.now(),
-  });
+  };
+  const waits = useMemo(() => orderHumanWaits(data.waits, Date.now()), [data.waits]);
+  const visibleWaits = filterExternalWaits(waits, filterOptions);
+  const visibleSignalWaits = filterExternalWaits(data.signalWaits, filterOptions);
   const dirty =
     humanWaitResultsDirty(results) ||
     Object.values(signalPayloads).some((payload) => payload.trim().length > 0);
@@ -6071,10 +6180,10 @@ function HumanWaitsPage({
   return (
     <Stack gap="lg">
       <Box>
-        <Title order={2}>Human waits</Title>
+        <Title order={2}>Waiting</Title>
         <Text c="dimmed" size="sm">
-          Signals and human decisions waiting outside the worker fleet. The first accepted input
-          resumes the handler and remains the audit record.
+          Tasks waiting for a signal or a human decision outside the worker fleet. The first
+          accepted input resumes the handler and remains the audit record.
         </Text>
         <Text c="dimmed" size="xs" mt={4}>
           {data.diagnostics.pendingSignals} signals and {data.diagnostics.pendingHumanDecisions}
@@ -6084,6 +6193,27 @@ function HumanWaitsPage({
           {data.diagnostics.capped ? " (bounded lower bounds)." : "."}
         </Text>
       </Box>
+      {data.waits.length > 0 || data.signalWaits.length > 0 ? (
+        <Group align="flex-end">
+          <TextInput
+            label="Search waiting tasks"
+            placeholder="Name, task, type, or queue"
+            leftSection={<MagnifyingGlass size={16} />}
+            value={search}
+            onChange={(event) => setSearch(event.currentTarget.value)}
+            style={{ flex: 1 }}
+          />
+          <SegmentedControl
+            aria-label="Filter waiting tasks"
+            value={waitFilter}
+            onChange={(value) => setWaitFilter(value as "all" | "overdue")}
+            data={[
+              { value: "all", label: "All pending" },
+              { value: "overdue", label: "Overdue" },
+            ]}
+          />
+        </Group>
+      ) : null}
       <Box>
         <Title order={3} mb="xs">
           Signal waits
@@ -6093,8 +6223,12 @@ function HumanWaitsPage({
             <Paper withBorder p="xl">
               <Text c="dimmed">No jobs are waiting for a signal.</Text>
             </Paper>
+          ) : visibleSignalWaits.length === 0 ? (
+            <Paper withBorder p="xl">
+              <Text c="dimmed">No signal waits match this search and filter.</Text>
+            </Paper>
           ) : (
-            data.signalWaits.map((wait) => {
+            visibleSignalWaits.map((wait) => {
               const key = `${wait.jobId}:${wait.name}`;
               return (
                 <SignalWaitCard
@@ -6115,27 +6249,6 @@ function HumanWaitsPage({
         </Stack>
       </Box>
       <Divider label="Human decisions" labelPosition="left" />
-      {data.waits.length > 0 ? (
-        <Group align="flex-end">
-          <TextInput
-            label="Search waits"
-            placeholder="Name, task, type, or queue"
-            leftSection={<MagnifyingGlass size={16} />}
-            value={search}
-            onChange={(event) => setSearch(event.currentTarget.value)}
-            style={{ flex: 1 }}
-          />
-          <SegmentedControl
-            aria-label="Filter human waits"
-            value={waitFilter}
-            onChange={(value) => setWaitFilter(value as "all" | "overdue")}
-            data={[
-              { value: "all", label: "All pending" },
-              { value: "overdue", label: "Overdue" },
-            ]}
-          />
-        </Group>
-      ) : null}
       {data.waits.length === 0 ? (
         <Paper withBorder p="xl">
           <Text c="dimmed">No jobs are waiting for a human decision.</Text>
@@ -6147,6 +6260,7 @@ function HumanWaitsPage({
       ) : (
         visibleWaits.map((wait) => {
           const key = `${wait.jobId}:${wait.name}`;
+          const quickAction = humanWaitQuickAction(wait.context);
           return (
             <Paper withBorder p="lg" key={key}>
               <Stack gap="sm">
@@ -6178,59 +6292,28 @@ function HumanWaitsPage({
                   </Text>
                   <Code block>{JSON.stringify(wait.context, null, 2)}</Code>
                 </Box>
-                <Stack gap="xs">
-                  <Textarea
-                    label="Result (JSON)"
-                    description="Use the result shape requested in the decision context. Workhorse validates JSON size, not domain fields."
-                    placeholder='{"approved":true}'
-                    value={results[key] ?? ""}
-                    disabled={!data.canComplete}
-                    autosize
-                    minRows={3}
-                    maxRows={12}
-                    onBlur={() => prettyPrintResult(key)}
-                    onChange={(event) => {
-                      const next = { ...results, [key]: event.currentTarget.value };
-                      setConfirming((current) => (current === key ? null : current));
-                      setResults(next);
-                    }}
-                  />
-                  {confirming === key ? (
-                    <Alert color="orange" title="Confirm this irreversible result">
-                      <Text size="sm" mb="sm">
-                        The first accepted result resumes the handler. Check the JSON before
-                        completing this wait because the result cannot be replaced.
-                      </Text>
-                      <Code block mb="sm">
-                        {results[key]}
-                      </Code>
-                      <Group gap="xs">
-                        <Button
-                          color="orange"
-                          loading={completing === key}
-                          onClick={() => void complete(wait.jobId, wait.name)}
-                        >
-                          Confirm completion
-                        </Button>
-                        <Button
-                          variant="default"
-                          disabled={completing === key}
-                          onClick={() => setConfirming(null)}
-                        >
-                          Keep editing
-                        </Button>
-                      </Group>
-                    </Alert>
-                  ) : (
-                    <Button
-                      disabled={!data.canComplete || !(results[key] ?? "").trim()}
-                      onClick={() => review(key)}
-                      style={{ alignSelf: "flex-start" }}
-                    >
-                      Review result
-                    </Button>
-                  )}
-                </Stack>
+                <HumanDecisionControls
+                  result={results[key] ?? ""}
+                  quickAction={quickAction ? { label: quickAction.label } : null}
+                  canComplete={data.canComplete}
+                  confirming={confirming === key}
+                  completing={completing === key}
+                  onQuickAction={() => {
+                    if (!quickAction) return;
+                    setResults((current) => ({ ...current, [key]: quickAction.formatted }));
+                    setConfirming(key);
+                  }}
+                  onResultChange={(value) => {
+                    setConfirming((current) => (current === key ? null : current));
+                    setResults((current) => ({ ...current, [key]: value }));
+                  }}
+                  onReview={() => {
+                    prettyPrintResult(key);
+                    review(key);
+                  }}
+                  onComplete={() => void complete(wait.jobId, wait.name)}
+                  onKeepEditing={() => setConfirming(null)}
+                />
                 {!data.canComplete ? (
                   <Text c="dimmed" size="xs">
                     This dashboard is read-only, so it can inspect decisions but cannot complete
@@ -6256,7 +6339,7 @@ function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
 }
 
 function routeTitle(route: PageRoute): string {
-  if (route === "/human-waits") return "human waits";
+  if (route === "/human-waits") return "waiting tasks";
   if (route === "/events") return "events";
   if (route === "/cron") return "schedules";
   if (route === "/queues") return "queues";
@@ -6284,7 +6367,6 @@ function useDashboardController(
     error: null,
   });
   const [taskCounts, setTaskCounts] = useState<DashboardTaskCounts | null>(null);
-  const [pendingHumanWaitCount, setPendingHumanWaitCount] = useState<number | null>(null);
   const [environment, setEnvironment] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -6500,9 +6582,6 @@ function useDashboardController(
             );
           } else {
             if (data.route === "/tasks") setTaskCounts(data.value.counts);
-            if (data.route === "/human-waits") {
-              setPendingHumanWaitCount(data.value.diagnostics.pendingHumanDecisions);
-            }
             setLoadState({ status: "ready", data, error: null });
           }
         }
@@ -6532,15 +6611,6 @@ function useDashboardController(
       setTaskCounts(await client.taskCounts());
     } catch {
       // The active page owns the connection state; keep the last navigation counts on failure.
-    }
-  }, [client]);
-
-  const loadHumanWaitCount = useCallback(async () => {
-    try {
-      const page = await client.humanWaits();
-      setPendingHumanWaitCount(page.diagnostics.pendingHumanDecisions);
-    } catch {
-      // The active page owns the connection state; keep the last navigation count on failure.
     }
   }, [client]);
 
@@ -7000,8 +7070,7 @@ function useDashboardController(
   useEffect(() => {
     void loadPage();
     if (location.route !== "/tasks") void loadTaskCounts();
-    if (location.route !== "/human-waits") void loadHumanWaitCount();
-  }, [loadHumanWaitCount, loadPage, loadTaskCounts, location.route]);
+  }, [loadPage, loadTaskCounts, location.route]);
 
   const refreshBlocked = refreshBlockers.blocked;
   const previousRefreshBlocked = useRef(refreshBlocked);
@@ -7030,9 +7099,8 @@ function useDashboardController(
     pollingClock.setRefresh(() => {
       void loadPage({ background: true });
       if (location.route !== "/tasks") void loadTaskCounts();
-      if (location.route !== "/human-waits") void loadHumanWaitCount();
     });
-  }, [loadHumanWaitCount, loadPage, loadTaskCounts, location.route, pollingClock]);
+  }, [loadPage, loadTaskCounts, location.route, pollingClock]);
   useEffect(() => {
     pollingClock.reset(dashboardRefreshIntervalMs(refreshInterval), autoRefreshPausedRef.current);
   }, [location.route, pollingClock, refreshInterval, refreshScheduleResetKey]);
@@ -7165,7 +7233,6 @@ function useDashboardController(
     changeRefreshInterval,
     location,
     taskCounts,
-    pendingHumanWaitCount,
     handleLink,
     content,
     selectedJobId,
@@ -7217,7 +7284,6 @@ function DashboardContent({
     changeRefreshInterval,
     location,
     taskCounts,
-    pendingHumanWaitCount,
     handleLink,
     content,
     selectedJobId,
@@ -7417,6 +7483,7 @@ function DashboardContent({
                   href={mountedHref(basePath, href)}
                   active={location.route === "/tasks" && location.filter === filter.value}
                   label={filter.label}
+                  title={filter.value === "blocked" ? blockedTaskDescription : undefined}
                   leftSection={<Icon size={18} />}
                   variant="light"
                   rightSection={
@@ -7436,22 +7503,6 @@ function DashboardContent({
             <Text c="dimmed" fw={600} size="xs" px="sm" mb={4}>
               Operations
             </Text>
-            <NavLink
-              component="a"
-              href={mountedHref(basePath, "/human-waits")}
-              active={location.route === "/human-waits"}
-              label="Human waits"
-              leftSection={<UserFocus size={18} />}
-              variant="light"
-              rightSection={
-                pendingHumanWaitCount === null ? null : (
-                  <Badge variant="light" color="gray" miw={32}>
-                    {pendingHumanWaitCount}
-                  </Badge>
-                )
-              }
-              onClick={(event) => handleLink(event, "/human-waits")}
-            />
             <NavLink
               component="a"
               href={mountedHref(basePath, "/events")}

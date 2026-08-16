@@ -4267,7 +4267,7 @@ describe("Workhorse dashboard events feed", () => {
   });
 
   it("completes a pending human decision and resumes the suspended handler", async () => {
-    const { workhorse } = createTestApplication();
+    const { app, workhorse } = createTestApplication();
     const queue = workhorse.context.queue;
     const family = demoFeatureShowcaseFamily("human-decisions");
 
@@ -4288,7 +4288,22 @@ describe("Workhorse dashboard events feed", () => {
       );
       expect(pending.items.find((wait) => wait.jobId === jobId)).toMatchObject({
         name: DEMO_HUMAN_WAIT_NAME,
-        context: { scenario: "test-approval" },
+        context: {
+          scenario: "test-approval",
+          dashboard: {
+            quickAction: { label: "Approve", result: { approved: true } },
+          },
+        },
+      });
+      const waiting = await dashboardClient(app).dashboard.tasks({
+        filter: "waiting",
+        page: 1,
+        pageSize: 25,
+      });
+      expect(waiting).toMatchObject({
+        filter: "waiting",
+        total: 1,
+        jobs: [{ id: jobId, state: "scheduled", waitName: DEMO_HUMAN_WAIT_NAME }],
       });
       const completion = await queue.completeHumanWait(
         jobId,

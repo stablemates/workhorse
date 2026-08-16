@@ -410,6 +410,7 @@ export interface DashboardFailureRow {
 export const dashboardTaskFilters = [
   "all",
   "blocked",
+  "waiting",
   "scheduled",
   "retried",
   "queued",

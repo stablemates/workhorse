@@ -445,7 +445,14 @@ The recursive cycle check starts from the inserted prerequisite identities and f
 
 `Queue.getJob` and `Queue.listJobs` expose sorted `prerequisiteJobIds`, `dependencyPolicy`, the compatible singular `prerequisiteJobId` when exactly one edge exists, and `blockedReason`. `Queue.getDependencyLineage(jobId, limit)` returns at most 1,000 edges where the identity is either the prerequisite or dependent. Each identity can own at most 100 edges in either direction, so the default read returns its complete one-hop lineage and needs no continuation cursor. A caller-selected lower limit can still set `truncated`. Each `DependencyLineageRecord` contains both identities, all three terminal policies, `createdAt`, nullable `releasedAt`, and nullable `resolution`. `dashboard_job_dependency_v1` exposes the same retained edge evidence to the bounded dashboard task-detail read.
 
-`DashboardTaskFilter` contains `all`, `blocked`, `scheduled`, `retried`, `queued`, `running`, `completed`, `discarded`, and `canceled`. `readDashboardTasks` maps `blocked` to runtime state `blocked`. Each `DashboardJobRow` exposes `blockedReason` as `prerequisite_pending` for that state and `prerequisiteJobIds` as the sorted unresolved prerequisite identities. `readDashboardTaskCounts` reports the same blocked population exactly below its planner threshold and from the exact live runtime count above it.
+`DashboardTaskFilter` contains `all`, `blocked`, `waiting`, `scheduled`, `retried`, `queued`,
+`running`, `completed`, `discarded`, and `canceled`. `readDashboardTasks` maps `blocked` to runtime
+state `blocked`. It maps `waiting` to jobs present in `dashboard_signal_wait_v1` or
+`dashboard_human_wait_v1`.
+Each `DashboardJobRow` exposes `blockedReason` as `prerequisite_pending` for a blocked state. Its
+`prerequisiteJobIds` contains the sorted unresolved prerequisite identities.
+`readDashboardTaskCounts` reports both live populations exactly below its planner threshold. Above
+that threshold, it reads their exact counts from the live runtime and external-wait projections.
 
 The dashboard `tasksInput.priority` filter is a nullable integer from 0 through 100. Its `sort` is
 `updated` or `priority` and defaults to `updated`. `readDashboardTasks` accepts these fields through
@@ -690,6 +697,10 @@ same page bounds, cursor fields, and order. Each `HumanWait<TContext>` adds the 
 the signal-wait projection. The dashboard calls this method, validates result JSON, and derives
 `requestedBy` from the authenticated principal. `human_wait_created`, `human_wait_completed`,
 `human_wait_replayed`, and `human_wait_rejected` retain value-free lifecycle evidence.
+
+The dashboard recognizes an optional `context.dashboard.quickAction` object with `label` and
+`result` fields. It renders `label` as a decision button and submits the stored JSON `result` only
+after confirmation. A missing or malformed object leaves only the custom JSON result control.
 
 Human decisions use the same default PostgreSQL timeout and parent-identity retention contract.
 Immediate cancellation and deadline terminalization read `job_human_wait` to preserve the original

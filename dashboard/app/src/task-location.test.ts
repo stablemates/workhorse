@@ -89,6 +89,12 @@ describe("task location state", () => {
     expect(taskLocationHref(state)).toBe("/tasks?filter=blocked");
   });
 
+  it("round-trips the waiting task filter used by the sidebar", () => {
+    const state = parseTaskLocation("?filter=waiting");
+    expect(state.filter).toBe("waiting");
+    expect(taskLocationHref(state)).toBe("/tasks?filter=waiting");
+  });
+
   it("carries the open task detail in the URL beside the listing parameters", () => {
     // A deep link has to restore the same list and the same open task, so the drawer id is
     // parsed alongside the filters rather than instead of them.

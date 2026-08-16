@@ -527,7 +527,13 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         (behavior === "human-expiring" ? 5_000 : DEMO_RECURRING_WAIT_TIMEOUT_MS);
       const decision = await context.waitForHuman(
         DEMO_HUMAN_WAIT_NAME,
-        { scenario: payload.scenario, summary: payload.label },
+        {
+          scenario: payload.scenario,
+          summary: payload.label,
+          dashboard: {
+            quickAction: { label: "Approve", result: { approved: true } },
+          },
+        },
         { timeoutMs },
       );
       return { scenario: payload.scenario, behavior, decision };
