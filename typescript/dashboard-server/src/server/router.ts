@@ -118,6 +118,7 @@ const demoJobKindValues = [
   "failure",
   "idempotent",
   "long-running",
+  "redrive",
 ] as const;
 const checkedDemoJobKindValues: CompleteDashboardOptions<
   DashboardDemoJobKind,

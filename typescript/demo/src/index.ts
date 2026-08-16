@@ -67,12 +67,25 @@ demoLogger.info(
 // bundle. Both render the page through the same host, so only module delivery differs.
 const dashboardDev = mode === "development" ? await createDashboardDevServer() : undefined;
 
+// Optional dashboard authentication. When both credentials are configured, the demo serves the
+// packaged single-administrator login instead of its default open access.
+const adminUsername = process.env.WORKHORSE_DEMO_ADMIN_USERNAME;
+const adminPasswordHash = process.env.WORKHORSE_DEMO_ADMIN_PASSWORD_HASH;
+if ((adminUsername === undefined) !== (adminPasswordHash === undefined)) {
+  throw new Error(
+    "WORKHORSE_DEMO_ADMIN_USERNAME and WORKHORSE_DEMO_ADMIN_PASSWORD_HASH must be set together",
+  );
+}
+
 const { app } = createDemoApplication(database, {
   dev: dashboardDev,
   environment,
   operator: createLocalOperator(database),
   queueController: localOperatorControllers.queueController,
   scheduleController: createLocalScheduleController(database),
+  ...(adminUsername && adminPasswordHash
+    ? { singleAdmin: { username: adminUsername, passwordHash: adminPasswordHash } }
+    : {}),
 });
 const metricsObserver = startDemoMetricsObserver(pool);
 if (process.env.SEED_DEMO_DATA !== "false") {

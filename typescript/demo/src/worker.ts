@@ -8,6 +8,7 @@ import {
   DEMO_WORKER_CONCURRENCY,
   DEMO_WORKER_POLL_MS,
 } from "./constants.js";
+import { DEMO_QUEUE_OPTIONS } from "./contracts.js";
 import { createDemoDatabase } from "./database.js";
 import { resolveDemoDatabaseUrl } from "./environment.js";
 import { demoLogger } from "./logger.js";
@@ -50,6 +51,7 @@ const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 const database = createDemoDatabase(pool);
 const adapter = createDrizzleAdapter(database, {
   defaultQueue: DEMO_QUEUE,
+  queueOptions: DEMO_QUEUE_OPTIONS,
   close: () => pool.end(),
 });
 

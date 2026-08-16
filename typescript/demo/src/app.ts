@@ -4,6 +4,7 @@ import {
   createDashboardHost,
   createDashboardOperatorControllers,
   type DashboardOperatorAction,
+  type DashboardSingleAdminOptions,
 } from "@workhorse/dashboard/server";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
@@ -30,8 +31,11 @@ import {
   DEMO_FEATURE_SHOWCASE_FAMILIES,
   DEMO_FEATURE_SHOWCASE_SEED_NAME,
   DEMO_FEATURE_SHOWCASE_SOURCE,
+  type DemoFeatureExample,
   type DemoFeaturePayload,
+  type DemoFeatureShowcaseFamily,
 } from "./feature-showcase.js";
+import { DEMO_QUEUE_OPTIONS } from "./contracts.js";
 import type { DemoDatabase } from "./database.js";
 
 import {
@@ -108,6 +112,11 @@ export interface CreateDemoApplicationOptions {
   workerController?: WorkerController;
   settingsController?: SettingsController;
   maintenanceIntervalMs?: number;
+  /**
+   * Protect the dashboard with the packaged single-administrator login instead of the demo's
+   * default open access. Supplied by the entry point when the operator credentials are configured.
+   */
+  singleAdmin?: DashboardSingleAdminOptions;
 }
 
 export interface AuditContext {
@@ -124,7 +133,15 @@ export interface CancellationAuditContext extends Omit<AuditContext, "reason"> {
 export interface DashboardOperator {
   mode: "read-only" | "writable";
   enqueueTest?: (
-    kind: "success" | "retry" | "durable" | "timer" | "failure" | "idempotent" | "long-running",
+    kind:
+      | "success"
+      | "retry"
+      | "durable"
+      | "timer"
+      | "failure"
+      | "idempotent"
+      | "long-running"
+      | "redrive",
     audit: AuditContext,
     scenario?: DurableDemoScenario,
   ) => Promise<{ jobId: string }>;
@@ -466,6 +483,13 @@ function featureShowcaseSchedules(enabledByName: ReadonlyMap<string, boolean>) {
         durationMs: null,
         waitMs: null,
         checkpointCount: null,
+        waitMode: null,
+        waitTimeoutMs: null,
+        childCount: null,
+        role: null,
+        memberIndex: null,
+        shouldFail: null,
+        invoiceId: family.key === "payload-contracts" ? "INV-recurring" : null,
       } satisfies DemoFeaturePayload,
       maxAttempts: family.recurringMaxAttempts,
       retryPolicy: family.recurringRetryPolicy,
@@ -661,13 +685,60 @@ function demoTestJob(
   };
 }
 
+/**
+ * Redrive the newest unredriven demo dead letter on the operator's behalf.
+ *
+ * This is the only operator "enqueue" that creates its task through redrive lineage rather than a
+ * fresh acceptance, so a visitor can trigger and then inspect a live redrive instead of only the
+ * pre-seeded one.
+ */
+async function redriveLatestDeadLetter(
+  database: DemoDatabase,
+  audit: AuditContext,
+): Promise<{ jobId: string }> {
+  return database.transaction(async (transaction) => {
+    const workhorse = createDrizzleAdapter(transaction, {
+      defaultQueue: DEMO_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
+    const deadLetters = await workhorse.queue.listDeadLetters({ queue: DEMO_QUEUE, limit: 50 });
+    const candidate = deadLetters.items.find((deadLetter) => deadLetter.redriveCount === 0);
+    if (!candidate) {
+      throw new Error("No demo dead letter is awaiting redrive; enqueue a terminal failure first");
+    }
+    const result = await workhorse.queue.redrive(candidate.jobId, {
+      requestedBy: audit.actor,
+      reason: audit.reason,
+      requestId: audit.requestId,
+    });
+    if (!result.targetJobId) {
+      throw new Error(`Redrive of ${candidate.jobId} was refused: ${result.status}`);
+    }
+    await transaction.execute(sql`
+      INSERT INTO public.workhorse_demo_audit
+        (actor, reason, request_id, occurred_at, action, target, before, after, status)
+      VALUES
+        (${audit.actor}, ${audit.reason}, ${audit.requestId},
+         ${audit.occurredAt ?? new Date().toISOString()}, 'redriveDeadLetter',
+         ${`job:${candidate.jobId}`}, ${JSON.stringify({ state: "failed" })}::jsonb,
+         ${JSON.stringify({ status: result.status, targetJobId: result.targetJobId })}::jsonb,
+         'succeeded')
+    `);
+    return { jobId: result.targetJobId };
+  });
+}
+
 export function createLocalOperator(database: DemoDatabase): DashboardOperator {
   return {
     mode: "writable",
     async enqueueTest(kind, audit, scenario) {
+      if (kind === "redrive") return redriveLatestDeadLetter(database, audit);
       const target = `job:${kind}`;
       return database.transaction(async (transaction) => {
-        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+        const workhorse = createDrizzleAdapter(transaction, {
+          defaultQueue: DEMO_QUEUE,
+          queueOptions: DEMO_QUEUE_OPTIONS,
+        });
         const definition = demoTestJob(kind, scenario);
         const jobId = await workhorse.queue.enqueue(definition.type, definition.payload, {
           ...(definition.maxAttempts === undefined ? {} : { maxAttempts: definition.maxAttempts }),
@@ -827,7 +898,10 @@ export function createLocalOperatorControllers(database: DemoDatabase) {
             break;
           }
         }
-        const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+        const workhorse = createDrizzleAdapter(transaction, {
+          defaultQueue: DEMO_QUEUE,
+          queueOptions: DEMO_QUEUE_OPTIONS,
+        });
         const result = await operation(workhorse.queue);
         const status = operatorAuditStatus(action, result);
         const audit = action.audit;
@@ -853,7 +927,10 @@ export function createLocalSettingsController(database: DemoDatabase): SettingsC
     change: (queue: Queue) => Promise<unknown>,
   ): Promise<void> {
     await database.transaction(async (transaction) => {
-      const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+      const workhorse = createDrizzleAdapter(transaction, {
+        defaultQueue: DEMO_QUEUE,
+        queueOptions: DEMO_QUEUE_OPTIONS,
+      });
       const before = {
         maintenance: await workhorse.queue.getMaintenancePolicy(),
         retention: await workhorse.queue.getRetentionPolicy(),
@@ -910,14 +987,19 @@ export function createDemoApplication(
   const settingsController =
     options.settingsController ??
     (options.operator?.mode === "writable" ? createLocalSettingsController(database) : undefined);
-  const adapter = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
+  const adapter = createDrizzleAdapter(database, {
+    defaultQueue: DEMO_QUEUE,
+    queueOptions: DEMO_QUEUE_OPTIONS,
+  });
   const app = new Hono();
 
   if (options.dashboard !== false) {
     const dashboard = createDashboardHost({
       path: "/",
       database: adapter.database,
-      authorize: () => true,
+      // Open access is the local default; configured credentials switch the host to the packaged
+      // single-administrator login so the authentication flow itself is demonstrable.
+      ...(options.singleAdmin ? { singleAdmin: options.singleAdmin } : { authorize: () => true }),
       environment,
       maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs },
       operator: options.operator ?? createReadOnlyOperator(),
@@ -1027,7 +1109,10 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
     `);
     if (marker.rows.length === 0) return [];
 
-    const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+    const workhorse = createDrizzleAdapter(transaction, {
+      defaultQueue: DEMO_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
     const jobIds: string[] = [];
     const runAt = new Date(Date.now() + DEMO_LONG_RUNNING_SEED_DELAY_MS);
     for (const job of DEMO_LONG_RUNNING_SEED_JOBS) {
@@ -1050,7 +1135,10 @@ async function seedLongRunningDemoData(database: DemoDatabase): Promise<string[]
 
 async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> {
   return database.transaction(async (transaction) => {
-    const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_RATE_LIMIT_QUEUE });
+    const workhorse = createDrizzleAdapter(transaction, {
+      defaultQueue: DEMO_RATE_LIMIT_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
     await workhorse.queue.syncRateLimitPolicies(DEMO_RATE_LIMIT_POLICY_NAMESPACE, [
       {
         queue: DEMO_RATE_LIMIT_QUEUE,
@@ -1092,6 +1180,165 @@ async function seedRateLimitDemoData(database: DemoDatabase): Promise<string[]> 
   });
 }
 
+function showcaseSeedPayload(
+  family: DemoFeatureShowcaseFamily,
+  example: DemoFeatureExample,
+): DemoFeaturePayload {
+  return {
+    source: DEMO_FEATURE_SHOWCASE_SOURCE,
+    family: family.key,
+    scenario: example.scenario,
+    behavior: example.behavior,
+    label: example.label,
+    durationMs: example.durationMs ?? null,
+    waitMs: example.waitMs ?? null,
+    checkpointCount: example.checkpointCount ?? null,
+    waitMode: example.waitMode ?? null,
+    waitTimeoutMs: example.waitTimeoutMs ?? null,
+    childCount: example.childCount ?? null,
+    role: null,
+    memberIndex: null,
+    shouldFail: null,
+    // The v1 contract requires a non-empty invoiceId on every accepted payload of this type.
+    invoiceId: family.key === "payload-contracts" ? `INV-${example.scenario}` : null,
+  };
+}
+
+/** Enqueue the declared prerequisites, then the dependent gated on all of them. */
+async function seedDependencyChain(
+  queue: Queue,
+  family: DemoFeatureShowcaseFamily,
+  example: DemoFeatureExample,
+  payload: DemoFeaturePayload,
+): Promise<string[]> {
+  const spec = example.seedDependency!;
+  const prerequisiteJobIds: string[] = [];
+  for (const prerequisite of spec.prerequisites) {
+    prerequisiteJobIds.push(
+      await queue.enqueue(
+        family.jobType,
+        {
+          ...payload,
+          behavior: prerequisite.behavior,
+          label: prerequisite.label,
+          role: "prerequisite",
+        },
+        {
+          maxAttempts: prerequisite.maxAttempts ?? 1,
+          tags: [...example.tags, "prerequisite"],
+        },
+      ),
+    );
+  }
+  const dependentJobId = await queue.enqueue(
+    family.jobType,
+    { ...payload, role: "dependent" },
+    {
+      maxAttempts: example.maxAttempts,
+      tags: [...example.tags, "dependent"],
+      dependencies: {
+        prerequisiteJobIds,
+        onSuccess: "release",
+        onFailure: spec.onFailure,
+        onCancellation: spec.onCancellation,
+      },
+    },
+  );
+  return [...prerequisiteJobIds, dependentJobId];
+}
+
+/** One keyed debounce acceptance plus its declared replacements; one retained job survives. */
+async function seedDebouncedScenario(
+  queue: Queue,
+  family: DemoFeatureShowcaseFamily,
+  example: DemoFeatureExample,
+  payload: DemoFeaturePayload,
+): Promise<string> {
+  const spec = example.seedDebounce!;
+  const debounce = {
+    key: `showcase-${example.scenario}`,
+    scope: "workhorse-demo:feature-showcase",
+    windowMs: spec.windowMs,
+    schedule: spec.schedule,
+  };
+  const first = await queue.enqueueWithResult(family.jobType, payload, {
+    maxAttempts: example.maxAttempts,
+    tags: example.tags,
+    debounce,
+  });
+  if (first.outcome !== "accepted") {
+    throw new Error(`Expected ${example.scenario} to be accepted, got ${first.outcome}`);
+  }
+  for (let replacement = 1; replacement <= spec.replacements; replacement += 1) {
+    const replaced = await queue.enqueueWithResult(
+      family.jobType,
+      { ...payload, label: `${example.label} (replacement ${replacement})` },
+      { maxAttempts: example.maxAttempts, tags: example.tags, debounce },
+    );
+    if (replaced.outcome !== "replaced" || replaced.jobId !== first.jobId) {
+      throw new Error(`Expected ${example.scenario} replacement, got ${replaced.outcome}`);
+    }
+  }
+  return first.jobId;
+}
+
+/** Seed one keyed throttle shape and assert the coalesced dispositions PostgreSQL reports. */
+async function seedThrottledScenario(
+  queue: Queue,
+  family: DemoFeatureShowcaseFamily,
+  example: DemoFeatureExample,
+  payload: DemoFeaturePayload,
+): Promise<string[]> {
+  const spec = example.seedThrottle!;
+  const scope = "workhorse-demo:feature-showcase";
+  const options = (key: string): EnqueueOptions => ({
+    maxAttempts: example.maxAttempts,
+    tags: example.tags,
+    throttle: { key, scope, windowMs: spec.windowMs },
+  });
+  if (spec.shape === "per-key") {
+    const jobIds: string[] = [];
+    for (const lane of ["lane-a", "lane-b"]) {
+      const result = await queue.enqueueWithResult(
+        family.jobType,
+        { ...payload, label: `${example.label} (${lane})` },
+        options(`showcase-${example.scenario}-${lane}`),
+      );
+      if (result.outcome !== "accepted") {
+        throw new Error(`Expected independent ${lane} acceptance, got ${result.outcome}`);
+      }
+      jobIds.push(result.jobId);
+    }
+    return jobIds;
+  }
+  const key = `showcase-${example.scenario}`;
+  if (spec.shape === "burst") {
+    // Throttled repeats coalesce only when they are equivalent, so every burst member carries
+    // the identical payload; a differing repeat would be a conflict, not a coalescence.
+    const results = await queue.enqueueManyWithResults(
+      Array.from({ length: 3 }, () => ({
+        type: family.jobType,
+        payload,
+        options: options(key),
+      })),
+    );
+    const [accepted, ...coalesced] = results;
+    if (accepted!.outcome !== "accepted" || coalesced.some((r) => r.outcome !== "coalesced")) {
+      throw new Error(`Expected one accepted burst member for ${example.scenario}`);
+    }
+    return [accepted!.jobId];
+  }
+  const first = await queue.enqueueWithResult(family.jobType, payload, options(key));
+  if (first.outcome !== "accepted") {
+    throw new Error(`Expected ${example.scenario} acceptance, got ${first.outcome}`);
+  }
+  const repeat = await queue.enqueueWithResult(family.jobType, payload, options(key));
+  if (repeat.outcome !== "coalesced" || repeat.jobId !== first.jobId) {
+    throw new Error(`Expected ${example.scenario} repeat to coalesce, got ${repeat.outcome}`);
+  }
+  return [first.jobId];
+}
+
 export async function seedDemoData(database: DemoDatabase) {
   const rateLimitJobIds = await seedRateLimitDemoData(database);
   // These jobs are inserted first but start after a short grace period, so startup work is never
@@ -1106,25 +1353,20 @@ export async function seedDemoData(database: DemoDatabase) {
     `);
     if (marker.rows.length === 0) return [] as string[];
 
-    const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+    const workhorse = createDrizzleAdapter(transaction, {
+      defaultQueue: DEMO_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
     const jobIds: string[] = [];
     for (const family of DEMO_FEATURE_SHOWCASE_FAMILIES) {
       for (const example of family.examples) {
-        const payload: DemoFeaturePayload = {
-          source: DEMO_FEATURE_SHOWCASE_SOURCE,
-          family: family.key,
-          scenario: example.scenario,
-          behavior: example.behavior,
-          label: example.label,
-          durationMs: example.durationMs ?? null,
-          waitMs: example.waitMs ?? null,
-          checkpointCount: example.checkpointCount ?? null,
-        };
+        const payload = showcaseSeedPayload(family, example);
         const now = Date.now();
         const enqueueOptions: EnqueueOptions = {
           maxAttempts: example.maxAttempts,
           retryPolicy: example.retryPolicy,
           tags: example.tags,
+          ...(example.priority === undefined ? {} : { priority: example.priority }),
           ...(example.runAfterMs === undefined
             ? {}
             : { runAt: new Date(now + example.runAfterMs) }),
@@ -1147,7 +1389,10 @@ export async function seedDemoData(database: DemoDatabase) {
 
         if (example.seedTransition) {
           const queue = `showcase-${example.scenario}`;
-          const isolated = createDrizzleAdapter(transaction, { defaultQueue: queue });
+          const isolated = createDrizzleAdapter(transaction, {
+            defaultQueue: queue,
+            queueOptions: DEMO_QUEUE_OPTIONS,
+          });
           const sourceJobId = await isolated.queue.enqueue(family.jobType, payload, enqueueOptions);
           jobIds.push(sourceJobId);
           const workerId = `showcase-seed-${example.scenario}`;
@@ -1191,6 +1436,38 @@ export async function seedDemoData(database: DemoDatabase) {
           continue;
         }
 
+        if (example.seedDependency) {
+          jobIds.push(...(await seedDependencyChain(workhorse.queue, family, example, payload)));
+          continue;
+        }
+        if (example.seedDebounce) {
+          jobIds.push(await seedDebouncedScenario(workhorse.queue, family, example, payload));
+          continue;
+        }
+        if (example.seedThrottle) {
+          jobIds.push(...(await seedThrottledScenario(workhorse.queue, family, example, payload)));
+          continue;
+        }
+        if (example.seedCount !== undefined) {
+          const memberCount = example.seedCount;
+          jobIds.push(
+            ...(await workhorse.queue.enqueueMany(
+              Array.from({ length: memberCount }, (_, index) => ({
+                type: family.jobType,
+                payload: {
+                  ...payload,
+                  memberIndex: index + 1,
+                  ...(example.failLastMember && index === memberCount - 1
+                    ? { shouldFail: true }
+                    : {}),
+                },
+                options: enqueueOptions,
+              })),
+            )),
+          );
+          continue;
+        }
+
         const jobId = await workhorse.queue.enqueue(family.jobType, payload, enqueueOptions);
         jobIds.push(jobId);
         if (example.idempotencyKey) {
@@ -1222,7 +1499,10 @@ export async function seedDemoData(database: DemoDatabase) {
       return { expiredDeadlineId: null, jobIds: [] as string[] };
     }
 
-    const workhorse = createDrizzleAdapter(transaction, { defaultQueue: DEMO_QUEUE });
+    const workhorse = createDrizzleAdapter(transaction, {
+      defaultQueue: DEMO_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
     const seededJobIds: string[] = [];
     const orderId = randomUUID();
     await transaction.insert(orders).values({
@@ -1360,7 +1640,10 @@ export async function seedDemoData(database: DemoDatabase) {
   });
 
   if (representativeSeed.expiredDeadlineId !== null) {
-    const workhorse = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
+    const workhorse = createDrizzleAdapter(database, {
+      defaultQueue: DEMO_QUEUE,
+      queueOptions: DEMO_QUEUE_OPTIONS,
+    });
     await workhorse.queue.recoverExpired();
     const expiredDeadline = await workhorse.queue.getJob(representativeSeed.expiredDeadlineId);
     if (expiredDeadline?.state !== "failed") {

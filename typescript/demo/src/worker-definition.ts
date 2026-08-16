@@ -1,5 +1,6 @@
 import type { Queue, WorkerProcessWorkerDefinition } from "@workhorse/core";
 import {
+  DEMO_BATCH_MAX_SIZE,
   DEMO_MAINTENANCE_INTERVAL_MS,
   DEMO_MAINTENANCE_TASK_POLL_MS,
   DEMO_QUEUE,
@@ -12,7 +13,7 @@ import { registerDemoHandlers, type DemoHandlerDependencies } from "./handlers.j
 
 export interface DemoWorkerDefinitionOptions extends Omit<
   DemoHandlerDependencies,
-  "database" | "queue"
+  "database" | "queue" | "batchMaxSize"
 > {
   concurrency: number;
   queue?: string;
@@ -46,6 +47,8 @@ export function createDemoWorkerDefinition(
       registerDemoHandlers(worker, {
         database,
         queue,
+        // A batch cannot hold more members than the worker has execution slots.
+        batchMaxSize: Math.min(DEMO_BATCH_MAX_SIZE, options.concurrency),
         durableStepMs: options.durableStepMs,
         durableTimerWaitMs: options.durableTimerWaitMs,
         longRunningJobMs: options.longRunningJobMs,
