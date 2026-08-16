@@ -5,7 +5,7 @@ import type { RouterClient } from "@orpc/server";
 import type { Queryable } from "@workhorse/core";
 import { describe, expect, it, vi } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
-import type { DashboardRouter } from "../src/server/router.js";
+import { isDashboardMutation, type DashboardRouter } from "../src/server/router.js";
 import type { DashboardAuditContext } from "../src/server/types.js";
 
 const salt = Buffer.from("workhorse-auth-test-salt");
@@ -47,6 +47,12 @@ function mutationClient(
 }
 
 describe("dashboard single-admin authentication", () => {
+  it("derives mutation classification from router metadata", () => {
+    expect(isDashboardMutation("dashboard.setQueuePaused")).toBe(true);
+    expect(isDashboardMutation("dashboard.tasks")).toBe(false);
+    expect(isDashboardMutation("dashboard.missing")).toBe(false);
+  });
+
   it("requires a bounded absolute cutoff when a previous password is configured", () => {
     expect(() =>
       createDashboardHost({

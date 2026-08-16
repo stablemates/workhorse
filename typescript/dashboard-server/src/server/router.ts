@@ -1,4 +1,4 @@
-import { ORPCError, os } from "@orpc/server";
+import { isProcedure, ORPCError, os } from "@orpc/server";
 import type { Queue } from "@workhorse/core";
 import type {
   CompleteDashboardOptions,
@@ -51,7 +51,12 @@ export interface DashboardRpcContext {
   authenticatedActor: string;
 }
 
-const procedure = os.$context<DashboardRpcContext>();
+interface DashboardProcedureMeta {
+  mutation?: boolean;
+}
+
+const procedure = os.$context<DashboardRpcContext>().$meta<DashboardProcedureMeta>({});
+const mutationProcedure = procedure.meta({ mutation: true });
 
 const auditSchema = z.object({
   actor: z.string().trim().min(1),
@@ -383,7 +388,7 @@ export const dashboardRouter = {
         context.operator.mode === "local" && Boolean(context.taskController?.completeHumanWait),
       ),
     ),
-    enqueueTest: procedure.input(enqueueTestInput).handler(async ({ context, input }) => {
+    enqueueTest: mutationProcedure.input(enqueueTestInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.operator.enqueueTest) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
@@ -393,7 +398,7 @@ export const dashboardRouter = {
         input.scenario,
       );
     }),
-    setScheduleEnabled: procedure
+    setScheduleEnabled: mutationProcedure
       .input(setScheduleEnabledInput)
       .handler(async ({ context, input }) => {
         if (context.operator.mode !== "local" || !context.scheduleController?.setScheduleEnabled) {
@@ -406,17 +411,19 @@ export const dashboardRouter = {
           auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
-    setQueuePaused: procedure.input(setQueuePausedInput).handler(async ({ context, input }) => {
-      if (context.operator.mode !== "local" || !context.queueController?.setQueuePaused) {
-        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
-      }
-      return context.queueController.setQueuePaused(
-        input.queue,
-        input.paused,
-        auditWithOccurredAt(input.audit, context.authenticatedActor),
-      );
-    }),
-    purgeQueue: procedure.input(purgeQueueInput).handler(async ({ context, input }) => {
+    setQueuePaused: mutationProcedure
+      .input(setQueuePausedInput)
+      .handler(async ({ context, input }) => {
+        if (context.operator.mode !== "local" || !context.queueController?.setQueuePaused) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        return context.queueController.setQueuePaused(
+          input.queue,
+          input.paused,
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
+        );
+      }),
+    purgeQueue: mutationProcedure.input(purgeQueueInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.queueController?.purgeQueue) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
@@ -425,17 +432,19 @@ export const dashboardRouter = {
         auditWithOccurredAt(input.audit, context.authenticatedActor),
       );
     }),
-    setWorkerPaused: procedure.input(setWorkerPausedInput).handler(async ({ context, input }) => {
-      if (context.operator.mode !== "local" || !context.workerController?.setWorkerPaused) {
-        throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
-      }
-      return context.workerController.setWorkerPaused(
-        input.workerId,
-        input.paused,
-        auditWithOccurredAt(input.audit, context.authenticatedActor),
-      );
-    }),
-    overrideMaintenancePolicy: procedure
+    setWorkerPaused: mutationProcedure
+      .input(setWorkerPausedInput)
+      .handler(async ({ context, input }) => {
+        if (context.operator.mode !== "local" || !context.workerController?.setWorkerPaused) {
+          throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
+        }
+        return context.workerController.setWorkerPaused(
+          input.workerId,
+          input.paused,
+          auditWithOccurredAt(input.audit, context.authenticatedActor),
+        );
+      }),
+    overrideMaintenancePolicy: mutationProcedure
       .input(overrideMaintenancePolicyInput)
       .handler(async ({ context, input }) => {
         if (context.operator.mode !== "local" || !context.settingsController) {
@@ -446,7 +455,7 @@ export const dashboardRouter = {
           auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
-    revertMaintenancePolicy: procedure
+    revertMaintenancePolicy: mutationProcedure
       .input(revertMaintenancePolicyInput)
       .handler(async ({ context, input }) => {
         if (context.operator.mode !== "local" || !context.settingsController) {
@@ -457,7 +466,7 @@ export const dashboardRouter = {
           auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
-    overrideRetentionPolicy: procedure
+    overrideRetentionPolicy: mutationProcedure
       .input(overrideRetentionPolicyInput)
       .handler(async ({ context, input }) => {
         if (context.operator.mode !== "local" || !context.settingsController) {
@@ -468,7 +477,7 @@ export const dashboardRouter = {
           auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
-    revertRetentionPolicy: procedure
+    revertRetentionPolicy: mutationProcedure
       .input(revertRetentionPolicyInput)
       .handler(async ({ context, input }) => {
         if (context.operator.mode !== "local" || !context.settingsController) {
@@ -479,7 +488,7 @@ export const dashboardRouter = {
           auditWithOccurredAt(input.audit, context.authenticatedActor),
         );
       }),
-    runTaskNow: procedure.input(runTaskNowInput).handler(async ({ context, input }) => {
+    runTaskNow: mutationProcedure.input(runTaskNowInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.taskController?.runTaskNow) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
@@ -497,7 +506,7 @@ export const dashboardRouter = {
      * distinguish an immediate cancellation from a cooperative request an active handler still has
      * to observe, and from a terminal task that was left untouched.
      */
-    cancelTask: procedure.input(cancelTaskInput).handler(async ({ context, input }) => {
+    cancelTask: mutationProcedure.input(cancelTaskInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.taskController?.cancelTask) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
@@ -510,7 +519,7 @@ export const dashboardRouter = {
       }
       return result;
     }),
-    signalTask: procedure.input(signalTaskInput).handler(async ({ context, input }) => {
+    signalTask: mutationProcedure.input(signalTaskInput).handler(async ({ context, input }) => {
       if (context.operator.mode !== "local" || !context.taskController?.signalTask) {
         throw new ORPCError("FORBIDDEN", { message: "This dashboard is read-only" });
       }
@@ -526,7 +535,7 @@ export const dashboardRouter = {
       }
       return result;
     }),
-    completeHumanWait: procedure
+    completeHumanWait: mutationProcedure
       .input(completeHumanWaitInput)
       .handler(async ({ context, input }) => {
         if (context.operator.mode !== "local" || !context.taskController?.completeHumanWait) {
@@ -546,5 +555,15 @@ export const dashboardRouter = {
       }),
   },
 };
+
+/** Return whether the router declares an RPC path as a state-changing operation. */
+export function isDashboardMutation(procedureName: string): boolean {
+  let route: unknown = dashboardRouter;
+  for (const segment of procedureName.split(".").filter(Boolean)) {
+    if (route === null || typeof route !== "object") return false;
+    route = (route as Record<string, unknown>)[segment];
+  }
+  return isProcedure(route) && route["~orpc"].meta.mutation === true;
+}
 
 export type DashboardRouter = typeof dashboardRouter;
