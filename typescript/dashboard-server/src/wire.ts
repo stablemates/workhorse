@@ -649,37 +649,59 @@ export interface DashboardWorkersPage {
  * writes it, and a filter list built from observed rows would silently lose an option whenever the
  * chosen window happens to contain none of that kind.
  */
-export type DashboardJobEventType =
-  | "enqueued"
-  | "claimed"
-  | "succeeded"
-  | "failed"
-  | "retry_scheduled"
-  | "canceled"
-  | "promoted"
-  | "lease_expired"
-  | "execution_timed_out"
-  | "redriven"
-  | "redrive_created"
-  | "wait_elapsed"
-  | "signal_waiting"
-  | "signal_received"
-  | "signal_replayed"
-  | "signal_rejected"
-  | "human_wait_created"
-  | "human_wait_completed"
-  | "human_wait_replayed"
-  | "human_wait_rejected";
+export const dashboardJobEventTypes = [
+  "enqueued",
+  "debounced",
+  "debounce_rejected",
+  "throttled",
+  "claimed",
+  "succeeded",
+  "failed",
+  "retry_scheduled",
+  "canceled",
+  "cancel_requested",
+  "promoted",
+  "lease_expired",
+  "deadline_exceeded",
+  "execution_timed_out",
+  "redriven",
+  "redrive_created",
+  "checkpoint_saved",
+  "progress_updated",
+  "wait_scheduled",
+  "wait_elapsed",
+  "wait_replayed",
+  "signal_waiting",
+  "signal_received",
+  "signal_replayed",
+  "signal_rejected",
+  "dependency_blocked",
+  "dependency_released",
+  "dependency_failed",
+  "dependency_canceled",
+  "child_created",
+  "child_joined",
+  "children_created",
+  "children_joined",
+  "parent_linked",
+  "human_wait_created",
+  "human_wait_completed",
+  "human_wait_replayed",
+  "human_wait_rejected",
+] as const;
+export type DashboardJobEventType = (typeof dashboardJobEventTypes)[number];
 
 /** Terminal outcomes `workhorse.attempt_history` records, constrained by a CHECK in the schema. */
-export type DashboardAttemptOutcome =
-  | "succeeded"
-  | "failed"
-  | "retry"
-  | "lease_expired"
-  | "canceled"
-  | "deadline_exceeded"
-  | "timeout";
+export const dashboardAttemptOutcomes = [
+  "succeeded",
+  "failed",
+  "retry",
+  "lease_expired",
+  "canceled",
+  "deadline_exceeded",
+  "timeout",
+] as const;
+export type DashboardAttemptOutcome = (typeof dashboardAttemptOutcomes)[number];
 
 /**
  * One value the events feed can be filtered by: an event type or an attempt outcome.

@@ -822,7 +822,7 @@ An active runtime, terminal outcome, incompatible idempotency key, or elapsed-bu
 
 `EnqueueOptions.throttle` contains `key`, optional `scope`, and `windowMs`. Keys and scopes share the idempotency limits of 512 and 256 UTF-8 bytes. `windowMs` is an integer from 1 through 31,536,000,000. A request cannot combine `throttle` with `idempotency`, `debounce`, `prerequisiteJobId`, or `dependencies`. `Queue.enqueueManyWithResults` and `enqueue_throttle_v1` enforce the dependency exclusions. A throttled request may supply `runAt`; explicit scheduling remains material to request equivalence.
 
-`enqueue_throttle_v1` hashes the scoped key, takes the shared transaction advisory lock, and converts the throttle window into the `enqueue_many_v1` idempotency retention contract. PostgreSQL stores `coalescing_mode = 'throttle'` and derives expiry from `clock_timestamp() + windowMs`. The first request returns `accepted`. An equivalent request before expiry returns the retained job ID with `coalesced` and creates no job, runtime, ready sequence, or notification effect. It deliberately writes no `job_event`, because repeated requests do not change the retained job and could amplify audit writes without bound. The caller emits a `workhorse.job.throttled` debug log and increments `workhorse.jobs.enqueue.outcomes` instead.
+`enqueue_throttle_v1` hashes the scoped key and takes the shared transaction advisory lock. It converts the throttle window into the `enqueue_many_v1` idempotency retention contract. PostgreSQL stores `coalescing_mode = 'throttle'` and derives expiry from `clock_timestamp() + windowMs`. The first request returns `accepted`. Its `enqueued` event adds `details.throttle`. That object contains `scope`, the first 12 hexadecimal key-digest characters, `key_length`, `window_ms`, and `expires_at`. An equivalent request before expiry returns the retained job ID with `coalesced`. It creates no job, runtime, ready sequence, or notification effect. PostgreSQL appends one `throttled` event with the same safe key evidence. The event never stores the raw key. The caller also emits a `workhorse.job.throttled` debug log and increments `workhorse.jobs.enqueue.outcomes`.
 
 Payload, queue, type, priority, scheduling, retry, contract, tag, deadline, timeout, or window changes before expiry raise `EnqueueIdempotencyConflictError`. Coalescing remains valid while the retained job is ready, scheduled, active, or terminal because throttle controls acceptance rather than execution. After expiry, a new request accepts a new stable identity even if the prior identity remains retained. Queue purge removes a pending job's binding and also permits a new acceptance. A retained key cannot change among idempotency, debounce, and throttle modes before expiry.
 
@@ -1138,6 +1138,15 @@ smaller response a prefix of a larger response. It returns:
 `redact_top_level_keys_v1`, and the maintenance functions remain the other
 versioned core surfaces used by the dashboard server. A core migration may change private tables
 without a dashboard release when it preserves these view and function contracts.
+
+`DashboardJobEventType`, the router's `eventTypeValues`, and the application's
+`dashboardJobEventTypes` enumerate every lifecycle event written by `schema.sql`, including
+coalescing, dependency, child, signal, human-wait, progress, and cancellation events. The Events
+feed exposes that vocabulary as filter values. The task drawer renders every returned event and
+uses a humanized type name with a neutral color when a newer SQL producer returns an unknown type.
+Its coalescing section reads only `scope`, `key_digest`, `key_length`, `window_ms`, `schedule`, and
+`expires_at` from `details.debounce` or `details.throttle`. It counts `debounced`, `throttled`, and
+`debounce_rejected` events and never reads `key_preview` or a raw key.
 
 `@workhorse/dashboard-contract` exports `DashboardCommandOptions`, `RunningDashboard`, and
 `DashboardStandaloneModule<Database>`. The package contains declarations only and imports neither

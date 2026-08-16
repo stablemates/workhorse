@@ -3389,7 +3389,10 @@ DECLARE
   v_key text;
   v_scope text;
   v_key_hash bytea;
+  v_key_digest text;
+  v_key_length integer;
   v_window_ms numeric;
+  v_expires_at timestamptz;
   v_existing record;
   v_normalized jsonb;
   v_row record;
@@ -3426,6 +3429,8 @@ BEGIN
   END IF;
 
   v_key_hash := workhorse.idempotency_key_hash_v1(v_scope, v_key);
+  v_key_digest := left(encode(v_key_hash, 'hex'), 12);
+  v_key_length := char_length(v_key);
   PERFORM pg_advisory_xact_lock(hashtextextended(v_scope || chr(31) || v_key, 0));
   v_now := clock_timestamp();
   SELECT identity.job_id, identity.expires_at, identity.coalescing_mode
@@ -3446,6 +3451,25 @@ BEGIN
   IF v_row.accepted THEN
     UPDATE workhorse.enqueue_idempotency SET coalescing_mode = 'throttle'
     WHERE idempotency_scope = v_scope AND idempotency_key_hash = v_key_hash;
+  END IF;
+  SELECT expires_at INTO v_expires_at
+    FROM workhorse.enqueue_idempotency
+   WHERE idempotency_scope = v_scope AND idempotency_key_hash = v_key_hash;
+  IF v_row.accepted THEN
+    UPDATE workhorse.job_event event SET details = event.details || jsonb_build_object(
+      'throttle', jsonb_build_object(
+        'scope', v_scope, 'key_digest', v_key_digest, 'key_length', v_key_length,
+        'window_ms', v_window_ms, 'expires_at', v_expires_at
+      )
+    ) WHERE event.job_id = v_row.job_id AND event.event_type = 'enqueued';
+  ELSE
+    INSERT INTO workhorse.job_event(job_id, event_type, details)
+    VALUES (v_row.job_id, 'throttled', jsonb_build_object(
+      'throttle', jsonb_build_object(
+        'scope', v_scope, 'key_digest', v_key_digest, 'key_length', v_key_length,
+        'window_ms', v_window_ms, 'expires_at', v_expires_at
+      )
+    ));
   END IF;
   job_id := v_row.job_id;
   outcome := CASE WHEN v_row.accepted THEN 'accepted' ELSE 'coalesced' END;

@@ -1089,63 +1089,135 @@ function eventDetail(event: JobEvent, key: string): string | null {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-const boundaryEventTypes = new Set([
-  "enqueued",
-  "wait_scheduled",
-  "wait_elapsed",
-  "wait_replayed",
-  "signal_waiting",
-  "signal_received",
-  "signal_replayed",
-  "signal_rejected",
-  "claimed",
-  "checkpoint_saved",
-  "progress_updated",
-  "retry_scheduled",
-  "cancel_requested",
-  "succeeded",
-  "failed",
-  "canceled",
-]);
-
-const boundaryEventLabels: Record<string, string> = {
-  enqueued: "Enqueued",
-  wait_scheduled: "Wait scheduled",
-  wait_elapsed: "Wait elapsed",
-  wait_replayed: "Wait replayed",
-  signal_waiting: "Waiting for signal",
-  signal_received: "Signal received",
-  signal_replayed: "Signal replayed",
-  signal_rejected: "Signal rejected",
-  claimed: "Claimed",
-  checkpoint_saved: "Checkpoint saved",
-  progress_updated: "Progress updated",
-  retry_scheduled: "Retry scheduled",
-  cancel_requested: "Cancellation requested",
-  succeeded: "Succeeded",
-  failed: "Failed",
-  canceled: "Canceled",
+const boundaryEventPresentation: Record<string, { label: string; color: string }> = {
+  enqueued: { label: "Enqueued", color: "violet" },
+  debounced: { label: "Debounced", color: "grape" },
+  debounce_rejected: { label: "Debounce rejected", color: "orange" },
+  throttled: { label: "Throttled", color: "grape" },
+  wait_scheduled: { label: "Wait scheduled", color: "indigo" },
+  wait_elapsed: { label: "Wait elapsed", color: "cyan" },
+  wait_replayed: { label: "Wait replayed", color: "grape" },
+  signal_waiting: { label: "Waiting for signal", color: "indigo" },
+  signal_received: { label: "Signal received", color: "teal" },
+  signal_replayed: { label: "Signal replayed", color: "grape" },
+  signal_rejected: { label: "Signal rejected", color: "orange" },
+  claimed: { label: "Claimed", color: "blue" },
+  checkpoint_saved: { label: "Checkpoint saved", color: "teal" },
+  progress_updated: { label: "Progress updated", color: "blue" },
+  retry_scheduled: { label: "Retry scheduled", color: "orange" },
+  cancel_requested: { label: "Cancellation requested", color: "gray" },
+  promoted: { label: "Promoted", color: "yellow" },
+  lease_expired: { label: "Lease expired", color: "red" },
+  deadline_exceeded: { label: "Deadline exceeded", color: "red" },
+  execution_timed_out: { label: "Execution timed out", color: "red" },
+  redriven: { label: "Redriven", color: "orange" },
+  redrive_created: { label: "Redrive created", color: "orange" },
+  dependency_blocked: { label: "Dependency blocked", color: "orange" },
+  dependency_released: { label: "Dependency released", color: "teal" },
+  dependency_failed: { label: "Dependency failed", color: "red" },
+  dependency_canceled: { label: "Dependency canceled", color: "gray" },
+  child_created: { label: "Child created", color: "blue" },
+  child_joined: { label: "Child joined", color: "teal" },
+  children_created: { label: "Children created", color: "blue" },
+  children_joined: { label: "Children joined", color: "teal" },
+  parent_linked: { label: "Parent linked", color: "blue" },
+  human_wait_created: { label: "Human wait created", color: "indigo" },
+  human_wait_completed: { label: "Human wait completed", color: "teal" },
+  human_wait_replayed: { label: "Human wait replayed", color: "grape" },
+  human_wait_rejected: { label: "Human wait rejected", color: "orange" },
+  succeeded: { label: "Succeeded", color: "green" },
+  failed: { label: "Failed", color: "red" },
+  canceled: { label: "Canceled", color: "gray" },
 };
 
-const boundaryEventColors: Record<string, string> = {
-  enqueued: "violet",
-  wait_scheduled: "indigo",
-  wait_elapsed: "cyan",
-  wait_replayed: "grape",
-  signal_waiting: "indigo",
-  signal_received: "teal",
-  signal_replayed: "grape",
-  signal_rejected: "orange",
-  claimed: "blue",
-  checkpoint_saved: "teal",
-  progress_updated: "blue",
-  retry_scheduled: "orange",
-  succeeded: "green",
-  failed: "red",
-  // Neutral, not red: an operator stopped this task, it did not break.
-  cancel_requested: "gray",
-  canceled: "gray",
-};
+function genericEventLabel(type: string): string {
+  const words = type.replaceAll("_", " ");
+  return words.length === 0 ? "Unknown event" : `${words[0]!.toUpperCase()}${words.slice(1)}`;
+}
+
+interface CoalescingEvidence {
+  mode: "debounce" | "throttle";
+  scope: string;
+  keyDigest: string;
+  keyLength: number;
+  windowMs: number;
+  schedule: string | null;
+  expiresAt: string | null;
+  absorbed: number;
+  rejected: number;
+}
+
+function coalescingEvidenceFor(job: DashboardJobDetail): CoalescingEvidence | null {
+  for (const event of job.events) {
+    if (!event.details || typeof event.details !== "object") continue;
+    const details = event.details as Record<string, unknown>;
+    const mode = details.debounce ? "debounce" : details.throttle ? "throttle" : null;
+    if (mode === null) continue;
+    const raw = details[mode];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const record = raw as Record<string, unknown>;
+    const scope = typeof record.scope === "string" ? record.scope : null;
+    const keyDigest = typeof record.key_digest === "string" ? record.key_digest : null;
+    const keyLength = typeof record.key_length === "number" ? record.key_length : null;
+    const windowMs = typeof record.window_ms === "number" ? record.window_ms : null;
+    if (scope === null || keyDigest === null || keyLength === null || windowMs === null) continue;
+    return {
+      mode,
+      scope,
+      keyDigest,
+      keyLength,
+      windowMs,
+      schedule: typeof record.schedule === "string" ? record.schedule : null,
+      expiresAt: typeof record.expires_at === "string" ? record.expires_at : null,
+      absorbed: job.events.filter((candidate) =>
+        mode === "debounce" ? candidate.type === "debounced" : candidate.type === "throttled",
+      ).length,
+      rejected: job.events.filter((candidate) => candidate.type === "debounce_rejected").length,
+    };
+  }
+  return null;
+}
+
+function enqueueCount(count: number, adjective: string): string {
+  return `${count} ${adjective} enqueue${count === 1 ? "" : "s"}`;
+}
+
+/** Persisted debounce or throttle evidence for the identity that survived coalescing. */
+export function CoalescingSection({ job }: { job: DashboardJobDetail }) {
+  const evidence = coalescingEvidenceFor(job);
+  if (evidence === null) return null;
+  const label = evidence.mode === "debounce" ? "Debounce" : "Throttle";
+  const counts = [enqueueCount(evidence.absorbed, "absorbed")];
+  if (evidence.rejected > 0) counts.push(enqueueCount(evidence.rejected, "rejected"));
+  return (
+    <Box>
+      <Group gap="xs" mb="xs" align="baseline">
+        <Text fw={600} size="sm">
+          Coalescing
+        </Text>
+        <Badge size="xs" variant="light" color="grape" tt="none">
+          {label}
+        </Badge>
+      </Group>
+      <Text c="dimmed" size="xs">
+        {formatDuration(evidence.windowMs)} window
+        {evidence.schedule === null ? "" : ` · ${evidence.schedule} schedule`} ·{" "}
+        {counts.join(" · ")}
+      </Text>
+      <Text c="dimmed" size="xs" mt={4}>
+        scope {evidence.scope} · key length {evidence.keyLength} · digest {evidence.keyDigest}
+      </Text>
+      {evidence.expiresAt === null ? null : (
+        <Text c="dimmed" size="xs" mt={4} title={formatExact(evidence.expiresAt)}>
+          Current window ends {formatExact(evidence.expiresAt)}.
+        </Text>
+      )}
+      <Text c="dimmed" size="xs" mt={4}>
+        The raw key is never shown; the digest identifies matching submissions without exposing it.
+      </Text>
+    </Box>
+  );
+}
 
 /**
  * How one recorded cancellation boundary reads.
@@ -1646,13 +1718,11 @@ function TimingPolicyLine({ job }: { job: DashboardJobDetail }) {
  * claims inside one attempt are called out, because a durable wait releases
  * ownership without closing the logical attempt.
  */
-function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
+export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
   // Acceptance is a boundary worth showing only when it deduplicated something. An unkeyed task
   // keeps exactly the timeline it had before this feature existed.
   const events = job.events.filter(
-    (event) =>
-      boundaryEventTypes.has(event.type) &&
-      (event.type !== "enqueued" || readIdempotencyEvidence(event) !== null),
+    (event) => event.type !== "enqueued" || readIdempotencyEvidence(event) !== null,
   );
   if (events.length === 0) return null;
   const claimsPerAttempt = new Map<number | null, number>();
@@ -1681,7 +1751,7 @@ function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
           const reason = eventDetail(event, "reason");
           const retry = retryEventDescription(event);
           const cancel = cancelEventDescription(event);
-          const parts = [
+          const knownParts = [
             name,
             worker,
             fence === null ? null : `fence ${fence}`,
@@ -1689,17 +1759,21 @@ function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
             retry?.text ?? null,
             cancel?.text ?? null,
           ].filter((part): part is string => part !== null);
+          const parts =
+            knownParts.length > 0
+              ? knownParts
+              : [eventDetailSummary(event.details)].filter((part): part is string => part !== null);
           return (
             <Group key={event.id} gap="xs" wrap="nowrap" align="flex-start">
               <Badge
                 size="xs"
                 variant="light"
-                color={boundaryEventColors[event.type] ?? "gray"}
+                color={boundaryEventPresentation[event.type]?.color ?? "gray"}
                 tt="none"
                 miw={116}
                 styles={{ root: { justifyContent: "start" } }}
               >
-                {boundaryEventLabels[event.type] ?? event.type}
+                {boundaryEventPresentation[event.type]?.label ?? genericEventLabel(event.type)}
               </Badge>
               <Text
                 c="dimmed"
@@ -4317,19 +4391,11 @@ const eventsKindOptions = [
  * `succeeded` and `failed` name both a lifecycle event and an attempt outcome, which is why this
  * reads the type alone and not the source table.
  */
-function eventTypeColor(type: string): string {
-  if (type === "succeeded") return "teal";
-  if (
-    ["failed", "lease_expired", "execution_timed_out", "deadline_exceeded", "timeout"].includes(
-      type,
-    )
-  ) {
-    return "red";
-  }
-  if (["retry", "retry_scheduled", "redriven", "redrive_created"].includes(type)) return "orange";
-  if (["canceled"].includes(type)) return "gray";
-  if (["enqueued", "promoted", "wait_elapsed"].includes(type)) return "yellow";
-  if (type === "claimed") return "blue";
+export function eventTypeColor(type: string): string {
+  const lifecycle = boundaryEventPresentation[type];
+  if (lifecycle !== undefined) return lifecycle.color;
+  if (type === "timeout") return "red";
+  if (type === "retry") return "orange";
   return "gray";
 }
 
@@ -6749,6 +6815,7 @@ function DashboardContent({
             </Box>
             <TaskOutcome job={selectedJob} />
             <IdempotencySection job={selectedJob} />
+            <CoalescingSection job={selectedJob} />
             <CancelTaskPanel
               job={selectedJob}
               confirming={confirmingCancel}

@@ -8,6 +8,7 @@ import type {
   DashboardSystemWindow,
   MaintenanceLoopCadences,
 } from "../wire.js";
+import { dashboardAttemptOutcomes, dashboardJobEventTypes } from "../wire.js";
 import { z } from "zod";
 import type {
   DashboardDurabilityProjector,
@@ -114,31 +115,7 @@ const activityInput = z.object({
 const systemInput = z.object({
   window: z.enum(["15m", "1h", "24h"]).default("1h"),
 });
-const eventTypeValues = [
-  "enqueued",
-  "claimed",
-  "succeeded",
-  "failed",
-  "retry_scheduled",
-  "canceled",
-  "promoted",
-  "lease_expired",
-  "execution_timed_out",
-  "redriven",
-  "redrive_created",
-  "wait_elapsed",
-  "signal_waiting",
-  "signal_received",
-  "signal_replayed",
-  "signal_rejected",
-  "human_wait_created",
-  "human_wait_completed",
-  "human_wait_replayed",
-  "human_wait_rejected",
-  "retry",
-  "deadline_exceeded",
-  "timeout",
-] as const;
+const eventTypeValues = [...dashboardJobEventTypes, ...dashboardAttemptOutcomes] as const;
 const checkedEventTypeValues: CompleteDashboardOptions<
   DashboardEventTypeFilter,
   typeof eventTypeValues

@@ -1,57 +1,21 @@
 import type { RetryPolicy } from "@workhorse/core";
 import type {
-  DashboardAttemptOutcome,
   DashboardCancellationRequest,
   DashboardCancelStatus,
   DashboardDemoJobKind,
   DashboardDemoScenario,
   DashboardJobRow,
-  DashboardJobEventType,
   DashboardRunNowStatus,
   CompleteDashboardOptions,
   IdempotencyEvidence,
 } from "@workhorse/dashboard-server/wire";
+import {
+  dashboardAttemptOutcomes as wireAttemptOutcomes,
+  dashboardJobEventTypes as wireJobEventTypes,
+} from "@workhorse/dashboard-server/wire";
 
-const jobEventTypes = [
-  "enqueued",
-  "claimed",
-  "succeeded",
-  "failed",
-  "retry_scheduled",
-  "canceled",
-  "promoted",
-  "lease_expired",
-  "execution_timed_out",
-  "redriven",
-  "redrive_created",
-  "wait_elapsed",
-  "signal_waiting",
-  "signal_received",
-  "signal_replayed",
-  "signal_rejected",
-  "human_wait_created",
-  "human_wait_completed",
-  "human_wait_replayed",
-  "human_wait_rejected",
-] as const;
-export const dashboardJobEventTypes: CompleteDashboardOptions<
-  DashboardJobEventType,
-  typeof jobEventTypes
-> = jobEventTypes;
-
-const attemptOutcomes = [
-  "succeeded",
-  "failed",
-  "retry",
-  "lease_expired",
-  "canceled",
-  "deadline_exceeded",
-  "timeout",
-] as const;
-export const dashboardAttemptOutcomes: CompleteDashboardOptions<
-  DashboardAttemptOutcome,
-  typeof attemptOutcomes
-> = attemptOutcomes;
+export const dashboardJobEventTypes = wireJobEventTypes;
+export const dashboardAttemptOutcomes = wireAttemptOutcomes;
 
 const demoJobKinds = [
   "success",

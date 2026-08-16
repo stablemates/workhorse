@@ -6,6 +6,9 @@ that period, while later triggers should reuse the same durable identity.
 Keyed throttle keeps the acceptance window in PostgreSQL. The first request creates the job. An
 equivalent request before the window closes returns that job with a `coalesced` outcome.
 
+The dashboard records safe throttle evidence on the surviving task. Its detail view shows the
+scope, a key digest, the window, and how many requests were absorbed without exposing the raw key.
+
 ```ts
 const result = await queue.enqueueWithResult(
   "email.digest",

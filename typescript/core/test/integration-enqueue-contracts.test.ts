@@ -1179,7 +1179,7 @@ describe("enqueue contracts", () => {
     },
   );
 
-  it("coalesces an equivalent throttled request into one accepted job", async () => {
+  it("coalesces an equivalent throttled request into one accepted job with audit evidence", async () => {
     const throttle = { key: "account-42", scope: "email-digest", windowMs: 60_000 };
 
     const accepted = await queue.enqueueWithResult("digest.send", { accountId: 42 }, { throttle });
@@ -1195,7 +1195,7 @@ describe("enqueue contracts", () => {
            (SELECT count(*)::integer FROM workhorse.job_event WHERE event_type = 'enqueued')
              AS enqueued_events`,
       ),
-    ).resolves.toMatchObject({ rows: [{ jobs: 1, events: 1, enqueued_events: 1 }] });
+    ).resolves.toMatchObject({ rows: [{ jobs: 1, events: 2, enqueued_events: 1 }] });
   });
 
   it("coalesces throttled work without another FIFO placement or notification", async () => {
@@ -1322,6 +1322,35 @@ describe("enqueue contracts", () => {
       { jobId: results[0]!.jobId, outcome: "coalesced" },
       { jobId: results[2]!.jobId, outcome: "accepted" },
     ]);
+    const throttleTimeline = await queue.getJobTimeline(results[0]!.jobId);
+    expect(throttleTimeline.items).toContainEqual(
+      expect.objectContaining({
+        kind: "event",
+        eventType: "enqueued",
+        details: expect.objectContaining({
+          throttle: expect.objectContaining({
+            scope: throttle.scope,
+            key_digest: safeKeyDigest(throttle.scope, throttle.key),
+            key_length: throttle.key.length,
+            window_ms: throttle.windowMs,
+          }),
+        }),
+      }),
+    );
+    expect(throttleTimeline.items).toContainEqual(
+      expect.objectContaining({
+        kind: "event",
+        eventType: "throttled",
+        details: expect.objectContaining({
+          throttle: expect.objectContaining({
+            scope: throttle.scope,
+            key_digest: safeKeyDigest(throttle.scope, throttle.key),
+            key_length: throttle.key.length,
+            window_ms: throttle.windowMs,
+          }),
+        }),
+      }),
+    );
 
     const client = await pool.connect();
     try {
