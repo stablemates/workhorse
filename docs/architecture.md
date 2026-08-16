@@ -967,9 +967,12 @@ type. `maxSize` is a safe integer from 1 through 100 and cannot exceed `WorkerOp
 type's process-local coordinator. A full group dispatches immediately. A partial group dispatches
 after its first member has waited `lingerMs`; this timer does not depend on `LISTEN` notifications.
 
-Every `BatchHandlerItem` retains its payload and `HandlerContext`. The coordinator sorts members by
-priority descending and coordinator arrival order. One invocation contains only the worker's configured
-queue and registered job type. The handler returns one `BatchHandlerOutcome` per member in the same order.
+Every `BatchHandlerItem` retains its payload and a `BatchHandlerContext`. This context omits
+`sleep`, `sleepUntil`, `waitForSignal`, `waitForHuman`, `runChild`, and `runChildren` because one
+member cannot suspend while the shared callback owes an outcome for every member. It retains the job,
+abort signal, checkpoint reads and writes, wait reads, and progress reads and writes. The coordinator
+sorts members by priority descending and coordinator arrival order. One invocation contains only the
+worker's configured queue and registered job type. The handler returns one `BatchHandlerOutcome` per member in the same order.
 `{ status: "succeeded", result }` submits that member's result. `{ status: "failed", error }` submits that
 member's failure through its persisted retry policy and remaining attempt budget. A thrown error, non-array
 return, wrong outcome count, or invalid outcome rejects every member. Each per-job execution path still

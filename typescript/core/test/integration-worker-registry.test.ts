@@ -1,13 +1,33 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
-import { InjectedCrashError, type MaintenancePhaseResult, Queue, Worker } from "../src/index.js";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import {
+  type BatchHandlerItem,
+  InjectedCrashError,
+  type MaintenancePhaseResult,
+  Queue,
+  Worker,
+} from "../src/index.js";
 import { Pool } from "pg";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { databaseUrl, deferred, pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("worker registry", () => {
+  it("keeps suspension APIs out of batch-handler contexts", () => {
+    type SuspensionMethod =
+      | "sleep"
+      | "sleepUntil"
+      | "waitForSignal"
+      | "waitForHuman"
+      | "runChild"
+      | "runChildren";
+
+    expectTypeOf<
+      Extract<keyof BatchHandlerItem["context"], SuspensionMethod>
+    >().toEqualTypeOf<never>();
+  });
+
   it("registers a running worker durably and deregisters it once its loop stops", async () => {
     const worker = new Worker(queue, {
       workerId: "registry-lifecycle",
