@@ -5,8 +5,10 @@ import {
   createLatestRequestGuard,
   taskDrawerBody,
   taskDrawerCloseOnEscape,
+  taskDrawerFocusChange,
   taskDrawerModelessProps,
   taskDrawerOpened,
+  taskDrawerViewportProps,
   taskDrawerSync,
 } from "./task-drawer.js";
 
@@ -21,6 +23,29 @@ describe("task detail drawer", () => {
     expect(taskDrawerModelessProps.returnFocus).toBe(false);
     // Escape stays the one keyboard way out of the panel.
     expect(taskDrawerModelessProps.closeOnEscape).toBe(true);
+  });
+
+  it("becomes a focus-trapped full-width dialog on narrow screens", () => {
+    expect(taskDrawerViewportProps(true)).toEqual({
+      withOverlay: true,
+      lockScroll: true,
+      trapFocus: true,
+      closeOnClickOutside: true,
+      returnFocus: false,
+      closeOnEscape: true,
+      size: "100%",
+    });
+    expect(taskDrawerViewportProps(false)).toMatchObject({
+      ...taskDrawerModelessProps,
+      size: "lg",
+    });
+  });
+
+  it("moves focus into every selected task and back to the latest trigger on close", () => {
+    expect(taskDrawerFocusChange(null, "job-a")).toBe("drawer");
+    expect(taskDrawerFocusChange("job-a", "job-b")).toBe("drawer");
+    expect(taskDrawerFocusChange("job-b", null)).toBe("trigger");
+    expect(taskDrawerFocusChange("job-b", "job-b")).toBe("none");
   });
 
   it("lets Escape close only the top interaction layer", () => {

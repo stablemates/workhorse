@@ -26,14 +26,13 @@ import {
   Table,
   Text,
   TextInput,
-  Textarea,
   ThemeIcon,
   Title,
   Tooltip,
   VisuallyHidden,
 } from "@mantine/core";
 import { BarChart } from "@mantine/charts";
-import { useDisclosure } from "@mantine/hooks";
+import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import {
   ArrowCounterClockwise,
   ArrowClockwise,
@@ -166,10 +165,20 @@ import {
   clearPendingCancel,
   createLatestRequestGuard,
   taskDrawerCloseOnEscape,
+  taskDrawerFocusChange,
   taskDrawerModelessProps,
   taskDrawerOpened,
+  taskDrawerViewportProps,
   taskDrawerSync,
 } from "./task-drawer.js";
+import { TaskOpenButton, taskOpenButtonId } from "./task-table-ui.js";
+import { StatusBadge } from "./status-badge.js";
+import {
+  ExternalWaitDeadline,
+  HumanDecisionControls,
+  SignalPayloadEditor,
+} from "./external-wait-controls.js";
+export { HumanDecisionControls } from "./external-wait-controls.js";
 import {
   concurrencyCappedFootnote,
   describeConcurrencyBlocked,
@@ -381,15 +390,6 @@ const taskFilters = dashboardTaskFilters.map((value) => ({
 }));
 const blockedTaskDescription =
   "Blocked tasks are held until their dependencies or child tasks reach the required outcomes. They are not waiting for an operator decision.";
-const healthyStates = new Set(["succeeded", "ready", "active", "busy"]);
-const failureStates = new Set(["failed", "discarded", "incomplete"]);
-const warningStates = new Set(["blocked", "scheduled", "retryable", "recent", "due"]);
-/**
- * Cancellation is neither success nor failure, so it gets its own neutral treatment. Colour is
- * decoration only; the badge text still says "Canceled" on its own.
- */
-const canceledStates = new Set(["canceled", "cancel_requested"]);
-
 /** Header badge color for the deployment environment label. */
 function environmentColor(environment: string): string {
   const normalized = environment.toLowerCase();
@@ -2082,6 +2082,11 @@ function DurableProgressBadge({ job }: { job: DashboardJobRow }) {
       color="violet"
       tt="none"
       title={`${job.durability.completedSteps} of ${job.durability.totalSteps} durable steps completed`}
+      role="progressbar"
+      aria-label="Durable steps completed"
+      aria-valuemin={0}
+      aria-valuemax={job.durability.totalSteps}
+      aria-valuenow={job.durability.completedSteps}
     >
       {job.durability.completedSteps}/{job.durability.totalSteps}
     </Badge>
@@ -2093,14 +2098,6 @@ function taskDisplayName(type: string, queue: string): string {
   return type.startsWith(`${queue}.`) ? type.slice(queue.length + 1) : type;
 }
 
-function statusColor(state: string): string {
-  if (healthyStates.has(state)) return "teal";
-  if (failureStates.has(state) || state === "unhealthy" || state === "offline") return "red";
-  if (canceledStates.has(state)) return "gray";
-  if (warningStates.has(state)) return "yellow";
-  return "gray";
-}
-
 const activityStatusColors: Record<string, string> = {
   blocked: "yellow.7",
   scheduled: "yellow.6",
@@ -2110,14 +2107,6 @@ const activityStatusColors: Record<string, string> = {
   failed: "red.6",
   canceled: "gray.6",
 };
-
-function StatusBadge({ state }: { state: string }) {
-  return (
-    <Badge color={statusColor(state)} variant="light" tt="capitalize" style={{ flexShrink: 0 }}>
-      {state}
-    </Badge>
-  );
-}
 
 /**
  * Pending cooperative cancellation on a live task.
@@ -2141,6 +2130,8 @@ function CancelRequestedBadge({
       leftSection={<Prohibit size={11} weight="bold" />}
       tt="none"
       title={`${described.exact} Requested ${formatExact(cancellation.requestedAt)}.`}
+      role="status"
+      aria-label={`Cancellation requested. ${described.exact}`}
       style={{ flexShrink: 0 }}
     >
       Cancellation requested
@@ -2198,7 +2189,14 @@ function TaskBlockedBy({ job }: { job: DashboardJobRow }) {
   }
   return (
     <Stack gap={2}>
-      <Badge size="xs" variant="light" color="yellow" tt="none">
+      <Badge
+        size="xs"
+        variant="light"
+        color="yellow"
+        tt="none"
+        role="status"
+        aria-label="Task blocked: prerequisite pending"
+      >
         Prerequisite pending
       </Badge>
       <Text size="xs" c="dimmed" lineClamp={1}>
@@ -2217,6 +2215,7 @@ export function TaskName({ type, queue }: { type: string; queue: string }) {
       size="sm"
       lh={1.3}
       title={displayName}
+      className="task-table__task-name"
       style={{
         width: 180,
         maxWidth: 180,
@@ -2262,6 +2261,8 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
         leftSection={<Lightning size={11} weight="bold" />}
         tt="none"
         title={`Waiting for signal ${job.signalWait.name} · deadline ${formatExact(job.signalWait.deadlineAt)}`}
+        role="status"
+        aria-label={`Waiting for signal ${job.signalWait.name}`}
         style={{ flexShrink: 0 }}
       >
         Waiting for signal: {job.signalWait.name}
@@ -2277,6 +2278,8 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
       leftSection={<Clock size={11} weight="bold" />}
       tt="none"
       title={`Durable wait ${scheduledWait.name} · not before ${formatExact(scheduledWait.wakeAt)}`}
+      role="status"
+      aria-label={`${due ? "Waking" : "Sleeping"} at durable wait ${scheduledWait.name}`}
       style={{ flexShrink: 0 }}
     >
       {due ? "Waking" : "Sleeping"}
@@ -2610,7 +2613,7 @@ function TaskListingFilters({
 }) {
   const nothingFoundMessage = taskFacets.loading ? "Loading filters…" : taskFacets.error;
   return (
-    <Group gap="xs" wrap="nowrap">
+    <Group gap="xs" wrap="wrap">
       <TextInput
         size="xs"
         value={searchInput}
@@ -2627,6 +2630,7 @@ function TaskListingFilters({
         onChange={(tags) => updateLocation({ tags })}
         onDropdownOpen={taskFacets.load}
         placeholder="Any tag"
+        aria-label="Filter tasks by tags"
         searchable
         clearable
         rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
@@ -2672,6 +2676,7 @@ function TaskListingFilters({
           onChange={(next) => updateLocation({ [key]: next })}
           onDropdownOpen={taskFacets.load}
           placeholder={placeholder}
+          aria-label={`Filter tasks by ${placeholder.toLowerCase()}`}
           searchable
           clearable
           rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
@@ -2939,14 +2944,14 @@ function TasksPage({
             taskFacets={taskFacets}
             updateLocation={updateLocation}
           />
-          <Group justify="space-between">
+          <Group justify="space-between" wrap="wrap">
             <Switch
               size="xs"
               label="Show full input"
               checked={fullArgs}
               onChange={(event) => toggleFullArgs(event.currentTarget.checked)}
             />
-            <Group gap="xs">
+            <Group gap="xs" wrap="wrap">
               {runDemoJob ? (
                 <Menu position="bottom-start" withinPortal>
                   <Menu.Target>
@@ -3052,28 +3057,45 @@ function TasksPage({
           </Group>
         </Stack>
         <Divider />
-        <ScrollArea>
+        <ScrollArea type="auto">
           <Table
             striped
             highlightOnHover
             verticalSpacing={6}
             horizontalSpacing="sm"
-            miw={fullArgs ? 1244 : 1124}
+            aria-label="Tasks matching the current filters"
+            className={`task-table${fullArgs ? " task-table--full-input" : ""}`}
           >
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>ID</Table.Th>
-                <Table.Th w={260}>Task</Table.Th>
-                <Table.Th miw={180}>Tags</Table.Th>
-                <Table.Th>Queue</Table.Th>
-                <Table.Th>Input</Table.Th>
-                <Table.Th miw={280}>Status</Table.Th>
-                <Table.Th miw={180}>Blocked by</Table.Th>
-                <Table.Th ta="right">Steps</Table.Th>
-                <Table.Th ta="right">Attempt</Table.Th>
-                <Table.Th ta="right">Duration</Table.Th>
-                <Table.Th ta="right">Updated</Table.Th>
-                <Table.Th w={44}>
+                <Table.Th className="task-table__col--id">ID</Table.Th>
+                <Table.Th className="task-table__col--task" w={260}>
+                  Task
+                </Table.Th>
+                <Table.Th className="task-table__col--tags" miw={180}>
+                  Tags
+                </Table.Th>
+                <Table.Th className="task-table__col--queue">Queue</Table.Th>
+                <Table.Th className="task-table__col--input">Input</Table.Th>
+                <Table.Th className="task-table__col--status" miw={280}>
+                  Status
+                </Table.Th>
+                <Table.Th className="task-table__col--blocked" miw={180}>
+                  Blocked by
+                </Table.Th>
+                <Table.Th className="task-table__col--steps" ta="right">
+                  Steps
+                </Table.Th>
+                <Table.Th className="task-table__col--attempt" ta="right">
+                  Attempt
+                </Table.Th>
+                <Table.Th className="task-table__col--duration" ta="right">
+                  Duration
+                </Table.Th>
+                <Table.Th className="task-table__col--updated" ta="right">
+                  Updated
+                </Table.Th>
+                <Table.Th className="task-table__col--actions" w={44}>
                   <VisuallyHidden>Actions</VisuallyHidden>
                 </Table.Th>
               </Table.Tr>
@@ -3096,7 +3118,7 @@ function TasksPage({
                     onClick={() => inspectJob(job.id)}
                     style={{ cursor: "pointer" }}
                   >
-                    <Table.Td>
+                    <Table.Td className="task-table__col--id">
                       <Code
                         fz="xs"
                         title={job.id}
@@ -3109,59 +3131,65 @@ function TasksPage({
                         {job.id.slice(0, 8)}
                       </Code>
                     </Table.Td>
-                    <Table.Td w={260}>
-                      <Group gap={4} wrap="nowrap" style={{ minWidth: 0 }}>
-                        <TaskName type={job.type} queue={job.queue} />
-                        {job.keyed ? (
-                          <Badge
-                            size="xs"
-                            variant="light"
-                            color="violet"
-                            tt="none"
-                            title="Workhorse accepted this task with an idempotency key. If the same request repeats during retention, Workhorse returns this task again."
-                          >
-                            Keyed
-                          </Badge>
-                        ) : null}
-                        {job.priority > 0 ? (
-                          <Badge
-                            size="xs"
-                            variant="light"
-                            color="orange"
-                            tt="none"
-                            title={`Priority ${job.priority}; higher-priority ready tasks are claimed first.`}
-                          >
-                            P{job.priority}
-                          </Badge>
-                        ) : null}
-                      </Group>
+                    <Table.Td className="task-table__col--task" w={260}>
+                      <TaskOpenButton
+                        jobId={job.id}
+                        taskType={job.type}
+                        onOpen={() => inspectJob(job.id)}
+                      >
+                        <Group gap={4} wrap="nowrap" style={{ minWidth: 0 }}>
+                          <TaskName type={job.type} queue={job.queue} />
+                          {job.keyed ? (
+                            <Badge
+                              size="xs"
+                              variant="light"
+                              color="violet"
+                              tt="none"
+                              title="Workhorse accepted this task with an idempotency key. If the same request repeats during retention, Workhorse returns this task again."
+                            >
+                              Keyed
+                            </Badge>
+                          ) : null}
+                          {job.priority > 0 ? (
+                            <Badge
+                              size="xs"
+                              variant="light"
+                              color="orange"
+                              tt="none"
+                              title={`Priority ${job.priority}; higher-priority ready tasks are claimed first.`}
+                            >
+                              P{job.priority}
+                            </Badge>
+                          ) : null}
+                        </Group>
+                      </TaskOpenButton>
                     </Table.Td>
-                    <Table.Td>
+                    <Table.Td className="task-table__col--tags">
                       <TaskTags tags={job.tags} />
                     </Table.Td>
-                    <Table.Td>
+                    <Table.Td className="task-table__col--queue">
                       <Text size="sm" c="dimmed">
                         {job.queue}
                       </Text>
                     </Table.Td>
-                    <Table.Td>
+                    <Table.Td className="task-table__col--input">
                       <CollapsedArgs payload={job.payload} expanded={fullArgs} />
                     </Table.Td>
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
+                    <Table.Td className="task-table__col--status">
+                      <Group className="task-table__status" gap="xs" wrap="nowrap">
                         <StatusBadge state={job.state} />
                         <CancelRequestedBadge cancellation={job.cancellation} />
                         <TaskWaitBadge job={job} />
                         <TaskStatusDetail job={job} />
                       </Group>
                     </Table.Td>
-                    <Table.Td>
+                    <Table.Td className="task-table__col--blocked">
                       <TaskBlockedBy job={job} />
                     </Table.Td>
-                    <Table.Td ta="right">
+                    <Table.Td className="task-table__col--steps" ta="right">
                       <DurableProgressBadge job={job} />
                     </Table.Td>
-                    <Table.Td ta="right">
+                    <Table.Td className="task-table__col--attempt" ta="right">
                       <Text
                         size="sm"
                         c={job.attempt > 1 ? "yellow.8" : undefined}
@@ -3170,17 +3198,17 @@ function TasksPage({
                         {job.attempt}/{job.maxAttempts}
                       </Text>
                     </Table.Td>
-                    <Table.Td ta="right">
+                    <Table.Td className="task-table__col--duration" ta="right">
                       <Text size="sm" c="dimmed">
                         {taskDuration(job) ?? "—"}
                       </Text>
                     </Table.Td>
-                    <Table.Td ta="right">
+                    <Table.Td className="task-table__col--updated" ta="right">
                       <Text size="sm" title={formatExact(job.updatedAt)} c="dimmed">
                         {formatRelative(job.updatedAt)}
                       </Text>
                     </Table.Td>
-                    <Table.Td>
+                    <Table.Td className="task-table__col--actions">
                       <TaskRowActions
                         job={job}
                         onAction={runRowAction}
@@ -5826,44 +5854,6 @@ async function deliverDashboardSignal({
   }
 }
 
-function SignalPayloadEditor({
-  payload,
-  disabled,
-  sending,
-  onPayloadChange,
-  onSend,
-}: {
-  payload: string;
-  disabled: boolean;
-  sending: boolean;
-  onPayloadChange: (value: string) => void;
-  onSend: () => void;
-}) {
-  return (
-    <Stack gap="xs">
-      <Textarea
-        label="Signal payload (JSON)"
-        description="The waiting handler receives this JSON value after it restarts."
-        placeholder='{"approved":true}'
-        value={payload}
-        disabled={disabled}
-        autosize
-        minRows={3}
-        maxRows={12}
-        onChange={(event) => onPayloadChange(event.currentTarget.value)}
-      />
-      <Button
-        loading={sending}
-        disabled={disabled || !payload.trim()}
-        onClick={onSend}
-        style={{ alignSelf: "flex-start" }}
-      >
-        Send signal
-      </Button>
-    </Stack>
-  );
-}
-
 export function SignalWaitCard({
   wait,
   payload,
@@ -5882,7 +5872,12 @@ export function SignalWaitCard({
   inspectJob?: (id: string) => void;
 }) {
   return (
-    <Paper withBorder p="lg">
+    <Paper
+      component="section"
+      aria-label={`Signal ${wait.name} for task ${wait.jobId}`}
+      withBorder
+      p="lg"
+    >
       <Stack gap="sm">
         <Group justify="space-between" align="flex-start">
           <Box>
@@ -5892,7 +5887,12 @@ export function SignalWaitCard({
             </Text>
             <Code fz="xs">{wait.jobId}</Code>
             {inspectJob ? (
-              <Button variant="subtle" size="compact-xs" onClick={() => inspectJob(wait.jobId)}>
+              <Button
+                variant="subtle"
+                size="compact-xs"
+                aria-label={`View task ${wait.jobId}`}
+                onClick={() => inspectJob(wait.jobId)}
+              >
                 View task
               </Button>
             ) : null}
@@ -5901,10 +5901,12 @@ export function SignalWaitCard({
             {formatExact(wait.createdAt)}
           </Text>
         </Group>
-        <Text c={new Date(wait.deadlineAt).getTime() <= Date.now() ? "red" : "dimmed"} size="xs">
-          Deadline {formatExact(wait.deadlineAt)}
-        </Text>
+        <ExternalWaitDeadline
+          deadline={formatExact(wait.deadlineAt)}
+          overdue={new Date(wait.deadlineAt).getTime() <= Date.now()}
+        />
         <SignalPayloadEditor
+          ariaLabel={`Signal input for ${wait.name}`}
           payload={payload}
           disabled={!canSignal}
           sending={sending}
@@ -5958,10 +5960,14 @@ function SignalTaskPanel({
       <Text size="sm" mb={4}>
         Waiting for <Code fz="xs">{wait.name}</Code>
       </Text>
-      <Text c="dimmed" size="xs" mb="sm">
-        Deadline {formatExact(wait.deadlineAt)}
-      </Text>
+      <Box mb="sm">
+        <ExternalWaitDeadline
+          deadline={formatExact(wait.deadlineAt)}
+          overdue={new Date(wait.deadlineAt).getTime() <= Date.now()}
+        />
+      </Box>
       <SignalPayloadEditor
+        ariaLabel={`Signal input for ${wait.name}`}
         payload={payload}
         disabled={!job.canSignal}
         sending={sending}
@@ -5969,91 +5975,6 @@ function SignalTaskPanel({
         onSend={() => void send()}
       />
     </Box>
-  );
-}
-
-export function HumanDecisionControls({
-  result,
-  quickAction,
-  canComplete,
-  confirming,
-  completing,
-  onQuickAction,
-  onResultChange,
-  onReview,
-  onComplete,
-  onKeepEditing,
-}: {
-  result: string;
-  quickAction: { label: string } | null;
-  canComplete: boolean;
-  confirming: boolean;
-  completing: boolean;
-  onQuickAction: () => void;
-  onResultChange: (value: string) => void;
-  onReview: () => void;
-  onComplete: () => void;
-  onKeepEditing: () => void;
-}) {
-  return (
-    <Stack gap="sm">
-      {quickAction ? (
-        <Group gap="xs">
-          <Button disabled={!canComplete} onClick={onQuickAction}>
-            {quickAction.label}
-          </Button>
-          <Text c="dimmed" size="xs">
-            Resume this task with the application-defined decision.
-          </Text>
-        </Group>
-      ) : null}
-      {confirming ? (
-        <Alert color="orange" title="Confirm this irreversible result">
-          <Text size="sm" mb="sm">
-            The first accepted result resumes the handler. Check the result before completing this
-            wait because it cannot be replaced.
-          </Text>
-          <Code block mb="sm">
-            {result}
-          </Code>
-          <Group gap="xs">
-            <Button color="orange" loading={completing} onClick={onComplete}>
-              Confirm decision
-            </Button>
-            <Button variant="default" disabled={completing} onClick={onKeepEditing}>
-              Keep editing
-            </Button>
-          </Group>
-        </Alert>
-      ) : null}
-      <Accordion variant="contained">
-        <Accordion.Item value="custom-result">
-          <Accordion.Control>Provide a custom JSON result</Accordion.Control>
-          <Accordion.Panel>
-            <Stack gap="xs">
-              <Textarea
-                label="Result (JSON)"
-                description="Use the result shape requested in the decision context. Workhorse validates JSON size, not domain fields."
-                placeholder='{"approved":true}'
-                value={result}
-                disabled={!canComplete}
-                autosize
-                minRows={3}
-                maxRows={12}
-                onChange={(event) => onResultChange(event.currentTarget.value)}
-              />
-              <Button
-                disabled={!canComplete || !result.trim()}
-                onClick={onReview}
-                style={{ alignSelf: "flex-start" }}
-              >
-                Review result
-              </Button>
-            </Stack>
-          </Accordion.Panel>
-        </Accordion.Item>
-      </Accordion>
-    </Stack>
   );
 }
 
@@ -6194,7 +6115,7 @@ function HumanWaitsPage({
         </Text>
       </Box>
       {data.waits.length > 0 || data.signalWaits.length > 0 ? (
-        <Group align="flex-end">
+        <Group align="flex-end" wrap="wrap">
           <TextInput
             label="Search waiting tasks"
             placeholder="Name, task, type, or queue"
@@ -6262,7 +6183,13 @@ function HumanWaitsPage({
           const key = `${wait.jobId}:${wait.name}`;
           const quickAction = humanWaitQuickAction(wait.context);
           return (
-            <Paper withBorder p="lg" key={key}>
+            <Paper
+              component="section"
+              aria-label={`Human decision ${wait.name} for task ${wait.jobId}`}
+              withBorder
+              p="lg"
+              key={key}
+            >
               <Stack gap="sm">
                 <Group justify="space-between" align="flex-start">
                   <Box>
@@ -6274,6 +6201,7 @@ function HumanWaitsPage({
                     <Button
                       variant="subtle"
                       size="compact-xs"
+                      aria-label={`View task ${wait.jobId}`}
                       onClick={() => inspectJob(wait.jobId)}
                     >
                       View task
@@ -6283,9 +6211,10 @@ function HumanWaitsPage({
                     {formatExact(wait.createdAt)}
                   </Text>
                 </Group>
-                <Text c={isHumanWaitOverdue(wait, Date.now()) ? "red" : "dimmed"} size="xs">
-                  Deadline {formatExact(wait.deadlineAt)}
-                </Text>
+                <ExternalWaitDeadline
+                  deadline={formatExact(wait.deadlineAt)}
+                  overdue={isHumanWaitOverdue(wait, Date.now())}
+                />
                 <Box>
                   <Text c="dimmed" fw={600} size="xs" mb={4}>
                     Decision context
@@ -6293,6 +6222,7 @@ function HumanWaitsPage({
                   <Code block>{JSON.stringify(wait.context, null, 2)}</Code>
                 </Box>
                 <HumanDecisionControls
+                  ariaLabel={`Decision for ${wait.name}`}
                   result={results[key] ?? ""}
                   quickAction={quickAction ? { label: quickAction.label } : null}
                   canComplete={data.canComplete}
@@ -7266,7 +7196,10 @@ function DashboardContent({
 }) {
   const controller = useDashboardController(auditActor, demoTools, basePath);
   const dropdownOpened = useDropdownActivity();
+  const narrowDetailDrawer = useMediaQuery("(max-width: 47.99em)");
   const refreshBlockingInputCapture = useRefreshBlockingInputCapture();
+  const previousTaskDrawerId = useRef<string | null>(null);
+  const taskDrawerReturnTarget = useRef<HTMLElement | null>(null);
   const {
     navbarOpened,
     toggleNavbar,
@@ -7304,10 +7237,38 @@ function DashboardContent({
     cancelTask,
   } = controller;
   const refreshProgressDuration = dashboardRefreshIntervalMs(refreshInterval);
-  const detailDrawerProps = {
+  const taskDetailDrawerProps = {
+    ...taskDrawerViewportProps(narrowDetailDrawer),
+    closeOnEscape: taskDrawerCloseOnEscape(dropdownOpened),
+  };
+  const eventDetailDrawerProps = {
     ...taskDrawerModelessProps,
     closeOnEscape: taskDrawerCloseOnEscape(dropdownOpened),
   };
+  useLayoutEffect(() => {
+    const focusChange = taskDrawerFocusChange(previousTaskDrawerId.current, selectedJobId);
+    previousTaskDrawerId.current = selectedJobId;
+    if (focusChange === "none") return;
+    if (focusChange === "trigger") {
+      taskDrawerReturnTarget.current?.focus();
+      return;
+    }
+    if (selectedJobId === null) return;
+
+    const trigger = document.getElementById(taskOpenButtonId(selectedJobId));
+    const drawer = document.getElementById("task-detail-drawer");
+    const activeElement = document.activeElement;
+    if (trigger instanceof HTMLElement) {
+      taskDrawerReturnTarget.current = trigger;
+    } else if (
+      activeElement instanceof HTMLElement &&
+      activeElement !== document.body &&
+      !drawer?.contains(activeElement)
+    ) {
+      taskDrawerReturnTarget.current = activeElement;
+    }
+    document.getElementById("task-detail-drawer-close")?.focus();
+  }, [selectedJobId]);
   const lineageTaskHref = useCallback(
     (id: string) => mountedHref(basePath, taskHref({ ...location, taskId: id })),
     [basePath, location],
@@ -7451,6 +7412,14 @@ function DashboardContent({
                 )
               }
               visibleFrom="xs"
+              role="status"
+              aria-label={
+                loadState.status === "error"
+                  ? "Dashboard disconnected"
+                  : connected
+                    ? "Dashboard connected"
+                    : "Dashboard connecting"
+              }
             >
               {loadState.status === "error"
                 ? "Disconnected"
@@ -7565,6 +7534,7 @@ function DashboardContent({
         <Box w="100%">{content}</Box>
       </AppShell.Main>
       <Drawer
+        id="task-detail-drawer"
         opened={taskDrawerOpened(selectedJobId)}
         onClose={closeJobDetail}
         title={
@@ -7573,10 +7543,13 @@ function DashboardContent({
           </Text>
         }
         position="right"
-        size="lg"
+        closeButtonProps={{
+          id: "task-detail-drawer-close",
+          "aria-label": "Close task details",
+        }}
         // The panel sits beside the task list instead of over it, so a row behind it stays
         // clickable and picking another task swaps the contents in place.
-        {...detailDrawerProps}
+        {...taskDetailDrawerProps}
         classNames={{ content: "task-drawer__content" }}
       >
         {jobDetailError ? (
@@ -7685,6 +7658,7 @@ function DashboardContent({
         )}
       </Drawer>
       <Drawer
+        id="event-detail-drawer"
         opened={selectedEventId !== null}
         onClose={closeEventDetail}
         title={
@@ -7693,8 +7667,8 @@ function DashboardContent({
           </Text>
         }
         position="right"
-        size="lg"
-        {...detailDrawerProps}
+        closeButtonProps={{ "aria-label": "Close event details" }}
+        {...eventDetailDrawerProps}
         classNames={{ content: "task-drawer__content" }}
       >
         {eventDetailError ? (

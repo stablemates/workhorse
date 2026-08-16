@@ -96,6 +96,99 @@ body {
   user-select: text;
 }
 
+/*
+ * The task name is the keyboard entry point for the pointer-clickable row. The visible focus ring
+ * stays inside the cell, so opening and closing the detail panel does not lose table position.
+ */
+.task-table__open {
+  border-radius: var(--mantine-radius-sm);
+  display: block;
+  max-width: 100%;
+  text-align: left;
+}
+
+.task-table__open:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 3px;
+}
+
+.task-table {
+  min-width: 1124px;
+}
+
+.task-table.task-table--full-input {
+  min-width: 1244px;
+}
+
+@media (max-width: 75em) {
+  .task-table__col--tags,
+  .task-table__col--steps {
+    display: none;
+  }
+
+  .task-table,
+  .task-table.task-table--full-input {
+    min-width: 920px;
+  }
+}
+
+@media (max-width: 62em) {
+  .task-table__col--input,
+  .task-table__col--blocked,
+  .task-table__col--duration {
+    display: none;
+  }
+
+  .task-table,
+  .task-table.task-table--full-input {
+    min-width: 680px;
+  }
+}
+
+@media (max-width: 48em) {
+  .task-drawer__content .mantine-Drawer-body,
+  .task-drawer__content .mantine-Drawer-header {
+    padding-inline: var(--mantine-spacing-md);
+  }
+
+  .task-table__col--id,
+  .task-table__col--queue,
+  .task-table__col--attempt,
+  .task-table__col--updated {
+    display: none;
+  }
+
+  .task-table,
+  .task-table.task-table--full-input {
+    min-width: 0;
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .task-table__col--task {
+    width: 42% !important;
+  }
+
+  .task-table__col--status {
+    min-width: 0 !important;
+    width: auto;
+  }
+
+  .task-table__col--actions {
+    width: 44px;
+  }
+
+  .task-table__task-name {
+    max-width: 100% !important;
+    width: auto !important;
+  }
+
+  .task-table__status {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
   filter: none;
 }
