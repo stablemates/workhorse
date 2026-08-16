@@ -381,7 +381,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
             "Recurring chain prerequisite",
             { role: "prerequisite" },
           ),
-          { maxAttempts: 1, tags: ["showcase", "dependency", "recurring", "prerequisite"] },
+          { maxAttempts: 1, tags: ["dependency", "recurring", "prerequisite"] },
         );
         const dependentJobId = await queue.enqueue(
           dependencyFamily.jobType,
@@ -400,7 +400,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
               onFailure: "fail",
               onCancellation: "cancel",
             },
-            tags: ["showcase", "dependency", "recurring", "dependent"],
+            tags: ["dependency", "recurring", "dependent"],
           },
         );
         return { scenario: payload.scenario, prerequisiteJobId, dependentJobId };
@@ -428,7 +428,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
         options: {
           maxAttempts: failUntilAttempt + 1,
           ...(failUntilAttempt > 0 ? { retryPolicy: { type: "fixed", delayMs: 250 } } : {}),
-          tags: ["showcase", "child-job", "child", payload.scenario],
+          tags: ["child-job", "child", payload.scenario],
         },
       });
       if (payload.behavior === "single-child" || payload.behavior === "child-retry") {
@@ -487,7 +487,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
               runAt: new Date(Date.now() + DEMO_SIGNAL_SENDER_DELAY_MS),
               maxAttempts: 5,
               retryPolicy: { type: "fixed", delayMs: 2_000 },
-              tags: ["showcase", "signal", "sender", payload.scenario],
+              tags: ["signal", "sender", payload.scenario],
             },
           ),
         );
@@ -561,7 +561,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
               "success",
               `Debounced refresh pass ${pass}`,
             ),
-            { debounce, maxAttempts: 1, tags: ["showcase", "debounce", "recurring"] },
+            { debounce, maxAttempts: 1, tags: ["debounce", "recurring"] },
           );
         const first = await enqueuePass(1);
         const replacement = await enqueuePass(2);
@@ -594,7 +594,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
             "success",
             "Throttled sync request",
           ),
-          options: { throttle, maxAttempts: 1, tags: ["showcase", "throttle", "recurring"] },
+          options: { throttle, maxAttempts: 1, tags: ["throttle", "recurring"] },
         };
         const outcomes = await queue.enqueueManyWithResults([request, request, request]);
         return {
@@ -627,7 +627,7 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
             options: {
               priority: lane.priority,
               maxAttempts: 1,
-              tags: ["showcase", "priority", "recurring", `priority-${lane.priority}`],
+              tags: ["priority", "recurring"],
             },
           })),
         );

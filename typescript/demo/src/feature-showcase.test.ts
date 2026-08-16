@@ -41,6 +41,20 @@ describe("demo feature showcase catalog", () => {
     }
   });
 
+  it("omits redundant showcase and numeric priority tags", () => {
+    const examples = [
+      ...DEMO_FEATURE_SHOWCASE_FAMILIES.flatMap((family) => family.examples),
+      ...Object.values(DEMO_FEATURE_MENU_EXAMPLES),
+    ];
+
+    for (const example of examples) {
+      expect(example.tags).not.toContain("showcase");
+      expect(example.tags).not.toEqual(
+        expect.arrayContaining([expect.stringMatching(/^priority-\d+$/)]),
+      );
+    }
+  });
+
   it("keeps one occurrence stable while distributing later identities across all variants", () => {
     const identity = "00000000-0000-4000-8000-000000000001";
     expect(demoFeatureRecurringVariant(identity)).toBe(demoFeatureRecurringVariant(identity));
