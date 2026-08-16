@@ -396,6 +396,9 @@ export const HEALTH_SNAPSHOT_SQL = `
              AS dependency_pending_edges,
            LEAST(failed_resolutions, ${DEPENDENCY_OPERATIONS_SCAN_LIMIT})::text
              AS dependency_failed_resolutions,
+           (SELECT terminal_prune_dependency_starved
+              FROM workhorse.maintenance_state
+             WHERE task_name = 'terminal_storage') AS dependency_retention_prune_starved,
            blocked_jobs > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
              OR pending_edges > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}
              OR failed_resolutions > ${DEPENDENCY_OPERATIONS_SCAN_LIMIT}

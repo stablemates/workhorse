@@ -226,6 +226,7 @@ type HealthSnapshotRow = RetentionPolicyRow & {
   dependency_blocked_jobs: string;
   dependency_pending_edges: string;
   dependency_failed_resolutions: string;
+  dependency_retention_prune_starved: boolean;
   dependency_counts_capped: boolean;
   child_waiting_parents: string;
   child_pending_children: string;
@@ -1119,6 +1120,7 @@ export class OperatorReadsModule extends QueueModule {
         blockedJobs: Number(row.dependency_blocked_jobs),
         pendingEdges: Number(row.dependency_pending_edges),
         failedResolutions: Number(row.dependency_failed_resolutions),
+        retentionPruneStarved: row.dependency_retention_prune_starved,
         capped: row.dependency_counts_capped,
       },
       children: {

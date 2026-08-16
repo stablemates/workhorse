@@ -119,6 +119,13 @@ describe("health snapshots", () => {
         error: null,
       },
       {
+        phase: "released_dependencies",
+        rowsAffected: 0,
+        durationMs: expect.any(Number),
+        skippedLock: false,
+        error: null,
+      },
+      {
         phase: "terminal_jobs",
         rowsAffected: 0,
         durationMs: expect.any(Number),
@@ -191,6 +198,13 @@ describe("health snapshots", () => {
       expect(await queue.pruneTerminalStorage({ force: true })).toEqual([
         {
           phase: "enqueue_idempotency",
+          rowsAffected: 0,
+          durationMs: 0,
+          skippedLock: true,
+          error: null,
+        },
+        {
+          phase: "released_dependencies",
           rowsAffected: 0,
           durationMs: 0,
           skippedLock: true,

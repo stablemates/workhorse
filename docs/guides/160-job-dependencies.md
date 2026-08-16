@@ -93,13 +93,13 @@ The dashboard task detail shows prerequisites and dependents with the policy and
 evidence. This lets an operator explain why work remains blocked or why PostgreSQL released,
 canceled, or failed it.
 
-`Queue.health()` reports blocked jobs, pending edges, and retained failures selected by dependency
-policy. OpenTelemetry exports the same pressure by queue without job ids, prerequisite ids, or
-other unbounded labels.
+`Queue.health()` reports blocked jobs, pending edges, retained failures, and whether dependency
+edges stopped the latest retention pass from deleting jobs. OpenTelemetry exports queue pressure
+without job ids, prerequisite ids, or other unbounded labels.
 
-Retention keeps a prerequisite identity while a dependent edge still needs it. Once the dependent
-identity expires, PostgreSQL can remove the edge and later remove the prerequisite, so lineage
-never outlives the identities it explains.
+Retention keeps a prerequisite identity while a dependent edge still controls dispatch. Once that
+edge resolves and the dependent finishes, maintenance removes the edge before pruning eligible job
+identities. The dependency lineage can therefore disappear while either terminal job remains.
 
 ## Next
 

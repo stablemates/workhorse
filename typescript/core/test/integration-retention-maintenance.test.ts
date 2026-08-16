@@ -197,9 +197,9 @@ describe("retention maintenance", () => {
     );
     expect(await queue.prepareHistoryPartitions({ force: true, now })).toHaveLength(1);
 
-    expect(await queue.pruneTerminalStorage({ now })).toHaveLength(2);
+    expect(await queue.pruneTerminalStorage({ now })).toHaveLength(3);
     expect(await queue.pruneTerminalStorage({ now: new Date(now.getTime() + 1_000) })).toEqual([]);
-    expect(await queue.pruneTerminalStorage({ force: true, now })).toHaveLength(2);
+    expect(await queue.pruneTerminalStorage({ force: true, now })).toHaveLength(3);
   });
 
   it("isolates housekeeping phases when partition replenishment fails", async () => {
@@ -854,7 +854,11 @@ describe("retention maintenance", () => {
     });
     expect(await queue.retainHistory({ force: true })).toHaveLength(3);
 
-    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
+    expect(
+      (await queue.pruneTerminalStorage({ force: true })).find(
+        ({ phase }) => phase === "terminal_jobs",
+      ),
+    ).toMatchObject({
       phase: "terminal_jobs",
       rowsAffected: 1,
       error: null,
@@ -869,7 +873,11 @@ describe("retention maintenance", () => {
       ).rows[0]?.count,
     ).toBe(0);
     expect(await queue.getJob(secondDeletable)).not.toBeNull();
-    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
+    expect(
+      (await queue.pruneTerminalStorage({ force: true })).find(
+        ({ phase }) => phase === "terminal_jobs",
+      ),
+    ).toMatchObject({
       phase: "terminal_jobs",
       rowsAffected: 1,
       error: null,
@@ -927,7 +935,12 @@ describe("retention maintenance", () => {
       rowsAffected: 1,
       error: null,
     });
-    expect(phases[1]).toMatchObject({ phase: "terminal_jobs", rowsAffected: 1, error: null });
+    expect(phases[1]).toMatchObject({
+      phase: "released_dependencies",
+      rowsAffected: 0,
+      error: null,
+    });
+    expect(phases[2]).toMatchObject({ phase: "terminal_jobs", rowsAffected: 1, error: null });
     expect(await queue.getJob(expired)).toBeNull();
     expect(await queue.getJob(retained)).not.toBeNull();
     expect(
@@ -976,7 +989,11 @@ describe("retention maintenance", () => {
       scheduleOccurrenceRetentionDays: 30,
     });
 
-    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
+    expect(
+      (await queue.pruneTerminalStorage({ force: true })).find(
+        ({ phase }) => phase === "terminal_jobs",
+      ),
+    ).toMatchObject({
       phase: "terminal_jobs",
       rowsAffected: 0,
     });
@@ -996,7 +1013,11 @@ describe("retention maintenance", () => {
         WHERE job_id = $1`,
       [id],
     );
-    expect((await queue.pruneTerminalStorage({ force: true }))[1]).toMatchObject({
+    expect(
+      (await queue.pruneTerminalStorage({ force: true })).find(
+        ({ phase }) => phase === "terminal_jobs",
+      ),
+    ).toMatchObject({
       phase: "terminal_jobs",
       rowsAffected: 1,
     });

@@ -765,13 +765,15 @@ describe("worker registry", () => {
       "background_tasks:attempt_retention",
       "background_tasks:schedule_occurrences",
       "background_tasks:enqueue_idempotency",
+      "background_tasks:released_dependencies",
       "background_tasks:terminal_jobs",
     ]);
     expect(worker.maintenanceTelemetry()).toEqual(telemetry);
 
+    const firstPassLength = telemetry.length;
     await sleep(110);
     expect(await worker.runOnce()).toBe(false);
-    expect(telemetry.slice(10).map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
+    expect(telemetry.slice(firstPassLength).map(({ loop, phase }) => `${loop}:${phase}`)).toEqual([
       "tick:promote",
       "tick:recover",
     ]);
@@ -817,6 +819,13 @@ describe("worker registry", () => {
     const terminalResults: MaintenancePhaseResult[] = [
       {
         phase: "enqueue_idempotency",
+        rowsAffected: 0,
+        durationMs: 0,
+        skippedLock: false,
+        error: null,
+      },
+      {
+        phase: "released_dependencies",
         rowsAffected: 0,
         durationMs: 0,
         skippedLock: false,

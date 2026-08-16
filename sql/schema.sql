@@ -388,8 +388,9 @@ CREATE TABLE IF NOT EXISTS workhorse.job (
 CREATE INDEX IF NOT EXISTS job_tags_gin_idx ON workhorse.job USING gin (tags);
 CREATE INDEX IF NOT EXISTS job_created_retention_idx ON workhorse.job (created_at, id);
 
--- Bounded immutable prerequisite edges. Prerequisite references deliberately restrict identity
--- pruning so retention cannot strand blocked work or erase released lineage.
+-- Bounded prerequisite edges. Prerequisite references deliberately restrict identity pruning so
+-- retention cannot strand blocked work. Terminal-storage maintenance removes released edges after
+-- the dependent is terminal, when dispatch no longer needs the edge and retained lineage may age.
 CREATE TABLE IF NOT EXISTS workhorse.job_dependency (
   dependent_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
   prerequisite_job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE RESTRICT,
@@ -414,6 +415,9 @@ CREATE INDEX IF NOT EXISTS job_dependency_prerequisite_idx
 CREATE INDEX IF NOT EXISTS job_dependency_dependent_pending_idx
   ON workhorse.job_dependency (dependent_job_id, prerequisite_job_id)
   WHERE released_at IS NULL;
+CREATE INDEX IF NOT EXISTS job_dependency_released_retention_idx
+  ON workhorse.job_dependency (released_at, dependent_job_id, prerequisite_job_id)
+  WHERE released_at IS NOT NULL;
 
 -- Immutable named child edges support bounded fan-out. The parent owns edge lifetime. Retention
 -- only removes it after every child is terminal and outside the configured evidence windows.
@@ -1126,11 +1130,13 @@ CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
   last_completed_at timestamptz,
   last_completed_local_date date,
   history_retained_before timestamptz,
+  terminal_prune_dependency_starved boolean NOT NULL DEFAULT false,
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK (
     (task_name = 'history_retention')
     OR (last_completed_local_date IS NULL AND history_retained_before IS NULL)
-  )
+  ),
+  CHECK (task_name = 'terminal_storage' OR NOT terminal_prune_dependency_starved)
 );
 INSERT INTO workhorse.maintenance_state(
   task_name, history_retained_before
@@ -6848,8 +6854,54 @@ BEGIN
            )
      ORDER BY candidate.finished_at, candidate.id
      LIMIT p_limit
+  ), deleted AS (
+    DELETE FROM workhorse.job job USING candidates WHERE job.id = candidates.id
+    RETURNING job.id
+  ), result AS (
+    SELECT count(*)::integer AS pruned,
+           count(*) = 0 AND EXISTS (
+             SELECT 1
+               FROM candidate_window candidate
+               JOIN workhorse.job_dependency dependency
+                 ON dependency.prerequisite_job_id = candidate.id
+           ) AS dependency_starved
+      FROM deleted
+  ), recorded AS (
+    UPDATE workhorse.maintenance_state state
+       SET terminal_prune_dependency_starved = result.dependency_starved,
+           updated_at = clock_timestamp()
+      FROM result
+     WHERE state.task_name = 'terminal_storage'
+    RETURNING result.pruned
   )
-  DELETE FROM workhorse.job job USING candidates WHERE job.id = candidates.id;
+  SELECT pruned INTO STRICT v_count FROM recorded;
+  RETURN v_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.prune_released_dependencies_v1(p_limit integer)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE v_count integer;
+BEGIN
+  IF p_limit NOT BETWEEN 1 AND 100000 THEN
+    RAISE EXCEPTION 'released dependency limit must be between 1 and 100000';
+  END IF;
+  WITH candidates AS MATERIALIZED (
+    SELECT dependency.dependent_job_id, dependency.prerequisite_job_id
+      FROM workhorse.job_dependency dependency
+      JOIN workhorse.job_outcome outcome ON outcome.job_id = dependency.dependent_job_id
+     WHERE dependency.released_at IS NOT NULL
+     ORDER BY dependency.released_at,
+              dependency.dependent_job_id,
+              dependency.prerequisite_job_id
+       FOR UPDATE OF dependency SKIP LOCKED
+     LIMIT p_limit
+  )
+  DELETE FROM workhorse.job_dependency dependency USING candidates
+   WHERE dependency.dependent_job_id = candidates.dependent_job_id
+     AND dependency.prerequisite_job_id = candidates.prerequisite_job_id;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
@@ -7479,6 +7531,8 @@ DECLARE v_maintenance workhorse.maintenance_policy%ROWTYPE;
 DECLARE v_state workhorse.maintenance_state%ROWTYPE;
 DECLARE v_history_before timestamptz;
 DECLARE v_success boolean := true;
+DECLARE v_identity_before timestamptz;
+DECLARE v_outcome_before timestamptz;
 BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
   IF NOT pg_try_advisory_xact_lock(
@@ -7486,6 +7540,7 @@ BEGIN
   ) THEN
     RETURN QUERY VALUES
       ('enqueue_idempotency'::text, 0, 0, true, NULL::jsonb),
+      ('released_dependencies'::text, 0, 0, true, NULL::jsonb),
       ('terminal_jobs'::text, 0, 0, true, NULL::jsonb);
     RETURN;
   END IF;
@@ -7522,18 +7577,42 @@ BEGIN
   );
   RETURN NEXT;
 
+  phase := 'released_dependencies';
+  rows_affected := 0;
+  error := NULL;
+  v_started_at := clock_timestamp();
+  BEGIN
+    rows_affected := workhorse.prune_released_dependencies_v1(
+      v_policy.terminal_job_prune_limit
+    );
+  EXCEPTION WHEN OTHERS THEN
+    error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
+    v_success := false;
+  END;
+  duration_ms := GREATEST(
+    0, round(extract(epoch FROM clock_timestamp() - v_started_at) * 1000)::integer
+  );
+  RETURN NEXT;
+
   phase := 'terminal_jobs';
   rows_affected := 0;
   error := NULL;
   v_started_at := clock_timestamp();
   BEGIN
     IF v_policy.job_identity_retention_days IS NOT NULL AND v_history_before IS NOT NULL THEN
+      v_identity_before := p_now - make_interval(days => v_policy.job_identity_retention_days);
+      v_outcome_before := p_now - make_interval(days => v_policy.terminal_outcome_retention_days);
       rows_affected := workhorse.prune_terminal_jobs_v1(
-        p_now - make_interval(days => v_policy.job_identity_retention_days),
-        p_now - make_interval(days => v_policy.terminal_outcome_retention_days),
+        v_identity_before,
+        v_outcome_before,
         v_history_before,
         v_policy.terminal_job_prune_limit
       );
+    ELSE
+      UPDATE workhorse.maintenance_state
+         SET terminal_prune_dependency_starved = false,
+             updated_at = clock_timestamp()
+       WHERE task_name = 'terminal_storage';
     END IF;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
