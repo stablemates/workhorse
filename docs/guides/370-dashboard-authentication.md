@@ -13,6 +13,9 @@ to the TLS-protected server, which compares it without storing the plaintext val
 A successful login creates an opaque cookie backed by server memory. The cookie cannot reveal the
 password, and deleting the server record ends the session even if a browser retains it.
 
+Built-in authentication keeps session state inside the standalone server process. Restarting that
+process ends every session. Replicated deployments should use shared host-owned authentication.
+
 Repeated failures temporarily pause login processing. The server owns this limit and does not trust
 proxy headers to decide who shares it.
 

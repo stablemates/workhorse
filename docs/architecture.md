@@ -825,6 +825,10 @@ stateDiagram-v2
 
 Idempotency replays one materially equivalent request and rejects a conflicting reuse. Debounce replaces one pending definition while arrivals continue. Throttle reuses one accepted identity without changing it. These contracts serialize acceptance in PostgreSQL, but they do not make handler effects exactly once. A handler can repeat after a lost lease or process failure, so external effects still require their own idempotency boundary.
 
+ADR 0031 keeps these keyed ingress modes mutually exclusive. Their shared ownership table, hash,
+and lock ordering do not collapse `replayed`, `replaced`, `non_replaceable`, and `coalesced` into one
+outcome.
+
 #### Keyed debounce
 
 `EnqueueOptions.debounce` contains `key`, optional `scope`, `windowMs`, and `schedule`. Keys and scopes share the idempotency limits of 512 and 256 UTF-8 bytes. `windowMs` is an integer from 1 through 31,536,000,000. `schedule` is `reset` or `preserve`. A request with `debounce` cannot also supply `idempotency`, `runAt`, `prerequisiteJobId`, or `dependencies`. `Queue.enqueueManyWithResults` rejects these combinations before querying PostgreSQL, and `enqueue_debounce_v1` rejects them for direct SQL callers. PostgreSQL derives the initial run time from `clock_timestamp() + windowMs`.
@@ -918,6 +922,9 @@ state. The observer never uses job IDs, worker IDs, payloads, error text, cancel
 redrive attribution as metric attributes.
 
 ### Durable timer suspension
+
+ADR 0030 reserves **timer wait** for the immutable `job_wait` record. Signal boundaries, human
+decisions, child joins, and dependency gates keep separate meanings despite shared storage.
 
 `schedule_wait_v1` accepts either a relative bigint duration or an absolute timestamp, locks the exact active worker/fence generation, and rechecks lease expiry after acquiring the runtime lock. A first future target inserts `job_wait`, changes runtime to wait-marked scheduled state, clears ownership, and emits `wait_scheduled`. A first past-due target is still recorded but leaves runtime active and returns elapsed. Relative replay returns the first stored target even if later configuration supplies another duration; absolute target or mode changes conflict. Reaching an elapsed name emits `wait_replayed`.
 
@@ -1222,6 +1229,10 @@ the bound. Invalid submissions retain their reservations and return the generic 
 Further submissions return `429` with `Retry-After` until the oldest reservation leaves the window.
 A successful login clears the reservations. The limit is process-wide because the mode has one
 configured administrator and does not trust caller-supplied forwarding headers as client identity.
+
+ADR 0032 makes that process boundary explicit. Built-in authentication supports one standalone
+server replica, and a restart revokes every session. Replicated deployments use host-owned
+authorization or an identity-aware proxy with its own shared session boundary.
 
 The CLI reads `WORKHORSE_DASHBOARD_USERNAME` and `WORKHORSE_DASHBOARD_PASSWORD_HASH`. Each value can
 instead come from its `_FILE` variant, with one trailing line ending removed. A direct value and its

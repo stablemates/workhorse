@@ -24,6 +24,9 @@ The current implementation remains an evidence-first validation release rather t
 - [`docs/decisions/0018-framework-neutral-dashboard-host.md`](docs/decisions/0018-framework-neutral-dashboard-host.md): the `Request`/`Response` dashboard host, Node bridge, one HTML contract, single-origin development, and why the mount takes a connection rather than a URL.
 - [`docs/decisions/0019-derived-rolling-statistics.md`](docs/decisions/0019-derived-rolling-statistics.md): why operator statistics are derived from history rather than counted on the dispatch path, one bucket definition evaluated two ways, idempotent recomputation, the retention interlock, and bounded dimensions.
 - [`docs/decisions/0020-database-authoritative-configuration.md`](docs/decisions/0020-database-authoritative-configuration.md): why the database rather than the last deploy owns policy, seed-versus-assert sync semantics, per-setting provenance, the database/process boundary, and what an operator settings surface owes its reader.
+- [`docs/decisions/0030-distinguish-suspensions-gates-and-child-joins.md`](docs/decisions/0030-distinguish-suspensions-gates-and-child-joins.md): why timer waits, external boundaries, child joins, and dependency gates remain distinct despite shared runtime storage.
+- [`docs/decisions/0031-keep-keyed-ingress-modes-distinct.md`](docs/decisions/0031-keep-keyed-ingress-modes-distinct.md): why idempotency, debounce, and throttle keep separate caller promises and outcomes.
+- [`docs/decisions/0032-keep-single-admin-authentication-process-local.md`](docs/decisions/0032-keep-single-admin-authentication-process-local.md): the single-process boundary for built-in dashboard sessions and login throttling.
 
 Run the Fumadocs site locally without PostgreSQL:
 
