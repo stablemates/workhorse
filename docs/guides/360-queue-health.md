@@ -75,7 +75,7 @@ if (health.status.level !== "healthy") {
 
 - [320-statistics.md](320-statistics.md) — the rollup watermark that health watches
 - [330-retention.md](330-retention.md) — the cleanup lag that health budgets
-- [350-observability.md](350-observability.md) — exporting metrics instead of polling health
+- [355-observability.md](355-observability.md) — exporting metrics instead of polling health
 
 ---
 

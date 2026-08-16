@@ -27,14 +27,18 @@ Read these three in order. Everything else assumes them.
 
 How a job behaves once it's executing.
 
-|                                                             |                                                            |
-| ----------------------------------------------------------- | ---------------------------------------------------------- |
-| [110 Retries](110-retries.md)                               | Attempt budgets, backoff policies, and who picks the delay |
-| [120 Cancellation](120-cancellation.md)                     | Stopping a job is a request, not a kill                    |
-| [130 Durable waits](130-durable-waits.md)                   | Sleeping for an hour without holding a worker slot         |
-| [140 Deadlines and timeouts](140-deadlines-and-timeouts.md) | Two different clocks, and which one you want               |
-| [150 Priority](150-priority.md)                             | Running urgent work before ordinary FIFO jobs              |
-| [180 Agentic flow](180-agentic-flow.md)                     | Composing durable boundaries into a replay-safe agent loop |
+|                                                             |                                                             |
+| ----------------------------------------------------------- | ----------------------------------------------------------- |
+| [110 Retries](110-retries.md)                               | Attempt budgets, backoff policies, and who picks the delay  |
+| [120 Cancellation](120-cancellation.md)                     | Stopping a job is a request, not a kill                     |
+| [130 Durable waits](130-durable-waits.md)                   | Sleeping for an hour without holding a worker slot          |
+| [135 Signals](135-signals.md)                               | Waiting for an application-owned external event             |
+| [140 Deadlines and timeouts](140-deadlines-and-timeouts.md) | Two different clocks, and which one you want                |
+| [145 Human decisions](145-human-decisions.md)               | Releasing the worker while an operator chooses what happens |
+| [150 Priority](150-priority.md)                             | Running urgent work before ordinary FIFO jobs               |
+| [160 Job dependencies](160-job-dependencies.md)             | Waiting for prerequisite jobs before dispatch               |
+| [170 Child jobs](170-child-jobs.md)                         | Delegating work and joining its durable results             |
+| [180 Agentic flow](180-agentic-flow.md)                     | Composing durable boundaries into a replay-safe agent loop  |
 
 ## Getting work in
 
@@ -50,15 +54,23 @@ How a job behaves once it's executing.
 
 ## Operating the system
 
-|                                             |                                                              |
-| ------------------------------------------- | ------------------------------------------------------------ |
-| [310 Workers](310-workers.md)               | The processes that run your jobs, and how they shut down     |
-| [315 Batch handlers](315-batch-handlers.md) | Processing compatible jobs in one application call           |
-| [320 Statistics](320-statistics.md)         | Counting things without melting the database                 |
-| [330 Retention](330-retention.md)           | Deleting old data without losing the audit trail             |
-| [340 Redrive](340-redrive.md)               | Running a job again after it has given up                    |
-| [350 Observability](350-observability.md)   | Exporting bounded process metrics and database-wide gauges   |
-| [360 Queue health](360-queue-health.md)     | One consistent snapshot, and when it says something is wrong |
+|                                                         |                                                              |
+| ------------------------------------------------------- | ------------------------------------------------------------ |
+| [310 Workers](310-workers.md)                           | The processes that run your jobs, and how they shut down     |
+| [315 Batch handlers](315-batch-handlers.md)             | Processing compatible jobs in one application call           |
+| [320 Statistics](320-statistics.md)                     | Counting things without melting the database                 |
+| [330 Retention](330-retention.md)                       | Deleting old data without losing the audit trail             |
+| [340 Redrive](340-redrive.md)                           | Running a job again after it has given up                    |
+| [350 Production telemetry](350-production-telemetry.md) | Connecting traces, logs, and metrics to your backend         |
+| [355 Observability](355-observability.md)               | Reading bounded runtime metrics and database-wide gauges     |
+| [360 Queue health](360-queue-health.md)                 | One consistent snapshot, and when it says something is wrong |
+
+## Deploying and extending
+
+|                                                                 |                                                         |
+| --------------------------------------------------------------- | ------------------------------------------------------- |
+| [370 Dashboard authentication](370-dashboard-authentication.md) | Protecting a dashboard exposed beyond local development |
+| [390 Language clients](390-language-clients.md)                 | Implementing the stable protocol outside TypeScript     |
 
 ## Adding a guide
 

@@ -1,6 +1,6 @@
 # How do I pause for a human decision?
 
-Some jobs need a person to inspect context and choose what happens next. A human wait stores that
+Some jobs need a person to inspect context and decide what happens next. A human wait stores that
 context, releases the worker lease, and gives the dashboard an actionable decision.
 
 ## The handler names the decision and explains it
