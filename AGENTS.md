@@ -91,7 +91,7 @@ first. `pnpm build:runtime:dev` only compiles the library half.
 
 ## Writing documentation
 
-The docs have two layers, for two different readers. Keep both.
+The product documentation has two source layers, for two different readers. Keep both.
 
 - `docs/architecture.md` is the precise reference. Name every function, column, and limit.
   Do not simplify it, and do not soften it into plain language — its job is to answer
@@ -120,6 +120,12 @@ Rules that keep the two layers from drifting into each other:
 
 Both layers name real identifiers, so a rename stays greppable across both. If you change
 behaviour a guide describes, update it in the same commit.
+
+The published site in `site/content/docs/` presents those source layers for web readers. It is a
+required consumer, not a third owner of product behaviour. `site/guide-coverage.json`
+maps each guide to its site page or to a temporary Linear issue. If you add a guide, add a mapping
+or tracked exclusion in the same commit. If you change behaviour described by a mapped guide,
+update its site page in the same commit.
 
 Every guide follows the same shape: title as the reader's question, one or two sentences of
 what and why, the explanation, a small verified example where one helps, a `## Next` block
