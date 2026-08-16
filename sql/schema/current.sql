@@ -232,6 +232,8 @@ BEGIN
 END;
 $$;
 
+-- Relations, supporting indexes, and relation triggers.
+
 -- Sparse per-queue operational control. The dispatch path remains a cheap anti-join when no queue
 -- has been explicitly managed.
 CREATE TABLE IF NOT EXISTS workhorse.queue_control (
@@ -753,6 +755,50 @@ CREATE TABLE IF NOT EXISTS workhorse.job_signal_wait (
       AND delivered_by IS NOT NULL AND delivered_at IS NOT NULL)
   )
 );
+
+CREATE INDEX IF NOT EXISTS job_signal_wait_pending_idx
+  ON workhorse.job_signal_wait(created_at, job_id, signal_name)
+  WHERE delivered_at IS NULL;
+
+-- One named human decision per stable job. Context tells an operator what they are deciding;
+-- completion retains the first bounded result and trusted actor for deterministic replay.
+CREATE TABLE IF NOT EXISTS workhorse.job_human_wait (
+  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
+  token_name text NOT NULL CHECK (token_name <> '' AND char_length(token_name) <= 200),
+  context jsonb NOT NULL CONSTRAINT job_human_wait_context_size CHECK (
+    octet_length(context::text) <= 65536
+  ),
+  attempt integer NOT NULL CHECK (attempt >= 1),
+  fence_token bigint NOT NULL CHECK (fence_token > 0),
+  worker_id text NOT NULL CHECK (worker_id <> ''),
+  claimed_at timestamptz NOT NULL CHECK (isfinite(claimed_at)),
+  result jsonb CONSTRAINT job_human_wait_result_size CHECK (
+    result IS NULL OR octet_length(result::text) <= 65536
+  ),
+  idempotency_key_hash bytea CHECK (
+    idempotency_key_hash IS NULL OR octet_length(idempotency_key_hash) = 32
+  ),
+  request_fingerprint jsonb,
+  completed_by text CHECK (
+    completed_by IS NULL OR (completed_by <> '' AND char_length(completed_by) <= 200)
+  ),
+  completed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  timeout_at timestamptz NOT NULL CONSTRAINT job_human_wait_timeout_finite
+    CHECK (isfinite(timeout_at)),
+  PRIMARY KEY (job_id, token_name),
+  CHECK (
+    (completed_at IS NULL AND result IS NULL AND idempotency_key_hash IS NULL
+      AND request_fingerprint IS NULL AND completed_by IS NULL)
+    OR
+    (completed_at IS NOT NULL AND result IS NOT NULL AND idempotency_key_hash IS NOT NULL
+      AND request_fingerprint IS NOT NULL AND completed_by IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS job_human_wait_actionable_idx
+  ON workhorse.job_human_wait(created_at, job_id, token_name)
+  WHERE completed_at IS NULL;
 
 -- Monotonic ownership generations and FIFO placement generations.
 CREATE SEQUENCE IF NOT EXISTS workhorse.fence_token_seq;
@@ -1540,6 +1586,8 @@ INSERT INTO workhorse.retention_policy(
   14, 14, 14, 14, 14, 14, 1000, 4, 10000, 10000, 10000
 )
 ON CONFLICT (singleton) DO NOTHING;
+
+-- Objects that depend on the complete relation block.
 
 CREATE OR REPLACE FUNCTION workhorse.sync_retention_policy_v1(
   p_job_identity_retention_days integer,
@@ -8218,50 +8266,6 @@ BEGIN
   ORDER BY page.occurred_at DESC, page.kind_rank DESC, page.record_id DESC;
 END;
 $$;
-
--- One named human decision per stable job. Context tells an operator what they are deciding;
--- completion retains the first bounded result and trusted actor for deterministic replay.
-CREATE TABLE IF NOT EXISTS workhorse.job_human_wait (
-  job_id uuid NOT NULL REFERENCES workhorse.job(id) ON DELETE CASCADE,
-  token_name text NOT NULL CHECK (token_name <> '' AND char_length(token_name) <= 200),
-  context jsonb NOT NULL CONSTRAINT job_human_wait_context_size CHECK (
-    octet_length(context::text) <= 65536
-  ),
-  attempt integer NOT NULL CHECK (attempt >= 1),
-  fence_token bigint NOT NULL CHECK (fence_token > 0),
-  worker_id text NOT NULL CHECK (worker_id <> ''),
-  claimed_at timestamptz NOT NULL CHECK (isfinite(claimed_at)),
-  result jsonb CONSTRAINT job_human_wait_result_size CHECK (
-    result IS NULL OR octet_length(result::text) <= 65536
-  ),
-  idempotency_key_hash bytea CHECK (
-    idempotency_key_hash IS NULL OR octet_length(idempotency_key_hash) = 32
-  ),
-  request_fingerprint jsonb,
-  completed_by text CHECK (
-    completed_by IS NULL OR (completed_by <> '' AND char_length(completed_by) <= 200)
-  ),
-  completed_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  timeout_at timestamptz NOT NULL CONSTRAINT job_human_wait_timeout_finite
-    CHECK (isfinite(timeout_at)),
-  PRIMARY KEY (job_id, token_name),
-  CHECK (
-    (completed_at IS NULL AND result IS NULL AND idempotency_key_hash IS NULL
-      AND request_fingerprint IS NULL AND completed_by IS NULL)
-    OR
-    (completed_at IS NOT NULL AND result IS NOT NULL AND idempotency_key_hash IS NOT NULL
-      AND request_fingerprint IS NOT NULL AND completed_by IS NOT NULL)
-  )
-);
-
-CREATE INDEX IF NOT EXISTS job_human_wait_actionable_idx
-  ON workhorse.job_human_wait(created_at, job_id, token_name)
-  WHERE completed_at IS NULL;
-
-CREATE INDEX IF NOT EXISTS job_signal_wait_pending_idx
-  ON workhorse.job_signal_wait(created_at, job_id, signal_name)
-  WHERE delivered_at IS NULL;
 
 CREATE OR REPLACE FUNCTION workhorse.wait_for_human_v1(
   p_job_id uuid,
