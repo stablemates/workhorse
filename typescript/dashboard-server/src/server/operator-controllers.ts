@@ -51,7 +51,7 @@ export interface DashboardOperatorControllerOptions {
 }
 
 export interface DashboardOperatorControllers {
-  operator: { mode: "local" };
+  operator: { mode: "writable" };
   queueController: DashboardQueueController;
   taskController: DashboardTaskController;
   workerController: DashboardWorkerController;
@@ -75,7 +75,7 @@ export function createDashboardOperatorControllers(
     options.requestedBy ?? audit.actor;
 
   return {
-    operator: { mode: "local" },
+    operator: { mode: "writable" },
     queueController: {
       setQueuePaused: (queueName, paused, audit) =>
         options.run({ kind: "setQueuePaused", queueName, paused, audit }, async (queue) => {

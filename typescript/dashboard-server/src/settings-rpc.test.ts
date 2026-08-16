@@ -31,7 +31,7 @@ describe("settings RPC", () => {
       .mockResolvedValue(undefined);
     const local = createRouterClient(dashboardRouter, {
       context: context({
-        operator: { mode: "local" },
+        operator: { mode: "writable" },
         settingsController: {
           overrideMaintenancePolicy,
           revertMaintenancePolicy: vi.fn<DashboardSettingsController["revertMaintenancePolicy"]>(),
