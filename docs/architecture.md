@@ -611,19 +611,26 @@ Code after a wait resumes by replaying the handler from its entry point. Work be
 One named external-delivery boundary per stable job identity. `wait_for_signal_v1` accepts the
 exact active job, worker, and fence generation. A first declaration retains its attempt, fence,
 worker, and claim time, then moves runtime to a non-runnable scheduled row without closing the
-logical attempt. One job retains at most 1,000 signal names, each limited to 200 characters.
+logical attempt. `MAX_EXTERNAL_WAITS_PER_JOB` is 1,000, and
+`MAX_EXTERNAL_WAIT_NAME_CHARACTERS` is 200. Names cannot have leading or trailing whitespace.
+If the same pending boundary is declared concurrently, PostgreSQL returns `already_waiting` and
+the client raises `SignalWaitConflictError`. `SignalWaitLeaseLostError` is reserved for a
+stale or expired ownership generation. Both errors expose the boundary through `waitName`.
 
 `send_signal_v1` accepts the job identity, signal name, JSON payload, idempotency key, and trusted
-actor. Payloads are limited to 65,536 bytes of canonical JSONB text, keys to 512 UTF-8 bytes, and
-actors to 200 characters. The function serializes delivery with declaration, stores only a SHA-256
-key hash and request fingerprint, and makes the waiting runtime ready in the same transaction.
+actor. `MAX_EXTERNAL_WAIT_VALUE_BYTES` limits payloads to 65,536 bytes of canonical JSONB text.
+`MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES` limits keys to 512 UTF-8 bytes.
+`MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS` limits actors to 200 characters. The function serializes
+delivery with declaration. It stores only a SHA-256 key hash and request fingerprint. The same
+transaction makes the waiting runtime ready.
 The first accepted payload is retained. An equal same-key retry returns `duplicate`; a changed
 same-key request raises `SignalIdempotencyConflictError`; another key returns
 `already_delivered`. Early, stale, and late deliveries return bounded statuses without changing
 dispatch state.
 
 `HandlerContext.waitForSignal(name, { timeoutMs })` suspends and later returns the retained payload
-after handler replay. `timeoutMs` is optional and accepts 1 through 604,800,000 milliseconds.
+after handler replay. `MAX_EXTERNAL_WAIT_TIMEOUT_MS` is 604,800,000, and `timeoutMs` accepts an
+integer from 1 through that bound.
 `Queue.sendSignal` is the application-owned delivery surface. The dashboard procedure
 `dashboard.signalTask` derives `requestedBy` from its authenticated server principal before it
 calls the same queue operation. `signal_waiting`, `signal_received`, `signal_replayed`, and
@@ -631,7 +638,7 @@ calls the same queue operation. `signal_waiting`, `signal_received`, `signal_rep
 key digest but never the raw key or payload.
 
 `Queue.listSignalWaits({ limit, cursor })` returns a `SignalWaitPage` in ascending `createdAt`,
-`jobId`, and `name` order. The default page size is 100 and the maximum is 1,000. Each
+`jobId`, and `name` order. The default page size is 100, and `MAX_EXTERNAL_WAIT_LIST_SIZE` is 1,000. Each
 `SignalWait` contains `jobId`, `queue`, `jobType`, `name`, `attempt`, `createdAt`, and `deadlineAt`.
 `nextCursor` contains the exact PostgreSQL `created_at` text, job identity, and name when another
 page exists. `dashboard_signal_wait_v1` owns the matching SQL projection and excludes delivered
@@ -660,7 +667,10 @@ outcome and required history are also eligible.
 One named human decision per stable job identity. `wait_for_human_v1` accepts the exact active job,
 worker, fence generation, name, and operator context. Names are limited to 200 characters. Context
 and completion results are each limited to 65,536 bytes of canonical JSONB text. One job retains at
-most 1,000 human decisions.
+most 1,000 human decisions. The shared bounds are `MAX_EXTERNAL_WAIT_NAME_CHARACTERS`,
+`MAX_EXTERNAL_WAIT_VALUE_BYTES`, and `MAX_EXTERNAL_WAITS_PER_JOB`. Names cannot have leading or
+trailing whitespace. A same-context concurrent declaration raises `HumanWaitAlreadyWaitingError`.
+A changed context raises `HumanWaitConflictError`. Declaration errors expose the name as `waitName`.
 
 `complete_human_wait_v1` accepts the job identity, token name, result, idempotency key, and trusted
 actor. Keys are limited to 512 UTF-8 bytes and actors to 200 characters. The function retains only
@@ -671,11 +681,14 @@ dispatch state.
 
 `HandlerContext.waitForHuman(name, context, { timeoutMs })` suspends and returns the retained result
 after replay. `timeoutMs` has the same optional range and terminal failure outcome as a signal wait.
-`Queue.completeHumanWait` is the application completion surface.
+`Queue.completeHumanWait` is the application completion surface. `CompleteHumanWaitRequest` uses
+`requestedBy` for caller attribution. `CompleteHumanWaitResult.payload` contains the accepted
+decision, matching signal delivery vocabulary. Its `completedBy` reports the actor whose completion
+PostgreSQL retained.
 `Queue.listHumanWaits<TContext>({ limit, cursor })` returns a `HumanWaitPage<TContext>` with the
 same page bounds, cursor fields, and order. Each `HumanWait<TContext>` adds the stored `context` to
 the signal-wait projection. The dashboard calls this method, validates result JSON, and derives
-`completedBy` from the authenticated principal. `human_wait_created`, `human_wait_completed`,
+`requestedBy` from the authenticated principal. `human_wait_created`, `human_wait_completed`,
 `human_wait_replayed`, and `human_wait_rejected` retain value-free lifecycle evidence.
 
 Human decisions use the same default PostgreSQL timeout and parent-identity retention contract.

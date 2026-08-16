@@ -39,7 +39,8 @@ If `nextCursor` is present, pass it to the next call to continue through every p
 
 Applications can complete the same decision through `Queue.completeHumanWait`. They must establish
 their own authorization before passing the stable job identity, token name, result, idempotency key,
-and trusted actor.
+and trusted actor as `requestedBy`.
+The response exposes the accepted decision as `payload`, matching `Queue.sendSignal`.
 
 The first accepted completion resumes the job. An equal retry returns the retained result, while a
 competing completion returns the accepted winner without overwriting its audit evidence.

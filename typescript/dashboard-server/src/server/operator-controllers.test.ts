@@ -36,7 +36,7 @@ describe("shared dashboard operator controllers", () => {
         status: "completed",
         jobId: "job-1",
         name: "review",
-        result: { approved: true },
+        payload: { approved: true },
         completedAt: new Date("2026-08-12T12:03:00.000Z"),
         completedBy: "configured-operator",
       }),
@@ -131,7 +131,7 @@ describe("shared dashboard operator controllers", () => {
       "job-1",
       "review",
       { approved: true },
-      { idempotencyKey: "request-2", completedBy: "configured-operator" },
+      { idempotencyKey: "request-2", requestedBy: "configured-operator" },
     );
     expect(queue.setWorkerPaused).toHaveBeenCalledWith("worker-1", true, {
       requestedBy: "configured-operator",

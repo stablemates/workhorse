@@ -969,7 +969,7 @@ describe("retention maintenance", () => {
       id,
       "decision",
       { approved: true },
-      { idempotencyKey: "decision", completedBy: "operator" },
+      { idempotencyKey: "decision", requestedBy: "operator" },
     );
     expect(await worker.runOnce()).toBe(true);
 

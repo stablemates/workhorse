@@ -9,8 +9,11 @@ import {
 import {
   CheckpointConflictError,
   ChildConflictError,
+  HumanWaitAlreadyWaitingError,
+  HumanWaitConflictError,
   JobValueSizeLimitError,
   SignalIdempotencyConflictError,
+  SignalWaitConflictError,
   SignalWaitLeaseLostError,
   SignalWaitLimitExceededError,
   WaitLimitExceededError,
@@ -32,7 +35,10 @@ describe("WorkhorseError", () => {
   it.each([
     ["CheckpointConflictError", new CheckpointConflictError("job", "checkpoint")],
     ["ChildConflictError", new ChildConflictError("job", "child")],
+    ["HumanWaitAlreadyWaitingError", new HumanWaitAlreadyWaitingError("job", "decision")],
+    ["HumanWaitConflictError", new HumanWaitConflictError("job", "decision")],
     ["SignalIdempotencyConflictError", new SignalIdempotencyConflictError("job", "signal")],
+    ["SignalWaitConflictError", new SignalWaitConflictError("job", "signal")],
     ["SignalWaitLeaseLostError", new SignalWaitLeaseLostError("job", "signal")],
     ["SignalWaitLimitExceededError", new SignalWaitLimitExceededError("job")],
     ["WaitLimitExceededError", new WaitLimitExceededError("job")],
@@ -48,6 +54,15 @@ describe("WorkhorseError", () => {
 
   it("does not claim errors Workhorse did not raise", () => {
     expect(new TypeError("unrelated")).not.toBeInstanceOf(WorkhorseError);
+  });
+
+  it("uses waitName for signal and human-wait error context", () => {
+    expect(new SignalWaitLeaseLostError("job", "signal")).toMatchObject({
+      waitName: "signal",
+    });
+    expect(new HumanWaitConflictError("job", "decision")).toMatchObject({
+      waitName: "decision",
+    });
   });
 });
 

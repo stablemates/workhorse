@@ -1,33 +1,29 @@
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
-import type { ClaimedJob, Json } from "../types.js";
+import { MAX_EXTERNAL_WAITS_PER_JOB, type ClaimedJob, type Json } from "../types.js";
 import {
+  encodeExternalWaitValue,
   externalWaitCursor,
   externalWaitRecord,
+  type ExternalWaitDeliveryRequest,
   type ExternalWaitCursor,
   type ExternalWaitListOptions,
   type ExternalWaitOptions,
   type ExternalWaitRecord,
   type ExternalWaitRow,
+  validateExternalWaitDeliveryRequest,
   validateExternalWaitListOptions,
+  validateExternalWaitName,
   validateExternalWaitOptions,
 } from "./external-waits.js";
 import { QueueModule } from "./module-context.js";
 
-const MAX_NAME_CHARACTERS = 200;
-const MAX_VALUE_BYTES = 65_536;
-const MAX_KEY_BYTES = 512;
-const MAX_ACTOR_CHARACTERS = 200;
-
 export type WaitForHumanStatus = "waiting" | "completed";
 export interface WaitForHumanResult<TResult extends Json = Json> {
   status: WaitForHumanStatus;
-  result: TResult | null;
+  payload: TResult | null;
 }
-export interface CompleteHumanWaitRequest {
-  idempotencyKey: string;
-  completedBy: string;
-}
+export type CompleteHumanWaitRequest = ExternalWaitDeliveryRequest;
 export type CompleteHumanWaitStatus =
   | "completed"
   | "duplicate"
@@ -39,7 +35,7 @@ export interface CompleteHumanWaitResult<TResult extends Json = Json> {
   status: CompleteHumanWaitStatus;
   jobId: string;
   name: string;
-  result: TResult | null;
+  payload: TResult | null;
   completedAt: Date | null;
   completedBy: string | null;
 }
@@ -58,7 +54,7 @@ type HumanWaitRow = ExternalWaitRow & {
 };
 
 type WaitRow = {
-  status: WaitForHumanStatus | "stale" | "limit_exceeded" | "conflict";
+  status: WaitForHumanStatus | "already_waiting" | "stale" | "limit_exceeded" | "conflict";
   result: Json | null;
 };
 type CompleteRow = {
@@ -68,75 +64,48 @@ type CompleteRow = {
   completed_by: string | null;
 };
 
-function validateName(name: string): void {
-  if (typeof name !== "string") throw new TypeError("Human wait name must be a string");
-  if (name.length < 1 || name.length > MAX_NAME_CHARACTERS) {
-    throw new RangeError("Human wait name must contain between 1 and 200 characters");
-  }
-  if (name.trim() !== name) {
-    throw new RangeError("Human wait name must not have leading or trailing whitespace");
-  }
-}
-
-function encodeValue(value: Json, label: string): string {
-  const encoded = JSON.stringify(value);
-  if (encoded === undefined) throw new TypeError(`${label} must be JSON serializable`);
-  if (Buffer.byteLength(encoded) > MAX_VALUE_BYTES) {
-    throw new RangeError(`${label} must be at most 65536 bytes`);
-  }
-  return encoded;
-}
-
-function validateRequest(request: CompleteHumanWaitRequest): void {
-  if (typeof request.idempotencyKey !== "string") {
-    throw new TypeError("Human wait idempotency key must be a string");
-  }
-  const keyBytes = Buffer.byteLength(request.idempotencyKey);
-  if (keyBytes < 1 || keyBytes > MAX_KEY_BYTES) {
-    throw new RangeError("Human wait idempotency key must contain between 1 and 512 UTF-8 bytes");
-  }
-  if (
-    typeof request.completedBy !== "string" ||
-    request.completedBy.length < 1 ||
-    request.completedBy.length > MAX_ACTOR_CHARACTERS
-  ) {
-    throw new RangeError("Human wait completedBy must contain between 1 and 200 characters");
-  }
-}
-
 export class HumanWaitLeaseLostError extends WorkhorseError {
   constructor(
     readonly jobId: string,
-    readonly tokenName: string,
+    readonly waitName: string,
   ) {
     super(
-      `Human wait ${tokenName} for job ${jobId} cannot be recorded because the lease is stale or expired`,
+      `Human wait ${waitName} for job ${jobId} cannot be recorded because the lease is stale or expired`,
     );
     this.name = "HumanWaitLeaseLostError";
   }
 }
+export class HumanWaitAlreadyWaitingError extends WorkhorseError {
+  constructor(
+    readonly jobId: string,
+    readonly waitName: string,
+  ) {
+    super(`Human wait ${waitName} for job ${jobId} is already waiting for completion`);
+    this.name = "HumanWaitAlreadyWaitingError";
+  }
+}
 export class HumanWaitLimitExceededError extends WorkhorseError {
   constructor(readonly jobId: string) {
-    super(`Job ${jobId} already has the maximum of 1000 human waits`);
+    super(`Job ${jobId} already has the maximum of ${MAX_EXTERNAL_WAITS_PER_JOB} human waits`);
     this.name = "HumanWaitLimitExceededError";
   }
 }
 export class HumanWaitConflictError extends WorkhorseError {
   constructor(
     readonly jobId: string,
-    readonly tokenName: string,
+    readonly waitName: string,
   ) {
-    super(`Human wait ${tokenName} for job ${jobId} was replayed with different context`);
+    super(`Human wait ${waitName} for job ${jobId} was replayed with different context`);
     this.name = "HumanWaitConflictError";
   }
 }
 export class HumanWaitIdempotencyConflictError extends WorkhorseError {
   constructor(
     readonly jobId: string,
-    readonly tokenName: string,
+    readonly waitName: string,
   ) {
     super(
-      `Human wait ${tokenName} for job ${jobId} received a different completion for a retained idempotency key`,
+      `Human wait ${waitName} for job ${jobId} received a different completion for a retained idempotency key`,
     );
     this.name = "HumanWaitIdempotencyConflictError";
   }
@@ -176,7 +145,7 @@ export class HumanWaitsModule extends QueueModule {
     context: TContext,
     options: ExternalWaitOptions = {},
   ): Promise<WaitForHumanResult<TResult>> {
-    validateName(name);
+    validateExternalWaitName(name, "Human wait");
     if (typeof workerId !== "string" || workerId.length === 0) {
       throw new TypeError("Worker ID must be a non-empty string");
     }
@@ -188,18 +157,19 @@ export class HumanWaitsModule extends QueueModule {
         workerId,
         job.fenceToken.toString(),
         name,
-        encodeValue(context, "Human wait context"),
+        encodeExternalWaitValue(context, "Human wait context"),
         validateExternalWaitOptions(options),
       ],
     );
     const row = expectOneRow(query, "workhorse.wait_for_human_v1");
+    if (row.status === "already_waiting") throw new HumanWaitAlreadyWaitingError(job.id, name);
     if (row.status === "stale") throw new HumanWaitLeaseLostError(job.id, name);
     if (row.status === "limit_exceeded") throw new HumanWaitLimitExceededError(job.id);
     if (row.status === "conflict") throw new HumanWaitConflictError(job.id, name);
     if (row.status !== "waiting" && row.status !== "completed") {
       throw new Error(`Unexpected human wait status: ${String(row.status)}`);
     }
-    return { status: row.status, result: row.result as TResult | null };
+    return { status: row.status, payload: row.result as TResult | null };
   }
 
   async completeHumanWait<TResult extends Json>(
@@ -208,17 +178,17 @@ export class HumanWaitsModule extends QueueModule {
     result: TResult,
     request: CompleteHumanWaitRequest,
   ): Promise<CompleteHumanWaitResult<TResult>> {
-    validateName(name);
-    validateRequest(request);
+    validateExternalWaitName(name, "Human wait");
+    validateExternalWaitDeliveryRequest(request, "Human wait");
     const query = await this.context.database.query<CompleteRow>(
       `SELECT status, result, completed_at, completed_by
          FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
       [
         jobId,
         name,
-        encodeValue(result, "Human wait result"),
+        encodeExternalWaitValue(result, "Human wait result"),
         request.idempotencyKey,
-        request.completedBy,
+        request.requestedBy,
       ],
     );
     const row = expectOneRow(query, "workhorse.complete_human_wait_v1");
@@ -232,7 +202,7 @@ export class HumanWaitsModule extends QueueModule {
       status: row.status,
       jobId,
       name,
-      result: row.result as TResult | null,
+      payload: row.result as TResult | null,
       completedAt: row.completed_at === null ? null : new Date(row.completed_at),
       completedBy: row.completed_by,
     };

@@ -562,7 +562,7 @@ describe("SQL protocol conformance fixtures", () => {
     );
     expect(humanWait).toEqual({
       parameters: [adapterJob.id, workerId, "17", "review", '{"question":"Ship?"}', null],
-      result: { status: "waiting", result: null },
+      result: { status: "waiting", payload: null },
     });
     const humanComplete = await exerciseQueue(
       [
@@ -580,7 +580,7 @@ describe("SQL protocol conformance fixtures", () => {
           { approved: true },
           {
             idempotencyKey: "human-key",
-            completedBy: "operator",
+            requestedBy: "operator",
           },
         ),
     );
@@ -593,7 +593,7 @@ describe("SQL protocol conformance fixtures", () => {
     ]);
     expect(humanComplete.result).toMatchObject({
       status: "completed",
-      result: { approved: true },
+      payload: { approved: true },
       completedBy: "operator",
     });
   });

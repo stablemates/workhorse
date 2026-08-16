@@ -104,6 +104,7 @@ import {
 } from "./queue/child-jobs.js";
 import {
   SignalIdempotencyConflictError,
+  SignalWaitConflictError,
   SignalWaitLeaseLostError,
   SignalWaitLimitExceededError,
   type SendSignalRequest,
@@ -115,6 +116,7 @@ import {
   type WaitForSignalStatus,
 } from "./queue/signals.js";
 import {
+  HumanWaitAlreadyWaitingError,
   HumanWaitConflictError,
   HumanWaitIdempotencyConflictError,
   HumanWaitLeaseLostError,
@@ -128,6 +130,7 @@ import {
   type WaitForHumanStatus,
 } from "./queue/human-waits.js";
 import type {
+  ExternalWaitDeliveryRequest,
   ExternalWaitCursor,
   ExternalWaitListOptions,
   ExternalWaitOptions,
@@ -155,8 +158,10 @@ export {
   WaitLeaseLostError,
   WaitLimitExceededError,
   SignalIdempotencyConflictError,
+  SignalWaitConflictError,
   SignalWaitLeaseLostError,
   SignalWaitLimitExceededError,
+  HumanWaitAlreadyWaitingError,
   HumanWaitConflictError,
   HumanWaitIdempotencyConflictError,
   HumanWaitLeaseLostError,
@@ -182,6 +187,7 @@ export type {
   WaitForHumanResult,
   WaitForHumanStatus,
   ExternalWaitOptions,
+  ExternalWaitDeliveryRequest,
   ExternalWaitCursor,
   ExternalWaitListOptions,
 };

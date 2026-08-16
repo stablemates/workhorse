@@ -11,6 +11,12 @@ import {
   MAX_CHECKPOINT_VALUE_BYTES,
   MAX_ENQUEUE_BATCH_SIZE,
   MAX_EXECUTION_TIMEOUT_MS,
+  MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS,
+  MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES,
+  MAX_EXTERNAL_WAIT_NAME_CHARACTERS,
+  MAX_EXTERNAL_WAIT_TIMEOUT_MS,
+  MAX_EXTERNAL_WAIT_VALUE_BYTES,
+  MAX_EXTERNAL_WAITS_PER_JOB,
   MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_IDEMPOTENCY_SCOPE_BYTES,
   MAX_IDEMPOTENCY_TTL_MS,
@@ -27,7 +33,6 @@ import {
   MAX_WAIT_DURATION_MS,
   MIN_PROGRESS_UPDATE_INTERVAL_MS,
 } from "../src/types.js";
-import { MAX_EXTERNAL_WAIT_TIMEOUT_MS } from "../src/queue/external-waits.js";
 
 // PostgreSQL enforces every bound in this system, so each named limit exists twice: once as a literal
 // inside sql/schema.sql, and once as an exported constant that callers read before they send work.
@@ -60,6 +65,38 @@ interface LimitRule {
 const gap = String.raw`\s*THEN\s*`;
 
 const rules: readonly LimitRule[] = [
+  {
+    constant: "MAX_EXTERNAL_WAIT_NAME_CHARACTERS",
+    value: MAX_EXTERNAL_WAIT_NAME_CHARACTERS,
+    bounds: "signal and human-decision names",
+    patterns: [/char_length\(p_(?:signal_name|token_name)\) > (\d+)/g],
+  },
+  {
+    constant: "MAX_EXTERNAL_WAIT_VALUE_BYTES",
+    value: MAX_EXTERNAL_WAIT_VALUE_BYTES,
+    bounds: "signal payloads and human-decision contexts and results",
+    patterns: [/octet_length\(p_(?:payload|context|result)::text\) > (\d+)/g],
+  },
+  {
+    constant: "MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES",
+    value: MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES,
+    bounds: "external-wait delivery idempotency keys",
+    patterns: [/octet_length\(p_idempotency_key\) NOT BETWEEN 1 AND (\d+)/g],
+  },
+  {
+    constant: "MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS",
+    value: MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS,
+    bounds: "external-wait delivery attribution",
+    patterns: [/char_length\(p_(?:requested_by|completed_by)\) > (\d+)/g],
+  },
+  {
+    constant: "MAX_EXTERNAL_WAITS_PER_JOB",
+    value: MAX_EXTERNAL_WAITS_PER_JOB,
+    bounds: "signal names or human decisions retained for one job",
+    patterns: [
+      /count\(\*\) FROM workhorse\.job_(?:signal|human)_wait stored WHERE stored\.job_id = p_job_id\) >= (\d+)/g,
+    ],
+  },
   {
     constant: "MAX_EXTERNAL_WAIT_TIMEOUT_MS",
     value: MAX_EXTERNAL_WAIT_TIMEOUT_MS,

@@ -1150,7 +1150,7 @@ export class Worker {
           if (token.status === "waiting") {
             suspend("suspended_for_wait");
           }
-          return token.result as TResult;
+          return token.payload as TResult;
         })();
         inFlightHumanWaits.set(name, { context, execution });
         try {

@@ -67,10 +67,8 @@ const humanWaitJob = await adapter.queue.enqueue("packed.human-wait", {}, { queu
 const humanWaitWorker = new Worker(adapter.queue, {
   workerId: "packed-human-wait",
   queue: "human-wait",
-}).handle(
-  "packed.human-wait",
-  async (_payload, context) =>
-    context.waitForHuman("review", { prompt: "Approve the packed contract?" }),
+}).handle("packed.human-wait", async (_payload, context) =>
+  context.waitForHuman("review", { prompt: "Approve the packed contract?" }),
 );
 assert.equal(await humanWaitWorker.runOnce(), true);
 assert.equal((await adapter.queue.getJob(humanWaitJob)).state, "scheduled");
@@ -78,7 +76,7 @@ const packedCompletion = await adapter.queue.completeHumanWait(
   humanWaitJob,
   "review",
   { approved: true },
-  { idempotencyKey: "packed-completion", completedBy: "packed-operator" },
+  { idempotencyKey: "packed-completion", requestedBy: "packed-operator" },
 );
 assert.equal(packedCompletion.status, "completed");
 assert.equal(packedCompletion.completedBy, "packed-operator");

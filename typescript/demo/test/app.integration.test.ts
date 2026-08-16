@@ -4294,7 +4294,7 @@ describe("Workhorse dashboard events feed", () => {
         jobId,
         DEMO_HUMAN_WAIT_NAME,
         { approved: true, note: "looks good" },
-        { idempotencyKey: "test-human-decision", completedBy: "integration-test" },
+        { idempotencyKey: "test-human-decision", requestedBy: "integration-test" },
       );
       expect(completion.status).toBe("completed");
       await waitForJobState(queue, jobId, "succeeded");

@@ -1,23 +1,22 @@
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
-import type { ClaimedJob, Json } from "../types.js";
+import { MAX_EXTERNAL_WAITS_PER_JOB, type ClaimedJob, type Json } from "../types.js";
 import {
+  encodeExternalWaitValue,
   externalWaitCursor,
   externalWaitRecord,
+  type ExternalWaitDeliveryRequest,
   type ExternalWaitCursor,
   type ExternalWaitListOptions,
   type ExternalWaitOptions,
   type ExternalWaitRecord,
   type ExternalWaitRow,
+  validateExternalWaitDeliveryRequest,
   validateExternalWaitListOptions,
+  validateExternalWaitName,
   validateExternalWaitOptions,
 } from "./external-waits.js";
 import { QueueModule } from "./module-context.js";
-
-const MAX_SIGNAL_NAME_CHARACTERS = 200;
-const MAX_SIGNAL_PAYLOAD_BYTES = 65_536;
-const MAX_SIGNAL_IDEMPOTENCY_KEY_BYTES = 512;
-const MAX_SIGNAL_ACTOR_CHARACTERS = 200;
 
 export type WaitForSignalStatus = "waiting" | "delivered";
 
@@ -26,10 +25,7 @@ export interface WaitForSignalResult<TPayload extends Json = Json> {
   payload: TPayload | null;
 }
 
-export interface SendSignalRequest {
-  idempotencyKey: string;
-  requestedBy: string;
-}
+export type SendSignalRequest = ExternalWaitDeliveryRequest;
 
 export type SendSignalStatus =
   | "delivered"
@@ -56,7 +52,7 @@ export interface SignalWaitPage {
 }
 
 type WaitForSignalRow = {
-  status: WaitForSignalStatus | "stale" | "limit_exceeded";
+  status: WaitForSignalStatus | "already_waiting" | "stale" | "limit_exceeded";
   payload: Json | null;
 };
 
@@ -67,54 +63,31 @@ type SendSignalRow = {
   delivered_by: string | null;
 };
 
-function validateSignalName(name: string): void {
-  if (typeof name !== "string") throw new TypeError("Signal name must be a string");
-  if (name.length < 1 || name.length > MAX_SIGNAL_NAME_CHARACTERS) {
-    throw new RangeError("Signal name must contain between 1 and 200 characters");
-  }
-}
-
-function validateSignalPayload(payload: Json): string {
-  const encoded = JSON.stringify(payload);
-  if (encoded === undefined) throw new TypeError("Signal payload must be JSON serializable");
-  if (Buffer.byteLength(encoded) > MAX_SIGNAL_PAYLOAD_BYTES) {
-    throw new RangeError("Signal payload must be at most 65536 bytes");
-  }
-  return encoded;
-}
-
-function validateSendRequest(request: SendSignalRequest): void {
-  if (typeof request.idempotencyKey !== "string") {
-    throw new TypeError("Signal idempotency key must be a string");
-  }
-  const keyBytes = Buffer.byteLength(request.idempotencyKey);
-  if (keyBytes < 1 || keyBytes > MAX_SIGNAL_IDEMPOTENCY_KEY_BYTES) {
-    throw new RangeError("Signal idempotency key must contain between 1 and 512 UTF-8 bytes");
-  }
-  if (
-    typeof request.requestedBy !== "string" ||
-    request.requestedBy.length < 1 ||
-    request.requestedBy.length > MAX_SIGNAL_ACTOR_CHARACTERS
-  ) {
-    throw new RangeError("Signal requestedBy must contain between 1 and 200 characters");
-  }
-}
-
 export class SignalWaitLeaseLostError extends WorkhorseError {
   constructor(
     readonly jobId: string,
-    readonly signalName: string,
+    readonly waitName: string,
   ) {
     super(
-      `Signal wait ${signalName} for job ${jobId} cannot be recorded because the lease is stale or expired`,
+      `Signal wait ${waitName} for job ${jobId} cannot be recorded because the lease is stale or expired`,
     );
     this.name = "SignalWaitLeaseLostError";
   }
 }
 
+export class SignalWaitConflictError extends WorkhorseError {
+  constructor(
+    readonly jobId: string,
+    readonly waitName: string,
+  ) {
+    super(`Signal wait ${waitName} for job ${jobId} is already waiting for delivery`);
+    this.name = "SignalWaitConflictError";
+  }
+}
+
 export class SignalWaitLimitExceededError extends WorkhorseError {
   constructor(readonly jobId: string) {
-    super(`Job ${jobId} already has the maximum of 1000 signal waits`);
+    super(`Job ${jobId} already has the maximum of ${MAX_EXTERNAL_WAITS_PER_JOB} signal waits`);
     this.name = "SignalWaitLimitExceededError";
   }
 }
@@ -122,10 +95,10 @@ export class SignalWaitLimitExceededError extends WorkhorseError {
 export class SignalIdempotencyConflictError extends WorkhorseError {
   constructor(
     readonly jobId: string,
-    readonly signalName: string,
+    readonly waitName: string,
   ) {
     super(
-      `Signal ${signalName} for job ${jobId} received a different request for a retained idempotency key`,
+      `Signal ${waitName} for job ${jobId} received a different request for a retained idempotency key`,
     );
     this.name = "SignalIdempotencyConflictError";
   }
@@ -159,7 +132,7 @@ export class SignalsModule extends QueueModule {
     name: string,
     options: ExternalWaitOptions = {},
   ): Promise<WaitForSignalResult<TPayload>> {
-    validateSignalName(name);
+    validateExternalWaitName(name, "Signal");
     if (typeof workerId !== "string" || workerId.length === 0) {
       throw new TypeError("Worker ID must be a non-empty string");
     }
@@ -169,6 +142,7 @@ export class SignalsModule extends QueueModule {
       [job.id, workerId, job.fenceToken.toString(), name, validateExternalWaitOptions(options)],
     );
     const row = expectOneRow(result, "workhorse.wait_for_signal_v1");
+    if (row.status === "already_waiting") throw new SignalWaitConflictError(job.id, name);
     if (row.status === "stale") throw new SignalWaitLeaseLostError(job.id, name);
     if (row.status === "limit_exceeded") throw new SignalWaitLimitExceededError(job.id);
     if (row.status !== "waiting" && row.status !== "delivered") {
@@ -183,9 +157,9 @@ export class SignalsModule extends QueueModule {
     payload: TPayload,
     request: SendSignalRequest,
   ): Promise<SendSignalResult<TPayload>> {
-    validateSignalName(name);
-    validateSendRequest(request);
-    const encodedPayload = validateSignalPayload(payload);
+    validateExternalWaitName(name, "Signal");
+    validateExternalWaitDeliveryRequest(request, "Signal");
+    const encodedPayload = encodeExternalWaitValue(payload, "Signal payload");
     const result = await this.context.database.query<SendSignalRow>(
       `SELECT status, payload, delivered_at, delivered_by
          FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,

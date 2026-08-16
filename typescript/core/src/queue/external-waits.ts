@@ -1,5 +1,17 @@
-export const MAX_EXTERNAL_WAIT_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1_000;
-export const MAX_EXTERNAL_WAIT_LIST_SIZE = 1_000;
+import type { Json } from "../types.js";
+import {
+  MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS,
+  MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES,
+  MAX_EXTERNAL_WAIT_LIST_SIZE,
+  MAX_EXTERNAL_WAIT_NAME_CHARACTERS,
+  MAX_EXTERNAL_WAIT_TIMEOUT_MS,
+  MAX_EXTERNAL_WAIT_VALUE_BYTES,
+} from "../types.js";
+
+export interface ExternalWaitDeliveryRequest {
+  idempotencyKey: string;
+  requestedBy: string;
+}
 
 export interface ExternalWaitOptions {
   /** Fail the job if the boundary remains unanswered for this many milliseconds. */
@@ -99,6 +111,54 @@ export function externalWaitRecord(row: ExternalWaitRow): ExternalWaitRecord {
 
 export function externalWaitCursor(row: ExternalWaitRow): ExternalWaitCursor {
   return { createdAt: row.cursor_created_at, jobId: row.job_id, name: row.wait_name };
+}
+
+export function validateExternalWaitName(name: string, label: string): void {
+  if (typeof name !== "string") throw new TypeError(`${label} name must be a string`);
+  if (name.length < 1 || name.length > MAX_EXTERNAL_WAIT_NAME_CHARACTERS) {
+    throw new RangeError(
+      `${label} name must contain between 1 and ${MAX_EXTERNAL_WAIT_NAME_CHARACTERS} characters`,
+    );
+  }
+  if (name.trim() !== name) {
+    throw new RangeError(`${label} name must not have leading or trailing whitespace`);
+  }
+}
+
+export function encodeExternalWaitValue(value: Json, label: string): string {
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) throw new TypeError(`${label} must be JSON serializable`);
+  if (Buffer.byteLength(encoded) > MAX_EXTERNAL_WAIT_VALUE_BYTES) {
+    throw new RangeError(`${label} must be at most ${MAX_EXTERNAL_WAIT_VALUE_BYTES} bytes`);
+  }
+  return encoded;
+}
+
+export function validateExternalWaitDeliveryRequest(
+  request: ExternalWaitDeliveryRequest,
+  label: string,
+): void {
+  if (typeof request !== "object" || request === null || Array.isArray(request)) {
+    throw new TypeError(`${label} request must be an object`);
+  }
+  if (typeof request.idempotencyKey !== "string") {
+    throw new TypeError(`${label} idempotency key must be a string`);
+  }
+  const keyBytes = Buffer.byteLength(request.idempotencyKey);
+  if (keyBytes < 1 || keyBytes > MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES) {
+    throw new RangeError(
+      `${label} idempotency key must contain between 1 and ${MAX_EXTERNAL_WAIT_IDEMPOTENCY_KEY_BYTES} UTF-8 bytes`,
+    );
+  }
+  if (
+    typeof request.requestedBy !== "string" ||
+    request.requestedBy.length < 1 ||
+    request.requestedBy.length > MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS
+  ) {
+    throw new RangeError(
+      `${label} requestedBy must contain between 1 and ${MAX_EXTERNAL_WAIT_ACTOR_CHARACTERS} characters`,
+    );
+  }
 }
 
 export function validateExternalWaitOptions(options: ExternalWaitOptions): number | null {
