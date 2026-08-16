@@ -20,6 +20,25 @@ export const DURABLE_TIMER_WAIT_NAME = "publication-delay";
 export const DURABLE_TIMER_PUBLISH_CHECKPOINT = "publish-after-wait";
 export const RECURRING_JOB_TYPE = "demo.recurring";
 export const REPORT_JOB_TYPE = "demo.report";
+export const CHILD_STEP_JOB_TYPE = "demo.child-step";
+export const SIGNAL_SENDER_JOB_TYPE = "demo.signal-sender";
+/** One shared boundary name keeps the signal showcase greppable across sender and waiter. */
+export const DEMO_SIGNAL_NAME = "partner-callback";
+export const DEMO_HUMAN_WAIT_NAME = "operator-decision";
+/** The automated signal sender runs shortly after its waiter suspends. */
+export const DEMO_SIGNAL_SENDER_DELAY_MS = 3_000;
+/**
+ * Recurring signal and human-decision occurrences expire on their own so unanswered boundaries
+ * never accumulate; only the seeded operator scenarios wait a full day for a person.
+ */
+export const DEMO_RECURRING_WAIT_TIMEOUT_MS = 10 * 60_000;
+/**
+ * The declared batch ceiling for `demo.batch-digest`. Each worker clamps it to its own declared
+ * job concurrency, so the serial worker delivers singleton batches while the overlapping worker
+ * groups up to three compatible members per invocation.
+ */
+export const DEMO_BATCH_MAX_SIZE = 3;
+export const DEMO_BATCH_LINGER_MS = 2_000;
 export const DEMO_QUEUE = "demo";
 export const REPRESENTATIVE_SEED_NAME = "default-dashboard-v8";
 export const LONG_RUNNING_SEED_NAME = "long-running-dashboard-v2";

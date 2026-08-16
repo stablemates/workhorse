@@ -2,8 +2,13 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   CancellationRequestedError,
+  JobContractValidationError,
+  JobValueSizeLimitError,
   MIN_PROGRESS_UPDATE_INTERVAL_MS,
+  type ChildJobRequest,
+  type EnqueueRequest,
   type Handler,
+  type Json,
   type Queue,
   type Worker,
 } from "@workhorse/core";
@@ -18,15 +23,26 @@ import {
 } from "./durable-demo.js";
 import { orders } from "./schema.js";
 import {
+  DEMO_FEATURE_RECURRING_SOURCE,
   DEMO_FEATURE_SHOWCASE_FAMILIES,
   demoFeatureRecurringVariant,
+  demoFeatureShowcaseFamily,
   type DemoFeatureBehavior,
+  type DemoFeatureFamily,
   type DemoFeaturePayload,
 } from "./feature-showcase.js";
+import { DEMO_CONTRACT_JOB_TYPE } from "./contracts.js";
 import {
+  CHILD_STEP_JOB_TYPE,
+  DEMO_BATCH_LINGER_MS,
+  DEMO_BATCH_MAX_SIZE,
   DEMO_DURABLE_STEP_MS,
   DEMO_DURABLE_TIMER_WAIT_MS,
+  DEMO_HUMAN_WAIT_NAME,
   DEMO_LONG_RUNNING_MS,
+  DEMO_RECURRING_WAIT_TIMEOUT_MS,
+  DEMO_SIGNAL_NAME,
+  DEMO_SIGNAL_SENDER_DELAY_MS,
   DURABLE_TIMER_JOB_TYPE,
   DURABLE_TIMER_PREPARE_CHECKPOINT,
   DURABLE_TIMER_PUBLISH_CHECKPOINT,
@@ -38,6 +54,7 @@ import {
   REPORT_JOB_TYPE,
   RETRY_CHECKPOINT_NAME,
   RETRY_JOB_TYPE,
+  SIGNAL_SENDER_JOB_TYPE,
   TIMING_JOB_TYPE,
 } from "./constants.js";
 import type { DemoDatabase } from "./database.js";
@@ -52,8 +69,16 @@ import type { DemoDatabase } from "./database.js";
  */
 export interface DemoHandlerDependencies {
   database: DemoDatabase;
-  /** Used only for the showcase's deliberate self-cancellation. */
+  /**
+   * Used by the showcase's deliberate self-cancellation and by the handler-driven families:
+   * signal senders, recurring dependency chains, and the keyed-ingress and priority drivers.
+   */
   queue: Queue;
+  /**
+   * Ceiling for one `demo.batch-digest` invocation. The caller clamps it to the worker's declared
+   * job concurrency because a batch cannot hold more members than the worker has slots.
+   */
+  batchMaxSize?: number;
   durableStepMs?: number;
   durableTimerWaitMs?: number;
   longRunningJobMs?: number;
@@ -67,6 +92,34 @@ export interface DemoHandlerDependencies {
     attempt: number,
     fenceToken: bigint,
   ) => void;
+}
+
+/** Build one handler-originated showcase payload with every optional field explicitly null. */
+function recurringPayload(
+  family: DemoFeatureFamily,
+  scenario: string,
+  behavior: DemoFeatureBehavior,
+  label: string,
+  extra: Partial<DemoFeaturePayload> = {},
+): DemoFeaturePayload {
+  return {
+    source: DEMO_FEATURE_RECURRING_SOURCE,
+    family,
+    scenario,
+    behavior,
+    label,
+    durationMs: null,
+    waitMs: null,
+    checkpointCount: null,
+    waitMode: null,
+    waitTimeoutMs: null,
+    childCount: null,
+    role: null,
+    memberIndex: null,
+    shouldFail: null,
+    invoiceId: null,
+    ...extra,
+  };
 }
 
 /** Register every demo job handler on one worker. */
@@ -239,10 +292,15 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
     }
 
     if (payload.family === "durable-waits") {
-      await context.sleep(
-        `${payload.scenario}:wait`,
-        payload.waitMs ?? (variant === null ? 500 : 400 + variant * 300),
-      );
+      const waitName = `${payload.scenario}:wait`;
+      const waitMs = payload.waitMs ?? (variant === null ? 500 : 400 + variant * 300);
+      // The embargo scenario waits on an absolute target; the wake time persists on first
+      // scheduling, so the recomputed argument is ignored when the wait replays.
+      if (payload.waitMode === "absolute") {
+        await context.sleepUntil(waitName, new Date(Date.now() + waitMs));
+      } else {
+        await context.sleep(waitName, waitMs);
+      }
     }
 
     if (payload.family === "progress") {
@@ -290,9 +348,365 @@ export function registerDemoHandlers(worker: Worker, deps: DemoHandlerDependenci
       attempt: context.job.attempt,
     };
   };
+  // The original outcome-shaped families share one generic handler; the families added for
+  // dependencies, children, external boundaries, keyed ingress, priority, batching, and contracts
+  // each need their own durable API calls and register individually below.
+  const genericFamilies: ReadonlySet<DemoFeatureFamily> = new Set([
+    "ingress-routing",
+    "retry-policies",
+    "durable-checkpoints",
+    "durable-waits",
+    "progress",
+    "timing-controls",
+    "cancellation",
+    "dead-letters-redrive",
+  ]);
   for (const family of DEMO_FEATURE_SHOWCASE_FAMILIES) {
-    worker.handle(family.jobType, featureShowcaseHandler);
+    if (genericFamilies.has(family.key)) worker.handle(family.jobType, featureShowcaseHandler);
   }
+
+  const dependencyFamily = demoFeatureShowcaseFamily("job-dependencies");
+  worker.handle<DemoFeaturePayload>(
+    dependencyFamily.jobType,
+    async (payload, context): Promise<Json> => {
+      // Each recurring occurrence drives a fresh prerequisite-to-dependent chain, so the
+      // dependency lineage keeps growing while the dashboard is open.
+      if (payload.behavior === "rotating") {
+        const prerequisiteJobId = await queue.enqueue(
+          dependencyFamily.jobType,
+          recurringPayload(
+            "job-dependencies",
+            "recurring-chain",
+            "success",
+            "Recurring chain prerequisite",
+            { role: "prerequisite" },
+          ),
+          { maxAttempts: 1, tags: ["showcase", "dependency", "recurring", "prerequisite"] },
+        );
+        const dependentJobId = await queue.enqueue(
+          dependencyFamily.jobType,
+          recurringPayload(
+            "job-dependencies",
+            "recurring-chain",
+            "success",
+            "Recurring chain dependent",
+            { role: "dependent" },
+          ),
+          {
+            maxAttempts: 1,
+            dependencies: {
+              prerequisiteJobIds: [prerequisiteJobId],
+              onSuccess: "release",
+              onFailure: "fail",
+              onCancellation: "cancel",
+            },
+            tags: ["showcase", "dependency", "recurring", "dependent"],
+          },
+        );
+        return { scenario: payload.scenario, prerequisiteJobId, dependentJobId };
+      }
+      if (payload.behavior === "always-fail") {
+        throw new Error(`Intentional prerequisite failure for ${payload.scenario}`);
+      }
+      return {
+        scenario: payload.scenario,
+        role: payload.role ?? null,
+        outcome: "succeeded",
+        attempt: context.job.attempt,
+      };
+    },
+  );
+
+  const childFamily = demoFeatureShowcaseFamily("child-workflows");
+  worker.handle<DemoFeaturePayload>(
+    childFamily.jobType,
+    async (payload, context): Promise<Json> => {
+      const childRequest = (name: string, failUntilAttempt: number): ChildJobRequest => ({
+        name,
+        type: CHILD_STEP_JOB_TYPE,
+        payload: { scenario: payload.scenario, step: name, failUntilAttempt },
+        options: {
+          maxAttempts: failUntilAttempt + 1,
+          ...(failUntilAttempt > 0 ? { retryPolicy: { type: "fixed", delayMs: 250 } } : {}),
+          tags: ["showcase", "child-job", "child", payload.scenario],
+        },
+      });
+      if (payload.behavior === "single-child" || payload.behavior === "child-retry") {
+        const request = childRequest("render-report", payload.behavior === "child-retry" ? 1 : 0);
+        const child = await context.runChild<Json>(
+          request.name,
+          request.type,
+          request.payload,
+          request.options,
+        );
+        return { scenario: payload.scenario, child };
+      }
+      const variant =
+        payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
+      const childCount = payload.childCount ?? (variant === null ? 3 : variant + 1);
+      const children = await context.runChildren(
+        Array.from({ length: childCount }, (_, index) => childRequest(`shard-${index + 1}`, 0)),
+      );
+      return { scenario: payload.scenario, childCount, children };
+    },
+  );
+  worker.handle<{ scenario: string; step: string; failUntilAttempt: number }>(
+    CHILD_STEP_JOB_TYPE,
+    async ({ scenario, step, failUntilAttempt }, { job }) => {
+      if (job.attempt <= failUntilAttempt) {
+        throw new Error(`Intentional child retry for ${scenario}:${step} attempt ${job.attempt}`);
+      }
+      return { scenario, step, completedOnAttempt: job.attempt };
+    },
+  );
+
+  const signalFamily = demoFeatureShowcaseFamily("signals");
+  worker.handle<DemoFeaturePayload>(
+    signalFamily.jobType,
+    async (payload, context): Promise<Json> => {
+      const variant =
+        payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
+      const behavior: DemoFeatureBehavior =
+        variant === null
+          ? payload.behavior
+          : variant === 0
+            ? "signal-handoff"
+            : variant === 1
+              ? "signal-operator"
+              : "signal-timeout";
+      const timeoutMs =
+        payload.waitTimeoutMs ??
+        (behavior === "signal-timeout" ? 5_000 : DEMO_RECURRING_WAIT_TIMEOUT_MS);
+      if (behavior === "signal-handoff") {
+        // The checkpoint keeps the sender enqueue exactly-once across the wait's replay.
+        await context.checkpoint("enqueue-signal-sender", () =>
+          queue.enqueue(
+            SIGNAL_SENDER_JOB_TYPE,
+            { targetJobId: context.job.id, scenario: payload.scenario },
+            {
+              runAt: new Date(Date.now() + DEMO_SIGNAL_SENDER_DELAY_MS),
+              maxAttempts: 5,
+              retryPolicy: { type: "fixed", delayMs: 2_000 },
+              tags: ["showcase", "signal", "sender", payload.scenario],
+            },
+          ),
+        );
+      }
+      const signal = await context.waitForSignal(DEMO_SIGNAL_NAME, { timeoutMs });
+      return { scenario: payload.scenario, behavior, signal };
+    },
+  );
+  worker.handle<{ targetJobId: string; scenario: string }>(
+    SIGNAL_SENDER_JOB_TYPE,
+    async ({ targetJobId, scenario }, { job }) => {
+      const result = await queue.sendSignal(
+        targetJobId,
+        DEMO_SIGNAL_NAME,
+        { scenario, sentBy: "showcase-sender", sentOnAttempt: job.attempt },
+        { idempotencyKey: `signal-sender:${job.id}`, requestedBy: "demo-signal-sender" },
+      );
+      // The waiter may not have suspended yet; retry until the wait exists. Any delivered or
+      // already-answered status is a success for the sender.
+      if (result.status === "not_waiting" || result.status === "stale") {
+        throw new Error(`Signal target ${targetJobId} is not waiting yet (${result.status})`);
+      }
+      return { targetJobId, scenario, status: result.status };
+    },
+  );
+
+  const humanFamily = demoFeatureShowcaseFamily("human-decisions");
+  worker.handle<DemoFeaturePayload>(
+    humanFamily.jobType,
+    async (payload, context): Promise<Json> => {
+      const variant =
+        payload.behavior === "rotating" ? demoFeatureRecurringVariant(context.job.id) : null;
+      const behavior: DemoFeatureBehavior =
+        variant === null ? payload.behavior : variant === 2 ? "human-expiring" : "human-pending";
+      const timeoutMs =
+        payload.waitTimeoutMs ??
+        (behavior === "human-expiring" ? 5_000 : DEMO_RECURRING_WAIT_TIMEOUT_MS);
+      const decision = await context.waitForHuman(
+        DEMO_HUMAN_WAIT_NAME,
+        { scenario: payload.scenario, summary: payload.label },
+        { timeoutMs },
+      );
+      return { scenario: payload.scenario, behavior, decision };
+    },
+  );
+
+  const debounceFamily = demoFeatureShowcaseFamily("keyed-debounce");
+  worker.handle<DemoFeaturePayload>(
+    debounceFamily.jobType,
+    async (payload, context): Promise<Json> => {
+      // The recurring occurrence is a driver: it performs a keyed enqueue and one replacement and
+      // returns both durable dispositions, so coalescing outcomes are visible as a task result.
+      if (payload.behavior === "rotating") {
+        const debounce = {
+          key: `showcase-debounce-${context.job.id}`,
+          windowMs: 5_000,
+          schedule: "reset",
+        } as const;
+        const enqueuePass = (pass: number) =>
+          queue.enqueueWithResult(
+            debounceFamily.jobType,
+            recurringPayload(
+              "keyed-debounce",
+              "recurring-window",
+              "success",
+              `Debounced refresh pass ${pass}`,
+            ),
+            { debounce, maxAttempts: 1, tags: ["showcase", "debounce", "recurring"] },
+          );
+        const first = await enqueuePass(1);
+        const replacement = await enqueuePass(2);
+        return {
+          scenario: payload.scenario,
+          outcomes: [first, replacement].map((result) => ({
+            jobId: result.jobId,
+            outcome: result.outcome,
+            reason: result.reason ?? null,
+          })),
+        };
+      }
+      return { scenario: payload.scenario, outcome: "succeeded", attempt: context.job.attempt };
+    },
+  );
+
+  const throttleFamily = demoFeatureShowcaseFamily("keyed-throttle");
+  worker.handle<DemoFeaturePayload>(
+    throttleFamily.jobType,
+    async (payload, context): Promise<Json> => {
+      if (payload.behavior === "rotating") {
+        const throttle = { key: `showcase-throttle-${context.job.id}`, windowMs: 5_000 };
+        // Throttled repeats coalesce only when they are equivalent, so all three requests are
+        // identical; a differing repeat would be refused as a conflict instead of coalescing.
+        const request: EnqueueRequest = {
+          type: throttleFamily.jobType,
+          payload: recurringPayload(
+            "keyed-throttle",
+            "recurring-window",
+            "success",
+            "Throttled sync request",
+          ),
+          options: { throttle, maxAttempts: 1, tags: ["showcase", "throttle", "recurring"] },
+        };
+        const outcomes = await queue.enqueueManyWithResults([request, request, request]);
+        return {
+          scenario: payload.scenario,
+          outcomes: outcomes.map((result) => ({
+            jobId: result.jobId,
+            outcome: result.outcome,
+            reason: result.reason ?? null,
+          })),
+        };
+      }
+      return { scenario: payload.scenario, outcome: "succeeded", attempt: context.job.attempt };
+    },
+  );
+
+  const priorityFamily = demoFeatureShowcaseFamily("priority-lanes");
+  worker.handle<DemoFeaturePayload>(
+    priorityFamily.jobType,
+    async (payload, context): Promise<Json> => {
+      if (payload.behavior === "rotating") {
+        const lanes = [
+          { priority: 90, label: "Recurring expedited lane" },
+          { priority: 50, label: "Recurring standard lane" },
+          { priority: 10, label: "Recurring bulk lane" },
+        ];
+        const jobIds = await queue.enqueueMany(
+          lanes.map((lane) => ({
+            type: priorityFamily.jobType,
+            payload: recurringPayload("priority-lanes", "recurring-lanes", "success", lane.label),
+            options: {
+              priority: lane.priority,
+              maxAttempts: 1,
+              tags: ["showcase", "priority", "recurring", `priority-${lane.priority}`],
+            },
+          })),
+        );
+        return { scenario: payload.scenario, jobIds };
+      }
+      return {
+        scenario: payload.scenario,
+        priority: context.job.priority,
+        outcome: "succeeded",
+        attempt: context.job.attempt,
+      };
+    },
+  );
+
+  const batchFamily = demoFeatureShowcaseFamily("batch-handlers");
+  const batchMaxSize = Math.max(1, deps.batchMaxSize ?? DEMO_BATCH_MAX_SIZE);
+  worker.handleBatch<DemoFeaturePayload>(
+    batchFamily.jobType,
+    { maxSize: batchMaxSize, lingerMs: DEMO_BATCH_LINGER_MS },
+    (items) => {
+      const digestId = randomUUID();
+      return items.map(({ payload, context }) =>
+        payload.shouldFail
+          ? {
+              status: "failed",
+              error: new Error(`Intentional independent member failure for ${payload.scenario}`),
+            }
+          : {
+              status: "succeeded",
+              result: {
+                scenario: payload.scenario,
+                digestId,
+                batchSize: items.length,
+                memberIndex: payload.memberIndex ?? null,
+                attempt: context.job.attempt,
+              },
+            },
+      );
+    },
+  );
+
+  worker.handle<DemoFeaturePayload>(
+    DEMO_CONTRACT_JOB_TYPE,
+    async (payload, context): Promise<Json> => {
+      if (payload.behavior === "contract-payload-probe") {
+        // A real rejection, surfaced honestly: the probe enqueues a payload the v1 contract
+        // refuses and returns the refusal as its own result.
+        try {
+          await queue.enqueue(
+            DEMO_CONTRACT_JOB_TYPE,
+            recurringPayload(
+              "payload-contracts",
+              "recurring-probe",
+              "contract-valid",
+              "Probe without invoiceId",
+            ),
+          );
+          throw new Error("Expected the v1 contract to refuse a payload without invoiceId");
+        } catch (error) {
+          if (
+            !(error instanceof JobContractValidationError) &&
+            !(error instanceof JobValueSizeLimitError)
+          ) {
+            throw error;
+          }
+          return {
+            approved: true,
+            scenario: payload.scenario,
+            probedRejection: { name: error.name, message: error.message },
+          };
+        }
+      }
+      if (payload.behavior === "contract-result-invalid") {
+        // The v1 contract requires a boolean `approved`; completing with this result fails the
+        // attempt at the completion boundary rather than inside the handler.
+        return { approved: "pending-review", scenario: payload.scenario };
+      }
+      return {
+        approved: true,
+        scenario: payload.scenario,
+        invoiceId: payload.invoiceId ?? null,
+        contractVersion: context.job.contractVersion,
+      };
+    },
+  );
   worker.handle<{ report: string; source: string }>(REPORT_JOB_TYPE, async (payload) => {
     return { ...payload, generated: true };
   });

@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import { installSchema, Queue, type Worker } from "@workhorse/core";
+import { installSchema, Queue, type Json, type Worker } from "@workhorse/core";
 import { createDrizzleAdapter } from "@workhorse/drizzle";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -37,6 +37,8 @@ import {
   DEMO_SCHEDULE_NAMESPACE,
   DEMO_TIMING_POLICY_TIMEOUT_MS,
   DEMO_TIMING_TIMEOUT_MS,
+  DEMO_HUMAN_WAIT_NAME,
+  DEMO_SIGNAL_NAME,
   DEMO_WORKER_POLL_MS,
   DEMO_WORKER_CONCURRENCY,
   HISTORICAL_WORKER_IDS,
@@ -60,11 +62,16 @@ import {
   readDashboardSnapshot,
   readDashboardWorkers,
 } from "@workhorse/dashboard/server";
+import { DEMO_QUEUE_OPTIONS } from "../src/contracts.js";
 import { durableDemoScenarios } from "../src/durable-demo.js";
 import {
   DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT,
   DEMO_FEATURE_SHOWCASE_FAMILIES,
   DEMO_FEATURE_SHOWCASE_SOURCE,
+  demoFeatureShowcaseFamily,
+  type DemoFeatureBehavior,
+  type DemoFeatureFamily,
+  type DemoFeaturePayload,
 } from "../src/feature-showcase.js";
 import { readIdempotencyEvidence, type DashboardWorkerRow } from "@workhorse/dashboard/wire";
 import { createDemoWorkerDefinition } from "../src/worker-definition.js";
@@ -144,7 +151,11 @@ interface DemoTestRuntimeOptions {
 type TestApplicationOptions = CreateDemoApplicationOptions & DemoTestRuntimeOptions;
 
 function createTestWorkerRuntime(options: DemoTestRuntimeOptions) {
-  const adapter = createDrizzleAdapter(database, { defaultQueue: DEMO_QUEUE });
+  // The worker runtime shares the demo's queue options so contracted job types stay completable.
+  const adapter = createDrizzleAdapter(database, {
+    defaultQueue: DEMO_QUEUE,
+    queueOptions: DEMO_QUEUE_OPTIONS,
+  });
   const workers: Worker[] = [];
   const runs: Promise<void>[] = [];
   let started = false;
@@ -368,6 +379,47 @@ async function waitForRegisteredFleet(
   return { overlapping: overlapping!, serial: serial! };
 }
 
+function showcaseTestPayload(
+  family: DemoFeatureFamily,
+  scenario: string,
+  behavior: DemoFeatureBehavior,
+  extra: Partial<DemoFeaturePayload> = {},
+): DemoFeaturePayload {
+  return {
+    source: DEMO_FEATURE_SHOWCASE_SOURCE,
+    family,
+    scenario,
+    behavior,
+    label: `${scenario} test`,
+    durationMs: null,
+    waitMs: null,
+    checkpointCount: null,
+    waitMode: null,
+    waitTimeoutMs: null,
+    childCount: null,
+    role: null,
+    memberIndex: null,
+    shouldFail: null,
+    invoiceId: null,
+    ...extra,
+  };
+}
+
+async function jobResult(jobId: string): Promise<Json | null> {
+  const rows = await pool.query<{ result: Json | null }>(
+    "SELECT result FROM workhorse.job_outcome WHERE job_id = $1",
+    [jobId],
+  );
+  return rows.rows[0]?.result ?? null;
+}
+
+const waitForJobState = (queue: Queue, jobId: string, state: string) =>
+  waitFor(
+    async () => (await queue.getJob(jobId))?.state,
+    (value) => value === state,
+    1_600,
+  );
+
 describe("Workhorse demo", () => {
   it("migrates legacy showcase jobs to their family task types", async () => {
     const queue = new Queue(pool, { defaultQueue: DEMO_QUEUE });
@@ -450,7 +502,7 @@ describe("Workhorse demo", () => {
 
     const seeded = await seedDemoData(database);
     expect(seeded).toMatchObject({ seeded: true, historicalJobCount: 362 });
-    expect(seeded.jobIds).toHaveLength(49);
+    expect(seeded.jobIds).toHaveLength(86);
     expect(await seedDemoData(database)).toEqual({
       seeded: false,
       jobIds: [],
@@ -460,8 +512,11 @@ describe("Workhorse demo", () => {
       await pool.query(
         `SELECT array_agg(DISTINCT version ORDER BY version) AS versions
            FROM (
+             -- Throttled acceptance runs inside a SQL exception block, so those rows carry
+             -- subtransaction xids of the same showcase transaction rather than its top-level id.
              SELECT xmin::text AS version FROM workhorse.job
-               WHERE id = ANY($1::uuid[]) AND job_type <> 'demo.long-running'
+               WHERE id = ANY($1::uuid[])
+                 AND job_type NOT IN ('demo.long-running', 'demo.keyed-throttle')
              UNION ALL SELECT xmin::text FROM public.workhorse_demo_order
             UNION ALL SELECT xmin::text FROM public.workhorse_demo_seed
                WHERE name = 'default-dashboard-v8'
@@ -475,7 +530,7 @@ describe("Workhorse demo", () => {
       await pool.query("SELECT count(*)::integer AS count FROM public.workhorse_demo_order"),
     ).toMatchObject({ rows: [{ count: 1 }] });
     expect(await pool.query("SELECT count(*)::integer AS count FROM workhorse.job")).toMatchObject({
-      rows: [{ count: 411 }],
+      rows: [{ count: 448 }],
     });
     expect(
       await pool.query(
@@ -493,7 +548,7 @@ describe("Workhorse demo", () => {
         .toSorted((left, right) => left.key.localeCompare(right.key))
         .map((family) => ({ family: family.key, job_type: family.jobType, scenarios: 3 })),
     });
-    expect(DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT).toBe(24);
+    expect(DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT).toBe(51);
     expect(
       await pool.query(
         `SELECT count(*)::integer AS count
@@ -699,9 +754,9 @@ describe("Workhorse demo", () => {
     });
     const client = dashboardClient(app);
     await expect(client.dashboard.taskCounts()).resolves.toMatchObject({
-      all: 411,
-      scheduled: 6,
-      queued: 32,
+      all: 448,
+      scheduled: 9,
+      queued: 63,
       completed: 350,
       discarded: 21,
       retried: 22,
@@ -730,8 +785,8 @@ describe("Workhorse demo", () => {
       filter: "all",
       page: 1,
       pageSize: 25,
-      total: 411,
-      counts: { all: 411, scheduled: 6, queued: 32, completed: 350, discarded: 21 },
+      total: 448,
+      counts: { all: 448, scheduled: 9, queued: 63, completed: 350, discarded: 21 },
     });
     expect(firstPage.jobs).toHaveLength(25);
     expect(firstPage).not.toHaveProperty("facets");
@@ -758,13 +813,13 @@ describe("Workhorse demo", () => {
       tags: expect.arrayContaining(["billing", "email", "reports", "weekly"]),
     });
     expect(firstPage.jobs.some((job) => job.tags.length > 0)).toBe(true);
-    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 411 });
+    expect(secondPage).toMatchObject({ filter: "all", page: 2, pageSize: 25, total: 448 });
     expect(secondPage.jobs).toHaveLength(25);
     expect(
       await client.dashboard.tasks({ filter: "scheduled", page: 1, pageSize: 25 }),
     ).toMatchObject({
       filter: "scheduled",
-      total: 6,
+      total: 9,
       jobs: expect.arrayContaining([
         expect.objectContaining({ state: "scheduled", payload: { source: "scheduled-seed" } }),
       ]),
@@ -895,9 +950,9 @@ describe("Workhorse demo", () => {
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "task" }),
     ).resolves.toMatchObject({
       groups: [
-        "demo.cancellation",
-        "demo.dead-letter-redrive",
+        "demo.batch-digest",
         "demo.durable-pipeline",
+        "demo.job-dependency",
         "demo.recurring",
         "demo.report",
         "email.digest",
@@ -911,7 +966,7 @@ describe("Workhorse demo", () => {
       client.dashboard.activity({ filter: "all", period: "7d", groupBy: "status" }),
     ).resolves.toMatchObject({
       groupBy: "status",
-      groups: ["canceled", "failed", "ready", "scheduled", "succeeded"],
+      groups: ["blocked", "canceled", "failed", "ready", "scheduled", "succeeded"],
     });
   });
 
@@ -1219,11 +1274,14 @@ describe("Workhorse demo", () => {
         `)
       ).rows;
     try {
+      // The full seventeen-family showcase backlog competes for the same four worker slots (the
+      // batch family lingers deliberately), so this wait needs a larger budget than the default.
       const firstAttemptRows = await waitFor(
         readPersistentRows,
         (rows) =>
           rows.length === persistentScenarios.length &&
           rows.every((row) => row.state === "scheduled" && row.current_attempt === 2),
+        1_200,
       );
 
       for (const [index, row] of firstAttemptRows.entries()) {
@@ -3978,6 +4036,292 @@ describe("Workhorse dashboard events feed", () => {
       expect(
         (await client.dashboard.events({ window: "1h", pageSize: 100, jobId })).events.length,
       ).toBeGreaterThan(0);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("releases and cancels dependents according to their prerequisite outcomes", async () => {
+    const { workhorse } = createTestApplication();
+    const queue = workhorse.context.queue;
+    const family = demoFeatureShowcaseFamily("job-dependencies");
+
+    const releasedPrerequisite = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("job-dependencies", "test-release", "success", { role: "prerequisite" }),
+      { maxAttempts: 1 },
+    );
+    const releasedDependent = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("job-dependencies", "test-release", "success", { role: "dependent" }),
+      {
+        maxAttempts: 1,
+        dependencies: {
+          prerequisiteJobIds: [releasedPrerequisite],
+          onSuccess: "release",
+          onFailure: "fail",
+          onCancellation: "cancel",
+        },
+      },
+    );
+    const failingPrerequisite = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("job-dependencies", "test-cancel", "always-fail", {
+        role: "prerequisite",
+      }),
+      { maxAttempts: 1 },
+    );
+    const canceledDependent = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("job-dependencies", "test-cancel", "success", { role: "dependent" }),
+      {
+        maxAttempts: 1,
+        dependencies: {
+          prerequisiteJobIds: [failingPrerequisite],
+          onSuccess: "release",
+          onFailure: "cancel",
+          onCancellation: "cancel",
+        },
+      },
+    );
+    workhorse.start();
+
+    try {
+      await waitForJobState(queue, releasedDependent, "succeeded");
+      await waitForJobState(queue, canceledDependent, "canceled");
+      const lineage = await queue.getDependencyLineage(releasedDependent);
+      expect(lineage.records).toMatchObject([
+        {
+          dependentJobId: releasedDependent,
+          prerequisiteJobId: releasedPrerequisite,
+          resolution: "release",
+        },
+      ]);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("joins named children and retains their results for the suspended parent", async () => {
+    const { workhorse } = createTestApplication();
+    const queue = workhorse.context.queue;
+    const family = demoFeatureShowcaseFamily("child-workflows");
+
+    const parentJobId = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("child-workflows", "test-fan-out", "fan-out-join", { childCount: 2 }),
+      { maxAttempts: 1 },
+    );
+    workhorse.start();
+
+    try {
+      await waitForJobState(queue, parentJobId, "succeeded");
+      expect(await jobResult(parentJobId)).toMatchObject({
+        scenario: "test-fan-out",
+        childCount: 2,
+        children: {
+          "shard-1": { step: "shard-1", completedOnAttempt: 1 },
+          "shard-2": { step: "shard-2", completedOnAttempt: 1 },
+        },
+      });
+      const lineage = await queue.getChildLineage(parentJobId);
+      expect(lineage.records).toHaveLength(2);
+      expect(lineage.records.every((record) => record.outcomeState === "succeeded")).toBe(true);
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("resumes a signal wait when its companion sender task delivers", async () => {
+    const { workhorse } = createTestApplication();
+    const queue = workhorse.context.queue;
+    const family = demoFeatureShowcaseFamily("signals");
+
+    const waiterJobId = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("signals", "test-handoff", "signal-handoff", {
+        waitTimeoutMs: 60_000,
+      }),
+      { maxAttempts: 1 },
+    );
+    workhorse.start();
+
+    try {
+      await waitForJobState(queue, waiterJobId, "succeeded");
+      expect(await jobResult(waiterJobId)).toMatchObject({
+        scenario: "test-handoff",
+        behavior: "signal-handoff",
+        signal: { scenario: "test-handoff", sentBy: "showcase-sender" },
+      });
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("lists a pending operator signal wait and resumes it on delivery", async () => {
+    const { workhorse } = createTestApplication();
+    const queue = workhorse.context.queue;
+    const family = demoFeatureShowcaseFamily("signals");
+
+    const waiterJobId = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("signals", "test-operator", "signal-operator", {
+        waitTimeoutMs: 60_000,
+      }),
+      { maxAttempts: 1 },
+    );
+    workhorse.start();
+
+    try {
+      await waitFor(
+        () => queue.listSignalWaits(),
+        (page) => page.items.some((wait) => wait.jobId === waiterJobId),
+        1_600,
+      );
+      const delivery = await queue.sendSignal(
+        waiterJobId,
+        DEMO_SIGNAL_NAME,
+        { approved: true },
+        { idempotencyKey: "test-operator-signal", requestedBy: "integration-test" },
+      );
+      expect(delivery.status).toBe("delivered");
+      await waitForJobState(queue, waiterJobId, "succeeded");
+      expect(await jobResult(waiterJobId)).toMatchObject({ signal: { approved: true } });
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("completes a pending human decision and resumes the suspended handler", async () => {
+    const { workhorse } = createTestApplication();
+    const queue = workhorse.context.queue;
+    const family = demoFeatureShowcaseFamily("human-decisions");
+
+    const jobId = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("human-decisions", "test-approval", "human-pending", {
+        waitTimeoutMs: 60_000,
+      }),
+      { maxAttempts: 1 },
+    );
+    workhorse.start();
+
+    try {
+      const pending = await waitFor(
+        () => queue.listHumanWaits(),
+        (page) => page.items.some((wait) => wait.jobId === jobId),
+        1_600,
+      );
+      expect(pending.items.find((wait) => wait.jobId === jobId)).toMatchObject({
+        name: DEMO_HUMAN_WAIT_NAME,
+        context: { scenario: "test-approval" },
+      });
+      const completion = await queue.completeHumanWait(
+        jobId,
+        DEMO_HUMAN_WAIT_NAME,
+        { approved: true, note: "looks good" },
+        { idempotencyKey: "test-human-decision", completedBy: "integration-test" },
+      );
+      expect(completion.status).toBe("completed");
+      await waitForJobState(queue, jobId, "succeeded");
+      expect(await jobResult(jobId)).toMatchObject({
+        scenario: "test-approval",
+        decision: { approved: true, note: "looks good" },
+      });
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("settles batch digest members independently within one invocation", async () => {
+    const { workhorse } = createTestApplication();
+    const queue = workhorse.context.queue;
+    const family = demoFeatureShowcaseFamily("batch-handlers");
+
+    const [succeedingJobId, failingJobId] = await queue.enqueueMany([
+      {
+        type: family.jobType,
+        payload: showcaseTestPayload("batch-handlers", "test-batch", "batch-member", {
+          memberIndex: 1,
+        }),
+        options: { maxAttempts: 1 },
+      },
+      {
+        type: family.jobType,
+        payload: showcaseTestPayload("batch-handlers", "test-batch", "batch-member", {
+          memberIndex: 2,
+          shouldFail: true,
+        }),
+        options: { maxAttempts: 1 },
+      },
+    ]);
+
+    workhorse.start();
+    try {
+      await waitForJobState(queue, succeedingJobId!, "succeeded");
+      await waitForJobState(queue, failingJobId!, "failed");
+      expect(await jobResult(succeedingJobId!)).toMatchObject({
+        scenario: "test-batch",
+        memberIndex: 1,
+        digestId: expect.any(String),
+      });
+    } finally {
+      await workhorse.stop();
+    }
+  });
+
+  it("captures the contract version, rejects an invalid result, and reports a payload refusal", async () => {
+    const { workhorse } = createTestApplication();
+    const queue = workhorse.context.queue;
+    const family = demoFeatureShowcaseFamily("payload-contracts");
+
+    const acceptedJobId = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("payload-contracts", "test-accepted", "contract-valid", {
+        invoiceId: "INV-test-accepted",
+      }),
+      { maxAttempts: 1 },
+    );
+    const rejectedResultJobId = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("payload-contracts", "test-rejected", "contract-result-invalid", {
+        invoiceId: "INV-test-rejected",
+      }),
+      { maxAttempts: 1 },
+    );
+    const probeJobId = await queue.enqueue(
+      family.jobType,
+      showcaseTestPayload("payload-contracts", "test-probe", "contract-payload-probe", {
+        invoiceId: "INV-test-probe",
+      }),
+      { maxAttempts: 1 },
+    );
+    await expect(
+      queue.enqueue(
+        family.jobType,
+        showcaseTestPayload("payload-contracts", "test-refused", "contract-valid"),
+      ),
+    ).rejects.toThrow(/contract/i);
+
+    workhorse.start();
+    try {
+      await waitForJobState(queue, acceptedJobId, "succeeded");
+      expect(await jobResult(acceptedJobId)).toMatchObject({
+        approved: true,
+        invoiceId: "INV-test-accepted",
+        contractVersion: "v1",
+      });
+      await waitForJobState(queue, rejectedResultJobId, "failed");
+      const failure = await pool.query<{ message: string }>(
+        "SELECT error->>'message' AS message FROM workhorse.job_outcome WHERE job_id = $1",
+        [rejectedResultJobId],
+      );
+      expect(failure.rows[0]!.message).toMatch(/contract/i);
+      await waitForJobState(queue, probeJobId, "succeeded");
+      expect(await jobResult(probeJobId)).toMatchObject({
+        approved: true,
+        probedRejection: { name: "JobContractValidationError" },
+      });
     } finally {
       await workhorse.stop();
     }

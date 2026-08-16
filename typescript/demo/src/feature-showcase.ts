@@ -1,6 +1,6 @@
-import type { Json, RetryPolicy } from "@workhorse/core";
+import type { DependencyTerminalPolicy, Json, RetryPolicy } from "@workhorse/core";
 
-export const DEMO_FEATURE_SHOWCASE_SEED_NAME = "feature-showcase-v1";
+export const DEMO_FEATURE_SHOWCASE_SEED_NAME = "feature-showcase-v2";
 export const DEMO_FEATURE_SHOWCASE_SOURCE = "feature-showcase-seed";
 export const DEMO_FEATURE_RECURRING_SOURCE = "feature-showcase-recurring";
 
@@ -12,7 +12,16 @@ export type DemoFeatureFamily =
   | "progress"
   | "timing-controls"
   | "cancellation"
-  | "dead-letters-redrive";
+  | "dead-letters-redrive"
+  | "job-dependencies"
+  | "child-workflows"
+  | "signals"
+  | "human-decisions"
+  | "keyed-debounce"
+  | "keyed-throttle"
+  | "priority-lanes"
+  | "batch-handlers"
+  | "payload-contracts";
 
 export type DemoFeatureBehavior =
   | "success"
@@ -30,6 +39,18 @@ export type DemoFeatureBehavior =
   | "timed-success"
   | "timed-slow"
   | "self-cancel"
+  | "single-child"
+  | "fan-out-join"
+  | "child-retry"
+  | "signal-handoff"
+  | "signal-operator"
+  | "signal-timeout"
+  | "human-pending"
+  | "human-expiring"
+  | "batch-member"
+  | "contract-valid"
+  | "contract-result-invalid"
+  | "contract-payload-probe"
   | "rotating";
 
 export type DemoFeaturePayload = {
@@ -42,7 +63,45 @@ export type DemoFeaturePayload = {
   durationMs: number | null;
   waitMs: number | null;
   checkpointCount: number | null;
+  /** Durable waits only: an absolute `sleepUntil` target instead of a relative `sleep`. */
+  waitMode: "absolute" | null;
+  /** Signals and human decisions: how long the external boundary stays answerable. */
+  waitTimeoutMs: number | null;
+  /** Child workflows: how many named children the parent fans out. */
+  childCount: number | null;
+  /** Job dependencies: which side of the prerequisite edge this job plays. */
+  role: "prerequisite" | "dependent" | null;
+  /** Batch handlers: position inside the seeded member group. */
+  memberIndex: number | null;
+  /** Batch handlers: whether this member settles as an independent failure. */
+  shouldFail: boolean | null;
+  /** Payload contracts: the field the demo contract requires on every accepted payload. */
+  invoiceId: string | null;
 };
+
+/** Prerequisite edges seeded ahead of one dependent showcase job. */
+export interface DemoFeatureDependencySeed {
+  prerequisites: ReadonlyArray<{
+    label: string;
+    behavior: "success" | "always-fail";
+    maxAttempts?: number;
+  }>;
+  onFailure: DependencyTerminalPolicy;
+  onCancellation: DependencyTerminalPolicy;
+}
+
+/** Keyed debounce shape seeded through `enqueueWithResult` replacements. */
+export interface DemoFeatureDebounceSeed {
+  schedule: "reset" | "preserve";
+  replacements: number;
+  windowMs: number;
+}
+
+/** Keyed throttle shape seeded through repeat, burst, or per-key acceptance. */
+export interface DemoFeatureThrottleSeed {
+  shape: "repeat" | "burst" | "per-key";
+  windowMs: number;
+}
 
 export interface DemoFeatureExample {
   scenario: string;
@@ -56,10 +115,21 @@ export interface DemoFeatureExample {
   executionTimeoutMs?: number;
   durationMs?: number;
   waitMs?: number;
+  waitMode?: "absolute";
+  waitTimeoutMs?: number;
   checkpointCount?: number;
+  childCount?: number;
+  priority?: number;
+  /** Enqueue this many members through one `enqueueMany` batch, all sharing the scenario. */
+  seedCount?: number;
+  /** Batch handlers: the last seeded member settles as an independent failure. */
+  failLastMember?: boolean;
   idempotencyKey?: string;
   afterEnqueue?: "cancel";
   seedTransition?: "fail" | "fail-and-redrive" | "fail-and-redrive-replay";
+  seedDependency?: DemoFeatureDependencySeed;
+  seedDebounce?: DemoFeatureDebounceSeed;
+  seedThrottle?: DemoFeatureThrottleSeed;
 }
 
 export interface DemoFeatureShowcaseFamily {
@@ -72,7 +142,16 @@ export interface DemoFeatureShowcaseFamily {
     | "demo.progress-reporting"
     | "demo.timing-control"
     | "demo.cancellation"
-    | "demo.dead-letter-redrive";
+    | "demo.dead-letter-redrive"
+    | "demo.job-dependency"
+    | "demo.child-workflow"
+    | "demo.signal-wait"
+    | "demo.human-decision"
+    | "demo.keyed-debounce"
+    | "demo.keyed-throttle"
+    | "demo.priority-lane"
+    | "demo.batch-digest"
+    | "demo.contract-check";
   title: string;
   description: string;
   scheduleName: string;
@@ -91,7 +170,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Ingress and routing",
     description: "Immediate, delayed, tagged, and idempotent acceptance paths.",
     scheduleName: "showcase.ingress-routing",
-    schedule: "0-59/8 * * * *",
+    schedule: "0-59/17 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -123,7 +202,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Retry policies",
     description: "Fixed, exponential, and decorrelated-jitter outcomes.",
     scheduleName: "showcase.retry-policies",
-    schedule: "1-59/8 * * * *",
+    schedule: "1-59/17 * * * *",
     recurringMaxAttempts: 3,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -164,7 +243,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Durable checkpoints",
     description: "Single, replayed, and multi-stage restart boundaries.",
     scheduleName: "showcase.durable-checkpoints",
-    schedule: "2-59/8 * * * *",
+    schedule: "2-59/17 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -199,7 +278,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Durable waits",
     description: "Lease-releasing waits with replay and retry variation.",
     scheduleName: "showcase.durable-waits",
-    schedule: "3-59/8 * * * *",
+    schedule: "3-59/17 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -212,10 +291,11 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
       },
       {
         scenario: "longer-embargo",
-        label: "Longer publication embargo",
+        label: "Absolute-target publication embargo",
         behavior: "wait",
         waitMs: 5_000,
-        tags: ["showcase", "durable-wait", "embargo"],
+        waitMode: "absolute",
+        tags: ["showcase", "durable-wait", "embargo", "sleep-until"],
       },
       {
         scenario: "wait-then-retry",
@@ -234,7 +314,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Mutable progress",
     description: "Latest-value progress across success, retry, and failure.",
     scheduleName: "showcase.progress",
-    schedule: "4-59/8 * * * *",
+    schedule: "4-59/17 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -270,7 +350,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Deadlines and execution timeouts",
     description: "Expired, timed-out, and comfortably completed work.",
     scheduleName: "showcase.timing-controls",
-    schedule: "5-59/8 * * * *",
+    schedule: "5-59/17 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -309,7 +389,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Cancellation",
     description: "Immediate ready, future scheduled, and cooperative active cancellation.",
     scheduleName: "showcase.cancellation",
-    schedule: "6-59/8 * * * *",
+    schedule: "6-59/17 * * * *",
     recurringMaxAttempts: 1,
     examples: [
       {
@@ -342,7 +422,7 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
     title: "Dead letters and redrive",
     description: "Unredriven failure, successful redrive, and idempotent redrive replay.",
     scheduleName: "showcase.dead-letters-redrive",
-    schedule: "7-59/8 * * * *",
+    schedule: "7-59/17 * * * *",
     recurringMaxAttempts: 2,
     recurringRetryPolicy: fastFixedRetry,
     examples: [
@@ -372,12 +452,348 @@ export const DEMO_FEATURE_SHOWCASE_FAMILIES: readonly DemoFeatureShowcaseFamily[
       },
     ],
   },
+  {
+    key: "job-dependencies",
+    jobType: "demo.job-dependency",
+    title: "Job dependencies",
+    description: "Prerequisites gate dependents; failures apply the declared terminal policy.",
+    scheduleName: "showcase.job-dependencies",
+    schedule: "8-59/17 * * * *",
+    recurringMaxAttempts: 1,
+    examples: [
+      {
+        scenario: "release-after-success",
+        label: "Dependent released by one prerequisite",
+        behavior: "success",
+        maxAttempts: 1,
+        tags: ["showcase", "dependency", "release"],
+        seedDependency: {
+          prerequisites: [{ label: "Prerequisite catalog import", behavior: "success" }],
+          onFailure: "fail",
+          onCancellation: "cancel",
+        },
+      },
+      {
+        scenario: "fan-in-join",
+        label: "Dependent joining two prerequisites",
+        behavior: "success",
+        maxAttempts: 1,
+        tags: ["showcase", "dependency", "fan-in"],
+        seedDependency: {
+          prerequisites: [
+            { label: "Prerequisite region export A", behavior: "success" },
+            { label: "Prerequisite region export B", behavior: "success" },
+          ],
+          onFailure: "fail",
+          onCancellation: "cancel",
+        },
+      },
+      {
+        scenario: "cancel-on-failure",
+        label: "Dependent canceled by a failed prerequisite",
+        behavior: "success",
+        maxAttempts: 1,
+        tags: ["showcase", "dependency", "intentionally-failing"],
+        seedDependency: {
+          prerequisites: [
+            { label: "Failing prerequisite validation", behavior: "always-fail", maxAttempts: 1 },
+          ],
+          onFailure: "cancel",
+          onCancellation: "cancel",
+        },
+      },
+    ],
+  },
+  {
+    key: "child-workflows",
+    jobType: "demo.child-workflow",
+    title: "Child workflows",
+    description: "Parents fan out named children, suspend, and join retained results.",
+    scheduleName: "showcase.child-workflows",
+    schedule: "9-59/17 * * * *",
+    recurringMaxAttempts: 1,
+    examples: [
+      {
+        scenario: "single-child",
+        label: "Parent awaiting one rendered child",
+        behavior: "single-child",
+        maxAttempts: 1,
+        tags: ["showcase", "child-job", "single"],
+      },
+      {
+        scenario: "fan-out-join",
+        label: "Parent joining three children by name",
+        behavior: "fan-out-join",
+        childCount: 3,
+        maxAttempts: 1,
+        tags: ["showcase", "child-job", "fan-out"],
+      },
+      {
+        scenario: "child-retry-recovery",
+        label: "Child retries before the parent joins",
+        behavior: "child-retry",
+        maxAttempts: 1,
+        tags: ["showcase", "child-job", "retry"],
+      },
+    ],
+  },
+  {
+    key: "signals",
+    jobType: "demo.signal-wait",
+    title: "Signals",
+    description: "Suspended handlers resumed by idempotent external signal deliveries.",
+    scheduleName: "showcase.signals",
+    schedule: "10-59/17 * * * *",
+    recurringMaxAttempts: 1,
+    examples: [
+      {
+        scenario: "automated-handoff",
+        label: "Signal delivered by a companion task",
+        behavior: "signal-handoff",
+        waitTimeoutMs: 600_000,
+        maxAttempts: 1,
+        tags: ["showcase", "signal", "automated"],
+      },
+      {
+        scenario: "operator-handoff",
+        label: "Signal awaiting an operator delivery",
+        behavior: "signal-operator",
+        waitTimeoutMs: 86_400_000,
+        maxAttempts: 1,
+        tags: ["showcase", "signal", "operator"],
+      },
+      {
+        scenario: "expired-handoff",
+        label: "Signal wait expiring unanswered",
+        behavior: "signal-timeout",
+        waitTimeoutMs: 5_000,
+        maxAttempts: 1,
+        tags: ["showcase", "signal", "intentionally-failing"],
+      },
+    ],
+  },
+  {
+    key: "human-decisions",
+    jobType: "demo.human-decision",
+    title: "Human decisions",
+    description: "Suspended handlers waiting for a bounded operator decision.",
+    scheduleName: "showcase.human-decisions",
+    schedule: "11-59/17 * * * *",
+    recurringMaxAttempts: 1,
+    examples: [
+      {
+        scenario: "refund-approval",
+        label: "Refund above the automatic limit",
+        behavior: "human-pending",
+        waitTimeoutMs: 86_400_000,
+        maxAttempts: 1,
+        tags: ["showcase", "human-wait", "refund"],
+      },
+      {
+        scenario: "publish-signoff",
+        label: "Catalog publication sign-off",
+        behavior: "human-pending",
+        waitTimeoutMs: 86_400_000,
+        maxAttempts: 1,
+        tags: ["showcase", "human-wait", "publication"],
+      },
+      {
+        scenario: "expired-review",
+        label: "Review expiring unanswered",
+        behavior: "human-expiring",
+        waitTimeoutMs: 5_000,
+        maxAttempts: 1,
+        tags: ["showcase", "human-wait", "intentionally-failing"],
+      },
+    ],
+  },
+  {
+    key: "keyed-debounce",
+    jobType: "demo.keyed-debounce",
+    title: "Keyed debounce",
+    description: "PostgreSQL-owned windows replacing still-pending keyed work.",
+    scheduleName: "showcase.keyed-debounce",
+    schedule: "12-59/17 * * * *",
+    recurringMaxAttempts: 1,
+    examples: [
+      {
+        scenario: "trailing-refresh",
+        label: "Replacement resetting the trailing window",
+        behavior: "success",
+        maxAttempts: 1,
+        tags: ["showcase", "debounce", "reset"],
+        seedDebounce: { schedule: "reset", replacements: 1, windowMs: 120_000 },
+      },
+      {
+        scenario: "preserved-window",
+        label: "Replacement preserving the first run time",
+        behavior: "success",
+        maxAttempts: 1,
+        tags: ["showcase", "debounce", "preserve"],
+        seedDebounce: { schedule: "preserve", replacements: 1, windowMs: 120_000 },
+      },
+      {
+        scenario: "burst-collapse",
+        label: "Burst collapsed into one pending task",
+        behavior: "success",
+        maxAttempts: 1,
+        tags: ["showcase", "debounce", "burst"],
+        seedDebounce: { schedule: "reset", replacements: 3, windowMs: 90_000 },
+      },
+    ],
+  },
+  {
+    key: "keyed-throttle",
+    jobType: "demo.keyed-throttle",
+    title: "Keyed throttle",
+    description: "One accepted keyed task per window, with coalesced repeats.",
+    scheduleName: "showcase.keyed-throttle",
+    schedule: "13-59/17 * * * *",
+    recurringMaxAttempts: 1,
+    examples: [
+      {
+        scenario: "first-through-window",
+        label: "First keyed acceptance, repeat coalesced",
+        behavior: "success",
+        maxAttempts: 1,
+        tags: ["showcase", "throttle", "coalesced"],
+        seedThrottle: { shape: "repeat", windowMs: 600_000 },
+      },
+      {
+        scenario: "burst-coalesced",
+        label: "Batch burst coalesced into one task",
+        behavior: "success",
+        maxAttempts: 1,
+        tags: ["showcase", "throttle", "burst"],
+        seedThrottle: { shape: "burst", windowMs: 600_000 },
+      },
+      {
+        scenario: "per-key-lanes",
+        label: "Independent windows for distinct keys",
+        behavior: "success",
+        maxAttempts: 1,
+        tags: ["showcase", "throttle", "per-key"],
+        seedThrottle: { shape: "per-key", windowMs: 600_000 },
+      },
+    ],
+  },
+  {
+    key: "priority-lanes",
+    jobType: "demo.priority-lane",
+    title: "Priority lanes",
+    description: "A mixed-priority backlog claimed highest rank first.",
+    scheduleName: "showcase.priority-lanes",
+    schedule: "14-59/17 * * * *",
+    recurringMaxAttempts: 1,
+    examples: [
+      {
+        scenario: "expedited-lane",
+        label: "Expedited partner escalation",
+        behavior: "success",
+        priority: 90,
+        maxAttempts: 1,
+        tags: ["showcase", "priority", "expedited"],
+      },
+      {
+        scenario: "standard-lane",
+        label: "Standard catalog refresh",
+        behavior: "success",
+        priority: 50,
+        maxAttempts: 1,
+        tags: ["showcase", "priority", "standard"],
+      },
+      {
+        scenario: "bulk-backfill",
+        label: "Bulk backfill batch behind live traffic",
+        behavior: "success",
+        priority: 10,
+        seedCount: 3,
+        maxAttempts: 1,
+        tags: ["showcase", "priority", "bulk", "enqueue-many"],
+      },
+    ],
+  },
+  {
+    key: "batch-handlers",
+    jobType: "demo.batch-digest",
+    title: "Batch handlers",
+    description: "Compatible jobs delivered to one handler invocation, settled independently.",
+    scheduleName: "showcase.batch-handlers",
+    schedule: "15-59/17 * * * *",
+    recurringMaxAttempts: 1,
+    examples: [
+      {
+        scenario: "grouped-digest",
+        label: "Three members grouped into one digest",
+        behavior: "batch-member",
+        seedCount: 3,
+        maxAttempts: 1,
+        tags: ["showcase", "batch", "grouped", "enqueue-many"],
+      },
+      {
+        scenario: "solo-linger",
+        label: "Partial batch dispatched after linger",
+        behavior: "batch-member",
+        seedCount: 1,
+        maxAttempts: 1,
+        tags: ["showcase", "batch", "linger"],
+      },
+      {
+        scenario: "independent-settlement",
+        label: "One member fails without failing its batch",
+        behavior: "batch-member",
+        seedCount: 2,
+        failLastMember: true,
+        maxAttempts: 1,
+        tags: ["showcase", "batch", "intentionally-failing"],
+      },
+    ],
+  },
+  {
+    key: "payload-contracts",
+    jobType: "demo.contract-check",
+    title: "Payload contracts",
+    description: "Versioned payload and result validation at the acceptance boundary.",
+    scheduleName: "showcase.payload-contracts",
+    schedule: "16-59/17 * * * *",
+    recurringMaxAttempts: 1,
+    examples: [
+      {
+        scenario: "validated-acceptance",
+        label: "Accepted under contract version v1",
+        behavior: "contract-valid",
+        maxAttempts: 1,
+        tags: ["showcase", "contract", "accepted"],
+      },
+      {
+        scenario: "result-rejection",
+        label: "Result rejected by the v1 contract",
+        behavior: "contract-result-invalid",
+        maxAttempts: 1,
+        tags: ["showcase", "contract", "intentionally-failing"],
+      },
+      {
+        scenario: "payload-rejection-probe",
+        label: "Invalid payload refused at enqueue",
+        behavior: "contract-payload-probe",
+        maxAttempts: 1,
+        tags: ["showcase", "contract", "rejection-probe"],
+      },
+    ],
+  },
 ] as const;
 
 export const DEMO_FEATURE_SHOWCASE_EXAMPLE_COUNT = DEMO_FEATURE_SHOWCASE_FAMILIES.reduce(
   (count, family) => count + family.examples.length,
   0,
 );
+
+/** Look one declared family up by key; the catalog is the single owner of job-type names. */
+export function demoFeatureShowcaseFamily(key: DemoFeatureFamily): DemoFeatureShowcaseFamily {
+  const family = DEMO_FEATURE_SHOWCASE_FAMILIES.find((candidate) => candidate.key === key);
+  if (!family) throw new Error(`Unknown demo feature family ${key}`);
+  return family;
+}
 
 /** Stable per-job rotation so each recurring family naturally produces mixed outcomes over time. */
 export function demoFeatureRecurringVariant(jobId: string): 0 | 1 | 2 {

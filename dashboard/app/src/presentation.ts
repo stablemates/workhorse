@@ -78,6 +78,7 @@ const demoJobKinds = [
   "failure",
   "idempotent",
   "long-running",
+  "redrive",
 ] as const;
 export const dashboardDemoJobKinds: CompleteDashboardOptions<
   DashboardDemoJobKind,

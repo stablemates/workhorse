@@ -74,11 +74,21 @@ The command recreates only the purpose-guarded `workhorse_demo` database, compil
 packages, then starts a watched Hono server and three watched dedicated worker processes. Everything is served from
 `http://workhorse.localhost:43155/`, mounted at `/`; the demo intentionally exposes no ad hoc public job
 API. Set `WORKHORSE_WORKER_POLL_MS` to override the workers' 15-second idle polling delay.
-Startup also creates a living feature showcase with one-off scenarios and staggered recurring definitions.
-Each recurring occurrence deterministically selects a stable variant, so the dashboard continues changing
-while it is open. See
+Startup also creates a living feature showcase: seventeen feature families, each with three one-off
+scenarios and one staggered recurring definition, covering ingress, retries, checkpoints, relative and
+absolute durable waits, progress, timing, cancellation, dead letters and redrive, job dependencies,
+child workflows, signals, human decisions, keyed debounce and throttle, priority lanes, batch handlers,
+and payload contracts. Each recurring occurrence deterministically selects a stable variant, so the
+dashboard continues changing while it is open. The seeded operator-handoff signal and the two pending
+human decisions stay answerable from the dashboard for a day, and the operator menu can redrive the
+newest unredriven dead letter on demand. See
 [`docs/demo-feature-coverage.md`](../../docs/demo-feature-coverage.md) for the complete mapping and the
 operational features intentionally represented outside task rows.
+
+The dashboard is served without authentication by default. Set `WORKHORSE_DEMO_ADMIN_USERNAME` and
+`WORKHORSE_DEMO_ADMIN_PASSWORD_HASH` (an `scrypt-v1$<base64url-salt>$<base64url-digest>` hash, as
+accepted by the standalone `workhorse dashboard` command) to switch the demo host to the packaged
+single-administrator login and demonstrate the authentication flow.
 
 The earlier representative layer still seeds one successful transactional order, one named durable timer, fixed, exponential, and
 decorrelated-jitter retry examples, one checkpointed recoverable retry, three recoverable multi-step

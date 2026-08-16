@@ -746,7 +746,8 @@ export type DashboardDemoJobKind =
   | "timer"
   | "failure"
   | "idempotent"
-  | "long-running";
+  | "long-running"
+  | "redrive";
 
 /** The multi-step demo scenarios, each of which enqueues its own shape of work. */
 export type DashboardDemoScenario =

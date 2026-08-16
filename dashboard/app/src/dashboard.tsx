@@ -315,7 +315,8 @@ type DemoJobKind =
   | "timer"
   | "failure"
   | "idempotent"
-  | "long-running";
+  | "long-running"
+  | "redrive";
 type DurableDemoScenario = "order-fulfillment" | "customer-onboarding" | "report-publication";
 type PageData =
   | { route: "/tasks"; value: DashboardTasksPage }
@@ -2884,6 +2885,12 @@ function TasksPage({
                       onClick={() => void runDemoJob("failure")}
                     >
                       Terminal failure
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<ArrowCounterClockwise size={16} />}
+                      onClick={() => void runDemoJob("redrive")}
+                    >
+                      Redrive newest dead letter
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<Clock size={16} />}
