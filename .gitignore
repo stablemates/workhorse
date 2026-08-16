@@ -24,3 +24,6 @@ logs/
 ops/signoz/pours/
 .jcode/
 scripts/with-env-probe.tmp.*
+/site/public/llms.txt
+/site/public/docs.md
+/site/public/docs/

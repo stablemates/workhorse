@@ -18,6 +18,8 @@ import { siteConfig } from "../lib/site.js";
 
 interface Group {
   readonly title: string;
+  /** Key in the icon map in `src/routes/docs.tsx`. */
+  readonly icon: string;
   readonly defaultOpen?: boolean;
   readonly pages?: readonly string[];
   readonly groups?: readonly Group[];
@@ -28,6 +30,35 @@ interface Group {
  * `public/brand/integrations`. Every integration carries its own mark, so a
  * reader scanning the group recognizes the tool before reading the label.
  */
+/**
+ * Sidebar labels, where the page title is too long or too internal to scan.
+ *
+ * A page title explains; a sidebar label points. "Idempotent enqueue" is the
+ * right title and the wrong label, because a reader scanning a column has not
+ * read the page yet and is looking for the thing that stops duplicates. The
+ * page keeps its title, and only the nav entry changes.
+ */
+const sidebarLabels: Readonly<Record<string, string>> = {
+  integrations: "Overview",
+  enqueue: "Enqueue a job",
+  contracts: "Validate payloads",
+  idempotency: "Avoid duplicates",
+  priority: "Run order",
+  "job-dependencies": "Wait for other jobs",
+  "concurrency-policies": "Limit how many run",
+  debounce: "Debounce",
+  throttle: "Throttle",
+  "batch-handlers": "Batch handlers",
+  deadlines: "Deadlines",
+  "durable-execution": "Checkpoints",
+  "human-waits": "Human approval",
+  queries: "Query jobs",
+  "dead-letters": "Dead letters",
+  maintenance: "Retention",
+  "agentic-flow": "Agent workflows",
+  api: "API",
+};
+
 const logos: Readonly<Record<string, string>> = {
   drizzle: "drizzle",
   prisma: "prisma",
@@ -38,15 +69,18 @@ const logos: Readonly<Record<string, string>> = {
 const structure: readonly Group[] = [
   {
     title: "Getting started",
+    icon: "rocket",
     defaultOpen: true,
     pages: ["index", "comparison", "installation", "quickstart", "concepts"],
   },
   {
     title: "Producing work",
+    icon: "inbox",
     pages: ["enqueue", "contracts", "idempotency", "schedules"],
   },
   {
     title: "Controlling flow",
+    icon: "filter",
     pages: [
       "priority",
       "job-dependencies",
@@ -58,27 +92,41 @@ const structure: readonly Group[] = [
   },
   {
     title: "Executing work",
+    icon: "play",
     pages: ["workers", "batch-handlers", "retries", "cancellation", "deadlines"],
   },
   {
     title: "Durable execution",
+    icon: "workflow",
     pages: ["durable-execution", "signals", "human-waits", "child-jobs", "progress"],
   },
   {
     title: "Operating",
-    pages: ["queries", "dead-letters", "operations", "worker-processes", "maintenance", "queue-health"],
+    icon: "activity",
+    pages: [
+      "dashboard",
+      "queries",
+      "dead-letters",
+      "operations",
+      "worker-processes",
+      "maintenance",
+      "queue-health",
+    ],
   },
   {
     title: "Integrations",
-    groups: [{ title: "ORMs", pages: ["drizzle", "prisma", "typeorm", "kysely"] }],
-    pages: ["dashboard"],
+    icon: "plug",
+    pages: ["integrations"],
+    groups: [{ title: "ORMs", icon: "database", pages: ["drizzle", "prisma", "typeorm", "kysely"] }],
   },
   {
     title: "Guides",
+    icon: "book",
     pages: ["examples", "agentic-flow"],
   },
   {
     title: "Reference",
+    icon: "code",
     pages: ["api", "language-clients", "compatibility", "limitations"],
   },
 ];
@@ -129,7 +177,7 @@ const pageNode = (slug: string) => {
   const logo = logos[slug];
   return {
     type: "page" as const,
-    name: page.title,
+    name: sidebarLabels[slug] ?? page.title,
     url: page.url,
     ...(logo ? { icon: logo } : {}),
   };
@@ -138,6 +186,7 @@ const pageNode = (slug: string) => {
 const folderNode = (group: Group): unknown => ({
   type: "folder" as const,
   name: group.title,
+  icon: group.icon,
   defaultOpen: group.defaultOpen ?? false,
   children: [
     ...(group.pages ?? []).map(pageNode),

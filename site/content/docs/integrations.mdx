@@ -1,0 +1,45 @@
+---
+title: Integrations
+description: Enqueue inside the transaction your ORM already opened, using the adapter for your database layer.
+---
+
+Workhorse talks to PostgreSQL through one small interface called `Queryable`. Anything that can run
+a parameterised query and hold a transaction can satisfy it. An adapter is the piece that makes
+your ORM's own transaction look like a `Queryable`, so a job commits with the rows you just wrote.
+
+You need an adapter only for that reason. If you already hold a `pg` client, you can pass it
+straight to `enqueue` and skip this section entirely. This page covers which adapter to install,
+what every adapter guarantees, and what to reach for when yours is not listed.
+
+## Pick your database layer
+
+Each adapter is a separate package, so you install one and nothing else comes with it.
+
+- **[Drizzle](/docs/drizzle)**: adapts Drizzle databases and transactions.
+- **[Prisma](/docs/prisma)**: adapts Prisma clients and interactive transactions.
+- **[TypeORM](/docs/typeorm)**: adapts TypeORM data sources and transactional entity managers.
+- **[Kysely](/docs/kysely)**: adapts Kysely databases and transactions.
+
+## What every adapter promises
+
+The four pages are deliberately the same shape, so you can read one and predict the others.
+
+An adapter never changes what a job does. It converts your transaction handle into the shape
+`enqueue` expects and nothing more. Retries, checkpoints, deadlines, and evidence behave
+identically whichever adapter you use, because all of them end at the same SQL functions.
+
+## No adapter for your setup
+
+You are not blocked. `enqueue` accepts any `Queryable`, so a thin wrapper around your own client
+works, and a plain `pg` client needs no wrapper at all.
+
+## Next
+
+- [Enqueue and transactions](/docs/enqueue) — why the transaction argument is the point
+- [Drizzle](/docs/drizzle) — the shortest complete adapter example
+- [Dashboard](/docs/dashboard) — the operator interface, which is a Workhorse package rather than an integration
+
+---
+
+Exact adapter contracts and the `Queryable` protocol:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#adapters).

@@ -12,6 +12,8 @@ import { siteConfig } from "@/lib/site";
 const page = docsIndex.pages.index;
 
 export const Route = createFileRoute("/docs/")({
+  // Load the MDX before render so the layout is never torn down mid-navigation.
+  loader: () => clientLoader.preload(page.path),
   head: () => {
     const canonical = `${siteConfig.url}${page.url}`;
 
