@@ -24,6 +24,7 @@ export type MaintenancePhase =
   | "attempt_retention"
   | "schedule_occurrences"
   | "enqueue_idempotency"
+  | "released_dependencies"
   | "terminal_jobs";
 
 export interface MaintenancePhaseResult {

@@ -34,7 +34,13 @@ function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     nextWakeAt: null,
     activeLeases: 0,
     expiredLeases: 0,
-    dependencies: { blockedJobs: 0, pendingEdges: 0, failedResolutions: 0, capped: false },
+    dependencies: {
+      blockedJobs: 0,
+      pendingEdges: 0,
+      failedResolutions: 0,
+      retentionPruneStarved: false,
+      capped: false,
+    },
     children: {
       waitingParents: 0,
       pendingChildren: 0,

@@ -5,7 +5,7 @@ import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
 import { MAX_JOB_DEPENDENTS } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
-const { pool, queue } = createIntegrationTestContext(import.meta.url);
+const { defaultRetentionPolicy, pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("job dependencies", () => {
   it("reports bounded prerequisite and dependent lineage with release evidence", async () => {
@@ -97,6 +97,7 @@ describe("job dependencies", () => {
       blockedJobs: 1,
       pendingEdges: 1,
       failedResolutions: 1,
+      retentionPruneStarved: false,
       capped: false,
     });
   });
@@ -761,7 +762,7 @@ describe("job dependencies", () => {
     await expect(queue.getJob(acceptedId)).resolves.toMatchObject({ state: "blocked" });
   });
 
-  it("prunes a released dependent before its retained prerequisite", async () => {
+  it("compacts released edges before pruning an older prerequisite", async () => {
     const prerequisiteId = await queue.enqueue("retained-prerequisite", null);
     const dependentId = await queue.enqueue("retained-dependent", null, {
       prerequisiteJobId: prerequisiteId,
@@ -781,29 +782,172 @@ describe("job dependencies", () => {
     ]);
     await pool.query(
       `UPDATE workhorse.job SET created_at = clock_timestamp() - interval '40 days'
-        WHERE id = ANY($1::uuid[])`,
-      [[prerequisiteId, dependentId]],
+        WHERE id = $1`,
+      [prerequisiteId],
     );
     await pool.query(
       `UPDATE workhorse.job_outcome
           SET finished_at = clock_timestamp() - interval '40 days',
               history_through_at = clock_timestamp() - interval '40 days'
-        WHERE job_id = ANY($1::uuid[])`,
-      [[prerequisiteId, dependentId]],
+        WHERE job_id = $1`,
+      [prerequisiteId],
     );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobIdentityRetentionDays: 30,
+      terminalOutcomeRetentionDays: 30,
+      jobEventRetentionDays: 30,
+      attemptHistoryRetentionDays: 30,
+      scheduleOccurrenceRetentionDays: 30,
+    });
+    await queue.retainHistory({ force: true });
 
-    const prune = () =>
-      pool.query<{ pruned: number }>(
-        `SELECT workhorse.prune_terminal_jobs_v1(
-           clock_timestamp() - interval '30 days',
-           clock_timestamp() - interval '30 days',
-           date_trunc('day', clock_timestamp() - interval '30 days'), 10
-         ) AS pruned`,
-      );
-    await expect(prune()).resolves.toMatchObject({ rows: [{ pruned: 1 }] });
-    await expect(queue.getJob(prerequisiteId)).resolves.not.toBeNull();
-    await expect(queue.getJob(dependentId)).resolves.toBeNull();
-    await expect(prune()).resolves.toMatchObject({ rows: [{ pruned: 1 }] });
+    const phases = await queue.pruneTerminalStorage({ force: true });
+    expect(phases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "released_dependencies",
+          rowsAffected: 1,
+          error: null,
+        }),
+        expect.objectContaining({ phase: "terminal_jobs", rowsAffected: 1, error: null }),
+      ]),
+    );
     await expect(queue.getJob(prerequisiteId)).resolves.toBeNull();
+    await expect(queue.getJob(dependentId)).resolves.not.toBeNull();
+    await expect(queue.getDependencyLineage(dependentId)).resolves.toEqual({
+      records: [],
+      truncated: false,
+    });
+    await expect(queue.health()).resolves.toMatchObject({
+      dependencies: { retentionPruneStarved: false },
+    });
+  });
+
+  it("reports a zero-deletion terminal prune starved by dependency pins", async () => {
+    const prerequisiteId = await queue.enqueue("starved-prerequisite", null);
+    const dependentIds = [
+      await queue.enqueue("starved-dependent-a", null, { prerequisiteJobId: prerequisiteId }),
+      await queue.enqueue("starved-dependent-b", null, { prerequisiteJobId: prerequisiteId }),
+    ];
+    const prerequisite = await queue.claim("starved-prerequisite-worker");
+    expect(prerequisite?.id).toBe(prerequisiteId);
+    expect(await queue.complete(prerequisite!, "starved-prerequisite-worker", null)).toBe(true);
+    const claimedDependentIds: string[] = [];
+    for (const index of dependentIds.keys()) {
+      const workerId = `starved-dependent-worker-${String(index)}`;
+      const dependent = await queue.claim(workerId);
+      expect(dependentIds).toContain(dependent?.id);
+      claimedDependentIds.push(dependent!.id);
+      expect(await queue.complete(dependent!, workerId, null)).toBe(true);
+    }
+    expect(new Set(claimedDependentIds)).toEqual(new Set(dependentIds));
+    const jobIds = [prerequisiteId, ...dependentIds];
+    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = ANY($1::uuid[])", [jobIds]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = ANY($1::uuid[])", [
+      jobIds,
+    ]);
+    await pool.query(
+      `UPDATE workhorse.job SET created_at = clock_timestamp() - interval '40 days'
+        WHERE id = $1`,
+      [prerequisiteId],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = clock_timestamp() - interval '40 days',
+              history_through_at = clock_timestamp() - interval '40 days'
+        WHERE job_id = $1`,
+      [prerequisiteId],
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobIdentityRetentionDays: 30,
+      terminalOutcomeRetentionDays: 30,
+      jobEventRetentionDays: 30,
+      attemptHistoryRetentionDays: 30,
+      scheduleOccurrenceRetentionDays: 30,
+      terminalJobPruneLimit: 1,
+    });
+    await queue.retainHistory({ force: true });
+
+    const starved = await queue.pruneTerminalStorage({ force: true });
+    expect(starved.find(({ phase }) => phase === "released_dependencies")).toMatchObject({
+      rowsAffected: 1,
+    });
+    expect(starved.find(({ phase }) => phase === "terminal_jobs")).toMatchObject({
+      rowsAffected: 0,
+    });
+    await expect(queue.health()).resolves.toMatchObject({
+      dependencies: { retentionPruneStarved: true },
+    });
+
+    const recovered = await queue.pruneTerminalStorage({ force: true });
+    expect(recovered.find(({ phase }) => phase === "released_dependencies")).toMatchObject({
+      rowsAffected: 1,
+    });
+    expect(recovered.find(({ phase }) => phase === "terminal_jobs")).toMatchObject({
+      rowsAffected: 1,
+    });
+    await expect(queue.health()).resolves.toMatchObject({
+      dependencies: { retentionPruneStarved: false },
+    });
+  });
+
+  it("does not report a dependency pin skipped by the terminal prune lock window", async () => {
+    const prerequisiteId = await queue.enqueue("locked-retention-prerequisite", null);
+    const prerequisite = await queue.claim("locked-retention-worker");
+    expect(prerequisite?.id).toBe(prerequisiteId);
+    expect(await queue.complete(prerequisite!, "locked-retention-worker", null)).toBe(true);
+    const blockerId = await queue.enqueue("locked-retention-blocker", null);
+    await queue.enqueue("locked-retention-dependent", null, {
+      dependencies: {
+        prerequisiteJobIds: [prerequisiteId, blockerId],
+        onSuccess: "release",
+        onFailure: "fail",
+        onCancellation: "cancel",
+      },
+    });
+    await pool.query("DELETE FROM workhorse.job_event WHERE job_id = $1", [prerequisiteId]);
+    await pool.query("DELETE FROM workhorse.attempt_history WHERE job_id = $1", [prerequisiteId]);
+    await pool.query(
+      `UPDATE workhorse.job SET created_at = clock_timestamp() - interval '40 days'
+        WHERE id = $1`,
+      [prerequisiteId],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_outcome
+          SET finished_at = clock_timestamp() - interval '40 days',
+              history_through_at = clock_timestamp() - interval '40 days'
+        WHERE job_id = $1`,
+      [prerequisiteId],
+    );
+    await queue.syncRetentionPolicy({
+      ...defaultRetentionPolicy,
+      jobIdentityRetentionDays: 30,
+      terminalOutcomeRetentionDays: 30,
+      jobEventRetentionDays: 30,
+      attemptHistoryRetentionDays: 30,
+      scheduleOccurrenceRetentionDays: 30,
+      terminalJobPruneLimit: 1,
+    });
+    await queue.retainHistory({ force: true });
+
+    const locker = await pool.connect();
+    try {
+      await locker.query("BEGIN");
+      await locker.query("SELECT 1 FROM workhorse.job WHERE id = $1 FOR UPDATE", [prerequisiteId]);
+      const pruning = queue.pruneTerminalStorage({ force: true });
+      await sleep(50);
+      await locker.query("COMMIT");
+      expect((await pruning).find(({ phase }) => phase === "terminal_jobs")).toMatchObject({
+        rowsAffected: 0,
+      });
+    } finally {
+      await locker.query("ROLLBACK").catch(() => undefined);
+      locker.release();
+    }
+    await expect(queue.health()).resolves.toMatchObject({
+      dependencies: { retentionPruneStarved: false },
+    });
   });
 });

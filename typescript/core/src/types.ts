@@ -994,6 +994,8 @@ export interface QueueHealth {
     blockedJobs: number;
     pendingEdges: number;
     failedResolutions: number;
+    /** The last terminal prune deleted nothing while its candidate window contained dependency pins. */
+    retentionPruneStarved: boolean;
     /** True when at least one value is a lower bound at the operations scan limit. */
     capped: boolean;
   };

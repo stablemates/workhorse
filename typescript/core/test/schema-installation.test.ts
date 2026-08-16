@@ -253,6 +253,7 @@ describe("schema installation", () => {
       housekeep: string | null;
       partitions: string | null;
       retention: string | null;
+      releasedDependencies: string | null;
       terminal: string | null;
     }>(`SELECT
         to_regprocedure('workhorse.maintain_v1(integer,integer,integer,integer)')::text AS maintain,
@@ -260,6 +261,7 @@ describe("schema installation", () => {
         to_regprocedure('workhorse.housekeep_v1(integer,integer)')::text AS housekeep,
         to_regprocedure('workhorse.prepare_history_partitions_v1(boolean,timestamp with time zone)')::text AS partitions,
         to_regprocedure('workhorse.retain_history_v1(boolean,timestamp with time zone)')::text AS retention,
+        to_regprocedure('workhorse.prune_released_dependencies_v1(integer)')::text AS "releasedDependencies",
         to_regprocedure('workhorse.prune_terminal_storage_v1(boolean,timestamp with time zone)')::text AS terminal`);
     expect(maintenanceFunctions.rows[0]).toEqual({
       maintain: null,
@@ -267,6 +269,7 @@ describe("schema installation", () => {
       housekeep: null,
       partitions: "prepare_history_partitions_v1(boolean,timestamp with time zone)",
       retention: "retain_history_v1(boolean,timestamp with time zone)",
+      releasedDependencies: "prune_released_dependencies_v1(integer)",
       terminal: "prune_terminal_storage_v1(boolean,timestamp with time zone)",
     });
 
@@ -333,6 +336,7 @@ describe("schema installation", () => {
           "job_runtime_scheduled_idx",
           "job_dependency_dependent_pending_idx",
           "job_dependency_prerequisite_idx",
+          "job_dependency_released_retention_idx",
           "job_tags_gin_idx",
           "enqueue_idempotency_expiry_idx",
         ],
@@ -342,6 +346,7 @@ describe("schema installation", () => {
       "enqueue_idempotency_expiry_idx",
       "job_dependency_dependent_pending_idx",
       "job_dependency_prerequisite_idx",
+      "job_dependency_released_retention_idx",
       "job_runtime_blocked_queue_idx",
       "job_runtime_expired_active_idx",
       "job_runtime_ready_idx",
