@@ -51,10 +51,13 @@ must agree exactly, because mismatched workers could interpret lifecycle state d
 Call `assertSchemaCompatible` during startup. A mismatch should fail the process before it claims
 or changes work.
 
-Schema installation is clean-install only. Workhorse does not yet provide an online migration path,
-so a release that changes the schema needs a separately designed drain and data transition. The
-dashboard transport can change without a schema bump because it is private to matching package
-versions — use the public `Queue` read API for application integrations.
+Use `installSchema` for a fresh database and `migrateSchema` for an installed schema. The migration
+entrypoint applies immutable, forward-only steps from the supported baseline and refuses missing,
+older-than-baseline, or newer schemas before changing them. The current pre-release line has no
+earlier supported source, so older development schemas still require a reset.
+
+The dashboard transport can change without a schema bump because it is private to matching package
+versions. Use the public `Queue` read API for application integrations.
 
 ## Treat releases as one package set
 

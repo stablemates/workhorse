@@ -69,8 +69,22 @@ await pool.end();
 
 `installSchema` targets a clean database. If a `workhorse` schema already exists, it proceeds only
 when that schema carries exactly the current version and no legacy relations; anything mixed,
-unversioned, or older is refused. It will not guess how to migrate durable state between protocol
-versions — treating installation as an upgrade path could corrupt live jobs.
+unversioned, or older is refused. It never treats installation as an upgrade path.
+
+## Migrate an installed schema
+
+Run `migrateSchema` from a deployment step before processes from the new release start. It applies
+the package's immutable, forward-only migration steps in order.
+
+```ts
+import { migrateSchema } from "@workhorse/core";
+
+await migrateSchema(pool);
+```
+
+The migration refuses a missing schema, a version below its supported baseline, a newer version,
+or a gap in the ordered plan. The current pre-release line has no older supported source, so an
+older development schema still requires a reset until a public release adds the first migration.
 
 ## Check before a runtime starts
 
