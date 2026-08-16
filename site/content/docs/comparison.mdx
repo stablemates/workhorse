@@ -41,20 +41,42 @@ same CPU, and the same write-ahead log. Scaling the queue means scaling the data
 
 ## Against the near neighbours
 
-Every tool here is a reasonable choice. The column that matters is what each one asks you to
-operate.
+This table compares operational shape, not feature counts. Two questions decide most of it: **can a
+job commit with your data**, and **what else do you have to run**.
 
-| Tool | Storage | Transactional enqueue | Durable execution | Extra service |
+| Tool | Where jobs live | Commits with your data | Resumes mid-handler | You also run |
 | --- | --- | --- | --- | --- |
-| Workhorse | PostgreSQL | Yes, your open transaction | Checkpoints, signals, durable sleeps | None |
-| pg-boss | PostgreSQL | Yes | No | None |
-| Graphile Worker | PostgreSQL | Yes | No | None |
-| BullMQ | Redis | No | No | Redis |
-| Temporal | Its own cluster | No | Full workflow engine | Temporal server |
+| **Workhorse** | Your PostgreSQL | Yes, your open transaction | Yes, checkpoints and durable waits | Nothing |
+| **pg-boss** | Your PostgreSQL | Yes | No | Nothing |
+| **Graphile Worker** | Your PostgreSQL | Yes | No | Nothing |
+| **pgmq** | Your PostgreSQL | Yes | No | A PostgreSQL extension |
+| **BullMQ** | Redis | No | No | Redis |
+| **Temporal** | Its own cluster | No | Yes, a full workflow engine | A Temporal cluster |
+| **Inngest** | The provider | No | Yes | A hosted service, or self-hosting |
+| **Trigger.dev** | The provider | No | Yes | A hosted service, or self-hosting |
+
+Read it in three bands.
+
+**The PostgreSQL band** is where Workhorse competes directly. pg-boss and Graphile Worker are older
+and narrower: both give you transactional enqueue, neither resumes a handler part-way through a
+crash. pgmq is a queue primitive rather than a job runner, and it needs an extension, which rules it
+out on managed PostgreSQL that will not install one.
+
+**The separate-datastore band** is BullMQ. It is excellent and widely used, but a job in Redis
+cannot commit with a row in PostgreSQL, so you are back to reconciling two systems.
+
+**The durable-execution band** is Temporal, Inngest, and Trigger.dev. They do more than Workhorse:
+real workflow orchestration, versioning, and their own UIs. They also add a system to your
+architecture and put your job state outside your database. Workhorse deliberately trades that power
+for having nothing else to operate.
+
+One honest caveat: every tool in that last band has years of production behind it. Workhorse does
+not.
 
 If you want a PostgreSQL queue and nothing more, pg-boss and Graphile Worker are mature and
-narrower. Workhorse adds the durable execution layer — a handler that resumes mid-way after a crash
-instead of restarting — and the evidence trail that goes with it.
+narrower. If you want orchestration as a product, Temporal is the serious answer. Workhorse is for
+the case in between: durable execution, in the database you already run, with nothing new to
+operate.
 
 ## What this release is not
 

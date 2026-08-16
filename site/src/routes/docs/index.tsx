@@ -13,7 +13,11 @@ const page = docsIndex.pages.index;
 
 export const Route = createFileRoute("/docs/")({
   // Load the MDX before render so the layout is never torn down mid-navigation.
-  loader: () => clientLoader.preload(page.path),
+  // Return nothing: the loaded module is not serializable, and anything a loader
+  // returns is serialized into the page payload.
+  loader: async () => {
+    await clientLoader.preload(page.path);
+  },
   head: () => {
     const canonical = `${siteConfig.url}${page.url}`;
 

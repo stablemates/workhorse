@@ -1,31 +1,35 @@
 ---
 title: Core concepts
-description: The mental model behind every job — identity, live state, ownership, delivery, and evidence.
+description: The mental model behind every job — where it lives, who owns it, why it can run twice, and what it leaves behind.
 ---
 
-Most queue bugs are really model bugs: you assumed a job runs once, or that a dead worker's writes
-stop mattering, or that finished jobs slow down the queue. This page gives you the model that makes
-Workhorse's behavior predictable — where a job lives, who may touch it, and what remains afterward.
+Most queue bugs are model bugs. Someone assumed a job runs exactly once, or that a dead worker
+stops writing, or that finished jobs pile up and slow everything down. None of those are true here,
+and each one is cheap to understand up front and expensive to discover in production.
 
-## A job is three kinds of row
+This page covers four things: where a job lives, who is allowed to touch it, why a handler can run
+twice, and what survives after it finishes.
 
-Workhorse splits every job across three relations, one per kind of fact.
+## A job moves between two tables, never both
 
-`job` stores immutable identity: queue, type, payload, attempt budget, and policy. PostgreSQL
-writes this row when it accepts the job and never changes its semantic fields.
+Think of a job as having a **live** form and a **finished** form.
 
-`job_runtime` is the live row. It exists only while the job is `scheduled`, `ready`, or `active`,
-and it is the only mutable lifecycle relation — workers and SQL functions change it as the job
-becomes eligible, gains an owner, or returns for another attempt.
+While a job is waiting or running, it has a live row. The moment it ends, PostgreSQL deletes that
+live row and writes a finished row in the same transaction. One or the other, never the two
+together.
 
-`job_outcome` is the terminal row. When the job becomes `succeeded`, `failed`, or `canceled`,
-PostgreSQL deletes the runtime row and inserts the outcome in the same transaction.
+This has a consequence you will feel: **finished jobs cost nothing to skip**. A worker looking for
+work only ever searches live rows, so a million completed jobs do not slow down the next claim.
 
-A committed job therefore has one runtime row or one outcome row, never both. No reader can observe
-a job as live and terminal at the same time, and terminal jobs leave the indexes workers search —
-which is why a million finished jobs do not slow the next claim.
+Underneath, that is three relations:
 
-## The six states
+- **`job`**: who the job is. Queue, type, payload, attempt budget, policy. Written once, never
+  semantically changed.
+- **`job_runtime`**: the live row. Exists only while the job is waiting or running, and it is the
+  only row that changes.
+- **`job_outcome`**: the finished row. Holds the result, the error, or the cancellation.
+
+## The states, and what moves a job between them
 
 ```
 scheduled ──▶ ready ──▶ active ──▶ succeeded
@@ -33,42 +37,47 @@ scheduled ──▶ ready ──▶ active ──▶ succeeded
                 └──(retry)─┘  └───▶ canceled
 ```
 
-- `scheduled`: the job has a future `runAt`, a retry delay, or a durable sleep in progress.
-- `ready`: the job is eligible and waiting for a worker slot, in queue-local FIFO order.
-- `active`: one worker owns the job under a lease and is running its handler.
-- `succeeded`, `failed`, `canceled`: terminal. Result, error, or cancellation envelope is stored.
+- **`scheduled`**: not yet. The job has a future start time, a retry delay, or a durable sleep
+  running.
+- **`ready`**: eligible, waiting for a free worker slot, in queue order.
+- **`active`**: one worker owns it and the handler is running.
+- **`succeeded`**, **`failed`**, **`canceled`**: over. The result, error, or cancellation is stored.
 
-`Queue.getJob` returns a snapshot with `state`, `currentAttempt`, `result`, and `error`, whichever
-side of the split the job is on.
+Ask any job where it is:
 
 ```ts
 const job = await queue.getJob(jobId);
 console.log(job?.state, job?.currentAttempt, job?.result);
 ```
 
-## Who owns active work
+## One worker owns a job at a time, and PostgreSQL enforces it
 
-When a `Worker` has a free slot, it calls the `claim_v2` SQL function. PostgreSQL checks any queue
-policy, then records the worker ID, a lease expiry, and a fence token on `job_runtime`. The worker
-sends heartbeats through `heartbeat_v2` while the handler runs.
+A worker with a free slot asks PostgreSQL for work. PostgreSQL hands back the job with two things
+attached: a **lease**, which is a deadline for finishing, and a **fence token**, which is a number
+that increases every time the job is claimed.
 
-If heartbeats stop, recovery closes the old attempt and makes the job eligible again. Every
-semantic write carries the worker ID and fence token, so a stale worker cannot complete, fail, or
-change a job after a newer worker has claimed it — the full mechanics live in
-[Workers](/docs/workers).
+The worker sends a heartbeat while it works. If the heartbeats stop, because the process crashed or
+the machine vanished, the lease expires and the job becomes available again.
 
-## Why a handler can run twice
+Here is the part that matters. When the old worker wakes up and tries to write its result, its
+fence token is now stale, and PostgreSQL rejects the write. A zombie process cannot overwrite the
+work of the worker that replaced it. You do not have to detect this yourself.
 
-The handler runs outside the transaction that grants ownership. A process can finish an external
-effect — the email sent, the card charged — and die before PostgreSQL records success. Recovery
-cannot tell that apart from a crash before the effect, so it must run the handler again.
+[Workers](/docs/workers) has the full mechanics.
 
-That is at-least-once delivery, and it shapes how you write handlers:
+## A handler can run twice, and no setting changes that
 
-- If a stage must not repeat within a job, wrap it in `HandlerContext.checkpoint`. A completed
-  checkpoint replays its stored result on the next run instead of executing again.
-- If an external call must not repeat across systems, give the provider a stable idempotency key.
-  Checkpoints narrow the duplicate window; only the provider can close it.
+The handler runs *outside* the transaction that granted ownership. So a process can send the email,
+then die before PostgreSQL records that it succeeded. Recovery cannot tell that apart from a crash
+that happened *before* the email. It has to assume the work did not happen and run the handler
+again.
+
+That is **at-least-once delivery**. Two tools make it safe, and they solve different halves:
+
+- **Inside your process**, wrap the step in `ctx.checkpoint`. A finished step returns its stored
+  result next time instead of running again.
+- **Outside your process**, pass the provider a stable idempotency key. A checkpoint narrows the
+  window where a duplicate is possible. Only the provider can close it.
 
 ```ts
 worker.handle("invoice.send", async (payload: { invoiceId: string }, ctx) => {
@@ -78,26 +87,26 @@ worker.handle("invoice.send", async (payload: { invoiceId: string }, ctx) => {
 });
 ```
 
-[Durable execution](/docs/durable-execution) covers checkpoints, durable sleeps, and their rules.
+[Checkpoints](/docs/durable-execution) covers the rules.
 
-## Where history goes
+## Everything that happened is still there
 
-Execution leaves append-only evidence, kept off the dispatch path so audits never compete with
-claims.
+Execution writes an append-only trail, and it is kept off the path workers use to claim jobs, so
+reading history never slows down running work.
 
-`job_event` records every lifecycle change; `attempt_history` records how each logical attempt
-closed. `Queue.getJobTimeline` merges both into one cursor stream, so you can answer "what happened
-to job X" from SQL-backed records rather than log lines.
+- **`job_event`** records every lifecycle change.
+- **`attempt_history`** records how each attempt ended.
+- **`job_query`** is a separate projection that operator screens page through.
 
-`job_query` is a separate bounded projection for operator reads. `Queue.listJobs` and the dashboard
-page through it across all states without adding broad indexes to `job_runtime`. Both history
-relations are partitioned by day and retired by retention policy, independently of live dispatch.
+`Queue.getJobTimeline` merges the first two into one stream, so "what happened to job X" is a
+database query, not a log search. Both history tables are partitioned by day and cleaned up by
+retention policy, on their own schedule.
 
 ## Next
 
-- [Workers](/docs/workers) — leases, fence tokens, and how a process claims jobs
+- [Workers](/docs/workers) — leases, fence tokens, and how a process claims work
 - [Retries](/docs/retries) — what happens after an attempt fails
-- [Durable execution](/docs/durable-execution) — preserve completed work across another run
+- [Checkpoints](/docs/durable-execution) — keep completed work across another run
 
 ---
 
