@@ -44,6 +44,7 @@ export default defineConfig({
               basePath: "",
               rpcUrl: "/rpc",
               auditActor,
+              authentication: null,
               demoTools,
             },
             browserModules: [`/@fs/${reactGrabEntry}`],

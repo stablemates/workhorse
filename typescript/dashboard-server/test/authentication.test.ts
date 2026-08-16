@@ -47,6 +47,23 @@ function mutationClient(
 }
 
 describe("dashboard single-admin authentication", () => {
+  it("serves a branded login page that follows the browser color scheme", async () => {
+    const host = createDashboardHost({
+      database,
+      path: "/workhorse",
+      singleAdmin: { username: "operator", passwordHash },
+    });
+
+    const response = await host.handle(new Request("https://dashboard.test/workhorse/login"));
+    const html = await response?.text();
+
+    expect(response?.status).toBe(200);
+    expect(html).toContain("Workhorse");
+    expect(html).toContain("prefers-color-scheme: dark");
+    expect(html).toContain("<svg");
+    expect(html).toContain("Sign in to the operator dashboard");
+  });
+
   it("derives mutation classification from router metadata", () => {
     expect(isDashboardMutation("dashboard.setQueuePaused")).toBe(true);
     expect(isDashboardMutation("dashboard.tasks")).toBe(false);
