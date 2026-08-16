@@ -13,6 +13,9 @@ to the TLS-protected server, which compares it without storing the plaintext val
 A successful login creates an opaque cookie backed by server memory. The cookie cannot reveal the
 password, and deleting the server record ends the session even if a browser retains it.
 
+The login page follows the browser's light or dark color scheme. After login, the dashboard header
+shows the authenticated administrator and provides a sign-out action.
+
 Built-in authentication keeps session state inside the standalone server process. Restarting that
 process ends every session. Replicated deployments should use shared host-owned authentication.
 
@@ -22,8 +25,9 @@ proxy headers to decide who shares it.
 For a rolling password change, configure the new hash as current and the old hash as previous with
 an absolute cutoff. The old password and every session it created stop working at that cutoff.
 
-Send a `POST` request to `/logout` to end the current session. Expired sessions return to the login
-page and cannot read dashboard HTML, browser assets, or private RPC responses.
+Send a `POST` request to `/logout` to end the current session. If a session expires while the
+dashboard is open, the next private request replaces the application with the login page. Expired
+sessions cannot read dashboard HTML, browser assets, or private RPC responses.
 
 If your application embeds the dashboard, keep its authorization in the host:
 

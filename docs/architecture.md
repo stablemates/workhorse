@@ -1231,6 +1231,16 @@ server record never authorizes a request, even if a client retains its cookie. E
 at most 16 sessions. Login removes expired records and evicts the oldest record before exceeding
 that bound.
 
+`loginPage()` returns one inline-styled document with the Workhorse mark, light and dark color
+schemes, and a generic invalid-credential alert. `DashboardRuntimeConfig.authentication` is either
+`{ loginUrl, logoutUrl }` for `singleAdmin` or `null` for host-owned authorization.
+`serveApplication()` serializes the request's `authenticatedActor` as `auditActor`.
+`createDashboardClient()` wraps the oRPC fetch adapter and calls `window.location.replace(loginUrl)`
+once after a `401` response when the authentication routes are present. It leaves those RPC calls
+pending until navigation unloads the document, so page-level error handlers cannot report session
+expiry as a generic RPC failure. `Dashboard` shows the authenticated actor in its header menu and
+submits sign-out to `logoutUrl` with `POST`.
+
 Single-admin authentication retains at most five login reservations in a rolling 60-second window.
 Each form submission reserves capacity before scrypt begins, so concurrent requests cannot bypass
 the bound. Invalid submissions retain their reservations and return the generic `401` response.
@@ -1255,6 +1265,8 @@ exactly matches the request URL origin. The single-admin session contributes its
 `DashboardPrincipal` with an `actor`; a compatible boolean `true` result uses the server-owned
 `auditActor`, which defaults to `dashboard`. `auditWithOccurredAt` replaces the parsed browser
 `audit.actor` with that authenticated actor before any operator controller runs.
+`BoundaryTimeline` reads `details.requested_by` from task events and renders it beside the event's
+reason, so cancellation, signal, redrive, and other operator events retain visible attribution.
 
 `DashboardCommandOptions.socketPath` selects a Unix socket instead of `hostname` and `port`. The
 unauthenticated development bypass accepts only an address in `127.0.0.0/8`, `::1`, or a Unix

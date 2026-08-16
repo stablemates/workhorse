@@ -1,3 +1,5 @@
+import type { DashboardAuthenticationRoutes } from "../runtime-config.js";
+
 /**
  * Runtime configuration handed to the dashboard's browser entry.
  *
@@ -9,6 +11,8 @@ export interface DashboardRuntimeConfig {
   basePath: string;
   rpcUrl: string;
   auditActor: string;
+  /** Built-in authentication routes. Null when the embedding host owns authorization. */
+  authentication: DashboardAuthenticationRoutes | null;
   /** Enables the job-seeding menu. Only hosts that intentionally supply fixtures should set it. */
   demoTools: boolean;
 }

@@ -77,6 +77,24 @@ describe("dashboard event history", () => {
     expect(html).toContain("new protocol");
   });
 
+  it("attributes operator-initiated boundary events", async () => {
+    const html = await renderExport(
+      "BoundaryTimeline",
+      jobWithEvents([
+        {
+          id: "cancel-request",
+          attempt: 2,
+          type: "cancel_requested",
+          details: { requested_by: "operator@example.com", reason: "stuck deployment" },
+          occurredAt: "2026-08-15T12:00:00.000Z",
+        },
+      ]),
+    );
+
+    expect(html).toContain("operator@example.com");
+    expect(html).toContain("stuck deployment");
+  });
+
   it("gives the new Events feed categories meaningful colors", async () => {
     const { eventTypeColor } = await import("./dashboard.js");
     expect(eventTypeColor("dependency_blocked")).toBe("orange");

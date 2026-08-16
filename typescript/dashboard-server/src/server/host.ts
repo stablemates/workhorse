@@ -179,7 +179,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
   const owns = (pathname: string): boolean =>
     path === "" || pathname === path || pathname.startsWith(`${path}/`);
 
-  async function serveApplication(url: URL): Promise<Response> {
+  async function serveApplication(url: URL, authenticatedActor: string): Promise<Response> {
     const template = options.dev
       ? await options.dev.readTemplate()
       : await readFile(join(assets, "index.html"), "utf8");
@@ -187,7 +187,10 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       runtime: {
         basePath: path,
         rpcUrl: `${path}/rpc`,
-        auditActor: options.auditActor ?? "dashboard",
+        auditActor: authenticatedActor,
+        authentication: singleAdmin
+          ? { loginUrl: `${path}/login`, logoutUrl: `${path}/logout` }
+          : null,
         demoTools: Boolean(options.operator?.enqueueTest),
       },
       browserModules: options.browserModules,
@@ -295,7 +298,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         return new Response(null, { status: 302, headers: { location: `${path}/tasks` } });
       }
 
-      return serveApplication(url);
+      return serveApplication(url, authenticatedActor);
     },
   };
 }

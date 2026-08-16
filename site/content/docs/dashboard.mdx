@@ -87,6 +87,10 @@ checks, and login throttling. A remote listener also requires an HTTPS public or
 that need multiple users, roles, SSO, or tenant isolation should use an embedded host and its
 `authorize` callback.
 
+The login page follows the browser's color scheme. The dashboard header shows the authenticated
+administrator and provides sign-out; if the session expires while the page is open, the next
+private request returns the browser to login.
+
 ## Customize without forking
 
 Hosts that want the components inside their own React tree can render `Dashboard` and

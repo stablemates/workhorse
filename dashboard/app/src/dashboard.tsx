@@ -1834,6 +1834,7 @@ export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
           const name = eventDetail(event, "name");
           const fence = eventDetail(event, "fence_token");
           const worker = eventDetail(event, "worker_id");
+          const requestedBy = eventDetail(event, "requested_by");
           const reason = eventDetail(event, "reason");
           const retry = retryEventDescription(event);
           const cancel = cancelEventDescription(event);
@@ -1841,6 +1842,7 @@ export function BoundaryTimeline({ job }: { job: DashboardJobDetail }) {
             name,
             worker,
             fence === null ? null : `fence ${fence}`,
+            requestedBy === null ? null : `by ${requestedBy}`,
             reason === null ? null : `reason ${reason}`,
             retry?.text ?? null,
             cancel?.text ?? null,
@@ -7095,9 +7097,11 @@ function useDashboardController(
 
 function DashboardContent({
   auditActor,
+  logoutUrl,
   demoTools,
   basePath,
 }: Required<Pick<DashboardProps, "auditActor">> & {
+  logoutUrl: string | null;
   demoTools: DashboardDemoTools | null;
   basePath: string;
 }) {
@@ -7244,6 +7248,28 @@ function DashboardContent({
           </Group>
           <Group gap="sm" wrap="nowrap">
             <ThemeSchemeSwitch />
+            {logoutUrl ? (
+              <Menu position="bottom-end" withinPortal>
+                <Menu.Target>
+                  <Button
+                    variant="default"
+                    size="xs"
+                    leftSection={<UserFocus size={14} />}
+                    aria-label={`Signed in as ${auditActor}`}
+                  >
+                    {auditActor}
+                  </Button>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Label>Signed in as {auditActor}</Menu.Label>
+                  <form action={logoutUrl} method="post">
+                    <Menu.Item component="button" type="submit">
+                      Sign out
+                    </Menu.Item>
+                  </form>
+                </Menu.Dropdown>
+              </Menu>
+            ) : null}
             {environment ? (
               <Badge
                 color={environmentColor(environment)}
@@ -7550,6 +7576,8 @@ export interface DashboardProps {
   demoTools?: DashboardDemoTools;
   /** URL namespace where the dashboard is mounted, for example `/workhorse`. */
   basePath?: string;
+  /** Built-in authentication logout URL. Omit when the embedding host owns authorization. */
+  logoutUrl?: string;
 }
 
 export function Dashboard({
@@ -7557,6 +7585,7 @@ export function Dashboard({
   auditActor = "dashboard",
   demoTools = undefined,
   basePath: basePathInput = "",
+  logoutUrl = undefined,
 }: DashboardProps) {
   const basePath = normalizeBasePath(basePathInput);
   return (
@@ -7564,6 +7593,7 @@ export function Dashboard({
       <DropdownActivityProvider>
         <DashboardContent
           auditActor={auditActor}
+          logoutUrl={logoutUrl ?? null}
           demoTools={demoTools ?? null}
           basePath={basePath}
         />

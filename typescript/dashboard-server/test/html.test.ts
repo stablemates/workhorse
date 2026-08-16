@@ -11,6 +11,10 @@ const runtime = {
   basePath: "/workhorse",
   rpcUrl: "/workhorse/rpc",
   auditActor: "ops@example.com",
+  authentication: {
+    loginUrl: "/workhorse/login",
+    logoutUrl: "/workhorse/logout",
+  },
   demoTools: false,
 };
 
@@ -19,7 +23,7 @@ describe("renderDashboardHtml", () => {
     const html = renderDashboardHtml(template, { runtime });
 
     expect(html).toContain(
-      `window.workhorseDashboard={"basePath":"/workhorse","rpcUrl":"/workhorse/rpc","auditActor":"ops@example.com","demoTools":false}`,
+      `window.workhorseDashboard={"basePath":"/workhorse","rpcUrl":"/workhorse/rpc","auditActor":"ops@example.com","authentication":{"loginUrl":"/workhorse/login","logoutUrl":"/workhorse/logout"},"demoTools":false}`,
     );
     expect(html).not.toContain(DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER);
   });
