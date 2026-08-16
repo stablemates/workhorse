@@ -37,7 +37,7 @@ describe("task detail drawer", () => {
     });
     expect(taskDrawerViewportProps(false)).toMatchObject({
       ...taskDrawerModelessProps,
-      size: "lg",
+      size: "xl",
     });
   });
 

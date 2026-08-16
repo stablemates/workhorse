@@ -9,6 +9,7 @@ import {
   Button,
   Center,
   Code,
+  CopyButton,
   Divider,
   Drawer,
   Grid,
@@ -639,6 +640,60 @@ async function copyToClipboard(text: string): Promise<string | null> {
 }
 
 /**
+ * One top-level block of the task detail drawer.
+ *
+ * Every section shares this wrapper so the drawer reads as a sequence of separated, identically
+ * headed blocks instead of one continuous column. The separator is a border on the section itself
+ * rather than a sibling `Divider`, because most sections render conditionally and a divider next
+ * to a section that returned null would leave a stray rule.
+ */
+function DrawerSection({
+  id,
+  title,
+  aside,
+  children,
+}: {
+  /** Stable heading element id, used as the section's aria-labelledby target. */
+  id: string;
+  title: string;
+  /** Optional right-aligned heading companion, typically a count or state badge. */
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Box component="section" aria-labelledby={id} className="task-drawer__section">
+      <Group justify="space-between" align="center" mb="xs" wrap="nowrap">
+        <Text id={id} component="h3" fw={600} size="sm" my={0}>
+          {title}
+        </Text>
+        {aside ?? null}
+      </Group>
+      {children}
+    </Box>
+  );
+}
+
+/**
+ * One aligned label/value row of drawer metadata.
+ *
+ * The label column has a fixed width so every value in the overview starts on the same vertical
+ * line; without it each row's label, badge, and explainer run together at a different offset and
+ * the block reads as one dense paragraph.
+ */
+function MetaRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Group gap="sm" align="baseline" wrap="nowrap">
+      <Text c="dimmed" size="xs" fw={600} className="task-drawer__meta-label">
+        {label}
+      </Text>
+      <Group gap="xs" align="baseline" wrap="wrap" style={{ flex: 1, minWidth: 0 }}>
+        {children}
+      </Group>
+    </Group>
+  );
+}
+
+/**
  * Bounded viewer for one stored JSON value.
  *
  * Every stored value in this drawer is operator evidence, so it is shown in full rather than
@@ -757,11 +812,10 @@ function TaskOutcome({ job }: { job: DashboardJobDetail }) {
   });
   const described = evidence.description;
   return (
-    <Box component="section" aria-labelledby="task-outcome-heading">
-      <Group justify="space-between" align="center" mb={4} wrap="nowrap">
-        <Text id="task-outcome-heading" component="h3" fw={600} size="sm" my={0}>
-          Outcome
-        </Text>
+    <DrawerSection
+      id="task-outcome-heading"
+      title="Outcome"
+      aside={
         <Badge
           variant="light"
           color={outcomeStateColor[described.state]}
@@ -770,7 +824,8 @@ function TaskOutcome({ job }: { job: DashboardJobDetail }) {
         >
           {described.label}
         </Badge>
-      </Group>
+      }
+    >
       <Text c="dimmed" size="xs" mb="xs">
         {described.summary}
       </Text>
@@ -785,7 +840,7 @@ function TaskOutcome({ job }: { job: DashboardJobDetail }) {
         emptyLabel={described.emptyLabel ?? "Nothing was stored."}
         copyLabel={(described.valueLabel ?? "final result").toLowerCase()}
       />
-    </Box>
+    </DrawerSection>
   );
 }
 
@@ -971,15 +1026,15 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
 function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
   const currentAttempt = job.current.outcome?.attempt ?? job.current.runtime?.attempt ?? 1;
   return (
-    <Box component="section" aria-labelledby="interim-results-heading">
-      <Group justify="space-between" mb="xs">
-        <Text id="interim-results-heading" component="h3" fw={600} size="sm" my={0}>
-          Interim results
-        </Text>
+    <DrawerSection
+      id="interim-results-heading"
+      title="Interim results"
+      aside={
         <Badge variant="light" color={job.checkpoints.length > 0 ? "teal" : "gray"}>
           {job.checkpoints.length}
         </Badge>
-      </Group>
+      }
+    >
       {/* Named once, here, so the rest of the section never has to re-explain what it is showing. */}
       <Text c="dimmed" size="xs" mb="sm">
         Interim results show completed work rather than current progress. Workhorse saves each
@@ -1026,22 +1081,22 @@ function JobCheckpoints({ job }: { job: DashboardJobDetail }) {
           })}
         </Stack>
       )}
-    </Box>
+    </DrawerSection>
   );
 }
 
 function JobProgress({ job }: { job: DashboardJobDetail }) {
   const progress = job.progress;
   return (
-    <Box component="section" aria-labelledby="job-progress-heading">
-      <Group justify="space-between" mb="xs">
-        <Text id="job-progress-heading" component="h3" fw={600} size="sm" my={0}>
-          Latest progress
-        </Text>
+    <DrawerSection
+      id="job-progress-heading"
+      title="Latest progress"
+      aside={
         <Badge variant="light" color={progress ? "blue" : "gray"}>
           {progress ? `Revision ${progress.revision}` : "Not reported"}
         </Badge>
-      </Group>
+      }
+    >
       {progress ? (
         <Paper withBorder p="sm">
           <Text c="dimmed" size="xs" mb="sm" title={formatExact(progress.updatedAt)}>
@@ -1060,7 +1115,7 @@ function JobProgress({ job }: { job: DashboardJobDetail }) {
           This task has not reported mutable progress.
         </Text>
       )}
-    </Box>
+    </DrawerSection>
   );
 }
 
@@ -1202,15 +1257,15 @@ export function CoalescingSection({ job }: { job: DashboardJobDetail }) {
   const counts = [enqueueCount(evidence.absorbed, "absorbed")];
   if (evidence.rejected > 0) counts.push(enqueueCount(evidence.rejected, "rejected"));
   return (
-    <Box>
-      <Group gap="xs" mb="xs" align="baseline">
-        <Text fw={600} size="sm">
-          Coalescing
-        </Text>
+    <DrawerSection
+      id="coalescing-heading"
+      title="Coalescing"
+      aside={
         <Badge size="xs" variant="light" color="grape" tt="none">
           {label}
         </Badge>
-      </Group>
+      }
+    >
       <Text c="dimmed" size="xs">
         {formatDuration(evidence.windowMs)} window
         {evidence.schedule === null ? "" : ` · ${evidence.schedule} schedule`} ·{" "}
@@ -1227,7 +1282,7 @@ export function CoalescingSection({ job }: { job: DashboardJobDetail }) {
       <Text c="dimmed" size="xs" mt={4}>
         The raw key is never shown; the digest identifies matching submissions without exposing it.
       </Text>
-    </Box>
+    </DrawerSection>
   );
 }
 
@@ -1291,15 +1346,15 @@ function IdempotencySection({ job }: { job: DashboardJobDetail }) {
   if (evidence === null) return null;
   const described = describeIdempotency(evidence);
   return (
-    <Box>
-      <Group gap="xs" mb="xs" align="baseline">
-        <Text fw={600} size="sm">
-          Idempotency
-        </Text>
+    <DrawerSection
+      id="idempotency-heading"
+      title="Idempotency"
+      aside={
         <Badge size="xs" variant="light" color="violet" tt="none" title={described.exact}>
           {described.label}
         </Badge>
-      </Group>
+      }
+    >
       <Text c="dimmed" size="xs" title={described.exact}>
         {described.summary}.
       </Text>
@@ -1309,7 +1364,7 @@ function IdempotencySection({ job }: { job: DashboardJobDetail }) {
       <Text c="dimmed" size="xs" mt={4}>
         The raw key is never recorded with the task, so it is never shown here.
       </Text>
-    </Box>
+    </DrawerSection>
   );
 }
 
@@ -1387,17 +1442,17 @@ function CancelTaskPanel({
   // sentence. What a cancellation reported is announced by the notification it raises, which
   // outlives this panel, because closing the drawer must not take the answer with it.
   return (
-    <Box>
-      <Group gap="xs" mb="xs" align="baseline">
-        <Text fw={600} size="sm">
-          Cancellation
-        </Text>
-        {requested === null ? null : (
+    <DrawerSection
+      id="cancellation-heading"
+      title="Cancellation"
+      aside={
+        requested === null ? null : (
           <Badge size="xs" variant="light" color="gray" tt="none" title={requested.exact}>
             {requested.label}
           </Badge>
-        )}
-      </Group>
+        )
+      }
+    >
       {requested === null ? null : (
         <Text c="dimmed" size="xs" mb="xs" title={requested.exact}>
           {requested.summary}.{" "}
@@ -1475,7 +1530,7 @@ function CancelTaskPanel({
             : "Workhorse cannot cancel this task because it has no live runtime."}
         </Text>
       )}
-    </Box>
+    </DrawerSection>
   );
 }
 
@@ -1498,10 +1553,7 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
       : "Retries remain within the attempt budget."
   }`;
   return (
-    <Group gap="xs" mt="sm" align="baseline">
-      <Text c="dimmed" size="xs" fw={600}>
-        Retry policy
-      </Text>
+    <MetaRow label="Retry policy">
       <Badge size="xs" variant="light" color="orange" title={title} tt="none">
         {policy.label}
       </Badge>
@@ -1509,6 +1561,40 @@ function RetryPolicyLine({ job }: { job: DashboardJobDetail }) {
         {policy.summary} · {budget}
         {exhausted ? " · budget exhausted, no further retry is scheduled" : ""}
       </Text>
+    </MetaRow>
+  );
+}
+
+/**
+ * Display form of a task UUID: the first eight characters, matching the task table's ID column.
+ * Every renderer of a shortened id carries the full id in `title`, so hover always recovers it.
+ */
+function shortTaskId(id: string): string {
+  return id.slice(0, 8);
+}
+
+/** One task UUID shown shortened, recoverable on hover, and copyable in full. */
+function TaskIdChip({ id }: { id: string }) {
+  return (
+    <Group gap={4} wrap="nowrap" align="center">
+      <Code fz="xs" title={id}>
+        {shortTaskId(id)}
+      </Code>
+      <CopyButton value={id} timeout={2000}>
+        {({ copied, copy }) => (
+          <Tooltip label={copied ? "Copied" : "Copy task id"} withArrow>
+            <ActionIcon
+              size="xs"
+              variant="subtle"
+              color={copied ? "teal" : "gray"}
+              aria-label={copied ? "Task id copied to the clipboard" : "Copy task id"}
+              onClick={copy}
+            >
+              {copied ? <CheckCircle size={12} weight="bold" /> : <Copy size={12} />}
+            </ActionIcon>
+          </Tooltip>
+        )}
+      </CopyButton>
     </Group>
   );
 }
@@ -1530,6 +1616,7 @@ function RelatedTaskLink({
       href={taskLinkHref(id)}
       fz="xs"
       ff="monospace"
+      title={id}
       onClick={(event) => {
         if (
           onOpenTask === undefined ||
@@ -1546,7 +1633,7 @@ function RelatedTaskLink({
         onOpenTask(id);
       }}
     >
-      {id}
+      {shortTaskId(id)}
     </Text>
   );
 }
@@ -1631,10 +1718,7 @@ function BatchExecutions({
 }: { job: DashboardJobDetail } & LineageNavigationProps) {
   if (job.batchExecutions.length === 0) return null;
   return (
-    <Box component="section" aria-labelledby="batch-executions-heading" mt="sm">
-      <Text id="batch-executions-heading" component="h3" fw={600} size="sm" mb="xs" my={0}>
-        Batch execution
-      </Text>
+    <DrawerSection id="batch-executions-heading" title="Batch execution">
       <Stack gap="sm">
         {job.batchExecutions.map((batch) => (
           <BatchExecutionLine
@@ -1645,9 +1729,43 @@ function BatchExecutions({
           />
         ))}
       </Stack>
-    </Box>
+    </DrawerSection>
   );
 }
+
+type DependencyEdge = DashboardJobDetail["dependencyLineage"]["records"][number];
+
+/** Plain-English consequence of one dependency policy action, said of the dependent task. */
+function dependencyActionPhrase(action: "release" | "cancel" | "fail"): string {
+  if (action === "release") return "can run";
+  return action === "cancel" ? "is canceled" : "fails";
+}
+
+/**
+ * One dependency edge's policy as a sentence instead of the stored action triple.
+ *
+ * The stored form ("success: release, failure: fail") names actions without saying which task
+ * each one happens to, so operators could not tell who releases whom. The sentence names both
+ * roles, and the caller says which of the two tasks is the one on screen.
+ */
+function dependencyPolicySentence(
+  policy: Pick<DependencyEdge, "onSuccess" | "onFailure" | "onCancellation">,
+  prerequisite: string,
+  dependent: string,
+): string {
+  return (
+    `If ${prerequisite} succeeds, ${dependent} ${dependencyActionPhrase(policy.onSuccess)}; ` +
+    `if ${prerequisite} fails, ${dependent} ${dependencyActionPhrase(policy.onFailure)}; ` +
+    `if ${prerequisite} is canceled, ${dependent} ${dependencyActionPhrase(policy.onCancellation)}.`
+  );
+}
+
+/** Past-tense verb for what a settled dependency edge did to its dependent. */
+const dependencyResolutionVerb: Record<"release" | "cancel" | "fail", string> = {
+  release: "released",
+  cancel: "canceled",
+  fail: "failed",
+};
 
 /** The immutable prerequisite edge and its current release state. */
 export function DependencyLine({
@@ -1662,20 +1780,21 @@ export function DependencyLine({
     : job.identity.dependencyReleasedAt === null
       ? "Dependency recorded"
       : `Released ${formatRelative(job.identity.dependencyReleasedAt)}`;
-  const dependentIds = [
-    ...new Set(
-      job.dependencyLineage.records
-        .filter((edge) => edge.prerequisiteJobId === job.identity.id)
-        .map((edge) => edge.dependentJobId),
-    ),
-  ];
+  // One edge renders as one row. The prerequisite identity, its state, and its policy used to be
+  // split between a labeled row and a raw "success: release, failure: fail" line that repeated
+  // the same id, which read as two different facts about two different tasks.
+  const prerequisiteEdges = job.dependencyLineage.records.filter(
+    (edge) => edge.dependentJobId === job.identity.id,
+  );
+  const dependentEdges = job.dependencyLineage.records.filter(
+    (edge) => edge.prerequisiteJobId === job.identity.id && edge.dependentJobId !== job.identity.id,
+  );
   return (
-    <Stack gap={4} mt="sm">
+    <Stack gap={6}>
       {job.identity.prerequisiteJobIds.length > 0 ? (
-        <Group gap="xs" align="baseline" wrap="wrap">
-          <Text c="dimmed" size="xs" fw={600}>
-            {job.identity.prerequisiteJobIds.length === 1 ? "Prerequisite" : "Prerequisites"}
-          </Text>
+        <MetaRow
+          label={job.identity.prerequisiteJobIds.length === 1 ? "Prerequisite" : "Prerequisites"}
+        >
           <span>
             <RelatedTaskLinks ids={job.identity.prerequisiteJobIds} {...navigation} />
           </span>
@@ -1685,33 +1804,31 @@ export function DependencyLine({
           <Text c="dimmed" size="xs">
             {summary}
           </Text>
-        </Group>
+        </MetaRow>
       ) : null}
-      {dependentIds.length > 0 ? (
-        <Group gap="xs" align="baseline" wrap="wrap">
-          <Text c="dimmed" size="xs" fw={600}>
-            {dependentIds.length === 1 ? "Dependent" : "Dependents"}
+      {prerequisiteEdges.map((edge) => (
+        <MetaRow key={`${edge.dependentJobId}:${edge.prerequisiteJobId}`} label="Policy">
+          {prerequisiteEdges.length > 1 ? (
+            <RelatedTaskLink id={edge.prerequisiteJobId} {...navigation} />
+          ) : null}
+          <Text c="dimmed" size="xs">
+            {dependencyPolicySentence(edge, "it", "this task")}
+            {edge.releasedAt === null || edge.resolution === null
+              ? ""
+              : ` It ${dependencyResolutionVerb[edge.resolution]} this task ${formatRelative(edge.releasedAt)}.`}
           </Text>
-          <span>
-            <RelatedTaskLinks ids={dependentIds} {...navigation} />
-          </span>
-        </Group>
-      ) : null}
-      {job.dependencyLineage.records.map((edge) => (
-        <Text c="dimmed" size="xs" key={`${edge.dependentJobId}:${edge.prerequisiteJobId}`}>
-          {edge.dependentJobId === job.identity.id ? "Prerequisite " : "Dependent "}
-          <RelatedTaskLink
-            id={
-              edge.dependentJobId === job.identity.id ? edge.prerequisiteJobId : edge.dependentJobId
-            }
-            {...navigation}
-          />
-          : success: {edge.onSuccess}, failure: {edge.onFailure}, cancellation:{" "}
-          {edge.onCancellation}
-          {edge.releasedAt === null
-            ? " · pending"
-            : ` · resolved as ${edge.resolution} ${formatRelative(edge.releasedAt)}`}
-        </Text>
+        </MetaRow>
+      ))}
+      {dependentEdges.map((edge) => (
+        <MetaRow key={`${edge.dependentJobId}:${edge.prerequisiteJobId}`} label="Dependent">
+          <RelatedTaskLink id={edge.dependentJobId} {...navigation} />
+          <Text c="dimmed" size="xs">
+            {dependencyPolicySentence(edge, "this task", "it")}{" "}
+            {edge.releasedAt === null || edge.resolution === null
+              ? "Still waiting on this task's outcome."
+              : `This task ${dependencyResolutionVerb[edge.resolution]} it ${formatRelative(edge.releasedAt)}.`}
+          </Text>
+        </MetaRow>
       ))}
       {job.dependencyLineage.truncated ? (
         <Text c="dimmed" size="xs">
@@ -1731,7 +1848,7 @@ export function ChildLine({
   const children = job.childLineage.records.filter((edge) => edge.parentJobId === job.identity.id);
   const joinedChildren = children.filter((edge) => edge.joinedAt !== null).length;
   return (
-    <Stack gap={4} mt="sm">
+    <Stack gap={6}>
       {children.length > 0 ? (
         <Text c="dimmed" size="xs" fw={600}>
           {joinedChildren} of {children.length} {children.length === 1 ? "child" : "children"}{" "}
@@ -1747,16 +1864,13 @@ export function ChildLine({
               ? "result ready"
               : (edge.outcomeState ?? "waiting");
         return (
-          <Group gap="xs" align="baseline" wrap="wrap" key={`${edge.parentJobId}:${edge.name}`}>
-            <Text c="dimmed" size="xs" fw={600}>
-              {isParent ? "Child" : "Parent"}
-            </Text>
+          <MetaRow key={`${edge.parentJobId}:${edge.name}`} label={isParent ? "Child" : "Parent"}>
             <RelatedTaskLink id={isParent ? edge.childJobId : edge.parentJobId} {...navigation} />
             <Text c="dimmed" size="xs">
               {edge.name} · {edge.type} · {state}
             </Text>
             {edge.error === null ? null : <Code fz="xs">{JSON.stringify(edge.error)}</Code>}
-          </Group>
+          </MetaRow>
         );
       })}
       {job.childLineage.truncated ? (
@@ -1775,24 +1889,19 @@ export function RedriveLine({
 }: { job: DashboardJobDetail } & LineageNavigationProps) {
   if (job.redriveLineage.records.length === 0) return null;
   return (
-    <Stack gap={4} mt="sm">
+    <Stack gap={6}>
       {job.redriveLineage.records.map((edge) => {
         const isSource = edge.sourceJobId === job.identity.id;
         return (
-          <Group
-            gap="xs"
-            align="baseline"
-            wrap="wrap"
+          <MetaRow
             key={`${edge.sourceJobId}:${edge.targetJobId}`}
+            label={isSource ? "Redrive" : "Redriven from"}
           >
-            <Text c="dimmed" size="xs" fw={600}>
-              {isSource ? "Redrive" : "Redriven from"}
-            </Text>
             <RelatedTaskLink id={isSource ? edge.targetJobId : edge.sourceJobId} {...navigation} />
             <Text c="dimmed" size="xs">
               {edge.requestedBy} · {edge.reason} · {formatRelative(edge.requestedAt)}
             </Text>
-          </Group>
+          </MetaRow>
         );
       })}
       {job.redriveLineage.truncated ? (
@@ -1818,10 +1927,7 @@ export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
   const described = describeTaskConcurrency(job);
   if (described === null) return null;
   return (
-    <Group gap="xs" mt="sm" align="baseline" wrap="wrap">
-      <Text c="dimmed" size="xs" fw={600}>
-        Concurrency
-      </Text>
+    <MetaRow label="Concurrency">
       {described.concurrencyKey === null ? null : (
         <Badge
           size="xs"
@@ -1857,15 +1963,28 @@ export function ConcurrencyPolicyLine({ job }: { job: DashboardJobDetail }) {
           usage not measured
         </Badge>
       )}
-    </Group>
+    </MetaRow>
   );
 }
 
-/** Absolute lifetime and per-attempt execution limits persisted with the job definition. */
+/**
+ * Absolute lifetime and per-attempt execution limits persisted with the job definition.
+ *
+ * A task without limits says so instead of omitting the row: an operator asking "why is this
+ * still running?" needs "no limit is set" as an answer, not a gap where the answer would be.
+ */
 function TimingPolicyLine({ job }: { job: DashboardJobDetail }) {
   const deadlineAt = job.identity.deadlineAt ?? null;
   const executionTimeoutMs = job.identity.executionTimeoutMs ?? null;
-  if (deadlineAt === null && executionTimeoutMs === null) return null;
+  if (deadlineAt === null && executionTimeoutMs === null) {
+    return (
+      <MetaRow label="Time limits">
+        <Text c="dimmed" size="xs">
+          No lifetime deadline and no per-attempt execution limit.
+        </Text>
+      </MetaRow>
+    );
+  }
   const runtimeTimeoutAt = job.current.runtime?.attemptTimeoutAt ?? null;
   const parts = [
     deadlineAt === null ? null : `deadline ${formatExact(deadlineAt)}`,
@@ -1875,14 +1994,11 @@ function TimingPolicyLine({ job }: { job: DashboardJobDetail }) {
     runtimeTimeoutAt === null ? null : `current timeout target ${formatExact(runtimeTimeoutAt)}`,
   ].filter((part): part is string => part !== null);
   return (
-    <Group gap="xs" mt="xs" align="baseline">
-      <Text c="dimmed" size="xs" fw={600}>
-        Time limits
-      </Text>
+    <MetaRow label="Time limits">
       <Text c="dimmed" size="xs" title={parts.join("; ")}>
         {parts.join(" · ")}
       </Text>
-    </Group>
+    </MetaRow>
   );
 }
 
@@ -2097,15 +2213,15 @@ function DurableWaits({ job }: { job: DashboardJobDetail }) {
   const unmatchedWaits = job.waits.filter((wait) => !planNames.has(wait.name));
   const matchedWaits = job.waits.filter((wait) => planNames.has(wait.name));
   return (
-    <Box>
-      <Group justify="space-between" mb="xs">
-        <Text fw={600} size="sm">
-          Durable wait
-        </Text>
+    <DrawerSection
+      id="durable-wait-heading"
+      title="Durable wait"
+      aside={
         <Badge variant="light" color="indigo">
           {job.waits.length}
         </Badge>
-      </Group>
+      }
+    >
       <Stack gap="sm">
         {matchedWaits.map((wait) => (
           <DurableWaitCard key={wait.name} job={job} wait={wait} nowMs={nowMs} />
@@ -2133,7 +2249,7 @@ function DurableWaits({ job }: { job: DashboardJobDetail }) {
         Workhorse stores checkpoint and wait records, not a workflow graph.
       </Text>
       <BoundaryTimeline job={job} />
-    </Box>
+    </DrawerSection>
   );
 }
 
@@ -6045,10 +6161,7 @@ function SignalTaskPanel({
   };
 
   return (
-    <Box>
-      <Text fw={600} size="sm" mb="xs">
-        Signal delivery
-      </Text>
+    <DrawerSection id="signal-delivery-heading" title="Signal delivery">
       <Text size="sm" mb={4}>
         Waiting for <Code fz="xs">{wait.name}</Code>
       </Text>
@@ -6066,7 +6179,7 @@ function SignalTaskPanel({
         onPayloadChange={setPayload}
         onSend={() => void send()}
       />
-    </Box>
+    </DrawerSection>
   );
 }
 
@@ -7367,52 +7480,68 @@ function DashboardContent({
             {jobDetailError}
           </Text>
         ) : selectedJob ? (
-          <Stack gap="lg">
-            <Box>
-              <Group justify="space-between">
-                <Text fw={700}>{selectedJob.identity.type}</Text>
+          <Stack gap="xl">
+            {/* The overview answers "what task is this, and under which rules does it run?" as
+                one aligned label/value grid, so every policy and limit reads from the same
+                column instead of each line wrapping at its own offset. */}
+            <Box component="section" aria-labelledby="task-overview-heading">
+              <Group justify="space-between" align="flex-start" wrap="nowrap" gap="sm">
+                <Box style={{ minWidth: 0 }}>
+                  <Text id="task-overview-heading" component="h3" fw={700} size="lg" my={0}>
+                    {selectedJob.identity.type}
+                  </Text>
+                  <Text c="dimmed" size="xs" title={formatExact(selectedJob.identity.createdAt)}>
+                    Queue {selectedJob.identity.queue} · created{" "}
+                    {formatRelative(selectedJob.identity.createdAt)}
+                  </Text>
+                </Box>
                 <StatusBadge state={selectedJob.identity.state} />
               </Group>
-              <Code fz="xs">{selectedJob.identity.id}</Code>
-              <RetryPolicyLine job={selectedJob} />
-              <BatchExecutions
-                job={selectedJob}
-                taskLinkHref={lineageTaskHref}
-                onOpenTask={inspectJob}
-              />
-              <DependencyLine
-                job={selectedJob}
-                taskLinkHref={lineageTaskHref}
-                onOpenTask={inspectJob}
-              />
-              <ChildLine job={selectedJob} taskLinkHref={lineageTaskHref} onOpenTask={inspectJob} />
-              <RedriveLine
-                job={selectedJob}
-                taskLinkHref={lineageTaskHref}
-                onOpenTask={inspectJob}
-              />
-              <Group gap="xs" mt="sm" align="baseline">
-                <Text c="dimmed" size="xs" fw={600}>
-                  Priority
-                </Text>
-                <Badge size="xs" variant="light" color="orange" tt="none">
-                  {selectedJob.identity.priority}
-                </Badge>
-                <Text c="dimmed" size="xs">
-                  Higher values are claimed first; equal values keep FIFO order.
-                </Text>
-              </Group>
-              <TimingPolicyLine job={selectedJob} />
-              <ConcurrencyPolicyLine job={selectedJob} />
+              <Stack gap={6} mt="md">
+                <MetaRow label="Task id">
+                  <TaskIdChip id={selectedJob.identity.id} />
+                </MetaRow>
+                <MetaRow label="Priority">
+                  <Badge size="xs" variant="light" color="orange" tt="none">
+                    {selectedJob.identity.priority}
+                  </Badge>
+                  <Text c="dimmed" size="xs">
+                    Higher values are claimed first; equal values keep FIFO order.
+                  </Text>
+                </MetaRow>
+                <RetryPolicyLine job={selectedJob} />
+                <TimingPolicyLine job={selectedJob} />
+                <ConcurrencyPolicyLine job={selectedJob} />
+                <DependencyLine
+                  job={selectedJob}
+                  taskLinkHref={lineageTaskHref}
+                  onOpenTask={inspectJob}
+                />
+                <ChildLine
+                  job={selectedJob}
+                  taskLinkHref={lineageTaskHref}
+                  onOpenTask={inspectJob}
+                />
+                <RedriveLine
+                  job={selectedJob}
+                  taskLinkHref={lineageTaskHref}
+                  onOpenTask={inspectJob}
+                />
+              </Stack>
             </Box>
-            <Box>
+            <BatchExecutions
+              job={selectedJob}
+              taskLinkHref={lineageTaskHref}
+              onOpenTask={inspectJob}
+            />
+            <DrawerSection id="task-input-heading" title="Input">
               <JsonValue
-                label="Input"
+                label="Stored payload"
                 value={selectedJob.payload}
                 emptyLabel="This task was enqueued without input."
                 copyLabel="the task input"
               />
-            </Box>
+            </DrawerSection>
             <TaskOutcome job={selectedJob} />
             <IdempotencySection job={selectedJob} />
             <CoalescingSection job={selectedJob} />
@@ -7429,10 +7558,15 @@ function DashboardContent({
             <JobProgress job={selectedJob} />
             <JobCheckpoints job={selectedJob} />
             <DurableWaits job={selectedJob} />
-            <Box>
-              <Text fw={600} size="sm" mb="xs">
-                Attempt history
-              </Text>
+            <DrawerSection
+              id="attempt-history-heading"
+              title="Attempt history"
+              aside={
+                <Badge variant="light" color={selectedJob.attempts.length > 0 ? "blue" : "gray"}>
+                  {selectedJob.attempts.length}
+                </Badge>
+              }
+            >
               {selectedJob.attempts.length === 0 ? (
                 <Text c="dimmed" size="sm">
                   No attempt has finished yet.
@@ -7464,7 +7598,7 @@ function DashboardContent({
                   ))}
                 </Stack>
               )}
-            </Box>
+            </DrawerSection>
           </Stack>
         ) : (
           <Center mih={200}>

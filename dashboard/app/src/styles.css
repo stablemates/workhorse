@@ -80,6 +80,23 @@ body {
 }
 
 /*
+ * Each drawer section carries its own separator, because sections render conditionally and a
+ * standalone divider beside a section that returned null would leave a stray rule.
+ */
+.task-drawer__section {
+  border-top: 1px solid var(--mantine-color-default-border);
+  padding-top: var(--mantine-spacing-md);
+}
+
+/*
+ * Fixed label column for the metadata rows in the drawer overview, so every value starts on the
+ * same vertical line instead of each row wrapping at its own offset.
+ */
+.task-drawer__meta-label {
+  flex: 0 0 6.5rem;
+}
+
+/*
  * Durable step text is evidence an operator copies into a ticket, so it must be selectable.
  * Mantine renders every step as a button, and a button is not text-selectable in every engine,
  * so selection is restored explicitly on the step body.

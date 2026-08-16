@@ -124,15 +124,54 @@ describe("task dependency detail", () => {
     );
     expect(html).toContain("Dependent");
     expect(html).toContain("dependent-job");
-    expect(html).toContain("success: release");
-    expect(html).toContain("failure: fail");
-    expect(html).toContain("cancellation: cancel");
-    expect(html).toContain("resolved as release");
+    expect(html).toContain(
+      "If this task succeeds, it can run; if this task fails, it fails; " +
+        "if this task is canceled, it is canceled.",
+    );
+    expect(html).toContain("This task released it");
     expect(html).toContain("other-dependent-job");
-    expect(html).toContain("success: cancel");
-    expect(html).toContain("failure: release");
+    expect(html).toContain(
+      "If this task succeeds, it is canceled; if this task fails, it can run; " +
+        "if this task is canceled, it fails.",
+    );
+    expect(html).toContain("Still waiting on this task");
+    expect(html).not.toContain("success: release");
     expect(html).toContain('href="/tasks?task=dependent-job"');
     expect(html).toContain('href="/tasks?task=other-dependent-job"');
+  });
+
+  it("explains the prerequisite policy as a sentence without repeating the identity", async () => {
+    const html = await renderDependency(
+      {
+        prerequisiteJobId: "prerequisite-job",
+        prerequisiteJobIds: ["prerequisite-job"],
+        blockedReason: "prerequisite_pending",
+      },
+      {
+        records: [
+          {
+            dependentJobId: "selected-job",
+            prerequisiteJobId: "prerequisite-job",
+            onSuccess: "release",
+            onFailure: "fail",
+            onCancellation: "cancel",
+            createdAt: "2026-08-14T11:00:00.000Z",
+            releasedAt: null,
+            resolution: null,
+          },
+        ],
+        truncated: false,
+      },
+    );
+    expect(html).toContain(
+      "If it succeeds, this task can run; if it fails, this task fails; " +
+        "if it is canceled, this task is canceled.",
+    );
+    expect(html).not.toContain("success: release");
+    // The identity appears exactly once, as the link: its href plus its full-id hover title.
+    // The visible text is the shortened eight-character form.
+    expect(html.split("prerequisite-job").length - 1).toBe(2);
+    expect(html).toContain(">prerequi<");
   });
 
   it("renders nothing for an independent task", async () => {
