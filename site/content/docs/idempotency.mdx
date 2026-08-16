@@ -39,6 +39,22 @@ Scopes keep unrelated features apart. Two features might both want the key `orde
 scopes make them separate registrations. An omitted scope uses the shared `"default"` scope, which
 works well when every key already carries a feature prefix.
 
+## Read what PostgreSQL did
+
+Use `enqueueWithResult` when application behavior or diagnostics need more than the stable job ID:
+
+```ts
+const result = await queue.enqueueWithResult(
+  "invoice.capture",
+  { invoiceId },
+  { idempotency: { key: `capture:${invoiceId}`, scope: "invoice-capture" } },
+);
+```
+
+`result.outcome` is an `EnqueueOutcome`: `accepted` for a new job, `replayed` for an equivalent
+idempotency request, `replaced` or `non_replaceable` for [debounce](/docs/debounce), and `coalesced`
+for [throttle](/docs/throttle). `enqueue` returns the same `jobId` while hiding that explanation.
+
 ## What counts as the same request?
 
 Returning the existing job is only safe when the repeat really is the same request. PostgreSQL

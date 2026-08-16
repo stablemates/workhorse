@@ -25,6 +25,10 @@ const surface = [
         body: "Batches many enqueue requests into one statement. A material idempotency mismatch rolls back the entire batch rather than partially accepting it.",
       },
       {
+        term: "enqueueWithResult(...) / enqueueManyWithResults(...) / EnqueueOutcome",
+        body: "Returns the retained job identity plus accepted, replayed, replaced, non_replaceable, or coalesced, so callers can distinguish a new job from idempotency, debounce, and throttle behavior.",
+      },
+      {
         term: "cancel(jobId, options?)",
         body: "Cancels queued, scheduled, and durable-wait jobs immediately. An active job records one cancellation request that the owning attempt observes on its AbortSignal.",
       },
@@ -57,6 +61,18 @@ const surface = [
         body: "Returns bounded retained redrive edges and reports whether traversal was truncated by retention.",
       },
       {
+        term: "getDependencyLineage(jobId) / getChildLineage(jobId)",
+        body: "Returns retained direct graph edges in either direction, including dependency policy and resolution or child name and join state.",
+      },
+      {
+        term: "listSignalWaits() / sendSignal(...) ",
+        body: "Lists actionable signal boundaries and idempotently delivers a named JSON payload under trusted actor attribution.",
+      },
+      {
+        term: "listHumanWaits() / completeHumanWait(...) ",
+        body: "Lists pending operator decisions with stored context and idempotently supplies the accepted result under trusted actor attribution.",
+      },
+      {
         term: "syncSchedules(namespace, definitions)",
         body: "Deploy-time synchronization of declarative recurring jobs. Definitions omitted from the namespace are disabled atomically in the target database.",
       },
@@ -78,6 +94,10 @@ const surface = [
       {
         term: "handle(type, handler)",
         body: "Registers a typed handler. The context supplies checkpoint, sleep, sleepUntil, signal, attempt metadata, and the fence generation that owns the attempt.",
+      },
+      {
+        term: "handleBatch(type, options, handler)",
+        body: "Groups claimed jobs of one type for a shared invocation while preserving a separate context, fence, retry budget, and ordered outcome for every member.",
       },
       {
         term: "run() / runOnce() / stop()",
@@ -109,6 +129,14 @@ const surface = [
       {
         term: "sleep(name, ms) / sleepUntil(name, date)",
         body: "Commits a named PostgreSQL timer, releases the lease and worker slot, then restarts the handler in the same logical attempt. The target is a not-before boundary, not an exact alarm.",
+      },
+      {
+        term: "waitForSignal(name, options?) / waitForHuman(name, context, options?)",
+        body: "Stores an external boundary, releases the lease, and returns the retained JSON value after an application or authenticated operator resumes the job.",
+      },
+      {
+        term: "runChild(name, type, payload, options?) / runChildren(children)",
+        body: "Creates named durable child work, blocks the parent without holding a slot, and returns retained results after one child or the whole set settles.",
       },
       {
         term: "getProgress() / setProgress(value)",
