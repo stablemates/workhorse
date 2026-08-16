@@ -433,81 +433,156 @@ CREATE TABLE IF NOT EXISTS workhorse.job_child (
 );
 CREATE INDEX IF NOT EXISTS job_child_unjoined_idx
   ON workhorse.job_child (parent_job_id, child_job_id) WHERE joined_at IS NULL;
-CREATE OR REPLACE FUNCTION workhorse.validate_job_dependency_v1()
+CREATE OR REPLACE FUNCTION workhorse.reject_self_job_dependency_v1()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
-DECLARE
-  v_cycle uuid[];
-  v_fan_out_root uuid;
 BEGIN
-  -- Serialize graph mutations so two transactions cannot create opposite edges from snapshots that
-  -- cannot see each other. Ordinary lifecycle resolution never needs this lock.
-  PERFORM pg_advisory_xact_lock(hashtextextended('workhorse:job-dependency-graph', 0));
   IF NEW.dependent_job_id = NEW.prerequisite_job_id THEN
-    v_cycle := ARRAY[NEW.dependent_job_id, NEW.prerequisite_job_id];
-  ELSE
-    WITH RECURSIVE reachable(job_id, path) AS (
-      SELECT NEW.prerequisite_job_id, ARRAY[NEW.dependent_job_id, NEW.prerequisite_job_id]
-      UNION ALL
-      SELECT edge.prerequisite_job_id, reachable.path || edge.prerequisite_job_id
-        FROM reachable
-        JOIN workhorse.job_dependency edge ON edge.dependent_job_id = reachable.job_id
-       WHERE (
-         edge.prerequisite_job_id = NEW.dependent_job_id
-         OR NOT edge.prerequisite_job_id = ANY(reachable.path)
-       )
-         AND reachable.job_id <> NEW.dependent_job_id
-    )
-    SELECT path INTO v_cycle FROM reachable
-     WHERE job_id = NEW.dependent_job_id
-     ORDER BY cardinality(path)
-     LIMIT 1;
-  END IF;
-  IF v_cycle IS NOT NULL THEN
     RAISE EXCEPTION USING
       ERRCODE = 'P1002',
       MESSAGE = 'dependency cycle rejected',
       DETAIL = jsonb_build_object(
         'dependentJobId', NEW.dependent_job_id,
         'prerequisiteJobId', NEW.prerequisite_job_id,
+        'cycleJobIds', jsonb_build_array(NEW.dependent_job_id, NEW.prerequisite_job_id),
+        'truncated', false
+      )::text;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.validate_job_dependencies_v1()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_component_job_id text;
+  v_cycle uuid[];
+  v_fan_out_root uuid;
+BEGIN
+  -- Lock every job in each pre-existing component touched by this statement in canonical order.
+  -- Transactions which mutate disconnected components proceed independently. Mutations which
+  -- overlap a component share a lock even when a concurrent commit has just merged its root.
+  FOR v_component_job_id IN
+    WITH RECURSIVE inserted_jobs(job_id) AS (
+      SELECT inserted.dependent_job_id FROM inserted_dependencies inserted
+      UNION
+      SELECT inserted.prerequisite_job_id FROM inserted_dependencies inserted
+    ), component(seed_job_id, job_id) AS (
+      SELECT inserted_jobs.job_id, inserted_jobs.job_id FROM inserted_jobs
+      UNION
+      SELECT component.seed_job_id, neighbor.job_id
+        FROM component
+        CROSS JOIN LATERAL (
+          SELECT dependency.prerequisite_job_id AS job_id
+            FROM workhorse.job_dependency dependency
+           WHERE dependency.dependent_job_id = component.job_id
+             AND NOT EXISTS (
+               SELECT 1 FROM inserted_dependencies inserted
+                WHERE inserted.dependent_job_id = dependency.dependent_job_id
+                  AND inserted.prerequisite_job_id = dependency.prerequisite_job_id
+             )
+          UNION
+          SELECT dependency.dependent_job_id
+            FROM workhorse.job_dependency dependency
+           WHERE dependency.prerequisite_job_id = component.job_id
+             AND NOT EXISTS (
+               SELECT 1 FROM inserted_dependencies inserted
+                WHERE inserted.dependent_job_id = dependency.dependent_job_id
+                  AND inserted.prerequisite_job_id = dependency.prerequisite_job_id
+             )
+        ) neighbor
+    )
+    SELECT DISTINCT component.job_id::text
+      FROM component
+     ORDER BY component.job_id::text
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtextextended(
+      'workhorse:job-dependency-component-job:' || v_component_job_id,
+      0
+    ));
+  END LOOP;
+
+  WITH RECURSIVE reachable(dependent_job_id, job_id, path) AS (
+    SELECT inserted.dependent_job_id,
+           inserted.prerequisite_job_id,
+           ARRAY[inserted.dependent_job_id, inserted.prerequisite_job_id]
+      FROM inserted_dependencies inserted
+    UNION ALL
+    SELECT reachable.dependent_job_id,
+           edge.prerequisite_job_id,
+           reachable.path || edge.prerequisite_job_id
+      FROM reachable
+      JOIN workhorse.job_dependency edge ON edge.dependent_job_id = reachable.job_id
+     WHERE (
+       edge.prerequisite_job_id = reachable.dependent_job_id
+       OR NOT edge.prerequisite_job_id = ANY(reachable.path)
+     )
+       AND reachable.job_id <> reachable.dependent_job_id
+  )
+  SELECT reachable.path INTO v_cycle
+    FROM reachable
+   WHERE reachable.job_id = reachable.dependent_job_id
+   ORDER BY cardinality(reachable.path)
+   LIMIT 1;
+  IF v_cycle IS NOT NULL THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P1002',
+      MESSAGE = 'dependency cycle rejected',
+      DETAIL = jsonb_build_object(
+        'dependentJobId', v_cycle[1],
+        'prerequisiteJobId', v_cycle[2],
         'cycleJobIds', to_jsonb(v_cycle[1:101]),
         'truncated', cardinality(v_cycle) > 101
       )::text;
   END IF;
-  IF (
-    SELECT count(*) FROM workhorse.job_dependency dependency
-     WHERE dependency.dependent_job_id = NEW.dependent_job_id
-  ) >= 100 THEN
+  IF EXISTS (
+    SELECT dependency.dependent_job_id
+      FROM workhorse.job_dependency dependency
+      JOIN (
+        SELECT DISTINCT inserted.dependent_job_id FROM inserted_dependencies inserted
+      ) touched USING (dependent_job_id)
+     GROUP BY dependency.dependent_job_id
+    HAVING count(*) > 100
+  ) THEN
     RAISE EXCEPTION 'a job accepts at most 100 prerequisite dependencies';
   END IF;
-  IF (
-    SELECT count(*) FROM workhorse.job_dependency dependency
-     WHERE dependency.prerequisite_job_id = NEW.prerequisite_job_id
-  ) >= 100 THEN
+  IF EXISTS (
+    SELECT dependency.prerequisite_job_id
+      FROM workhorse.job_dependency dependency
+      JOIN (
+        SELECT DISTINCT inserted.prerequisite_job_id FROM inserted_dependencies inserted
+      ) touched USING (prerequisite_job_id)
+     GROUP BY dependency.prerequisite_job_id
+    HAVING count(*) > 100
+  ) THEN
     RAISE EXCEPTION 'a job accepts at most 100 dependent jobs';
   END IF;
-  IF NEW.released_at IS NULL THEN
-    WITH RECURSIVE graph(prerequisite_job_id, dependent_job_id) AS (
-      SELECT dependency.prerequisite_job_id, dependency.dependent_job_id
-        FROM workhorse.job_dependency dependency
-       WHERE dependency.released_at IS NULL
+  IF EXISTS (SELECT 1 FROM inserted_dependencies inserted WHERE inserted.released_at IS NULL) THEN
+    WITH RECURSIVE affected(root_job_id) AS (
+      SELECT inserted.prerequisite_job_id
+        FROM inserted_dependencies inserted
+       WHERE inserted.released_at IS NULL
       UNION
-      SELECT NEW.prerequisite_job_id, NEW.dependent_job_id
-    ), affected(root_job_id) AS (
-      SELECT NEW.prerequisite_job_id
-      UNION
-      SELECT graph.prerequisite_job_id
+      SELECT dependency.prerequisite_job_id
         FROM affected
-        JOIN graph ON graph.dependent_job_id = affected.root_job_id
+        JOIN workhorse.job_dependency dependency
+          ON dependency.dependent_job_id = affected.root_job_id
+         AND dependency.released_at IS NULL
     ), reachable(root_job_id, dependent_job_id) AS (
-      SELECT affected.root_job_id, graph.dependent_job_id
+      SELECT affected.root_job_id, dependency.dependent_job_id
         FROM affected
-        JOIN graph ON graph.prerequisite_job_id = affected.root_job_id
+        JOIN workhorse.job_dependency dependency
+          ON dependency.prerequisite_job_id = affected.root_job_id
+         AND dependency.released_at IS NULL
       UNION
-      SELECT reachable.root_job_id, graph.dependent_job_id
+      SELECT reachable.root_job_id, dependency.dependent_job_id
         FROM reachable
-        JOIN graph ON graph.prerequisite_job_id = reachable.dependent_job_id
+        JOIN workhorse.job_dependency dependency
+          ON dependency.prerequisite_job_id = reachable.dependent_job_id
+         AND dependency.released_at IS NULL
     )
     SELECT reachable.root_job_id INTO v_fan_out_root
       FROM reachable
@@ -521,23 +596,31 @@ BEGIN
     END IF;
   END IF;
   IF EXISTS (
-    SELECT 1 FROM workhorse.job_dependency dependency
-     WHERE dependency.dependent_job_id = NEW.dependent_job_id
-       AND (
-         dependency.on_success <> NEW.on_success
-         OR dependency.on_failure <> NEW.on_failure
-         OR dependency.on_cancellation <> NEW.on_cancellation
-       )
+    SELECT dependency.dependent_job_id
+      FROM workhorse.job_dependency dependency
+      JOIN (
+        SELECT DISTINCT inserted.dependent_job_id FROM inserted_dependencies inserted
+      ) touched USING (dependent_job_id)
+     GROUP BY dependency.dependent_job_id
+    HAVING count(DISTINCT (
+      dependency.on_success,
+      dependency.on_failure,
+      dependency.on_cancellation
+    )) > 1
   ) THEN
     RAISE EXCEPTION 'every dependency edge for one job must use the same outcome policies';
   END IF;
-  RETURN NEW;
+  RETURN NULL;
 END;
 $$;
 
-CREATE OR REPLACE TRIGGER job_dependency_validate_insert
+CREATE OR REPLACE TRIGGER job_dependency_reject_self_insert
   BEFORE INSERT ON workhorse.job_dependency
-  FOR EACH ROW EXECUTE FUNCTION workhorse.validate_job_dependency_v1();
+  FOR EACH ROW EXECUTE FUNCTION workhorse.reject_self_job_dependency_v1();
+CREATE OR REPLACE TRIGGER job_dependency_validate_insert
+  AFTER INSERT ON workhorse.job_dependency
+  REFERENCING NEW TABLE AS inserted_dependencies
+  FOR EACH STATEMENT EXECUTE FUNCTION workhorse.validate_job_dependencies_v1();
 
 -- PostgreSQL owns enqueue deduplication. The deferred reference lets enqueue reserve a scoped key
 -- through the unique index before creating any job, event, FIFO, or notification side effects.
@@ -2904,63 +2987,43 @@ BEGIN
         CASE WHEN v_state = 'ready' THEN nextval('workhorse.ready_sequence_seq') END,
         v_deadline_at
       );
-      FOREACH v_prerequisite_job_id IN ARRAY v_prerequisite_job_ids LOOP
+      WITH prerequisites AS MATERIALIZED (
+        SELECT input.prerequisite_job_id, outcome.state,
+               outcome.state IS NOT NULL AND (
+                 (outcome.state = 'succeeded' AND v_on_success = 'release')
+                 OR (outcome.state = 'failed' AND v_on_failure = 'release')
+                 OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
+               ) AS releases_immediately
+          FROM unnest(v_prerequisite_job_ids) input(prerequisite_job_id)
+          LEFT JOIN workhorse.job_outcome outcome
+            ON outcome.job_id = input.prerequisite_job_id
+      ), inserted_edges AS (
         INSERT INTO workhorse.job_dependency(
           dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation,
           created_at, released_at, resolution
-        ) VALUES (
-          job_id, v_prerequisite_job_id, v_on_success, v_on_failure, v_on_cancellation, v_now,
-          CASE WHEN EXISTS (
-            SELECT 1 FROM workhorse.job_outcome outcome
-             WHERE outcome.job_id = v_prerequisite_job_id
-               AND (
-                 (outcome.state = 'succeeded' AND v_on_success = 'release')
-                 OR (outcome.state = 'failed' AND v_on_failure = 'release')
-                 OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
-               )
-          ) THEN v_now END,
-          CASE WHEN EXISTS (
-            SELECT 1 FROM workhorse.job_outcome outcome
-             WHERE outcome.job_id = v_prerequisite_job_id
-               AND (
-                 (outcome.state = 'succeeded' AND v_on_success = 'release')
-                 OR (outcome.state = 'failed' AND v_on_failure = 'release')
-                 OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
-               )
-          ) THEN 'release' END
-        );
-        INSERT INTO workhorse.job_event(job_id, event_type, details)
-          VALUES (
-            job_id,
-            CASE WHEN EXISTS (
-              SELECT 1 FROM workhorse.job_outcome outcome
-               WHERE outcome.job_id = v_prerequisite_job_id
-                 AND (
-                   (outcome.state = 'succeeded' AND v_on_success = 'release')
-                   OR (outcome.state = 'failed' AND v_on_failure = 'release')
-                   OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
-                 )
-            )
-              THEN 'dependency_released' ELSE 'dependency_blocked' END,
-            jsonb_build_object(
-              'prerequisite_job_id', v_prerequisite_job_id,
-              'state', v_state,
-              'reason', COALESCE((
-                SELECT CASE outcome.state
-                  WHEN 'succeeded' THEN 'prerequisite_already_succeeded'
-                  ELSE 'prerequisite_terminal_policy'
-                END
-                  FROM workhorse.job_outcome outcome
-                 WHERE outcome.job_id = v_prerequisite_job_id
-                   AND (
-                     (outcome.state = 'succeeded' AND v_on_success = 'release')
-                     OR (outcome.state = 'failed' AND v_on_failure = 'release')
-                     OR (outcome.state = 'canceled' AND v_on_cancellation = 'release')
-                   )
-              ), 'prerequisite_pending')
-            )
-          );
-      END LOOP;
+        )
+        SELECT job_id, prerequisites.prerequisite_job_id,
+               v_on_success, v_on_failure, v_on_cancellation, v_now,
+               CASE WHEN prerequisites.releases_immediately THEN v_now END,
+               CASE WHEN prerequisites.releases_immediately THEN 'release' END
+          FROM prerequisites
+        RETURNING prerequisite_job_id, released_at
+      )
+      INSERT INTO workhorse.job_event(job_id, event_type, details)
+      SELECT job_id,
+             CASE WHEN inserted_edges.released_at IS NOT NULL
+               THEN 'dependency_released' ELSE 'dependency_blocked' END,
+             jsonb_build_object(
+               'prerequisite_job_id', inserted_edges.prerequisite_job_id,
+               'state', v_state,
+               'reason', CASE
+                 WHEN NOT prerequisites.releases_immediately THEN 'prerequisite_pending'
+                 WHEN prerequisites.state = 'succeeded' THEN 'prerequisite_already_succeeded'
+                 ELSE 'prerequisite_terminal_policy'
+               END
+             )
+        FROM inserted_edges
+        JOIN prerequisites USING (prerequisite_job_id);
       FOR v_terminal IN
         SELECT outcome.job_id, outcome.state FROM workhorse.job_outcome outcome
          WHERE outcome.job_id = ANY(v_prerequisite_job_ids)

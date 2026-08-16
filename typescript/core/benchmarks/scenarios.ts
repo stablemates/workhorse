@@ -446,11 +446,11 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
   {
     name: "dependency-operations",
     purpose:
-      "Measure fan-in, wide fan-out settlement, dependency enqueue contention, and cancellation while proving claim work stays bounded as terminal history grows.",
+      "Measure fan-in, wide fan-out settlement, disconnected dependency enqueue concurrency, and cancellation while proving claim work stays bounded as terminal history grows.",
     invariants: [
       "fan-in releases once after every prerequisite resolves",
       "wide fan-out terminal settlement cancels every dependent at the configured bound",
-      "concurrent dependency enqueue creates every requested edge under advisory-lock contention",
+      "concurrent disconnected dependency enqueue creates every requested edge without cross-component lock contention",
       "cancellation applies its declared terminal dependency policy",
       "claim buffer work stays bounded after retained terminal history grows",
       "health reports no blocked dependency after every cohort settles",
@@ -3425,13 +3425,15 @@ async function dependencyOperations(
   );
 
   const contentionQueue = new Queue(context.pool, `${context.queueName}-contention`);
-  const contentionPrerequisiteId = await contentionQueue.enqueue(
-    "dependency-contention-prerequisite",
-    null,
-  );
   const concurrentDependencyEnqueues = Math.max(
     2,
     Math.min(context.options.jobCount, MAX_JOB_DEPENDENTS),
+  );
+  const contentionPrerequisiteIds = await contentionQueue.enqueueMany(
+    Array.from({ length: concurrentDependencyEnqueues }, (_unused, index) => ({
+      type: "dependency-contention-prerequisite",
+      payload: { index },
+    })),
   );
   const contentionStarted = context.now();
   const contentionRequests = await Promise.all(
@@ -3441,7 +3443,7 @@ async function dependencyOperations(
           "dependency-contention-dependent",
           { index },
           {
-            prerequisiteJobId: contentionPrerequisiteId,
+            prerequisiteJobId: contentionPrerequisiteIds[index],
           },
         ),
       );
@@ -3451,13 +3453,15 @@ async function dependencyOperations(
   const concurrentDependencyEnqueueTotalMs = Math.max(0.001, context.now() - contentionStarted);
   recordInvariant(
     assertions,
-    "concurrent dependency enqueue creates every requested edge under advisory-lock contention",
+    "concurrent disconnected dependency enqueue creates every requested edge without cross-component lock contention",
     new Set(contentionRequests.map((request) => request.jobId)).size,
     concurrentDependencyEnqueues,
   );
-  await contentionQueue.cancel(contentionPrerequisiteId, {
-    requestedBy: "dependency-operations",
-  });
+  await Promise.all(
+    contentionPrerequisiteIds.map((prerequisiteId) =>
+      contentionQueue.cancel(prerequisiteId, { requestedBy: "dependency-operations" }),
+    ),
+  );
 
   const cancellationPrerequisiteId = await queue.enqueue("dependency-cancel-prerequisite", null);
   const canceledDependentId = await queue.enqueue("dependency-cancel-dependent", null, {

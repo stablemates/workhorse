@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import type { PoolClient } from "pg";
 import { describe, expect, it } from "vitest";
 import { readDashboardJobDetail } from "../../dashboard-server/src/server/read-model.js";
 import { dashboardDatabase } from "../../dashboard-server/src/server/sql.js";
@@ -6,6 +7,14 @@ import { MAX_JOB_DEPENDENTS } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { defaultRetentionPolicy, pool, queue } = createIntegrationTestContext(import.meta.url);
+
+const insertDependency = (client: PoolClient, dependentJobId: string, prerequisiteJobId: string) =>
+  client.query(
+    `INSERT INTO workhorse.job_dependency(
+       dependent_job_id, prerequisite_job_id, on_success, on_failure, on_cancellation
+     ) VALUES ($1, $2, 'release', 'fail', 'cancel')`,
+    [dependentJobId, prerequisiteJobId],
+  );
 
 describe("job dependencies", () => {
   it("reports bounded prerequisite and dependent lineage with release evidence", async () => {
@@ -445,6 +454,110 @@ describe("job dependencies", () => {
         [firstId],
       ),
     ).rejects.toMatchObject({ code: "P1002" });
+  });
+
+  it("does not serialize dependency inserts across disconnected graph components", async () => {
+    const [firstDependentId, firstPrerequisiteId, secondDependentId, secondPrerequisiteId] =
+      await queue.enqueueMany([
+        { type: "component-lock-first-dependent", payload: null },
+        { type: "component-lock-first-prerequisite", payload: null },
+        { type: "component-lock-second-dependent", payload: null },
+        { type: "component-lock-second-prerequisite", payload: null },
+      ]);
+    if (!firstDependentId || !firstPrerequisiteId || !secondDependentId || !secondPrerequisiteId) {
+      throw new Error("component lock setup did not enqueue every job");
+    }
+    const first = await pool.connect();
+    const second = await pool.connect();
+    try {
+      await first.query("BEGIN");
+      await insertDependency(first, firstDependentId, firstPrerequisiteId);
+
+      await second.query("BEGIN");
+      await second.query("SET LOCAL lock_timeout = '100ms'");
+      await expect(
+        insertDependency(second, secondDependentId, secondPrerequisiteId),
+      ).resolves.toMatchObject({ rowCount: 1 });
+    } finally {
+      await Promise.allSettled([first.query("ROLLBACK"), second.query("ROLLBACK")]);
+      first.release();
+      second.release();
+    }
+  });
+
+  it("serializes opposite dependency inserts and rejects the resulting cycle", async () => {
+    const [firstId, secondId] = await queue.enqueueMany([
+      { type: "component-cycle-first", payload: null },
+      { type: "component-cycle-second", payload: null },
+    ]);
+    if (!firstId || !secondId) throw new Error("component cycle setup did not enqueue every job");
+    const first = await pool.connect();
+    const second = await pool.connect();
+    let secondSettled = false;
+    try {
+      await first.query("BEGIN");
+      await insertDependency(first, firstId, secondId);
+
+      await second.query("BEGIN");
+      const oppositeInsert = insertDependency(second, secondId, firstId).finally(() => {
+        secondSettled = true;
+      });
+      await sleep(50);
+      expect(secondSettled).toBe(false);
+
+      await first.query("COMMIT");
+      await expect(oppositeInsert).rejects.toMatchObject({ code: "P1002" });
+    } finally {
+      await Promise.allSettled([first.query("ROLLBACK"), second.query("ROLLBACK")]);
+      first.release();
+      second.release();
+    }
+  });
+
+  it("keeps a waiting component mutation serialized after another transaction merges its component", async () => {
+    const ids = await queue.enqueueMany(
+      Array.from({ length: 4 }, (_unused, index) => ({
+        type: "component-merge-lock",
+        payload: { index },
+      })),
+    );
+    const [lowerId, upperId, thirdId, fourthId] = [...ids].sort();
+    if (!lowerId || !upperId || !thirdId || !fourthId) {
+      throw new Error("component merge setup did not enqueue every job");
+    }
+    const merger = await pool.connect();
+    const waiter = await pool.connect();
+    const follower = await pool.connect();
+    let waiterSettled = false;
+    try {
+      await merger.query("BEGIN");
+      await insertDependency(merger, lowerId, upperId);
+
+      await waiter.query("BEGIN");
+      const waitingInsert = insertDependency(waiter, upperId, thirdId).finally(() => {
+        waiterSettled = true;
+      });
+      await sleep(50);
+      expect(waiterSettled).toBe(false);
+
+      await merger.query("COMMIT");
+      await expect(waitingInsert).resolves.toMatchObject({ rowCount: 1 });
+
+      await follower.query("BEGIN");
+      await follower.query("SET LOCAL lock_timeout = '100ms'");
+      await expect(
+        insertDependency(follower, lowerId, fourthId),
+      ).rejects.toMatchObject({ code: "55P03" });
+    } finally {
+      await Promise.allSettled([
+        merger.query("ROLLBACK"),
+        waiter.query("ROLLBACK"),
+        follower.query("ROLLBACK"),
+      ]);
+      merger.release();
+      waiter.release();
+      follower.release();
+    }
   });
 
   it("chooses fail deterministically when failure and cancellation complete concurrently", async () => {
