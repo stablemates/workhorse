@@ -13,7 +13,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v41**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v42**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -43,8 +43,10 @@ First published line. Requires **schema v41**, Node.js **22 or 24**, PostgreSQL 
   detail expose bounded orchestration evidence.
 - `@workhorse/core`: named signal waits release worker leases, and application or authenticated
   dashboard callers can deliver bounded payloads exactly once at the waiting-state transition.
+  Callers can shorten the PostgreSQL-owned timeout; unanswered boundaries fail terminally.
 - `@workhorse/core`: named human waits retain bounded decision context, release worker leases, and
   resume once after an application or authenticated dashboard operator supplies a bounded result.
+  They share the signal-wait timeout and terminal failure contract.
 - `@workhorse/core`: `Worker.handleBatch` for compatible full and linger-bounded partial batches,
   with explicit per-job success or failure outcomes, independent retries, leases, contexts, fencing,
   cancellation, timeout handling, policy accounting, priority order, and bounded batch telemetry.
@@ -97,7 +99,7 @@ name the retired instruments.
   and human decisions over a trailing 24-hour window. A partial event index bounds these polling
   reads to recent rejection evidence instead of scanning all retained event history.
 
-- `@workhorse/core`: schema versions 23 through 40 are replaced by the version 41 pre-release
+- `@workhorse/core`: schema versions 23 through 41 are replaced by the version 42 pre-release
   baseline. No published deployment can consume that history, so schema changes edit the canonical
   artifact directly until the first public release. Existing development worktrees must run
   `pnpm worktree:setup` once to recreate their dedicated databases.

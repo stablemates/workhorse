@@ -1,6 +1,7 @@
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import type { ClaimedJob, Json } from "../types.js";
+import { type ExternalWaitOptions, validateExternalWaitOptions } from "./external-waits.js";
 import { QueueModule } from "./module-context.js";
 
 const MAX_NAME_CHARACTERS = 200;
@@ -125,6 +126,7 @@ export class HumanWaitsModule extends QueueModule {
     workerId: string,
     name: string,
     context: TContext,
+    options: ExternalWaitOptions = {},
   ): Promise<WaitForHumanResult<TResult>> {
     validateName(name);
     if (typeof workerId !== "string" || workerId.length === 0) {
@@ -132,13 +134,14 @@ export class HumanWaitsModule extends QueueModule {
     }
     const query = await this.context.database.query<WaitRow>(
       `SELECT status, result
-         FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+         FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)`,
       [
         job.id,
         workerId,
         job.fenceToken.toString(),
         name,
         encodeValue(context, "Human wait context"),
+        validateExternalWaitOptions(options),
       ],
     );
     const row = expectOneRow(query, "workhorse.wait_for_human_v1");

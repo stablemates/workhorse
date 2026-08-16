@@ -5498,7 +5498,8 @@ CREATE OR REPLACE FUNCTION workhorse.wait_for_signal_v1(
   p_job_id uuid,
   p_worker_id text,
   p_fence_token bigint,
-  p_signal_name text
+  p_signal_name text,
+  p_timeout_ms bigint DEFAULT NULL
 ) RETURNS TABLE (status text, payload jsonb)
 LANGUAGE plpgsql
 AS $$
@@ -5513,6 +5514,9 @@ BEGIN
   END IF;
   IF p_worker_id IS NULL OR p_worker_id = '' THEN
     RAISE EXCEPTION 'worker_id must not be empty';
+  END IF;
+  IF p_timeout_ms IS NOT NULL AND p_timeout_ms NOT BETWEEN 1 AND 604800000 THEN
+    RAISE EXCEPTION 'signal timeout_ms must be between 1 and 604800000';
   END IF;
 
   PERFORM pg_advisory_xact_lock(hashtextextended(
@@ -5535,7 +5539,7 @@ BEGIN
   END IF;
   v_timeout_at := LEAST(
     COALESCE(v_runtime.deadline_at, 'infinity'::timestamptz),
-    v_now + interval '7 days'
+    v_now + COALESCE(p_timeout_ms, 604800000) * interval '1 millisecond'
   );
 
   SELECT * INTO v_wait
@@ -8217,7 +8221,8 @@ CREATE OR REPLACE FUNCTION workhorse.wait_for_human_v1(
   p_worker_id text,
   p_fence_token bigint,
   p_token_name text,
-  p_context jsonb
+  p_context jsonb,
+  p_timeout_ms bigint DEFAULT NULL
 ) RETURNS TABLE (status text, result jsonb)
 LANGUAGE plpgsql
 AS $$
@@ -8238,6 +8243,9 @@ BEGIN
   END IF;
   IF p_context IS NULL OR octet_length(p_context::text) > 65536 THEN
     RAISE EXCEPTION 'human wait context must be JSON and at most 65536 bytes';
+  END IF;
+  IF p_timeout_ms IS NOT NULL AND p_timeout_ms NOT BETWEEN 1 AND 604800000 THEN
+    RAISE EXCEPTION 'human wait timeout_ms must be between 1 and 604800000';
   END IF;
 
   PERFORM pg_advisory_xact_lock(hashtextextended(
@@ -8260,7 +8268,7 @@ BEGIN
   END IF;
   v_timeout_at := LEAST(
     COALESCE(v_runtime.deadline_at, 'infinity'::timestamptz),
-    v_now + interval '7 days'
+    v_now + COALESCE(p_timeout_ms, 604800000) * interval '1 millisecond'
   );
 
   SELECT * INTO v_wait
@@ -8828,9 +8836,9 @@ AS $$
 $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (41, 'pre-release baseline')
+  (42, 'pre-release baseline')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (41) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (42) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

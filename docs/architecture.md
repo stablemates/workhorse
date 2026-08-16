@@ -2,14 +2,14 @@
 
 Workhorse is a PostgreSQL-backed durable queue whose correctness-sensitive lifecycle transitions live in versioned SQL functions. The TypeScript `Queue` and `Worker` remain thin protocol clients.
 
-The current clean-install protocol and pre-release baseline are schema version 41. No earlier
+The current clean-install protocol and pre-release baseline are schema version 42. No earlier
 schema version has been published or remains a supported upgrade source.
 
 `installSchema` reads `sql/schema.sql`. It accepts only a fresh database or an already-current
-version 41 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It accepts
-version 41 without mutation and rejects every other version on the unreleased line.
+version 42 schema. `migrateSchema` reads the single `workhorse.schema_version` row. It accepts
+version 42 without mutation and rejects every other version on the unreleased line.
 
-A clean installation records `(41, 'pre-release baseline')` in
+A clean installation records `(42, 'pre-release baseline')` in
 `workhorse.schema_migration`. `migrateSchema` delegates ordered execution to the internal
 `applySchemaMigrationPlan` function. Its `SchemaMigrationPlan` has `baselineVersion`,
 `currentVersion`, `steps`, and `readStep` fields. Each `SchemaMigrationStep` has `fromVersion`,
@@ -20,14 +20,14 @@ After the first public release, each migration takes the transaction advisory lo
 `workhorse.schema_migration`, and advances the single `workhorse.schema_version` row. A migration
 is safe to replay after its target version commits.
 
-Versions below 41, versions above 41, gaps, and mixed version rows fail without running a migration.
+Versions below 42, versions above 42, gaps, and mixed version rows fail without running a migration.
 SQL protocol functions keep their independent `_vN` suffix. A schema migration does not rename a
 function or reinterpret that suffix.
 
 ## SQL protocol conformance
 
 `protocol/v1/manifest.json` declares fixture format 1 and SQL protocol 1. It accepts installed
-schema version 41 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
+schema version 42 and client protocol 1. `protocol/v1/compatibility.json` distinguishes an absent,
 older, current, or newer installed schema from the client's protocol version. Every incompatible
 case requires refusal before a mutating function runs.
 
@@ -581,15 +581,18 @@ same-key request raises `SignalIdempotencyConflictError`; another key returns
 `already_delivered`. Early, stale, and late deliveries return bounded statuses without changing
 dispatch state.
 
-`HandlerContext.waitForSignal(name)` suspends and later returns the retained payload after handler
-replay. `Queue.sendSignal` is the application-owned delivery surface. The dashboard procedure
+`HandlerContext.waitForSignal(name, { timeoutMs })` suspends and later returns the retained payload
+after handler replay. `timeoutMs` is optional and accepts 1 through 604,800,000 milliseconds.
+`Queue.sendSignal` is the application-owned delivery surface. The dashboard procedure
 `dashboard.signalTask` derives `requestedBy` from its authenticated server principal before it
 calls the same queue operation. `signal_waiting`, `signal_received`, `signal_replayed`, and
 `signal_rejected` events retain bounded lifecycle evidence. Events include the actor and a short
 key digest but never the raw key or payload.
 
-PostgreSQL gives every undelivered signal a seven-day `timeout_at`; an earlier `job.deadline_at`
-wins. The waiting runtime temporarily stores that effective bound in `job_runtime.deadline_at`.
+If the caller omits `timeoutMs`, PostgreSQL gives the undelivered signal a seven-day `timeout_at`.
+A shorter caller timeout or earlier `job.deadline_at` wins. The waiting runtime temporarily stores
+that effective bound in `job_runtime.deadline_at`. Expiry terminally fails the job with
+`DeadlineExceeded`; it never resumes handler code without a payload.
 Accepted delivery restores the immutable job deadline before making the runtime ready.
 `terminalize_deadline_v1` materializes `DeadlineExceeded`, retains the original attempt attribution,
 and makes every later delivery return `stale`. Signal rows have no independent retention window.
@@ -610,13 +613,14 @@ returns `duplicate`; a changed same-key request raises `HumanWaitIdempotencyConf
 key returns `already_completed`. Early and stale requests return bounded statuses without changing
 dispatch state.
 
-`HandlerContext.waitForHuman(name, context)` suspends and returns the retained result after replay.
+`HandlerContext.waitForHuman(name, context, { timeoutMs })` suspends and returns the retained result
+after replay. `timeoutMs` has the same optional range and terminal failure outcome as a signal wait.
 `Queue.completeHumanWait` is the application completion surface. The dashboard lists at most 100
 actionable rows from `dashboard_human_wait_v1`, validates result JSON, and derives `completedBy` from
 the authenticated principal. `human_wait_created`, `human_wait_completed`, `human_wait_replayed`,
 and `human_wait_rejected` retain value-free lifecycle evidence.
 
-Human decisions use the same seven-day PostgreSQL timeout and parent-identity retention contract.
+Human decisions use the same default PostgreSQL timeout and parent-identity retention contract.
 Immediate cancellation and deadline terminalization read `job_human_wait` to preserve the original
 attempt, fence, worker, and claim time before deleting `job_runtime`. A completion after either
 transition returns `stale` and appends `human_wait_rejected`; it cannot overwrite the retained
@@ -905,7 +909,8 @@ Suspension aborts the handler's cooperative signal and exits through private wor
 ### Durable signal suspension
 
 `wait_for_signal_v1` takes an advisory lock scoped to job identity and signal name, then locks and
-revalidates the active runtime generation. It inserts `job_signal_wait`, clears ownership, and
+revalidates the active runtime generation. Its nullable `p_timeout_ms` selects a shorter boundary
+than the default or immutable job deadline. It inserts `job_signal_wait`, clears ownership, and
 parks runtime outside the ready and active indexes. The worker uses the same private suspension
 control path as a timer wait, so no failure, completion, or attempt-history row is written.
 
@@ -928,8 +933,9 @@ exports `workhorse.wait.pending`, `workhorse.wait.overdue`, and
 ### Human decision suspension
 
 `wait_for_human_v1` serializes on the stable job and token name, validates the active fence, stores
-bounded decision context, and parks the runtime without closing the logical attempt. A replay must
-provide equal JSON context. `complete_human_wait_v1` serializes competing operator results, retains
+bounded decision context and the effective optional `p_timeout_ms`, and parks the runtime without
+closing the logical attempt. A replay must provide equal JSON context.
+`complete_human_wait_v1` serializes competing operator results, retains
 the first accepted completion, moves the runtime to ready, and notifies workers in the same
 transaction. The handler restarts from entry and receives that retained result at the named wait.
 
@@ -1434,7 +1440,7 @@ Schedule occurrence deduplication prevents duplicate enqueue for one occurrence 
 
 `typescript/examples/agentic-flow.mjs` composes the public SQL-backed primitives without adding a workflow
 runtime. `pnpm example:agentic-flow` builds the publishable packages, loads this worktree's
-`DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 41 with
+`DATABASE_URL` through `scripts/with-env.ts`, verifies schema version 42 with
 `assertSchemaCompatible`, and runs the example as a package consumer. The controller advances the
 two `Worker` instances through `Worker.runOnce` and reads completion through `Queue.getJob`.
 `typescript/core/test/packed-packages.ts`
@@ -1469,9 +1475,10 @@ milliseconds, and at most 1,000 timer names per stable job. Replay then declares
 `Queue.sendSignal` with `SendSignalRequest.idempotencyKey` value
 `agentic-flow:<conversationId>:approval` and `SendSignalRequest.requestedBy` value
 `agentic-flow-example`. `send_signal_v1` accepts payloads through 65,536 bytes, keys through 512 UTF-8
-bytes, and actors and names through 200 characters. `wait_for_signal_v1` accepts at most 1,000 signal
-names per job. PostgreSQL closes an undelivered signal after seven days or at the job's earlier
-deadline.
+bytes, and actors and names through 200 characters. `wait_for_signal_v1` accepts at most 1,000
+signal names per job and `p_timeout_ms` from 1 through 604,800,000. PostgreSQL closes an
+undelivered signal at the caller's shorter timeout, after seven days by default, or at the job's
+earlier deadline.
 
 Progress moves monotonically through `planned`, `tools-complete`, `awaiting-approval`, and
 `finalizing`. `reportProgress` reads `HandlerContext.getProgress` before
@@ -1523,7 +1530,7 @@ accepting claims. It does not expose application HTTP ingress, queue data, or mu
 
 ## Operational limits
 
-- The canonical artifact installs version 41. Forward migration starts with the first public
+- The canonical artifact installs version 42. Forward migration starts with the first public
   release; every pre-release database must install the current schema from scratch.
 - Only plain PostgreSQL 15+ is required; no extension beyond the default `plpgsql` is installed.
 - Schedules fire only while at least one worker with matching `scheduleNamespaces` is running; scheduling drift is bounded by `maintenanceIntervalMs` and catch-up after downtime is bounded by `scheduleCatchupLimit`.

@@ -13,6 +13,7 @@ import type {
   ScheduleWaitRequest,
   ScheduleWaitResult,
 } from "./queue/checkpoints-progress-waits.js";
+import type { ExternalWaitOptions } from "./queue/external-waits.js";
 import type { WaitForSignalResult } from "./queue/signals.js";
 import type { StoredSchedule } from "./queue/cron-schedules.js";
 import type { MaintenancePhaseResult } from "./queue/retention-maintenance.js";
@@ -111,11 +112,15 @@ export interface HandlerContext<TPayload = Json> {
   /** Suspend this job without consuming its logical attempt until the absolute target is due. */
   sleepUntil(name: string, wakeAt: Date): Promise<void>;
   /** Suspend until one idempotent external delivery supplies this named signal payload. */
-  waitForSignal<TPayload extends Json = Json>(name: string): Promise<TPayload>;
+  waitForSignal<TPayload extends Json = Json>(
+    name: string,
+    options?: ExternalWaitOptions,
+  ): Promise<TPayload>;
   /** Suspend until an operator completes this named human decision with a bounded result. */
   waitForHuman<TContext extends Json, TResult extends Json = Json>(
     name: string,
     context: TContext,
+    options?: ExternalWaitOptions,
   ): Promise<TResult>;
   /** Create or replay one named child and return its retained successful result after resumption. */
   runChild<TChildPayload extends Json, TResult extends Json = Json>(
@@ -226,12 +231,14 @@ export interface WorkerQueueApi {
     job: ClaimedJob<unknown>,
     workerId: string,
     name: string,
+    options?: ExternalWaitOptions,
   ): Promise<WaitForSignalResult<TPayload>>;
   waitForHuman<TContext extends Json, TResult extends Json = Json>(
     job: ClaimedJob<unknown>,
     workerId: string,
     name: string,
     context: TContext,
+    options?: ExternalWaitOptions,
   ): Promise<import("./queue/human-waits.js").WaitForHumanResult<TResult>>;
   createChild<TPayload extends Json, TResult extends Json = Json>(
     parent: ClaimedJob<unknown>,
@@ -1087,6 +1094,7 @@ export class Worker {
       const inFlightSignals = new Map<string, Promise<Json>>();
       const waitForSignal: HandlerContext["waitForSignal"] = async <TPayload extends Json>(
         name: string,
+        options: ExternalWaitOptions = {},
       ): Promise<TPayload> => {
         const pending = inFlightSignals.get(name);
         if (pending) return (await pending) as TPayload;
@@ -1094,7 +1102,12 @@ export class Worker {
           if (controller.signal.aborted) {
             throw controller.signal.reason ?? new Error("Job lease was lost");
           }
-          const signal = await this.queue.waitForSignal<TPayload>(job, this.workerId, name);
+          const signal = await this.queue.waitForSignal<TPayload>(
+            job,
+            this.workerId,
+            name,
+            options,
+          );
           if (signal.status === "waiting") {
             suspend("suspended_for_wait");
           }
@@ -1114,6 +1127,7 @@ export class Worker {
       >(
         name: string,
         context: TContext,
+        options: ExternalWaitOptions = {},
       ): Promise<TResult> => {
         const pending = inFlightHumanWaits.get(name);
         if (pending) {
@@ -1131,6 +1145,7 @@ export class Worker {
             this.workerId,
             name,
             context,
+            options,
           );
           if (token.status === "waiting") {
             suspend("suspended_for_wait");

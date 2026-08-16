@@ -758,7 +758,7 @@ three primitives below have shipped and proven their contracts.
 - [x] Bound fan-out and result materialization.
 - [x] Preserve lineage across retry, cancellation, redrive, and retention.
 
-### [ ] P3-03 Signals and human-in-the-loop wait tokens
+### [x] P3-03 Signals and human-in-the-loop wait tokens
 
 **Depends on:** P3-01, P0-08
 
@@ -766,14 +766,14 @@ The former P2-04 dependency is deliberately dropped: authenticated single-admin 
 audited attribution is a sufficient authorization baseline for signals, and premium SSO/RBAC
 refines who may send them later without changing the primitive.
 
-- [ ] Add idempotent, attributed signals addressed to a stable waiting execution.
+- [x] Add idempotent, attributed signals addressed to a stable waiting execution.
 - [x] Add completable wait tokens for human-in-the-loop steps: a handler creates a named
       token and suspends its lease; an operator or external caller completes it with a
       bounded payload through the dashboard or API.
-- [ ] Define signal and token retention, timeout, cancellation, and duplicate-delivery
+- [x] Define signal and token retention, timeout, cancellation, and duplicate-delivery
       semantics.
-- [ ] Keep waiting executions out of ready and active dispatch indexes.
-- [ ] Audit every accepted and rejected signal and token completion.
+- [x] Keep waiting executions out of ready and active dispatch indexes.
+- [x] Audit every accepted and rejected signal and token completion.
 
 ### [ ] P3-04 Workflow runtime
 

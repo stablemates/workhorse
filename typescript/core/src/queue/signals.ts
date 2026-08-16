@@ -1,6 +1,7 @@
 import { expectOneRow, WorkhorseError } from "../errors.js";
 import { logInfo } from "../telemetry.js";
 import type { ClaimedJob, Json } from "../types.js";
+import { type ExternalWaitOptions, validateExternalWaitOptions } from "./external-waits.js";
 import { QueueModule } from "./module-context.js";
 
 const MAX_SIGNAL_NAME_CHARACTERS = 200;
@@ -119,6 +120,7 @@ export class SignalsModule extends QueueModule {
     job: ClaimedJob<unknown>,
     workerId: string,
     name: string,
+    options: ExternalWaitOptions = {},
   ): Promise<WaitForSignalResult<TPayload>> {
     validateSignalName(name);
     if (typeof workerId !== "string" || workerId.length === 0) {
@@ -126,8 +128,8 @@ export class SignalsModule extends QueueModule {
     }
     const result = await this.context.database.query<WaitForSignalRow>(
       `SELECT status, payload
-         FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text)`,
-      [job.id, workerId, job.fenceToken.toString(), name],
+         FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)`,
+      [job.id, workerId, job.fenceToken.toString(), name, validateExternalWaitOptions(options)],
     );
     const row = expectOneRow(result, "workhorse.wait_for_signal_v1");
     if (row.status === "stale") throw new SignalWaitLeaseLostError(job.id, name);
