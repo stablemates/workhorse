@@ -98,6 +98,7 @@ export {
 } from "./worker.js";
 export type {
   BatchHandler,
+  BatchHandlerContext,
   BatchHandlerItem,
   BatchHandlerOutcome,
   BatchHandlerOptions,

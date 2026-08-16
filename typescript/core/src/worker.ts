@@ -135,10 +135,16 @@ export type Handler<TPayload = Json, TResult extends Json = Json> = (
   context: HandlerContext<TPayload>,
 ) => Promise<TResult> | TResult;
 
+/** Per-job batch context without APIs that suspend and replay an individual handler. */
+export type BatchHandlerContext<TPayload = Json> = Omit<
+  HandlerContext<TPayload>,
+  "sleep" | "sleepUntil" | "waitForSignal" | "waitForHuman" | "runChild" | "runChildren"
+>;
+
 /** One independently leased job delivered to a shared batch-handler invocation. */
 export interface BatchHandlerItem<TPayload = Json> {
   payload: TPayload;
-  context: HandlerContext<TPayload>;
+  context: BatchHandlerContext<TPayload>;
 }
 
 /** The handler result for one independently settled member of a batch. */

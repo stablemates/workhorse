@@ -8,7 +8,9 @@ Workhorse claims jobs through the normal priority path. A batch contains one que
 
 Its items arrive in priority order.
 
-The handler receives `BatchHandlerItem` values. Each item includes the original payload and its own `HandlerContext`, so checkpoints, progress, waits, cancellation, and fencing remain attached to the correct job.
+The handler receives `BatchHandlerItem` values. Each item includes the original payload and its own `BatchHandlerContext`, so checkpoints, progress, cancellation, and fencing remain attached to the correct job.
+
+A batch callback must return one outcome for every member, so one member cannot suspend and replay independently. `BatchHandlerContext` therefore omits timer waits, signals, human decisions, and child joins. Use an ordinary `Handler` when a job needs those boundaries.
 
 Return one `BatchHandlerOutcome` for each item in the same order. A successful outcome carries that job's result. A failed outcome carries the error for that job's retry policy.
 
