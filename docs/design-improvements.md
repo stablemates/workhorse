@@ -10,10 +10,11 @@ Findings come from a full sweep of `typescript/core/src/`, `sql/`, `typescript/`
 on 2026-08-11, at schema version 23. Line references are to that snapshot; verify them before
 editing, but the named identifiers stay greppable after drift.
 
-Each item below has four parts. **Today** states the verified current behavior with file
+Each open item below has four parts. **Today** states the verified current behavior with file
 references. **Change** states the work. **Done when** states the acceptance criteria.
 **Benchmark gate**, where present, names the evidence that decides or validates the change
-and the existing benchmark asset to extend.
+and the existing benchmark asset to extend. Completed items retain a short status and the
+source evidence that closed them.
 
 ## Roadmap rules
 
@@ -260,57 +261,41 @@ The indirection cost must be noise; the gate exists to prove it.
 
 ### 1.3 Worker execution state machine and durable-wait hardening
 
-**Scope:** M/L. **Depends on:** 0.3 (write the adversarial tests first). **Unblocks:**
-P2-13/P2-14, which must document these semantics precisely.
+**Status:** Completed.
 
-**Today.** `Worker.executeJobWithinSpan` (`worker.ts:482-843`, 362 lines) coordinates six
-mutable boolean flags — `leaseLost`, `cancellationRequested`, `deadlineExceeded`,
-`timeoutExceeded`, `durablySuspended`, `heartbeatStopped` — across three expiry mechanisms
-(lease `expires_at`, absolute `deadline_at`, per-attempt `attempt_timeout_at`) plus
-cancellation and durable-wait suspension. Its `catch` block re-checks each flag against both
-`error instanceof` and `controller.signal.reason instanceof` (`worker.ts:766-810`). Durable
-waits are implemented by throwing the module-private `DURABLE_WAIT_SUSPENSION` Symbol
-(`worker.ts:29`) through user handler code, caught at `worker.ts:768-772`; a user
-`catch (e) {}` around `ctx.sleep()` silently defeats suspension. Two overlapping loop
-taxonomies exist: `WorkerMaintenanceTelemetry["loop"]`
-(`"tick" | "statistics_rollup" | "history_partitions" | "history_retention" |
-"terminal_storage"`, `worker.ts:69-76`) vs `recordMaintenanceDrift`'s
-`"tick" | "statistics_rollup" | "background_tasks"` (`worker.ts:1001`).
-
-**Change.** Replace the flag soup with an explicit outcome arbiter: enumerate attempt
-outcomes (completed, failed, lease-expired, deadline-exceeded, attempt-timeout, cancelled,
-suspended-for-wait), let each signal source race to submit one, first writer wins, the rest
-become no-ops. For durable waits, keep the throw as the fast path but re-assert the
-suspension in a post-invoke check: if the context recorded a suspension and the handler
-returned normally, honor the suspension and log loudly that a handler swallowed the signal.
-Unify the two loop enums into one. Write the adversarial tests before refactoring: handler
-catches everything; handler catches and rethrows a different error; attempt timeout racing
-lease expiry; cancellation arriving during a durable wait.
-
-**Done when** `executeJobWithinSpan` (or its successor) has no mutable outcome booleans; the
-swallowed-suspension case is covered by a test and produces a documented warning; one loop
-taxonomy remains.
-
-**Benchmark gate.** The durable-wait scenario in `typescript/core/benchmarks/scenarios.ts`: suspension and
-resume latency must not regress.
+`AttemptOutcomeArbiter` now resolves competing completion, failure, expiry, cancellation,
+and suspension outcomes once. `Worker` reasserts a recorded suspension after handler code
+returns, so swallowing the internal signal cannot complete or fail the job. Adversarial
+coverage lives in `integration-checkpoints-progress-waits.test.ts`, and maintenance uses one
+loop taxonomy.
 
 ### 1.4 A `Worker`-to-`Queue` interface seam
 
-**Scope:** S. **Depends on:** 1.2 (the facade reveals the interface). **Unblocks:**
-P2-13/P2-14 directly.
+**Status:** Completed.
 
-**Today.** `Worker` depends on the concrete `Queue` class (`worker.ts:262`) and duck-types
-`supportsJobNotifications` against a class its own package defines
-(`worker.ts:273-276`) — a symptom of tests passing structural doubles where the code
-declares a nominal dependency.
+`WorkerQueueApi` is the worker's declared queue protocol for claims, fences, lifecycle
+writes, durable boundaries, maintenance, and optional notifications. `Worker` accepts that
+interface, and unit tests use structural implementations without importing the concrete
+`Queue` class.
 
-**Change.** Define a `WorkerQueueApi` interface — claim, heartbeat, complete/fail,
-checkpoint, wait, and a declared notification capability — and make `Worker` depend on it.
-Delete the duck-typing.
+### 1.5 Stabilize the feature-wave seams before another language implements them
 
-**Done when** `Worker` imports no concrete `Queue`; worker unit tests construct a plain
-object implementing `WorkerQueueApi`; the interface doc comment states it is the SDK wire
-contract for P2-13/P2-14.
+**Scope:** M. **Depends on:** 1.3 and 1.4. **Unblocks:** P2-13/P2-14 directly.
+
+**Today.** The versioned SQL protocol now owns dependencies, child jobs, signals, human
+decisions, keyed debounce, keyed throttle, priority dispatch, and batch claims. The worker
+runtime owns child suspension and excludes suspension methods from `BatchHandlerContext`.
+`protocol/v1/runtime.json` pins batch ordering and suspension behavior for other language
+runtimes.
+
+Three public seams still need cleanup before Python or Go copies them. WOR-98 consolidates
+the dependency input and results from keyed coalescing. WOR-99 aligns signal and human-wait
+naming, validation, typed errors, limits, and test depth. WOR-122 defines how retry,
+promotion, and redrive preserve priority and documents strict-priority starvation.
+
+**Done when** the protocol fixtures represent those public shapes once. TypeScript must
+implement them without compatibility-only siblings. Language SDK issues must not depend on
+TypeScript-specific interpretation.
 
 ## Phase 2: schema lifecycle and evidence-gated confrontations
 

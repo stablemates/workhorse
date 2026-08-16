@@ -289,9 +289,9 @@ without treating one shared administrator as multi-user RBAC.
 - [x] Store only a password hash in production configuration, accept secrets through files where
       container platforms support them, and keep any plaintext-password convenience explicitly
       development-only.
-- [ ] Exchange a successful login for a bounded `Secure`, `HttpOnly`, and explicitly `SameSite`
+- [x] Exchange a successful login for a bounded `Secure`, `HttpOnly`, and explicitly `SameSite`
       session cookie; add logout, expiry, credential rotation, origin checks, and login throttling.
-- [ ] Derive the audit actor from the authenticated server session. Never trust the browser's
+- [x] Derive the audit actor from the authenticated server session. Never trust the browser's
       `auditActor` or mutation payload as identity evidence.
 - [x] Keep host-supplied authorization as an alternative mode for embedded applications that
       already own sessions. Reject ambiguous configurations that enable both modes.
@@ -716,7 +716,7 @@ transport.
 - [ ] Ship installation, dedicated-worker, transaction, retry, checkpoint, wait, and standalone
       dashboard examples as tested module artifacts.
 
-### [ ] P2-15 Agentic flows guide and example
+### [x] P2-15 Agentic flows guide and example
 
 **Depends on:** P3-01, P3-02, P3-03
 
@@ -725,12 +725,12 @@ ships or has scheduled: checkpoints, durable timer waits, fenced progress, keyed
 and — after P3 — dependencies, fan-out/fan-in, and signals. This item is composition and
 documentation, not new SQL.
 
-- [ ] Document an agent loop built from existing primitives: checkpoints for memoized model
+- [x] Document an agent loop built from existing primitives: checkpoints for memoized model
       and tool steps, durable timer waits, signals and human-in-the-loop wait tokens, fenced
       progress for streaming visibility, and keyed rate limits per external API.
-- [ ] Ship one runnable agent example in the example suite with explicit at-least-once
+- [x] Ship one runnable agent example in the example suite with explicit at-least-once
       framing. Make no exactly-once, persisted-continuation, or "durable stack" claims.
-- [ ] Follow the documentation rules: guide layer states no numbers, one reference link,
+- [x] Follow the documentation rules: guide layer states no numbers, one reference link,
       every identifier verified against source.
 
 ## P3: orchestration
