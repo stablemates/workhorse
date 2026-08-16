@@ -97,6 +97,15 @@ body {
 }
 
 /*
+ * Metadata values align on their text baseline. The square help control has no text baseline of
+ * its own, so lower it to center the information glyph beside the text it explains.
+ */
+.task-drawer__content .task-drawer__help {
+  position: relative;
+  top: 2px;
+}
+
+/*
  * Durable step text is evidence an operator copies into a ticket, so it must be selectable.
  * Mantine renders every step as a button, and a button is not text-selectable in every engine,
  * so selection is restored explicitly on the step body.
@@ -111,6 +120,11 @@ body {
   cursor: text;
   -webkit-user-select: text;
   user-select: text;
+}
+
+/* Mantine's inline loader reserves baseline space, which lifts it inside the centered step icon. */
+.task-drawer__content .mantine-Stepper-stepLoader {
+  display: block;
 }
 
 /*

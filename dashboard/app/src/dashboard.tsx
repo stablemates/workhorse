@@ -3893,7 +3893,13 @@ function RetryBars({ buckets }: { buckets: DashboardSystemRetryBucket[] }) {
 function HelpButton({ label, help }: { label: string; help: string }) {
   return (
     <Tooltip label={help} multiline w={280} withArrow>
-      <ActionIcon aria-label={`${label}: ${help}`} color="gray" size="sm" variant="subtle">
+      <ActionIcon
+        className="task-drawer__help"
+        aria-label={`${label}: ${help}`}
+        color="gray"
+        size="sm"
+        variant="subtle"
+      >
         <Info size={14} />
       </ActionIcon>
     </Tooltip>
