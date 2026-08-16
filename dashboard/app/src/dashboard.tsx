@@ -2442,16 +2442,46 @@ export function TaskName({ type, queue }: { type: string; queue: string }) {
 }
 
 /** Visible task tags, constrained to one discoverable line so they cannot widen a task row. */
+export function TaskTagsTooltipContent({ tags }: { tags: readonly string[] }) {
+  return (
+    <Box component="ul" m={0} pl="md">
+      {tags.map((tag, index) => (
+        <li key={`${tag}-${index}`}>{tag}</li>
+      ))}
+    </Box>
+  );
+}
+
 export function TaskTags({ tags }: { tags: readonly string[] }) {
   if (tags.length === 0) return <Text c="dimmed">—</Text>;
   return (
-    <Text
-      size="sm"
-      title={tags.join(", ")}
-      style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+    <Tooltip
+      label={<TaskTagsTooltipContent tags={tags} />}
+      multiline
+      withArrow
+      events={{ hover: true, focus: true, touch: false }}
     >
-      {tags.join(", ")}
-    </Text>
+      <Group
+        gap={4}
+        wrap="nowrap"
+        tabIndex={0}
+        aria-label={`Tags: ${tags.join(", ")}`}
+        style={{ overflow: "hidden", whiteSpace: "nowrap" }}
+      >
+        {tags.map((tag, index) => (
+          <Badge
+            key={`${tag}-${index}`}
+            size="xs"
+            variant="light"
+            color="gray"
+            tt="none"
+            style={{ flexShrink: 0 }}
+          >
+            {tag}
+          </Badge>
+        ))}
+      </Group>
+    </Tooltip>
   );
 }
 

@@ -27,16 +27,20 @@ describe("task listing identity", () => {
     expect(html).toContain("text-overflow:ellipsis");
   });
 
-  it("keeps tags on one line and exposes the full visible list on hover", async () => {
-    const { TaskTags } = await import("./dashboard.js");
+  it("renders tags as separate badges and exposes the full list on hover", async () => {
+    const { TaskTags, TaskTagsTooltipContent } = await import("./dashboard.js");
+    const tags = ["billing", "weekly", "durable-checkpoint"];
     const html = render(TaskTags, {
-      tags: ["billing", "weekly", "durable-checkpoint"],
+      tags,
     });
+    const tooltipHtml = render(TaskTagsTooltipContent, { tags });
 
-    expect(html).toContain('title="billing, weekly, durable-checkpoint"');
+    expect(html.match(/mantine-Badge-root/g)).toHaveLength(3);
+    expect(html).toContain('aria-label="Tags: billing, weekly, durable-checkpoint"');
+    expect(tooltipHtml).toContain("<ul");
+    expect(tooltipHtml.match(/<li/g)).toHaveLength(3);
     expect(html).toContain("white-space:nowrap");
     expect(html).toContain("overflow:hidden");
-    expect(html).toContain("text-overflow:ellipsis");
     expect(html).toContain("durable-checkpoint");
   });
 
