@@ -9,7 +9,7 @@ __pycache__/
 /typescript/dashboard/development/
 coverage/
 .next/
-apps/site/next-env.d.ts
+site/next-env.d.ts
 .source/
 .env
 .env.*
