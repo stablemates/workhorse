@@ -718,9 +718,9 @@ export class Worker {
     // publish that state and would simply vanish from an operator's fleet view mid-drain.
     if (this.draining && this.registered) {
       const previousRefresh = this.pendingStopRegistrationRefresh ?? Promise.resolve();
-      this.pendingStopRegistrationRefresh = previousRefresh.then(() =>
-        this.refreshRegistration(true),
-      );
+      const pendingRefresh = previousRefresh.then(() => this.refreshRegistration(true));
+      this.pendingStopRegistrationRefresh = pendingRefresh;
+      void pendingRefresh.catch(() => undefined);
     }
     logInfo("workhorse.worker.stop_requested", "Worker stop requested", {
       "workhorse.queue.name": this.queueName,
@@ -969,17 +969,22 @@ export class Worker {
       });
       return expirationPromise;
     };
+    const expireOwnershipInBackground = (): void => {
+      // Observe the memoized promise without replacing it: the settlement path still awaits the
+      // original rejection, while a handler that ignores abort cannot cause an unhandled rejection.
+      void expireOwnership().catch((error: unknown) => controller.abort(error));
+    };
     const refreshOwnership = async () => {
       const status = await this.queue.heartbeatStatus(job, this.workerId, this.leaseMs);
       if (status === "cancel_requested") {
         markCancellationRequested();
       } else if (status === "deadline_exceeded") {
         stopHeartbeat();
-        void expireOwnership();
+        expireOwnershipInBackground();
         if (!controller.signal.aborted) controller.abort(new DeadlineExceededError(job.id));
       } else if (status === "timeout_exceeded") {
         stopHeartbeat();
-        void expireOwnership();
+        expireOwnershipInBackground();
         if (!controller.signal.aborted)
           controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
       } else if (status === "stale") {
@@ -1008,7 +1013,7 @@ export class Worker {
               controller.abort(new ExecutionTimeoutError(job.id, job.attempt));
           }
           stopHeartbeat();
-          void expireOwnership();
+          expireOwnershipInBackground();
         },
         // The extra millisecond keeps the timer from leading the database clock: expirationAt was
         // truncated to milliseconds on the way to the client, so firing at it exactly can precede
@@ -1512,7 +1517,12 @@ export class Worker {
   /** Best-effort removal of this worker's registration once its loop has stopped. */
   private async deregister(): Promise<void> {
     if (!this.registered) return;
-    await this.pendingStopRegistrationRefresh;
+    let refreshFailure: { error: unknown } | undefined;
+    try {
+      await this.pendingStopRegistrationRefresh;
+    } catch (error) {
+      refreshFailure = { error };
+    }
     this.pendingStopRegistrationRefresh = undefined;
     this.registered = false;
     this.loggedRegistrationState = undefined;
@@ -1521,6 +1531,7 @@ export class Worker {
     } catch {
       // A worker that cannot deregister ages out of the fleet view on its heartbeat window.
     }
+    if (refreshFailure) throw refreshFailure.error;
   }
 
   private async runMaintenance(): Promise<void> {
@@ -1641,15 +1652,17 @@ export class Worker {
       this.wakeLoops();
     };
 
-    let notificationSubscription: JobNotificationSubscription | null = null;
-    try {
+    const notificationState: { notificationSubscription: JobNotificationSubscription | null } = {
+      notificationSubscription: null,
+    };
+    const runFailure = await (async () => {
       if (shouldStop()) return;
       await this.runMaintenance();
       if (shouldStop()) return;
 
       const subscribeToJobNotifications = this.queue.subscribeToJobNotifications;
       if (typeof subscribeToJobNotifications === "function") {
-        notificationSubscription = await subscribeToJobNotifications.call(
+        notificationState.notificationSubscription = await subscribeToJobNotifications.call(
           this.queue,
           this.queueName,
           () => this.wakeLoops(),
@@ -1662,17 +1675,32 @@ export class Worker {
       const dispatch = this.dispatchLoop(shouldStop, signal).catch(fail);
       await Promise.all([maintenance, registration, dispatch]);
       if (firstError !== undefined) throw firstError;
-    } finally {
-      this.running = false;
-      this.draining = this.activeSlots > 0;
-      await notificationSubscription?.close();
-      await this.deregister();
-      logInfo("workhorse.worker.stopped", "Worker stopped", {
-        "workhorse.queue.name": this.queueName,
-        "workhorse.worker.id": this.workerId,
-        "workhorse.worker.active_slots": this.activeSlots,
-      });
+    })().then(
+      () => undefined,
+      (error: unknown) => ({ error }),
+    );
+
+    this.running = false;
+    this.draining = this.activeSlots > 0;
+    const failures: unknown[] = [];
+    if (runFailure) failures.push(runFailure.error);
+    try {
+      await notificationState.notificationSubscription?.close();
+    } catch (error) {
+      failures.push(error);
     }
+    try {
+      await this.deregister();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Worker shutdown failed");
+    logInfo("workhorse.worker.stopped", "Worker stopped", {
+      "workhorse.queue.name": this.queueName,
+      "workhorse.worker.id": this.workerId,
+      "workhorse.worker.active_slots": this.activeSlots,
+    });
   }
 
   /**

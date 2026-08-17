@@ -690,6 +690,50 @@ describe("claim lease fence", () => {
     });
   });
 
+  it("observes a timer-driven expiration rejection while the handler ignores abort", async () => {
+    const expirationStarted = deferred();
+    const releaseHandler = deferred();
+    const expirationFailure = new Error("expiration connection lost");
+    const unhandledRejections: unknown[] = [];
+    const recordUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason);
+    };
+    const rejectingQueue = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property === "expireOwned") {
+          return async () => {
+            expirationStarted.resolve();
+            throw expirationFailure;
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    await queue.enqueue("expiration-rejection", null, { executionTimeoutMs: 50 });
+    const worker = new Worker(rejectingQueue, {
+      workerId: "expiration-rejection-worker",
+      leaseMs: 5_000,
+      heartbeatMs: 1_000,
+    }).handle("expiration-rejection", async () => {
+      await releaseHandler.promise;
+      return null;
+    });
+
+    process.on("unhandledRejection", recordUnhandledRejection);
+    const execution = worker.runOnce();
+    try {
+      await expirationStarted.promise;
+      await sleep(0);
+      expect(unhandledRejections).toEqual([]);
+      releaseHandler.resolve();
+      await expect(execution).rejects.toBe(expirationFailure);
+    } finally {
+      releaseHandler.resolve();
+      await execution.catch(() => undefined);
+      process.off("unhandledRejection", recordUnhandledRejection);
+    }
+  });
+
   it("keeps lease recovery authoritative when it wins an attempt-timeout race", async () => {
     const expirationStarted = deferred();
     const releaseExpiration = deferred();

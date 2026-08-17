@@ -40,6 +40,83 @@ describe("worker registry", () => {
     await expect(registration()).resolves.toBeUndefined();
   });
 
+  it("deregisters when notification subscription cleanup fails", async () => {
+    const closeFailure = new Error("notification close failed");
+    const close = vi.fn<() => Promise<void>>(async () => {
+      throw closeFailure;
+    });
+    const subscribe = vi.spyOn(queue, "subscribeToJobNotifications").mockResolvedValue({ close });
+    const worker = new Worker(queue, {
+      workerId: "registry-notification-close-failure",
+      queue: "default",
+      pollMs: 10,
+      registryIntervalMs: 100,
+    }).handle("registry-notification-close-failure", () => null);
+    const registration = async () =>
+      (await queue.listWorkers()).find(
+        (entry) => entry.workerId === "registry-notification-close-failure",
+      );
+
+    try {
+      const running = worker.run();
+      await vi.waitFor(async () => expect(await registration()).toBeDefined());
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
+
+      worker.stop();
+      await expect(running).rejects.toBe(closeFailure);
+      expect(close).toHaveBeenCalledOnce();
+      await expect(registration()).resolves.toBeUndefined();
+    } finally {
+      subscribe.mockRestore();
+    }
+  });
+
+  it("preserves cleanup failures while still deregistering", async () => {
+    const closeFailure = new Error("notification close failed");
+    const registrationFailure = new Error("draining registration failed");
+    let failRegistration = false;
+    const rejectingQueue = new Proxy(queue, {
+      get(target, property, receiver) {
+        if (property === "registerWorker") {
+          return async (...args: Parameters<Queue["registerWorker"]>) => {
+            if (failRegistration) throw registrationFailure;
+            return target.registerWorker(...args);
+          };
+        }
+        if (property === "subscribeToJobNotifications") {
+          return async () => ({
+            close: async () => {
+              throw closeFailure;
+            },
+          });
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const workerId = "registry-multiple-cleanup-failures";
+    const worker = new Worker(rejectingQueue, {
+      workerId,
+      queue: "default",
+      pollMs: 10,
+      registryIntervalMs: 100,
+      onRegistrationError: (error) => {
+        throw error;
+      },
+    }).handle("registry-multiple-cleanup-failures", () => null);
+    const registration = async () =>
+      (await queue.listWorkers()).find((entry) => entry.workerId === workerId);
+
+    const running = worker.run();
+    await vi.waitFor(async () => expect(await registration()).toBeDefined());
+    failRegistration = true;
+    worker.stop();
+
+    await expect(running).rejects.toEqual(
+      new AggregateError([closeFailure, registrationFailure], "Worker shutdown failed"),
+    );
+    await expect(registration()).resolves.toBeUndefined();
+  });
+
   it("applies an operator pause written to PostgreSQL by another process", async () => {
     // The pause is written through a separate Queue instance holding no reference to the worker
     // object, which is exactly the situation of a dashboard running outside the worker process.
