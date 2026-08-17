@@ -10,7 +10,7 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { Menu } from "./dropdown-activity.js";
-import { ColorThemeIcon, DarkThemeIcon, LightThemeIcon, iconSize } from "./icons.js";
+import { Moon, Palette, Sun } from "@phosphor-icons/react";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { DashboardNotifications } from "./notifications.js";
 
@@ -95,8 +95,8 @@ const options: Array<{
   label: string;
   icon: ReactNode;
 }> = [
-  { value: "light", label: "Light", icon: <LightThemeIcon size={iconSize.control} /> },
-  { value: "dark", label: "Dark", icon: <DarkThemeIcon size={iconSize.control} /> },
+  { value: "light", label: "Light", icon: <Sun size={14} /> },
+  { value: "dark", label: "Dark", icon: <Moon size={14} /> },
 ];
 
 function ThemeOptionLabel({ icon, label }: { icon: ReactNode; label: string }) {
@@ -133,7 +133,7 @@ export function ThemeSchemeSwitch() {
           <Menu.Target>
             <Tooltip label="Change color theme">
               <ActionIcon variant="default" size="lg" aria-label="Change color theme">
-                <ColorThemeIcon size={iconSize.navigation} />
+                <Palette size={18} />
               </ActionIcon>
             </Tooltip>
           </Menu.Target>

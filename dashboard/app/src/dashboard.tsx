@@ -35,30 +35,28 @@ import {
 import { BarChart } from "@mantine/charts";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import {
-  ActivityIcon,
-  CalendarIcon,
-  CheckCircleIcon,
-  ClockIcon,
-  CopyIcon,
-  DiscardedIcon,
-  FilterIconGlyph,
-  HumanWaitIcon,
-  InfoIcon,
-  LightningIcon,
-  PlayIcon,
-  ProhibitIcon,
-  QueuedIcon,
-  RefreshIconGlyph,
-  RetryIcon,
-  RowMenuIcon,
-  SearchIcon,
-  SettingsIcon,
-  TaskListIcon,
-  WarningIcon,
-  WorkerIcon,
-  iconSize,
-  type DashboardIcon,
-} from "./icons.js";
+  ArrowCounterClockwise,
+  ArrowClockwise,
+  CalendarDots,
+  CheckCircle,
+  Clock,
+  Copy,
+  DotsThreeVertical,
+  FunnelSimple,
+  GearSix,
+  Info,
+  Lightning,
+  ListDashes,
+  ListChecks,
+  MagnifyingGlass,
+  PlayCircle,
+  Prohibit,
+  Pulse,
+  Robot,
+  UserFocus,
+  WarningCircle,
+  XCircle,
+} from "@phosphor-icons/react";
 import {
   createContext,
   Fragment,
@@ -352,20 +350,20 @@ const taskFilterPresentation: Record<
   DashboardTaskFilter,
   {
     label: string;
-    icon: DashboardIcon;
+    icon: typeof ListChecks;
   }
 > = {
-  all: { label: "All tasks", icon: TaskListIcon },
-  blocked: { label: "Blocked", icon: WarningIcon },
-  waiting: { label: "Waiting", icon: HumanWaitIcon },
-  scheduled: { label: "Scheduled", icon: ClockIcon },
-  retried: { label: "Retried", icon: RetryIcon },
-  queued: { label: "Queued", icon: QueuedIcon },
-  running: { label: "Running", icon: PlayIcon },
-  completed: { label: "Completed", icon: CheckCircleIcon },
-  discarded: { label: "Discarded", icon: DiscardedIcon },
+  all: { label: "All tasks", icon: ListChecks },
+  blocked: { label: "Blocked", icon: WarningCircle },
+  waiting: { label: "Waiting", icon: UserFocus },
+  scheduled: { label: "Scheduled", icon: Clock },
+  retried: { label: "Retried", icon: ArrowCounterClockwise },
+  queued: { label: "Queued", icon: ListDashes },
+  running: { label: "Running", icon: PlayCircle },
+  completed: { label: "Completed", icon: CheckCircle },
+  discarded: { label: "Discarded", icon: XCircle },
   // Cancellation is a distinct terminal state, never folded into discarded work.
-  canceled: { label: "Canceled", icon: ProhibitIcon },
+  canceled: { label: "Canceled", icon: Prohibit },
 };
 const taskFilters = dashboardTaskFilters.map((value) => ({
   value,
@@ -754,11 +752,7 @@ function JsonValue({
               aria-label={copied ? `${copyLabel} copied to the clipboard` : `Copy ${copyLabel}`}
               onClick={copy}
             >
-              {copied ? (
-                <CheckCircleIcon size={iconSize.control} weight="bold" />
-              ) : (
-                <CopyIcon size={iconSize.control} />
-              )}
+              {copied ? <CheckCircle size={14} weight="bold" /> : <Copy size={14} />}
             </ActionIcon>
           </Tooltip>
         ) : null}
@@ -927,7 +921,7 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
         /* State is carried by the heading text and the icon, never by colour alone. */
         <Paper withBorder p="xs" mb="sm">
           <Group gap={6} align="center" wrap="nowrap" mb={2}>
-            <ProhibitIcon size={iconSize.bullet} weight="bold" aria-hidden />
+            <Prohibit size={13} weight="bold" aria-hidden />
             <Text fw={600} size="xs">
               {hasEvidencePastPersistentBoundary
                 ? "Earlier demo evidence detected"
@@ -949,13 +943,13 @@ function PlannedDurability({ job }: { job: DashboardJobDetail }) {
         color="violet"
         iconSize={28}
         allowNextStepsSelect={false}
-        completedIcon={<CheckCircleIcon size={iconSize.marker} weight="bold" />}
+        completedIcon={<CheckCircle size={15} weight="bold" />}
         progressIcon={
           // A blocked task is not waiting for anything, so it never shows a waiting clock.
           persistentFailure && !hasEvidencePastPersistentBoundary ? (
-            <ProhibitIcon size={iconSize.control} weight="bold" style={{ display: "block" }} />
+            <Prohibit size={14} weight="bold" style={{ display: "block" }} />
           ) : (
-            <ClockIcon size={iconSize.control} weight="bold" style={{ display: "block" }} />
+            <Clock size={14} weight="bold" style={{ display: "block" }} />
           )
         }
       >
@@ -1522,7 +1516,7 @@ function CancelTaskPanel({
           <Button
             size="xs"
             variant="default"
-            leftSection={<ProhibitIcon size={iconSize.control} />}
+            leftSection={<Prohibit size={14} />}
             disabled={pending}
             onClick={() => setConfirming(true)}
           >
@@ -1600,11 +1594,7 @@ function TaskIdChip({ id }: { id: string }) {
               aria-label={copied ? "Task id copied to the clipboard" : "Copy task id"}
               onClick={copy}
             >
-              {copied ? (
-                <CheckCircleIcon size={iconSize.inline} weight="bold" />
-              ) : (
-                <CopyIcon size={iconSize.inline} />
-              )}
+              {copied ? <CheckCircle size={12} weight="bold" /> : <Copy size={12} />}
             </ActionIcon>
           </Tooltip>
         )}
@@ -2348,7 +2338,7 @@ function CancelRequestedBadge({
       size="sm"
       variant="light"
       color="gray"
-      leftSection={<ProhibitIcon size={iconSize.chip} weight="bold" />}
+      leftSection={<Prohibit size={11} weight="bold" />}
       tt="none"
       title={`${described.exact} Requested ${formatExact(cancellation.requestedAt)}.`}
       role="status"
@@ -2508,7 +2498,7 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
         size="sm"
         variant="light"
         color="violet"
-        leftSection={<LightningIcon size={iconSize.chip} weight="bold" />}
+        leftSection={<Lightning size={11} weight="bold" />}
         tt="none"
         title={`Waiting for signal ${job.signalWait.name} · deadline ${formatExact(job.signalWait.deadlineAt)}`}
         role="status"
@@ -2525,7 +2515,7 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
         size="sm"
         variant="light"
         color="violet"
-        leftSection={<HumanWaitIcon size={iconSize.chip} weight="bold" />}
+        leftSection={<UserFocus size={11} weight="bold" />}
         tt="none"
         title={`Waiting for decision ${job.humanWait.name} · deadline ${formatExact(job.humanWait.deadlineAt)}`}
         role="status"
@@ -2542,7 +2532,7 @@ export function TaskWaitBadge({ job }: { job: DashboardJobRow }) {
       size="sm"
       variant="light"
       color={due ? "cyan" : "indigo"}
-      leftSection={<ClockIcon size={iconSize.chip} weight="bold" />}
+      leftSection={<Clock size={11} weight="bold" />}
       tt="none"
       title={`Durable wait ${scheduledWait.name} · not before ${formatExact(scheduledWait.wakeAt)}`}
       role="status"
@@ -2578,7 +2568,7 @@ function EmptyState({ children }: { children: ReactNode }) {
       <Center mih={180}>
         <Stack align="center" gap="xs">
           <ThemeIcon variant="light" color="gray" size="xl" radius="xl">
-            <CheckCircleIcon size={iconSize.feature} />
+            <CheckCircle size={22} />
           </ThemeIcon>
           <Text fw={600}>No results</Text>
           <Text c="dimmed" size="sm">
@@ -2830,7 +2820,7 @@ export function TaskListingFilters({
         size="xs"
         value={searchInput}
         onChange={(event) => setSearchInput(event.currentTarget.value)}
-        leftSection={<SearchIcon size={iconSize.control} />}
+        leftSection={<MagnifyingGlass size={14} />}
         placeholder="Search tasks. Use * as a wildcard."
         aria-label="Search tasks"
         style={{ flex: "1 1 220px" }}
@@ -2890,12 +2880,12 @@ export function TaskListingFilters({
 }
 
 function taskRowActionIcon(id: TaskRowActionId): ReactNode {
-  if (id === "inspect") return <InfoIcon size={iconSize.menu} />;
-  if (id === "copy-id" || id === "copy-args") return <CopyIcon size={iconSize.menu} />;
-  if (id === "cancel") return <ProhibitIcon size={iconSize.menu} />;
-  if (id === "run-now") return <PlayIcon size={iconSize.menu} />;
-  if (id === "complete-human-wait") return <CheckCircleIcon size={iconSize.menu} />;
-  return <FilterIconGlyph size={iconSize.menu} />;
+  if (id === "inspect") return <Info size={16} />;
+  if (id === "copy-id" || id === "copy-args") return <Copy size={16} />;
+  if (id === "cancel") return <Prohibit size={16} />;
+  if (id === "run-now") return <PlayCircle size={16} />;
+  if (id === "complete-human-wait") return <CheckCircle size={16} />;
+  return <FunnelSimple size={16} />;
 }
 
 /**
@@ -2937,7 +2927,7 @@ function TaskRowActions({
           // The row itself opens the drawer on click, which is not what opening this menu means.
           onClick={(event) => event.stopPropagation()}
         >
-          <RowMenuIcon size={iconSize.menu} weight="bold" />
+          <DotsThreeVertical size={16} weight="bold" />
         </ActionIcon>
       </Menu.Target>
       <Menu.Dropdown onClick={(event) => event.stopPropagation()}>
@@ -3194,7 +3184,7 @@ function TasksPage({
                       variant="default"
                       size="xs"
                       radius="xl"
-                      leftSection={<PlayIcon size={iconSize.menu} />}
+                      leftSection={<PlayCircle size={16} />}
                       loading={runningDemoJob !== null}
                     >
                       Enqueue test task
@@ -3204,25 +3194,25 @@ function TasksPage({
                   <Menu.Dropdown style={{ maxHeight: "min(560px, 80vh)", overflowY: "auto" }}>
                     <Menu.Label>Test outcome</Menu.Label>
                     <Menu.Item
-                      leftSection={<CheckCircleIcon size={iconSize.menu} />}
+                      leftSection={<CheckCircle size={16} />}
                       onClick={() => void enqueueTestTask("success")}
                     >
                       Succeed
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<RetryIcon size={iconSize.menu} />}
+                      leftSection={<ArrowCounterClockwise size={16} />}
                       onClick={() => void enqueueTestTask("retry")}
                     >
                       Fail once, then retry
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<CheckCircleIcon size={iconSize.menu} />}
+                      leftSection={<CheckCircle size={16} />}
                       onClick={() => void enqueueTestTask("idempotent")}
                     >
                       Reuse one task for repeat requests
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<TaskListIcon size={iconSize.menu} />}
+                      leftSection={<ListChecks size={16} />}
                       onClick={() =>
                         void enqueueTestTask("durable", { scenario: "order-fulfillment" })
                       }
@@ -3230,7 +3220,7 @@ function TasksPage({
                       Durable · order fulfillment · 4 steps
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<TaskListIcon size={iconSize.menu} />}
+                      leftSection={<ListChecks size={16} />}
                       onClick={() =>
                         void enqueueTestTask("durable", { scenario: "customer-onboarding" })
                       }
@@ -3238,7 +3228,7 @@ function TasksPage({
                       Durable · customer onboarding · 3 steps
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<TaskListIcon size={iconSize.menu} />}
+                      leftSection={<ListChecks size={16} />}
                       onClick={() =>
                         void enqueueTestTask("durable", { scenario: "report-publication" })
                       }
@@ -3246,26 +3236,26 @@ function TasksPage({
                       Durable · report publication · 3 steps
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<ClockIcon size={iconSize.menu} />}
+                      leftSection={<Clock size={16} />}
                       onClick={() => void enqueueTestTask("timer")}
                     >
                       Durable wait · named timer boundary
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<DiscardedIcon size={iconSize.menu} />}
+                      leftSection={<XCircle size={16} />}
                       color="red"
                       onClick={() => void enqueueTestTask("failure")}
                     >
                       Terminal failure
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<RetryIcon size={iconSize.menu} />}
+                      leftSection={<ArrowCounterClockwise size={16} />}
                       onClick={() => void enqueueTestTask("redrive")}
                     >
                       Redrive newest dead letter
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<ClockIcon size={iconSize.menu} />}
+                      leftSection={<Clock size={16} />}
                       onClick={() => void enqueueTestTask("long-running")}
                     >
                       Long-running · 20s
@@ -3275,7 +3265,7 @@ function TasksPage({
                     {dashboardDemoFeatureExamples.map(({ feature, label }) => (
                       <Menu.Item
                         key={feature}
-                        leftSection={<LightningIcon size={iconSize.menu} />}
+                        leftSection={<Lightning size={16} />}
                         onClick={() => void enqueueTestTask("feature", { feature })}
                       >
                         {label}
@@ -3904,7 +3894,7 @@ function HelpButton({ label, help }: { label: string; help: string }) {
   return (
     <Tooltip label={help} multiline w={280} withArrow>
       <ActionIcon aria-label={`${label}: ${help}`} color="gray" size="sm" variant="subtle">
-        <InfoIcon size={iconSize.control} />
+        <Info size={14} />
       </ActionIcon>
     </Tooltip>
   );
@@ -4205,7 +4195,7 @@ export function SystemKpiList({
         help="This rate compares finished tasks with new tasks during the selected window. A negative net means tasks arrived faster than workers finished them."
         scope={data.window}
         color={data.kpis.drain.netPerMinute < 0 ? "yellow" : "teal"}
-        icon={<RefreshIconGlyph size={iconSize.menu} />}
+        icon={<ArrowClockwise size={16} />}
       >
         <MiniTrend
           series={[
@@ -4228,7 +4218,7 @@ export function SystemKpiList({
         help="This count shows tasks that are ready for workers. An older task can mean that its queue is draining slowly."
         scope="now"
         color={backlogColor}
-        icon={<TaskListIcon size={iconSize.menu} />}
+        icon={<ListChecks size={16} />}
       />
       <HealthKpi
         divided
@@ -4238,7 +4228,7 @@ export function SystemKpiList({
         help="This is the share of attempts that did not succeed. The comparison uses the previous window of the same length."
         scope={data.window}
         color={errorColor}
-        icon={<WarningIcon size={iconSize.menu} />}
+        icon={<WarningCircle size={16} />}
       />
       <HealthKpi
         divided
@@ -4261,7 +4251,7 @@ export function SystemKpiList({
         help="These percentiles measure the time between enqueue and first claim during the selected window."
         scope={data.window}
         color="indigo"
-        icon={<ClockIcon size={iconSize.menu} />}
+        icon={<Clock size={16} />}
       />
       <HealthKpi
         divided
@@ -4271,7 +4261,7 @@ export function SystemKpiList({
         help="This count shows tasks in backoff before another attempt. The second count shows how many become ready within five minutes."
         scope="now"
         color={data.kpis.retry.dueSoon > 0 ? "orange" : "blue"}
-        icon={<RetryIcon size={iconSize.menu} />}
+        icon={<ArrowCounterClockwise size={16} />}
       />
       <HealthKpi
         divided
@@ -4281,7 +4271,7 @@ export function SystemKpiList({
         help="This count shows active tasks whose leases expired. It also shows leases nearing expiry and tasks recovered during the selected window."
         scope="now"
         color={data.kpis.lease.expired > 0 ? "red" : "teal"}
-        icon={<ActivityIcon size={iconSize.menu} />}
+        icon={<Pulse size={16} />}
       />
       <HealthKpi
         divided
@@ -4297,7 +4287,7 @@ export function SystemKpiList({
               ? "orange"
               : "teal"
         }
-        icon={<ClockIcon size={iconSize.menu} />}
+        icon={<Clock size={16} />}
       />
       <HealthKpi
         divided
@@ -4328,7 +4318,7 @@ export function SystemKpiList({
               ? "yellow"
               : "teal"
         }
-        icon={<FilterIconGlyph size={iconSize.menu} />}
+        icon={<FunnelSimple size={16} />}
       />
       <HealthKpi
         divided
@@ -4344,7 +4334,7 @@ export function SystemKpiList({
               ? "yellow"
               : "teal"
         }
-        icon={<HumanWaitIcon size={iconSize.menu} />}
+        icon={<UserFocus size={16} />}
       />
       <HealthKpi
         divided
@@ -4369,7 +4359,7 @@ export function SystemKpiList({
         help="These handlers are suspended for a signal or human decision. Overdue waits remain critical until deadline maintenance resolves them."
         scope="now"
         color={data.kpis.externalWaits.overdue > 0 ? "red" : "teal"}
-        icon={<LightningIcon size={iconSize.menu} />}
+        icon={<Lightning size={16} />}
       />
     </Paper>
   );
@@ -4385,11 +4375,7 @@ export function ExternalWaitAlert({
   if (externalWaits.overdue === 0) return null;
 
   return (
-    <Alert
-      color="red"
-      icon={<WarningIcon size={iconSize.navigation} />}
-      title="External waits are overdue"
-    >
+    <Alert color="red" icon={<WarningCircle size={18} />} title="External waits are overdue">
       <Group justify="space-between" align="center">
         <Text size="sm">
           A signal or human decision passed its deadline. Deadline maintenance will resolve the
@@ -7055,7 +7041,7 @@ function useDashboardController(
     content = (
       <Center mih="60vh">
         <Stack align="center" gap="sm">
-          <WarningIcon size={iconSize.page} color="var(--mantine-color-red-6)" />
+          <WarningCircle size={28} color="var(--mantine-color-red-6)" />
           <Text fw={600}>Workhorse could not load this page.</Text>
           <Text c="dimmed" size="sm">
             {loadState.error}
@@ -7300,7 +7286,7 @@ function DashboardContent({
                 variant="default"
                 size="xs"
                 w={120}
-                leftSection={<RefreshIconGlyph size={iconSize.control} />}
+                leftSection={<ArrowClockwise size={14} />}
                 loading={loading}
                 onClick={() => {
                   resetRefreshSchedule();
@@ -7338,9 +7324,7 @@ function DashboardContent({
                       key={option.value}
                       onClick={() => changeRefreshInterval(option.value)}
                       rightSection={
-                        refreshInterval === option.value ? (
-                          <CheckCircleIcon size={iconSize.control} />
-                        ) : null
+                        refreshInterval === option.value ? <CheckCircle size={14} /> : null
                       }
                     >
                       {option.label}
@@ -7369,7 +7353,7 @@ function DashboardContent({
                   <Button
                     variant="default"
                     size="xs"
-                    leftSection={<HumanWaitIcon size={iconSize.control} />}
+                    leftSection={<UserFocus size={14} />}
                     aria-label={`Signed in as ${auditActor}`}
                   >
                     {auditActor}
@@ -7400,9 +7384,9 @@ function DashboardContent({
               variant="light"
               leftSection={
                 loadState.status === "error" ? (
-                  <WarningIcon size={iconSize.inline} />
+                  <WarningCircle size={12} />
                 ) : (
-                  <CheckCircleIcon size={iconSize.inline} />
+                  <CheckCircle size={12} />
                 )
               }
               visibleFrom="xs"
@@ -7471,7 +7455,7 @@ function DashboardContent({
               href={mountedHref(basePath, "/events")}
               active={location.route === "/events"}
               label="Events"
-              leftSection={<LightningIcon size={iconSize.navigation} />}
+              leftSection={<Lightning size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/events")}
             />
@@ -7480,7 +7464,7 @@ function DashboardContent({
               href={mountedHref(basePath, "/cron")}
               active={location.route === "/cron"}
               label="Schedules"
-              leftSection={<CalendarIcon size={iconSize.navigation} />}
+              leftSection={<CalendarDots size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/cron")}
             />
@@ -7489,7 +7473,7 @@ function DashboardContent({
               href={mountedHref(basePath, "/queues")}
               active={location.route === "/queues"}
               label="Queues"
-              leftSection={<QueuedIcon size={iconSize.navigation} />}
+              leftSection={<ListDashes size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/queues")}
             />
@@ -7498,7 +7482,7 @@ function DashboardContent({
               href={mountedHref(basePath, "/system")}
               active={location.route === "/system"}
               label="System health"
-              leftSection={<ActivityIcon size={iconSize.navigation} />}
+              leftSection={<Pulse size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/system")}
             />
@@ -7507,7 +7491,7 @@ function DashboardContent({
               href={mountedHref(basePath, "/workers")}
               active={location.route === "/workers"}
               label="Workers"
-              leftSection={<WorkerIcon size={iconSize.navigation} />}
+              leftSection={<Robot size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/workers")}
             />
@@ -7516,7 +7500,7 @@ function DashboardContent({
               href={mountedHref(basePath, "/settings")}
               active={location.route === "/settings"}
               label="Settings"
-              leftSection={<SettingsIcon size={iconSize.navigation} />}
+              leftSection={<GearSix size={18} />}
               variant="light"
               onClick={(event) => handleLink(event, "/settings")}
             />
