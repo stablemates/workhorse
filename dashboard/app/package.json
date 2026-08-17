@@ -57,11 +57,12 @@
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "dependencies": {
+    "@hugeicons/core-free-icons": "^4.2.3",
+    "@hugeicons/react": "^1.1.9",
     "@mantine/charts": "^8.3.18",
     "@mantine/core": "^8.3.14",
     "@mantine/hooks": "^8.3.14",
     "@mantine/notifications": "^8.3.18",
-    "@phosphor-icons/react": "^2.1.10",
     "@workhorse/dashboard-server": "workspace:*",
     "recharts": "^3.10.1"
   },
