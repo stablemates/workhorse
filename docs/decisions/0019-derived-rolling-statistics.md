@@ -10,7 +10,7 @@ The operator dashboard auto-refreshes, and every time window on its system page 
 
 Each query was correct and each was proportional to throughput. Together they made observing the system most expensive exactly when the system was busiest, which is when an operator is most likely to be watching. On a busy queue a 24-hour window re-scanned millions of rows per refresh.
 
-TODO P2-10 had scoped a full long-horizon rollup — hourly and daily tiers, a retention ladder, benchmarks. That is the right eventual shape, but the dashboard needed the cost curve fixed before the tiering question was answered.
+[WOR-258](https://linear.app/workhorse-run/issue/WOR-258/p2-10-remainder-long-horizon-statistics-tiers-mergeable-percentiles) scopes the full long-horizon rollup — hourly and daily tiers, a retention ladder, and benchmarks. That is the right eventual shape, but the dashboard needed the cost curve fixed before the tiering question was answered.
 
 ## Decision
 
@@ -82,7 +82,7 @@ relation every operator window reads.
 
 ## Non-goals
 
-- Hourly and daily tiers. They remain in TODO P2-10; the minute tier is the substrate they would be derived from, and they are what would make long windows cheap without keeping minute resolution for months.
+- Hourly and daily tiers. They remain in [WOR-258](https://linear.app/workhorse-run/issue/WOR-258/p2-10-remainder-long-horizon-statistics-tiers-mergeable-percentiles); the minute tier is the substrate they would be derived from, and they are what would make long windows cheap without keeping minute resolution for months.
 - Approximate percentiles. Rejected once already, on the evidence above.
 - Worker and tag dimensions. Adding either changes the cardinality argument above and belongs in its own decision.
 - Moving the tasks-page activity chart onto these buckets. Its semantics are a live-state question — tasks whose `updated_at` fell in a bucket, filtered by current state — not an event count, and mapping it onto event buckets would silently change what the chart means. It was made cheap by starting from the tasks that changed inside the window instead.

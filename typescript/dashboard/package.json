@@ -6,6 +6,7 @@
   "bugs": {
     "url": "https://github.com/stablemates/workhorse/issues"
   },
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/stablemates/workhorse.git",
@@ -60,8 +61,8 @@
     "provenance": true
   },
   "scripts": {
-    "build": "rm -rf dist development && cp -R ../../dashboard/app/dist/library dist && mkdir -p development/browser && cp ../../dashboard/app/browser/index.html development/browser/index.html && cp -R ../../dashboard/app/src development/src && find dist -name '*.map' -delete && find development/src -name '*.test.*' -delete && sed -i.bak '/sourceMappingURL=.*\\.map$/d' dist/*.js dist/*.d.ts && find dist -name '*.bak' -delete",
-    "build:dev": "mkdir -p dist development/browser development/src && cp -R ../../dashboard/app/dist/library/. dist && cp ../../dashboard/app/browser/index.html development/browser/index.html && cp -R ../../dashboard/app/src/. development/src && find dist -name '*.map' -delete && find development/src -name '*.test.*' -delete && sed -i.bak '/sourceMappingURL=.*\\.map$/d' dist/*.js dist/*.d.ts && find dist -name '*.bak' -delete",
+    "build": "rm -rf dist development && cp -R ../../dashboard/app/dist/library dist && mkdir -p development/browser && cp ../../dashboard/app/browser/index.html development/browser/index.html && cp -R ../../dashboard/app/src development/src && find dist -name '*.map' -delete && find development/src -name '*.test.*' -delete && node ../../scripts/strip-source-map-comments.mjs dist",
+    "build:dev": "mkdir -p dist development/browser development/src && cp -R ../../dashboard/app/dist/library/. dist && cp ../../dashboard/app/browser/index.html development/browser/index.html && cp -R ../../dashboard/app/src/. development/src && find dist -name '*.map' -delete && find development/src -name '*.test.*' -delete && node ../../scripts/strip-source-map-comments.mjs dist",
     "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "dependencies": {

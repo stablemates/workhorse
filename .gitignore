@@ -13,7 +13,6 @@ coverage/
 /site/public/sitemap.xml
 .env
 .env.*
-!.beans/*
 !.env.example
 !**/.env.example
 *.tgz

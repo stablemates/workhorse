@@ -259,7 +259,7 @@ Two defects surfaced only under this benchmark, both fixed:
 ## Limits and open work
 
 - **Wait percentiles still read the event log.** They are the one system-page panel not served by rollups, and the most expensive query on the page at high throughput. Exact percentiles are not mergeable across buckets; the fix is a coarser tier, not an approximation.
-- **No worker or tag dimensions.** Both have cardinality bounded by data rather than by code, and tags are per-job arrays. The dashboard serves them from live queries; whether they belong in the rollup is tracked in TODO P2-10.
-- **One tier only.** Minute buckets, kept for a configurable window defaulting to 14 days. Hourly and daily tiers remain in TODO P2-10, and are what would let a long window stay cheap without keeping minute resolution for months.
+- **No worker or tag dimensions.** Both have cardinality bounded by data rather than by code, and tags are per-job arrays. The dashboard serves them from live queries; [WOR-258](https://linear.app/workhorse-run/issue/WOR-258/p2-10-remainder-long-horizon-statistics-tiers-mergeable-percentiles) tracks whether they belong in the rollup.
+- **One tier only.** Minute buckets, kept for a configurable window defaulting to 14 days. [WOR-258](https://linear.app/workhorse-run/issue/WOR-258/p2-10-remainder-long-horizon-statistics-tiers-mergeable-percentiles) tracks hourly and daily tiers, which would let a long window stay cheap without keeping minute resolution for months.
 - **Window edges are minute-granular.** A 15-minute window is 15 whole minutes, not 15 minutes to the microsecond.
 - **Schema baseline.** Rolling statistics are part of the current pre-release baseline described in [`schema-lifecycle.md`](schema-lifecycle.md).

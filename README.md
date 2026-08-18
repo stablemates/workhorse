@@ -37,6 +37,10 @@ pnpm docs:dev
 
 The site listens on `http://localhost:3000`. Run `pnpm demo` separately when you also want the live operator demo; set `NEXT_PUBLIC_WORKHORSE_DEMO_URL` for a custom demo origin.
 
+## License
+
+Workhorse is available under the [MIT License](LICENSE).
+
 ## Included scope
 
 - enqueue inside an existing `pg` transaction;
