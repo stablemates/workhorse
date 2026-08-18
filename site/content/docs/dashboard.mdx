@@ -55,6 +55,34 @@ unrelated routes. On every owned request, the host checks schema compatibility a
 clear error rather than serving against a mismatched database. It never installs or migrates
 anything.
 
+## Serve several databases as workspaces
+
+One dashboard can serve several Workhorse databases as named workspaces, switchable from the
+header. Configure `workspaces` instead of `database`; each entry owns its connection and may
+override `environment`, `operator`, and the controllers, falling back to the host-level options:
+
+```ts
+const host = createDashboardHost({
+  path: "/workhorse",
+  workspaces: {
+    production: { database: productionPool, environment: "production" },
+    staging: { database: stagingPool, environment: "staging" },
+  },
+  defaultWorkspace: "production",
+  authorize: (request, workspace) => isOperator(request, workspace),
+});
+```
+
+Each workspace lives under its own path — `/workhorse/production`, `/workhorse/staging` — so
+links deep into one workspace stay shareable and two browser tabs can watch two workspaces. The
+`authorize` callback receives the resolved workspace name, letting the application grant access
+per workspace. The host still never owns pool sizing, shutdown, or credentials for any of the
+connections.
+
+The standalone CLI serves workspaces too: repeat `--workspace name=url`, or point `--config` at a
+JSON file whose entries name a `url` directly or a `urlEnv` environment variable that keeps
+credentials out of the file.
+
 ## Choose the authentication boundary
 
 An embedded dashboard uses your application's authentication through `authorize`. The callback

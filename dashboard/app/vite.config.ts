@@ -46,6 +46,8 @@ export default defineConfig({
               auditActor,
               authentication: null,
               demoTools,
+              workspaces: [],
+              workspace: null,
             },
             browserModules: [`/@fs/${reactGrabEntry}`],
           });

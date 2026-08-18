@@ -42,6 +42,10 @@ const host = createDashboardHost({
 });
 ```
 
+If the host serves several workspaces, `authorize` also receives the name of the workspace the
+request resolved to. An application can therefore grant an operator one workspace without granting
+every workspace the same host serves.
+
 The browser still sends actor text as part of the dashboard wire contract, but the server discards
 it for mutations. A built-in session supplies its configured username. An embedded host supplies
 the principal returned by `authorize`, or its server-configured `auditActor` for a boolean result.

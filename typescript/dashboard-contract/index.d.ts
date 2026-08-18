@@ -35,6 +35,19 @@ export interface RunningDashboard {
 }
 
 /**
+ * The databases a standalone dashboard serves: one anonymous database, or named workspaces the
+ * served application can switch between. A workspace map is distinguished from a bare database
+ * capability by its `workspaces` key, which no database driver exposes.
+ */
+export type DashboardStandaloneTarget<Database> =
+  | Database
+  | {
+      workspaces: Readonly<Record<string, Database>>;
+      /** Workspace served at the root path. Defaults to the first configured workspace. */
+      defaultWorkspace?: string;
+    };
+
+/**
  * The dashboard package entry point loaded by `workhorse dashboard`.
  *
  * The dependency-free interface lets core and dashboard compile against one definition without
@@ -43,7 +56,7 @@ export interface RunningDashboard {
  */
 export interface DashboardStandaloneModule<Database> {
   startDashboardServer(
-    database: Database,
+    database: DashboardStandaloneTarget<Database>,
     options: DashboardCommandOptions,
   ): Promise<RunningDashboard>;
 }

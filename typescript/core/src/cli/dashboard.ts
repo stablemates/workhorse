@@ -1,6 +1,7 @@
 import type {
   DashboardCommandOptions,
   DashboardStandaloneModule,
+  DashboardStandaloneTarget,
   RunningDashboard,
 } from "@workhorse/dashboard-contract";
 import type { Pool } from "pg";
@@ -36,7 +37,7 @@ async function loadDashboard(): Promise<DashboardStandaloneModule<Pool>> {
 
 /** Serve the optional dashboard package while leaving the database connection owned by the CLI. */
 export async function startDashboardServer(
-  database: Pool,
+  database: DashboardStandaloneTarget<Pool>,
   options: DashboardCommandOptions,
 ): Promise<RunningDashboard> {
   const dashboard = await loadDashboard();

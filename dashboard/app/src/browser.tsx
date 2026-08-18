@@ -4,6 +4,7 @@ import { Dashboard } from "./dashboard.js";
 import {
   createDashboardClient,
   type DashboardAuthenticationRoutes,
+  type DashboardWorkspaceLink,
 } from "@workhorse/dashboard-server/client";
 // oxlint-disable-next-line import/no-unassigned-import -- Browser entrypoint owns the complete package stylesheet.
 import "./styles.css";
@@ -15,6 +16,8 @@ export interface WorkhorseDashboardRuntimeConfig {
   auditActor: string;
   authentication: DashboardAuthenticationRoutes | null;
   demoTools?: boolean;
+  workspaces?: readonly DashboardWorkspaceLink[];
+  workspace?: string | null;
 }
 
 declare global {
@@ -40,6 +43,8 @@ createRoot(document.getElementById("root")!).render(
         demoTools={
           config.demoTools && client.enqueueTest ? { enqueueTest: client.enqueueTest } : undefined
         }
+        workspaces={config.workspaces}
+        workspace={config.workspace}
       />
     </WorkhorseThemeProvider>
   </StrictMode>,

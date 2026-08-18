@@ -4,7 +4,7 @@ import type { RouterClient } from "@orpc/server";
 import type { DashboardClient } from "./client.js";
 import type { DashboardRouter } from "./server/router.js";
 
-export type { DashboardAuthenticationRoutes } from "./runtime-config.js";
+export type { DashboardAuthenticationRoutes, DashboardWorkspaceLink } from "./runtime-config.js";
 
 export interface DashboardClientOptions {
   /** Mounted login URL for built-in authentication. Omit for host-owned authorization. */

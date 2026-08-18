@@ -277,10 +277,11 @@ afterAll(async () => {
 
 function dashboardClient(
   app: ReturnType<typeof createDemoApplication>["app"],
+  rpcPath = "/rpc",
 ): RouterClient<DashboardRouter> {
   return createORPCClient(
     new RPCLink({
-      url: "http://demo.test/rpc",
+      url: `http://demo.test${rpcPath}`,
       fetch: (request) => {
         const forwarded = new Request(request, { headers: new Headers(request.headers) });
         forwarded.headers.set("origin", "http://demo.test");
@@ -303,6 +304,33 @@ it("loads the settings dashboard route and its read model", async () => {
     editable: true,
     maintenance: { timezone: "UTC" },
     workers: [],
+  });
+});
+
+it("serves two switchable workspaces when a staging database is configured", async () => {
+  // Routing is what this test asserts, so production and staging may share the test database.
+  const { app } = createTestApplication({ workers: false, stagingDatabase: database });
+
+  const redirect = await app.request("/");
+  expect(redirect.status).toBe(302);
+  expect(redirect.headers.get("location")).toBe("/production/tasks");
+
+  const page = await app.request("/production/tasks");
+  expect(page.status).toBe(200);
+  const html = await page.text();
+  expect(html).toContain('"workspace":"production"');
+  expect(html).toContain(
+    '"workspaces":[{"name":"production","url":"/production"},{"name":"staging","url":"/staging"}]',
+  );
+
+  // The single-workspace URL space no longer exists once workspaces are configured.
+  expect((await app.request("/tasks")).status).toBe(404);
+
+  await expect(dashboardClient(app, "/staging/rpc").dashboard.meta()).resolves.toMatchObject({
+    environment: "staging",
+  });
+  await expect(dashboardClient(app, "/production/rpc").dashboard.meta()).resolves.toMatchObject({
+    environment: "development",
   });
 });
 

@@ -5,8 +5,17 @@ export {
   DASHBOARD_RUNTIME_CONFIG_PLACEHOLDER,
   renderDashboardHtml,
 } from "./html.js";
-export type { DashboardRuntimeConfig, RenderDashboardHtmlOptions } from "./html.js";
-export type { DashboardHost, DashboardHostOptions, DashboardPrincipal } from "./host.js";
+export type {
+  DashboardRuntimeConfig,
+  DashboardWorkspaceLink,
+  RenderDashboardHtmlOptions,
+} from "./html.js";
+export type {
+  DashboardHost,
+  DashboardHostOptions,
+  DashboardPrincipal,
+  DashboardWorkspaceOptions,
+} from "./host.js";
 export type { DashboardSingleAdminOptions } from "@workhorse/dashboard-contract";
 export { dashboardNodeMiddleware, normalizeDashboardPublicOrigin } from "./node.js";
 export type { DashboardNodeMiddlewareOptions } from "./node.js";

@@ -1,4 +1,4 @@
-import type { DashboardAuthenticationRoutes } from "../runtime-config.js";
+import type { DashboardAuthenticationRoutes, DashboardWorkspaceLink } from "../runtime-config.js";
 
 /**
  * Runtime configuration handed to the dashboard's browser entry.
@@ -15,7 +15,16 @@ export interface DashboardRuntimeConfig {
   authentication: DashboardAuthenticationRoutes | null;
   /** Enables the job-seeding menu. Only hosts that intentionally supply fixtures should set it. */
   demoTools: boolean;
+  /**
+   * Every named workspace the host serves, in configuration order. Empty when the host serves one
+   * unnamed database, which is the single-workspace mode that predates workspaces.
+   */
+  workspaces: readonly DashboardWorkspaceLink[];
+  /** Name of the workspace this document was rendered for. Null in single-workspace mode. */
+  workspace: string | null;
 }
+
+export type { DashboardWorkspaceLink } from "../runtime-config.js";
 
 export interface RenderDashboardHtmlOptions {
   runtime: DashboardRuntimeConfig;

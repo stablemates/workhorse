@@ -50,15 +50,21 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
         "An authenticated remote dashboard requires an explicit HTTPS public origin",
       );
     }
-    const queue = new Queue(database);
-    const controls = options.allowMutations
-      ? createDashboardOperatorControllers({
-          run: (_action, operation) => operation(queue),
-        })
-      : { operator: { mode: "read-only" as const } };
+    // Each database gets its own Queue so mutations in one workspace can never reach another.
+    const workspaceControls = (workspaceDatabase: Queryable) => {
+      const queue = new Queue(workspaceDatabase);
+      return options.allowMutations
+        ? createDashboardOperatorControllers({
+            run: (_action, operation) => operation(queue),
+          })
+        : { operator: { mode: "read-only" as const } };
+    };
+    const workspaceTarget =
+      typeof database === "object" && database !== null && "workspaces" in database
+        ? database
+        : undefined;
 
     const host = createDashboardHost({
-      database,
       path: "/",
       environment: "standalone",
       auditActor: options.actor,
@@ -69,7 +75,17 @@ export const startDashboardServer: DashboardStandaloneModule<Queryable>["startDa
             // it on loopback unless an operator deliberately widens the listener.
             authorize: () => true,
           }),
-      ...controls,
+      ...(workspaceTarget
+        ? {
+            workspaces: Object.fromEntries(
+              Object.entries(workspaceTarget.workspaces).map(([name, workspaceDatabase]) => [
+                name,
+                { database: workspaceDatabase, ...workspaceControls(workspaceDatabase) },
+              ]),
+            ),
+            defaultWorkspace: workspaceTarget.defaultWorkspace,
+          }
+        : { database: database as Queryable, ...workspaceControls(database as Queryable) }),
     });
 
     const middleware = dashboardNodeMiddleware(host, { publicOrigin });

@@ -86,9 +86,18 @@ Besides RPC, a backend serves three surfaces under `{basePath}`:
 - Every other owned path answers the bundle's `index.html` with two placeholders filled
   (`renderDashboardHtml` in `typescript/dashboard-server/src/server/html.ts`): the runtime
   configuration script `window.workhorseDashboard = { basePath, rpcUrl, auditActor,
-authentication, demoTools }` (`DashboardRuntimeConfig`), and optional host-owned module tags.
-  `authentication` is null when the host owns authorization; otherwise it names the mounted
-  `loginUrl` and `logoutUrl`, and the application redirects there when RPC answers 401.
+authentication, demoTools, workspaces, workspace }` (`DashboardRuntimeConfig`), and optional
+  host-owned module tags. `authentication` is null when the host owns authorization; otherwise it
+  names the mounted `loginUrl` and `logoutUrl`, and the application redirects there when RPC
+  answers 401.
+
+A backend configured with named workspaces serves each one as its own instance of this contract:
+`{basePath}` above is then the workspace mount `{path}/{workspace}` (`DashboardHostOptions.workspaces`
+in `typescript/dashboard-server/src/server/host.ts`), the mount path itself answers a 302 redirect
+to the default workspace's `/tasks`, and a first path segment naming no workspace answers 404 with
+`{ "error": "Unknown dashboard workspace" }`. The runtime configuration's `workspaces` array lists
+every `{ name, url }` pair and `workspace` names the one being served; both are empty (`[]` and
+`null`) in single-workspace mode.
 
 Reads behind these procedures go through the versioned `dashboard_*_v1` SQL views and mutations
 go through the shared versioned SQL functions, so a backend implements transport, sessions, and

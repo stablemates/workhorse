@@ -121,6 +121,13 @@ export interface CreateDemoApplicationOptions {
    * default open access. Supplied by the entry point when the operator credentials are configured.
    */
   singleAdmin?: DashboardSingleAdminOptions;
+  /**
+   * Serve a second, read-only "staging" workspace from this database, next to the busy
+   * "production" workspace, so the dashboard's workspace switcher is demonstrable. The entry
+   * point supplies it only when a staging database is provisioned; without it the demo serves the
+   * familiar single-workspace dashboard at the same URLs it always had.
+   */
+  stagingDatabase?: DemoDatabase;
 }
 
 export interface AuditContext {
@@ -1071,20 +1078,43 @@ export function createDemoApplication(
   const app = new Hono();
 
   if (options.dashboard !== false) {
-    const dashboard = createDashboardHost({
-      path: "/",
+    const production = {
       database: adapter.database,
-      // Open access is the local default; configured credentials switch the host to the packaged
-      // single-administrator login so the authentication flow itself is demonstrable.
-      ...(options.singleAdmin ? { singleAdmin: options.singleAdmin } : { authorize: () => true }),
       environment,
-      maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs },
       operator: options.operator ?? createReadOnlyOperator(),
       scheduleController: options.scheduleController,
       queueController: options.queueController,
       taskController,
       workerController,
       settingsController,
+    };
+    const stagingAdapter = options.stagingDatabase
+      ? createDrizzleAdapter(options.stagingDatabase, {
+          defaultQueue: DEMO_QUEUE,
+          queueOptions: DEMO_QUEUE_OPTIONS,
+        })
+      : undefined;
+    const dashboard = createDashboardHost({
+      path: "/",
+      // Open access is the local default; configured credentials switch the host to the packaged
+      // single-administrator login so the authentication flow itself is demonstrable.
+      ...(options.singleAdmin ? { singleAdmin: options.singleAdmin } : { authorize: () => true }),
+      ...(stagingAdapter
+        ? {
+            workspaces: {
+              production,
+              // Staging stays read-only with no controllers: the switcher should show a visibly
+              // different workspace, and a quiet seeded database is the demonstration.
+              staging: {
+                database: stagingAdapter.database,
+                environment: "staging",
+                operator: createReadOnlyOperator(),
+              },
+            },
+            defaultWorkspace: "production",
+          }
+        : production),
+      maintenanceLoops: { tickIntervalMs: maintenanceIntervalMs },
       projectDurability: durableDemoPlanForJob,
       auditActor: "local-demo",
       dev: options.dev,

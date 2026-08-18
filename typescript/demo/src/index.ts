@@ -42,11 +42,24 @@ const port = Number(process.env.PORT ?? 3000);
 const environment = process.env.WORKHORSE_ENV ?? mode;
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 
+// A provisioned staging database turns the dashboard into two switchable workspaces: the busy
+// worker-driven "production" one, and a quiet seeded "staging" one that no worker ever touches.
+// Without the variable the demo keeps its familiar single-workspace URLs.
+const stagingDatabaseUrl = process.env.WORKHORSE_DEMO_STAGING_DATABASE_URL;
+const stagingPool = stagingDatabaseUrl
+  ? new Pool({ connectionString: stagingDatabaseUrl, max: 3 })
+  : undefined;
+
 const database = createDemoDatabase(pool);
+const stagingDatabase = stagingPool ? createDemoDatabase(stagingPool) : undefined;
 const localOperatorControllers = createLocalOperatorControllers(database);
 
 await installSchema(pool);
 await installDemoSchema(database);
+if (stagingPool && stagingDatabase) {
+  await installSchema(stagingPool);
+  await installDemoSchema(stagingDatabase);
+}
 await syncDemoSchedules(pool);
 await syncDemoConcurrencyPolicies(pool);
 await syncDemoRateLimitPolicies(pool);
@@ -86,6 +99,7 @@ const { app } = createDemoApplication(database, {
   ...(adminUsername && adminPasswordHash
     ? { singleAdmin: { username: adminUsername, passwordHash: adminPasswordHash } }
     : {}),
+  stagingDatabase,
 });
 const metricsObserver = startDemoMetricsObserver(pool);
 if (process.env.SEED_DEMO_DATA !== "false") {
@@ -98,6 +112,17 @@ if (process.env.SEED_DEMO_DATA !== "false") {
       "workhorse.demo.historical_job_count": seed.historicalJobCount,
     },
   );
+  if (stagingDatabase) {
+    // Staging gets the same seed but no schedules, policies, or workers, so it stays a readable
+    // snapshot instead of a second live system.
+    const stagingSeed = await seedDemoData(stagingDatabase);
+    demoLogger.info(
+      stagingSeed.seeded ? "workhorse.demo.staging_seeded" : "workhorse.demo.staging_seed_reused",
+      stagingSeed.seeded
+        ? "Seeded staging workspace data"
+        : "Staging workspace data already exists",
+    );
+  }
 }
 const application = getRequestListener(app.fetch);
 const server = createServer((request, response) => {
@@ -140,7 +165,7 @@ async function shutdown(signal: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-  await Promise.all([pool.end(), dashboardDev?.close()]);
+  await Promise.all([pool.end(), stagingPool?.end(), dashboardDev?.close()]);
   demoLogger.info("workhorse.demo.shutdown_completed", "Demo shutdown completed");
 }
 

@@ -37,6 +37,7 @@ import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import {
   ArrowCounterClockwise,
   ArrowClockwise,
+  Buildings,
   CalendarDots,
   CheckCircle,
   Clock,
@@ -124,7 +125,11 @@ import type {
   DashboardSettingsPage,
 } from "@workhorse/dashboard-server/wire";
 import type { TaskRowActionCapabilities, TaskRowActionId } from "./presentation.js";
-import type { DashboardClient, DashboardDemoTools } from "@workhorse/dashboard-server";
+import type {
+  DashboardClient,
+  DashboardDemoTools,
+  DashboardWorkspaceLink,
+} from "@workhorse/dashboard-server";
 import { requestRunNow, type RunNowFeedback } from "./run-now.js";
 import { notifyCancel, notifyDashboard, notifyFailure, notifyRunNow } from "./notifications.js";
 import { WorkhorseBrand } from "./brand.js";
@@ -7167,15 +7172,59 @@ function useDashboardController(
   };
 }
 
+/** Header control that switches between the host's workspaces. Renders nothing with one. */
+export function DashboardWorkspaceSwitcher({
+  workspaces,
+  workspace,
+}: {
+  workspaces: readonly DashboardWorkspaceLink[];
+  workspace: string | null;
+}) {
+  if (workspaces.length < 2 || !workspace) return null;
+  return (
+    <Menu position="bottom-end" withinPortal>
+      <Menu.Target>
+        <Button
+          variant="default"
+          size="xs"
+          leftSection={<Buildings size={14} />}
+          aria-label={`Workspace ${workspace}`}
+        >
+          {workspace}
+        </Button>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Label>Workspaces</Menu.Label>
+        {workspaces.map((entry) => (
+          // A plain link on purpose: each workspace is its own document with its own runtime
+          // configuration, so switching is a navigation, not a state change.
+          <Menu.Item
+            key={entry.name}
+            component="a"
+            href={`${entry.url}/tasks`}
+            disabled={entry.name === workspace}
+          >
+            {entry.name}
+          </Menu.Item>
+        ))}
+      </Menu.Dropdown>
+    </Menu>
+  );
+}
+
 function DashboardContent({
   auditActor,
   logoutUrl,
   demoTools,
   basePath,
+  workspaces,
+  workspace,
 }: Required<Pick<DashboardProps, "auditActor">> & {
   logoutUrl: string | null;
   demoTools: DashboardDemoTools | null;
   basePath: string;
+  workspaces: readonly DashboardWorkspaceLink[];
+  workspace: string | null;
 }) {
   useDashboardWindowActivityRefreshBlocker();
   const controller = useDashboardController(auditActor, demoTools, basePath);
@@ -7375,6 +7424,7 @@ function DashboardContent({
                 </Menu.Dropdown>
               </Menu>
             ) : null}
+            <DashboardWorkspaceSwitcher workspaces={workspaces} workspace={workspace} />
             {environment ? (
               <Badge
                 color={environmentColor(environment)}
@@ -7708,6 +7758,10 @@ export interface DashboardProps {
   basePath?: string;
   /** Built-in authentication logout URL. Omit when the embedding host owns authorization. */
   logoutUrl?: string;
+  /** Every workspace the host serves. Omit in single-workspace mode. */
+  workspaces?: readonly DashboardWorkspaceLink[];
+  /** Workspace this document was rendered for. Omit in single-workspace mode. */
+  workspace?: string | null;
 }
 
 export function Dashboard({
@@ -7716,6 +7770,8 @@ export function Dashboard({
   demoTools = undefined,
   basePath: basePathInput = "",
   logoutUrl = undefined,
+  workspaces = [],
+  workspace = null,
 }: DashboardProps) {
   const basePath = normalizeBasePath(basePathInput);
   return (
@@ -7727,6 +7783,8 @@ export function Dashboard({
             logoutUrl={logoutUrl ?? null}
             demoTools={demoTools ?? null}
             basePath={basePath}
+            workspaces={workspaces}
+            workspace={workspace}
           />
         </DropdownActivityProvider>
       </RefreshBlockerProvider>

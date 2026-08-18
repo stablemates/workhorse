@@ -88,6 +88,10 @@ try {
       ...process.env,
       PORT: String(port),
       DATABASE_URL: demoDatabaseUrl,
+      // The smoke test asserts the documented single-workspace URLs, so a provisioned staging
+      // workspace database in the ambient environment must not switch the demo into multi-workspace
+      // mode here. The empty string means "not configured".
+      WORKHORSE_DEMO_STAGING_DATABASE_URL: "",
       WORKHORSE_DISABLE_PORTLESS: "1",
       WORKHORSE_WORKER_POLL_MS: "15",
     },

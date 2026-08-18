@@ -1,5 +1,5 @@
 /** Local database roles used by repository tooling. Application code may still use DATABASE_URL. */
-export type LocalDatabasePurpose = "dev" | "test" | "bench" | "demo";
+export type LocalDatabasePurpose = "dev" | "test" | "bench" | "demo" | "demo_staging";
 
 const POSTGRES_IDENTIFIER_LIMIT = 63;
 
@@ -33,6 +33,11 @@ const localDatabaseDefinitions: Record<LocalDatabasePurpose, LocalDatabaseDefini
     suffix: "_demo",
     defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_demo",
   },
+  demo_staging: {
+    environmentVariable: "WORKHORSE_DEMO_STAGING_DATABASE_URL",
+    suffix: "_demo_staging",
+    defaultUrl: "postgres://workhorse:workhorse@localhost:5432/workhorse_demo_staging",
+  },
 };
 
 export const localDatabasePurposes: readonly LocalDatabasePurpose[] = [
@@ -40,6 +45,7 @@ export const localDatabasePurposes: readonly LocalDatabasePurpose[] = [
   "test",
   "bench",
   "demo",
+  "demo_staging",
 ];
 
 /** Name the environment override dedicated to a role, so tooling never hardcodes the string. */
@@ -103,7 +109,7 @@ export function worktreeDatabaseUrl(
 }
 
 export function isLocalDatabasePurpose(value: string): value is LocalDatabasePurpose {
-  return value === "dev" || value === "test" || value === "bench" || value === "demo";
+  return (localDatabasePurposes as readonly string[]).includes(value);
 }
 
 function normalizeIdentifier(value: string): string {

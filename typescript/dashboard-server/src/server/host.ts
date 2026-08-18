@@ -29,8 +29,24 @@ export interface DashboardHostOptions {
    * that already has a connection. Accepting a `Queryable` also keeps the package driver-agnostic
    * and free of a `pg` dependency, and works for deployments that have no URL at all, such as IAM
    * token auth, unix sockets, or dynamically issued credentials.
+   *
+   * Configure exactly one of `database` and `workspaces`. `database` is single-workspace mode: the
+   * dashboard serves one unnamed database directly under `path`, exactly as it did before
+   * workspaces existed.
    */
-  database: Queryable;
+  database?: Queryable;
+  /**
+   * Named workspaces, each backed by its own database, switchable in the served application.
+   *
+   * Every workspace mounts under its own path segment: `${path}/${name}` serves the application
+   * and `${path}/${name}/rpc` its endpoint, while `path` itself redirects to `defaultWorkspace`.
+   * Workspace values carry the same `Queryable` contract as `database`; the host still never owns
+   * pool sizing, shutdown ordering, reconnection, or TLS. Host-level controller, environment, and
+   * cadence options act as defaults that each workspace may override.
+   */
+  workspaces?: Readonly<Record<string, DashboardWorkspaceOptions>>;
+  /** Workspace served at `path`. Defaults to the first configured workspace. */
+  defaultWorkspace?: string;
   /** URL mount path. Defaults to `/workhorse`; use `/` to own the host root. */
   path?: string;
   environment?: string;
@@ -57,12 +73,35 @@ export interface DashboardHostOptions {
     readTemplate(): Promise<string>;
     transformHtml(url: string, html: string): Promise<string>;
   };
-  /** Must explicitly authorize every dashboard, RPC, and asset request. */
+  /**
+   * Must explicitly authorize every dashboard, RPC, and asset request.
+   *
+   * `workspace` is the workspace the request resolved to, so an embedding application can grant
+   * access per workspace. It is null in single-workspace mode and for requests outside any
+   * workspace, such as the redirect from `path` to the default workspace.
+   */
   authorize?: (
     request: Request,
+    workspace: string | null,
   ) => boolean | DashboardPrincipal | Response | Promise<boolean | DashboardPrincipal | Response>;
   /** Standalone single-administrator credentials. Mutually exclusive with `authorize`. */
   singleAdmin?: DashboardSingleAdminOptions;
+}
+
+/** One named workspace served by a dashboard host. See `DashboardHostOptions.workspaces`. */
+export interface DashboardWorkspaceOptions {
+  /** This workspace's connection, under the same ownership contract as `DashboardHostOptions.database`. */
+  database: Queryable;
+  environment?: string;
+  configuredWorkers?: readonly string[];
+  maintenanceLoops?: MaintenanceLoopCadences;
+  operator?: DashboardOperator;
+  scheduleController?: DashboardScheduleController;
+  queueController?: DashboardQueueController;
+  taskController?: DashboardTaskController;
+  workerController?: DashboardWorkerController;
+  settingsController?: DashboardSettingsController;
+  projectDurability?: DashboardDurabilityProjector;
 }
 
 /** Identity established by the embedded application's server-side authorization boundary. */
@@ -83,6 +122,31 @@ export interface DashboardHost {
 export function normalizeDashboardPath(input: string): string {
   const path = `/${input}`.replaceAll(/\/+/g, "/").replace(/\/$/, "");
   return path === "/" ? "" : path;
+}
+
+/** Path segments the host routes itself, which a workspace name must therefore never shadow. */
+const RESERVED_WORKSPACE_NAMES = new Set(["rpc", "assets", "login", "logout"]);
+
+const WORKSPACE_NAME = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/i;
+
+/** A resolved workspace with its own connection, queue, and request context. */
+interface HostWorkspace {
+  name: string | null;
+  basePath: string;
+  queryable: Queryable;
+  database: ReturnType<typeof dashboardDatabase>;
+  queue: Queue;
+  environment: string;
+  configuredWorkers: readonly string[];
+  maintenanceLoops: MaintenanceLoopCadences;
+  operator: DashboardOperator;
+  scheduleController?: DashboardScheduleController;
+  queueController?: DashboardQueueController;
+  taskController?: DashboardTaskController;
+  workerController?: DashboardWorkerController;
+  settingsController?: DashboardSettingsController;
+  projectDurability?: DashboardDurabilityProjector;
+  compatibility?: Promise<void>;
 }
 
 const contentTypes: Readonly<Record<string, string>> = {
@@ -164,34 +228,84 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
   if (Boolean(options.authorize) === Boolean(options.singleAdmin)) {
     throw new TypeError("Configure exactly one dashboard authorization mode");
   }
+  if (Boolean(options.database) === Boolean(options.workspaces)) {
+    throw new TypeError("Configure exactly one of a dashboard database or dashboard workspaces");
+  }
   const path = normalizeDashboardPath(options.path ?? "/workhorse");
   const singleAdmin = options.singleAdmin
     ? createSingleAdminAuthentication(options.singleAdmin)
     : undefined;
   const assets = dashboardAssetsDirectory();
   const rpc = new RPCHandler(dashboardRouter);
-  const database = dashboardDatabase(options.database);
-  // The read model needs a Queue only for `health()`, which reads through the same connection and
-  // does not depend on a default queue name, so there is nothing for a caller to supply here.
-  const queue = new Queue(options.database);
-  let compatibility: Promise<void> | undefined;
+
+  const resolveWorkspace = (
+    name: string | null,
+    workspace: DashboardWorkspaceOptions,
+  ): HostWorkspace => ({
+    name,
+    basePath: name === null ? path : `${path}/${name}`,
+    queryable: workspace.database,
+    database: dashboardDatabase(workspace.database),
+    // The read model needs a Queue only for `health()`, which reads through the same connection
+    // and does not depend on a default queue name, so there is nothing for a caller to supply.
+    queue: new Queue(workspace.database),
+    environment: workspace.environment ?? options.environment ?? "unknown",
+    configuredWorkers: workspace.configuredWorkers ?? options.configuredWorkers ?? [],
+    maintenanceLoops: workspace.maintenanceLoops ??
+      options.maintenanceLoops ?? { tickIntervalMs: 1_000 },
+    operator: workspace.operator ?? options.operator ?? { mode: "read-only" },
+    scheduleController: workspace.scheduleController ?? options.scheduleController,
+    queueController: workspace.queueController ?? options.queueController,
+    taskController: workspace.taskController ?? options.taskController,
+    workerController: workspace.workerController ?? options.workerController,
+    settingsController: workspace.settingsController ?? options.settingsController,
+    projectDurability: workspace.projectDurability ?? options.projectDurability,
+  });
+
+  const workspaces = new Map<string, HostWorkspace>();
+  for (const [name, workspace] of Object.entries(options.workspaces ?? {})) {
+    if (!WORKSPACE_NAME.test(name) || RESERVED_WORKSPACE_NAMES.has(name.toLowerCase())) {
+      throw new TypeError(`Invalid dashboard workspace name: ${JSON.stringify(name)}`);
+    }
+    workspaces.set(name, resolveWorkspace(name, workspace));
+  }
+  if (options.workspaces && workspaces.size === 0) {
+    throw new TypeError("Configure at least one dashboard workspace");
+  }
+  const defaultWorkspaceName = options.defaultWorkspace ?? workspaces.keys().next().value ?? "";
+  if (workspaces.size > 0 && !workspaces.has(defaultWorkspaceName)) {
+    throw new TypeError(`Unknown default dashboard workspace: ${String(options.defaultWorkspace)}`);
+  }
+  const single = options.database
+    ? resolveWorkspace(null, { ...options, database: options.database })
+    : undefined;
+  const workspaceLinks = [...workspaces.values()].map((workspace) => ({
+    name: workspace.name as string,
+    url: workspace.basePath,
+  }));
 
   const owns = (pathname: string): boolean =>
     path === "" || pathname === path || pathname.startsWith(`${path}/`);
 
-  async function serveApplication(url: URL, authenticatedActor: string): Promise<Response> {
+  async function serveApplication(
+    url: URL,
+    authenticatedActor: string,
+    workspace: HostWorkspace,
+  ): Promise<Response> {
     const template = options.dev
       ? await options.dev.readTemplate()
       : await readFile(join(assets, "index.html"), "utf8");
     const rendered = renderDashboardHtml(template, {
       runtime: {
-        basePath: path,
-        rpcUrl: `${path}/rpc`,
+        basePath: workspace.basePath,
+        rpcUrl: `${workspace.basePath}/rpc`,
         auditActor: authenticatedActor,
         authentication: singleAdmin
           ? { loginUrl: `${path}/login`, logoutUrl: `${path}/logout` }
           : null,
-        demoTools: Boolean(options.operator?.enqueueTest),
+        demoTools: Boolean(workspace.operator.enqueueTest),
+        workspaces: workspaceLinks,
+        workspace: workspace.name,
       },
       browserModules: options.browserModules,
     });
@@ -201,8 +315,8 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     });
   }
 
-  async function serveAsset(pathname: string): Promise<Response | null> {
-    const relative = pathname.slice(`${path}/`.length);
+  async function serveAsset(pathname: string, basePath: string): Promise<Response | null> {
+    const relative = pathname.slice(`${basePath}/`.length);
     const safe = normalize(relative).replaceAll("\\", "/");
     if (!safe.startsWith("assets/") || safe.includes("../")) return null;
     try {
@@ -235,8 +349,16 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
       );
       if (authenticationResponse) return authenticationResponse;
 
+      // Workspace resolution is pure path parsing, so it happens before authorization to give the
+      // authorize callback the workspace name; it must never read from a database.
+      let workspace = single;
+      if (!workspace) {
+        const segment = pathname.slice(path.length).split("/")[1] ?? "";
+        workspace = workspaces.get(segment);
+      }
+
       const authorization = options.authorize
-        ? await options.authorize(request)
+        ? await options.authorize(request, workspace?.name ?? null)
         : (singleAdmin?.authorize(request, path) ?? false);
       if (authorization instanceof Response) return authorization;
       if (!authorization) {
@@ -247,19 +369,32 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
           ? authorization.actor
           : (options.auditActor ?? "dashboard");
 
-      compatibility ??= assertSchemaCompatible(options.database);
+      if (!workspace) {
+        if (pathname === (path || "/") || pathname === `${path}/`) {
+          // A relative Location keeps the redirect correct behind proxies that rewrite the host
+          // or terminate TLS, which an absolute URL built from the inbound request would not.
+          return new Response(null, {
+            status: 302,
+            headers: { location: `${path}/${defaultWorkspaceName}/tasks` },
+          });
+        }
+        return Response.json({ error: "Unknown dashboard workspace" }, { status: 404 });
+      }
+      const basePath = workspace.basePath;
+
+      workspace.compatibility ??= assertSchemaCompatible(workspace.queryable);
       try {
-        await compatibility;
+        await workspace.compatibility;
       } catch (error) {
-        compatibility = undefined;
+        workspace.compatibility = undefined;
         return Response.json(
           { error: error instanceof Error ? error.message : "Incompatible Workhorse schema" },
           { status: 503 },
         );
       }
 
-      if (pathname === `${path}/rpc` || pathname.startsWith(`${path}/rpc/`)) {
-        const rpcPrefix = `${path}/rpc`;
+      if (pathname === `${basePath}/rpc` || pathname.startsWith(`${basePath}/rpc/`)) {
+        const rpcPrefix = `${basePath}/rpc`;
         const procedure = rpcProcedure(pathname, rpcPrefix);
         if (isDashboardMutation(procedure)) {
           const rejection = rejectCrossOriginMutation(request);
@@ -269,18 +404,18 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         const { response } = await rpc.handle(request, {
           prefix: rpcPrefix as `/${string}`,
           context: {
-            database,
-            queue,
-            configuredWorkers: options.configuredWorkers ?? [],
-            environment: options.environment ?? "unknown",
-            maintenanceLoops: options.maintenanceLoops ?? { tickIntervalMs: 1_000 },
-            operator: options.operator ?? { mode: "read-only" },
-            scheduleController: options.scheduleController,
-            queueController: options.queueController,
-            taskController: options.taskController,
-            workerController: options.workerController,
-            settingsController: options.settingsController,
-            projectDurability: options.projectDurability,
+            database: workspace.database,
+            queue: workspace.queue,
+            configuredWorkers: workspace.configuredWorkers,
+            environment: workspace.environment,
+            maintenanceLoops: workspace.maintenanceLoops,
+            operator: workspace.operator,
+            scheduleController: workspace.scheduleController,
+            queueController: workspace.queueController,
+            taskController: workspace.taskController,
+            workerController: workspace.workerController,
+            settingsController: workspace.settingsController,
+            projectDurability: workspace.projectDurability,
             authenticatedActor,
           },
         });
@@ -290,15 +425,14 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
         return response ?? null;
       }
 
-      if (pathname.startsWith(`${path}/assets/`)) return serveAsset(pathname);
+      if (pathname.startsWith(`${basePath}/assets/`)) return serveAsset(pathname, basePath);
 
-      if (pathname === (path || "/")) {
-        // A relative Location keeps the redirect correct behind proxies that rewrite the host or
-        // terminate TLS, which an absolute URL built from the inbound request would not.
-        return new Response(null, { status: 302, headers: { location: `${path}/tasks` } });
+      if (pathname === (basePath || "/")) {
+        // See the redirect note above; the same proxy constraint applies here.
+        return new Response(null, { status: 302, headers: { location: `${basePath}/tasks` } });
       }
 
-      return serveApplication(url, authenticatedActor);
+      return serveApplication(url, authenticatedActor, workspace);
     },
   };
 }

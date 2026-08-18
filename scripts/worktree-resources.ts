@@ -113,6 +113,8 @@ export async function readResourceRegistry(path: string): Promise<WorktreeResour
 export async function dropWorktreeDatabases(resources: WorktreeResources): Promise<void> {
   for (const purpose of localDatabasePurposes) {
     const databaseUrl = resources.databaseUrls[purpose];
+    // A registry written before a purpose existed simply has nothing to drop for it.
+    if (databaseUrl === undefined) continue;
     assertLocalDatabasePurpose(databaseUrl, purpose);
     const target = new URL(databaseUrl);
     if (!isLocalHost(target.hostname) && process.env.WORKHORSE_ALLOW_REMOTE_RESET !== "1") {
