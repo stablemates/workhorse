@@ -44,9 +44,10 @@ try {
   }
   if (!ready) throw new Error(`Timed out waiting for documentation site\n${output}`);
 
-  // The site is documentation only. `/` redirects to `/docs`, and every other
-  // destination lives in the docs sidebar.
+  // `/` is the landing page; every documentation destination lives in the
+  // docs sidebar.
   const expectations = [
+    ["/", ["Workhorse", "Postgres", "quickstart"]],
     ["/docs", ["Workhorse", "PostgreSQL"]],
     ["/docs/api", ["API overview", `Workhorse version ${WORKHORSE_VERSION}`]],
     ["/docs/quickstart", ["quickstart", "worker"]],
