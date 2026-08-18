@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolve } from "node:path";
+import { WORKHORSE_VERSION } from "../src/version.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "../../..");
 const port = 32_000 + Math.floor(Math.random() * 1_000);
@@ -47,6 +48,7 @@ try {
   // destination lives in the docs sidebar.
   const expectations = [
     ["/docs", ["Workhorse", "PostgreSQL"]],
+    ["/docs/api", ["API overview", `Workhorse version ${WORKHORSE_VERSION}`]],
     ["/docs/quickstart", ["quickstart", "worker"]],
     ["/docs/retries", ["retry", "backoff"]],
     ["/robots.txt", ["Sitemap"]],

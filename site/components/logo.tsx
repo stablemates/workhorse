@@ -1,3 +1,5 @@
+import { WORKHORSE_VERSION } from "@workhorse/core/version";
+
 /**
  * Canonical Workhorse brand assets, copied from `@workhorse/dashboard` so the
  * site, the operator dashboard, and the demo all present one identity.
@@ -52,6 +54,12 @@ export function WorkhorseWordmark({ className = "" }: { className?: string }) {
         height={53}
         className="h-[9px] w-auto brightness-[0.26] contrast-[1.25] dark:brightness-100 dark:contrast-100"
       />
+      <span
+        className="ml-1.5 font-mono text-[10px] leading-none text-fd-muted-foreground"
+        aria-label={`Workhorse version ${WORKHORSE_VERSION}`}
+      >
+        v{WORKHORSE_VERSION}
+      </span>
     </span>
   );
 }

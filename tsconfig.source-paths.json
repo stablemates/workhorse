@@ -3,6 +3,7 @@
     "baseUrl": ".",
     "paths": {
       "@workhorse/core": ["typescript/core/src/index.ts"],
+      "@workhorse/core/version": ["typescript/core/src/version.ts"],
       "@workhorse/dashboard": ["typescript/dashboard/src/index.ts"],
       "@workhorse/dashboard/dev": ["typescript/dashboard/src/dev.ts"],
       "@workhorse/dashboard/presentation": ["typescript/dashboard/src/presentation.ts"],

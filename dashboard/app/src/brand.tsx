@@ -1,4 +1,5 @@
-import { Box, Group, type BoxProps } from "@mantine/core";
+import { Box, Group, Text, type BoxProps } from "@mantine/core";
+import { WORKHORSE_VERSION } from "@workhorse/core/version";
 const workhorseMarkUrl = new URL("./assets/workhorse-mark.svg", import.meta.url).href;
 const workhorseWordmarkUrl = new URL("./assets/workhorse-wordmark.svg", import.meta.url).href;
 
@@ -22,6 +23,16 @@ export function WorkhorseBrand() {
         alt="Workhorse"
         className="workhorse-brand__wordmark"
       />
+      <Text
+        component="span"
+        size="10px"
+        c="dimmed"
+        ff="monospace"
+        aria-label={`Workhorse version ${WORKHORSE_VERSION}`}
+        className="workhorse-brand__version"
+      >
+        v{WORKHORSE_VERSION}
+      </Text>
     </Group>
   );
 }
