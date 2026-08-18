@@ -180,7 +180,12 @@ const rpcLogRecords = {
   },
 } as const;
 
-function logRpcRequest(procedure: string, durationMs: number, statusCode: number): void {
+function logRpcRequest(
+  procedure: string,
+  durationMs: number,
+  statusCode: number,
+  workspace: string | null,
+): void {
   const record =
     statusCode >= 400
       ? rpcLogRecords.failed
@@ -194,6 +199,8 @@ function logRpcRequest(procedure: string, durationMs: number, statusCode: number
       "rpc.method": procedure,
       "http.response.status_code": statusCode,
       "workhorse.dashboard.rpc.duration_ms": durationMs,
+      // Single-workspace mode has no name; omitting the attribute keeps its records unchanged.
+      ...(workspace === null ? {} : { "workhorse.dashboard.workspace": workspace }),
     },
   });
 }
@@ -283,6 +290,19 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
     name: workspace.name as string,
     url: workspace.basePath,
   }));
+  if (workspaces.size > 0) {
+    logs.getLogger("@workhorse/dashboard").emit({
+      severityNumber: SeverityNumber.INFO,
+      severityText: "INFO",
+      eventName: "workhorse.dashboard.workspaces_configured",
+      body: "Dashboard host serves named workspaces",
+      attributes: {
+        "workhorse.dashboard.workspace_count": workspaces.size,
+        "workhorse.dashboard.workspace_names": [...workspaces.keys()],
+        "workhorse.dashboard.default_workspace": defaultWorkspaceName,
+      },
+    });
+  }
 
   const owns = (pathname: string): boolean =>
     path === "" || pathname === path || pathname.startsWith(`${path}/`);
@@ -420,7 +440,7 @@ export function createDashboardHost(options: DashboardHostOptions): DashboardHos
           },
         });
         if (response) {
-          logRpcRequest(procedure, performance.now() - startedAt, response.status);
+          logRpcRequest(procedure, performance.now() - startedAt, response.status, workspace.name);
         }
         return response ?? null;
       }

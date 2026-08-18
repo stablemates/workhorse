@@ -29,6 +29,21 @@ function dashboardClient(): RouterClient<DashboardRouter> {
   );
 }
 
+function workspaceClient(): RouterClient<DashboardRouter> {
+  const host = createDashboardHost({
+    workspaces: { production: { database }, staging: { database } },
+    defaultWorkspace: "production",
+    path: "/",
+    authorize: () => true,
+  });
+  return createORPCClient(
+    new RPCLink({
+      url: "http://dashboard.test/production/rpc",
+      fetch: async (request) => (await host.handle(request)) ?? new Response(null, { status: 404 }),
+    }),
+  );
+}
+
 beforeAll(() => logs.setGlobalLoggerProvider(provider));
 beforeEach(() => (records.length = 0));
 afterAll(() => logs.disable());
@@ -51,6 +66,7 @@ describe("dashboard RPC logging", () => {
       }),
     ]);
     expect(JSON.stringify(records)).not.toContain("unknown");
+    expect(records[0]?.attributes).not.toHaveProperty("workhorse.dashboard.workspace");
   });
 
   it("records a failed procedure without its input or error details", async () => {
@@ -75,6 +91,40 @@ describe("dashboard RPC logging", () => {
     ]);
     expect(JSON.stringify(records)).not.toContain(sensitiveInput);
     expect(records[0]).not.toHaveProperty("exception");
+  });
+
+  it("announces the configured workspaces once at construction", () => {
+    workspaceClient();
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        eventName: "workhorse.dashboard.workspaces_configured",
+        severityText: "INFO",
+        body: "Dashboard host serves named workspaces",
+        attributes: {
+          "workhorse.dashboard.workspace_count": 2,
+          "workhorse.dashboard.workspace_names": ["production", "staging"],
+          "workhorse.dashboard.default_workspace": "production",
+        },
+      }),
+    ]);
+  });
+
+  it("attributes RPC records to the workspace that served them", async () => {
+    const client = workspaceClient();
+    records.length = 0;
+
+    await client.dashboard.meta();
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        eventName: "workhorse.dashboard.rpc_completed",
+        attributes: expect.objectContaining({
+          "rpc.method": "dashboard.meta",
+          "workhorse.dashboard.workspace": "production",
+        }),
+      }),
+    ]);
   });
 
   it("promotes a slow successful procedure to warning severity", async () => {

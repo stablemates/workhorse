@@ -49,6 +49,18 @@ const stagingDatabaseUrl = process.env.WORKHORSE_DEMO_STAGING_DATABASE_URL;
 const stagingPool = stagingDatabaseUrl
   ? new Pool({ connectionString: stagingDatabaseUrl, max: 3 })
   : undefined;
+if (stagingPool) {
+  demoLogger.info(
+    "workhorse.demo.workspaces_enabled",
+    "Dashboard serves the busy production workspace and the quiet staging workspace",
+    { "workhorse.demo.workspace_names": ["production", "staging"] },
+  );
+} else {
+  demoLogger.info(
+    "workhorse.demo.single_workspace_fallback",
+    "WORKHORSE_DEMO_STAGING_DATABASE_URL is not set; the dashboard serves a single workspace and renders no workspace switcher",
+  );
+}
 
 const database = createDemoDatabase(pool);
 const stagingDatabase = stagingPool ? createDemoDatabase(stagingPool) : undefined;
