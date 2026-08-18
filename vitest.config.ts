@@ -1,5 +1,8 @@
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+
+const require = createRequire(import.meta.url);
 
 export const databaseTestFiles = [
   "typescript/demo/test/app.integration.test.ts",
@@ -15,9 +18,16 @@ export const databaseTestFiles = [
 
 export default defineConfig({
   resolve: {
-    alias: {
-      workhorse: fileURLToPath(new URL("./typescript/core/src/index.ts", import.meta.url)),
-    },
+    alias: [
+      {
+        find: "workhorse",
+        replacement: fileURLToPath(new URL("./typescript/core/src/index.ts", import.meta.url)),
+      },
+      // The repository's `typescript/` source directory shadows the TypeScript package when the
+      // `vitest related` import crawl falls back to root-relative resolution for the bare import
+      // in typescript/dashboard-server/spec/response-schemas.ts, so pin the installed package.
+      { find: /^typescript$/, replacement: require.resolve("typescript") },
+    ],
   },
   test: {
     // Files run in parallel because no two files share mutable state. Every database-backed suite
