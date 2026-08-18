@@ -58,6 +58,7 @@ describe("demo telemetry preload", () => {
     ]);
 
     expect(preload).toContain("new RotatingFileLogExporter");
+    expect(preload).toContain('resolve(__dirname, "..", "..", "logs")');
     expect(preload.match(/new OTLPLogExporter/g)).toHaveLength(1);
     expect(preload).not.toContain("auto-instrumentations-node/register");
     expect(preload).toContain(

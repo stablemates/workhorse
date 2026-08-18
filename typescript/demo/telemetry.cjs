@@ -39,9 +39,12 @@ function positiveInteger(value, fallback, name) {
   return parsed;
 }
 
+// The default root is the repository's `logs/` directory, two levels above this file. Resolving
+// from `__dirname` rather than the working directory keeps the destination stable no matter which
+// directory spawned the process.
 const logRoot = process.env.WORKHORSE_DEMO_LOG_DIRECTORY
   ? resolve(process.env.WORKHORSE_DEMO_LOG_DIRECTORY)
-  : resolve(__dirname, "..", "logs");
+  : resolve(__dirname, "..", "..", "logs");
 const logPath = resolve(
   logRoot,
   safePathSegment(environment),
