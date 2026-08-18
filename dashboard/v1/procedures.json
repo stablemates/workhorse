@@ -1,0 +1,6264 @@
+{
+  "formatVersion": 1,
+  "contractVersion": 1,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "procedures": {
+    "meta": {
+      "path": "/rpc/dashboard/meta",
+      "mutation": false,
+      "input": null,
+      "output": {
+        "type": "object",
+        "properties": {
+          "environment": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment"
+        ]
+      }
+    },
+    "taskCounts": {
+      "path": "/rpc/dashboard/taskCounts",
+      "mutation": false,
+      "input": null,
+      "output": {
+        "$ref": "#/$defs/DashboardTaskCounts"
+      }
+    },
+    "tasks": {
+      "path": "/rpc/dashboard/tasks",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "filter": {
+            "default": "all",
+            "type": "string",
+            "enum": [
+              "all",
+              "blocked",
+              "waiting",
+              "scheduled",
+              "retried",
+              "queued",
+              "running",
+              "completed",
+              "discarded",
+              "canceled"
+            ]
+          },
+          "queue": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page": {
+            "default": 1,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "worker": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jobType": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sort": {
+            "default": "updated",
+            "type": "string",
+            "enum": [
+              "updated",
+              "priority"
+            ]
+          },
+          "tags": {
+            "default": [],
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "search": {
+            "type": "string"
+          },
+          "pageSize": {
+            "default": 50,
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 25
+              },
+              {
+                "type": "number",
+                "const": 50
+              },
+              {
+                "type": "number",
+                "const": 100
+              }
+            ]
+          }
+        }
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardTasksPage"
+      }
+    },
+    "taskFacets": {
+      "path": "/rpc/dashboard/taskFacets",
+      "mutation": false,
+      "input": null,
+      "output": {
+        "$ref": "#/$defs/DashboardTaskFacets"
+      }
+    },
+    "activity": {
+      "path": "/rpc/dashboard/activity",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "filter": {
+            "default": "all",
+            "type": "string",
+            "enum": [
+              "all",
+              "blocked",
+              "waiting",
+              "scheduled",
+              "retried",
+              "queued",
+              "running",
+              "completed",
+              "discarded",
+              "canceled"
+            ]
+          },
+          "period": {
+            "default": "1h",
+            "type": "string",
+            "enum": [
+              "15m",
+              "1h",
+              "6h",
+              "24h",
+              "7d"
+            ]
+          },
+          "groupBy": {
+            "default": "task",
+            "type": "string",
+            "enum": [
+              "queue",
+              "worker",
+              "task",
+              "status"
+            ]
+          },
+          "tags": {
+            "default": [],
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "queue": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "worker": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardActivityPage"
+      }
+    },
+    "events": {
+      "path": "/rpc/dashboard/events",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "window": {
+            "default": "1h",
+            "type": "string",
+            "enum": [
+              "15m",
+              "1h",
+              "6h",
+              "24h"
+            ]
+          },
+          "page": {
+            "default": 1,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "pageSize": {
+            "default": 50,
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 25
+              },
+              {
+                "type": "number",
+                "const": 50
+              },
+              {
+                "type": "number",
+                "const": 100
+              }
+            ]
+          },
+          "kind": {
+            "default": "all",
+            "type": "string",
+            "enum": [
+              "all",
+              "event",
+              "attempt"
+            ]
+          },
+          "queue": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jobType": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "types": {
+            "default": [],
+            "maxItems": 42,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "enqueued",
+                "debounced",
+                "debounce_rejected",
+                "throttled",
+                "claimed",
+                "batch_dispatched",
+                "batch_failed",
+                "succeeded",
+                "failed",
+                "retry_scheduled",
+                "canceled",
+                "cancel_requested",
+                "promoted",
+                "lease_expired",
+                "deadline_exceeded",
+                "execution_timed_out",
+                "redriven",
+                "redrive_created",
+                "checkpoint_saved",
+                "progress_updated",
+                "wait_scheduled",
+                "wait_elapsed",
+                "wait_replayed",
+                "signal_waiting",
+                "signal_received",
+                "signal_replayed",
+                "signal_rejected",
+                "dependency_blocked",
+                "dependency_released",
+                "dependency_failed",
+                "dependency_canceled",
+                "child_created",
+                "child_joined",
+                "children_created",
+                "children_joined",
+                "parent_linked",
+                "human_wait_created",
+                "human_wait_completed",
+                "human_wait_replayed",
+                "human_wait_rejected",
+                "retry",
+                "timeout"
+              ]
+            }
+          },
+          "jobId": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardEventsPage"
+      }
+    },
+    "eventDetail": {
+      "path": "/rpc/dashboard/eventDetail",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(event|attempt):\\d+$"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardEventDetail"
+      }
+    },
+    "cron": {
+      "path": "/rpc/dashboard/cron",
+      "mutation": false,
+      "input": null,
+      "output": {
+        "$ref": "#/$defs/DashboardCronPage"
+      }
+    },
+    "queues": {
+      "path": "/rpc/dashboard/queues",
+      "mutation": false,
+      "input": null,
+      "output": {
+        "$ref": "#/$defs/DashboardQueuesPage"
+      }
+    },
+    "system": {
+      "path": "/rpc/dashboard/system",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "window": {
+            "default": "1h",
+            "type": "string",
+            "enum": [
+              "15m",
+              "1h",
+              "24h"
+            ]
+          }
+        }
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardSystemPage"
+      }
+    },
+    "workers": {
+      "path": "/rpc/dashboard/workers",
+      "mutation": false,
+      "input": null,
+      "output": {
+        "$ref": "#/$defs/DashboardWorkersPage"
+      }
+    },
+    "settings": {
+      "path": "/rpc/dashboard/settings",
+      "mutation": false,
+      "input": null,
+      "output": {
+        "$ref": "#/$defs/DashboardSettingsPage"
+      }
+    },
+    "previewRetentionPolicy": {
+      "path": "/rpc/dashboard/previewRetentionPolicy",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "definition": {
+            "type": "object",
+            "properties": {
+              "jobIdentityRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "terminalOutcomeRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "jobEventRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "attemptHistoryRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "scheduleOccurrenceRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "statisticsRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "terminalJobPruneLimit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000
+              },
+              "historyPartitionsPerPass": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 52
+              },
+              "defaultPartitionRowsPerPass": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "occurrenceRowsPerPass": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "statisticsRowsPerPass": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              }
+            }
+          }
+        },
+        "required": [
+          "definition"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/RetentionPolicyImpact"
+      }
+    },
+    "jobDetail": {
+      "path": "/rpc/dashboard/jobDetail",
+      "mutation": false,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardJobDetail"
+      }
+    },
+    "humanWaits": {
+      "path": "/rpc/dashboard/humanWaits",
+      "mutation": false,
+      "input": null,
+      "output": {
+        "$ref": "#/$defs/DashboardHumanWaitPage"
+      }
+    },
+    "enqueueTest": {
+      "path": "/rpc/dashboard/enqueueTest",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "success",
+              "retry",
+              "durable",
+              "timer",
+              "failure",
+              "idempotent",
+              "long-running",
+              "redrive",
+              "feature"
+            ]
+          },
+          "scenario": {
+            "type": "string",
+            "enum": [
+              "order-fulfillment",
+              "customer-onboarding",
+              "report-publication"
+            ]
+          },
+          "feature": {
+            "type": "string",
+            "enum": [
+              "ingress-routing",
+              "retry-policies",
+              "durable-checkpoints",
+              "durable-waits",
+              "progress",
+              "timing-controls",
+              "cancellation",
+              "dead-letters-redrive",
+              "job-dependencies",
+              "child-workflows",
+              "signals",
+              "human-decisions",
+              "keyed-debounce",
+              "keyed-throttle",
+              "priority-lanes",
+              "batch-handlers",
+              "payload-contracts"
+            ]
+          },
+          "priority": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "audit"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ]
+      }
+    },
+    "setScheduleEnabled": {
+      "path": "/rpc/dashboard/setScheduleEnabled",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "user"
+          },
+          "namespace": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "namespace",
+          "name",
+          "enabled",
+          "audit"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      }
+    },
+    "setQueuePaused": {
+      "path": "/rpc/dashboard/setQueuePaused",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "queue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "queue",
+          "paused",
+          "audit"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "paused": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "paused"
+        ]
+      }
+    },
+    "purgeQueue": {
+      "path": "/rpc/dashboard/purgeQueue",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "queue": {
+            "type": "string",
+            "minLength": 1
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "queue",
+          "audit"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "deletedCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "deletedCount"
+        ]
+      }
+    },
+    "setWorkerPaused": {
+      "path": "/rpc/dashboard/setWorkerPaused",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "workerId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "workerId",
+          "paused",
+          "audit"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "paused": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "paused"
+        ]
+      }
+    },
+    "overrideMaintenancePolicy": {
+      "path": "/rpc/dashboard/overrideMaintenancePolicy",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "definition": {
+            "type": "object",
+            "properties": {
+              "timezone": {
+                "type": "string",
+                "minLength": 1
+              },
+              "partitionPreparationIntervalMs": {
+                "type": "integer",
+                "minimum": 60000,
+                "maximum": 604800000
+              },
+              "terminalCleanupIntervalMs": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 86400000
+              },
+              "historyRetentionLocalTime": {
+                "type": "string",
+                "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+              }
+            }
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "definition",
+          "audit"
+        ]
+      },
+      "output": null
+    },
+    "revertMaintenancePolicy": {
+      "path": "/rpc/dashboard/revertMaintenancePolicy",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "settings": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "timezone",
+                "partitionPreparationIntervalMs",
+                "terminalCleanupIntervalMs",
+                "historyRetentionLocalTime"
+              ]
+            }
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "settings",
+          "audit"
+        ]
+      },
+      "output": null
+    },
+    "overrideRetentionPolicy": {
+      "path": "/rpc/dashboard/overrideRetentionPolicy",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "definition": {
+            "type": "object",
+            "properties": {
+              "jobIdentityRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "terminalOutcomeRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "jobEventRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "attemptHistoryRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "scheduleOccurrenceRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "statisticsRetentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36500
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "terminalJobPruneLimit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000
+              },
+              "historyPartitionsPerPass": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 52
+              },
+              "defaultPartitionRowsPerPass": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "occurrenceRowsPerPass": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "statisticsRowsPerPass": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              }
+            }
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "definition",
+          "audit"
+        ]
+      },
+      "output": null
+    },
+    "revertRetentionPolicy": {
+      "path": "/rpc/dashboard/revertRetentionPolicy",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "settings": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "jobIdentityRetentionDays",
+                "terminalOutcomeRetentionDays",
+                "jobEventRetentionDays",
+                "attemptHistoryRetentionDays",
+                "scheduleOccurrenceRetentionDays",
+                "statisticsRetentionDays",
+                "terminalJobPruneLimit",
+                "historyPartitionsPerPass",
+                "defaultPartitionRowsPerPass",
+                "occurrenceRowsPerPass",
+                "statisticsRowsPerPass"
+              ]
+            }
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "settings",
+          "audit"
+        ]
+      },
+      "output": null
+    },
+    "runTaskNow": {
+      "path": "/rpc/dashboard/runTaskNow",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "audit"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardRunNowResult"
+      }
+    },
+    "cancelTask": {
+      "path": "/rpc/dashboard/cancelTask",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "audit"
+        ]
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardCancelTaskResult"
+      }
+    },
+    "signalTask": {
+      "path": "/rpc/dashboard/signalTask",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "payload": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "payload",
+          "idempotencyKey",
+          "audit"
+        ],
+        "$defs": {
+          "__schema0": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/__schema0"
+                }
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardSignalTaskResult"
+      }
+    },
+    "completeHumanWait": {
+      "path": "/rpc/dashboard/completeHumanWait",
+      "mutation": true,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "result": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "actor",
+              "reason",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "result",
+          "idempotencyKey",
+          "audit"
+        ],
+        "$defs": {
+          "__schema0": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/__schema0"
+                }
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "output": {
+        "$ref": "#/$defs/DashboardCompleteHumanWaitResult"
+      }
+    }
+  },
+  "$defs": {
+    "CancelStatus": {
+      "enum": [
+        "already_terminal",
+        "cancel_requested",
+        "canceled",
+        "not_found"
+      ]
+    },
+    "CompleteHumanWaitStatus": {
+      "enum": [
+        "already_completed",
+        "completed",
+        "duplicate",
+        "not_found",
+        "not_waiting",
+        "stale"
+      ]
+    },
+    "DashboardActivityBucket": {
+      "type": "object",
+      "properties": {
+        "bucketStart": {
+          "type": "string"
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        }
+      },
+      "required": [
+        "bucketStart",
+        "counts"
+      ]
+    },
+    "DashboardActivityGroupBy": {
+      "enum": [
+        "queue",
+        "status",
+        "task",
+        "worker"
+      ]
+    },
+    "DashboardActivityPage": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "filter": {
+          "enum": [
+            "all",
+            "blocked",
+            "canceled",
+            "completed",
+            "discarded",
+            "queued",
+            "retried",
+            "running",
+            "scheduled",
+            "waiting"
+          ]
+        },
+        "period": {
+          "$ref": "#/$defs/DashboardActivityPeriod"
+        },
+        "groupBy": {
+          "$ref": "#/$defs/DashboardActivityGroupBy"
+        },
+        "bucketSeconds": {
+          "type": "number"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardActivityBucket"
+          }
+        }
+      },
+      "required": [
+        "capturedAt",
+        "filter",
+        "period",
+        "groupBy",
+        "bucketSeconds",
+        "groups",
+        "buckets"
+      ]
+    },
+    "DashboardActivityPeriod": {
+      "enum": [
+        "15m",
+        "1h",
+        "24h",
+        "6h",
+        "7d"
+      ]
+    },
+    "DashboardCancelTaskResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/CancelStatus"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "const": "active"
+            },
+            {
+              "const": "blocked"
+            },
+            {
+              "const": "canceled"
+            },
+            {
+              "const": "failed"
+            },
+            {
+              "const": "ready"
+            },
+            {
+              "const": "scheduled"
+            },
+            {
+              "const": "succeeded"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currentAttempt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "requestedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "requestedBy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "jobId",
+        "state",
+        "currentAttempt",
+        "requestedAt",
+        "requestedBy",
+        "reason",
+        "finishedAt"
+      ]
+    },
+    "DashboardCancellationRequest": {
+      "type": "object",
+      "properties": {
+        "requestedAt": {
+          "type": "string"
+        },
+        "requestedBy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "requestedAt",
+        "requestedBy",
+        "reason"
+      ]
+    },
+    "DashboardCompleteHumanWaitResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/CompleteHumanWaitStatus"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/Json"
+        },
+        "completedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "completedBy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "jobId",
+        "name",
+        "result",
+        "completedAt",
+        "completedBy"
+      ]
+    },
+    "DashboardConcurrencyPolicySummary": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string"
+        },
+        "maxActive": {
+          "type": "number"
+        },
+        "utilizationKnown": {
+          "type": "boolean"
+        },
+        "active": {
+          "type": "number"
+        },
+        "available": {
+          "type": "number"
+        },
+        "blockedReady": {
+          "type": "number"
+        },
+        "maxActivePerKey": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "saturatedKeys": {
+          "type": "number"
+        },
+        "highestKeyActive": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "namespace",
+        "maxActive",
+        "utilizationKnown",
+        "active",
+        "available",
+        "blockedReady",
+        "maxActivePerKey",
+        "saturatedKeys",
+        "highestKeyActive"
+      ]
+    },
+    "DashboardCronPage": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "schedules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardScheduleRow"
+          }
+        }
+      },
+      "required": [
+        "capturedAt",
+        "schedules"
+      ]
+    },
+    "DashboardDurabilityPlan": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "scenario": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "label",
+              "description"
+            ]
+          }
+        },
+        "persistentFailure": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "afterStepIndex": {
+                  "type": "number"
+                },
+                "afterStepName": {
+                  "type": "string"
+                },
+                "beforeStepName": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "afterStepIndex",
+                "afterStepName",
+                "beforeStepName",
+                "reason"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "scenario",
+        "label",
+        "description",
+        "steps",
+        "persistentFailure"
+      ]
+    },
+    "DashboardEventDetail": {
+      "type": "object",
+      "properties": {
+        "startedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "claimedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "error": {},
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DashboardEventKind"
+        },
+        "recordId": {
+          "type": "string"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "queue": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "jobType": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "occurredAt": {
+          "type": "string"
+        },
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "details": {},
+        "workerId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "fenceToken": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "durationMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "errorMessage": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "startedAt",
+        "claimedAt",
+        "finishedAt",
+        "error",
+        "id",
+        "kind",
+        "recordId",
+        "jobId",
+        "queue",
+        "jobType",
+        "occurredAt",
+        "attempt",
+        "type",
+        "details",
+        "workerId",
+        "fenceToken",
+        "durationMs",
+        "errorMessage"
+      ]
+    },
+    "DashboardEventKind": {
+      "enum": [
+        "attempt",
+        "event"
+      ]
+    },
+    "DashboardEventRow": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DashboardEventKind"
+        },
+        "recordId": {
+          "type": "string"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "queue": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "jobType": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "occurredAt": {
+          "type": "string"
+        },
+        "attempt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "details": {},
+        "workerId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "fenceToken": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "durationMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "errorMessage": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "recordId",
+        "jobId",
+        "queue",
+        "jobType",
+        "occurredAt",
+        "attempt",
+        "type",
+        "details",
+        "workerId",
+        "fenceToken",
+        "durationMs",
+        "errorMessage"
+      ]
+    },
+    "DashboardEventsPage": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "window": {
+          "$ref": "#/$defs/DashboardEventsWindow"
+        },
+        "windowSeconds": {
+          "type": "number"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardEventRow"
+          }
+        },
+        "page": {
+          "type": "number"
+        },
+        "pageSize": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        },
+        "retention": {
+          "type": "object",
+          "properties": {
+            "jobEventDays": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "attemptHistoryDays": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "required": [
+            "jobEventDays",
+            "attemptHistoryDays"
+          ]
+        }
+      },
+      "required": [
+        "capturedAt",
+        "window",
+        "windowSeconds",
+        "events",
+        "page",
+        "pageSize",
+        "total",
+        "retention"
+      ]
+    },
+    "DashboardEventsWindow": {
+      "enum": [
+        "15m",
+        "1h",
+        "24h",
+        "6h"
+      ]
+    },
+    "DashboardHumanWaitPage": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "canComplete": {
+          "type": "boolean"
+        },
+        "canSignal": {
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "type": "object",
+          "properties": {
+            "pendingSignals": {
+              "type": "number"
+            },
+            "pendingHumanDecisions": {
+              "type": "number"
+            },
+            "overdue": {
+              "type": "number"
+            },
+            "oldestPendingAgeMs": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "rejectedDeliveries": {
+              "type": "number"
+            },
+            "capped": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "pendingSignals",
+            "pendingHumanDecisions",
+            "overdue",
+            "oldestPendingAgeMs",
+            "rejectedDeliveries",
+            "capped"
+          ]
+        },
+        "waits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardHumanWaitRow"
+          }
+        },
+        "signalWaits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardSignalWaitRow"
+          }
+        }
+      },
+      "required": [
+        "capturedAt",
+        "canComplete",
+        "canSignal",
+        "diagnostics",
+        "waits",
+        "signalWaits"
+      ]
+    },
+    "DashboardHumanWaitRow": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "jobType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "context": {},
+        "attempt": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "deadlineAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "jobId",
+        "queue",
+        "jobType",
+        "name",
+        "context",
+        "attempt",
+        "createdAt",
+        "deadlineAt"
+      ]
+    },
+    "DashboardHumanWaitSummary": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "context": {},
+        "deadlineAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "context",
+        "deadlineAt"
+      ]
+    },
+    "DashboardJobDetail": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "queue": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "priority": {
+              "type": "number"
+            },
+            "state": {
+              "type": "string"
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "retryPolicy": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "decorrelated-jitter"
+                    },
+                    "baseDelayMs": {
+                      "type": "number"
+                    },
+                    "maxDelayMs": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "baseDelayMs",
+                    "maxDelayMs"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "exponential"
+                    },
+                    "initialDelayMs": {
+                      "type": "number"
+                    },
+                    "multiplier": {
+                      "type": "number"
+                    },
+                    "maxDelayMs": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "initialDelayMs",
+                    "multiplier",
+                    "maxDelayMs"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "fixed"
+                    },
+                    "delayMs": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "delayMs"
+                  ]
+                }
+              ]
+            },
+            "maxAttempts": {
+              "type": "number"
+            },
+            "deadlineAt": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "executionTimeoutMs": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "concurrencyKey": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "prerequisiteJobId": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "prerequisiteJobIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "dependencyPolicy": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "onSuccess": {
+                      "enum": [
+                        "cancel",
+                        "fail",
+                        "release"
+                      ]
+                    },
+                    "onFailure": {
+                      "enum": [
+                        "cancel",
+                        "fail",
+                        "release"
+                      ]
+                    },
+                    "onCancellation": {
+                      "enum": [
+                        "cancel",
+                        "fail",
+                        "release"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "onSuccess",
+                    "onFailure",
+                    "onCancellation"
+                  ]
+                }
+              ]
+            },
+            "dependencyReleasedAt": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "blockedReason": {
+              "anyOf": [
+                {
+                  "const": "prerequisite_pending"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "queue",
+            "type",
+            "priority",
+            "state",
+            "createdAt",
+            "retryPolicy",
+            "maxAttempts",
+            "concurrencyKey",
+            "prerequisiteJobId",
+            "prerequisiteJobIds",
+            "dependencyPolicy",
+            "dependencyReleasedAt",
+            "blockedReason"
+          ]
+        },
+        "dependencyLineage": {
+          "type": "object",
+          "properties": {
+            "records": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "dependentJobId": {
+                    "type": "string"
+                  },
+                  "prerequisiteJobId": {
+                    "type": "string"
+                  },
+                  "onSuccess": {
+                    "enum": [
+                      "cancel",
+                      "fail",
+                      "release"
+                    ]
+                  },
+                  "onFailure": {
+                    "enum": [
+                      "cancel",
+                      "fail",
+                      "release"
+                    ]
+                  },
+                  "onCancellation": {
+                    "enum": [
+                      "cancel",
+                      "fail",
+                      "release"
+                    ]
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "releasedAt": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "resolution": {
+                    "anyOf": [
+                      {
+                        "const": "cancel"
+                      },
+                      {
+                        "const": "fail"
+                      },
+                      {
+                        "const": "release"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "dependentJobId",
+                  "prerequisiteJobId",
+                  "onSuccess",
+                  "onFailure",
+                  "onCancellation",
+                  "createdAt",
+                  "releasedAt",
+                  "resolution"
+                ]
+              }
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "records",
+            "truncated"
+          ]
+        },
+        "childLineage": {
+          "type": "object",
+          "properties": {
+            "records": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "parentJobId": {
+                    "type": "string"
+                  },
+                  "childJobId": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "joinedAt": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "outcomeState": {
+                    "anyOf": [
+                      {
+                        "const": "canceled"
+                      },
+                      {
+                        "const": "failed"
+                      },
+                      {
+                        "const": "succeeded"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "error": {}
+                },
+                "required": [
+                  "parentJobId",
+                  "childJobId",
+                  "name",
+                  "type",
+                  "createdAt",
+                  "joinedAt",
+                  "outcomeState",
+                  "error"
+                ]
+              }
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "records",
+            "truncated"
+          ]
+        },
+        "redriveLineage": {
+          "type": "object",
+          "properties": {
+            "records": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "sourceJobId": {
+                    "type": "string"
+                  },
+                  "targetJobId": {
+                    "type": "string"
+                  },
+                  "requestedBy": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "requestIdPreview": {
+                    "type": "string"
+                  },
+                  "requestIdDigest": {
+                    "type": "string"
+                  },
+                  "requestIdLength": {
+                    "type": "number"
+                  },
+                  "sourceState": {
+                    "const": "failed"
+                  },
+                  "targetInitialState": {
+                    "const": "ready"
+                  },
+                  "requestedAt": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sourceJobId",
+                  "targetJobId",
+                  "requestedBy",
+                  "reason",
+                  "requestIdPreview",
+                  "requestIdDigest",
+                  "requestIdLength",
+                  "sourceState",
+                  "targetInitialState",
+                  "requestedAt"
+                ]
+              }
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "records",
+            "truncated"
+          ]
+        },
+        "concurrencyPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardConcurrencyPolicySummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signalWait": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardSignalWaitSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "canSignal": {
+          "type": "boolean"
+        },
+        "payload": {},
+        "progress": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "value": {},
+                "revision": {
+                  "type": "string"
+                },
+                "attempt": {
+                  "type": "number"
+                },
+                "fenceToken": {
+                  "type": "string"
+                },
+                "workerId": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "revision",
+                "attempt",
+                "fenceToken",
+                "workerId",
+                "createdAt",
+                "updatedAt"
+              ]
+            }
+          ]
+        },
+        "durability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardDurabilityPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current": {
+          "type": "object",
+          "properties": {
+            "runtime": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "type": "string"
+                    },
+                    "attempt": {
+                      "type": "number"
+                    },
+                    "runAt": {
+                      "type": "string"
+                    },
+                    "readyAt": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "workerId": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "fenceToken": {
+                      "type": "string"
+                    },
+                    "acquiredAt": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "heartbeatAt": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "expiresAt": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "waitName": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "attemptStartedAt": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "attemptTimeoutAt": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "cancellation": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/DashboardCancellationRequest"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "error": {}
+                  },
+                  "required": [
+                    "state",
+                    "attempt",
+                    "runAt",
+                    "readyAt",
+                    "workerId",
+                    "fenceToken",
+                    "acquiredAt",
+                    "heartbeatAt",
+                    "expiresAt",
+                    "waitName",
+                    "attemptStartedAt",
+                    "cancellation",
+                    "error"
+                  ]
+                }
+              ]
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "type": "string"
+                    },
+                    "attempt": {
+                      "type": "number"
+                    },
+                    "finishedAt": {
+                      "type": "string"
+                    },
+                    "result": {},
+                    "error": {}
+                  },
+                  "required": [
+                    "state",
+                    "attempt",
+                    "finishedAt",
+                    "result",
+                    "error"
+                  ]
+                }
+              ]
+            },
+            "result": {},
+            "error": {}
+          },
+          "required": [
+            "runtime",
+            "outcome",
+            "result",
+            "error"
+          ]
+        },
+        "batchExecutions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "attempt": {
+                "type": "number"
+              },
+              "dispatchedAt": {
+                "type": "string"
+              },
+              "batchWideFailure": {
+                "type": "boolean"
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "attempt": {
+                      "type": "number"
+                    },
+                    "outcome": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "error": {}
+                  },
+                  "required": [
+                    "id",
+                    "type",
+                    "attempt",
+                    "outcome",
+                    "error"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "attempt",
+              "dispatchedAt",
+              "batchWideFailure",
+              "members"
+            ]
+          }
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "attempt": {
+                "type": "number"
+              },
+              "workerId": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string"
+              },
+              "startedAt": {
+                "type": "string"
+              },
+              "claimedAt": {
+                "type": "string"
+              },
+              "finishedAt": {
+                "type": "string"
+              },
+              "durationMs": {
+                "type": "number"
+              },
+              "executionMs": {
+                "type": "number"
+              },
+              "elapsedMs": {
+                "type": "number"
+              },
+              "error": {}
+            },
+            "required": [
+              "attempt",
+              "workerId",
+              "outcome",
+              "startedAt",
+              "claimedAt",
+              "finishedAt",
+              "durationMs",
+              "executionMs",
+              "elapsedMs",
+              "error"
+            ]
+          }
+        },
+        "checkpoints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {},
+              "attempt": {
+                "type": "number"
+              },
+              "fenceToken": {
+                "type": "string"
+              },
+              "workerId": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value",
+              "attempt",
+              "fenceToken",
+              "workerId",
+              "createdAt"
+            ]
+          }
+        },
+        "waits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "mode": {
+                "enum": [
+                  "absolute",
+                  "relative"
+                ]
+              },
+              "durationMs": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "requestedWakeAt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "wakeAt": {
+                "type": "string"
+              },
+              "attempt": {
+                "type": "number"
+              },
+              "fenceToken": {
+                "type": "string"
+              },
+              "workerId": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "mode",
+              "durationMs",
+              "requestedWakeAt",
+              "wakeAt",
+              "attempt",
+              "fenceToken",
+              "workerId",
+              "createdAt"
+            ]
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "attempt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": {
+                "type": "string"
+              },
+              "details": {},
+              "occurredAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "attempt",
+              "type",
+              "details",
+              "occurredAt"
+            ]
+          }
+        }
+      },
+      "required": [
+        "identity",
+        "dependencyLineage",
+        "childLineage",
+        "redriveLineage",
+        "concurrencyPolicy",
+        "signalWait",
+        "canSignal",
+        "payload",
+        "progress",
+        "durability",
+        "current",
+        "batchExecutions",
+        "attempts",
+        "checkpoints",
+        "waits",
+        "events"
+      ]
+    },
+    "DashboardJobRow": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "number"
+        },
+        "state": {
+          "type": "string"
+        },
+        "blockedReason": {
+          "anyOf": [
+            {
+              "const": "prerequisite_pending"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prerequisiteJobIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attempt": {
+          "type": "number"
+        },
+        "maxAttempts": {
+          "type": "number"
+        },
+        "retryPolicy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "decorrelated-jitter"
+                },
+                "baseDelayMs": {
+                  "type": "number"
+                },
+                "maxDelayMs": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "type",
+                "baseDelayMs",
+                "maxDelayMs"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "exponential"
+                },
+                "initialDelayMs": {
+                  "type": "number"
+                },
+                "multiplier": {
+                  "type": "number"
+                },
+                "maxDelayMs": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "type",
+                "initialDelayMs",
+                "multiplier",
+                "maxDelayMs"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "fixed"
+                },
+                "delayMs": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "type",
+                "delayMs"
+              ]
+            }
+          ]
+        },
+        "deadlineAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "executionTimeoutMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "payload": {},
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "keyed": {
+          "type": "boolean"
+        },
+        "cancellation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardCancellationRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "workerId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "lastWorkerId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "errorMessage": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "durability": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "completedSteps": {
+                  "type": "number"
+                },
+                "totalSteps": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "completedSteps",
+                "totalSteps"
+              ]
+            }
+          ]
+        },
+        "waitName": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "wakeAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "wait": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "wakeAt": {
+                  "type": "string"
+                },
+                "mode": {
+                  "enum": [
+                    "absolute",
+                    "relative"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "wakeAt",
+                "mode"
+              ]
+            }
+          ]
+        },
+        "signalWait": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardSignalWaitSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "humanWait": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardHumanWaitSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "queue",
+        "type",
+        "priority",
+        "state",
+        "blockedReason",
+        "prerequisiteJobIds",
+        "attempt",
+        "maxAttempts",
+        "retryPolicy",
+        "payload",
+        "tags",
+        "keyed",
+        "cancellation",
+        "runAt",
+        "workerId",
+        "lastWorkerId",
+        "finishedAt",
+        "errorMessage",
+        "createdAt",
+        "updatedAt",
+        "durability",
+        "waitName",
+        "wakeAt",
+        "wait",
+        "signalWait",
+        "humanWait"
+      ],
+      "additionalProperties": {}
+    },
+    "DashboardMaintenancePolicy": {
+      "type": "object",
+      "properties": {
+        "timezone": {
+          "type": "string"
+        },
+        "partitionPreparationIntervalMs": {
+          "type": "number"
+        },
+        "terminalCleanupIntervalMs": {
+          "type": "number"
+        },
+        "historyRetentionLocalTime": {
+          "type": "string"
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "timezone": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "partitionPreparationIntervalMs": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "terminalCleanupIntervalMs": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "historyRetentionLocalTime": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            }
+          },
+          "required": [
+            "timezone",
+            "partitionPreparationIntervalMs",
+            "terminalCleanupIntervalMs",
+            "historyRetentionLocalTime"
+          ]
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "timezone",
+        "partitionPreparationIntervalMs",
+        "terminalCleanupIntervalMs",
+        "historyRetentionLocalTime",
+        "provenance",
+        "updatedAt"
+      ]
+    },
+    "DashboardManagedQueueRow": {
+      "type": "object",
+      "properties": {
+        "queue": {
+          "type": "string"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "scheduled": {
+          "type": "number"
+        },
+        "ready": {
+          "type": "number"
+        },
+        "active": {
+          "type": "number"
+        },
+        "succeeded": {
+          "type": "number"
+        },
+        "failed": {
+          "type": "number"
+        },
+        "canceled": {
+          "type": "number"
+        },
+        "terminalCountsApproximate": {
+          "type": "boolean"
+        },
+        "concurrencyPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardConcurrencyPolicySummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rateLimitPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardRateLimitPolicySummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "queue",
+        "paused",
+        "scheduled",
+        "ready",
+        "active",
+        "succeeded",
+        "failed",
+        "canceled",
+        "terminalCountsApproximate",
+        "concurrencyPolicy",
+        "rateLimitPolicy"
+      ]
+    },
+    "DashboardQueuesPage": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "queues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardManagedQueueRow"
+          }
+        },
+        "concurrencyPoliciesCapped": {
+          "type": "boolean"
+        },
+        "rateLimitPoliciesCapped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "capturedAt",
+        "queues",
+        "concurrencyPoliciesCapped",
+        "rateLimitPoliciesCapped"
+      ]
+    },
+    "DashboardRateLimitPolicySummary": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string"
+        },
+        "rate": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number"
+            },
+            "intervalMs": {
+              "type": "number"
+            },
+            "burst": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "limit",
+            "intervalMs",
+            "burst"
+          ]
+        },
+        "perKey": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "type": "number"
+                },
+                "intervalMs": {
+                  "type": "number"
+                },
+                "burst": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "limit",
+                "intervalMs",
+                "burst"
+              ]
+            }
+          ]
+        },
+        "availableTokens": {
+          "type": "number"
+        },
+        "throttledReady": {
+          "type": "number"
+        },
+        "throttledKeys": {
+          "type": "number"
+        },
+        "nextEligibleAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "namespace",
+        "rate",
+        "perKey",
+        "availableTokens",
+        "throttledReady",
+        "throttledKeys",
+        "nextEligibleAt"
+      ]
+    },
+    "DashboardRetentionCategory": {
+      "enum": [
+        "attemptHistory",
+        "jobEvents",
+        "jobIdentity",
+        "scheduleOccurrences",
+        "statistics",
+        "terminalOutcome"
+      ]
+    },
+    "DashboardRetentionCategoryRow": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/DashboardRetentionCategory"
+        },
+        "label": {
+          "type": "string"
+        },
+        "retentionDays": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "lagMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "oldestRetainedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "prunedByPartition": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "category",
+        "label",
+        "retentionDays",
+        "lagMs",
+        "oldestRetainedAt",
+        "prunedByPartition"
+      ]
+    },
+    "DashboardRetentionPolicy": {
+      "type": "object",
+      "properties": {
+        "jobIdentityRetentionDays": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "terminalOutcomeRetentionDays": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "jobEventRetentionDays": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "attemptHistoryRetentionDays": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "scheduleOccurrenceRetentionDays": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "statisticsRetentionDays": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "terminalJobPruneLimit": {
+          "type": "number"
+        },
+        "historyPartitionsPerPass": {
+          "type": "number"
+        },
+        "defaultPartitionRowsPerPass": {
+          "type": "number"
+        },
+        "occurrenceRowsPerPass": {
+          "type": "number"
+        },
+        "statisticsRowsPerPass": {
+          "type": "number"
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "jobIdentityRetentionDays": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "terminalOutcomeRetentionDays": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "jobEventRetentionDays": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "attemptHistoryRetentionDays": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "scheduleOccurrenceRetentionDays": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "statisticsRetentionDays": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "terminalJobPruneLimit": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "historyPartitionsPerPass": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "defaultPartitionRowsPerPass": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "occurrenceRowsPerPass": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "statisticsRowsPerPass": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            }
+          },
+          "required": [
+            "jobIdentityRetentionDays",
+            "terminalOutcomeRetentionDays",
+            "jobEventRetentionDays",
+            "attemptHistoryRetentionDays",
+            "scheduleOccurrenceRetentionDays",
+            "statisticsRetentionDays",
+            "terminalJobPruneLimit",
+            "historyPartitionsPerPass",
+            "defaultPartitionRowsPerPass",
+            "occurrenceRowsPerPass",
+            "statisticsRowsPerPass"
+          ]
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "jobIdentityRetentionDays",
+        "terminalOutcomeRetentionDays",
+        "jobEventRetentionDays",
+        "attemptHistoryRetentionDays",
+        "scheduleOccurrenceRetentionDays",
+        "statisticsRetentionDays",
+        "terminalJobPruneLimit",
+        "historyPartitionsPerPass",
+        "defaultPartitionRowsPerPass",
+        "occurrenceRowsPerPass",
+        "statisticsRowsPerPass",
+        "provenance",
+        "updatedAt"
+      ]
+    },
+    "DashboardRunNowResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/DashboardRunNowStatus"
+        },
+        "id": {
+          "type": "string"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "runAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "id",
+        "state",
+        "runAt"
+      ]
+    },
+    "DashboardRunNowStatus": {
+      "enum": [
+        "already_ready",
+        "not_found",
+        "not_scheduled",
+        "released",
+        "waiting"
+      ]
+    },
+    "DashboardScheduleRow": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "system",
+            "user"
+          ]
+        },
+        "identity": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "system",
+                "user"
+              ]
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "namespace",
+            "name"
+          ]
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "cron": {
+          "type": "string"
+        },
+        "queue": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "occurrenceCount": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "lastFiredAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "lastRun": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "startedAt": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "endedAt": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "message": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "status",
+                "startedAt",
+                "endedAt",
+                "message"
+              ]
+            }
+          ]
+        },
+        "maintenance": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "intervalMs": {
+                  "type": "number"
+                },
+                "phases": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "status": {
+                  "enum": [
+                    "due",
+                    "incomplete",
+                    "scheduled"
+                  ]
+                },
+                "lastStartedAt": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "lastCompletedAt": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "intervalMs",
+                "phases",
+                "status",
+                "lastStartedAt",
+                "lastCompletedAt"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "namespace",
+        "name",
+        "description",
+        "cron",
+        "queue",
+        "type",
+        "priority",
+        "enabled",
+        "active",
+        "revision",
+        "updatedAt",
+        "occurrenceCount",
+        "lastFiredAt"
+      ]
+    },
+    "DashboardSettingsPage": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "editable": {
+          "type": "boolean"
+        },
+        "maintenance": {
+          "$ref": "#/$defs/DashboardMaintenancePolicy"
+        },
+        "retention": {
+          "$ref": "#/$defs/DashboardRetentionPolicy"
+        },
+        "workers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "queue": {
+                "type": "string"
+              },
+              "concurrency": {
+                "type": "number"
+              },
+              "leaseMs": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "heartbeatMs": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "pollMs": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "maintenanceIntervalMs": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "maintenanceTaskPollMs": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "registryIntervalMs": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "lastSeenAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "queue",
+              "concurrency",
+              "leaseMs",
+              "heartbeatMs",
+              "pollMs",
+              "maintenanceIntervalMs",
+              "maintenanceTaskPollMs",
+              "registryIntervalMs",
+              "lastSeenAt"
+            ]
+          }
+        }
+      },
+      "required": [
+        "capturedAt",
+        "editable",
+        "maintenance",
+        "retention",
+        "workers"
+      ]
+    },
+    "DashboardSignalTaskResult": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/SendSignalStatus"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/Json"
+        },
+        "deliveredAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "deliveredBy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "jobId",
+        "name",
+        "payload",
+        "deliveredAt",
+        "deliveredBy"
+      ]
+    },
+    "DashboardSignalWaitRow": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "jobType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "deadlineAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "jobId",
+        "queue",
+        "jobType",
+        "name",
+        "attempt",
+        "createdAt",
+        "deadlineAt"
+      ]
+    },
+    "DashboardSignalWaitSummary": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "deadlineAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "deadlineAt"
+      ]
+    },
+    "DashboardStorageRelation": {
+      "type": "object",
+      "properties": {
+        "relation": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "group": {
+          "enum": [
+            "history",
+            "statistics",
+            "tasks"
+          ]
+        },
+        "totalBytes": {
+          "type": "number"
+        },
+        "tableBytes": {
+          "type": "number"
+        },
+        "indexBytes": {
+          "type": "number"
+        },
+        "rows": {
+          "type": "number"
+        },
+        "deadRows": {
+          "type": "number"
+        },
+        "partitions": {
+          "type": "number"
+        },
+        "lastVacuumAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "relation",
+        "label",
+        "group",
+        "totalBytes",
+        "tableBytes",
+        "indexBytes",
+        "rows",
+        "deadRows",
+        "partitions",
+        "lastVacuumAt"
+      ]
+    },
+    "DashboardSystemFailingType": {
+      "type": "object",
+      "properties": {
+        "queue": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "attempts": {
+          "type": "number"
+        },
+        "errorRate": {
+          "type": "number"
+        },
+        "terminalFailures": {
+          "type": "number"
+        },
+        "lastError": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "lastSeenAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "queue",
+        "type",
+        "attempts",
+        "errorRate",
+        "terminalFailures",
+        "lastError",
+        "lastSeenAt"
+      ]
+    },
+    "DashboardSystemOutcomeBucket": {
+      "type": "object",
+      "properties": {
+        "bucketStart": {
+          "type": "string"
+        },
+        "enqueued": {
+          "type": "number"
+        },
+        "succeeded": {
+          "type": "number"
+        },
+        "failed": {
+          "type": "number"
+        },
+        "retry": {
+          "type": "number"
+        },
+        "leaseExpired": {
+          "type": "number"
+        },
+        "canceled": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "bucketStart",
+        "enqueued",
+        "succeeded",
+        "failed",
+        "retry",
+        "leaseExpired",
+        "canceled"
+      ]
+    },
+    "DashboardSystemPage": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "window": {
+          "$ref": "#/$defs/DashboardSystemWindow"
+        },
+        "windowSeconds": {
+          "type": "number"
+        },
+        "status": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "enum": [
+                "critical",
+                "degraded",
+                "healthy"
+              ]
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "criticalChecks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "degradedChecks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "level",
+            "checks",
+            "criticalChecks",
+            "degradedChecks"
+          ]
+        },
+        "pausedQueues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kpis": {
+          "type": "object",
+          "properties": {
+            "drain": {
+              "type": "object",
+              "properties": {
+                "enqueuedPerMinute": {
+                  "type": "number"
+                },
+                "completedPerMinute": {
+                  "type": "number"
+                },
+                "netPerMinute": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "enqueuedPerMinute",
+                "completedPerMinute",
+                "netPerMinute"
+              ]
+            },
+            "backlog": {
+              "type": "object",
+              "properties": {
+                "ready": {
+                  "type": "number"
+                },
+                "oldestReadyMs": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "ready",
+                "oldestReadyMs"
+              ]
+            },
+            "errorRate": {
+              "type": "object",
+              "properties": {
+                "current": {
+                  "type": "number"
+                },
+                "previous": {
+                  "type": "number"
+                },
+                "delta": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "current",
+                "previous",
+                "delta"
+              ]
+            },
+            "queueWait": {
+              "type": "object",
+              "properties": {
+                "p50Ms": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "p95Ms": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "p99Ms": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "p50Ms",
+                "p95Ms",
+                "p99Ms"
+              ]
+            },
+            "retry": {
+              "type": "object",
+              "properties": {
+                "backoff": {
+                  "type": "number"
+                },
+                "dueSoon": {
+                  "type": "number"
+                },
+                "buckets": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/DashboardSystemRetryBucket"
+                  }
+                }
+              },
+              "required": [
+                "backoff",
+                "dueSoon",
+                "buckets"
+              ]
+            },
+            "lease": {
+              "type": "object",
+              "properties": {
+                "active": {
+                  "type": "number"
+                },
+                "expired": {
+                  "type": "number"
+                },
+                "expiringSoon": {
+                  "type": "number"
+                },
+                "recovered": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "active",
+                "expired",
+                "expiringSoon",
+                "recovered"
+              ]
+            },
+            "dependencies": {
+              "type": "object",
+              "properties": {
+                "blockedJobs": {
+                  "type": "number"
+                },
+                "pendingEdges": {
+                  "type": "number"
+                },
+                "failedResolutions": {
+                  "type": "number"
+                },
+                "retentionPruneStarved": {
+                  "type": "boolean"
+                },
+                "capped": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "blockedJobs",
+                "pendingEdges",
+                "failedResolutions",
+                "retentionPruneStarved",
+                "capped"
+              ]
+            },
+            "children": {
+              "type": "object",
+              "properties": {
+                "waitingParents": {
+                  "type": "number"
+                },
+                "pendingChildren": {
+                  "type": "number"
+                },
+                "unjoinedResults": {
+                  "type": "number"
+                },
+                "failedParents": {
+                  "type": "number"
+                },
+                "canceledParents": {
+                  "type": "number"
+                },
+                "capped": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "waitingParents",
+                "pendingChildren",
+                "unjoinedResults",
+                "failedParents",
+                "canceledParents",
+                "capped"
+              ]
+            },
+            "externalWaits": {
+              "type": "object",
+              "properties": {
+                "pendingSignals": {
+                  "type": "number"
+                },
+                "pendingHumanDecisions": {
+                  "type": "number"
+                },
+                "overdue": {
+                  "type": "number"
+                },
+                "oldestPendingAgeMs": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "rejectedDeliveries": {
+                  "type": "number"
+                },
+                "capped": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "pendingSignals",
+                "pendingHumanDecisions",
+                "overdue",
+                "oldestPendingAgeMs",
+                "rejectedDeliveries",
+                "capped"
+              ]
+            },
+            "deadline": {
+              "type": "object",
+              "properties": {
+                "pending": {
+                  "type": "number"
+                },
+                "overdue": {
+                  "type": "number"
+                },
+                "dueWithinMinute": {
+                  "type": "number"
+                },
+                "earliestAt": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "activeTimeouts": {
+                  "type": "number"
+                },
+                "overdueTimeouts": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "pending",
+                "overdue",
+                "dueWithinMinute",
+                "earliestAt",
+                "activeTimeouts",
+                "overdueTimeouts"
+              ]
+            }
+          },
+          "required": [
+            "drain",
+            "backlog",
+            "errorRate",
+            "queueWait",
+            "retry",
+            "lease",
+            "dependencies",
+            "children",
+            "externalWaits"
+          ]
+        },
+        "outcomes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardSystemOutcomeBucket"
+          }
+        },
+        "queues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardSystemQueueRow"
+          }
+        },
+        "concurrencyPoliciesCapped": {
+          "type": "boolean"
+        },
+        "rateLimitPoliciesCapped": {
+          "type": "boolean"
+        },
+        "retryStorm": {
+          "type": "object",
+          "properties": {
+            "buckets": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DashboardSystemRetryBucket"
+              }
+            },
+            "topTypes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "queue": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "count": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "queue",
+                  "type",
+                  "count"
+                ]
+              }
+            }
+          },
+          "required": [
+            "buckets",
+            "topTypes"
+          ]
+        },
+        "failingTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardSystemFailingType"
+          }
+        },
+        "integrity": {
+          "type": "object",
+          "properties": {
+            "dueButUnpromoted": {
+              "type": "number"
+            },
+            "partitions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "day": {
+                    "type": "string"
+                  },
+                  "startsAt": {
+                    "type": "string"
+                  },
+                  "eventExists": {
+                    "type": "boolean"
+                  },
+                  "attemptExists": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "day",
+                  "startsAt",
+                  "eventExists",
+                  "attemptExists"
+                ]
+              }
+            },
+            "defaultEventRows": {
+              "type": "number"
+            },
+            "defaultAttemptRows": {
+              "type": "number"
+            },
+            "retention": {
+              "$ref": "#/$defs/DashboardSystemRetention"
+            },
+            "storage": {
+              "$ref": "#/$defs/DashboardSystemStorage"
+            }
+          },
+          "required": [
+            "dueButUnpromoted",
+            "partitions",
+            "defaultEventRows",
+            "defaultAttemptRows",
+            "retention",
+            "storage"
+          ]
+        }
+      },
+      "required": [
+        "capturedAt",
+        "window",
+        "windowSeconds",
+        "status",
+        "pausedQueues",
+        "kpis",
+        "outcomes",
+        "queues",
+        "concurrencyPoliciesCapped",
+        "rateLimitPoliciesCapped",
+        "retryStorm",
+        "failingTypes",
+        "integrity"
+      ]
+    },
+    "DashboardSystemQueueRow": {
+      "type": "object",
+      "properties": {
+        "queue": {
+          "type": "string"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "ready": {
+          "type": "number"
+        },
+        "oldestReadyMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "priorityBacklog": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "priority": {
+                "type": "number"
+              },
+              "ready": {
+                "type": "number"
+              },
+              "oldestReadyMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "priority",
+              "ready",
+              "oldestReadyMs"
+            ]
+          }
+        },
+        "dueSoon": {
+          "type": "number"
+        },
+        "active": {
+          "type": "number"
+        },
+        "retrying": {
+          "type": "number"
+        },
+        "enqueuedPerMinute": {
+          "type": "number"
+        },
+        "completedPerMinute": {
+          "type": "number"
+        },
+        "concurrencyPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardConcurrencyPolicySummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rateLimitPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DashboardRateLimitPolicySummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "queue",
+        "paused",
+        "ready",
+        "oldestReadyMs",
+        "priorityBacklog",
+        "dueSoon",
+        "active",
+        "retrying",
+        "enqueuedPerMinute",
+        "completedPerMinute",
+        "concurrencyPolicy",
+        "rateLimitPolicy"
+      ]
+    },
+    "DashboardSystemRetention": {
+      "type": "object",
+      "properties": {
+        "policyUpdatedAt": {
+          "type": "string"
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardRetentionCategoryRow"
+          }
+        },
+        "maxLagMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "maxLagCategory": {
+          "anyOf": [
+            {
+              "const": "attemptHistory"
+            },
+            {
+              "const": "jobEvents"
+            },
+            {
+              "const": "jobIdentity"
+            },
+            {
+              "const": "scheduleOccurrences"
+            },
+            {
+              "const": "statistics"
+            },
+            {
+              "const": "terminalOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "oldestRetainedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "oldestRetainedCategory": {
+          "anyOf": [
+            {
+              "const": "attemptHistory"
+            },
+            {
+              "const": "jobEvents"
+            },
+            {
+              "const": "jobIdentity"
+            },
+            {
+              "const": "scheduleOccurrences"
+            },
+            {
+              "const": "statistics"
+            },
+            {
+              "const": "terminalOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "eligibleHistoryPartitions": {
+          "type": "object",
+          "properties": {
+            "jobEvents": {
+              "type": "number"
+            },
+            "attemptHistory": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "jobEvents",
+            "attemptHistory"
+          ]
+        },
+        "defaultHistoryRows": {
+          "type": "object",
+          "properties": {
+            "jobEvents": {
+              "type": "number"
+            },
+            "attemptHistory": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "jobEvents",
+            "attemptHistory"
+          ]
+        },
+        "defaultHistoryRowsCapped": {
+          "type": "object",
+          "properties": {
+            "jobEvents": {
+              "type": "boolean"
+            },
+            "attemptHistory": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "jobEvents",
+            "attemptHistory"
+          ]
+        }
+      },
+      "required": [
+        "policyUpdatedAt",
+        "categories",
+        "maxLagMs",
+        "maxLagCategory",
+        "oldestRetainedAt",
+        "oldestRetainedCategory",
+        "eligibleHistoryPartitions",
+        "defaultHistoryRows",
+        "defaultHistoryRowsCapped"
+      ]
+    },
+    "DashboardSystemRetryBucket": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "enum": [
+            "15m",
+            "1h",
+            "1m",
+            "5m",
+            "later"
+          ]
+        },
+        "count": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "count"
+      ]
+    },
+    "DashboardSystemStorage": {
+      "type": "object",
+      "properties": {
+        "rollup": {
+          "type": "object",
+          "properties": {
+            "rolledUpThrough": {
+              "type": "string"
+            },
+            "lagMs": {
+              "type": "number"
+            },
+            "lastRunAt": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "buckets": {
+              "type": "number"
+            },
+            "oldestBucketAt": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "newestBucketAt": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "stalled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "rolledUpThrough",
+            "lagMs",
+            "lastRunAt",
+            "buckets",
+            "oldestBucketAt",
+            "newestBucketAt",
+            "stalled"
+          ]
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardStorageRelation"
+          }
+        },
+        "totalBytes": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "rollup",
+        "relations",
+        "totalBytes"
+      ]
+    },
+    "DashboardSystemWindow": {
+      "enum": [
+        "15m",
+        "1h",
+        "24h"
+      ]
+    },
+    "DashboardTaskCounts": {
+      "type": "object",
+      "properties": {
+        "canceled": {
+          "type": "number"
+        },
+        "blocked": {
+          "type": "number"
+        },
+        "scheduled": {
+          "type": "number"
+        },
+        "completed": {
+          "type": "number"
+        },
+        "waiting": {
+          "type": "number"
+        },
+        "running": {
+          "type": "number"
+        },
+        "all": {
+          "type": "number"
+        },
+        "retried": {
+          "type": "number"
+        },
+        "queued": {
+          "type": "number"
+        },
+        "discarded": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "canceled",
+        "blocked",
+        "scheduled",
+        "completed",
+        "waiting",
+        "running",
+        "all",
+        "retried",
+        "queued",
+        "discarded"
+      ]
+    },
+    "DashboardTaskFacets": {
+      "type": "object",
+      "properties": {
+        "queues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "workers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "jobTypes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "queues",
+        "workers",
+        "jobTypes",
+        "tags"
+      ]
+    },
+    "DashboardTasksPage": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "canCompleteHumanWait": {
+          "type": "boolean"
+        },
+        "filter": {
+          "enum": [
+            "all",
+            "blocked",
+            "canceled",
+            "completed",
+            "discarded",
+            "queued",
+            "retried",
+            "running",
+            "scheduled",
+            "waiting"
+          ]
+        },
+        "queue": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "worker": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "jobType": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "sort": {
+          "enum": [
+            "priority",
+            "updated"
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "search": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "page": {
+          "type": "number"
+        },
+        "pageSize": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        },
+        "counts": {
+          "$ref": "#/$defs/DashboardTaskCounts"
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardJobRow"
+          }
+        }
+      },
+      "required": [
+        "capturedAt",
+        "canCompleteHumanWait",
+        "filter",
+        "queue",
+        "worker",
+        "jobType",
+        "priority",
+        "sort",
+        "tags",
+        "search",
+        "page",
+        "pageSize",
+        "total",
+        "counts",
+        "jobs"
+      ]
+    },
+    "DashboardWorkerRow": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "hostname": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "activeJobs": {
+          "type": "number"
+        },
+        "concurrency": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "activeSlots": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "draining": {
+          "type": "boolean"
+        },
+        "completedAttempts": {
+          "type": "number"
+        },
+        "failedAttempts": {
+          "type": "number"
+        },
+        "averageExecutionMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "lastSeenAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "startedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "registered": {
+          "type": "boolean"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "idle",
+            "offline",
+            "recent"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "hostname",
+        "pid",
+        "activeJobs",
+        "concurrency",
+        "activeSlots",
+        "draining",
+        "completedAttempts",
+        "failedAttempts",
+        "averageExecutionMs",
+        "lastSeenAt",
+        "startedAt",
+        "registered",
+        "paused",
+        "status"
+      ]
+    },
+    "DashboardWorkersPage": {
+      "type": "object",
+      "properties": {
+        "capturedAt": {
+          "type": "string"
+        },
+        "canManageWorkers": {
+          "type": "boolean"
+        },
+        "workers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardWorkerRow"
+          }
+        }
+      },
+      "required": [
+        "capturedAt",
+        "canManageWorkers",
+        "workers"
+      ]
+    },
+    "Json": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Json"
+          }
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Json"
+          }
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "RetentionPolicyImpact": {
+      "type": "object",
+      "properties": {
+        "eligible": {
+          "type": "object",
+          "properties": {
+            "terminalJobs": {
+              "type": "number"
+            },
+            "jobEvents": {
+              "type": "number"
+            },
+            "attemptHistory": {
+              "type": "number"
+            },
+            "scheduleOccurrences": {
+              "type": "number"
+            },
+            "statistics": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "terminalJobs",
+            "jobEvents",
+            "attemptHistory",
+            "scheduleOccurrences",
+            "statistics"
+          ]
+        },
+        "capped": {
+          "type": "object",
+          "properties": {
+            "terminalJobs": {
+              "type": "boolean"
+            },
+            "jobEvents": {
+              "type": "boolean"
+            },
+            "attemptHistory": {
+              "type": "boolean"
+            },
+            "scheduleOccurrences": {
+              "type": "boolean"
+            },
+            "statistics": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "terminalJobs",
+            "jobEvents",
+            "attemptHistory",
+            "scheduleOccurrences",
+            "statistics"
+          ]
+        }
+      },
+      "required": [
+        "eligible",
+        "capped"
+      ]
+    },
+    "SendSignalStatus": {
+      "enum": [
+        "already_delivered",
+        "delivered",
+        "duplicate",
+        "not_found",
+        "not_waiting",
+        "stale"
+      ]
+    }
+  }
+}

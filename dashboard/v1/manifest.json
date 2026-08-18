@@ -1,0 +1,149 @@
+{
+  "formatVersion": 1,
+  "contractVersion": 1,
+  "readSurfaceVersion": 1,
+  "transport": {
+    "protocol": "orpc-rpc",
+    "method": "POST",
+    "pathTemplate": "{basePath}/rpc/dashboard/{procedure}",
+    "requestContentType": "application/json",
+    "requestEnvelope": {
+      "json": "<input>"
+    },
+    "successEnvelope": {
+      "json": "<output>"
+    },
+    "emptySuccessBody": {},
+    "errorEnvelope": {
+      "type": "object",
+      "properties": {
+        "json": {
+          "type": "object",
+          "properties": {
+            "defined": {
+              "const": false
+            },
+            "code": {
+              "type": "string"
+            },
+            "status": {
+              "type": "number"
+            },
+            "message": {
+              "type": "string"
+            },
+            "data": {}
+          },
+          "required": [
+            "defined",
+            "code",
+            "status",
+            "message"
+          ]
+        }
+      },
+      "required": [
+        "json"
+      ]
+    }
+  },
+  "authentication": {
+    "delegated": true,
+    "unauthenticatedStatus": 401,
+    "forbiddenStatus": 403,
+    "singleAdminRoutes": {
+      "login": "{basePath}/login",
+      "logout": "{basePath}/logout"
+    }
+  },
+  "csrf": {
+    "mechanism": "same-origin",
+    "rule": "Mutation procedures require an Origin header matching the request origin; a mismatched or unparsable Origin is rejected with status 403 before the procedure runs."
+  },
+  "procedures": {
+    "meta": {
+      "mutation": false
+    },
+    "taskCounts": {
+      "mutation": false
+    },
+    "tasks": {
+      "mutation": false
+    },
+    "taskFacets": {
+      "mutation": false
+    },
+    "activity": {
+      "mutation": false
+    },
+    "events": {
+      "mutation": false
+    },
+    "eventDetail": {
+      "mutation": false
+    },
+    "cron": {
+      "mutation": false
+    },
+    "queues": {
+      "mutation": false
+    },
+    "system": {
+      "mutation": false
+    },
+    "workers": {
+      "mutation": false
+    },
+    "settings": {
+      "mutation": false
+    },
+    "previewRetentionPolicy": {
+      "mutation": false
+    },
+    "jobDetail": {
+      "mutation": false
+    },
+    "humanWaits": {
+      "mutation": false
+    },
+    "enqueueTest": {
+      "mutation": true
+    },
+    "setScheduleEnabled": {
+      "mutation": true
+    },
+    "setQueuePaused": {
+      "mutation": true
+    },
+    "purgeQueue": {
+      "mutation": true
+    },
+    "setWorkerPaused": {
+      "mutation": true
+    },
+    "overrideMaintenancePolicy": {
+      "mutation": true
+    },
+    "revertMaintenancePolicy": {
+      "mutation": true
+    },
+    "overrideRetentionPolicy": {
+      "mutation": true
+    },
+    "revertRetentionPolicy": {
+      "mutation": true
+    },
+    "runTaskNow": {
+      "mutation": true
+    },
+    "cancelTask": {
+      "mutation": true
+    },
+    "signalTask": {
+      "mutation": true
+    },
+    "completeHumanWait": {
+      "mutation": true
+    }
+  }
+}

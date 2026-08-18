@@ -1,0 +1,99 @@
+# Dashboard wire contract, version 1
+
+This directory is the language-neutral contract a backend implements to embed the Workhorse
+dashboard (ADR 0029). The React application in `dashboard/app` is the only frontend; a backend
+serves its bundle and answers its RPC procedures. The TypeScript server in
+`typescript/dashboard-server` is the first implementation bound by this contract.
+
+The committed artifacts are the authority and the oRPC router in
+`typescript/dashboard-server/src/server/router.ts` is the generator, the same relation
+`sql/schema/current.sql` has to the migrations. `pnpm dashboard-spec:generate` regenerates the
+artifacts; `pnpm dashboard-spec:check` and `typescript/dashboard-server/test/dashboard-spec.test.ts`
+fail when the router and the artifacts disagree. A router change that alters these files is a
+reviewed contract change. A change that breaks an existing client requires a new `dashboard/v2`
+directory; this directory then only receives compatible corrections.
+
+## Artifacts
+
+- `manifest.json` identifies the format, the transport envelope, the authentication and CSRF
+  expectations, and every procedure with its mutation flag.
+- `procedures.json` gives each procedure its URL path, mutation flag, request-input JSON Schema,
+  and response JSON Schema (2020-12). Shared wire types live under `$defs`. An `input` of `null`
+  means the procedure accepts an empty request envelope; an `output` of `null` means it produces
+  no result and answers `{}`.
+
+## Transport
+
+Every procedure is one HTTP endpoint: `POST {basePath}/rpc/dashboard/{procedure}` with
+`content-type: application/json`. `{basePath}` is the dashboard mount path — `/workhorse` by
+default, empty when the dashboard owns the host root (`normalizeDashboardPath` in
+`typescript/dashboard-server/src/server/host.ts`). Other HTTP methods answer status 405.
+
+The body is an oRPC RPC envelope. A request carries the validated input under `json`; a success
+response carries the result under `json`:
+
+```json
+{ "json": { "id": "5c1f…", "audit": { "actor": "…", "reason": "…", "requestId": "…" } } }
+```
+
+Every type in this contract is plain JSON, so the envelope's optional `meta` array (which oRPC
+uses to restore non-JSON values such as dates or maps) is never required: a backend may ignore an
+incoming `meta` and must not need one on responses. A procedure whose `output` is `null` answers
+`{}` with status 200.
+
+A failed call answers the error envelope with a matching HTTP status:
+
+```json
+{ "json": { "defined": false, "code": "NOT_FOUND", "status": 404, "message": "Task not found" } }
+```
+
+Codes the reference implementation uses: `BAD_REQUEST` (400, malformed envelope or input rejected
+by the request schema), `FORBIDDEN` (403, mutation on a read-only dashboard), `NOT_FOUND` (404,
+`eventDetail`, `jobDetail`, `runTaskNow`, `cancelTask`, `signalTask`, `completeHumanWait`),
+`METHOD_NOT_SUPPORTED` (405), and `INTERNAL_SERVER_ERROR` (500). Input constraints beyond JSON
+Schema — for example `enqueueTest` requiring `feature` when `kind` is `"feature"` — are enforced
+server-side and answer `BAD_REQUEST`.
+
+## Request handling order
+
+The reference host processes every owned request in this order; a conforming backend must not
+reorder authorization behind procedure execution:
+
+1. **Authorization.** Every dashboard, RPC, and asset request is authorized by the host
+   application (or by built-in single-admin sessions). An unauthenticated request answers 401,
+   an unauthorized one 403.
+2. **Schema compatibility.** An incompatible installed Workhorse schema answers 503 with
+   `{ "error": "…" }`.
+3. **Same-origin check.** A procedure flagged `mutation` requires an `Origin` header whose origin
+   equals the request URL's origin; a missing, mismatched, or unparsable `Origin` answers 403
+   with `{ "error": "A same-origin mutation request is required" }` before the procedure runs.
+   This is the dashboard's CSRF protection; it relies on the browser sending `Origin` on
+   cross-origin POSTs and assumes cookie-authenticated deployments stay same-origin.
+4. **Input validation**, then the procedure.
+
+Mutations additionally require the backend to be writable: a read-only backend answers
+`FORBIDDEN` for every `mutation: true` procedure. Audit attribution (`audit.actor`) is
+server-assigned from the authenticated principal; the client-supplied value is ignored.
+
+## Serving the application
+
+Besides RPC, a backend serves three surfaces under `{basePath}`:
+
+- `{basePath}` exactly answers a 302 redirect to `{basePath}/tasks`.
+- `{basePath}/assets/*` serves the built bundle's files with immutable caching.
+- Every other owned path answers the bundle's `index.html` with two placeholders filled
+  (`renderDashboardHtml` in `typescript/dashboard-server/src/server/html.ts`): the runtime
+  configuration script `window.workhorseDashboard = { basePath, rpcUrl, auditActor,
+authentication, demoTools }` (`DashboardRuntimeConfig`), and optional host-owned module tags.
+  `authentication` is null when the host owns authorization; otherwise it names the mounted
+  `loginUrl` and `logoutUrl`, and the application redirects there when RPC answers 401.
+
+Reads behind these procedures go through the versioned `dashboard_*_v1` SQL views and mutations
+go through the shared versioned SQL functions, so a backend implements transport, sessions, and
+delegation — never a second read model. `docs/architecture.md` names the views and functions.
+
+## Conformance
+
+HTTP-level conformance fixtures, analogous to `protocol/v1/scenarios.json`, are planned and
+tracked in Linear (WOR-252); until they land, `procedures.json` plus this document is the
+contract, and the parity check keeps it honest against the reference implementation.

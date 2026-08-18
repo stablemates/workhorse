@@ -4,5 +4,6 @@
     "noEmit": true,
     "rootDir": "../..",
     "incremental": false
-  }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "spec/**/*.ts"]
 }
