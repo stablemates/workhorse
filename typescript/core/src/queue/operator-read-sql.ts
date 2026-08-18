@@ -1,9 +1,5 @@
 import { totalDepthSelect } from "../queue-depth.js";
-import {
-  DEPENDENCY_OPERATIONS_SCAN_LIMIT,
-  EXTERNAL_WAIT_REJECTION_WINDOW_MS,
-  HEALTH_HISTORY_SCAN_LIMIT,
-} from "../types.js";
+import { DEPENDENCY_OPERATIONS_SCAN_LIMIT, HEALTH_HISTORY_SCAN_LIMIT } from "../types.js";
 
 // The rate-limit status projection is shared verbatim between rateLimitStatuses() and the health
 // snapshot statement so the two surfaces can never disagree about throttle semantics. $1 is the

@@ -24,8 +24,8 @@ describe("demo feature showcase catalog", () => {
   });
 
   it("declares one repeat-safe menu example for every family", () => {
-    expect(Object.keys(DEMO_FEATURE_MENU_EXAMPLES).sort()).toEqual(
-      DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => family.key).sort(),
+    expect(Object.keys(DEMO_FEATURE_MENU_EXAMPLES).toSorted()).toEqual(
+      DEMO_FEATURE_SHOWCASE_FAMILIES.map((family) => family.key).toSorted(),
     );
     for (const example of Object.values(DEMO_FEATURE_MENU_EXAMPLES)) {
       // The operator enqueue path only performs plain acceptances (plus enqueueMany for the batch
