@@ -14,7 +14,7 @@ class AsyncpgConnection:
     async def fetch(self, sql: str, *parameters: object) -> Sequence[Mapping[str, object]]:
         self.calls.append((sql, parameters))
         if "schema_version" in sql:
-            return [{"version": 43}]
+            return [{"version": 44}]
         return [{"ordinal": 1, "job_id": "asyncpg", "outcome": "accepted", "reason": None}]
 
     async def commit(self) -> None:
@@ -47,7 +47,7 @@ class AsyncPsycopgCursor:
 
     async def fetchall(self) -> Sequence[Sequence[object]]:
         if "schema_version" in self.sql:
-            return [(43,)]
+            return [(44,)]
         return [(1, "psycopg", "accepted", None)]
 
 

@@ -62,14 +62,15 @@ Nothing accepts jobs over HTTP. Producers need a database connection and the SDK
 Workaround: enqueue from your own API routes — which is also where transactional enqueue with your
 business writes lives.
 
-## Pre-release schemas have no upgrade source
+## Retired pre-release schemas have no upgrade source
 
-`migrateSchema` applies ordered, forward-only migrations from the supported baseline. The current
-pre-release line has no earlier supported baseline, so operators must reset older development
-schemas instead of upgrading them.
+`migrateSchema` applies ordered, forward-only migrations from the supported baseline. Schemas at
+versions retired before that baseline have no migration history, so operators must reset those
+development schemas instead of upgrading them.
 
-Workaround: keep schema changes in the deployment path and call `migrateSchema` before starting a
-new runtime. The changelog records which released versions can migrate forward.
+Workaround: keep schema changes in the deployment path and call `migrateSchema` — or
+`workhorse schema migrate` — before starting a new runtime. The changelog records each release's
+required schema version.
 
 ## Dashboard authentication has one built-in role
 

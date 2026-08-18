@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expectOneRow } from "./errors.js";
 import {
   applySchemaMigrationPlan,
+  readProtocolVersions,
   readSchemaVersion,
   type SchemaMigrationStep,
 } from "./schema-migrations.js";
@@ -13,10 +14,17 @@ import type { Queryable } from "./types.js";
 /** Current pre-release baseline, and later the oldest version covered by migrations. */
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 43;
 
-/** Canonical schema version for the current pre-release line. */
-export const WORKHORSE_SCHEMA_VERSION = 43;
+/** Canonical schema version for the current line. */
+export const WORKHORSE_SCHEMA_VERSION = 44;
 
-const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
+const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
+  {
+    fromVersion: 43,
+    toVersion: 44,
+    file: "0044-protocol-version.sql",
+    description: "protocol version registry",
+  },
+];
 
 function sqlAsset(relativePath: string): URL {
   const packaged = new URL(`../sql/${relativePath}`, import.meta.url);
@@ -25,7 +33,7 @@ function sqlAsset(relativePath: string): URL {
     : new URL(`../../../sql/${relativePath}`, import.meta.url);
 }
 
-export { readSchemaVersion };
+export { readProtocolVersions, readSchemaVersion };
 
 /** Check compatibility without creating or changing database objects. */
 export async function assertSchemaCompatible(database: Queryable): Promise<void> {

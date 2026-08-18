@@ -21,6 +21,14 @@ function runCli(args: readonly string[]) {
 }
 
 describe("database CLI output", () => {
+  it("leaves an already-current schema unchanged through schema migrate", () => {
+    const result = runCli(["schema", "migrate", `--database-url=${databaseUrl}`]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(
+      `Workhorse schema v${WORKHORSE_SCHEMA_VERSION} is already current.`,
+    );
+  });
+
   it("emits separate current-schema and PostgreSQL support fields", () => {
     const result = runCli(["schema", "status", `--database-url=${databaseUrl}`, "--json"]);
     expect(result.code).toBe(0);
@@ -29,6 +37,7 @@ describe("database CLI output", () => {
         installedVersion: WORKHORSE_SCHEMA_VERSION,
         expectedVersion: WORKHORSE_SCHEMA_VERSION,
         state: "current",
+        installedProtocolVersions: [1],
       },
       postgres: {
         supported: true,

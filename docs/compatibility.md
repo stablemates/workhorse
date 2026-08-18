@@ -98,7 +98,7 @@ Nine packages ship from this repository. `@workhorse/core` is the TypeScript dur
 The eight TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package version floats independently and declares compatibility through SQL protocol 1
-and schema version 43 instead of a TypeScript peer range.
+and schema version 44 instead of a TypeScript peer range.
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
 server reads `workhorse.dashboard_*_v1` views and versioned functions, so a core patch remains
@@ -116,9 +116,12 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   single row in `workhorse.schema_version`. `assertSchemaCompatible` refuses anything else, and it
   refuses on both sides: an older runtime against a newer schema fails just as loudly as the
   reverse. A mixed fleet mid-deploy is not supported.
-- **Installation is clean-database only.** `installSchema` refuses to interpret an older or
-  unversioned `workhorse` schema. `migrateSchema` owns explicit forward upgrades after the first
-  public release, while pre-release versions require a fresh schema or a separately engineered path.
+- **Installation is clean-database only; migration owns upgrades.** `installSchema` refuses to
+  interpret an older or unversioned `workhorse` schema. `migrateSchema` applies ordered, immutable,
+  transactional migrations forward from the version 43 baseline; retired pre-release versions below
+  43 require a fresh schema. `docs/schema-lifecycle.md` records the execution contract, the
+  expand/contract rollout rules, and the backup and recovery guidance. The supported upgrade window
+  is deliberately undefined until real released versions require one.
 - **Correctness-sensitive transitions stay in versioned SQL functions.** Claim, completion, retry,
   cancellation, deadline, and maintenance transitions are owned by SQL. A client that speaks the
   same schema version speaks the same protocol, whatever language it is written in.

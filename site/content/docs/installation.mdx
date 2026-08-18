@@ -53,6 +53,7 @@ installed version against what the runtime expects.
 
 ```bash
 npx workhorse schema install
+npx workhorse schema migrate
 npx workhorse schema status
 npx workhorse schema status --json
 ```
@@ -87,8 +88,11 @@ await migrateSchema(pool);
 ```
 
 The migration refuses a missing schema, a version below its supported baseline, a newer version,
-or a gap in the ordered plan. The current pre-release line has no older supported source, so an
-older development schema still requires a reset until a public release adds the first migration.
+or a gap in the ordered plan. Each step commits one version in its own transaction behind an
+advisory lock, and a failed step rolls back atomically, so a rerun resumes from the recorded
+version. The same step is available from the CLI as `workhorse schema migrate`, and an
+already-current schema is left unchanged. Development schemas at retired versions below the
+baseline still require a reset.
 
 ## Check before a runtime starts
 

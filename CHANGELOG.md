@@ -15,9 +15,19 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v43**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v44**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
+
+- `@workhorse/core`: ordered, transactional schema migrations replace clean-install-only schema
+  management. `migrateSchema` and the new `workhorse schema migrate` command apply immutable steps
+  forward from the frozen version 43 baseline; each step commits one version behind the
+  `workhorse:schema-migration` advisory lock and rolls back atomically on failure. Migration 0044
+  adds `workhorse.protocol_version`, which records the served SQL protocol versions independently
+  of the `workhorse.schema_migration` history; `readProtocolVersions` and `workhorse schema status`
+  report it. Upgrade steps: run `workhorse schema migrate` (or `migrateSchema`) before starting
+  processes from this release; development schemas at retired versions below 43 still require
+  `pnpm worktree:setup`.
 
 - `@workhorse/core`: durable PostgreSQL job queue with at-least-once delivery, leases and fencing,
   cooperative cancellation, deadlines and execution timeouts, durable waits, progress and
@@ -126,9 +136,9 @@ name the retired instruments.
   reads to recent rejection evidence instead of scanning all retained event history.
 
 - `@workhorse/core`: schema versions 23 through 42 are replaced by the version 43 pre-release
-  baseline. No published deployment can consume that history, so schema changes edit the canonical
-  artifact directly until the first public release. Existing development worktrees must run
-  `pnpm worktree:setup` once to recreate their dedicated databases.
+  baseline. No published deployment can consume that history. Version 43 became the permanent
+  migration baseline; later schema changes ship as ordered migrations. Existing development
+  worktrees must run `pnpm worktree:setup` once to recreate their dedicated databases.
 
 - `@workhorse/core`: metric instruments are created on first emission and re-created when the
   global meter provider changes. An application may now install its OpenTelemetry SDK after

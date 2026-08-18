@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { verifySqlProtocolFixtures } from "../../../scripts/verify-sql-protocol.js";
-import { migrateSchema } from "../src/index.js";
+import { migrateSchema, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 import { applySchemaMigrationPlan } from "../src/schema-migrations.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 
@@ -14,6 +14,7 @@ const fixtureDatabase = createDatabaseTestHarness(new URL("?fixture", import.met
 const fixtureCleanDatabase = createDatabaseTestHarness(
   new URL("?fixture-clean", import.meta.url).href,
 );
+const releaseDatabase = createDatabaseTestHarness(new URL("?release", import.meta.url).href);
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const executeFile = promisify(execFile);
 
@@ -52,6 +53,7 @@ describe("schema migrations", () => {
       cleanDatabase.setup(),
       fixtureDatabase.setup(),
       fixtureCleanDatabase.setup(),
+      releaseDatabase.setup(),
     ]);
     await Promise.all([
       fixtureDatabase.pool.query("DROP SCHEMA workhorse CASCADE"),
@@ -64,6 +66,7 @@ describe("schema migrations", () => {
       cleanDatabase.teardown(),
       fixtureDatabase.teardown(),
       fixtureCleanDatabase.teardown(),
+      releaseDatabase.teardown(),
     ]);
   });
 
@@ -85,8 +88,13 @@ describe("schema migrations", () => {
       baselineVersion: 1,
       currentVersion: 3,
       steps: [
-        { fromVersion: 1, toVersion: 2, file: "0002-add-name.sql" },
-        { fromVersion: 2, toVersion: 3, file: "0003-add-created-at.sql" },
+        { fromVersion: 1, toVersion: 2, file: "0002-add-name.sql", description: "add name" },
+        {
+          fromVersion: 2,
+          toVersion: 3,
+          file: "0003-add-created-at.sql",
+          description: "add created_at",
+        },
       ],
       readStep: (file) => readFile(path.join(directory, file), "utf8"),
     });
@@ -94,6 +102,15 @@ describe("schema migrations", () => {
     expect(await dumpNormalizedSchema(fixtureDatabase.databaseUrl)).toBe(
       await dumpNormalizedSchema(fixtureCleanDatabase.databaseUrl),
     );
+
+    const migrations = await fixtureDatabase.pool.query<{ version: number; description: string }>(
+      "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
+    );
+    expect(migrations.rows).toEqual([
+      { version: 1, description: "fixture baseline" },
+      { version: 2, description: "add name" },
+      { version: 3, description: "add created_at" },
+    ]);
   });
 
   it("rejects a gap in a synthetic forward migration plan", async () => {
@@ -103,13 +120,50 @@ describe("schema migrations", () => {
         applySchemaMigrationPlan(fixtureDatabase.pool, {
           baselineVersion: 1,
           currentVersion: 3,
-          steps: [{ fromVersion: 2, toVersion: 3, file: "unused.sql" }],
+          steps: [{ fromVersion: 2, toVersion: 3, file: "unused.sql", description: "unused" }],
           readStep: () => Promise.reject(new Error("a missing step must fail before reading SQL")),
         }),
       ).rejects.toThrow("No Workhorse schema migration starts at version 1");
     } finally {
       await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 3");
     }
+  });
+
+  it("rejects a migration body that manages its own transaction", async () => {
+    await expect(
+      applySchemaMigrationPlan(
+        fixtureDatabase.pool,
+        {
+          baselineVersion: 1,
+          currentVersion: 4,
+          steps: [{ fromVersion: 3, toVersion: 4, file: "0004.sql", description: "self commit" }],
+          readStep: () => Promise.resolve("COMMIT;\nALTER TABLE workhorse.example ADD y integer;"),
+        },
+        3,
+      ),
+    ).rejects.toThrow("must not contain transaction control statements");
+  });
+
+  it("rolls a failed migration back atomically", async () => {
+    await expect(
+      applySchemaMigrationPlan(
+        fixtureDatabase.pool,
+        {
+          baselineVersion: 1,
+          currentVersion: 4,
+          steps: [{ fromVersion: 3, toVersion: 4, file: "0004.sql", description: "broken" }],
+          readStep: () =>
+            Promise.resolve("CREATE TABLE workhorse.should_not_exist (id integer);\nSELECT 1 / 0;"),
+        },
+        3,
+      ),
+    ).rejects.toThrow("Workhorse migration 0004.sql failed and was rolled back");
+
+    const state = await fixtureDatabase.pool.query<{ version: number; leaked: string | null }>(
+      `SELECT version, to_regclass('workhorse.should_not_exist')::text AS leaked
+         FROM workhorse.schema_version`,
+    );
+    expect(state.rows).toEqual([{ version: 3, leaked: null }]);
   });
 
   it("rejects retired pre-release schema versions", async () => {
@@ -120,6 +174,48 @@ describe("schema migrations", () => {
       );
     } finally {
       await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 3");
+    }
+  });
+
+  it("migrates every released schema version to a schema identical to a clean installation", async () => {
+    const releases = (await readdir(path.join(repository, "sql", "releases")))
+      .filter((file) => file.endsWith(".sql"))
+      // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
+      .sort();
+    expect(releases.length).toBeGreaterThan(0);
+
+    for (const release of releases) {
+      const releasedVersion = Number.parseInt(release, 10);
+      await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
+      await releaseDatabase.pool.query(
+        await readFile(path.join(repository, "sql", "releases", release), "utf8"),
+      );
+      const installed = await releaseDatabase.pool.query<{ version: number }>(
+        "SELECT version FROM workhorse.schema_version",
+      );
+      expect(installed.rows).toEqual([{ version: releasedVersion }]);
+
+      await migrateSchema(releaseDatabase.pool);
+
+      expect(await dumpNormalizedSchema(releaseDatabase.databaseUrl)).toBe(
+        await dumpNormalizedSchema(cleanDatabase.databaseUrl),
+      );
+      const versions = await releaseDatabase.pool.query<{ version: number }>(
+        "SELECT version FROM workhorse.schema_version",
+      );
+      expect(versions.rows).toEqual([{ version: WORKHORSE_SCHEMA_VERSION }]);
+      const protocols = await releaseDatabase.pool.query<{ version: number }>(
+        "SELECT version FROM workhorse.protocol_version ORDER BY version",
+      );
+      expect(protocols.rows).toEqual([{ version: 1 }]);
+      const migrations = await releaseDatabase.pool.query<{ version: number }>(
+        "SELECT version FROM workhorse.schema_migration ORDER BY version",
+      );
+      // A clean installation records the full lineage from the baseline, and each migration
+      // appends its own row, so both paths agree on the complete 43..current range.
+      expect(migrations.rows.map((row) => row.version)).toEqual(
+        Array.from({ length: WORKHORSE_SCHEMA_VERSION - 43 + 1 }, (unused, index) => 43 + index),
+      );
     }
   });
 
@@ -135,14 +231,15 @@ describe("schema migrations", () => {
   });
 
   it("leaves an already-current schema unchanged", async () => {
-    const before = await cleanDatabase.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 43",
+    const before = await cleanDatabase.pool.query<{ version: number; applied_at: Date }>(
+      "SELECT version, applied_at FROM workhorse.schema_migration ORDER BY version",
     );
+    expect(before.rows.map((row) => row.version)).toEqual([43, WORKHORSE_SCHEMA_VERSION]);
 
     await migrateSchema(cleanDatabase.pool);
 
-    const after = await cleanDatabase.pool.query<{ applied_at: Date }>(
-      "SELECT applied_at FROM workhorse.schema_migration WHERE version = 43",
+    const after = await cleanDatabase.pool.query<{ version: number; applied_at: Date }>(
+      "SELECT version, applied_at FROM workhorse.schema_migration ORDER BY version",
     );
     expect(after.rows).toEqual(before.rows);
   });

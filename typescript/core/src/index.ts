@@ -21,6 +21,7 @@ export {
   assertSchemaCompatible,
   installSchema,
   migrateSchema,
+  readProtocolVersions,
   readSchemaVersion,
   WORKHORSE_SCHEMA_BASELINE_VERSION,
   WORKHORSE_SCHEMA_VERSION,

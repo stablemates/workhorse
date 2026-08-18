@@ -16,6 +16,13 @@ CREATE TABLE IF NOT EXISTS workhorse.schema_migration (
   applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+-- SQL protocol versions served by the installed schema, recorded independently of the schema
+-- migration history so a protocol revision is never inferred from a schema version.
+CREATE TABLE IF NOT EXISTS workhorse.protocol_version (
+  version integer PRIMARY KEY,
+  recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
 CREATE OR REPLACE FUNCTION workhorse.valid_tags(p_tags text[])
 RETURNS boolean
 LANGUAGE sql
@@ -9090,9 +9097,11 @@ AS $$
 $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (43, 'pre-release baseline')
+  (43, 'pre-release baseline'),
+  (44, 'protocol version registry')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (43) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (44) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.protocol_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date
        )

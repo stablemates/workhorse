@@ -245,16 +245,24 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v43 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v44 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(43);
+    expect(version.rows[0]?.version).toBe(44);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
     );
-    expect(migrations.rows).toEqual([{ version: 43, description: "pre-release baseline" }]);
+    expect(migrations.rows).toEqual([
+      { version: 43, description: "pre-release baseline" },
+      { version: 44, description: "protocol version registry" },
+    ]);
+
+    const protocols = await pool.query<{ version: number }>(
+      "SELECT version FROM workhorse.protocol_version ORDER BY version",
+    );
+    expect(protocols.rows).toEqual([{ version: 1 }]);
 
     const maintenanceFunctions = await pool.query<{
       maintain: string | null;

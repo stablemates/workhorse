@@ -6,6 +6,7 @@ export interface SchemaStatusReport {
     readonly installedVersion: number | null;
     readonly expectedVersion: number;
     readonly state: "not-installed" | "current" | "drift";
+    readonly installedProtocolVersions: readonly number[] | null;
   };
   readonly postgres: PostgresSupport & {
     readonly minimumMajor: number;
@@ -15,6 +16,7 @@ export interface SchemaStatusReport {
 
 export function createSchemaStatusReport(
   installedVersion: number | null,
+  installedProtocolVersions: readonly number[] | null,
   support: PostgresSupport,
 ): SchemaStatusReport {
   return {
@@ -27,6 +29,7 @@ export function createSchemaStatusReport(
           : installedVersion === WORKHORSE_SCHEMA_VERSION
             ? "current"
             : "drift",
+      installedProtocolVersions,
     },
     postgres: {
       ...support,
