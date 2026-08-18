@@ -10,7 +10,7 @@ The operator dashboard auto-refreshes, and every time window on its system page 
 
 Each query was correct and each was proportional to throughput. Together they made observing the system most expensive exactly when the system was busiest, which is when an operator is most likely to be watching. On a busy queue a 24-hour window re-scanned millions of rows per refresh.
 
-[WOR-258](https://linear.app/workhorse-run/issue/WOR-258/p2-10-remainder-long-horizon-statistics-tiers-mergeable-percentiles) scopes the full long-horizon rollup — hourly and daily tiers, a retention ladder, and benchmarks. That is the right eventual shape, but the dashboard needed the cost curve fixed before the tiering question was answered.
+TODO P2-10 scoped a full long-horizon rollup: hourly and daily tiers, a retention ladder, mergeable percentiles, and benchmarks. The minute tier shipped first, then became the source for the coarser tiers described below.
 
 ## Decision
 
@@ -68,6 +68,26 @@ Deletion is bounded per pass like every other prune. The first pass after shorte
 eligible to delete months of buckets, and an unbounded statement there would hold a long lock on the
 relation every operator window reads.
 
+### Derive complete hour and day tiers
+
+`job_stat_bucket_hour` derives only complete hours from minute rows. `job_stat_bucket_day` derives
+only complete days from hour rows. Each pass recomputes the affected coarse periods, so late history
+absorbed by a minute recomputation also converges in its parent tiers.
+
+`stat_buckets_v1` requires the lower bound to align with its selected tier, then chooses the
+coarsest complete rows and fills the recent edge from finer data. Minute rows age out first, hour
+rows age out next, and day rows follow the operator's statistics retention window.
+
+### Store first-claim wait in a logarithmic sketch
+
+The removed fixed-edge histogram spent bins where no samples existed and clipped values beyond its
+last edge. The replacement uses logarithmic bins with a constant ratio. Matching bins merge by
+adding counts, so hour and day rows retain percentile information without retaining samples.
+
+The dashboard computes queue-wait percentiles from merged sketches. The production-shaped benchmark
+kept relative p95 error within one percent while long-window reads were substantially faster than
+the raw event self join.
+
 ## Consequences
 
 - Every system-page window costs one pass over the buckets in the window plus a one-to-three-minute live tail, instead of a scan proportional to throughput.
@@ -75,15 +95,13 @@ relation every operator window reads.
 - Catch-up after an outage is bounded per pass, so a long gap advances over several cycles rather than in one long transaction.
 - The rollup runs before retention in the same worker cycle, so a cycle can reclaim the history it just summarized.
 - Setting `statisticsRollupIntervalMs` to `0` is a supported configuration: windows stay fully derived and history retention holds at the current watermark. Correctness does not depend on the pass running.
-- First-attempt wait is attributed to the minute the attempt _finished_, not the minute it was claimed. The two differ by the attempt's own duration.
+- First-attempt wait is attributed to the minute of the first `claimed` event. The rollup joins that event to the job's `enqueued` event.
 - Window edges are minute-granular. A 15-minute window is 15 whole minutes.
 - Bucket retention is independent of raw history and operator-configurable, defaulting to 14 days. A minute of aggregate is orders of magnitude smaller than the events it summarizes, so a much longer window is affordable when someone wants one.
-- First-attempt wait percentiles are the one panel not served by rollups. A mergeable histogram was implemented and removed: it cost accuracy at every scale and was slower than the exact self join below roughly 1M jobs/day. Aggregate tiers, not approximation, are the answer there.
+- First-attempt wait percentiles use a mergeable logarithmic sketch, so the dashboard no longer joins raw events for that panel.
 
 ## Non-goals
 
-- Hourly and daily tiers. They remain in [WOR-258](https://linear.app/workhorse-run/issue/WOR-258/p2-10-remainder-long-horizon-statistics-tiers-mergeable-percentiles); the minute tier is the substrate they would be derived from, and they are what would make long windows cheap without keeping minute resolution for months.
-- Approximate percentiles. Rejected once already, on the evidence above.
-- Worker and tag dimensions. Adding either changes the cardinality argument above and belongs in its own decision.
+- Worker and tag dimensions. Their data-controlled cardinality would remove the aggregate row bound, so they remain on bounded live queries.
 - Moving the tasks-page activity chart onto these buckets. Its semantics are a live-state question — tasks whose `updated_at` fell in a bucket, filtered by current state — not an event count, and mapping it onto event buckets would silently change what the chart means. It was made cheap by starting from the tasks that changed inside the window instead.
 - An exported metrics endpoint. These aggregates are an operator read model, not a telemetry pipeline.

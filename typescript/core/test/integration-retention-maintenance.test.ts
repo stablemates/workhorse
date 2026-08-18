@@ -358,7 +358,10 @@ describe("retention maintenance", () => {
       },
     });
 
-    await queue.revertMaintenancePolicy(["statisticsRollupIntervalMs", "statisticsRecomputeBuckets"]);
+    await queue.revertMaintenancePolicy([
+      "statisticsRollupIntervalMs",
+      "statisticsRecomputeBuckets",
+    ]);
     await expect(queue.getMaintenancePolicy()).resolves.toMatchObject({
       statisticsRollupIntervalMs: 30_000,
       statisticsRecomputeBuckets: 5,
@@ -376,7 +379,11 @@ describe("retention maintenance", () => {
       (
         await pool.query<{ enqueued: number }>(
           `SELECT COALESCE(sum(enqueued), 0)::integer AS enqueued
-             FROM workhorse.stat_buckets_v1(clock_timestamp() - interval '1 hour', clock_timestamp())`,
+             FROM workhorse.stat_buckets_v1(
+               date_bin('1 minute', clock_timestamp(),
+                 timestamp with time zone '2000-01-01') - interval '1 hour',
+               clock_timestamp()
+             )`,
         )
       ).rows[0]!.enqueued;
 
@@ -394,6 +401,70 @@ describe("retention maintenance", () => {
     ).not.toBe("0");
     // The same window now reads a materialized bucket and still reports the same total.
     expect(await window()).toBe(1);
+  });
+
+  it("derives hourly and daily tiers and reads mergeable wait percentiles from them", async () => {
+    const jobId = await queue.enqueue("stat-tiered", {});
+    const claimed = await queue.claim("stat-tiered-worker");
+    expect(claimed?.id).toBe(jobId);
+
+    await pool.query(
+      `UPDATE workhorse.job_event
+          SET occurred_at = date_bin('1 hour', clock_timestamp(),
+                timestamp with time zone '2000-01-01') - interval '55 minutes'
+        WHERE job_id = $1 AND event_type = 'enqueued'`,
+      [jobId],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_event
+          SET occurred_at = date_bin('1 hour', clock_timestamp(),
+                timestamp with time zone '2000-01-01') - interval '45 minutes'
+        WHERE job_id = $1 AND event_type = 'claimed'`,
+      [jobId],
+    );
+    await pool.query(
+      `UPDATE workhorse.job_stat_state
+          SET rolled_up_through = date_bin('1 hour', clock_timestamp(),
+                timestamp with time zone '2000-01-01') - interval '1 hour',
+              hourly_rolled_up_through = date_bin('1 hour', clock_timestamp(),
+                timestamp with time zone '2000-01-01') - interval '1 hour',
+              daily_rolled_up_through = date_bin('1 day', clock_timestamp(),
+                timestamp with time zone '2000-01-01')`,
+    );
+
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60_000);
+    const result = await queue.rollupStatistics({ force: true, now: tomorrow });
+    expect(result.every(({ error }) => error === null)).toBe(true);
+
+    const tiers = await pool.query<{ minutes: string; hours: string; days: string }>(
+      `SELECT (SELECT count(*) FROM workhorse.job_stat_bucket) AS minutes,
+              (SELECT count(*) FROM workhorse.job_stat_bucket_hour) AS hours,
+              (SELECT count(*) FROM workhorse.job_stat_bucket_day) AS days`,
+    );
+    expect(Number(tiers.rows[0]!.minutes)).toBeGreaterThan(0);
+    expect(Number(tiers.rows[0]!.hours)).toBeGreaterThan(0);
+    expect(Number(tiers.rows[0]!.days)).toBeGreaterThan(0);
+
+    const percentile = await pool.query<{ p50_ms: number | null }>(
+      `SELECT workhorse.stat_sketch_percentile_v1(
+                workhorse.stat_sketch_merge_v1(array_agg(stat.wait_sketch)), 0.50
+              ) AS p50_ms
+         FROM workhorse.stat_buckets_v1(
+           date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01'),
+           $1::timestamptz
+         ) stat`,
+      [tomorrow],
+    );
+    expect(percentile.rows[0]!.p50_ms).toBeGreaterThanOrEqual(590_000);
+    expect(percentile.rows[0]!.p50_ms).toBeLessThanOrEqual(610_000);
+
+    await expect(
+      pool.query(
+        `SELECT * FROM workhorse.stat_buckets_v1(
+           clock_timestamp() - interval '30 days', clock_timestamp()
+         )`,
+      ),
+    ).rejects.toThrow("hour-aligned lower bound");
   });
 
   it("folds statistics beyond the group limit into an overflow type instead of growing unbounded", async () => {
@@ -415,31 +486,47 @@ describe("retention maintenance", () => {
     await queue.tick();
     await queue.rollupStatistics({ now: new Date(Date.now() + 120_000) });
     await pool.query(
+      `INSERT INTO workhorse.job_stat_bucket_day (bucket_start, queue_name, job_type, enqueued)
+       SELECT date_bin('1 day', bucket_start, timestamp with time zone '2000-01-01'),
+              queue_name, job_type, sum(enqueued)
+         FROM workhorse.job_stat_bucket
+        GROUP BY 1, 2, 3`,
+    );
+    await pool.query(
       "UPDATE workhorse.job_stat_bucket SET bucket_start = bucket_start - interval '30 days'",
     );
+    await pool.query(
+      "UPDATE workhorse.job_stat_bucket_hour SET bucket_start = bucket_start - interval '30 days'",
+    );
+    await pool.query(
+      "UPDATE workhorse.job_stat_bucket_day SET bucket_start = bucket_start - interval '30 days'",
+    );
+
+    const storedBuckets = async () =>
+      Number(
+        (
+          await pool.query<{ count: string }>(
+            `SELECT sum(count)::text AS count FROM (
+               SELECT count(*) FROM workhorse.job_stat_bucket
+               UNION ALL SELECT count(*) FROM workhorse.job_stat_bucket_hour
+               UNION ALL SELECT count(*) FROM workhorse.job_stat_bucket_day
+             ) tiers`,
+          )
+        ).rows[0]!.count,
+      );
 
     // Statistics deliberately sit outside the identity chain: aggregates may outlive the history
     // they were derived from, so a long statistics window with short history retention is legal.
     await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, statisticsRetentionDays: 365 });
     await queue.rollupStatistics({ force: true, now: new Date() });
-    expect(
-      Number(
-        (await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_stat_bucket"))
-          .rows[0]!.count,
-      ),
-    ).toBeGreaterThan(0);
+    expect(await storedBuckets()).toBeGreaterThan(0);
 
     await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, statisticsRetentionDays: 1 });
     const pruned = await queue.rollupStatistics({ force: true, now: new Date() });
     expect(pruned.find((phase) => phase.phase === "stat_retention")?.rowsAffected).toBeGreaterThan(
       0,
     );
-    expect(
-      Number(
-        (await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_stat_bucket"))
-          .rows[0]!.count,
-      ),
-    ).toBe(0);
+    expect(await storedBuckets()).toBe(0);
   });
 
   it("bounds statistics pruning by the configured rows per pass", async () => {

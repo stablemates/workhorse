@@ -45,7 +45,7 @@ class Cursor:
             raise self.error
 
     def fetchall(self) -> list[tuple[int]]:
-        return [(45,)]
+        return [(46,)]
 
 
 class Connection:

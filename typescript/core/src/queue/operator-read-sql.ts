@@ -277,8 +277,11 @@ export const HEALTH_SNAPSHOT_SQL = `
           ORDER BY occurred_at, attempt_id LIMIT 1) AS oldest_default_attempt_history_at,
         (SELECT occurrence_at FROM workhorse.schedule_occurrence ORDER BY occurrence_at LIMIT 1)
           AS oldest_schedule_occurrence_at,
-        (SELECT bucket_start FROM workhorse.job_stat_bucket ORDER BY bucket_start LIMIT 1)
-          AS oldest_statistics_at
+        (SELECT min(bucket_start) FROM (
+           SELECT bucket_start FROM workhorse.job_stat_bucket
+           UNION ALL SELECT bucket_start FROM workhorse.job_stat_bucket_hour
+           UNION ALL SELECT bucket_start FROM workhorse.job_stat_bucket_day
+         ) statistic_tiers) AS oldest_statistics_at
       FROM policy
     ), partitions AS (
       SELECT parent.relname AS parent_name,
@@ -503,12 +506,20 @@ export const HEALTH_SNAPSHOT_SQL = `
            state.last_run_at,
            bucket_sample.buckets::text AS buckets,
            bucket_sample.buckets_capped,
-           (SELECT max(bucket_start) FROM workhorse.job_stat_bucket) AS newest_bucket_at
+           (SELECT max(bucket_start) FROM (
+              SELECT bucket_start FROM workhorse.job_stat_bucket
+              UNION ALL SELECT bucket_start FROM workhorse.job_stat_bucket_hour
+              UNION ALL SELECT bucket_start FROM workhorse.job_stat_bucket_day
+            ) statistic_tiers) AS newest_bucket_at
       FROM workhorse.job_stat_state state
       CROSS JOIN LATERAL (
         SELECT count(*) AS buckets, count(*) > ${HEALTH_HISTORY_SCAN_LIMIT} AS buckets_capped
-          FROM (SELECT 1 FROM workhorse.job_stat_bucket LIMIT ${HEALTH_HISTORY_SCAN_LIMIT + 1})
-            sampled_buckets
+          FROM (
+            SELECT 1 FROM workhorse.job_stat_bucket
+            UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_hour
+            UNION ALL SELECT 1 FROM workhorse.job_stat_bucket_day
+            LIMIT ${HEALTH_HISTORY_SCAN_LIMIT + 1}
+          ) sampled_buckets
       ) bucket_sample
      WHERE state.singleton
      LIMIT 1

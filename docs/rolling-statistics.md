@@ -2,7 +2,7 @@
 
 Workhorse answers every operator time window — throughput charts, error rates, per-queue drain, wait percentiles, failing task types — from **per-minute aggregates derived from raw history**, rather than from scans over the history itself.
 
-This document records the problem, the design, the schema, the read path, the operational contract, and the limits of the implementation retained in schema version 45.
+This document records the problem, the design, the schema, the read path, the operational contract, and the limits of the implementation retained in schema version 46.
 
 ## Why
 
@@ -32,7 +32,7 @@ Instead a maintenance pass aggregates raw history for minutes that have already 
 
 ## Schema
 
-### `workhorse.job_stat_bucket`
+### Statistics tiers
 
 One row per closed minute per `(queue_name, job_type)`. Primary key `(bucket_start, queue_name, job_type)`; the leading key column makes every window a range scan without an extra index.
 
@@ -44,15 +44,21 @@ One row per closed minute per `(queue_name, job_type)`. Primary key `(bucket_sta
 | `attempt_succeeded`, `attempt_failed`, `attempt_retry`, `attempt_lease_expired`, `attempt_canceled` | attempt | `attempt_history` rows by outcome                               |
 | `attempt_other`                                                                                     | attempt | `deadline_exceeded` and `timeout` closures                      |
 | `attempt_duration_ms`                                                                               | attempt | Sum of `finished_at - started_at`                               |
+| `wait_sketch`                                                                                       | job     | Mergeable first-claim wait histogram                            |
 | `last_attempt_at`, `last_error`, `last_error_at`                                                    | attempt | Latest attempt and latest error message (≤ 500 chars) in minute |
 
 **Grain is never conflated.** A job that retried four times before succeeding contributes one `job_succeeded` and five attempts. Mixing the two is the usual way a throughput panel starts disagreeing with a task list, so the columns are named for their grain and the dashboard picks one deliberately per panel.
 
 `attempt_other` is separate from `attempt_failed` on purpose: a deadline or execution timeout is an error, but it is not a handler failure, and folding them together would misattribute a scheduling problem to application code.
 
+`job_stat_bucket_hour` has the same measures with `bigint` counters and one row per complete hour.
+`job_stat_bucket_day` has the same shape and one row per complete day. Hours derive only from
+minute rows, and days derive only from hour rows.
+
 ### `workhorse.job_stat_state`
 
-Singleton. `rolled_up_through` is the exclusive, minute-aligned watermark: every closed minute below it is materialized. `last_run_at` records the last pass for health.
+Singleton. `rolled_up_through`, `hourly_rolled_up_through`, and `daily_rolled_up_through` are
+exclusive tier watermarks. `last_run_at` records the last pass for health.
 
 ### `job_outcome_updated_idx`
 
@@ -62,13 +68,14 @@ Singleton. `rolled_up_through` is the exclusive, minute-aligned watermark: every
 
 ### `aggregate_stats_v1(p_from, p_to, p_group_limit default 200)`
 
-The single definition of what a bucket means. A `STABLE` SQL function returning the full bucket shape for `[p_from, p_to)`, derived from four sources:
+The single definition of what a minute bucket means. A `STABLE` SQL function returning the full bucket shape for `[p_from, p_to)`, derived from four sources:
 
-| Source            | Rows                      | Bucketed by   |
-| ----------------- | ------------------------- | ------------- |
-| `job_event`       | `event_type = 'enqueued'` | `occurred_at` |
-| `attempt_history` | all closed attempts       | `occurred_at` |
-| `job_outcome`     | all terminal jobs         | `finished_at` |
+| Source            | Rows                          | Bucketed by         |
+| ----------------- | ----------------------------- | ------------------- |
+| `job_event`       | `event_type = 'enqueued'`     | `occurred_at`       |
+| `attempt_history` | all closed attempts           | `occurred_at`       |
+| `job_outcome`     | all terminal jobs             | `finished_at`       |
+| `job_event`       | first claim joined to enqueue | claim `occurred_at` |
 
 Each grain is bucketed by the timestamp its own row carries when it lands. `occurred_at` is also the history partition key, so ranges prune. Bucketing by anything a row does _not_ carry would make recomputation non-idempotent.
 
@@ -77,6 +84,13 @@ Each grain is bucketed by the timestamp its own row carries when it lands. `occu
 Returns `'__other__'`. Within each bucket, `(queue, job type)` pairs are ranked by volume; everything past `p_group_limit` is folded into the `__other__` job type **within its own queue**, so per-queue rates stay accurate while the row count per bucket stays bounded by `group_limit + distinct queues`.
 
 Queue and job type are the only dimensions in the rollup because they are the only two whose cardinality is bounded by code rather than by data. Worker and tag dimensions were considered and left to live queries; see Limits.
+
+### `stat_sketch_index_v1`, `stat_sketch_merge_v1`, `stat_sketch_percentile_v1`
+
+Wait sketches use logarithmic bins with ratio `1.02`. The index is
+`floor(ln(1 + wait_ms) / ln(1.02))`; merging adds counts with the same index; percentile reads use
+the nearest-rank bin midpoint. This gives roughly one percent relative error without fixed edges or
+an upper clipping boundary.
 
 ### `rollup_stats_v1(p_force, p_now, p_max_buckets)`
 
@@ -87,7 +101,7 @@ Defaults: `false, clock_timestamp(), 240`. Returns the standard maintenance phas
 3. `v_closed = date_bin('1 minute', p_now)` — only fully elapsed minutes are eligible.
 4. `v_from = LEAST(rolled_up_through - statistics_recompute_buckets minutes, v_closed)`.
 5. `v_to = LEAST(v_closed, v_from + p_max_buckets minutes)` — catching up after an outage advances in bounded passes rather than in one long transaction.
-6. `DELETE` then `INSERT … SELECT * FROM aggregate_stats_v1(v_from, v_to, statistics_group_limit)`, then advance the watermark to `v_to`.
+6. Rewrite minute rows with `statistics_group_limit`, derive complete affected hours and days, then advance all three watermarks.
 7. `stat_retention` deletes expired buckets, bounded by policy (below).
 
 **Why the pass rewrites minutes it already closed.** A bucket is a pure function of the raw history in its minute. A transaction that commits its history row after its own minute closed would otherwise be lost forever; rewriting the last couple of minutes absorbs it. The same property makes the pass safe to run twice — it converges rather than double counting, which is what the "recompute" integration test asserts.
@@ -96,7 +110,10 @@ Defaults: `false, clock_timestamp(), 240`. Returns the standard maintenance phas
 
 ### `stat_buckets_v1(p_from, p_to)`
 
-The read entry point. Returns materialized buckets for `[p_from, min(p_to, watermark))` unioned with `aggregate_stats_v1(max(p_from, watermark), p_to)` for the live tail.
+The read entry point. Windows below two days use minute rows. Longer windows substitute complete
+hours, and windows of at least ninety days substitute complete days. `stat_window_tier_v1` requires
+the lower bound to align to the selected minute, hour, or day tier. Finer rows and
+`aggregate_stats_v1` supply the recent right edge.
 
 Callers never need to know where the watermark sits. A window is correct the instant a job runs, without waiting for a rollup pass, and a rollup that is behind costs a longer live tail rather than a wrong answer. In steady state the tail is one to three minutes of partition-pruned raw history.
 
@@ -122,8 +139,11 @@ In normal operation the clamp never binds — the rollup runs every minute, and 
 Buckets are a sixth retained category, configured exactly like the other five through
 `retention_policy` and `Queue.syncRetentionPolicy()`:
 
-- `statisticsRetentionDays` — default 14, null keeps buckets forever.
+- `statisticsRetentionDays` — default 14, null keeps daily buckets forever.
 - `statisticsRowsPerPass` — default 10,000, the per-pass deletion bound.
+
+Minute rows retain at most two days and hour rows retain at most ninety days. A shorter
+`statisticsRetentionDays` value shortens every tier. Each tier applies the row bound independently.
 
 It sits **outside** the `job_identity >= dependents` constraint that governs the history categories,
 and that placement is the point. A bucket summarizes jobs; it does not attribute one. Keeping
@@ -161,14 +181,13 @@ Workers offer the pass on `WorkerOptions.maintenanceTaskPollMs` (default `60_000
 
 `typescript/dashboard-server/src/server/rolling-stats.ts` provides the query fragments:
 
-| Export                                     | Purpose                                                        |
-| ------------------------------------------ | -------------------------------------------------------------- |
-| `statWindow(windowSeconds, multiple)`      | `stat_buckets_v1(…) stat` for the _n_-th window back           |
-| `statWindowStart(windowSeconds, multiple)` | Minute-aligned lower bound                                     |
-| `statAttempts`                             | All closed attempts in a bucket                                |
-| `statAttemptErrors`                        | Attempts that neither succeeded nor were canceled              |
-| `statCompleted`                            | Attempts that closed their job                                 |
-| `approximateWaitPercentile(histogram, q)`  | Quantile from a merged histogram, interpolated within its slot |
+| Export                                     | Purpose                                              |
+| ------------------------------------------ | ---------------------------------------------------- |
+| `statWindow(windowSeconds, multiple)`      | `stat_buckets_v1(…) stat` for the _n_-th window back |
+| `statWindowStart(windowSeconds, multiple)` | Minute-aligned lower bound                           |
+| `statAttempts`                             | All closed attempts in a bucket                      |
+| `statAttemptErrors`                        | Attempts that neither succeeded nor were canceled    |
+| `statCompleted`                            | Attempts that closed their job                       |
 
 `statAttemptErrors` counts retries. A retry is an error the system absorbed, and an error rate that ignored retries would read as healthy while a queue burned its attempt budget.
 
@@ -178,7 +197,7 @@ Workers offer the pass on `WorkerOptions.maintenanceTaskPollMs` (default `60_000
 | ------------------------------------ | -------------------------------------------------------------------- |
 | Throughput chart                     | Buckets grouped by minute                                            |
 | Drain, error rate (current + prior)  | Two window aggregates, `statWindow(w, 1)` and `statWindow(w, 2)`     |
-| First-attempt wait percentiles       | Merged `wait_histogram`, percentiles computed in TypeScript          |
+| First-attempt wait percentiles       | Merged `wait_sketch`, percentiles computed in PostgreSQL             |
 | Per-queue enqueued / completed rates | Buckets grouped by `queue_name`                                      |
 | Failing task types                   | Buckets grouped by `(queue_name, job_type)`, error text from the row |
 
@@ -226,10 +245,9 @@ compresses almost nothing. The benefit is a function of events per bucket, not o
 turns on somewhere around 1M jobs/day at this pair cardinality, and earlier for deployments with
 fewer active pairs per minute.
 
-First-attempt wait percentiles are excluded from both tables: they still read the event log. A
-mergeable histogram was implemented and removed, because it cost accuracy at every scale and was 3x
-slower than the self join below roughly 1M jobs/day. A coarser aggregate tier is the intended answer
-there, not an approximation.
+The fixed-edge wait histogram from the first experiment remains removed. The retained logarithmic
+sketch has no fixed upper edge, keeps relative error stable across scales, and merges unchanged into
+hour and day tiers.
 
 Rollup cost: 26–88 ms per steady-state pass, 2.7 s for a cold 24-hour backfill. Storage: 24 MB per
 day of buckets at 86k rows/day, against 1.1 GB/day of raw history at 2M jobs/day.
@@ -249,12 +267,27 @@ Two defects surfaced only under this benchmark, both fixed:
 - `stat_buckets_v1` read the watermark through a CTE and cross-joined it. With no statistics for the CTE the planner estimated a 7.6M-row join, carried the plan past `jit_above_cost`, and paid ~1 second of LLVM compilation on every call — making every window **slower than before**. Reading the watermark through scalar subqueries fixed it (971 ms → 9 ms).
 - The wait histogram query joined a slot series against the buckets, re-scanning the window once per slot. That query is gone with the histogram, but the shape is worth remembering: a set-returning function in the inner side of a nested loop is re-executed per outer row.
 
+### Long-horizon tier benchmark
+
+The production-shaped 120-day benchmark loaded 200,000 jobs with 2 KiB payloads, three tags,
+sixteen queues, 128 job types, and 64 workers. Mean tiered/raw p95 query latency was 20/431 ms for
+one day, 91/498 ms for thirty days, and 101/645 ms for 120 days. Relative p95 error stayed below
+one percent.
+
+Cold catch-up wrote 3.42 aggregate rows per job. After the retention ladder settled, aggregates
+retained 0.90 rows per job and used 138.7 MB against 180.3 MB of raw event and attempt history.
+This sparse profile is intentionally unfavorable to aggregation, which is why it supports keeping
+worker and tag dimensions live rather than multiplying rollup groups.
+
+Full method and results: [`benchmarks/2026-08-17-statistics-tiers-analysis.md`](benchmarks/2026-08-17-statistics-tiers-analysis.md).
+
 ## Testing
 
-| Test                                                                                            | Asserts                                                             |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Test                                                                                                                  | Asserts                                                             |
+| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `typescript/core/test/integration-retention-maintenance.test.ts` — "materializes closed minutes"                      | Grain separation, error capture, and convergence on repeated passes |
 | `typescript/core/test/integration-retention-maintenance.test.ts` — "stitches materialized buckets"                    | A window is correct before _and_ after materialization              |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "derives hourly and daily tiers"                   | Tier derivation and merged wait percentile accuracy                 |
 | `typescript/core/test/integration-retention-maintenance.test.ts` — "folds statistics beyond the group limit"          | Overflow folds into `__other__` and totals are preserved            |
 | `typescript/core/test/integration-retention-maintenance.test.ts` — "reports rollup progress through health"           | `lagMs` and `lastRunAt`                                             |
 | `typescript/core/test/integration-retention-maintenance.test.ts` — "refuses to delete raw history past the watermark" | The retention interlock, held and then released                     |
@@ -262,10 +295,9 @@ Two defects surfaced only under this benchmark, both fixed:
 | `typescript/core/test/integration-retention-maintenance.test.ts` — "bounds statistics pruning by the rows per pass"   | Per-pass deletion cap                                               |
 | `typescript/core/test/integration-retention-maintenance.test.ts` — "reports history size with daily partitions"       | Partition trees folded into their parent in health                  |
 
-## Limits and open work
+## Limits
 
-- **Wait percentiles still read the event log.** They are the one system-page panel not served by rollups, and the most expensive query on the page at high throughput. Exact percentiles are not mergeable across buckets; the fix is a coarser tier, not an approximation.
-- **No worker or tag dimensions.** Both have cardinality bounded by data rather than by code, and tags are per-job arrays. The dashboard serves them from live queries; [WOR-258](https://linear.app/workhorse-run/issue/WOR-258/p2-10-remainder-long-horizon-statistics-tiers-mergeable-percentiles) tracks whether they belong in the rollup.
-- **One tier only.** Minute buckets, kept for a configurable window defaulting to 14 days. [WOR-258](https://linear.app/workhorse-run/issue/WOR-258/p2-10-remainder-long-horizon-statistics-tiers-mergeable-percentiles) tracks hourly and daily tiers, which would let a long window stay cheap without keeping minute resolution for months.
+- **Wait percentiles are approximate.** The logarithmic sketch has roughly one percent relative error and returns a bin midpoint rather than an exact retained sample.
+- **No worker or tag dimensions.** Their cardinality is controlled by deployment data, so including them would remove the aggregate row bound. Filtered views keep using bounded live queries.
 - **Window edges are minute-granular.** A 15-minute window is 15 whole minutes, not 15 minutes to the microsecond.
 - **Schema baseline.** Rolling statistics are part of the current pre-release baseline described in [`schema-lifecycle.md`](schema-lifecycle.md).

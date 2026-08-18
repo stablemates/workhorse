@@ -19,6 +19,13 @@ other concern assumes a supervised process already exists.
 partitions, cleanup, retention policy, and the health budgets that reveal lag. Workers drive this
 work automatically; the page explains how to observe and tune it.
 
+## Rolling statistics
+
+The dashboard reads time-window statistics from minute, hour, or day summaries chosen for the
+requested horizon. Queue-wait percentiles merge a logarithmic sketch across those summaries, so
+long-window reads stay bounded without keeping every sample. Worker and tag breakdowns remain live
+queries because their data-controlled cardinality would make aggregate storage unbounded.
+
 ## Fleet controls
 
 Every worker registers itself in PostgreSQL on its `registryIntervalMs` cadence — 5 seconds by

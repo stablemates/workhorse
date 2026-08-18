@@ -11,24 +11,23 @@ one and gets slower every day, because the log only grows.
 Worse, it's backwards: a dashboard that auto-refreshes would cost more the busier your
 system is. Exactly when you most want to look at it, looking at it hurts most.
 
-## Pre-computed minutes
+## Pre-computed summaries
 
-So Workhorse keeps a running summary instead: one row per minute, per queue and job type.
-Each row holds counts for that minute — how many were enqueued, succeeded, failed — plus
-the last error seen, which is what lets a dashboard name a likely cause without touching the
-history tables at all.
+So Workhorse keeps running summaries per queue and job type. Recent rows cover minutes,
+older rows cover hours, and the oldest rows cover days. Each row holds counts for its period
+plus the last error seen, so a dashboard can name a likely cause without touching history.
 
 Two different things get counted, and they're kept separate on purpose:
 
-- **Jobs** — a job that retried four times and then succeeded counts as _one_ success.
-- **Attempts** — the same job contributes _five_ attempts.
+- **Jobs** — a job that retried several times and then succeeded counts as one success.
+- **Attempts** — the same job contributes every attempt it made.
 
-Conflating those is how you end up with a "failure rate" over 100%.
+Conflating those is how a failure rate can exceed the number of jobs that ran.
 
 ## Filling them in
 
-A background pass runs about once a minute, summarises the minutes that have fully elapsed,
-and records how far it got. That marker is the **watermark**.
+A background pass summarises periods that have fully elapsed and records how far it got.
+That marker is the **watermark**.
 
 When you ask for a time window, Workhorse reads pre-computed rows below the watermark and
 calculates the rest live. So a window is correct the instant a job runs — you never wait for
@@ -38,6 +37,13 @@ a slower query, not a wrong answer.
 Each pass also redoes the last few minutes. A transaction that commits its history row just
 after its minute closed gets picked up by the rewrite instead of being lost, and running the
 pass twice produces the same numbers rather than double counting.
+
+Hour summaries come only from complete minute summaries, and day summaries come only from
+complete hour summaries. A long window starts on the matching tier boundary, uses coarse complete
+rows, then fills its newest section from finer rows and raw history.
+
+Wait percentiles travel with every tier as a logarithmic sketch. Sketches merge by adding
+matching bins, so long windows avoid both the raw-event join and a list of every wait sample.
 
 ## Why the watermark protects history
 
@@ -57,13 +63,16 @@ summary rows could grow without limit. Beyond a threshold, extra combinations ar
 into a catch-all type within their own queue. You lose the per-type breakdown for the long
 tail; you don't lose the totals, and the table stays bounded.
 
+Worker identities and tags stay out of summaries because deployment data controls their
+cardinality. Including them would let unstable worker names or tenant tags multiply every
+row, so views filtered by those dimensions continue to use bounded live queries.
+
 ## Turning it off
 
-Set the rollup interval to zero and every window is computed live from raw history. Correct,
-slower, and history retention stops advancing. The interval is maintenance policy stored in the
-database beside the other cleanup cadences, so zero opts out the whole fleet at once rather than
-one process. Reasonable for a small deployment; not for a busy one — and the settings page will
-say so while retention depends on the watermark.
+Disable the rollup interval and every window is computed live from raw history. It stays correct
+but gets slower, and history retention stops advancing. The interval is maintenance policy stored
+beside the other cleanup cadences, so the whole fleet opts out together. This suits only a small
+deployment, and the settings page warns while retention depends on the watermark.
 
 ## Next
 
@@ -74,4 +83,4 @@ say so while retention depends on the watermark.
 ---
 
 Exact measures, bucket definition, and health fields:
-[`architecture.md`](../architecture.md#job_stat_bucket-and-job_stat_state).
+[`architecture.md`](../architecture.md#job_stat_bucket-job_stat_bucket_hour-job_stat_bucket_day-and-job_stat_state).

@@ -11,7 +11,7 @@ import {
 import type { DashboardRouter } from "../src/server/router.js";
 
 const fakeDatabase = (): Queryable =>
-  ({ query: async () => ({ rows: [{ version: 45 }] }) }) as unknown as Queryable;
+  ({ query: async () => ({ rows: [{ version: 46 }] }) }) as unknown as Queryable;
 
 // Serving the application from the dev hook keeps this test independent of the packaged bundle.
 const dev = {

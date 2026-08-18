@@ -1339,6 +1339,8 @@ const dashboardStorageRelations: ReadonlyArray<{
   { relation: "attempt_history", label: "Attempt history", group: "history" },
   { relation: "schedule_occurrence", label: "Schedule runs", group: "history" },
   { relation: "job_stat_bucket", label: "Minute summaries", group: "statistics" },
+  { relation: "job_stat_bucket_hour", label: "Hourly summaries", group: "statistics" },
+  { relation: "job_stat_bucket_day", label: "Daily summaries", group: "statistics" },
 ];
 
 function dashboardStorage(health: QueueHealthSnapshot): DashboardSystemStorage {
@@ -1601,26 +1603,15 @@ export async function readDashboardSystem(
              current_window.recovered
         FROM current_window CROSS JOIN previous_window
     `),
-    // Exact percentiles are not mergeable across rolled-up buckets without keeping every sample, so
-    // this one panel still reads the event log. It is the most expensive query on the page at high
-    // throughput; a coarser aggregate tier is the intended answer, not an approximation here.
     database.execute<{ p50_ms: number | null; p95_ms: number | null; p99_ms: number | null }>(sql`
-      SELECT percentile_cont(0.50) WITHIN GROUP (
-               ORDER BY extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
-             ) AS p50_ms,
-             percentile_cont(0.95) WITHIN GROUP (
-               ORDER BY extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
-             ) AS p95_ms,
-             percentile_cont(0.99) WITHIN GROUP (
-               ORDER BY extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
-             ) AS p99_ms
-        FROM workhorse.dashboard_job_event_v1 claimed
-        JOIN workhorse.dashboard_job_event_v1 enqueued ON enqueued.job_id = claimed.job_id
-         AND enqueued.event_type = 'enqueued'
-         AND enqueued.occurred_at <= claimed.occurred_at
-       WHERE claimed.event_type = 'claimed' AND claimed.attempt = 1
-         AND claimed.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds})
-         AND enqueued.occurred_at >= clock_timestamp() - make_interval(secs => ${windowSeconds * 2})
+      WITH merged AS (
+        SELECT workhorse.stat_sketch_merge_v1(array_agg(stat.wait_sketch)) AS wait_sketch
+          FROM ${statWindow(windowSeconds)}
+      )
+      SELECT workhorse.stat_sketch_percentile_v1(wait_sketch, 0.50) AS p50_ms,
+             workhorse.stat_sketch_percentile_v1(wait_sketch, 0.95) AS p95_ms,
+             workhorse.stat_sketch_percentile_v1(wait_sketch, 0.99) AS p99_ms
+        FROM merged
     `),
     database.execute<{
       ready: number;

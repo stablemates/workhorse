@@ -219,6 +219,48 @@ describe("schema migrations", () => {
     }
   });
 
+  it("backfills retained minute statistics before v46 enables tier-aware reads", async () => {
+    await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
+    await releaseDatabase.pool.query(
+      await readFile(path.join(repository, "sql", "releases", "0043.sql"), "utf8"),
+    );
+    await releaseDatabase.pool.query(
+      `UPDATE workhorse.job_stat_state
+          SET rolled_up_through = date_bin(
+            '1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'
+          );
+       INSERT INTO workhorse.job_stat_bucket(bucket_start, queue_name, job_type, enqueued)
+       VALUES (
+         date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01')
+           - interval '3 days' + interval '4 hours',
+         'migrated', 'retained', 7
+       )`,
+    );
+
+    await migrateSchema(releaseDatabase.pool);
+
+    const windows = await releaseDatabase.pool.query<{ tier: string; enqueued: string }>(
+      `SELECT 'hour' AS tier, sum(enqueued)::text AS enqueued
+         FROM workhorse.stat_buckets_v1(
+           date_bin('1 hour', clock_timestamp(), timestamp with time zone '2000-01-01')
+             - interval '30 days',
+           clock_timestamp()
+         )
+       UNION ALL
+       SELECT 'day', sum(enqueued)::text
+         FROM workhorse.stat_buckets_v1(
+           date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01')
+             - interval '90 days',
+           clock_timestamp()
+         )
+       ORDER BY tier`,
+    );
+    expect(windows.rows).toEqual([
+      { tier: "day", enqueued: "7" },
+      { tier: "hour", enqueued: "7" },
+    ]);
+  });
+
   it("satisfies the SQL protocol fixtures on the pre-release baseline", async () => {
     const report = await verifySqlProtocolFixtures(cleanDatabase.pool, repository);
     expect(report.coverage).toEqual(

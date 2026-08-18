@@ -1,7 +1,7 @@
 # Language feature parity
 
 This is the authoritative per-language support matrix for the Workhorse SDKs, anchored to schema
-version 44. It owns one question: which language can use which capability today. What each
+version 46. It owns one question: which language can use which capability today. What each
 capability does, and its exact limits, stay owned by [docs/features.md](features.md); this
 document never restates them.
 

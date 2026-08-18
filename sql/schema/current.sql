@@ -1371,7 +1371,36 @@ CREATE TABLE IF NOT EXISTS workhorse.job_stat_bucket (
   last_attempt_at timestamptz,
   last_error text CHECK (last_error IS NULL OR char_length(last_error) <= 500),
   last_error_at timestamptz,
+  -- A logarithmic, relative-error histogram encoded as {bin: count}. Its bins are stable across
+  -- tiers, so PostgreSQL can merge percentiles without retaining individual wait samples.
+  wait_sketch jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(wait_sketch) = 'object'),
   PRIMARY KEY (bucket_start, queue_name, job_type)
+);
+
+CREATE TABLE IF NOT EXISTS workhorse.job_stat_bucket_hour (
+  bucket_start timestamptz NOT NULL CHECK (isfinite(bucket_start)),
+  queue_name text NOT NULL CHECK (queue_name <> ''),
+  job_type text NOT NULL CHECK (job_type <> ''),
+  enqueued bigint NOT NULL DEFAULT 0 CHECK (enqueued >= 0),
+  job_succeeded bigint NOT NULL DEFAULT 0 CHECK (job_succeeded >= 0),
+  job_failed bigint NOT NULL DEFAULT 0 CHECK (job_failed >= 0),
+  job_canceled bigint NOT NULL DEFAULT 0 CHECK (job_canceled >= 0),
+  attempt_succeeded bigint NOT NULL DEFAULT 0 CHECK (attempt_succeeded >= 0),
+  attempt_failed bigint NOT NULL DEFAULT 0 CHECK (attempt_failed >= 0),
+  attempt_retry bigint NOT NULL DEFAULT 0 CHECK (attempt_retry >= 0),
+  attempt_lease_expired bigint NOT NULL DEFAULT 0 CHECK (attempt_lease_expired >= 0),
+  attempt_canceled bigint NOT NULL DEFAULT 0 CHECK (attempt_canceled >= 0),
+  attempt_other bigint NOT NULL DEFAULT 0 CHECK (attempt_other >= 0),
+  attempt_duration_ms numeric NOT NULL DEFAULT 0 CHECK (attempt_duration_ms >= 0),
+  wait_sketch jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(wait_sketch) = 'object'),
+  last_attempt_at timestamptz,
+  last_error text CHECK (last_error IS NULL OR char_length(last_error) <= 500),
+  last_error_at timestamptz,
+  PRIMARY KEY (bucket_start, queue_name, job_type)
+);
+
+CREATE TABLE IF NOT EXISTS workhorse.job_stat_bucket_day (
+  LIKE workhorse.job_stat_bucket_hour INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES
 );
 
 -- One watermark for the derived aggregates above. Raw history retention is forbidden from crossing
@@ -1382,10 +1411,19 @@ CREATE TABLE IF NOT EXISTS workhorse.job_stat_state (
   -- Exclusive, minute-aligned. Every closed minute below this is materialized in job_stat_bucket.
   rolled_up_through timestamptz NOT NULL CHECK (isfinite(rolled_up_through)),
   last_run_at timestamptz,
-  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  hourly_rolled_up_through timestamptz NOT NULL CHECK (isfinite(hourly_rolled_up_through)),
+  daily_rolled_up_through timestamptz NOT NULL CHECK (isfinite(daily_rolled_up_through))
 );
-INSERT INTO workhorse.job_stat_state(singleton, rolled_up_through)
-VALUES (true, date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'))
+INSERT INTO workhorse.job_stat_state(
+  singleton, rolled_up_through, hourly_rolled_up_through, daily_rolled_up_through
+)
+VALUES (
+  true,
+  date_bin('1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'),
+  date_bin('1 hour', clock_timestamp(), timestamp with time zone '2000-01-01'),
+  date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01')
+)
 ON CONFLICT (singleton) DO NOTHING;
 
 -- History deliberately has no reverse foreign key to job. Parent deletion would otherwise probe
@@ -7505,6 +7543,86 @@ CREATE OR REPLACE FUNCTION workhorse.stat_overflow_type_v1() RETURNS text
 LANGUAGE sql IMMUTABLE PARALLEL SAFE
 AS $$ SELECT '__other__'::text $$;
 
+CREATE OR REPLACE FUNCTION workhorse.stat_sketch_index_v1(p_value_ms double precision)
+RETURNS integer
+LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+AS $$
+  SELECT floor(ln(1 + GREATEST(p_value_ms, 0)) / ln(1.02))::integer
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.stat_sketch_merge_v1(p_sketches jsonb[])
+RETURNS jsonb
+LANGUAGE sql IMMUTABLE PARALLEL SAFE
+AS $$
+  SELECT COALESCE(jsonb_object_agg(bin, total ORDER BY bin::integer), '{}'::jsonb)
+    FROM (
+      SELECT entry.key AS bin, sum(entry.value::bigint) AS total
+        FROM unnest(COALESCE(p_sketches, '{}'::jsonb[])) sketch
+        CROSS JOIN LATERAL jsonb_each_text(sketch) entry
+       GROUP BY entry.key
+    ) merged
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.stat_sketch_percentile_v1(
+  p_sketch jsonb, p_percentile double precision
+) RETURNS double precision
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+AS $$
+DECLARE v_total bigint;
+DECLARE v_target bigint;
+DECLARE v_seen bigint := 0;
+DECLARE v_bin integer;
+DECLARE v_count bigint; BEGIN
+  IF p_percentile IS NULL OR p_percentile = 'NaN'::double precision
+     OR p_percentile < 0 OR p_percentile > 1 THEN
+    RAISE EXCEPTION 'percentile must be between 0 and 1';
+  END IF;
+  SELECT COALESCE(sum(value::bigint), 0) INTO v_total
+    FROM jsonb_each_text(COALESCE(p_sketch, '{}'::jsonb));
+  IF v_total = 0 THEN RETURN NULL; END IF;
+  v_target := GREATEST(1, ceil(p_percentile * v_total)::bigint);
+  FOR v_bin, v_count IN
+    SELECT key::integer, value::bigint
+      FROM jsonb_each_text(p_sketch)
+     ORDER BY key::integer
+  LOOP
+    v_seen := v_seen + v_count;
+    IF v_seen >= v_target THEN
+      RETURN power(1.02, v_bin + 0.5) - 1;
+    END IF;
+  END LOOP;
+  RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION workhorse.stat_window_tier_v1(
+  p_from timestamptz, p_to timestamptz
+) RETURNS text
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+AS $$ BEGIN
+  IF p_from IS NULL OR p_to IS NULL OR NOT isfinite(p_from) OR NOT isfinite(p_to)
+     OR p_to <= p_from THEN
+    RAISE EXCEPTION 'statistics window must have finite increasing bounds';
+  END IF;
+  IF p_to - p_from >= interval '90 days' THEN
+    IF p_from <> date_bin('1 day', p_from, timestamp with time zone '2000-01-01') THEN
+      RAISE EXCEPTION 'statistics windows of at least 90 days require a day-aligned lower bound';
+    END IF;
+    RETURN 'day';
+  END IF;
+  IF p_to - p_from >= interval '2 days' THEN
+    IF p_from <> date_bin('1 hour', p_from, timestamp with time zone '2000-01-01') THEN
+      RAISE EXCEPTION 'statistics windows of at least 2 days require an hour-aligned lower bound';
+    END IF;
+    RETURN 'hour';
+  END IF;
+  IF p_from <> date_bin('1 minute', p_from, timestamp with time zone '2000-01-01') THEN
+    RAISE EXCEPTION 'statistics windows require a minute-aligned lower bound';
+  END IF;
+  RETURN 'minute';
+END;
+$$;
+
 -- Derive per-minute statistics from raw history for [p_from, p_to). This is the single definition
 -- of what a bucket means: workhorse.rollup_stats_v1 materializes it for closed minutes, and
 -- workhorse.stat_buckets_v1 evaluates it live for the minutes a rollup has not reached yet.
@@ -7520,6 +7638,7 @@ CREATE OR REPLACE FUNCTION workhorse.aggregate_stats_v1(
   attempt_succeeded integer, attempt_failed integer, attempt_retry integer,
   attempt_lease_expired integer, attempt_canceled integer, attempt_other integer,
   attempt_duration_ms bigint,
+  wait_sketch jsonb,
   last_attempt_at timestamptz, last_error text, last_error_at timestamptz
 )
 LANGUAGE sql STABLE
@@ -7559,6 +7678,27 @@ AS $$
       JOIN workhorse.job job ON job.id = history.job_id
      WHERE history.occurred_at >= p_from AND history.occurred_at < p_to
      GROUP BY 1, 2, 3
+  ), wait_bin_source AS (
+    SELECT date_bin('1 minute', claimed.occurred_at,
+                    timestamp with time zone '2000-01-01') AS bucket,
+           job.queue_name AS queue, job.job_type AS type,
+           workhorse.stat_sketch_index_v1(
+             extract(epoch FROM claimed.occurred_at - enqueued.occurred_at) * 1000
+           ) AS bin,
+           count(*)::bigint AS samples
+      FROM workhorse.job_event claimed
+      JOIN workhorse.job_event enqueued ON enqueued.job_id = claimed.job_id
+       AND enqueued.event_type = 'enqueued'
+       AND enqueued.occurred_at <= claimed.occurred_at
+      JOIN workhorse.job job ON job.id = claimed.job_id
+     WHERE claimed.event_type = 'claimed' AND claimed.attempt = 1
+       AND claimed.occurred_at >= p_from AND claimed.occurred_at < p_to
+     GROUP BY 1, 2, 3, 4
+  ), wait_source AS (
+    SELECT bucket, queue, type,
+           jsonb_object_agg(bin::text, samples ORDER BY bin) AS wait_sketch
+      FROM wait_bin_source
+     GROUP BY 1, 2, 3
   ), outcome_source AS (
     SELECT date_bin('1 minute', outcome.finished_at, timestamp with time zone '2000-01-01') AS bucket,
            job.queue_name AS queue, job.job_type AS type,
@@ -7575,6 +7715,7 @@ AS $$
            0 AS attempt_succeeded, 0 AS attempt_failed, 0 AS attempt_retry,
            0 AS attempt_lease_expired, 0 AS attempt_canceled, 0 AS attempt_other,
            0::bigint AS attempt_duration_ms,
+           '{}'::jsonb AS wait_sketch,
            NULL::timestamptz AS last_attempt_at, NULL::text AS last_error,
            NULL::timestamptz AS last_error_at
       FROM enqueue_source source
@@ -7584,14 +7725,25 @@ AS $$
            source.attempt_succeeded, source.attempt_failed, source.attempt_retry,
            source.attempt_lease_expired, source.attempt_canceled, source.attempt_other,
            source.attempt_duration_ms,
+           '{}'::jsonb,
            source.last_attempt_at, source.last_error, source.last_error_at
       FROM attempt_source source
+     UNION ALL
+    SELECT source.bucket, source.queue, source.type, 0,
+           0, 0, 0,
+           0, 0, 0,
+           0, 0, 0,
+           0::bigint,
+           source.wait_sketch,
+           NULL::timestamptz, NULL::text, NULL::timestamptz
+      FROM wait_source source
      UNION ALL
     SELECT source.bucket, source.queue, source.type, 0,
            source.job_succeeded, source.job_failed, source.job_canceled,
            0, 0, 0,
            0, 0, 0,
            0::bigint,
+           '{}'::jsonb,
            NULL::timestamptz, NULL::text, NULL::timestamptz
       FROM outcome_source source
   ), total AS (
@@ -7607,6 +7759,7 @@ AS $$
            sum(measure.attempt_canceled)::integer AS attempt_canceled,
            sum(measure.attempt_other)::integer AS attempt_other,
            sum(measure.attempt_duration_ms)::bigint AS attempt_duration_ms,
+           workhorse.stat_sketch_merge_v1(array_agg(measure.wait_sketch)) AS wait_sketch,
            max(measure.last_attempt_at) AS last_attempt_at,
            (array_agg(measure.last_error ORDER BY measure.last_error_at DESC NULLS LAST)
              FILTER (WHERE measure.last_error IS NOT NULL))[1] AS last_error,
@@ -7640,6 +7793,7 @@ AS $$
            sum(total.attempt_canceled)::integer AS attempt_canceled,
            sum(total.attempt_other)::integer AS attempt_other,
            sum(total.attempt_duration_ms)::bigint AS attempt_duration_ms,
+           workhorse.stat_sketch_merge_v1(array_agg(total.wait_sketch)) AS wait_sketch,
            max(total.last_attempt_at) AS last_attempt_at,
            (array_agg(total.last_error ORDER BY total.last_error_at DESC NULLS LAST)
              FILTER (WHERE total.last_error IS NOT NULL))[1] AS last_error,
@@ -7654,6 +7808,7 @@ AS $$
          folded.attempt_succeeded, folded.attempt_failed, folded.attempt_retry,
          folded.attempt_lease_expired, folded.attempt_canceled, folded.attempt_other,
          folded.attempt_duration_ms,
+         folded.wait_sketch,
          folded.last_attempt_at, folded.last_error, folded.last_error_at
     FROM folded
 $$;
@@ -7664,39 +7819,80 @@ $$;
 CREATE OR REPLACE FUNCTION workhorse.stat_buckets_v1(
   p_from timestamptz, p_to timestamptz
 ) RETURNS TABLE (
-  bucket_start timestamptz, queue_name text, job_type text, enqueued integer,
-  job_succeeded integer, job_failed integer, job_canceled integer,
-  attempt_succeeded integer, attempt_failed integer, attempt_retry integer,
-  attempt_lease_expired integer, attempt_canceled integer, attempt_other integer,
-  attempt_duration_ms bigint,
+  bucket_start timestamptz, queue_name text, job_type text, enqueued bigint,
+  job_succeeded bigint, job_failed bigint, job_canceled bigint,
+  attempt_succeeded bigint, attempt_failed bigint, attempt_retry bigint,
+  attempt_lease_expired bigint, attempt_canceled bigint, attempt_other bigint,
+  attempt_duration_ms numeric, wait_sketch jsonb,
   last_attempt_at timestamptz, last_error text, last_error_at timestamptz
 )
 LANGUAGE sql STABLE
 AS $$
-  -- The watermark is read through scalar subqueries rather than joined in from a CTE. A CTE here
-  -- reads better but plans catastrophically: the planner has no statistics for it, estimates
-  -- hundreds of rows, and the resulting cross-join estimate carries the plan past jit_above_cost.
-  -- Every call then pays roughly a second of LLVM compilation to scan a few thousand rows. A
-  -- scalar subquery over a singleton primary key is an InitPlan evaluated once, and it keeps the
-  -- `p_to > watermark` test a one-time filter, so the live tail is skipped outright when the
-  -- window ends at or below the watermark.
-  SELECT bucket.bucket_start, bucket.queue_name, bucket.job_type, bucket.enqueued,
-         bucket.job_succeeded, bucket.job_failed, bucket.job_canceled,
-         bucket.attempt_succeeded, bucket.attempt_failed, bucket.attempt_retry,
-         bucket.attempt_lease_expired, bucket.attempt_canceled, bucket.attempt_other,
-         bucket.attempt_duration_ms,
-         bucket.last_attempt_at, bucket.last_error, bucket.last_error_at
-    FROM workhorse.job_stat_bucket bucket
-   WHERE bucket.bucket_start >= p_from
-     AND bucket.bucket_start < LEAST(p_to, (
-           SELECT state.rolled_up_through FROM workhorse.job_stat_state state WHERE state.singleton
-         ))
-   UNION ALL
-  SELECT live.bucket_start, live.queue_name, live.job_type, live.enqueued,
-         live.job_succeeded, live.job_failed, live.job_canceled,
-         live.attempt_succeeded, live.attempt_failed, live.attempt_retry,
-         live.attempt_lease_expired, live.attempt_canceled, live.attempt_other,
-         live.attempt_duration_ms,
+  WITH selected AS (
+    SELECT workhorse.stat_window_tier_v1(p_from, p_to) AS tier
+  ), boundary AS (
+    SELECT selected.tier IN ('hour', 'day') AS use_hour,
+           selected.tier = 'day' AS use_day,
+           CASE WHEN p_from = date_bin('1 hour', p_from, timestamp with time zone '2000-01-01')
+             THEN p_from ELSE date_bin('1 hour', p_from,
+               timestamp with time zone '2000-01-01') + interval '1 hour' END AS hour_start,
+           date_bin('1 hour', p_to, timestamp with time zone '2000-01-01') AS hour_end,
+           CASE WHEN p_from = date_bin('1 day', p_from, timestamp with time zone '2000-01-01')
+             THEN p_from ELSE date_bin('1 day', p_from,
+               timestamp with time zone '2000-01-01') + interval '1 day' END AS day_start,
+           date_bin('1 day', p_to, timestamp with time zone '2000-01-01') AS day_end,
+           (SELECT state.rolled_up_through FROM workhorse.job_stat_state state WHERE singleton)
+             AS minute_watermark
+      FROM selected
+  ), stored AS (
+    SELECT bucket.bucket_start, bucket.queue_name, bucket.job_type,
+           bucket.enqueued::bigint, bucket.job_succeeded::bigint, bucket.job_failed::bigint,
+           bucket.job_canceled::bigint, bucket.attempt_succeeded::bigint,
+           bucket.attempt_failed::bigint, bucket.attempt_retry::bigint,
+           bucket.attempt_lease_expired::bigint, bucket.attempt_canceled::bigint,
+           bucket.attempt_other::bigint, bucket.attempt_duration_ms::numeric,
+           bucket.wait_sketch, bucket.last_attempt_at, bucket.last_error, bucket.last_error_at
+      FROM workhorse.job_stat_bucket bucket, boundary
+     WHERE bucket.bucket_start >= p_from
+       AND bucket.bucket_start < LEAST(p_to, boundary.minute_watermark)
+       AND (
+         NOT boundary.use_hour
+         OR bucket.bucket_start < boundary.hour_start
+         OR bucket.bucket_start >= boundary.hour_end
+       )
+    UNION ALL
+    SELECT bucket.bucket_start, bucket.queue_name, bucket.job_type,
+           bucket.enqueued, bucket.job_succeeded, bucket.job_failed, bucket.job_canceled,
+           bucket.attempt_succeeded, bucket.attempt_failed, bucket.attempt_retry,
+           bucket.attempt_lease_expired, bucket.attempt_canceled, bucket.attempt_other,
+           bucket.attempt_duration_ms, bucket.wait_sketch,
+           bucket.last_attempt_at, bucket.last_error, bucket.last_error_at
+      FROM workhorse.job_stat_bucket_hour bucket, boundary
+     WHERE boundary.use_hour
+       AND bucket.bucket_start >= boundary.hour_start AND bucket.bucket_start < boundary.hour_end
+       AND (
+         NOT boundary.use_day
+         OR bucket.bucket_start < boundary.day_start
+         OR bucket.bucket_start >= boundary.day_end
+       )
+    UNION ALL
+    SELECT bucket.bucket_start, bucket.queue_name, bucket.job_type,
+           bucket.enqueued, bucket.job_succeeded, bucket.job_failed, bucket.job_canceled,
+           bucket.attempt_succeeded, bucket.attempt_failed, bucket.attempt_retry,
+           bucket.attempt_lease_expired, bucket.attempt_canceled, bucket.attempt_other,
+           bucket.attempt_duration_ms, bucket.wait_sketch,
+           bucket.last_attempt_at, bucket.last_error, bucket.last_error_at
+      FROM workhorse.job_stat_bucket_day bucket, boundary
+     WHERE boundary.use_day
+       AND bucket.bucket_start >= boundary.day_start AND bucket.bucket_start < boundary.day_end
+  )
+  SELECT * FROM stored
+  UNION ALL
+  SELECT live.bucket_start, live.queue_name, live.job_type, live.enqueued::bigint,
+         live.job_succeeded::bigint, live.job_failed::bigint, live.job_canceled::bigint,
+         live.attempt_succeeded::bigint, live.attempt_failed::bigint, live.attempt_retry::bigint,
+         live.attempt_lease_expired::bigint, live.attempt_canceled::bigint,
+         live.attempt_other::bigint, live.attempt_duration_ms::numeric, live.wait_sketch,
          live.last_attempt_at, live.last_error, live.last_error_at
     FROM workhorse.aggregate_stats_v1(
            GREATEST(p_from, (
@@ -7729,7 +7925,11 @@ DECLARE v_maintenance workhorse.maintenance_policy%ROWTYPE;
 DECLARE v_from timestamptz;
 DECLARE v_to timestamptz;
 DECLARE v_closed timestamptz;
-BEGIN
+DECLARE v_hour_from timestamptz;
+DECLARE v_hour_to timestamptz;
+DECLARE v_day_from timestamptz;
+DECLARE v_day_to timestamptz;
+DECLARE v_inserted integer; BEGIN
   IF p_now IS NULL OR NOT isfinite(p_now) THEN RAISE EXCEPTION 'maintenance time is required'; END IF;
   IF p_max_buckets NOT BETWEEN 1 AND 100000 THEN
     RAISE EXCEPTION 'bucket limit must be between 1 and 100000';
@@ -7759,8 +7959,7 @@ BEGIN
   rows_affected := 0;
   skipped_lock := false;
   error := NULL;
-  v_started_at := clock_timestamp();
-  BEGIN
+  v_started_at := clock_timestamp(); BEGIN
     v_closed := date_bin('1 minute', p_now, timestamp with time zone '2000-01-01');
     v_from := LEAST(
       v_state.rolled_up_through
@@ -7777,12 +7976,90 @@ BEGIN
         job_succeeded, job_failed, job_canceled,
         attempt_succeeded, attempt_failed, attempt_retry,
         attempt_lease_expired, attempt_canceled, attempt_other,
-        attempt_duration_ms, last_attempt_at, last_error, last_error_at
+        attempt_duration_ms, wait_sketch, last_attempt_at, last_error, last_error_at
       )
       SELECT * FROM workhorse.aggregate_stats_v1(v_from, v_to, v_maintenance.statistics_group_limit);
       GET DIAGNOSTICS rows_affected = ROW_COUNT;
+
+      v_hour_from := LEAST(
+        v_state.hourly_rolled_up_through,
+        date_bin('1 hour', v_from, timestamp with time zone '2000-01-01')
+      );
+      v_hour_to := date_bin('1 hour', v_to, timestamp with time zone '2000-01-01');
+      IF v_hour_to > v_hour_from THEN
+        DELETE FROM workhorse.job_stat_bucket_hour
+         WHERE bucket_start >= v_hour_from AND bucket_start < v_hour_to;
+        INSERT INTO workhorse.job_stat_bucket_hour (
+          bucket_start, queue_name, job_type, enqueued,
+          job_succeeded, job_failed, job_canceled,
+          attempt_succeeded, attempt_failed, attempt_retry,
+          attempt_lease_expired, attempt_canceled, attempt_other,
+          attempt_duration_ms, wait_sketch, last_attempt_at, last_error, last_error_at
+        )
+        SELECT date_bin('1 hour', bucket.bucket_start,
+                        timestamp with time zone '2000-01-01'),
+               bucket.queue_name, bucket.job_type,
+               sum(bucket.enqueued), sum(bucket.job_succeeded), sum(bucket.job_failed),
+               sum(bucket.job_canceled), sum(bucket.attempt_succeeded),
+               sum(bucket.attempt_failed), sum(bucket.attempt_retry),
+               sum(bucket.attempt_lease_expired), sum(bucket.attempt_canceled),
+               sum(bucket.attempt_other), sum(bucket.attempt_duration_ms),
+               workhorse.stat_sketch_merge_v1(array_agg(bucket.wait_sketch)),
+               max(bucket.last_attempt_at),
+               (array_agg(bucket.last_error ORDER BY bucket.last_error_at DESC NULLS LAST)
+                 FILTER (WHERE bucket.last_error IS NOT NULL))[1],
+               max(bucket.last_error_at)
+          FROM workhorse.job_stat_bucket bucket
+         WHERE bucket.bucket_start >= v_hour_from AND bucket.bucket_start < v_hour_to
+         GROUP BY 1, 2, 3;
+        GET DIAGNOSTICS v_inserted = ROW_COUNT;
+        rows_affected := rows_affected + v_inserted;
+      ELSE
+        v_hour_to := v_state.hourly_rolled_up_through;
+      END IF;
+
+      v_day_from := LEAST(
+        v_state.daily_rolled_up_through,
+        date_bin('1 day', v_hour_from, timestamp with time zone '2000-01-01')
+      );
+      v_day_to := date_bin('1 day', v_hour_to, timestamp with time zone '2000-01-01');
+      IF v_day_to > v_day_from THEN
+        DELETE FROM workhorse.job_stat_bucket_day
+         WHERE bucket_start >= v_day_from AND bucket_start < v_day_to;
+        INSERT INTO workhorse.job_stat_bucket_day (
+          bucket_start, queue_name, job_type, enqueued,
+          job_succeeded, job_failed, job_canceled,
+          attempt_succeeded, attempt_failed, attempt_retry,
+          attempt_lease_expired, attempt_canceled, attempt_other,
+          attempt_duration_ms, wait_sketch, last_attempt_at, last_error, last_error_at
+        )
+        SELECT date_bin('1 day', bucket.bucket_start,
+                        timestamp with time zone '2000-01-01'),
+               bucket.queue_name, bucket.job_type,
+               sum(bucket.enqueued), sum(bucket.job_succeeded), sum(bucket.job_failed),
+               sum(bucket.job_canceled), sum(bucket.attempt_succeeded),
+               sum(bucket.attempt_failed), sum(bucket.attempt_retry),
+               sum(bucket.attempt_lease_expired), sum(bucket.attempt_canceled),
+               sum(bucket.attempt_other), sum(bucket.attempt_duration_ms),
+               workhorse.stat_sketch_merge_v1(array_agg(bucket.wait_sketch)),
+               max(bucket.last_attempt_at),
+               (array_agg(bucket.last_error ORDER BY bucket.last_error_at DESC NULLS LAST)
+                 FILTER (WHERE bucket.last_error IS NOT NULL))[1],
+               max(bucket.last_error_at)
+          FROM workhorse.job_stat_bucket_hour bucket
+         WHERE bucket.bucket_start >= v_day_from AND bucket.bucket_start < v_day_to
+         GROUP BY 1, 2, 3;
+        GET DIAGNOSTICS v_inserted = ROW_COUNT;
+        rows_affected := rows_affected + v_inserted;
+      ELSE
+        v_day_to := v_state.daily_rolled_up_through;
+      END IF;
+
       UPDATE workhorse.job_stat_state
-         SET rolled_up_through = v_to, last_run_at = p_now, updated_at = clock_timestamp()
+         SET rolled_up_through = v_to,
+             hourly_rolled_up_through = GREATEST(hourly_rolled_up_through, v_hour_to),
+             daily_rolled_up_through = GREATEST(daily_rolled_up_through, v_day_to),
+             last_run_at = p_now, updated_at = clock_timestamp()
        WHERE singleton;
     ELSE
       UPDATE workhorse.job_stat_state
@@ -7803,21 +8080,50 @@ BEGIN
   phase := 'stat_retention';
   rows_affected := 0;
   error := NULL;
-  v_started_at := clock_timestamp();
-  BEGIN
+  v_started_at := clock_timestamp(); BEGIN
+    WITH expired AS (
+      SELECT bucket.ctid
+        FROM workhorse.job_stat_bucket bucket
+       WHERE bucket.bucket_start < p_now - make_interval(
+         days => LEAST(COALESCE(v_policy.statistics_retention_days, 2), 2)
+       )
+       ORDER BY bucket.bucket_start
+         FOR UPDATE SKIP LOCKED
+       LIMIT v_policy.statistics_rows_per_pass
+    )
+    DELETE FROM workhorse.job_stat_bucket bucket USING expired
+     WHERE bucket.ctid = expired.ctid;
+    GET DIAGNOSTICS rows_affected = ROW_COUNT;
+
+    WITH expired AS (
+      SELECT bucket.ctid
+        FROM workhorse.job_stat_bucket_hour bucket
+       WHERE bucket.bucket_start < p_now - make_interval(
+         days => LEAST(COALESCE(v_policy.statistics_retention_days, 90), 90)
+       )
+       ORDER BY bucket.bucket_start
+         FOR UPDATE SKIP LOCKED
+       LIMIT v_policy.statistics_rows_per_pass
+    )
+    DELETE FROM workhorse.job_stat_bucket_hour bucket USING expired
+     WHERE bucket.ctid = expired.ctid;
+    GET DIAGNOSTICS v_inserted = ROW_COUNT;
+    rows_affected := rows_affected + v_inserted;
+
     IF v_policy.statistics_retention_days IS NOT NULL THEN
       WITH expired AS (
         SELECT bucket.ctid
-          FROM workhorse.job_stat_bucket bucket
+          FROM workhorse.job_stat_bucket_day bucket
          WHERE bucket.bucket_start < p_now
                - make_interval(days => v_policy.statistics_retention_days)
          ORDER BY bucket.bucket_start
            FOR UPDATE SKIP LOCKED
          LIMIT v_policy.statistics_rows_per_pass
       )
-      DELETE FROM workhorse.job_stat_bucket bucket USING expired
+      DELETE FROM workhorse.job_stat_bucket_day bucket USING expired
        WHERE bucket.ctid = expired.ctid;
-      GET DIAGNOSTICS rows_affected = ROW_COUNT;
+      GET DIAGNOSTICS v_inserted = ROW_COUNT;
+      rows_affected := rows_affected + v_inserted;
     END IF;
   EXCEPTION WHEN OTHERS THEN
     error := jsonb_build_object('code', SQLSTATE, 'message', SQLERRM);
@@ -9205,9 +9511,10 @@ $$;
 INSERT INTO workhorse.schema_migration(version, description) VALUES
   (43, 'pre-release baseline'),
   (44, 'protocol version registry'),
-  (45, 'statistics maintenance policy')
+  (45, 'statistics maintenance policy'),
+  (46, 'long-horizon statistics tiers')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (45) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (46) ON CONFLICT DO NOTHING;
 INSERT INTO workhorse.protocol_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date

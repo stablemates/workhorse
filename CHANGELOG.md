@@ -15,7 +15,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v45**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v46**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 

@@ -3944,9 +3944,33 @@
                         "deadRows": 0,
                         "partitions": 0,
                         "lastVacuumAt": null
+                      },
+                      {
+                        "relation": "job_stat_bucket_hour",
+                        "label": "Hourly summaries",
+                        "group": "statistics",
+                        "totalBytes": 16384,
+                        "tableBytes": 0,
+                        "indexBytes": 8192,
+                        "rows": 0,
+                        "deadRows": 0,
+                        "partitions": 0,
+                        "lastVacuumAt": null
+                      },
+                      {
+                        "relation": "job_stat_bucket_day",
+                        "label": "Daily summaries",
+                        "group": "statistics",
+                        "totalBytes": 16384,
+                        "tableBytes": 0,
+                        "indexBytes": 8192,
+                        "rows": 0,
+                        "deadRows": 0,
+                        "partitions": 0,
+                        "lastVacuumAt": null
                       }
                     ],
-                    "totalBytes": 925696
+                    "totalBytes": 958464
                   }
                 }
               }

@@ -1,0 +1,214 @@
+{
+  "generatedAt": "2026-08-18T03:57:19.088Z",
+  "options": {
+    "jobs": 200000,
+    "days": 120,
+    "payloadBytes": 2048,
+    "repetitions": 5,
+    "warmupRepetitions": 1
+  },
+  "loadMs": 27511.484774,
+  "rollupMs": {
+    "count": 2,
+    "min": 23324.708807000003,
+    "max": 58660.19145200001,
+    "mean": 40992.45012950001,
+    "sampleStandardDeviation": 24985.959394779064,
+    "confidenceInterval95": {
+      "confidenceLevel": 0.95,
+      "lower": -183493.87111418496,
+      "upper": 265478.771373185,
+      "marginOfError": 224486.32124368497
+    }
+  },
+  "retentionDrainMs": {
+    "count": 44,
+    "min": 3.3717929999984335,
+    "max": 148.95647499999905,
+    "mean": 48.44423479545433,
+    "sampleStandardDeviation": 29.572608412843703,
+    "confidenceInterval95": {
+      "confidenceLevel": 0.95,
+      "lower": 39.52775787022614,
+      "upper": 57.36071172068252,
+      "marginOfError": 8.916476925228189
+    }
+  },
+  "latency": [
+    {
+      "days": 1,
+      "p95Ms": {
+        "tiered": 572551.0771870171,
+        "raw": 573886.51455,
+        "relativeError": -0.002327006000533127
+      },
+      "tiered": {
+        "count": 5,
+        "min": 11.638712999993004,
+        "max": 49.52274900001066,
+        "mean": 19.664051800000017,
+        "sampleStandardDeviation": 16.69670487514902,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": -1.0643219345225674,
+          "upper": 40.3924255345226,
+          "marginOfError": 20.728373734522584
+        }
+      },
+      "raw": {
+        "count": 5,
+        "min": 426.9722059999913,
+        "max": 435.99469300000055,
+        "mean": 430.9654745999986,
+        "sampleStandardDeviation": 3.464289137543712,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 426.6646810898772,
+          "upper": 435.26626811011994,
+          "marginOfError": 4.300793510121383
+        }
+      }
+    },
+    {
+      "days": 30,
+      "p95Ms": {
+        "tiered": 572551.0771870171,
+        "raw": 573985.3942,
+        "relativeError": -0.002498873712600314
+      },
+      "tiered": {
+        "count": 5,
+        "min": 89.41687000000093,
+        "max": 93.02091199999268,
+        "mean": 90.8374358000001,
+        "sampleStandardDeviation": 1.4723694990801717,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 89.00954068653549,
+          "upper": 92.6653309134647,
+          "marginOfError": 1.8278951134646086
+        }
+      },
+      "raw": {
+        "count": 5,
+        "min": 476.7843290000019,
+        "max": 527.2139640000096,
+        "mean": 497.70905839999904,
+        "sampleStandardDeviation": 20.366901133623227,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 472.4242646835954,
+          "upper": 522.9938521164026,
+          "marginOfError": 25.284793716403634
+        }
+      }
+    },
+    {
+      "days": 120,
+      "p95Ms": {
+        "tiered": 572551.0771870171,
+        "raw": 574053.6282999999,
+        "relativeError": -0.002617440320745716
+      },
+      "tiered": {
+        "count": 5,
+        "min": 99.19882099999813,
+        "max": 101.6277609999961,
+        "mean": 100.5228667999967,
+        "sampleStandardDeviation": 1.1180800496554313,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 99.13480961699733,
+          "upper": 101.91092398299608,
+          "marginOfError": 1.3880571829993789
+        }
+      },
+      "raw": {
+        "count": 5,
+        "min": 623.3686889999954,
+        "max": 676.9235199999966,
+        "mean": 644.9780437999987,
+        "sampleStandardDeviation": 20.29604190470535,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 619.7812193320505,
+          "upper": 670.1748682679469,
+          "marginOfError": 25.196824467948154
+        }
+      }
+    }
+  ],
+  "dimensions": {
+    "baseline": {
+      "rows": 180176,
+      "rowsPerJob": 0.90088,
+      "rowMultiplier": 1,
+      "bytes": 34660352,
+      "byteMultiplier": 1,
+      "query": {
+        "count": 5,
+        "min": 134.23188700000173,
+        "max": 141.39429699999164,
+        "mean": 137.32505660000024,
+        "sampleStandardDeviation": 2.7494602535128942,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 133.9116980882944,
+          "upper": 140.73841511170608,
+          "marginOfError": 3.4133585117058507
+        }
+      }
+    },
+    "worker": {
+      "rows": 353195,
+      "rowsPerJob": 1.765975,
+      "rowMultiplier": 1.9602777284433,
+      "bytes": 61947904,
+      "byteMultiplier": 1.7872843299456393,
+      "query": {
+        "count": 5,
+        "min": 571.6455209999986,
+        "max": 605.8196290000051,
+        "mean": 593.806734399998,
+        "sampleStandardDeviation": 13.634330610244685,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 576.8801909519052,
+          "upper": 610.7332778480909,
+          "marginOfError": 16.926543448092826
+        }
+      }
+    },
+    "tag": {
+      "rows": 690435,
+      "rowsPerJob": 3.452175,
+      "rowMultiplier": 3.8320031524731375,
+      "bytes": 124968960,
+      "byteMultiplier": 3.6055306074214135,
+      "query": {
+        "count": 5,
+        "min": 786.9884549999842,
+        "max": 795.9128909999854,
+        "mean": 792.0527113999939,
+        "sampleStandardDeviation": 4.2723832623714095,
+        "confidenceInterval95": {
+          "confidenceLevel": 0.95,
+          "lower": 786.7486973647837,
+          "upper": 797.3567254352041,
+          "marginOfError": 5.304014035210227
+        }
+      }
+    }
+  },
+  "storage": {
+    "rawRows": 600000,
+    "minuteRows": 3715,
+    "hourRows": 161026,
+    "dayRows": 15435,
+    "rawBytes": 180346880,
+    "rollupBytes": 138723328,
+    "retainedRowsPerJob": 0.90088,
+    "rowsWrittenPerJob": 3.416375,
+    "bytesPerRawHistoryByte": 0.7692028162616398
+  }
+}

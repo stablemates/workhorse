@@ -15,7 +15,7 @@ Workers call the same versioned SQL functions you can call yourself:
 
 - `queue.tick` promotes due jobs to ready and recovers expired leases.
 - `queue.prepareHistoryPartitions` creates future time partitions before data arrives.
-- `queue.rollupStatistics` folds raw history into durable statistics buckets.
+- `queue.rollupStatistics` folds raw history into minute summaries, then derives hour and day tiers.
 - `queue.retainHistory` retires history the statistics rollup no longer needs.
 - `queue.pruneTerminalStorage` removes expired idempotency bindings, then terminal job bundles.
 
@@ -67,6 +67,10 @@ console.log(impact.eligible.terminalJobs, impact.capped.terminalJobs);
 
 The preview counts currently eligible rows per category, size-capped with an explicit `capped`
 flag. The dashboard settings page runs the same preview before applying a change.
+
+Statistics use a retention ladder inside that policy window. Minute summaries age into hour
+summaries, and hour summaries age into day summaries, so long windows keep totals and mergeable
+wait percentiles without paying minute-level storage forever.
 
 PostgreSQL guards the dependency order: it rejects any `RetentionPolicyDefinition` that could
 remove a job's identity before its retained evidence, and a retained `job_redrive` descendant

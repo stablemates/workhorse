@@ -363,6 +363,14 @@ export class RetentionMaintenanceModule extends QueueModule {
           SELECT 1 FROM workhorse.job_stat_bucket
           WHERE $6::integer IS NOT NULL
             AND bucket_start < clock_timestamp() - make_interval(days => $6)
+          UNION ALL
+          SELECT 1 FROM workhorse.job_stat_bucket_hour
+          WHERE $6::integer IS NOT NULL
+            AND bucket_start < clock_timestamp() - make_interval(days => $6)
+          UNION ALL
+          SELECT 1 FROM workhorse.job_stat_bucket_day
+          WHERE $6::integer IS NOT NULL
+            AND bucket_start < clock_timestamp() - make_interval(days => $6)
           LIMIT 10001
         ) rows) AS statistics`,
       [
