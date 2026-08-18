@@ -164,11 +164,9 @@ try {
   }
   const themeModule = await fetch(`${baseUrl}/src/theme.tsx`);
   const themeModuleText = await themeModule.text();
-  if (
-    !themeModule.ok ||
-    (!themeModuleText.includes("react/jsx-dev-runtime") &&
-      !themeModuleText.includes("react/jsx-runtime"))
-  ) {
+  // Vite serves the runtime either as the bare specifier (react/jsx-dev-runtime) or, once its
+  // dependency optimizer has pre-bundled it, as .vite/deps/react_jsx-dev-runtime.js.
+  if (!themeModule.ok || !/react[/_]jsx(-dev)?-runtime/.test(themeModuleText)) {
     throw new Error("Dashboard TSX modules did not use the automatic JSX runtime");
   }
 
