@@ -98,7 +98,7 @@ Nine packages ship from this repository. `@workhorse/core` is the TypeScript dur
 The eight TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package version floats independently and declares compatibility through SQL protocol 1
-and schema version 44 instead of a TypeScript peer range.
+and schema version 45 instead of a TypeScript peer range.
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
 server reads `workhorse.dashboard_*_v1` views and versioned functions, so a core patch remains

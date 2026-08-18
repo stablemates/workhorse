@@ -75,7 +75,9 @@ keeps its source identity available for lineage.
 ## Set maintenance cadence
 
 `queue.syncMaintenancePolicy` stores one set of scheduling defaults for the database, including
-an IANA timezone and local wall-clock time for the daily history retention pass.
+an IANA timezone, a local wall-clock time for the daily history retention pass, and the
+statistics rollup interval, group limit, and recompute window. Setting the rollup interval to
+zero opts the whole fleet out of statistics.
 `queue.overrideMaintenancePolicy` and `queue.revertMaintenancePolicy` follow the same
 override-and-revert model as retention, and the dashboard settings page shows each value's
 source. Workers check eligibility at different moments, but the database owns the shared due

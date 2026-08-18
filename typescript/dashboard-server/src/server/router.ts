@@ -224,6 +224,9 @@ const maintenanceSetting = z.enum([
   "partitionPreparationIntervalMs",
   "terminalCleanupIntervalMs",
   "historyRetentionLocalTime",
+  "statisticsRollupIntervalMs",
+  "statisticsGroupLimit",
+  "statisticsRecomputeBuckets",
 ]);
 const retentionSetting = z.enum([
   "jobIdentityRetentionDays",
@@ -247,6 +250,15 @@ const maintenanceDefinition = z
       .string()
       .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)
       .optional(),
+    statisticsRollupIntervalMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(86_400_000)
+      .refine((value) => value === 0 || value >= 1_000, "Use 0 to opt out or at least 1000")
+      .optional(),
+    statisticsGroupLimit: z.number().int().min(1).max(10_000).optional(),
+    statisticsRecomputeBuckets: z.number().int().min(0).max(1_440).optional(),
   })
   .refine((definition) => Object.keys(definition).length > 0, "At least one setting is required");
 const retentionDays = z.number().int().min(1).max(36_500).nullable();

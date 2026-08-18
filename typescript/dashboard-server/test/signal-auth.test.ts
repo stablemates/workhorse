@@ -8,7 +8,7 @@ import type { DashboardRouter } from "../src/server/router.js";
 import type { DashboardTaskController } from "../src/server/types.js";
 
 const database = {
-  query: async () => ({ rows: [{ version: 44 }] }),
+  query: async () => ({ rows: [{ version: 45 }] }),
 } as unknown as Queryable;
 
 describe("signal RPC authentication", () => {

@@ -18,11 +18,34 @@ export type DashboardDependencyHealth = QueueHealth["dependencies"];
 export type DashboardChildHealth = QueueHealth["children"];
 export type DashboardExternalWaitHealth = QueueHealth["externalWaits"];
 
+/**
+ * One piece of settings advice derived from measured queue state.
+ *
+ * A recommendation only exists when a measurement warrants it; the page never restates defaults.
+ * `measured` carries the numbers the advice was computed from, so an operator can check the
+ * arithmetic instead of trusting a sentence.
+ */
+export interface DashboardSettingsRecommendation {
+  id:
+    | "terminal-cleanup-ceiling"
+    | "retention-lag"
+    | "rollup-stalled"
+    | "statistics-disabled"
+    | "partition-spill";
+  /** Warnings describe measured pressure; info describes a deliberate but consequential state. */
+  severity: "info" | "warning";
+  /** Policy settings the advice concerns, named as the settings page names them. */
+  settings: string[];
+  summary: string;
+  measured: Record<string, number | string | boolean | null>;
+}
+
 export interface DashboardSettingsPage {
   capturedAt: string;
   editable: boolean;
   maintenance: DashboardMaintenancePolicy;
   retention: DashboardRetentionPolicy;
+  recommendations: DashboardSettingsRecommendation[];
   workers: Array<{
     id: string;
     queue: string;

@@ -92,6 +92,7 @@ describe("structured logging", () => {
         if (
           sql.includes("tick_v1") ||
           sql.includes("prepare_history_partitions_v1") ||
+          sql.includes("rollup_stats_v1") ||
           sql.includes("retain_history_v1") ||
           sql.includes("prune_terminal_storage_v1")
         ) {
@@ -109,7 +110,6 @@ describe("structured logging", () => {
       registryIntervalMs: 100,
       maintenanceIntervalMs: 60_000,
       maintenanceTaskPollMs: 60_000,
-      statisticsRollupIntervalMs: 0,
     });
 
     const running = worker.run();

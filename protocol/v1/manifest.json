@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 1,
   "schema": {
-    "installedVersion": 44,
-    "minimumVersion": 44,
-    "maximumVersion": 44
+    "installedVersion": 45,
+    "minimumVersion": 45,
+    "maximumVersion": 45
   },
   "supportedClientProtocol": {
     "minimumVersion": 1,
@@ -27,7 +27,9 @@
     "signals",
     "human-tokens"
   ],
-  "runtimeCoverage": ["batch-handling"],
+  "runtimeCoverage": [
+    "batch-handling"
+  ],
   "functions": [
     {
       "name": "enqueue_many_v2",

@@ -1002,7 +1002,6 @@ async function scheduleCadenceJitter(
     pollMs: 10,
     maintenanceIntervalMs,
     maintenanceTaskPollMs: 60_000,
-    statisticsRollupIntervalMs: 0,
     registryIntervalMs: 0,
     scheduleNamespaces: [namespace],
     scheduleCatchupLimit: context.options.scheduleSamples,
@@ -4336,7 +4335,6 @@ async function batchDispatch(
       heartbeatMs,
       pollMs: 10,
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     });
     let completedMembers = 0;
     let maxActiveSlots = 0;
@@ -4531,7 +4529,6 @@ async function batchDispatch(
       leaseMs,
       heartbeatMs,
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handleBatch<{ index: number }, null>(
       "batch-policy",
       { maxSize: batchMaxSize, lingerMs: 20 },
@@ -4604,7 +4601,6 @@ async function batchDispatch(
     leaseMs,
     heartbeatMs: leaseMs - 1,
     registryIntervalMs: 0,
-    statisticsRollupIntervalMs: 0,
   }).handleBatch<{ member: string }, { source: string }>(
     "batch-recovery",
     { maxSize: 2, lingerMs: 20 },

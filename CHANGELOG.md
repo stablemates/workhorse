@@ -15,7 +15,7 @@ version. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v44**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v45**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -139,6 +139,17 @@ name the retired instruments.
   baseline. No published deployment can consume that history. Version 43 became the permanent
   migration baseline; later schema changes ship as ordered migrations. Existing development
   worktrees must run `pnpm worktree:setup` once to recreate their dedicated databases.
+
+- **Breaking:** `@workhorse/core`: the rolling-statistics cadence is maintenance policy rather
+  than a worker option. `WorkerOptions.statisticsRollupIntervalMs` is removed; set
+  `statisticsRollupIntervalMs`, and the newly policy-owned `statisticsGroupLimit` and
+  `statisticsRecomputeBuckets`, through `Queue.syncMaintenancePolicy` or an operator override.
+  `rollup_stats_v1` now reads all three from `maintenance_policy`, gates itself on the interval
+  (`Queue.rollupStatistics({ force: true })` bypasses the gate), and its signature is
+  `(p_force, p_now, p_max_buckets)`. Migration `0045-statistics-maintenance-policy.sql` takes the
+  schema to version 45, adding the three policy columns and their provenance. The dashboard
+  settings page shows the new settings and derives recommendations from measured state — arrival rate against the terminal-cleanup ceiling, retention lag, a stalled or
+  opted-out rollup, and default-partition spill — in `DashboardSettingsPage.recommendations`.
 
 - `@workhorse/core`: metric instruments are created on first emission and re-created when the
   global meter provider changes. An application may now install its OpenTelemetry SDK after

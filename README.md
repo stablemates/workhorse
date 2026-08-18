@@ -701,16 +701,19 @@ Mounting requires only a database connection. It does not require a worker runti
 because worker identity and runtime state are read from `workhorse.worker_registry` rather than from
 process-local objects. This is what allows the dashboard and the workers to be separate deployments.
 
-Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs, recovers expired leases, and drives schedule evaluation. Three slower SQL-owned tasks have independent advisory locks and persisted due state: `prepare_history_partitions_v1` maintains UTC-daily history partitions every six hours, `retain_history_v1` retires event, attempt, and schedule-occurrence history once per local date at or after the configured local time in the configured IANA timezone, and `prune_terminal_storage_v1` removes expired idempotency bindings and safe terminal bundles every five minutes. Clean installation uses 03:00 UTC, but `Queue.syncMaintenancePolicy`, operator overrides, and the dashboard settings page can change both parts of that boundary. Workers poll task eligibility every minute by default, but PostgreSQL decides whether work is due globally, so additional workers produce cheap no-ops rather than multiplying cleanup. Every task returns per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and `onMaintenance`.
+Workers own scheduling and maintenance in process, the same model good_job, pg-boss, and Oban use on plain PostgreSQL. A fast tick (`workhorse.tick_v1`, once per second by default) promotes due jobs, recovers expired leases, and drives schedule evaluation. Four slower SQL-owned tasks have independent advisory locks and persisted due state: `rollup_stats_v1` summarizes finished work into per-minute statistics every minute, `prepare_history_partitions_v1` maintains UTC-daily history partitions every six hours, `retain_history_v1` retires event, attempt, and schedule-occurrence history once per local date at or after the configured local time in the configured IANA timezone, and `prune_terminal_storage_v1` removes expired idempotency bindings and safe terminal bundles every five minutes. Clean installation uses 03:00 UTC, but `Queue.syncMaintenancePolicy`, operator overrides, and the dashboard settings page can change both parts of that boundary. Workers poll task eligibility every minute by default, but PostgreSQL decides whether work is due globally, so additional workers produce cheap no-ops rather than multiplying cleanup. Every task returns per-phase telemetry `(phase, rows_affected, duration_ms, skipped_lock, error)`, exposed through `worker.maintenanceTelemetry()` and `onMaintenance`.
 
 Clean installation creates the current UTC day plus three future daily partitions. Retention defaults to 14 days for identity, outcomes, events, attempts, and occurrences, and each window remains configurable through `Queue.syncRetentionPolicy`. Terminal identity deletion is interlocked with a persisted history-retention watermark, so frequent terminal cleanup cannot outrun daily history retirement or late history insertion.
 
 The settings page groups values by ownership. When the host supplies
 `DashboardSettingsController`, operators can change the maintenance timezone and daily retention
 time, and they can revert those values individually. Retention windows, cleanup limits, and the
-partition preparation and terminal cleanup intervals show their effective values, application
-defaults, and operator-override status, but they remain read-only because changing them can delete
-history or alter internal maintenance behavior. Browser display preferences live in a separate
+partition preparation, terminal cleanup, and statistics rollup settings show their effective
+values, application defaults, and operator-override status, but they remain read-only because
+changing them can delete history or alter internal maintenance behavior. The page also derives
+recommendations from measured state — arrival rate against the terminal-cleanup ceiling, retention
+lag, a stalled or opted-out statistics rollup, and history rows spilled into the default
+partition — instead of restating defaults. Browser display preferences live in a separate
 section because they affect only the current browser. Worker concurrency, lease, heartbeat, and
 polling values are reported from live processes but remain read-only because changing them requires
 a deployment.

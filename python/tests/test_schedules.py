@@ -8,7 +8,7 @@ from workhorse import Queue, ScheduleDefinition, ScheduledJob
 
 
 def test_synchronizes_recurring_definitions_through_the_versioned_sql_function() -> None:
-    connection = Connection([[{"version": 44}], []])
+    connection = Connection([[{"version": 45}], []])
 
     Queue(connection, default_queue="mail").sync_schedules(
         "billing",

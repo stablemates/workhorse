@@ -78,10 +78,16 @@ type MaintenancePolicyRow = {
   partition_preparation_interval_ms: number;
   terminal_cleanup_interval_ms: number;
   history_retention_local_time: string;
+  statistics_rollup_interval_ms: number;
+  statistics_group_limit: number;
+  statistics_recompute_buckets: number;
   application_timezone: string;
   application_partition_preparation_interval_ms: number;
   application_terminal_cleanup_interval_ms: number;
   application_history_retention_local_time: string;
+  application_statistics_rollup_interval_ms: number;
+  application_statistics_group_limit: number;
+  application_statistics_recompute_buckets: number;
   operator_overrides: string[];
   updated_at: Date;
 };
@@ -105,6 +111,9 @@ const MAINTENANCE_POLICY_COLUMNS: Readonly<Record<MaintenancePolicySetting, stri
   partitionPreparationIntervalMs: "partition_preparation_interval_ms",
   terminalCleanupIntervalMs: "terminal_cleanup_interval_ms",
   historyRetentionLocalTime: "history_retention_local_time",
+  statisticsRollupIntervalMs: "statistics_rollup_interval_ms",
+  statisticsGroupLimit: "statistics_group_limit",
+  statisticsRecomputeBuckets: "statistics_recompute_buckets",
 };
 
 function policyProvenance<TSetting extends string>(
@@ -163,6 +172,9 @@ function maintenancePolicy(row: MaintenancePolicyRow): MaintenancePolicy {
     partitionPreparationIntervalMs: row.partition_preparation_interval_ms,
     terminalCleanupIntervalMs: row.terminal_cleanup_interval_ms,
     historyRetentionLocalTime: localMaintenanceTime(row.history_retention_local_time),
+    statisticsRollupIntervalMs: row.statistics_rollup_interval_ms,
+    statisticsGroupLimit: row.statistics_group_limit,
+    statisticsRecomputeBuckets: row.statistics_recompute_buckets,
     provenance: policyProvenance(
       row,
       MAINTENANCE_POLICY_COLUMNS,
@@ -218,12 +230,12 @@ export class RetentionMaintenanceModule extends QueueModule {
   }
 
   async rollupStatistics(
-    options: { now?: Date; maxBuckets?: number; recomputeBuckets?: number } = {},
+    options: { force?: boolean; now?: Date; maxBuckets?: number } = {},
   ): Promise<MaintenancePhaseResult[]> {
     return this.maintenanceSpan("statistics_rollup", async () => {
       const result = await this.context.database.query<MaintenancePhaseRow>(
-        "SELECT * FROM workhorse.rollup_stats_v1($1::timestamptz, $2::integer, $3::integer)",
-        [options.now ?? new Date(), options.maxBuckets ?? 240, options.recomputeBuckets ?? 2],
+        "SELECT * FROM workhorse.rollup_stats_v1($1::boolean, $2::timestamptz, $3::integer)",
+        [options.force ?? false, options.now ?? new Date(), options.maxBuckets ?? 240],
       );
       return result.rows.map(maintenancePhaseResult);
     });
@@ -394,13 +406,17 @@ export class RetentionMaintenanceModule extends QueueModule {
     this.validateMaintenanceTime(definition.historyRetentionLocalTime);
     const result = await this.context.database.query<MaintenancePolicyRow>(
       `SELECT (policy).* FROM workhorse.sync_maintenance_policy_v1(
-         $1::text, $2::integer, $3::integer, $4::time, $5::boolean
+         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer,
+         $8::boolean
        ) policy`,
       [
         definition.timezone,
         definition.partitionPreparationIntervalMs ?? null,
         definition.terminalCleanupIntervalMs ?? null,
         definition.historyRetentionLocalTime ?? null,
+        definition.statisticsRollupIntervalMs ?? null,
+        definition.statisticsGroupLimit ?? null,
+        definition.statisticsRecomputeBuckets ?? null,
         options.force ?? false,
       ],
     );
@@ -417,13 +433,16 @@ export class RetentionMaintenanceModule extends QueueModule {
     this.validateMaintenanceTime(definition.historyRetentionLocalTime);
     const result = await this.context.database.query<MaintenancePolicyRow>(
       `SELECT (policy).* FROM workhorse.override_maintenance_policy_v1(
-         $1::text, $2::integer, $3::integer, $4::time
+         $1::text, $2::integer, $3::integer, $4::time, $5::integer, $6::integer, $7::integer
        ) policy`,
       [
         definition.timezone ?? null,
         definition.partitionPreparationIntervalMs ?? null,
         definition.terminalCleanupIntervalMs ?? null,
         definition.historyRetentionLocalTime ?? null,
+        definition.statisticsRollupIntervalMs ?? null,
+        definition.statisticsGroupLimit ?? null,
+        definition.statisticsRecomputeBuckets ?? null,
       ],
     );
     return maintenancePolicy(expectOneRow(result, "workhorse.override_maintenance_policy_v1"));

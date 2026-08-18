@@ -5761,6 +5761,10 @@ function formatRetentionDefault(value: number | null, suffix: string): string {
   return value === null ? "indefinitely" : `${value.toLocaleString()}${suffix}`;
 }
 
+function formatStatisticsRollupInterval(milliseconds: number): string {
+  return milliseconds === 0 ? "Opted out" : formatMaintenanceInterval(milliseconds);
+}
+
 export function SettingsPage({
   data,
   saving,
@@ -5873,6 +5877,19 @@ export function SettingsPage({
               The connected host did not authorize settings changes.
             </Alert>
           ) : null}
+          {data.recommendations.map((recommendation) => (
+            <Alert
+              key={recommendation.id}
+              color={recommendation.severity === "warning" ? "orange" : "blue"}
+              title={
+                recommendation.severity === "warning"
+                  ? "Measured pressure on current settings"
+                  : "Configuration note"
+              }
+            >
+              {recommendation.summary}
+            </Alert>
+          ))}
           <Box>
             <Text fw={600}>Maintenance schedule</Text>
             <Text c="dimmed" size="xs">
@@ -5960,6 +5977,7 @@ export function SettingsPage({
                         "How often Workhorse checks that upcoming history partitions exist.",
                       effective: data.maintenance.partitionPreparationIntervalMs,
                       provenance: data.maintenance.provenance.partitionPreparationIntervalMs,
+                      format: formatMaintenanceInterval,
                     },
                     {
                       label: "Terminal cleanup interval",
@@ -5967,6 +5985,31 @@ export function SettingsPage({
                         "How often Workhorse removes finished tasks after their retention windows elapse.",
                       effective: data.maintenance.terminalCleanupIntervalMs,
                       provenance: data.maintenance.provenance.terminalCleanupIntervalMs,
+                      format: formatMaintenanceInterval,
+                    },
+                    {
+                      label: "Statistics rollup interval",
+                      description:
+                        "How often Workhorse summarizes finished work into per-minute statistics.",
+                      effective: data.maintenance.statisticsRollupIntervalMs,
+                      provenance: data.maintenance.provenance.statisticsRollupIntervalMs,
+                      format: formatStatisticsRollupInterval,
+                    },
+                    {
+                      label: "Statistics group limit",
+                      description:
+                        "Distinct queue and task-type pairs kept per statistics minute before overflow.",
+                      effective: data.maintenance.statisticsGroupLimit,
+                      provenance: data.maintenance.provenance.statisticsGroupLimit,
+                      format: (value: number) => `${value.toLocaleString()} groups`,
+                    },
+                    {
+                      label: "Statistics recompute window",
+                      description:
+                        "Closed minutes rewritten behind the rollup watermark to absorb late history.",
+                      effective: data.maintenance.statisticsRecomputeBuckets,
+                      provenance: data.maintenance.provenance.statisticsRecomputeBuckets,
+                      format: (value: number) => `${value.toLocaleString()} minutes`,
                     },
                   ].map((setting) => (
                     <Grid.Col key={setting.label} span={{ base: 12, md: 6 }}>
@@ -5978,11 +6021,11 @@ export function SettingsPage({
                           {setting.description}
                         </Text>
                         <Text size="sm">
-                          Effective: {formatMaintenanceInterval(setting.effective)}
+                          Effective: {setting.format(setting.effective)}
                         </Text>
                         <Text c="dimmed" size="xs">
                           Default:{" "}
-                          {formatMaintenanceInterval(setting.provenance.applicationDefault)}
+                          {setting.format(setting.provenance.applicationDefault)}
                         </Text>
                         {setting.provenance.source === "operator" ? (
                           <Box>

@@ -184,6 +184,7 @@ describe("OpenTelemetry", () => {
         if (
           sql.includes("tick_v1") ||
           sql.includes("prepare_history_partitions_v1") ||
+          sql.includes("rollup_stats_v1") ||
           sql.includes("retain_history_v1") ||
           sql.includes("prune_terminal_storage_v1")
         ) {
@@ -220,7 +221,6 @@ describe("OpenTelemetry", () => {
     const worker = new Worker(new Queue(database, "mail"), {
       workerId: "worker-a",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     });
     worker.handle("mail.send", async () => ({ sent: true }));
 
@@ -325,6 +325,7 @@ describe("OpenTelemetry", () => {
         if (
           sql.includes("tick_v1") ||
           sql.includes("prepare_history_partitions_v1") ||
+          sql.includes("rollup_stats_v1") ||
           sql.includes("retain_history_v1") ||
           sql.includes("prune_terminal_storage_v1")
         ) {
@@ -365,7 +366,6 @@ describe("OpenTelemetry", () => {
     const worker = new Worker(new Queue(database, "mail"), {
       workerId: "worker-redaction",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handle("mail.send", async () => {
       throw new Error(`provider rejected ${secret}`);
     });

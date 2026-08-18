@@ -20,6 +20,9 @@ const maintenanceProvenance = {
   },
   terminalCleanupIntervalMs: { source: "application" as const, applicationDefault: 300_000 },
   historyRetentionLocalTime: { source: "operator" as const, applicationDefault: "03:00" },
+  statisticsRollupIntervalMs: { source: "operator" as const, applicationDefault: 60_000 },
+  statisticsGroupLimit: { source: "application" as const, applicationDefault: 200 },
+  statisticsRecomputeBuckets: { source: "application" as const, applicationDefault: 2 },
 };
 const retentionProvenance = {
   jobIdentityRetentionDays: { source: "application" as const, applicationDefault: 14 },
@@ -43,6 +46,9 @@ const data: DashboardSettingsPage = {
     partitionPreparationIntervalMs: 18_000_000,
     terminalCleanupIntervalMs: 300_000,
     historyRetentionLocalTime: "01:30",
+    statisticsRollupIntervalMs: 0,
+    statisticsGroupLimit: 200,
+    statisticsRecomputeBuckets: 2,
     provenance: maintenanceProvenance,
     updatedAt: "2026-08-10T12:00:00.000Z",
   },
@@ -61,6 +67,17 @@ const data: DashboardSettingsPage = {
     provenance: retentionProvenance,
     updatedAt: "2026-08-10T12:00:00.000Z",
   },
+  recommendations: [
+    {
+      id: "statistics-disabled",
+      severity: "info",
+      settings: ["statisticsRollupIntervalMs"],
+      summary:
+        "The statistics rollup is opted out while raw-history retention is enabled. Retention " +
+        "cannot delete past the rollup watermark, so history behind it is held indefinitely.",
+      measured: { statisticsRollupIntervalMs: 0 },
+    },
+  ],
   workers: [
     {
       id: "worker-1",
@@ -112,6 +129,15 @@ describe("settings page", () => {
     expect(html).toContain("Effective: 5 hours");
     expect(html).toContain("Effective: 5 minutes");
     expect(html).not.toContain("Custom partition preparation interval");
+    expect(html).toContain("Statistics rollup interval");
+    expect(html).toContain("Effective: Opted out");
+    expect(html).toContain("Default: 1 minute");
+    expect(html).toContain("Statistics group limit");
+    expect(html).toContain("Effective: 200 groups");
+    expect(html).toContain("Statistics recompute window");
+    expect(html).toContain("Effective: 2 minutes");
+    expect(html).toContain("Configuration note");
+    expect(html).toContain("The statistics rollup is opted out while raw-history retention");
     expect(html).toContain("Retention windows");
     expect(html).toContain(
       "These effective values are read-only here because shortening them can permanently delete stored history",

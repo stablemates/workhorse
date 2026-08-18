@@ -956,6 +956,21 @@
               "historyRetentionLocalTime": {
                 "type": "string",
                 "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "statisticsRollupIntervalMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 86400000
+              },
+              "statisticsGroupLimit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "statisticsRecomputeBuckets": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1440
               }
             }
           },
@@ -1005,7 +1020,10 @@
                 "timezone",
                 "partitionPreparationIntervalMs",
                 "terminalCleanupIntervalMs",
-                "historyRetentionLocalTime"
+                "historyRetentionLocalTime",
+                "statisticsRollupIntervalMs",
+                "statisticsGroupLimit",
+                "statisticsRecomputeBuckets"
               ]
             }
           },
@@ -3685,6 +3703,15 @@
         "historyRetentionLocalTime": {
           "type": "string"
         },
+        "statisticsRollupIntervalMs": {
+          "type": "number"
+        },
+        "statisticsGroupLimit": {
+          "type": "number"
+        },
+        "statisticsRecomputeBuckets": {
+          "type": "number"
+        },
         "provenance": {
           "type": "object",
           "properties": {
@@ -3759,13 +3786,70 @@
                 "source",
                 "applicationDefault"
               ]
+            },
+            "statisticsRollupIntervalMs": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "statisticsGroupLimit": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
+            },
+            "statisticsRecomputeBuckets": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "application",
+                    "operator"
+                  ]
+                },
+                "applicationDefault": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "source",
+                "applicationDefault"
+              ]
             }
           },
           "required": [
             "timezone",
             "partitionPreparationIntervalMs",
             "terminalCleanupIntervalMs",
-            "historyRetentionLocalTime"
+            "historyRetentionLocalTime",
+            "statisticsRollupIntervalMs",
+            "statisticsGroupLimit",
+            "statisticsRecomputeBuckets"
           ]
         },
         "updatedAt": {
@@ -3777,6 +3861,9 @@
         "partitionPreparationIntervalMs",
         "terminalCleanupIntervalMs",
         "historyRetentionLocalTime",
+        "statisticsRollupIntervalMs",
+        "statisticsGroupLimit",
+        "statisticsRecomputeBuckets",
         "provenance",
         "updatedAt"
       ]
@@ -4662,6 +4749,12 @@
         "retention": {
           "$ref": "#/$defs/DashboardRetentionPolicy"
         },
+        "recommendations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DashboardSettingsRecommendation"
+          }
+        },
         "workers": {
           "type": "array",
           "items": {
@@ -4760,7 +4853,63 @@
         "editable",
         "maintenance",
         "retention",
+        "recommendations",
         "workers"
+      ]
+    },
+    "DashboardSettingsRecommendation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "enum": [
+            "partition-spill",
+            "retention-lag",
+            "rollup-stalled",
+            "statistics-disabled",
+            "terminal-cleanup-ceiling"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning"
+          ]
+        },
+        "settings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        },
+        "measured": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "severity",
+        "settings",
+        "summary",
+        "measured"
       ]
     },
     "DashboardSignalTaskResult": {

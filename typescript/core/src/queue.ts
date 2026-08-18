@@ -359,10 +359,11 @@ export class Queue {
    * Operator time windows read these aggregates instead of scanning retained history, so this pass
    * is what keeps a dashboard's cost proportional to the window rather than to throughput. It is
    * safe to run from every worker and safe to run repeatedly: a bucket is a pure function of the
-   * raw history in its minute, and passes serialize on an advisory lock.
+   * raw history in its minute, and passes serialize on an advisory lock. The cadence, recompute
+   * window, and group limit come from the maintenance policy; `force` bypasses the cadence gate.
    */
   async rollupStatistics(
-    options: { now?: Date; maxBuckets?: number; recomputeBuckets?: number } = {},
+    options: { force?: boolean; now?: Date; maxBuckets?: number } = {},
   ): Promise<MaintenancePhaseResult[]> {
     return this.modules.retentionMaintenance.rollupStatistics(options);
   }

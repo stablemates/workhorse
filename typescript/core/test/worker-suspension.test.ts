@@ -59,7 +59,6 @@ describe("worker suspension", () => {
     } as unknown as WorkerQueueApi;
     const worker = new Worker(queue, {
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handle("concurrent-suspension", async (_payload, context) => {
       const operations = {
         waitForSignal: () => context.waitForSignal("approval"),

@@ -51,7 +51,11 @@ function quoteLiteral(value: string): string {
  * must not manage transactions.
  */
 function migrationScript(step: SchemaMigrationStep, body: string): string {
-  if (transactionControl.test(body)) {
+  // Dollar-quoted bodies are data, not statements: a migration that redefines a plpgsql
+  // function legitimately contains BEGIN lines inside $$…$$, and only statements outside
+  // those quotes can manage the transaction.
+  const statements = body.replace(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, "''");
+  if (transactionControl.test(statements)) {
     throw new Error(
       `Workhorse migration ${step.file} must not contain transaction control statements`,
     );

@@ -1275,17 +1275,46 @@ CREATE TABLE IF NOT EXISTS workhorse.maintenance_policy (
   operator_overrides text[] NOT NULL DEFAULT '{}' CHECK (
     operator_overrides <@ ARRAY[
       'timezone', 'partition_preparation_interval_ms',
-      'terminal_cleanup_interval_ms', 'history_retention_local_time'
+      'terminal_cleanup_interval_ms', 'history_retention_local_time',
+      'statistics_rollup_interval_ms', 'statistics_group_limit', 'statistics_recompute_buckets'
     ]::text[]
   ),
-  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  -- Rolling-statistics rollup: a global cadence like the three above, not a per-process option.
+  -- Zero opts out of the rollup fleet-wide, which holds history retention at the current
+  -- watermark. Declared after updated_at so migration 0045's ADD COLUMN order matches a clean
+  -- installation column for column.
+  statistics_rollup_interval_ms integer NOT NULL CHECK (
+    statistics_rollup_interval_ms = 0
+    OR statistics_rollup_interval_ms BETWEEN 1000 AND 86400000
+  ),
+  statistics_group_limit integer NOT NULL CHECK (
+    statistics_group_limit BETWEEN 1 AND 10000
+  ),
+  statistics_recompute_buckets integer NOT NULL CHECK (
+    statistics_recompute_buckets BETWEEN 0 AND 1440
+  ),
+  application_statistics_rollup_interval_ms integer NOT NULL CHECK (
+    application_statistics_rollup_interval_ms = 0
+    OR application_statistics_rollup_interval_ms BETWEEN 1000 AND 86400000
+  ),
+  application_statistics_group_limit integer NOT NULL CHECK (
+    application_statistics_group_limit BETWEEN 1 AND 10000
+  ),
+  application_statistics_recompute_buckets integer NOT NULL CHECK (
+    application_statistics_recompute_buckets BETWEEN 0 AND 1440
+  )
 );
 INSERT INTO workhorse.maintenance_policy(
   singleton, timezone, partition_preparation_interval_ms,
   terminal_cleanup_interval_ms, history_retention_local_time,
   application_timezone, application_partition_preparation_interval_ms,
-  application_terminal_cleanup_interval_ms, application_history_retention_local_time
-) VALUES (true, 'UTC', 21600000, 300000, '03:00', 'UTC', 21600000, 300000, '03:00')
+  application_terminal_cleanup_interval_ms, application_history_retention_local_time,
+  statistics_rollup_interval_ms, statistics_group_limit, statistics_recompute_buckets,
+  application_statistics_rollup_interval_ms, application_statistics_group_limit,
+  application_statistics_recompute_buckets
+) VALUES (true, 'UTC', 21600000, 300000, '03:00', 'UTC', 21600000, 300000, '03:00',
+          60000, 200, 2, 60000, 200, 2)
 ON CONFLICT (singleton) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS workhorse.maintenance_state (
@@ -1908,6 +1937,9 @@ CREATE OR REPLACE FUNCTION workhorse.sync_maintenance_policy_v1(
   p_partition_preparation_interval_ms integer DEFAULT NULL,
   p_terminal_cleanup_interval_ms integer DEFAULT NULL,
   p_history_retention_local_time time DEFAULT NULL,
+  p_statistics_rollup_interval_ms integer DEFAULT NULL,
+  p_statistics_group_limit integer DEFAULT NULL,
+  p_statistics_recompute_buckets integer DEFAULT NULL,
   p_force boolean DEFAULT false
 ) RETURNS workhorse.maintenance_policy
 LANGUAGE plpgsql
@@ -1931,6 +1963,15 @@ BEGIN
     ),
     application_history_retention_local_time = COALESCE(
       p_history_retention_local_time, policy.application_history_retention_local_time
+    ),
+    application_statistics_rollup_interval_ms = COALESCE(
+      p_statistics_rollup_interval_ms, policy.application_statistics_rollup_interval_ms
+    ),
+    application_statistics_group_limit = COALESCE(
+      p_statistics_group_limit, policy.application_statistics_group_limit
+    ),
+    application_statistics_recompute_buckets = COALESCE(
+      p_statistics_recompute_buckets, policy.application_statistics_recompute_buckets
     ),
     timezone = CASE WHEN p_force OR NOT ('timezone' = ANY(policy.operator_overrides))
       THEN p_timezone ELSE policy.timezone END,
@@ -1958,6 +1999,30 @@ BEGIN
       WHEN NOT ('history_retention_local_time' = ANY(policy.operator_overrides))
         THEN p_history_retention_local_time
       ELSE policy.history_retention_local_time END,
+    statistics_rollup_interval_ms = CASE
+      WHEN p_force THEN COALESCE(
+        p_statistics_rollup_interval_ms, policy.application_statistics_rollup_interval_ms
+      )
+      WHEN p_statistics_rollup_interval_ms IS NULL THEN policy.statistics_rollup_interval_ms
+      WHEN NOT ('statistics_rollup_interval_ms' = ANY(policy.operator_overrides))
+        THEN p_statistics_rollup_interval_ms
+      ELSE policy.statistics_rollup_interval_ms END,
+    statistics_group_limit = CASE
+      WHEN p_force THEN COALESCE(
+        p_statistics_group_limit, policy.application_statistics_group_limit
+      )
+      WHEN p_statistics_group_limit IS NULL THEN policy.statistics_group_limit
+      WHEN NOT ('statistics_group_limit' = ANY(policy.operator_overrides))
+        THEN p_statistics_group_limit
+      ELSE policy.statistics_group_limit END,
+    statistics_recompute_buckets = CASE
+      WHEN p_force THEN COALESCE(
+        p_statistics_recompute_buckets, policy.application_statistics_recompute_buckets
+      )
+      WHEN p_statistics_recompute_buckets IS NULL THEN policy.statistics_recompute_buckets
+      WHEN NOT ('statistics_recompute_buckets' = ANY(policy.operator_overrides))
+        THEN p_statistics_recompute_buckets
+      ELSE policy.statistics_recompute_buckets END,
     operator_overrides = CASE WHEN p_force THEN '{}'::text[] ELSE policy.operator_overrides END,
     updated_at = clock_timestamp()
   WHERE singleton
@@ -1976,7 +2041,10 @@ CREATE OR REPLACE FUNCTION workhorse.override_maintenance_policy_v1(
   p_timezone text DEFAULT NULL,
   p_partition_preparation_interval_ms integer DEFAULT NULL,
   p_terminal_cleanup_interval_ms integer DEFAULT NULL,
-  p_history_retention_local_time time DEFAULT NULL
+  p_history_retention_local_time time DEFAULT NULL,
+  p_statistics_rollup_interval_ms integer DEFAULT NULL,
+  p_statistics_group_limit integer DEFAULT NULL,
+  p_statistics_recompute_buckets integer DEFAULT NULL
 ) RETURNS workhorse.maintenance_policy
 LANGUAGE plpgsql
 AS $$
@@ -1990,7 +2058,9 @@ BEGIN
     RAISE EXCEPTION 'maintenance timezone must be a valid IANA timezone name';
   END IF;
   IF p_timezone IS NULL AND p_partition_preparation_interval_ms IS NULL
-     AND p_terminal_cleanup_interval_ms IS NULL AND p_history_retention_local_time IS NULL THEN
+     AND p_terminal_cleanup_interval_ms IS NULL AND p_history_retention_local_time IS NULL
+     AND p_statistics_rollup_interval_ms IS NULL AND p_statistics_group_limit IS NULL
+     AND p_statistics_recompute_buckets IS NULL THEN
     RAISE EXCEPTION 'maintenance override must include at least one setting';
   END IF;
   IF p_timezone IS NOT NULL THEN v_overrides := array_append(v_overrides, 'timezone'); END IF;
@@ -2002,6 +2072,15 @@ BEGIN
   END IF;
   IF p_history_retention_local_time IS NOT NULL THEN
     v_overrides := array_append(v_overrides, 'history_retention_local_time');
+  END IF;
+  IF p_statistics_rollup_interval_ms IS NOT NULL THEN
+    v_overrides := array_append(v_overrides, 'statistics_rollup_interval_ms');
+  END IF;
+  IF p_statistics_group_limit IS NOT NULL THEN
+    v_overrides := array_append(v_overrides, 'statistics_group_limit');
+  END IF;
+  IF p_statistics_recompute_buckets IS NOT NULL THEN
+    v_overrides := array_append(v_overrides, 'statistics_recompute_buckets');
   END IF;
 
   SELECT * INTO STRICT v_previous FROM workhorse.maintenance_policy WHERE singleton FOR UPDATE;
@@ -2015,6 +2094,13 @@ BEGIN
     ),
     history_retention_local_time = COALESCE(
       p_history_retention_local_time, policy.history_retention_local_time
+    ),
+    statistics_rollup_interval_ms = COALESCE(
+      p_statistics_rollup_interval_ms, policy.statistics_rollup_interval_ms
+    ),
+    statistics_group_limit = COALESCE(p_statistics_group_limit, policy.statistics_group_limit),
+    statistics_recompute_buckets = COALESCE(
+      p_statistics_recompute_buckets, policy.statistics_recompute_buckets
     ),
     operator_overrides = ARRAY(
       SELECT DISTINCT name FROM unnest(policy.operator_overrides || v_overrides) name ORDER BY name
@@ -2042,7 +2128,8 @@ DECLARE v_previous workhorse.maintenance_policy%ROWTYPE;
 BEGIN
   IF p_settings IS NULL OR cardinality(p_settings) = 0 OR NOT p_settings <@ ARRAY[
     'timezone', 'partition_preparation_interval_ms',
-    'terminal_cleanup_interval_ms', 'history_retention_local_time'
+    'terminal_cleanup_interval_ms', 'history_retention_local_time',
+    'statistics_rollup_interval_ms', 'statistics_group_limit', 'statistics_recompute_buckets'
   ]::text[] THEN
     RAISE EXCEPTION 'maintenance revert must name known settings';
   END IF;
@@ -2062,6 +2149,18 @@ BEGIN
       WHEN 'history_retention_local_time' = ANY(p_settings)
         THEN policy.application_history_retention_local_time
       ELSE policy.history_retention_local_time END,
+    statistics_rollup_interval_ms = CASE
+      WHEN 'statistics_rollup_interval_ms' = ANY(p_settings)
+        THEN policy.application_statistics_rollup_interval_ms
+      ELSE policy.statistics_rollup_interval_ms END,
+    statistics_group_limit = CASE
+      WHEN 'statistics_group_limit' = ANY(p_settings)
+        THEN policy.application_statistics_group_limit
+      ELSE policy.statistics_group_limit END,
+    statistics_recompute_buckets = CASE
+      WHEN 'statistics_recompute_buckets' = ANY(p_settings)
+        THEN policy.application_statistics_recompute_buckets
+      ELSE policy.statistics_recompute_buckets END,
     operator_overrides = ARRAY(
       SELECT name FROM unnest(policy.operator_overrides) name WHERE NOT (name = ANY(p_settings))
     ),
@@ -7615,10 +7714,9 @@ $$;
 -- after its own minute closed is absorbed by the rewrite instead of being lost. Rewriting is safe
 -- because a bucket is a pure function of the raw history in its minute.
 CREATE OR REPLACE FUNCTION workhorse.rollup_stats_v1(
+  p_force boolean DEFAULT false,
   p_now timestamptz DEFAULT clock_timestamp(),
-  p_max_buckets integer DEFAULT 240,
-  p_recompute_buckets integer DEFAULT 2,
-  p_group_limit integer DEFAULT 200
+  p_max_buckets integer DEFAULT 240
 ) RETURNS TABLE (
   phase text, rows_affected integer, duration_ms integer, skipped_lock boolean, error jsonb
 )
@@ -7627,6 +7725,7 @@ AS $$
 DECLARE v_started_at timestamptz;
 DECLARE v_state workhorse.job_stat_state%ROWTYPE;
 DECLARE v_policy workhorse.retention_policy%ROWTYPE;
+DECLARE v_maintenance workhorse.maintenance_policy%ROWTYPE;
 DECLARE v_from timestamptz;
 DECLARE v_to timestamptz;
 DECLARE v_closed timestamptz;
@@ -7635,20 +7734,26 @@ BEGIN
   IF p_max_buckets NOT BETWEEN 1 AND 100000 THEN
     RAISE EXCEPTION 'bucket limit must be between 1 and 100000';
   END IF;
-  IF p_recompute_buckets NOT BETWEEN 0 AND 1440 THEN
-    RAISE EXCEPTION 'recompute window must be between 0 and 1440 buckets';
-  END IF;
-  IF p_group_limit NOT BETWEEN 1 AND 10000 THEN
-    RAISE EXCEPTION 'group limit must be between 1 and 10000';
-  END IF;
   IF NOT pg_try_advisory_xact_lock(hashtextextended('workhorse:maintenance:stat-rollup', 0)) THEN
     RETURN QUERY VALUES
       ('stat_rollup'::text, 0, 0, true, NULL::jsonb),
       ('stat_retention'::text, 0, 0, true, NULL::jsonb);
     RETURN;
   END IF;
+  SELECT * INTO STRICT v_maintenance FROM workhorse.maintenance_policy WHERE singleton;
   SELECT * INTO STRICT v_state FROM workhorse.job_stat_state WHERE singleton FOR UPDATE;
   SELECT * INTO STRICT v_policy FROM workhorse.retention_policy WHERE singleton;
+  -- The cadence, recompute window, and group limit are maintenance policy, not caller options:
+  -- a fleet shares one statistics contract, and a zero interval opts the whole fleet out while
+  -- holding history retention at the current watermark. Force bypasses the cadence gate only.
+  IF NOT p_force AND (
+    v_maintenance.statistics_rollup_interval_ms = 0
+    OR (v_state.last_run_at IS NOT NULL AND v_state.last_run_at > p_now - make_interval(
+      secs => v_maintenance.statistics_rollup_interval_ms / 1000.0
+    ))
+  ) THEN
+    RETURN;
+  END IF;
 
   phase := 'stat_rollup';
   rows_affected := 0;
@@ -7658,7 +7763,9 @@ BEGIN
   BEGIN
     v_closed := date_bin('1 minute', p_now, timestamp with time zone '2000-01-01');
     v_from := LEAST(
-      v_state.rolled_up_through - make_interval(mins => p_recompute_buckets), v_closed
+      v_state.rolled_up_through
+        - make_interval(mins => v_maintenance.statistics_recompute_buckets),
+      v_closed
     );
     -- Catching up after an outage advances in bounded passes rather than in one long transaction.
     v_to := LEAST(v_closed, v_from + make_interval(mins => p_max_buckets));
@@ -7672,7 +7779,7 @@ BEGIN
         attempt_lease_expired, attempt_canceled, attempt_other,
         attempt_duration_ms, last_attempt_at, last_error, last_error_at
       )
-      SELECT * FROM workhorse.aggregate_stats_v1(v_from, v_to, p_group_limit);
+      SELECT * FROM workhorse.aggregate_stats_v1(v_from, v_to, v_maintenance.statistics_group_limit);
       GET DIAGNOSTICS rows_affected = ROW_COUNT;
       UPDATE workhorse.job_stat_state
          SET rolled_up_through = v_to, last_run_at = p_now, updated_at = clock_timestamp()
@@ -9064,7 +9171,8 @@ CREATE OR REPLACE VIEW workhorse.dashboard_job_wait_v1 AS
          worker_id, created_at FROM workhorse.job_wait;
 CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_policy_v1 AS
   SELECT singleton, timezone, partition_preparation_interval_ms, terminal_cleanup_interval_ms,
-         history_retention_local_time, updated_at FROM workhorse.maintenance_policy;
+         history_retention_local_time, statistics_rollup_interval_ms, statistics_group_limit,
+         statistics_recompute_buckets, updated_at FROM workhorse.maintenance_policy;
 CREATE OR REPLACE VIEW workhorse.dashboard_maintenance_state_v1 AS
   SELECT task_name, last_started_at, last_completed_at, last_completed_local_date
     FROM workhorse.maintenance_state;
@@ -9096,9 +9204,10 @@ $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
   (43, 'pre-release baseline'),
-  (44, 'protocol version registry')
+  (44, 'protocol version registry'),
+  (45, 'statistics maintenance policy')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (44) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (45) ON CONFLICT DO NOTHING;
 INSERT INTO workhorse.protocol_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date

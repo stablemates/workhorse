@@ -218,7 +218,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handle("email.send", async () => null);
 
     await worker.runOnce();
@@ -274,7 +273,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
       queue: "mail",
       concurrency: 3,
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handleBatch<{ value: number }, null>("email.batch", { maxSize: 3, lingerMs: 1 }, (items) =>
       items.map(() => ({ status: "succeeded", result: null })),
     );
@@ -326,7 +324,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handle("email.send", async () => {
       throw new Error("delivery failed");
     });
@@ -374,7 +371,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handle("email.send", async () => {
       throw new Error("delivery failed");
     });
@@ -422,7 +418,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handle("email.send", async () => {
       throw new CancellationRequestedError(job.id);
     });
@@ -471,7 +466,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handle(
       "email.send",
       async (_payload, context) =>
@@ -649,7 +643,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     });
 
     await worker.runOnce();
@@ -925,7 +918,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const worker = new Worker(queue, {
       queue: "mail",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handle("email.send", async () => {
       throw new Error("execution stopped");
     });
@@ -987,7 +979,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const worker = new Worker(queue, {
       queue: "reports",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     }).handle("report.publish", async (_payload, context) => {
       await context.sleep("publish", 1_000);
       return null;
@@ -1036,7 +1027,6 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const worker = new Worker(queue, {
       queue: "default",
       registryIntervalMs: 0,
-      statisticsRollupIntervalMs: 0,
     });
 
     await worker.runOnce();

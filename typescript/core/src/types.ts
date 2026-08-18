@@ -897,6 +897,16 @@ export interface MaintenancePolicyDefinition {
   terminalCleanupIntervalMs?: number;
   /** Local wall-clock time in `HH:mm` form. The IANA timezone supplies daylight-saving rules. */
   historyRetentionLocalTime?: string;
+  /**
+   * Minimum delay between rolling-statistics rollup passes, shared by the whole fleet. Zero opts
+   * out, which leaves operator windows fully derived from raw history and holds history retention
+   * at the current rollup watermark.
+   */
+  statisticsRollupIntervalMs?: number;
+  /** Distinct (queue, job type) groups kept per statistics bucket before folding into overflow. */
+  statisticsGroupLimit?: number;
+  /** Closed minutes re-derived behind the rollup watermark to absorb late-committing history. */
+  statisticsRecomputeBuckets?: number;
 }
 
 export interface MaintenancePolicy extends Required<MaintenancePolicyDefinition> {
@@ -905,6 +915,9 @@ export interface MaintenancePolicy extends Required<MaintenancePolicyDefinition>
     partitionPreparationIntervalMs: PolicyValueProvenance<number>;
     terminalCleanupIntervalMs: PolicyValueProvenance<number>;
     historyRetentionLocalTime: PolicyValueProvenance<string>;
+    statisticsRollupIntervalMs: PolicyValueProvenance<number>;
+    statisticsGroupLimit: PolicyValueProvenance<number>;
+    statisticsRecomputeBuckets: PolicyValueProvenance<number>;
   };
   updatedAt: Date;
 }

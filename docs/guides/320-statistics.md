@@ -60,8 +60,10 @@ tail; you don't lose the totals, and the table stays bounded.
 ## Turning it off
 
 Set the rollup interval to zero and every window is computed live from raw history. Correct,
-slower, and history retention stops advancing. Reasonable for a small deployment; not for a
-busy one.
+slower, and history retention stops advancing. The interval is maintenance policy stored in the
+database beside the other cleanup cadences, so zero opts out the whole fleet at once rather than
+one process. Reasonable for a small deployment; not for a busy one — and the settings page will
+say so while retention depends on the watermark.
 
 ## Next
 

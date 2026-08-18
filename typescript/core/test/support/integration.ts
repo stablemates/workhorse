@@ -109,6 +109,9 @@ export function createIntegrationTestContext(fileUrl: string) {
         partitionPreparationIntervalMs: 21_600_000,
         terminalCleanupIntervalMs: 300_000,
         historyRetentionLocalTime: "03:00",
+        statisticsRollupIntervalMs: 60_000,
+        statisticsGroupLimit: 200,
+        statisticsRecomputeBuckets: 2,
       },
       { force: true },
     );

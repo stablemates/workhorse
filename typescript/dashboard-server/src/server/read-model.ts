@@ -46,6 +46,7 @@ import {
   statWindow,
   statWindowStart,
 } from "./rolling-stats.js";
+import { deriveSettingsRecommendations } from "./settings-recommendations.js";
 import { sql, type DashboardDatabase, type DashboardSql } from "./sql.js";
 import type { DashboardDurabilityProjector, DashboardOperator } from "./types.js";
 
@@ -123,9 +124,15 @@ export async function readDashboardSettings(
   queue: Queue,
   editable: boolean,
 ): Promise<DashboardSettingsPage> {
-  const [maintenance, retention, workers] = await Promise.all([
+  const [maintenance, retention, health, enqueued, workers] = await Promise.all([
     queue.getMaintenancePolicy(),
     queue.getRetentionPolicy(),
+    queue.health(),
+    // Measured arrival rate for the recommendation engine, over one stitched statistics hour so
+    // the reading works whether or not the rollup has materialized the window yet.
+    database.execute<{ jobs: string | number }>(sql`
+      SELECT COALESCE(sum(stat.enqueued), 0)::bigint AS jobs FROM ${statWindow(3_600)}
+    `),
     database.execute<{
       worker_id: string;
       queue_name: string;
@@ -153,6 +160,12 @@ export async function readDashboardSettings(
     editable,
     maintenance: { ...maintenance, updatedAt: toIso(maintenance.updatedAt) },
     retention: { ...retention, updatedAt: toIso(retention.updatedAt) },
+    recommendations: deriveSettingsRecommendations({
+      maintenance,
+      retention,
+      health,
+      enqueueRate: { jobs: Number(enqueued.rows[0]?.jobs ?? 0), windowMs: 3_600_000 },
+    }),
     workers: workers.rows.map((worker) => ({
       id: worker.worker_id,
       queue: worker.queue_name,

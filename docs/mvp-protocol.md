@@ -1,6 +1,6 @@
 # Workhorse MVP protocol
 
-This is the compact schema version 44 protocol reference. The clean-install schema stores bounded
+This is the compact schema version 45 protocol reference. The clean-install schema stores bounded
 W3C trace metadata and supports scoped enqueue idempotency, keyed debounce, keyed throttle, and
 fan-in job dependencies with terminal policies. It also supports retry policies, bounded linked
 child fan-out and joins, checkpoints, progress, timer waits, cancellation, deadlines, execution timeouts, and dead-letter
@@ -214,12 +214,13 @@ independently drop only fully expired completed days and bounded-delete expired 
 Identity is the attribution anchor. History inserts lock and verify their parent and update its retained-history boundary. Daily retention advances a global watermark only after event and attempt cleanup is complete through their cutoffs. Terminal cleanup requires an outcome, elapsed identity and outcome windows, no live runtime or retained occurrence, and a terminal boundary behind that watermark. Only then does deleting `job` cascade its outcome, checkpoints, and waits. Retention windows are minimums: daily granularity, bounded catch-up, and retained provenance can extend actual storage. Queue health reports policy, cleanup lag, oldest retained boundaries, eligible history partitions, and cumulative default-partition rows.
 
 `Queue.syncMaintenancePolicy` records application defaults for one IANA timezone, a local
-wall-clock retention time, and task cadences. `Queue.overrideMaintenancePolicy` changes selected
-effective values, and `Queue.revertMaintenancePolicy` restores selected application defaults.
+wall-clock retention time, and task cadences, including the statistics rollup interval, group
+limit, and recompute window. `Queue.overrideMaintenancePolicy` changes selected effective values,
+and `Queue.revertMaintenancePolicy` restores selected application defaults.
 Partition preparation defaults to six-hour intervals, terminal/idempotency cleanup to five-minute
-intervals, and history retention to once per local date at or after 03:00 UTC. Workers poll task
-eligibility every minute by default; PostgreSQL owns the global due check and separate advisory lock
-for each task.
+intervals, the statistics rollup to one-minute intervals (zero opts out fleet-wide), and history
+retention to once per local date at or after 03:00 UTC. Workers poll task eligibility every minute
+by default; PostgreSQL owns the global due check and separate advisory lock for each task.
 
 ## Validation limits
 

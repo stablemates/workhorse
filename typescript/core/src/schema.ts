@@ -15,7 +15,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 43;
 
 /** Canonical schema version for the current line. */
-export const WORKHORSE_SCHEMA_VERSION = 44;
+export const WORKHORSE_SCHEMA_VERSION = 45;
 
 const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
   {
@@ -23,6 +23,12 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     toVersion: 44,
     file: "0044-protocol-version.sql",
     description: "protocol version registry",
+  },
+  {
+    fromVersion: 44,
+    toVersion: 45,
+    file: "0045-statistics-maintenance-policy.sql",
+    description: "statistics maintenance policy",
   },
 ];
 

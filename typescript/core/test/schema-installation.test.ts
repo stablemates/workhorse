@@ -176,6 +176,9 @@ describe("schema installation", () => {
         "partition_preparation_interval_ms",
         "terminal_cleanup_interval_ms",
         "history_retention_local_time",
+        "statistics_rollup_interval_ms",
+        "statistics_group_limit",
+        "statistics_recompute_buckets",
         "updated_at",
       ],
       dashboard_maintenance_state_v1: [
@@ -245,11 +248,11 @@ describe("schema installation", () => {
     expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
   });
 
-  it("installs schema v44 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v45 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(44);
+    expect(version.rows[0]?.version).toBe(45);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
@@ -257,6 +260,7 @@ describe("schema installation", () => {
     expect(migrations.rows).toEqual([
       { version: 43, description: "pre-release baseline" },
       { version: 44, description: "protocol version registry" },
+      { version: 45, description: "statistics maintenance policy" },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

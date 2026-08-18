@@ -234,7 +234,9 @@ describe("schema migrations", () => {
     const before = await cleanDatabase.pool.query<{ version: number; applied_at: Date }>(
       "SELECT version, applied_at FROM workhorse.schema_migration ORDER BY version",
     );
-    expect(before.rows.map((row) => row.version)).toEqual([43, WORKHORSE_SCHEMA_VERSION]);
+    expect(before.rows.map((row) => row.version)).toEqual(
+      Array.from({ length: WORKHORSE_SCHEMA_VERSION - 43 + 1 }, (unused, index) => 43 + index),
+    );
 
     await migrateSchema(cleanDatabase.pool);
 

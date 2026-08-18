@@ -2,7 +2,7 @@
 
 Workhorse answers every operator time window — throughput charts, error rates, per-queue drain, wait percentiles, failing task types — from **per-minute aggregates derived from raw history**, rather than from scans over the history itself.
 
-This document records the problem, the design, the schema, the read path, the operational contract, and the limits of the implementation retained in schema version 43.
+This document records the problem, the design, the schema, the read path, the operational contract, and the limits of the implementation retained in schema version 45.
 
 ## Why
 
@@ -78,16 +78,17 @@ Returns `'__other__'`. Within each bucket, `(queue, job type)` pairs are ranked 
 
 Queue and job type are the only dimensions in the rollup because they are the only two whose cardinality is bounded by code rather than by data. Worker and tag dimensions were considered and left to live queries; see Limits.
 
-### `rollup_stats_v1(p_now, p_max_buckets, p_recompute_buckets, p_group_limit)`
+### `rollup_stats_v1(p_force, p_now, p_max_buckets)`
 
-Defaults: `clock_timestamp(), 240, 2, 200`. Returns the standard maintenance phase shape (`phase, rows_affected, duration_ms, skipped_lock, error`) for two phases, `stat_rollup` and `stat_retention`.
+Defaults: `false, clock_timestamp(), 240`. Returns the standard maintenance phase shape (`phase, rows_affected, duration_ms, skipped_lock, error`) for two phases, `stat_rollup` and `stat_retention`. The cadence, recompute window, and group limit are read from `maintenance_policy` (`statistics_rollup_interval_ms` default 60,000, `statistics_recompute_buckets` default 2, `statistics_group_limit` default 200) rather than passed by the caller; a fleet shares one statistics contract.
 
 1. Take `pg_try_advisory_xact_lock('workhorse:maintenance:stat-rollup')`. A losing caller returns both phases with `skipped_lock = true` and does nothing, so every worker can run it.
-2. `v_closed = date_bin('1 minute', p_now)` — only fully elapsed minutes are eligible.
-3. `v_from = LEAST(rolled_up_through - p_recompute_buckets minutes, v_closed)`.
-4. `v_to = LEAST(v_closed, v_from + p_max_buckets minutes)` — catching up after an outage advances in bounded passes rather than in one long transaction.
-5. `DELETE` then `INSERT … SELECT * FROM aggregate_stats_v1(v_from, v_to)`, then advance the watermark to `v_to`.
-6. `stat_retention` deletes expired buckets, bounded by policy (below).
+2. Read `maintenance_policy`. Unless `p_force`, return no rows when `statistics_rollup_interval_ms` is zero or `job_stat_state.last_run_at` is within the interval of `p_now`. `p_force` bypasses only this gate.
+3. `v_closed = date_bin('1 minute', p_now)` — only fully elapsed minutes are eligible.
+4. `v_from = LEAST(rolled_up_through - statistics_recompute_buckets minutes, v_closed)`.
+5. `v_to = LEAST(v_closed, v_from + p_max_buckets minutes)` — catching up after an outage advances in bounded passes rather than in one long transaction.
+6. `DELETE` then `INSERT … SELECT * FROM aggregate_stats_v1(v_from, v_to, statistics_group_limit)`, then advance the watermark to `v_to`.
+7. `stat_retention` deletes expired buckets, bounded by policy (below).
 
 **Why the pass rewrites minutes it already closed.** A bucket is a pure function of the raw history in its minute. A transaction that commits its history row after its own minute closed would otherwise be lost forever; rewriting the last couple of minutes absorbs it. The same property makes the pass safe to run twice — it converges rather than double counting, which is what the "recompute" integration test asserts.
 
@@ -141,16 +142,18 @@ Lag and oldest-retained are reported through `QueueHealth.retentionLagMs.statist
 
 ```ts
 // Materialize closed minutes and advance the watermark. Safe from every worker, safe to repeat.
-await queue.rollupStatistics({ now, maxBuckets, recomputeBuckets });
+// `force` bypasses the policy cadence gate for an explicit operator pass.
+await queue.rollupStatistics({ force, now, maxBuckets });
 
 // Rollup progress, for alerting.
 const { rolledUpThrough, lagMs, lastRunAt } = (await queue.health()).statistics;
 ```
 
-Workers run the pass on `WorkerOptions.statisticsRollupIntervalMs`:
+Workers offer the pass on `WorkerOptions.maintenanceTaskPollMs` (default `60_000`), alongside the other database-scheduled maintenance tasks. The real cadence is `maintenance_policy.statistics_rollup_interval_ms`:
 
 - Default `60_000`, matching the bucket width. Passing more often only rewrites the same closed minutes; passing less often makes windows derive a longer live tail.
-- Minimum `1_000`. `0` opts out entirely — windows stay fully derived and history retention holds at the current watermark.
+- Minimum `1_000`. `0` opts the whole fleet out — windows stay fully derived and history retention holds at the current watermark.
+- Set it through `Queue.syncMaintenancePolicy` / `overrideMaintenancePolicy` beside the other maintenance cadences; provenance and revert work the same way.
 - It runs **before** the retention pass in the same cycle, so the cycle can reclaim the history it just summarized.
 - Phases arrive through `onMaintenance` as loop `statistics_rollup`, phases `stat_rollup` and `stat_retention`.
 
@@ -236,7 +239,10 @@ but it is above what the _default_ retention settings can delete. `terminal_job_
 times the `terminal_cleanup_interval_ms` cadence (5 minutes) caps terminal-job deletion at roughly
 288,000 jobs/day, so a deployment at that volume must raise those limits or retention falls
 permanently behind. The benchmark scale demonstrates where the read costs go; it is not a claim that
-the defaults sustain it.
+the defaults sustain it. The settings page now computes this ceiling from the live policy and the
+measured arrival rate (`deriveSettingsRecommendations` in
+`typescript/dashboard-server/src/server/settings-recommendations.ts`) and warns when the measured
+rate approaches it, so the limit is reported by the product instead of rediscovered by benchmark.
 
 Two defects surfaced only under this benchmark, both fixed:
 
@@ -247,14 +253,14 @@ Two defects surfaced only under this benchmark, both fixed:
 
 | Test                                                                                            | Asserts                                                             |
 | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `typescript/core/test/integration.test.ts` — "materializes closed minutes"                      | Grain separation, error capture, and convergence on repeated passes |
-| `typescript/core/test/integration.test.ts` — "stitches materialized buckets"                    | A window is correct before _and_ after materialization              |
-| `typescript/core/test/integration.test.ts` — "folds statistics beyond the group limit"          | Overflow folds into `__other__` and totals are preserved            |
-| `typescript/core/test/integration.test.ts` — "reports rollup progress through health"           | `lagMs` and `lastRunAt`                                             |
-| `typescript/core/test/integration.test.ts` — "refuses to delete raw history past the watermark" | The retention interlock, held and then released                     |
-| `typescript/core/test/integration.test.ts` — "prunes statistics buckets on their own policy"    | Independent window, and that it is not bound by the identity chain  |
-| `typescript/core/test/integration.test.ts` — "bounds statistics pruning by the rows per pass"   | Per-pass deletion cap                                               |
-| `typescript/core/test/integration.test.ts` — "reports history size with daily partitions"       | Partition trees folded into their parent in health                  |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "materializes closed minutes"                      | Grain separation, error capture, and convergence on repeated passes |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "stitches materialized buckets"                    | A window is correct before _and_ after materialization              |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "folds statistics beyond the group limit"          | Overflow folds into `__other__` and totals are preserved            |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "reports rollup progress through health"           | `lagMs` and `lastRunAt`                                             |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "refuses to delete raw history past the watermark" | The retention interlock, held and then released                     |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "prunes statistics buckets on their own policy"    | Independent window, and that it is not bound by the identity chain  |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "bounds statistics pruning by the rows per pass"   | Per-pass deletion cap                                               |
+| `typescript/core/test/integration-retention-maintenance.test.ts` — "reports history size with daily partitions"       | Partition trees folded into their parent in health                  |
 
 ## Limits and open work
 

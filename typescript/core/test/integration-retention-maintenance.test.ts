@@ -255,7 +255,6 @@ describe("retention maintenance", () => {
     await queue.tick();
     const worker = new Worker(queue, {
       workerId: "worker-statistics",
-      statisticsRollupIntervalMs: 0,
     })
       .handle("stat-alpha", () => ({ ok: true }))
       .handle("stat-beta", () => {
@@ -308,9 +307,65 @@ describe("retention maintenance", () => {
     // A bucket is a pure function of the history in its minute, so rerunning the pass rewrites the
     // same numbers rather than adding to them.
     const before = await stored();
-    await queue.rollupStatistics({ now: later });
-    await queue.rollupStatistics({ now: later });
+    await queue.rollupStatistics({ force: true, now: later });
+    await queue.rollupStatistics({ force: true, now: later });
     expect(await stored()).toEqual(before);
+  });
+
+  it("rate limits the statistics rollup on the policy cadence and lets zero opt out", async () => {
+    const later = new Date(Date.now() + 120_000);
+    const first = await queue.rollupStatistics({ now: later });
+    expect(first.map(({ phase }) => phase)).toEqual(["stat_rollup", "stat_retention"]);
+
+    // Within the policy interval the pass returns without work rather than rewriting buckets.
+    const gated = await queue.rollupStatistics({ now: later });
+    expect(gated).toEqual([]);
+
+    // Past the interval the pass runs again.
+    const dueAgain = await queue.rollupStatistics({ now: new Date(later.getTime() + 61_000) });
+    expect(dueAgain.map(({ phase }) => phase)).toEqual(["stat_rollup", "stat_retention"]);
+
+    // A zero interval opts the fleet out; force still runs an explicit operator pass.
+    await queue.overrideMaintenancePolicy({ statisticsRollupIntervalMs: 0 });
+    const disabled = await queue.rollupStatistics({ now: new Date(later.getTime() + 300_000) });
+    expect(disabled).toEqual([]);
+    const forced = await queue.rollupStatistics({
+      force: true,
+      now: new Date(later.getTime() + 300_000),
+    });
+    expect(forced.map(({ phase }) => phase)).toEqual(["stat_rollup", "stat_retention"]);
+  });
+
+  it("keeps operator statistics-cadence overrides while sync updates application defaults", async () => {
+    await queue.overrideMaintenancePolicy({
+      statisticsRollupIntervalMs: 120_000,
+      statisticsRecomputeBuckets: 10,
+    });
+    await queue.syncMaintenancePolicy({
+      timezone: "UTC",
+      statisticsRollupIntervalMs: 30_000,
+      statisticsGroupLimit: 500,
+      statisticsRecomputeBuckets: 5,
+    });
+    await expect(queue.getMaintenancePolicy()).resolves.toMatchObject({
+      statisticsRollupIntervalMs: 120_000,
+      statisticsGroupLimit: 500,
+      statisticsRecomputeBuckets: 10,
+      provenance: {
+        statisticsRollupIntervalMs: { source: "operator", applicationDefault: 30_000 },
+        statisticsGroupLimit: { source: "application", applicationDefault: 500 },
+        statisticsRecomputeBuckets: { source: "operator", applicationDefault: 5 },
+      },
+    });
+
+    await queue.revertMaintenancePolicy(["statisticsRollupIntervalMs", "statisticsRecomputeBuckets"]);
+    await expect(queue.getMaintenancePolicy()).resolves.toMatchObject({
+      statisticsRollupIntervalMs: 30_000,
+      statisticsRecomputeBuckets: 5,
+      provenance: {
+        statisticsRollupIntervalMs: { source: "application", applicationDefault: 30_000 },
+      },
+    });
   });
 
   it("stitches materialized buckets to a live tail so a window covers unrolled minutes", async () => {
@@ -343,9 +398,8 @@ describe("retention maintenance", () => {
 
   it("folds statistics beyond the group limit into an overflow type instead of growing unbounded", async () => {
     for (let index = 0; index < 5; index += 1) await queue.enqueue(`stat-type-${index}`, {});
-    await pool.query("SELECT * FROM workhorse.rollup_stats_v1($1, 240, 2, 2)", [
-      new Date(Date.now() + 120_000),
-    ]);
+    await queue.overrideMaintenancePolicy({ statisticsGroupLimit: 2 });
+    await queue.rollupStatistics({ now: new Date(Date.now() + 120_000) });
     const rows = await pool.query<{ job_type: string; enqueued: number }>(
       `SELECT job_type, sum(enqueued)::integer AS enqueued
          FROM workhorse.job_stat_bucket GROUP BY job_type ORDER BY job_type`,
@@ -367,7 +421,7 @@ describe("retention maintenance", () => {
     // Statistics deliberately sit outside the identity chain: aggregates may outlive the history
     // they were derived from, so a long statistics window with short history retention is legal.
     await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, statisticsRetentionDays: 365 });
-    await queue.rollupStatistics({ now: new Date() });
+    await queue.rollupStatistics({ force: true, now: new Date() });
     expect(
       Number(
         (await pool.query<{ count: string }>("SELECT count(*) FROM workhorse.job_stat_bucket"))
@@ -376,7 +430,7 @@ describe("retention maintenance", () => {
     ).toBeGreaterThan(0);
 
     await queue.syncRetentionPolicy({ ...defaultRetentionPolicy, statisticsRetentionDays: 1 });
-    const pruned = await queue.rollupStatistics({ now: new Date() });
+    const pruned = await queue.rollupStatistics({ force: true, now: new Date() });
     expect(pruned.find((phase) => phase.phase === "stat_retention")?.rowsAffected).toBeGreaterThan(
       0,
     );
