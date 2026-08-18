@@ -12,6 +12,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
+import { WORKHORSE_VERSION } from "@workhorse/core/version";
 import type { Node, Root } from "fumadocs-core/page-tree";
 import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import type { ReactNode } from "react";
@@ -133,8 +134,26 @@ export const Route = createFileRoute("/docs")({
 
 function DocsRootLayout() {
   return (
-    <DocsLayout {...baseOptions} tree={tree} sidebar={{ defaultOpenLevel: 0 }}>
-      <Outlet />
-    </DocsLayout>
+    /* wh-page-scale: on wide monitors the docs render at the density of
+       ~150% browser zoom — see the media rules in global.css. */
+    <div className="wh-page-scale flex flex-1 flex-col">
+      <DocsLayout
+        {...baseOptions}
+        tree={tree}
+        sidebar={{
+          defaultOpenLevel: 0,
+          footer: (
+            <p
+              className="px-2 pb-1 font-mono text-[11px] text-fd-muted-foreground"
+              aria-label={`Workhorse version ${WORKHORSE_VERSION}`}
+            >
+              Workhorse v{WORKHORSE_VERSION}
+            </p>
+          ),
+        }}
+      >
+        <Outlet />
+      </DocsLayout>
+    </div>
   );
 }

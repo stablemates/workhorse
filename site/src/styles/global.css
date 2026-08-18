@@ -51,7 +51,6 @@
 :root {
   --wh-accent: var(--color-signal-600);
   --wh-rule: color-mix(in oklab, var(--color-ink-900) 12%, transparent);
-  --wh-grid: color-mix(in oklab, var(--color-ink-900) 6%, transparent);
   --wh-surface: var(--color-ink-50);
   --wh-panel: #fff;
 
@@ -63,7 +62,6 @@
 .dark {
   --wh-accent: var(--color-signal-400);
   --wh-rule: color-mix(in oklab, var(--color-ink-50) 14%, transparent);
-  --wh-grid: color-mix(in oklab, var(--color-ink-50) 7%, transparent);
   --wh-surface: var(--color-ink-950);
   --wh-panel: color-mix(in oklab, var(--color-ink-900) 88%, black);
 
@@ -88,14 +86,34 @@ body {
 
 /* ---------- Structural primitives ---------- */
 
-/* A hairline blueprint grid. Deliberately faint: structure, not decoration. */
-.wh-grid-field {
-  background-image:
-    linear-gradient(to right, var(--wh-grid) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--wh-grid) 1px, transparent 1px);
-  background-size: 64px 64px;
-  background-position: center top;
-  mask-image: linear-gradient(to bottom, black, transparent 78%);
+/* A soft accent wash behind the hero. One gradient, no texture. */
+.wh-hero-glow {
+  background: radial-gradient(
+    58% 48% at 50% 0%,
+    color-mix(in oklab, var(--wh-accent) 9%, transparent),
+    transparent 72%
+  );
+}
+
+/* ---------- Wide-viewport density ----------
+ *
+ * On wide monitors the site was judged best at the density of ~150% browser
+ * zoom; these rules reproduce that verdict at 100%. `zoom` scales layout,
+ * type, and spacing together, and each threshold leaves the scaled layout
+ * comfortable inside the viewport, so breakpoint styles never disagree with
+ * the zoomed layout. Narrower screens, where the layout already fills the
+ * width, stay 1:1.
+ */
+@media (min-width: 1680px) {
+  .wh-page-scale {
+    zoom: 1.25;
+  }
+}
+
+@media (min-width: 2048px) {
+  .wh-page-scale {
+    zoom: 1.5;
+  }
 }
 
 /* Full-bleed hairline that reads like a schema separator. */
@@ -151,6 +169,9 @@ body {
   background-color: var(--wh-panel);
   border-radius: 0.75rem;
   overflow: hidden;
+  box-shadow:
+    0 1px 2px color-mix(in oklab, var(--color-ink-950) 5%, transparent),
+    0 16px 40px -24px color-mix(in oklab, var(--color-ink-950) 22%, transparent);
 }
 
 .wh-frame-bar {

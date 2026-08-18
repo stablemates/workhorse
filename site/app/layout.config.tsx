@@ -3,9 +3,9 @@ import { WorkhorseWordmark } from "@/components/logo";
 import { demoUrl, siteConfig } from "@/lib/site";
 
 /**
- * The site is documentation only, so the header carries the wordmark, the
+ * The header carries the wordmark, the main documentation destinations, the
  * GitHub link, and one external link to the hosted demo. Sidebar groups own
- * every other destination.
+ * every deeper destination.
  */
 export const baseOptions: BaseLayoutProps = {
   nav: {
@@ -14,6 +14,10 @@ export const baseOptions: BaseLayoutProps = {
   },
   githubUrl: siteConfig.github,
   links: [
+    { text: "Docs", url: "/docs" },
+    { text: "Quickstart", url: "/docs/quickstart" },
+    { text: "Examples", url: "/docs/examples" },
+    { text: "API", url: "/docs/api" },
     {
       type: "icon",
       text: "Live demo",
