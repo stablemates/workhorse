@@ -19,6 +19,16 @@ export const MINIMUM_NODE_MAJOR = 22;
 /** Node.js majors exercised by CI. Odd-numbered development lines are never included. */
 export const SUPPORTED_NODE_MAJORS: readonly number[] = [22, 24];
 
+/**
+ * JS runtimes exercised only by CI's `runtime-smoke` lane, never claimed as supported.
+ *
+ * The lane runs `test/runtime-smoke.ts` — an enqueue, claim, and complete round-trip through the
+ * built package against PostgreSQL — under the latest release of each runtime. Nothing more: the
+ * full vitest suites run under Node.js only, so a regression that only these runtimes can show
+ * outside that round-trip is not caught. See the JS runtime smoke tier in `docs/compatibility.md`.
+ */
+export const SMOKE_TESTED_JS_RUNTIMES: readonly string[] = ["bun", "deno"];
+
 /** Lowest PostgreSQL major the schema installs against. Below this, installation is refused. */
 export const MINIMUM_POSTGRES_MAJOR = 15;
 

@@ -94,6 +94,54 @@ jobs:
       - run: pnpm db:reset:test
       - run: pnpm test:database
 
+  # The smoke tier for JS runtimes the full suite never runs under. src/support.ts declares the
+  # runtime list, and test/support-matrix.test.ts fails if this matrix and that list disagree.
+  # Each lane proves an enqueue, claim, and complete round-trip through the built package against
+  # PostgreSQL — deliberately nothing more, so the lane never reads as full support.
+  runtime-smoke:
+    name: runtime smoke (${{ matrix.runtime }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [bun, deno]
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: workhorse
+          POSTGRES_PASSWORD: workhorse
+          POSTGRES_DB: workhorse_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workhorse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORKHORSE_TEST_DATABASE_URL: postgres://workhorse:workhorse@localhost:5432/workhorse_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      # Node still drives pnpm, the build, and the database reset; only the smoke script itself
+      # runs under the matrix runtime.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.runtime == 'bun'
+      - uses: denoland/setup-deno@v2
+        if: matrix.runtime == 'deno'
+        with:
+          deno-version: v2.x
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:runtime:dev
+      - run: pnpm db:reset:test
+      - run: pnpm test:runtime-smoke:${{ matrix.runtime }}
+
   packed:
     name: packed install (node ${{ matrix.node }})
     runs-on: ubuntu-latest

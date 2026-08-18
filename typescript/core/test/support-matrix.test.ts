@@ -5,6 +5,7 @@ import {
   describePostgresSupport,
   MINIMUM_NODE_MAJOR,
   MINIMUM_POSTGRES_MAJOR,
+  SMOKE_TESTED_JS_RUNTIMES,
   SUPPORTED_NODE_MAJORS,
   SUPPORTED_POSTGRES_MAJORS,
 } from "../src/support.js";
@@ -103,6 +104,22 @@ describe("continuous integration", () => {
     }
   });
 
+  it("smoke-tests exactly the declared JS runtimes without claiming them as supported", async () => {
+    const workflow = await read(".github/workflows/ci.yml");
+
+    // The lane exercises the round-trip script per runtime; the runtime list in the workflow
+    // matrix and the exported constant must agree, or the documentation claims an untested lane.
+    expect(workflow).toContain(`runtime: [${SMOKE_TESTED_JS_RUNTIMES.join(", ")}]`);
+    expect(workflow).toContain("pnpm test:runtime-smoke:${{ matrix.runtime }}");
+
+    const scripts = (await readManifest("package.json")).scripts as Record<string, string>;
+    for (const runtime of SMOKE_TESTED_JS_RUNTIMES) {
+      const script = scripts[`test:runtime-smoke:${runtime}`];
+      expect(script).toContain(runtime);
+      expect(script).toContain("typescript/core/test/runtime-smoke.ts");
+    }
+  });
+
   it("publishes with provenance from a workflow that can mint an identity token", async () => {
     const workflow = await read(".github/workflows/release.yml");
     expect(workflow).toContain("id-token: write");
@@ -144,6 +161,15 @@ describe("documentation", () => {
     expect(sitePage).not.toContain(claimed);
     expect(sitePage).not.toContain(claimedNodeMajors);
     expect(installation).toContain("[Compatibility](/docs/compatibility)");
+    // The smoke tier is a weaker claim than support, and both layers must state it as such: the
+    // reference names each runtime's tier section, and the site page describes it without pinning
+    // versions it does not test.
+    for (const runtime of SMOKE_TESTED_JS_RUNTIMES) {
+      expect(compatibility.toLowerCase()).toContain(runtime);
+      expect(sitePage.toLowerCase()).toContain(runtime);
+    }
+    expect(compatibility).toContain("## JS runtime smoke tier");
+    expect(sitePage).toContain("smoke-tested tier, not support");
     expect(readme).toContain(`PostgreSQL **${MINIMUM_POSTGRES_MAJOR} or newer**`);
     expect(readme).toContain(`Node.js **>= ${MINIMUM_NODE_MAJOR}**`);
   });
