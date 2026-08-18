@@ -4,6 +4,7 @@ import { defineConfig } from "vitest/config";
 export const databaseTestFiles = [
   "typescript/demo/test/app.integration.test.ts",
   "typescript/*/test/integration.test.ts",
+  "typescript/dashboard-server/test/conformance.test.ts",
   "typescript/core/test/benchmark-conventional.test.ts",
   "typescript/core/test/integration-*.test.ts",
   "typescript/core/test/isolation-canary-*.test.ts",

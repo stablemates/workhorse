@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Queryable } from "../typescript/core/src/types.js";
 
 type JsonScalar = boolean | number | string | null;
-type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };
 
 export interface SqlProtocolManifest {
   formatVersion: number;
@@ -206,7 +206,7 @@ function compatibilityRefusal(
   return null;
 }
 
-function resolveReferences(value: JsonValue, references: Map<string, JsonValue>): JsonValue {
+export function resolveReferences(value: JsonValue, references: Map<string, JsonValue>): JsonValue {
   if (Array.isArray(value)) return value.map((item) => resolveReferences(item, references));
   if (value && typeof value === "object") {
     if (Object.keys(value).length === 1 && "$ref" in value) {
@@ -222,7 +222,7 @@ function resolveReferences(value: JsonValue, references: Map<string, JsonValue>)
   return value;
 }
 
-function assertFixtureValue(
+export function assertFixtureValue(
   expected: JsonValue,
   actual: JsonValue,
   location: string,
@@ -275,12 +275,15 @@ function assertFixtureValue(
 
 function assertMatcher(type: string, actual: JsonValue, location: string): void {
   const accepted =
+    type === "any" ||
     (type === "uuid" &&
       typeof actual === "string" &&
       /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(actual)) ||
     (type === "timestamp" && typeof actual === "string" && !Number.isNaN(Date.parse(actual))) ||
     (type === "string" && typeof actual === "string") ||
-    (type === "integer" && typeof actual === "number" && Number.isInteger(actual));
+    (type === "integer" && typeof actual === "number" && Number.isInteger(actual)) ||
+    (type === "number" && typeof actual === "number") ||
+    (type === "boolean" && typeof actual === "boolean");
   if (!accepted)
     throw new Error(`${location} expected ${type}, received ${JSON.stringify(actual)}`);
 }
@@ -305,7 +308,7 @@ function assertDatabaseError(
   }
 }
 
-function readPointer(value: JsonValue, pointer: string, context: string): JsonValue {
+export function readPointer(value: JsonValue, pointer: string, context: string): JsonValue {
   let current: JsonValue | undefined = value;
   for (const segment of pointer.split(".")) {
     current = Array.isArray(current)

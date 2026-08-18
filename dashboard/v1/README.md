@@ -21,6 +21,8 @@ directory; this directory then only receives compatible corrections.
   and response JSON Schema (2020-12). Shared wire types live under `$defs`. An `input` of `null`
   means the procedure accepts an empty request envelope; an `output` of `null` means it produces
   no result and answers `{}`.
+- `conformance.json` carries the executable HTTP conformance fixtures described under
+  [Conformance](#conformance).
 
 ## Transport
 
@@ -94,6 +96,50 @@ delegation — never a second read model. `docs/architecture.md` names the views
 
 ## Conformance
 
-HTTP-level conformance fixtures, analogous to `protocol/v1/scenarios.json`, are planned and
-tracked in Linear (WOR-252); until they land, `procedures.json` plus this document is the
-contract, and the parity check keeps it honest against the reference implementation.
+`conformance.json` is the executable half of this contract, analogous to
+`protocol/v1/scenarios.json`: golden HTTP exchanges against a seeded database that every backend
+must answer byte-for-byte in structure. `scripts/verify-dashboard-conformance.ts` executes the
+file and is the authority on its semantics;
+`typescript/dashboard-server/test/conformance.test.ts` runs it against the TypeScript server, the
+reference implementation that must pass it. A foreign backend passes the same file by
+implementing the verifier's small transport interface (route one `Request` into the backend in
+either deployment mode) or by porting the verifier, as `python/tests/test_protocol_conformance.py`
+ports the SQL protocol runner.
+
+The file's `scenarios` run strictly in order against one freshly installed schema
+(`sql/schema/current.sql`), sharing a single capture namespace:
+
+- A `seed` step executes one SQL statement — the same versioned `workhorse.*_v1` functions the
+  SQL protocol fixtures pin — asserts its rows when `expect` is present, and can `capture` values
+  (job ids, fence tokens) by row pointer for later `$ref` citations.
+- An `exchange` posts one literal oRPC envelope from `request` (after `$ref` resolution) to
+  `POST {basePath}/rpc/dashboard/{procedure}` and asserts the exact response `status` and `body`.
+  `mode` selects the writable or read-only deployment (default `"writable"`), `origin` sends the
+  harness origin, the mismatched `crossOrigin`, or no Origin header (default `"same"`), and
+  `method` overrides POST for the 405 fixture.
+
+Expected bodies are exact: every key must appear and no other key may. Two escape hatches keep
+them portable: `{"$ref": "name"}` must equal a captured value, and `{"$type": "..."}` accepts any
+value of that shape (`uuid`, `timestamp`, `string`, `integer`, `number`, `boolean`, or `any`)
+where the concrete value is inherently nondeterministic — generated identifiers, clock-derived
+timestamps, durations, and time-bucketed series.
+
+The fixtures must cover every procedure in `manifest.json` with a successful exchange, every
+mutation with both a cross-origin rejection and a read-only `FORBIDDEN` exchange, and the 400,
+404, and 405 error envelopes; the verifier fails the run when any of that coverage is missing.
+
+The `harness` block is part of the contract for the backend under test: authorize every request
+as `authenticatedActor` (the fixtures pin server-assigned attribution to it), report
+`environment`, mount at `basePath` on `origin`, and configure `configuredWorkers` and
+`maintenanceLoops` as given. Two members of the writable deployment have no shared SQL function
+and must be supplied by the harness exactly as the reference harness
+(`typescript/dashboard-server/test/support/conformance-harness.ts`) does: an `enqueueTest`
+operator that enqueues one `conformance.demo-{kind}` job on the `conformance-demo` queue, and a
+`setScheduleEnabled` controller that flips `workhorse.schedule_definition.enabled`.
+
+`pnpm dashboard-conformance:generate` regenerates every exchange's `expect` block by replaying
+the file twice against the reference server on two fresh databases: values identical across both
+runs commit literally, differing values become `$type` matchers, and each exchange's `coerce`
+map (generator input, ignored by verification) forces matchers onto values that are stable
+within one machine but environment- or time-dependent. A diff in this file is a contract change
+and is reviewed like one.
