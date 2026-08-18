@@ -469,6 +469,16 @@ npx workhorse health --json
 npx workhorse bench
 npx workhorse bench competitors
 
+# Inspect jobs, queues, schedules, failures, workers, and maintenance state from a shell.
+npx workhorse admin queues
+npx workhorse admin failures --queue billing --json
+
+# Guarded operations name the target database explicitly and require confirmation.
+npx workhorse admin redrive <job-id> --env my_database --reason "upstream fixed"
+
+# Watch the same views live in a terminal.
+npx workhorse tui
+
 # Or just look at the queue, with no application involved.
 npx workhorse dashboard --port 3000
 ```

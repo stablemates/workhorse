@@ -59,6 +59,11 @@ First published line. Requires **schema v43**, Node.js **22 or 24**, PostgreSQL 
   exit code, the benchmark invariants, and the dashboard verdict.
 - `@workhorse/core`: the `workhorse` CLI — `init`, `schema install`, `schema status`, `worker`,
   `dashboard`, `health`, `bench`, and `bench competitors`.
+- `@workhorse/core`: the `workhorse admin` command set — inspection of jobs, queues, schedules,
+  failures, workers, and maintenance state with table and `--json` output, plus guarded `cancel`,
+  `redrive`, `pause`, and `resume` that require an explicit verified `--env` target and
+  confirmation — and the `workhorse tui` terminal application rendering the same views over the
+  same administrative client and safety checks.
 - `@workhorse/core`: notification-assisted worker dispatch through one process-local
   `workhorse_jobs` listener per node-postgres pool, with queue routing, reconnect backoff, and
   jittered bounded polling as the durable fallback.

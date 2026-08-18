@@ -59,6 +59,27 @@ read models for humans and owns the authorization boundary for operator mutation
 return a verified principal through `authorize`, while the standalone dashboard can enable its
 built-in administrator login.
 
+## Terminal operations
+
+The packaged CLI carries the same operator surface into a shell. `workhorse admin` inspects
+jobs, queues, schedules, failures, workers, and maintenance state — as aligned tables for
+humans, or with `--json` as the exact objects the TypeScript operator API returns:
+
+```sh
+workhorse admin queues
+workhorse admin failures --queue billing --json | jq '.items[].jobId'
+```
+
+Guarded commands — `admin cancel`, `admin redrive`, `admin pause`, `admin resume` — refuse to
+run until the target database is named explicitly with `--env`, verified against
+`current_database()` on the live connection, and the operation is confirmed interactively or
+with `--yes`. Attribution and redrive idempotency follow the same contracts as the
+programmatic APIs.
+
+`workhorse tui` renders the same views as a live, self-refreshing terminal application. It is
+read-only unless launched with a verified `--env`, which enables pausing and resuming the
+selected queue behind an explicit confirmation.
+
 ## Next
 
 - [Worker processes](/docs/worker-processes) — deploy and drain runtime processes

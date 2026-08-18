@@ -1,0 +1,372 @@
+import { randomUUID } from "node:crypto";
+import readline from "node:readline/promises";
+import { Pool } from "pg";
+import type { JobListQuery, JobState } from "../types.js";
+import { CliUsageError, parseCommandArgs, resolveDatabaseUrl } from "./arguments.js";
+import {
+  AdminSafetyError,
+  WorkhorseAdminClient,
+  type ConfirmedEnvironment,
+} from "./admin-client.js";
+import {
+  FAILURES_TABLE_HEADERS,
+  JOBS_TABLE_HEADERS,
+  QUEUES_TABLE_HEADERS,
+  SCHEDULES_TABLE_HEADERS,
+  TIMELINE_TABLE_HEADERS,
+  WORKERS_TABLE_HEADERS,
+  failuresTableRows,
+  formatTable,
+  jobDetailLines,
+  jobsTableRows,
+  maintenanceLines,
+  queuesTableRows,
+  schedulesTableRows,
+  timelineTableRows,
+  toAdminJson,
+  workersTableRows,
+} from "./admin-format.js";
+
+export const ADMIN_HELP = `Usage: workhorse admin <command> [options]
+
+Inspection commands (safe, read-only):
+  jobs         List jobs newest-first with lifecycle filters.
+  job <id>     Show one job snapshot.
+  timeline <id>
+               Show one job's merged event and attempt timeline.
+  failures     List terminal failures (dead letters).
+  queues       List per-queue dispatch pressure and pause state.
+  schedules    List enabled recurring schedules.
+  workers      List durable worker registrations.
+  maintenance  Show the maintenance and retention policies with provenance.
+
+Guarded commands (mutate; require --env and confirmation):
+  cancel <job-id>     Request cooperative cancellation of one job.
+  redrive <job-id>    Redrive one terminal failure as a new job.
+  pause <queue>       Pause claiming for one queue.
+  resume <queue>      Resume claiming for one queue.
+
+Common options:
+  --database-url <url>  Database URL. This takes precedence over all other sources.
+  --json                Emit machine-readable JSON instead of tables.
+  --help, -h            Show help for a command.
+
+Guarded-command options:
+  --env <database>   Required. Must equal the connected database's own name.
+  --yes              Skip the interactive confirmation prompt.
+  --actor <name>     Attribution recorded for the mutation (default: workhorse-admin).
+  --reason <text>    Reason recorded for the mutation. Required for redrive.
+  --request-id <id>  Redrive idempotency identity (default: a random UUID).
+
+Listing options:
+  --queue <name>     Filter by queue.
+  --type <type>      Filter by job type.
+  --state <state>    Filter jobs by lifecycle state; repeatable or comma-separated.
+  --limit <count>    Page size.
+  --namespace <ns>   Filter schedules by namespace; repeatable or comma-separated.
+
+The fallback database URL order is WORKHORSE_DATABASE_URL, then DATABASE_URL. Guarded commands
+exit 1 when they refuse or when the target does not exist; malformed usage exits 64.
+`;
+
+const JOB_STATES: readonly JobState[] = [
+  "blocked",
+  "scheduled",
+  "ready",
+  "active",
+  "succeeded",
+  "failed",
+  "canceled",
+];
+
+const READ_COMMANDS = new Set([
+  "jobs",
+  "job",
+  "timeline",
+  "failures",
+  "queues",
+  "schedules",
+  "workers",
+  "maintenance",
+]);
+const MUTATION_COMMANDS = new Set(["cancel", "redrive", "pause", "resume"]);
+
+interface AdminIo {
+  out(text: string): void;
+  error(text: string): void;
+  /** Interactive confirmation. Returns the operator's exact answer, or null when not a TTY. */
+  confirm(question: string): Promise<string | null>;
+}
+
+function defaultIo(): AdminIo {
+  return {
+    out: (text) => process.stdout.write(text),
+    error: (text) => process.stderr.write(text),
+    confirm: async (question) => {
+      if (!process.stdin.isTTY || !process.stderr.isTTY) return null;
+      const prompt = readline.createInterface({ input: process.stdin, output: process.stderr });
+      try {
+        return await prompt.question(question);
+      } finally {
+        prompt.close();
+      }
+    },
+  };
+}
+
+function parsePositiveInteger(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new CliUsageError(`${flag} must be a positive safe integer`);
+  }
+  return parsed;
+}
+
+function splitRepeatable(values: readonly string[] | undefined): string[] {
+  return (values ?? []).flatMap((value) => value.split(",")).filter((value) => value.length > 0);
+}
+
+function parseStates(values: readonly string[] | undefined): JobState[] | undefined {
+  const states = splitRepeatable(values);
+  if (states.length === 0) return undefined;
+  for (const state of states) {
+    if (!JOB_STATES.includes(state as JobState)) {
+      throw new CliUsageError(
+        `Unknown job state: ${state}. Known states: ${JOB_STATES.join(", ")}`,
+      );
+    }
+  }
+  return states as JobState[];
+}
+
+function requirePositional(positionals: readonly string[], command: string, name: string): string {
+  const target = positionals[0];
+  if (target === undefined) throw new CliUsageError(`admin ${command} requires a <${name}>`);
+  if (positionals.length > 1) {
+    throw new CliUsageError(`Unexpected admin ${command} argument: ${positionals[1]}`);
+  }
+  return target;
+}
+
+/**
+ * The shared confirmation gate for guarded commands.
+ *
+ * The environment check runs inside the client; this adds the human confirmation: the operator
+ * either passed --yes or retypes the target identifier at an interactive prompt.
+ */
+async function confirmMutation(
+  client: WorkhorseAdminClient,
+  io: AdminIo,
+  options: { env?: string; yes?: boolean },
+  action: string,
+  target: string,
+): Promise<ConfirmedEnvironment | null> {
+  if (options.env === undefined) {
+    throw new CliUsageError(
+      `admin ${action} requires --env <database> naming the target database explicitly`,
+    );
+  }
+  const environment = await client.confirmEnvironment(options.env);
+  if (options.yes) return environment;
+  const answer = await io.confirm(
+    `About to ${action} "${target}" in database "${environment.database}". ` +
+      `Type "${target}" to confirm: `,
+  );
+  if (answer === null) {
+    throw new CliUsageError(`admin ${action} requires --yes when not running interactively`);
+  }
+  if (answer.trim() !== target) {
+    io.error("Confirmation did not match; nothing was changed.\n");
+    process.exitCode = 1;
+    return null;
+  }
+  return environment;
+}
+
+export async function runAdminCommand(
+  args: readonly string[],
+  io: AdminIo = defaultIo(),
+): Promise<void> {
+  const command = args[0];
+  if (!command || command === "--help" || command === "-h" || command === "help") {
+    io.out(ADMIN_HELP);
+    return;
+  }
+  if (!READ_COMMANDS.has(command) && !MUTATION_COMMANDS.has(command)) {
+    throw new CliUsageError(`Unknown admin command: ${command}`);
+  }
+  const { values, positionals } = parseCommandArgs(`admin ${command}`, {
+    args: args.slice(1),
+    options: {
+      "database-url": { type: "string" },
+      json: { type: "boolean" },
+      queue: { type: "string" },
+      type: { type: "string" },
+      state: { type: "string", multiple: true },
+      limit: { type: "string" },
+      namespace: { type: "string", multiple: true },
+      env: { type: "string" },
+      yes: { type: "boolean" },
+      actor: { type: "string" },
+      reason: { type: "string" },
+      "request-id": { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    strict: true,
+    allowPositionals: true,
+  });
+  if (values.help) {
+    io.out(ADMIN_HELP);
+    return;
+  }
+  const limit =
+    values.limit === undefined ? undefined : parsePositiveInteger(values.limit, "--limit");
+  const json = values.json ?? false;
+  const pool = new Pool({ connectionString: resolveDatabaseUrl(values) });
+  const client = new WorkhorseAdminClient(pool);
+  try {
+    if (command === "jobs") {
+      const query: JobListQuery = {
+        queue: values.queue,
+        type: values.type,
+        states: parseStates(values.state),
+        limit,
+      };
+      const page = await client.listJobs(query);
+      io.out(
+        json
+          ? toAdminJson(page)
+          : `${formatTable(JOBS_TABLE_HEADERS, jobsTableRows(page.items))}\n`,
+      );
+      return;
+    }
+    if (command === "job") {
+      const jobId = requirePositional(positionals, command, "job-id");
+      const snapshot = await client.getJob(jobId);
+      if (snapshot === null) {
+        io.error(`Job ${jobId} was not found.\n`);
+        process.exitCode = 1;
+        return;
+      }
+      io.out(json ? toAdminJson(snapshot) : `${jobDetailLines(snapshot).join("\n")}\n`);
+      return;
+    }
+    if (command === "timeline") {
+      const jobId = requirePositional(positionals, command, "job-id");
+      const page = await client.getJobTimeline(jobId, { limit });
+      io.out(
+        json
+          ? toAdminJson(page)
+          : `${formatTable(TIMELINE_TABLE_HEADERS, timelineTableRows(page.items))}\n`,
+      );
+      return;
+    }
+    if (command === "failures") {
+      const page = await client.listDeadLetters({
+        queue: values.queue,
+        type: values.type,
+        limit,
+      });
+      io.out(
+        json
+          ? toAdminJson(page)
+          : `${formatTable(FAILURES_TABLE_HEADERS, failuresTableRows(page.items))}\n`,
+      );
+      return;
+    }
+    if (command === "queues") {
+      const queues = await client.queues();
+      io.out(
+        json
+          ? toAdminJson(queues)
+          : `${formatTable(QUEUES_TABLE_HEADERS, queuesTableRows(queues))}\n`,
+      );
+      return;
+    }
+    if (command === "schedules") {
+      const namespaces = splitRepeatable(values.namespace);
+      const schedules = await client.schedules(namespaces.length === 0 ? undefined : namespaces);
+      io.out(
+        json
+          ? toAdminJson(schedules)
+          : `${formatTable(SCHEDULES_TABLE_HEADERS, schedulesTableRows(schedules))}\n`,
+      );
+      return;
+    }
+    if (command === "workers") {
+      const workers = await client.workers();
+      io.out(
+        json
+          ? toAdminJson(workers)
+          : `${formatTable(WORKERS_TABLE_HEADERS, workersTableRows(workers))}\n`,
+      );
+      return;
+    }
+    if (command === "maintenance") {
+      const state = await client.maintenance();
+      io.out(json ? toAdminJson(state) : `${maintenanceLines(state).join("\n")}\n`);
+      return;
+    }
+
+    // Guarded commands below. Every path passes through confirmMutation, which owns both the
+    // explicit-environment check and the human confirmation.
+    const actor = values.actor ?? "workhorse-admin";
+    if (command === "cancel") {
+      const jobId = requirePositional(positionals, command, "job-id");
+      const environment = await confirmMutation(client, io, values, "cancel", jobId);
+      if (environment === null) return;
+      const result = await client.cancel(environment, jobId, {
+        requestedBy: actor,
+        reason: values.reason,
+      });
+      if (json) io.out(toAdminJson(result));
+      else if (result.status === "canceled") io.out(`Canceled job ${jobId}.\n`);
+      else if (result.status === "cancel_requested") {
+        io.out(`Requested cooperative cancellation of active job ${jobId}.\n`);
+      } else if (result.status === "already_terminal") {
+        io.out(`Job ${jobId} is already terminal (${result.state ?? "unknown"}).\n`);
+      } else io.error(`Job ${jobId} was not found.\n`);
+      if (result.status === "already_terminal" || result.status === "not_found") {
+        process.exitCode = 1;
+      }
+      return;
+    }
+    if (command === "redrive") {
+      const jobId = requirePositional(positionals, command, "job-id");
+      if (!values.reason) throw new CliUsageError("admin redrive requires --reason <text>");
+      const environment = await confirmMutation(client, io, values, "redrive", jobId);
+      if (environment === null) return;
+      const result = await client.redrive(environment, jobId, {
+        requestedBy: actor,
+        reason: values.reason,
+        requestId: values["request-id"] ?? randomUUID(),
+      });
+      if (json) io.out(toAdminJson(result));
+      else if (result.status === "redriven" || result.status === "replayed") {
+        io.out(`Redrove job ${jobId} as ${result.targetJobId ?? "unknown"} (${result.status}).\n`);
+      } else if (result.status === "not_failed") {
+        io.error(
+          `Job ${jobId} is not a terminal failure (state ${result.sourceState ?? "unknown"}).\n`,
+        );
+      } else io.error(`Job ${jobId} was not found.\n`);
+      if (result.status === "not_found" || result.status === "not_failed") process.exitCode = 1;
+      return;
+    }
+    const queueName = requirePositional(positionals, command, "queue");
+    const environment = await confirmMutation(client, io, values, command, queueName);
+    if (environment === null) return;
+    if (command === "pause") await client.pauseQueue(environment, queueName);
+    else await client.resumeQueue(environment, queueName);
+    if (json) io.out(toAdminJson({ queue: queueName, paused: command === "pause" }));
+    else io.out(`${command === "pause" ? "Paused" : "Resumed"} queue ${queueName}.\n`);
+  } catch (error) {
+    if (error instanceof AdminSafetyError) {
+      io.error(`Refused: ${error.message}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  } finally {
+    await pool.end();
+  }
+}
