@@ -39,7 +39,7 @@ if (mode !== "development" && mode !== "production") {
   throw new Error("WORKHORSE_DEMO_MODE must be either development or production");
 }
 const port = Number(process.env.PORT ?? 3000);
-const environment = process.env.WORKHORSE_ENV ?? mode;
+const environment = process.env.WORKHORSE_DEMO_ENV ?? "development";
 const pool = new Pool({ connectionString: databaseUrl, max: 10 });
 
 // A provisioned staging database turns the dashboard into two switchable workspaces: the busy

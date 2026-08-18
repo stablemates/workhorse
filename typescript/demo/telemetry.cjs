@@ -14,7 +14,7 @@ const { RotatingFileLogExporter } = require("./file-log-exporter.cjs");
 
 const telemetryEnabled = process.env.WORKHORSE_DEMO_TELEMETRY === "true";
 const serviceName = process.env.WORKHORSE_DEMO_SERVICE_NAME ?? "workhorse-demo";
-const environment = process.env.WORKHORSE_ENV ?? process.env.WORKHORSE_DEMO_MODE ?? "development";
+const environment = process.env.WORKHORSE_DEMO_ENV ?? "development";
 
 process.env.OTEL_SERVICE_NAME ??= serviceName;
 process.env.OTEL_TRACES_EXPORTER ??= telemetryEnabled ? "otlp" : "none";

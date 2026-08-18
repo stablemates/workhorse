@@ -7473,7 +7473,7 @@ function DashboardContent({
                 color={environmentColor(environment)}
                 variant="light"
                 visibleFrom="xs"
-                title="Deployment environment from WORKHORSE_ENV"
+                title="Deployment environment"
               >
                 {environment}
               </Badge>
