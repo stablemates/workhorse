@@ -23,16 +23,23 @@ export function WorkhorseBrand() {
         alt="Workhorse"
         className="workhorse-brand__wordmark"
       />
-      <Text
-        component="span"
-        size="10px"
-        c="dimmed"
-        ff="monospace"
-        aria-label={`Workhorse version ${WORKHORSE_VERSION}`}
-        className="workhorse-brand__version"
-      >
-        v{WORKHORSE_VERSION}
-      </Text>
     </Group>
+  );
+}
+
+export function WorkhorseVersion() {
+  return (
+    <Text
+      component="span"
+      size="10px"
+      c="dimmed"
+      display="block"
+      ff="monospace"
+      ta="right"
+      w="100%"
+      aria-label={`Workhorse version ${WORKHORSE_VERSION}`}
+    >
+      v{WORKHORSE_VERSION}
+    </Text>
   );
 }

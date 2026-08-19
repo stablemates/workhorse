@@ -29,12 +29,6 @@ body {
   width: 158px;
 }
 
-.workhorse-brand__version {
-  flex: 0 0 auto;
-  line-height: 1;
-  margin-left: 2px;
-}
-
 .theme-switch {
   border: 1px solid var(--mantine-color-default-border);
 }

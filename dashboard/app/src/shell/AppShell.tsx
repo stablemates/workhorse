@@ -43,7 +43,7 @@ import {
   taskDrawerViewportProps,
 } from "../task-drawer.js";
 import { taskOpenButtonId } from "../task-table-ui.js";
-import { WorkhorseBrand } from "../brand.js";
+import { WorkhorseBrand, WorkhorseVersion } from "../brand.js";
 import { ThemeSchemeSwitch } from "../theme.js";
 import { DashboardProps } from "../dashboard.js";
 import { useDashboardController } from "./controller.js";
@@ -434,6 +434,9 @@ export function DashboardContent({
               onClick={(event) => handleLink(event, "/settings")}
             />
           </Stack>
+        </AppShell.Section>
+        <AppShell.Section>
+          <WorkhorseVersion />
         </AppShell.Section>
       </AppShell.Navbar>
 
