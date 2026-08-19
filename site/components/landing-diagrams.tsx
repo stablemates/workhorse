@@ -39,13 +39,7 @@ const chipTone = {
   ghost: "wh-rule border border-dashed text-fd-muted-foreground",
 } as const;
 
-function Chip({
-  tone = "line",
-  children,
-}: {
-  tone?: keyof typeof chipTone;
-  children: ReactNode;
-}) {
+function Chip({ tone = "line", children }: { tone?: keyof typeof chipTone; children: ReactNode }) {
   return (
     <span
       className={`inline-flex w-fit items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-1.5 font-mono text-[12.5px] leading-none tracking-tight ${chipTone[tone]}`}
@@ -436,9 +430,7 @@ export function DependenciesDiagram() {
         <div className="flex items-center">
           <div className="flex flex-col items-start gap-1.5">
             <Chip>order.fulfill</Chip>
-            <span className="text-[12.5px] text-fd-muted-foreground">
-              suspends — holds no slot
-            </span>
+            <span className="text-[12.5px] text-fd-muted-foreground">suspends — holds no slot</span>
           </div>
           <LabeledWire label='runChild("charge")' className="w-20" />
           <Chip tone="accent">payment.capture</Chip>

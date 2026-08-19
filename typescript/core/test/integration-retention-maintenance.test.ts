@@ -410,30 +410,34 @@ describe("retention maintenance", () => {
 
     await pool.query(
       `UPDATE workhorse.job_event
-          SET occurred_at = date_bin('1 hour', clock_timestamp(),
-                timestamp with time zone '2000-01-01') - interval '55 minutes'
+          SET occurred_at = date_bin('1 day', clock_timestamp(),
+                timestamp with time zone '2000-01-01') + interval '1 hour 5 minutes'
         WHERE job_id = $1 AND event_type = 'enqueued'`,
       [jobId],
     );
     await pool.query(
       `UPDATE workhorse.job_event
-          SET occurred_at = date_bin('1 hour', clock_timestamp(),
-                timestamp with time zone '2000-01-01') - interval '45 minutes'
+          SET occurred_at = date_bin('1 day', clock_timestamp(),
+                timestamp with time zone '2000-01-01') + interval '1 hour 15 minutes'
         WHERE job_id = $1 AND event_type = 'claimed'`,
       [jobId],
     );
     await pool.query(
       `UPDATE workhorse.job_stat_state
-          SET rolled_up_through = date_bin('1 hour', clock_timestamp(),
-                timestamp with time zone '2000-01-01') - interval '1 hour',
-              hourly_rolled_up_through = date_bin('1 hour', clock_timestamp(),
-                timestamp with time zone '2000-01-01') - interval '1 hour',
+          SET rolled_up_through = date_bin('1 day', clock_timestamp(),
+                timestamp with time zone '2000-01-01') + interval '1 hour',
+              hourly_rolled_up_through = date_bin('1 day', clock_timestamp(),
+                timestamp with time zone '2000-01-01') + interval '1 hour',
               daily_rolled_up_through = date_bin('1 day', clock_timestamp(),
                 timestamp with time zone '2000-01-01')`,
     );
 
     const tomorrow = new Date(Date.now() + 24 * 60 * 60_000);
-    const result = await queue.rollupStatistics({ force: true, now: tomorrow });
+    const result = await queue.rollupStatistics({
+      force: true,
+      now: tomorrow,
+      maxBuckets: 2 * 24 * 60,
+    });
     expect(result.every(({ error }) => error === null)).toBe(true);
 
     const tiers = await pool.query<{ minutes: string; hours: string; days: string }>(

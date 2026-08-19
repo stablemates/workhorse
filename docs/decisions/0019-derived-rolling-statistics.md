@@ -10,7 +10,7 @@ The operator dashboard auto-refreshes, and every time window on its system page 
 
 Each query was correct and each was proportional to throughput. Together they made observing the system most expensive exactly when the system was busiest, which is when an operator is most likely to be watching. On a busy queue a 24-hour window re-scanned millions of rows per refresh.
 
-TODO P2-10 scoped a full long-horizon rollup: hourly and daily tiers, a retention ladder, mergeable percentiles, and benchmarks. The minute tier shipped first, then became the source for the coarser tiers described below.
+The P2-10 roadmap item scoped a full long-horizon rollup: hourly and daily tiers, a retention ladder, mergeable percentiles, and benchmarks. The minute tier shipped first, then became the source for the coarser tiers described below.
 
 ## Decision
 

@@ -75,7 +75,9 @@ export function deriveSettingsRecommendations(input: {
     }
   }
 
-  const retentionReasons = health.status.reasons.filter((reason) => reason.code === "retention-lag");
+  const retentionReasons = health.status.reasons.filter(
+    (reason) => reason.code === "retention-lag",
+  );
   if (retentionReasons.length > 0) {
     const categories = retentionReasons
       .map((reason) => reason.category)
@@ -84,7 +86,9 @@ export function deriveSettingsRecommendations(input: {
     recommendations.push({
       id: "retention-lag",
       severity: "warning",
-      settings: [...new Set(categories.flatMap((category) => RETENTION_CATEGORY_SETTINGS[category] ?? []))],
+      settings: [
+        ...new Set(categories.flatMap((category) => RETENTION_CATEGORY_SETTINGS[category] ?? [])),
+      ],
       summary:
         `Retention for ${categories.join(", ")} is ${hours(worst)} past its window. ` +
         `Cleanup is not keeping up at the current cadence and per-pass limits.`,
@@ -130,13 +134,10 @@ export function deriveSettingsRecommendations(input: {
     });
   }
 
-  const spill =
-    health.defaultHistoryRows.jobEvents +
-    health.defaultHistoryRows.attemptHistory;
+  const spill = health.defaultHistoryRows.jobEvents + health.defaultHistoryRows.attemptHistory;
   if (spill > 0) {
     const capped =
-      health.defaultHistoryRowsCapped.jobEvents ||
-      health.defaultHistoryRowsCapped.attemptHistory;
+      health.defaultHistoryRowsCapped.jobEvents || health.defaultHistoryRowsCapped.attemptHistory;
     recommendations.push({
       id: "partition-spill",
       severity: "warning",
