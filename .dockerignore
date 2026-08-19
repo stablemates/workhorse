@@ -8,6 +8,7 @@ dist
 .next
 **/.next
 .build
+**/.venv
 coverage
 **/coverage
 docs/benchmarks/results

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expectOneRow } from "./errors.js";
 import {
   applySchemaMigrationPlan,
+  isMissingDatabaseRelationError,
   readProtocolVersions,
   readSchemaVersion,
   type SchemaMigrationStep,
@@ -45,7 +46,7 @@ function sqlAsset(relativePath: string): URL {
     : new URL(`../../../sql/${relativePath}`, import.meta.url);
 }
 
-export { readProtocolVersions, readSchemaVersion };
+export { isMissingDatabaseRelationError, readProtocolVersions, readSchemaVersion };
 
 /** Check compatibility without creating or changing database objects. */
 export async function assertSchemaCompatible(database: Queryable): Promise<void> {
@@ -53,10 +54,8 @@ export async function assertSchemaCompatible(database: Queryable): Promise<void>
   try {
     version = await readSchemaVersion(database);
   } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
     throw new Error(
-      code === "42P01" || code === "3F000"
+      isMissingDatabaseRelationError(error)
         ? "Workhorse schema is not installed. Run the application's explicit Workhorse schema installation step before mounting the dashboard."
         : "Unable to verify Workhorse schema compatibility because the database query failed.",
       { cause: error },
@@ -77,10 +76,8 @@ export async function migrateSchema(database: Queryable): Promise<void> {
   try {
     version = await readSchemaVersion(database);
   } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
     throw new Error(
-      code === "42P01" || code === "3F000"
+      isMissingDatabaseRelationError(error)
         ? "Workhorse schema is not installed. Run installSchema for a fresh database."
         : "Unable to read the Workhorse schema version before migration.",
       { cause: error },

@@ -1,0 +1,64 @@
+import { describe, expect, it, vi } from "vitest";
+import { prepareSchema, type SchemaPreparationOperations } from "./schema-preparation.js";
+
+function operations(
+  overrides: Partial<SchemaPreparationOperations> = {},
+): SchemaPreparationOperations {
+  return {
+    readVersion: vi.fn<SchemaPreparationOperations["readVersion"]>().mockResolvedValue(46),
+    install: vi.fn<SchemaPreparationOperations["install"]>().mockResolvedValue(undefined),
+    migrate: vi.fn<SchemaPreparationOperations["migrate"]>().mockResolvedValue(undefined),
+    installDemo: vi.fn<SchemaPreparationOperations["installDemo"]>().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+describe("demo schema preparation", () => {
+  it.each(["3F000", "42P01"])(
+    "installs a fresh database after PostgreSQL error %s",
+    async (code) => {
+      const subject = operations({
+        readVersion: vi
+          .fn<SchemaPreparationOperations["readVersion"]>()
+          .mockRejectedValue(Object.assign(new Error("missing schema"), { code })),
+      });
+
+      await expect(prepareSchema(subject)).resolves.toBe("installed");
+      expect(subject.install).toHaveBeenCalledOnce();
+      expect(subject.migrate).not.toHaveBeenCalled();
+      expect(subject.installDemo).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("migrates an installed database before installing the demo tables", async () => {
+    const calls: string[] = [];
+    const subject = operations({
+      readVersion: vi.fn<SchemaPreparationOperations["readVersion"]>(async () => {
+        calls.push("read");
+        return 45;
+      }),
+      migrate: vi.fn<SchemaPreparationOperations["migrate"]>(async () => {
+        calls.push("migrate");
+      }),
+      installDemo: vi.fn<SchemaPreparationOperations["installDemo"]>(async () => {
+        calls.push("demo");
+      }),
+    });
+
+    await expect(prepareSchema(subject)).resolves.toBe("migrated");
+    expect(calls).toEqual(["read", "migrate", "demo"]);
+    expect(subject.install).not.toHaveBeenCalled();
+  });
+
+  it("does not treat an unrelated database error as a fresh installation", async () => {
+    const error = Object.assign(new Error("authentication failed"), { code: "28P01" });
+    const subject = operations({
+      readVersion: vi.fn<SchemaPreparationOperations["readVersion"]>().mockRejectedValue(error),
+    });
+
+    await expect(prepareSchema(subject)).rejects.toBe(error);
+    expect(subject.install).not.toHaveBeenCalled();
+    expect(subject.migrate).not.toHaveBeenCalled();
+    expect(subject.installDemo).not.toHaveBeenCalled();
+  });
+});

@@ -278,13 +278,21 @@ afterAll(async () => {
 function dashboardClient(
   app: ReturnType<typeof createDemoApplication>["app"],
   rpcPath = "/rpc",
+  origins: { browser: string; upstream: string } = {
+    browser: "http://demo.test",
+    upstream: "http://demo.test",
+  },
 ): RouterClient<DashboardRouter> {
   return createORPCClient(
     new RPCLink({
-      url: `http://demo.test${rpcPath}`,
+      url: `${origins.browser}${rpcPath}`,
       fetch: (request) => {
-        const forwarded = new Request(request, { headers: new Headers(request.headers) });
-        forwarded.headers.set("origin", "http://demo.test");
+        const browserUrl = new URL(request.url);
+        const forwarded = new Request(
+          new URL(`${browserUrl.pathname}${browserUrl.search}`, origins.upstream),
+          request,
+        );
+        forwarded.headers.set("origin", origins.browser);
         return app.request(forwarded);
       },
     }),
@@ -305,6 +313,28 @@ it("loads the settings dashboard route and its read model", async () => {
     maintenance: { timezone: "UTC" },
     workers: [],
   });
+});
+
+it("accepts same-origin mutations behind a TLS-terminating proxy", async () => {
+  const publicOrigin = "https://demo.workhorse.run";
+  const queueController = createLocalOperatorControllers(database).queueController;
+  const { app } = createTestApplication({
+    operator: createLocalOperator(database),
+    publicOrigin,
+    queueController,
+  });
+  const client = dashboardClient(app, "/rpc", {
+    browser: publicOrigin,
+    upstream: "http://demo:3000",
+  });
+
+  await expect(
+    client.dashboard.setQueuePaused({
+      queue: "cloudflare-proxy-test",
+      paused: true,
+      audit: { actor: "operator", reason: "proxy origin", requestId: "proxy-origin" },
+    }),
+  ).resolves.toEqual({ paused: true });
 });
 
 it("serves two switchable workspaces when a staging database is configured", async () => {

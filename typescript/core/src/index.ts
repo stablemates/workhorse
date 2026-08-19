@@ -20,6 +20,7 @@ export type {
 export {
   assertSchemaCompatible,
   installSchema,
+  isMissingDatabaseRelationError,
   migrateSchema,
   readProtocolVersions,
   readSchemaVersion,

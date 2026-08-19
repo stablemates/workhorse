@@ -1,3 +1,4 @@
+import { databaseErrorCode } from "./errors.js";
 import type { Queryable } from "./types.js";
 
 export interface SchemaMigrationStep {
@@ -17,6 +18,12 @@ export interface SchemaMigrationPlan {
 /** Advisory lock name serializing concurrent schema migrations, hashed with hashtext. */
 export const SCHEMA_MIGRATION_LOCK = "workhorse:schema-migration";
 
+/** Whether PostgreSQL reports a missing schema or a missing relation within that schema. */
+export function isMissingDatabaseRelationError(error: unknown): boolean {
+  const code = databaseErrorCode(error);
+  return code === "3F000" || code === "42P01";
+}
+
 const transactionControl = /^\s*(?:BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\b/im;
 
 export async function readSchemaVersion(database: Queryable): Promise<number | null> {
@@ -34,9 +41,7 @@ export async function readProtocolVersions(database: Queryable): Promise<number[
     );
     return result.rows.map((row) => row.version);
   } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
-    if (code === "42P01" || code === "3F000") return null;
+    if (isMissingDatabaseRelationError(error)) return null;
     throw error;
   }
 }

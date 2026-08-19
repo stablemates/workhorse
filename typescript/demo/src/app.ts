@@ -3,6 +3,7 @@ import { createDrizzleAdapter } from "@workhorse/drizzle";
 import {
   createDashboardHost,
   createDashboardOperatorControllers,
+  normalizeDashboardPublicOrigin,
   type DashboardOperatorAction,
   type DashboardSingleAdminOptions,
 } from "@workhorse/dashboard/server";
@@ -116,6 +117,8 @@ export interface CreateDemoApplicationOptions {
   workerController?: WorkerController;
   settingsController?: SettingsController;
   maintenanceIntervalMs?: number;
+  /** Exact browser-visible origin when a TLS-terminating proxy fronts the demo. */
+  publicOrigin?: string;
   /**
    * Protect the dashboard with the packaged single-administrator login instead of the demo's
    * default open access. Supplied by the entry point when the operator credentials are configured.
@@ -1060,6 +1063,9 @@ export function createDemoApplication(
 ) {
   const maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEMO_MAINTENANCE_INTERVAL_MS;
   const environment = options.environment ?? "development";
+  const publicOrigin = options.publicOrigin
+    ? normalizeDashboardPublicOrigin(options.publicOrigin)
+    : undefined;
   const localControllers = createLocalOperatorControllers(database);
   // Worker pause state is durable and fleet-wide; it survives restarts and reaches remote workers.
   const workerController = options.workerController ?? localControllers.workerController;
@@ -1119,10 +1125,17 @@ export function createDemoApplication(
       auditActor: "local-demo",
       dev: options.dev,
     });
-    app.all(
-      "*",
-      async (context) => (await dashboard.handle(context.req.raw)) ?? context.notFound(),
-    );
+    app.all("*", async (context) => {
+      const request = context.req.raw;
+      const requestUrl = new URL(request.url);
+      const dashboardRequest = publicOrigin
+        ? new Request(
+            new URL(`${requestUrl.pathname}${requestUrl.search}`, `${publicOrigin}/`),
+            request,
+          )
+        : request;
+      return (await dashboard.handle(dashboardRequest)) ?? context.notFound();
+    });
   }
 
   return { app, queue: adapter.queue, workerController };

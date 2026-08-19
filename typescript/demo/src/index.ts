@@ -106,6 +106,7 @@ const { app } = createDemoApplication(database, {
   dev: dashboardDev,
   environment,
   operator: createLocalOperator(database),
+  publicOrigin: process.env.WORKHORSE_DEMO_PUBLIC_ORIGIN,
   queueController: localOperatorControllers.queueController,
   scheduleController: createLocalScheduleController(database),
   ...(adminUsername && adminPasswordHash
