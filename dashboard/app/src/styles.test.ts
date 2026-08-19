@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-const dashboardSource = readFileSync(new URL("./dashboard.tsx", import.meta.url), "utf8");
+const dashboardSource = readFileSync(new URL("./charts/system.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
 
 describe("task drawer control alignment", () => {
