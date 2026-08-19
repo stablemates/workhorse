@@ -21,24 +21,53 @@ import { dashboardRefreshBlockers, useRefreshBlocker } from "./refresh-blockers.
 
 interface DropdownActivityContextValue {
   opened: boolean;
-  setOpened: (id: string, opened: boolean) => void;
+  setOpened: (id: string, opened: boolean, blocksRefresh: boolean) => void;
+}
+
+export interface DropdownActivityEntry {
+  opened: boolean;
+  blocksRefresh: boolean;
+}
+
+export function dropdownActivitySnapshot(entries: ReadonlyMap<string, DropdownActivityEntry>): {
+  opened: boolean;
+  refreshBlocked: boolean;
+} {
+  let opened = false;
+  let refreshBlocked = false;
+  for (const entry of entries.values()) {
+    if (!entry.opened) continue;
+    opened = true;
+    if (entry.blocksRefresh) refreshBlocked = true;
+  }
+  return { opened, refreshBlocked };
 }
 
 const DropdownActivityContext = createContext<DropdownActivityContextValue | null>(null);
 
 export function DropdownActivityProvider({ children }: { children: ReactNode }) {
-  const [openedIds, setOpenedIds] = useState<ReadonlySet<string>>(() => new Set());
-  useRefreshBlocker(openedIds.size > 0, dashboardRefreshBlockers.dropdown);
-  const setOpened = useCallback((id: string, opened: boolean) => {
-    setOpenedIds((current) => {
-      if (current.has(id) === opened) return current;
-      const next = new Set(current);
-      if (opened) next.add(id);
+  const [entries, setEntries] = useState<ReadonlyMap<string, DropdownActivityEntry>>(
+    () => new Map(),
+  );
+  const snapshot = dropdownActivitySnapshot(entries);
+  useRefreshBlocker(snapshot.refreshBlocked, dashboardRefreshBlockers.taskContextMenu);
+  const setOpened = useCallback((id: string, opened: boolean, blocksRefresh: boolean) => {
+    setEntries((current) => {
+      const existing = current.get(id);
+      if (existing?.opened === opened && existing?.blocksRefresh === blocksRefresh) {
+        return current;
+      }
+      if (!opened && existing === undefined) return current;
+      const next = new Map(current);
+      if (opened) next.set(id, { opened, blocksRefresh });
       else next.delete(id);
       return next;
     });
   }, []);
-  const value = useMemo(() => ({ opened: openedIds.size > 0, setOpened }), [openedIds, setOpened]);
+  const value = useMemo(
+    () => ({ opened: snapshot.opened, setOpened }),
+    [snapshot.opened, setOpened],
+  );
 
   return (
     <DropdownActivityContext.Provider value={value}>{children}</DropdownActivityContext.Provider>
@@ -49,7 +78,7 @@ export function useDropdownActivity(): boolean {
   return useContext(DropdownActivityContext)?.opened ?? false;
 }
 
-function useTrackedDropdown(): (opened: boolean) => void {
+function useTrackedDropdown(blocksRefresh = false): (opened: boolean) => void {
   const activity = useContext(DropdownActivityContext);
   const id = useId();
   const openedRef = useRef(false);
@@ -57,16 +86,16 @@ function useTrackedDropdown(): (opened: boolean) => void {
   const track = useCallback(
     (opened: boolean) => {
       openedRef.current = opened;
-      setOpened?.(id, opened);
+      setOpened?.(id, opened, blocksRefresh);
     },
-    [id, setOpened],
+    [blocksRefresh, id, setOpened],
   );
 
   useEffect(
     () => () => {
-      if (openedRef.current) setOpened?.(id, false);
+      if (openedRef.current) setOpened?.(id, false, blocksRefresh);
     },
-    [id, setOpened],
+    [blocksRefresh, id, setOpened],
   );
   return track;
 }
@@ -87,8 +116,12 @@ function useTrackedSelectDropdown(
   return { onDropdownOpen: open, onDropdownClose: close };
 }
 
-function TrackedMenuRoot({ onChange, ...props }: MenuProps) {
-  const track = useTrackedDropdown();
+function TrackedMenuRoot({
+  blocksRefresh = false,
+  onChange,
+  ...props
+}: MenuProps & { blocksRefresh?: boolean }) {
+  const track = useTrackedDropdown(blocksRefresh);
   return (
     <MantineMenu
       {...props}

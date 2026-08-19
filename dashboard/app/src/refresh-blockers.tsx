@@ -133,8 +133,8 @@ export const dashboardRefreshBlockers = {
     description: "Auto refresh paused while task details are open",
     priority: 10,
   },
-  dropdown: {
-    description: "Auto refresh paused while a dropdown is open",
+  taskContextMenu: {
+    description: "Auto refresh paused while a task action menu is open",
     priority: 20,
   },
 } as const satisfies Record<string, RefreshBlocker>;

@@ -684,7 +684,7 @@ export function TaskRowActions({
 }) {
   const groups = taskRowActionGroups(job, capabilities);
   return (
-    <Menu position="bottom-end" withinPortal shadow="md" width={280}>
+    <Menu blocksRefresh position="bottom-end" withinPortal shadow="md" width={280}>
       <Menu.Target>
         <ActionIcon
           size="sm"
