@@ -69,14 +69,32 @@ initialization`), and `--pool=threads` fails because Bun's `worker_threads` `Mes
 No runtime-specific code paths or shims exist, and none are planned. If a smoke lane turns red,
 the fix is filed against the runtime story, never inlined as a conditional in the library.
 
-### Edge isolates are a non-goal
+### Serverless and edge runtimes
 
-Cloudflare Workers, Vercel Edge, and Deno Deploy can never run the worker half of Workhorse. A
-worker is a long-lived process that holds pooled connections, renews leases, and heartbeats;
-an isolate is short-lived and constrains raw TCP. This is a boundary, not a backlog item. The
-enqueue-only half would fit an isolate, but that is a separate client deliverable speaking the
-versioned SQL protocol — the same shape as the Python and Go clients — not runtime support for
-`@workhorse/core`.
+Two independent rules determine whether a serverless runtime can use Workhorse. A producer needs
+a supported client and a PostgreSQL connection. A worker also needs an autonomous process that can
+hold connections, renew leases, send heartbeats, and drain after a termination signal. Database
+connectivity does not turn a request-scoped function into a worker host.
+
+| Platform              | Runtime                | Enqueue with the published client | Host a worker | Requirement or boundary                                                                                                                                        |
+| --------------------- | ---------------------- | --------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cloudflare Workers    | Workers isolate        | No                                | No            | Hyperdrive provides verified `pg` connectivity under `nodejs_compat`, but `@workhorse/core` supports Node.js, not the Workers runtime. Use a Node.js producer. |
+| Vercel Functions      | Node.js                | Yes                               | No            | Use `@workhorse/core` and `pg` normally. The caller can pass its open `pg` transaction to `Queue.enqueue`.                                                     |
+| Vercel Functions      | Edge                   | No                                | No            | The Edge runtime omits the Node.js APIs required by `pg` and `@workhorse/core`. Move the route to the Node.js runtime.                                         |
+| AWS Lambda            | Node.js                | Yes                               | No            | Use `@workhorse/core` and `pg` over a network path to PostgreSQL. Lambda owns the execution environment lifetime.                                              |
+| Cloud Run service     | Node.js, request-based | Yes                               | No            | Use `@workhorse/core` and `pg` in the request. Request-based CPU allocation and instance scaling cannot own a continuous worker loop.                          |
+| Cloud Run worker pool | Node.js container      | Yes                               | Yes           | Run the dedicated Workhorse worker process with at least one worker-pool instance.                                                                             |
+
+We verified these claims on 2026-08-18. A Wrangler 4.124 local Worker used `nodejs_compat`, the
+repository's `pg` dependency, and a local Hyperdrive binding to execute `SELECT 1` against the
+worktree test database. The request returned `{ "connected": true }`. This test covers the Workers
+runtime and PostgreSQL transport, but local Hyperdrive does not enable Cloudflare's managed pooling
+or cache. The repository's PostgreSQL integration suite covers the Node.js transaction path used by
+Vercel Functions, Lambda, and Cloud Run. Provider runtime documentation supplies their lifecycle
+boundaries and confirms that Vercel Edge omits the Node.js networking APIs required by `pg`.
+
+The published [serverless guide](https://workhorse.run/docs/serverless) links each provider source
+and explains where to deploy workers when the web tier is serverless.
 
 ## Packages and versioning
 

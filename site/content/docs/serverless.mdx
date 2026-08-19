@@ -1,0 +1,103 @@
+---
+title: Can I use Workhorse from a serverless app?
+description: Decide where Workhorse can enqueue and where its worker process must run.
+---
+
+Serverless support comes down to two separate rules. Check them in this order, because a runtime
+can pass the database rule and still be unable to run a worker.
+
+1. **Process lifetime:** A Workhorse worker is a continuous process. It holds a PostgreSQL pool,
+   renews leases, sends heartbeats, and drains after a termination signal. A request or event
+   invocation does not own that lifecycle, so it cannot host the worker loop.
+2. **Database connectivity:** An enqueue producer needs a supported Workhorse client and a
+   PostgreSQL session. Node.js functions can use `@workhorse/core` and `pg` normally. An edge
+   runtime may need a platform transport, and transport support alone does not make the published
+   Node.js package compatible with that runtime.
+
+## Platform matrix
+
+| Platform              | Runtime                | Can enqueue?                  | Can host a worker?               | What it needs                                                      |
+| --------------------- | ---------------------- | ----------------------------- | -------------------------------- | ------------------------------------------------------------------ |
+| Cloudflare Workers    | Workers isolate        | Not with the published client | No — lifetime and client support | Use a Node.js producer; Hyperdrive only provides the database path |
+| Vercel Functions      | Node.js                | Yes, transactionally          | No — function lifetime           | `@workhorse/core`, `pg`, and ordinary database network access      |
+| Vercel Functions      | Edge                   | Not with the published client | No — lifetime and connectivity   | Move the route to the Node.js runtime                              |
+| AWS Lambda            | Node.js                | Yes, transactionally          | No — function lifetime           | `@workhorse/core`, `pg`, and a reachable PostgreSQL endpoint       |
+| Cloud Run service     | Node.js, request-based | Yes, transactionally          | No — request lifecycle           | `@workhorse/core`, `pg`, and ordinary database network access      |
+| Cloud Run worker pool | Node.js container      | Yes                           | Yes                              | Run the dedicated Workhorse process as a persistent instance       |
+
+"Enqueue" means using a package that this repository publishes today. An HTTP database driver may
+make PostgreSQL reachable from another isolate. It cannot replace the `Queryable` contract or the
+versioned SQL behavior that a Workhorse client implements.
+
+## Vercel Node functions enqueue normally
+
+The Vercel Node.js runtime is ordinary supported Node.js for this purpose. It can open a `pg`
+connection, and Vercel documents `pg` pools directly. If the function owns a transaction, pass it
+to `Queue.enqueue`. The job then commits or rolls back with the business write.
+
+```ts
+const client = await pool.connect();
+try {
+  await client.query("BEGIN");
+  await client.query("INSERT INTO orders (id) VALUES ($1)", [orderId]);
+  await queue.enqueue("order.fulfill", { orderId }, {}, client);
+  await client.query("COMMIT");
+} catch (error) {
+  await client.query("ROLLBACK");
+  throw error;
+} finally {
+  client.release();
+}
+```
+
+On Vercel Fluid Compute, call
+[`attachDatabasePool`](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#attachdatabasepool)
+after creating the pool so Vercel can release idle clients before suspending the function. That
+pool management does not weaken transactional enqueue.
+
+## Cloudflare Hyperdrive solves connectivity, not lifetime
+
+Cloudflare documents `pg` as its recommended PostgreSQL driver through
+[Hyperdrive](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/). The
+documented path uses a current `pg`, the `nodejs_compat` flag, and the connection string exposed by
+the Hyperdrive binding. Cloudflare's
+[TCP documentation](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/) confirms
+that Hyperdrive carries the PostgreSQL wire protocol and manages connection pooling.
+
+That verifies the database path, but `@workhorse/core` still supports Node.js rather than the
+Workers runtime. Workhorse therefore does not publish a Cloudflare enqueue client today.
+
+Cloudflare also ties execution to an invocation. Its
+[runtime limits](https://developers.cloudflare.com/workers/platform/limits/) allow a long HTTP
+response while the caller remains connected. Cloudflare may cancel work after the response or a
+disconnect. Runtime updates also impose a drain window. That lifecycle cannot own Workhorse leases
+or an autonomous worker loop.
+
+## Put the worker beside the serverless web tier
+
+The web tier and worker tier only need access to the same PostgreSQL database. Keep request
+handlers on the serverless platform. Run `workhorse worker` in compute that owns a continuous
+process, such as a VM, Kubernetes deployment, ECS/Fargate service, or
+[Cloud Run worker pool](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run#services-jobs-worker-pools).
+
+Use [Worker processes](/docs/worker-processes) for the process definition, probes, termination
+signals, and drain contract. Use [Deployment and operations](/docs/operations) to size pools and
+operate the shared database boundary.
+
+The compatibility reference records the verification method and date. The Vercel Edge
+classification follows Vercel's
+[supported API list](https://vercel.com/docs/functions/runtimes/edge#edge-runtime-supported-apis),
+which omits the Node.js networking APIs required by `pg`. AWS explains that
+[Lambda owns and may replace execution environments](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html),
+even though a function can reuse a database connection while an environment remains warm.
+
+## Next
+
+- [Transactional enqueue](/docs/enqueue) — commit the job with the business write
+- [Worker processes](/docs/worker-processes) — run handlers in continuous compute
+- [Compatibility](/docs/compatibility) — check the supported runtime and database matrix
+
+---
+
+Exact process lifecycle and PostgreSQL ownership rules:
+[architecture reference](https://github.com/stablemates/workhorse/blob/main/docs/architecture.md#worker-process-lifecycle).

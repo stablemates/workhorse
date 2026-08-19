@@ -9,6 +9,10 @@ traffic, worker replicas process jobs, and the two meet only in PostgreSQL. Work
 the whole process lifecycle — startup, signals, drain, probes — so a worker deployment is one
 configuration file and one command.
 
+If the web tier runs in a function or edge isolate, use the [serverless and edge matrix](/docs/serverless)
+to check its enqueue path. The worker still runs here, in continuous compute with its own process
+lifecycle.
+
 ## Define the process
 
 `defineWorkerProcess` type-checks a configuration and returns it unchanged. The definition owns
