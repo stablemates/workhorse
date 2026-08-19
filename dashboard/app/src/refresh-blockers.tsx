@@ -150,11 +150,16 @@ export function useDashboardWindowActivityRefreshBlocker(): void {
   useRefreshBlocker(!active, dashboardRefreshBlockers.inactiveWindow);
 }
 
+export function dashboardInputTypeBlocksRefresh(type: string): boolean {
+  return type !== "hidden" && type !== "radio" && type !== "checkbox";
+}
+
 function isRefreshBlockingInput(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.matches('input:not([type="hidden"]), textarea, select, [contenteditable="true"]')
-  );
+  if (!(target instanceof Element)) return false;
+  if (target.matches("input")) {
+    return dashboardInputTypeBlocksRefresh((target as HTMLInputElement).type);
+  }
+  return target.matches('textarea, select, [contenteditable="true"]');
 }
 
 export function useRefreshBlockingInputCapture(): {

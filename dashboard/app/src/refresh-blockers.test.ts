@@ -1,5 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRefreshBlockerRegistry } from "./refresh-blockers.js";
+import {
+  createRefreshBlockerRegistry,
+  dashboardInputTypeBlocksRefresh,
+} from "./refresh-blockers.js";
+
+describe("dashboard focus refresh blocking", () => {
+  it("keeps non-editable theme and toggle controls refreshable", () => {
+    expect(dashboardInputTypeBlocksRefresh("radio")).toBe(false);
+    expect(dashboardInputTypeBlocksRefresh("checkbox")).toBe(false);
+    expect(dashboardInputTypeBlocksRefresh("text")).toBe(true);
+  });
+});
 
 describe("dashboard refresh blocker registry", () => {
   it("keeps refresh blocked until every active control releases its registration", () => {
