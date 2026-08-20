@@ -12,8 +12,8 @@ dynamic PostgreSQL value of `uuid`, `timestamp`, `integer`, or `string` while al
 remains exact.
 
 `v1/runtime.json` defines behavior that every language worker supplies above the SQL protocol. Its
-batch fixture pins priority order, positional outcomes, retries, terminal failures, and independent
-attempt state for jobs with separate fence tokens.
+fixtures pin batch ordering and settlement as well as durable-wait suspension, slot release,
+single-logical-attempt replay, and checkpoint reuse when a handler restarts.
 
 `v1/requests.json` maps public enqueue inputs to the exact JSON request sent to PostgreSQL. The
 TypeScript suite executes these mappings through `Queue`, so serialization changes fail alongside

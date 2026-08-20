@@ -55,10 +55,14 @@ interface SqlScenario {
   steps: SqlStep[];
 }
 
-export interface RuntimeFixture {
+interface RuntimeFixtureBase {
   id: string;
   covers: string[];
   jobType: string;
+}
+
+export interface BatchRuntimeFixture extends RuntimeFixtureBase {
+  kind: "batch";
   concurrency: number;
   batchMaxSize: number;
   jobs: { key: string; priority: number; maxAttempts: number; outcome: string }[];
@@ -66,6 +70,24 @@ export interface RuntimeFixture {
   expectedAfterFirstRun: Record<string, { state: string; attempt: number }>;
   expectedAfterSecondRun: Record<string, { state: string; attempt: number }>;
 }
+
+export interface SuspensionReplayRuntimeFixture extends RuntimeFixtureBase {
+  kind: "suspension-replay";
+  followingJobType: string;
+  checkpointName: string;
+  waitName: string;
+  waitMs: number;
+  expectedHandlerOrder: string[];
+  expectedAfterSuspension: Record<string, { state: string; attempt: number }>;
+  expectedAfterSlotRelease: Record<string, { state: string; attempt: number }>;
+  expectedAfterReplay: Record<string, { state: string; attempt: number }>;
+  expectedHandlerRuns: number;
+  expectedCheckpointOperations: number;
+  expectedAttemptsAfterSuspension: number;
+  expectedAttemptsAfterReplay: number;
+}
+
+export type RuntimeFixture = BatchRuntimeFixture | SuspensionReplayRuntimeFixture;
 
 export interface RequestFixture {
   id: string;

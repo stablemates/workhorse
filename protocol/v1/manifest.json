@@ -21,13 +21,23 @@
     "checkpoint",
     "timer-wait",
     "batch-handling",
+    "durable-wait-suspension",
+    "worker-slot-release",
+    "single-attempt-replay",
+    "checkpoint-replay",
     "coalescing",
     "dependencies",
     "children",
     "signals",
     "human-tokens"
   ],
-  "runtimeCoverage": ["batch-handling"],
+  "runtimeCoverage": [
+    "batch-handling",
+    "durable-wait-suspension",
+    "worker-slot-release",
+    "single-attempt-replay",
+    "checkpoint-replay"
+  ],
   "functions": [
     {
       "name": "enqueue_many_v2",

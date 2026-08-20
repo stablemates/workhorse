@@ -1,6 +1,7 @@
 [
   {
     "id": "priority-ordered-mixed-batch",
+    "kind": "batch",
     "covers": ["batch-handling"],
     "jobType": "protocol.batch",
     "concurrency": 3,
@@ -21,5 +22,37 @@
       "retry": { "state": "succeeded", "attempt": 2 },
       "fail": { "state": "failed", "attempt": 1 }
     }
+  },
+  {
+    "id": "durable-wait-suspension-and-checkpoint-replay",
+    "kind": "suspension-replay",
+    "covers": [
+      "durable-wait-suspension",
+      "worker-slot-release",
+      "single-attempt-replay",
+      "checkpoint-replay"
+    ],
+    "jobType": "protocol.suspension-replay",
+    "followingJobType": "protocol.after-suspension",
+    "checkpointName": "prepare",
+    "waitName": "after-prepare",
+    "waitMs": 30,
+    "expectedHandlerOrder": ["suspension:1", "following:1", "suspension:1"],
+    "expectedAfterSuspension": {
+      "suspension": { "state": "scheduled", "attempt": 1 },
+      "following": { "state": "ready", "attempt": 1 }
+    },
+    "expectedAfterSlotRelease": {
+      "suspension": { "state": "scheduled", "attempt": 1 },
+      "following": { "state": "succeeded", "attempt": 1 }
+    },
+    "expectedAfterReplay": {
+      "suspension": { "state": "succeeded", "attempt": 1 },
+      "following": { "state": "succeeded", "attempt": 1 }
+    },
+    "expectedHandlerRuns": 2,
+    "expectedCheckpointOperations": 1,
+    "expectedAttemptsAfterSuspension": 0,
+    "expectedAttemptsAfterReplay": 1
   }
 ]

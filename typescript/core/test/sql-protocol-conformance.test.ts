@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ClaimedJob, EnqueueRequest, Json, Queryable } from "../src/index.js";
@@ -7,6 +8,10 @@ import {
   loadSqlProtocolFixtures,
   assertSqlProtocolCompatible,
   verifySqlProtocolFixtures,
+} from "../../../scripts/verify-sql-protocol.js";
+import type {
+  BatchRuntimeFixture,
+  SuspensionReplayRuntimeFixture,
 } from "../../../scripts/verify-sql-protocol.js";
 import { Queue, Worker, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 import { createDatabaseTestHarness } from "./support/db.js";
@@ -32,6 +37,119 @@ async function expectJobStates(
       currentAttempt: state.attempt,
     });
   }
+}
+
+async function expectAttemptCount(
+  database: Queryable,
+  jobId: string,
+  expected: number,
+): Promise<void> {
+  const attempts = await database.query<{ count: number }>(
+    "SELECT count(*)::integer AS count FROM workhorse.attempt_history WHERE job_id = $1",
+    [jobId],
+  );
+  expect(attempts.rows).toEqual([{ count: expected }]);
+}
+
+async function executeBatchRuntimeFixture(
+  queue: Queue,
+  fixture: BatchRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const ids = new Map<string, string>();
+  for (const job of fixture.jobs) {
+    ids.set(
+      job.key,
+      await queue.enqueue(
+        fixture.jobType,
+        { key: job.key, outcome: job.outcome },
+        {
+          queue: queueName,
+          priority: job.priority,
+          maxAttempts: job.maxAttempts,
+        },
+      ),
+    );
+  }
+  const seen: string[] = [];
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    concurrency: fixture.concurrency,
+    retryDelayMs: 0,
+  }).handleBatch<{ key: string; outcome: string }, { attempt: number }>(
+    fixture.jobType,
+    { maxSize: fixture.batchMaxSize, lingerMs: 100 },
+    (items) => {
+      seen.push(...items.map((item) => item.payload.key));
+      return items.map(({ payload, context }) =>
+        payload.outcome === "succeed" || context.job.attempt > 1
+          ? { status: "succeeded" as const, result: { attempt: context.job.attempt } }
+          : {
+              status: "failed" as const,
+              error: new Error(`${payload.outcome} on attempt ${context.job.attempt}`),
+            },
+      );
+    },
+  );
+
+  await expect(worker.runOnce()).resolves.toBe(true);
+  expect(seen).toEqual(fixture.expectedHandlerOrder);
+  await expectJobStates(queue, ids, fixture.expectedAfterFirstRun);
+  await expect(worker.runOnce()).resolves.toBe(true);
+  await expectJobStates(queue, ids, fixture.expectedAfterSecondRun);
+}
+
+async function executeSuspensionReplayRuntimeFixture(
+  queue: Queue,
+  database: Queryable,
+  fixture: SuspensionReplayRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const ids = new Map<string, string>();
+  ids.set("suspension", await queue.enqueue(fixture.jobType, {}, { queue: queueName }));
+  ids.set("following", await queue.enqueue(fixture.followingJobType, {}, { queue: queueName }));
+  let handlerRuns = 0;
+  let checkpointOperations = 0;
+  const seen: string[] = [];
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    maintenanceIntervalMs: 100,
+  })
+    .handle(fixture.jobType, async (_payload, context) => {
+      handlerRuns += 1;
+      seen.push(`suspension:${context.job.attempt}`);
+      const prepared = await context.checkpoint(fixture.checkpointName, () => {
+        checkpointOperations += 1;
+        return { operation: checkpointOperations };
+      });
+      await context.sleep(fixture.waitName, fixture.waitMs);
+      return { prepared, handlerRuns };
+    })
+    .handle(fixture.followingJobType, (_payload, context) => {
+      seen.push(`following:${context.job.attempt}`);
+      return { handled: true };
+    });
+
+  await expect(worker.runOnce()).resolves.toBe(true);
+  await expectJobStates(queue, ids, fixture.expectedAfterSuspension);
+  await expectAttemptCount(
+    database,
+    ids.get("suspension")!,
+    fixture.expectedAttemptsAfterSuspension,
+  );
+
+  await expect(worker.runOnce()).resolves.toBe(true);
+  await expectJobStates(queue, ids, fixture.expectedAfterSlotRelease);
+
+  await sleep(Math.max(110, fixture.waitMs + 80));
+  await expect(worker.runOnce()).resolves.toBe(true);
+  await expectJobStates(queue, ids, fixture.expectedAfterReplay);
+  await expectAttemptCount(database, ids.get("suspension")!, fixture.expectedAttemptsAfterReplay);
+  expect(seen).toEqual(fixture.expectedHandlerOrder);
+  expect(handlerRuns).toBe(fixture.expectedHandlerRuns);
+  expect(checkpointOperations).toBe(fixture.expectedCheckpointOperations);
 }
 
 async function exerciseQueue<TResult>(
@@ -99,6 +217,10 @@ describe("SQL protocol conformance fixtures", () => {
         "checkpoint",
         "timer-wait",
         "batch-handling",
+        "durable-wait-suspension",
+        "worker-slot-release",
+        "single-attempt-replay",
+        "checkpoint-replay",
         "coalescing",
         "dependencies",
         "children",
@@ -163,7 +285,7 @@ describe("SQL protocol conformance fixtures", () => {
     }
   });
 
-  it("verifies language-runtime batch formation and independent settlement", async () => {
+  it("verifies language-runtime behavior through the shared fixtures", async () => {
     await runtimeDatabase.setup();
     try {
       const fixtures = await loadSqlProtocolFixtures(repository);
@@ -171,49 +293,11 @@ describe("SQL protocol conformance fixtures", () => {
       const coverage = new Set<string>();
       for (const fixture of fixtures.runtime) {
         fixture.covers.forEach((capability) => coverage.add(capability));
-        const queueName = `runtime-${fixture.id}`;
-        const ids = new Map<string, string>();
-        for (const job of fixture.jobs) {
-          ids.set(
-            job.key,
-            await queue.enqueue(
-              fixture.jobType,
-              { key: job.key, outcome: job.outcome },
-              {
-                queue: queueName,
-                priority: job.priority,
-                maxAttempts: job.maxAttempts,
-              },
-            ),
-          );
+        if (fixture.kind === "batch") {
+          await executeBatchRuntimeFixture(queue, fixture);
+        } else {
+          await executeSuspensionReplayRuntimeFixture(queue, runtimeDatabase.pool, fixture);
         }
-        const seen: string[] = [];
-        const worker = new Worker(queue, {
-          workerId: `runtime-${fixture.id}`,
-          queue: queueName,
-          concurrency: fixture.concurrency,
-          retryDelayMs: 0,
-        }).handleBatch<{ key: string; outcome: string }, { attempt: number }>(
-          fixture.jobType,
-          { maxSize: fixture.batchMaxSize, lingerMs: 100 },
-          (items) => {
-            seen.push(...items.map((item) => item.payload.key));
-            return items.map(({ payload, context }) =>
-              payload.outcome === "succeed" || context.job.attempt > 1
-                ? { status: "succeeded" as const, result: { attempt: context.job.attempt } }
-                : {
-                    status: "failed" as const,
-                    error: new Error(`${payload.outcome} on attempt ${context.job.attempt}`),
-                  },
-            );
-          },
-        );
-
-        await expect(worker.runOnce()).resolves.toBe(true);
-        expect(seen).toEqual(fixture.expectedHandlerOrder);
-        await expectJobStates(queue, ids, fixture.expectedAfterFirstRun);
-        await expect(worker.runOnce()).resolves.toBe(true);
-        await expectJobStates(queue, ids, fixture.expectedAfterSecondRun);
       }
       expect(coverage).toEqual(new Set(fixtures.manifest.runtimeCoverage));
     } finally {
