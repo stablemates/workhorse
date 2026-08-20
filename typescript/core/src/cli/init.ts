@@ -73,7 +73,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
   switch (project.orm) {
     case "drizzle": {
       adapterImport =
-        'import { createDrizzleAdapter } from "@workhorse/drizzle";\nimport { drizzle as createDrizzle } from "drizzle-orm/node-postgres";';
+        'import { createDrizzleAdapter } from "@workhorse-js/drizzle";\nimport { drizzle as createDrizzle } from "drizzle-orm/node-postgres";';
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     return createDrizzleAdapter(createDrizzle({ client: pool }), {
       defaultQueue: QUEUE,
@@ -83,7 +83,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
     }
     case "prisma": {
       adapterImport =
-        'import { PrismaClient } from "@prisma/client";\nimport { createPrismaAdapter } from "@workhorse/prisma";';
+        'import { PrismaClient } from "@prisma/client";\nimport { createPrismaAdapter } from "@workhorse-js/prisma";';
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     const database = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
     return createPrismaAdapter(database, {
@@ -98,7 +98,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
     }
     case "typeorm": {
       adapterImport =
-        'import { createTypeOrmAdapter } from "@workhorse/typeorm";\nimport { DataSource } from "typeorm";';
+        'import { createTypeOrmAdapter } from "@workhorse-js/typeorm";\nimport { DataSource } from "typeorm";';
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     const database = new DataSource({ type: "postgres", url: databaseUrl });
     await database.initialize();
@@ -114,7 +114,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
     }
     case "kysely": {
       adapterImport =
-        'import { createKyselyAdapter } from "@workhorse/kysely";\nimport { Kysely, PostgresDialect } from "kysely";';
+        'import { createKyselyAdapter } from "@workhorse-js/kysely";\nimport { Kysely, PostgresDialect } from "kysely";';
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     const database = new Kysely({ dialect: new PostgresDialect({ pool }) });
     return createKyselyAdapter(database, {
@@ -125,7 +125,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
       break;
     }
     case "pg": {
-      adapterImport = 'import { createWorkhorseAdapter } from "@workhorse/core";';
+      adapterImport = 'import { createWorkhorseAdapter } from "@workhorse-js/core";';
       adapterBody = `    const pool = new Pool({ connectionString: databaseUrl });
     return createWorkhorseAdapter({
       database: pool,
@@ -137,7 +137,7 @@ export function renderWorkerConfig(project: DetectedProject): string {
     }
   }
 
-  return `import { defineWorkerProcess } from "@workhorse/core";
+  return `import { defineWorkerProcess } from "@workhorse-js/core";
 ${adapterImport}
 import { Pool } from "pg";
 
@@ -181,7 +181,7 @@ ${adapterBody}
 /** The mount snippet printed for the detected framework. Nothing is written into user routes. */
 export function renderMountSnippet(project: DetectedProject): string {
   if (project.framework === "hono") {
-    return `import { createDashboardHost } from "@workhorse/dashboard/server";
+    return `import { createDashboardHost } from "@workhorse-js/dashboard/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -199,7 +199,7 @@ for (const route of ["/workhorse", "/workhorse/*"]) {
       project.framework === "express"
         ? "app.use(dashboardNodeMiddleware(host));"
         : "await app.register(middie);\napp.use(dashboardNodeMiddleware(host));";
-    return `import { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboard/server";
+    return `import { createDashboardHost, dashboardNodeMiddleware } from "@workhorse-js/dashboard/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -210,7 +210,7 @@ ${mount}`;
   }
   if (project.framework === "next") {
     return `// app/workhorse/[[...path]]/route.ts
-import { createDashboardHost } from "@workhorse/dashboard/server";
+import { createDashboardHost } from "@workhorse-js/dashboard/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -224,7 +224,7 @@ async function handler(request: Request) {
 
 export { handler as GET, handler as POST };`;
   }
-  return `import { createDashboardHost } from "@workhorse/dashboard/server";
+  return `import { createDashboardHost } from "@workhorse-js/dashboard/server";
 
 // The host is framework-neutral: give it a Request, it returns a Response or null.
 const host = createDashboardHost({

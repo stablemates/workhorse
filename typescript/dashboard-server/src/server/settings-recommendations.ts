@@ -1,4 +1,4 @@
-import type { MaintenancePolicy, QueueHealth, RetentionPolicy } from "@workhorse/core";
+import type { MaintenancePolicy, QueueHealth, RetentionPolicy } from "@workhorse-js/core";
 import type { DashboardSettingsRecommendation } from "../wire.js";
 
 const DAY_MS = 86_400_000;

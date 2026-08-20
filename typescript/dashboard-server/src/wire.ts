@@ -4,7 +4,7 @@ import type {
   QueueHealth,
   RetentionPolicy,
   RetryPolicy,
-} from "@workhorse/core";
+} from "@workhorse-js/core";
 
 export type DashboardMaintenancePolicy = Omit<MaintenancePolicy, "updatedAt"> & {
   updatedAt: string;

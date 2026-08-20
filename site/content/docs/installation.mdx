@@ -19,14 +19,14 @@ failing partway through with a syntax error that reads like a Workhorse bug.
 
 ## Add the package
 
-Install `@workhorse/core` alongside the PostgreSQL client your application already uses.
+Install `@workhorse-js/core` alongside the PostgreSQL client your application already uses.
 
 ```bash
-npm install @workhorse/core pg
+npm install @workhorse-js/core pg
 ```
 
-Add a database adapter (`@workhorse/drizzle`, `@workhorse/prisma`, `@workhorse/typeorm`,
-`@workhorse/kysely`) or `@workhorse/dashboard` only when that integration belongs in the same
+Add a database adapter (`@workhorse-js/drizzle`, `@workhorse-js/prisma`, `@workhorse-js/typeorm`,
+`@workhorse-js/kysely`) or `@workhorse-js/dashboard` only when that integration belongs in the same
 process.
 
 If you are adding Workhorse to an existing project, `workhorse init` can scaffold the wiring. It
@@ -65,7 +65,7 @@ The same step is available from deployment code as `installSchema`.
 
 ```ts
 import { Pool } from "pg";
-import { installSchema } from "@workhorse/core";
+import { installSchema } from "@workhorse-js/core";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 await installSchema(pool);
@@ -82,7 +82,7 @@ Run `migrateSchema` from a deployment step before processes from the new release
 the package's immutable, forward-only migration steps in order.
 
 ```ts
-import { migrateSchema } from "@workhorse/core";
+import { migrateSchema } from "@workhorse-js/core";
 
 await migrateSchema(pool);
 ```
@@ -100,7 +100,7 @@ Application and worker processes should verify the schema, never install it. Tha
 destructive authority to create database objects out of every long-lived process.
 
 ```ts
-import { assertSchemaCompatible } from "@workhorse/core";
+import { assertSchemaCompatible } from "@workhorse-js/core";
 
 await assertSchemaCompatible(pool);
 ```
@@ -113,7 +113,7 @@ When you want the raw values instead of an assertion — for a health endpoint, 
 `readSchemaVersion` and compare against the exported `WORKHORSE_SCHEMA_VERSION` constant.
 
 ```ts
-import { readSchemaVersion, WORKHORSE_SCHEMA_VERSION } from "@workhorse/core";
+import { readSchemaVersion, WORKHORSE_SCHEMA_VERSION } from "@workhorse-js/core";
 
 const installed = await readSchemaVersion(pool); // number, or null when absent
 console.log({ installed, expected: WORKHORSE_SCHEMA_VERSION });

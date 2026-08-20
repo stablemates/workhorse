@@ -15,6 +15,7 @@ import {
 
 const packages = await workspacePackages();
 const core = await corePackage();
+const npmScope = core.name.slice(1, core.name.indexOf("/"));
 
 async function read(relativePath: string): Promise<string> {
   return readFile(path.join(repositoryRoot, relativePath), "utf8");
@@ -31,7 +32,7 @@ describe("the derived package list", () => {
       ...new Set(packages.map((entry) => entry.directory)),
     ]);
     // Core is published too, but is kept first because the other packages consume it.
-    expect(core.name).toBe("@workhorse/core");
+    expect(core.name).toBe("@workhorse-js/core");
     expect((await publishedPackages())[0]).toEqual(core);
   });
 
@@ -86,17 +87,17 @@ describe("published package manifests", () => {
     expect(contractManifest.private).not.toBe(true);
     expect(contractManifest.dependencies).toBeUndefined();
     expect(contractManifest.devDependencies).toEqual({ typescript: "^5.8.3" });
-    expect(coreManifest.dependencies?.["@workhorse/dashboard-contract"]).toBe("workspace:*");
-    expect(coreManifest.peerDependencies?.["@workhorse/dashboard"]).toBe(">=0.1.0 <0.2.0");
-    expect(coreManifest.peerDependenciesMeta?.["@workhorse/dashboard"]?.optional).toBe(true);
-    expect(dashboardManifest.dependencies?.["@workhorse/dashboard-contract"]).toBe("workspace:*");
+    expect(coreManifest.dependencies?.["@workhorse-js/dashboard-contract"]).toBe("workspace:*");
+    expect(coreManifest.peerDependencies?.["@workhorse-js/dashboard"]).toBe(">=0.1.0 <0.2.0");
+    expect(coreManifest.peerDependenciesMeta?.["@workhorse-js/dashboard"]?.optional).toBe(true);
+    expect(dashboardManifest.dependencies?.["@workhorse-js/dashboard-contract"]).toBe("workspace:*");
     expect(dashboardManifest.exports?.["./standalone"]).toEqual({
       "workhorse-source": "./src/server/standalone.ts",
       types: "./dist/server/standalone.d.ts",
       import: "./dist/server/standalone.js",
     });
-    expect(coreDashboardSource).toContain('from "@workhorse/dashboard-contract"');
-    expect(coreDashboardSource).toContain('"@workhorse/dashboard/standalone"');
+    expect(coreDashboardSource).toContain('from "@workhorse-js/dashboard-contract"');
+    expect(coreDashboardSource).toContain('"@workhorse-js/dashboard/standalone"');
     expect(coreDashboardSource).not.toContain('.join("/")');
     expect(coreDashboardSource).not.toContain("interface DashboardServerModule");
     expect(standaloneSource).toContain("DashboardStandaloneModule<Queryable>");
@@ -165,7 +166,7 @@ describe("published package manifests", () => {
       peerDependencies?: Record<string, string>;
     };
 
-    expect(dashboardManifest.peerDependencies?.["@workhorse/core"]).toBe(">=0.1.0 <0.2.0");
+    expect(dashboardManifest.peerDependencies?.["@workhorse-js/core"]).toBe(">=0.1.0 <0.2.0");
     expect(dashboardManifest.version).toBe(core.version);
   });
 
@@ -184,7 +185,7 @@ describe("ORM adapter entry points", () => {
   it.each(adapters)("keeps %s as thin glue over the public core adapter API", async (adapter) => {
     const source = await read(`typescript/${adapter}/src/index.ts`);
     expect(source.trimEnd().split("\n").length).toBeLessThanOrEqual(50);
-    expect(source).not.toMatch(/from ["']@workhorse\/core\//);
+    expect(source).not.toMatch(/from ["']@workhorse-js\/core\//);
     expect(source).not.toMatch(/from ["'](?:\.\.\/)+\.\.\/src\//);
   });
 });
@@ -197,6 +198,17 @@ describe("consumers of the package list", () => {
     );
     expect(loops.length).toBeGreaterThan(0);
     for (const loop of loops) expect(loop).toBe("$(pnpm --silent exec tsx scripts/packages.ts)");
+
+    expect(workflow).toContain(`dist-tarballs/${npmScope}-core-$version.tgz`);
+    expect(workflow).toContain(`dist-tarballs/${npmScope}-$package-$version.tgz`);
+  });
+
+  it("moves scoped dashboard tarballs to stable container artifact names", async () => {
+    const dockerfile = await read("Dockerfile.dashboard");
+    for (const directory of ["core", "dashboard-contract", "dashboard-server"]) {
+      expect(dockerfile).toContain(`/artifacts/${npmScope}-${directory}-*.tgz`);
+    }
+    expect(dockerfile).toContain(`/artifacts/${npmScope}-dashboard-[0-9]*.tgz`);
   });
 
   it("keeps the development build script free of a hand-written package list", async () => {

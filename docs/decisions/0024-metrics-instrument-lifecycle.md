@@ -10,7 +10,7 @@ Core ships two instrumentation layers that fire on the same code paths, each wit
 instrument lifecycle. They are competing strategies, not complementary ones, and consolidating them
 requires picking a survivor.
 
-`typescript/core/src/metrics.ts` uses the **eager** lifecycle. It calls `metrics.getMeter("@workhorse/core")` once at
+`typescript/core/src/metrics.ts` uses the **eager** lifecycle. It calls `metrics.getMeter("@workhorse-js/core")` once at
 module evaluation and creates every instrument immediately at module scope. Emission is a direct
 call on a captured instrument.
 
@@ -62,7 +62,7 @@ The registration-order check is not close:
 time and returns no proxy that re-binds later, unlike the tracing API. An eager module-scope
 instrument created before the application installs its SDK is bound to the no-op provider for the
 lifetime of the process, and every emission through it is silently discarded. This is the ordinary
-case for a library: importing `@workhorse/core` to construct a `Queue` runs `typescript/core/src/metrics.ts` at
+case for a library: importing `@workhorse-js/core` to construct a `Queue` runs `typescript/core/src/metrics.ts` at
 import, which commonly precedes SDK setup.
 
 ## Decision
@@ -80,7 +80,7 @@ Consolidation onto that lifecycle is 0.1b's work. This decision fixes only which
 ## Consequences
 
 - Applications may install their OpenTelemetry SDK at any point relative to importing
-  `@workhorse/core`. Emissions after registration reach the registered provider.
+  `@workhorse-js/core`. Emissions after registration reach the registered provider.
 - Every core metric emission reads the global meter provider. That cost is measured above and
   accepted.
 - Instruments migrated out of `typescript/core/src/metrics.ts` must move to `lazyCounter`, `lazyHistogram`, or an

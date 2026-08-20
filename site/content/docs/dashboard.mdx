@@ -3,7 +3,7 @@ title: Dashboard
 description: Mount the operator interface behind application authorization, or run it standalone with a built-in administrator login.
 ---
 
-`@workhorse/dashboard` gives your operators a full interface — jobs, attempts, checkpoints,
+`@workhorse-js/dashboard` gives your operators a full interface — jobs, attempts, checkpoints,
 schedules, queues, workers, failures, health — without you building a single admin page. It reads
 everything from PostgreSQL, so a dashboard mounted anywhere can observe workers running on
 machines it has never met.
@@ -22,7 +22,7 @@ objects. It answers only for requests under its configured path and returns `nul
 everything else.
 
 ```ts
-import { createDashboardHost } from "@workhorse/dashboard/server";
+import { createDashboardHost } from "@workhorse-js/dashboard/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -45,7 +45,7 @@ app.all("/workhorse/*", async (c) => {
 Connect-style frameworks — Express, Connect, Fastify via `@fastify/middie` — wrap the same host:
 
 ```ts
-import { dashboardNodeMiddleware } from "@workhorse/dashboard/server";
+import { dashboardNodeMiddleware } from "@workhorse-js/dashboard/server";
 
 app.use(dashboardNodeMiddleware(host));
 ```

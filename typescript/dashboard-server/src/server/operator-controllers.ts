@@ -1,5 +1,5 @@
-import type { Queue } from "@workhorse/core";
-import type { Json } from "@workhorse/core";
+import type { Queue } from "@workhorse-js/core";
+import type { Json } from "@workhorse-js/core";
 import type {
   DashboardAuditContext,
   DashboardCancellationAuditContext,

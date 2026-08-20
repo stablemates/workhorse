@@ -19,7 +19,7 @@ lifecycle.
 its adapter — and through it, its database pool — plus one entry per worker.
 
 ```ts title="src/workhorse.worker.ts"
-import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse/core";
+import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse-js/core";
 import { Pool } from "pg";
 import { generateReport, sendEmail } from "./jobs.js";
 

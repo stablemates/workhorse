@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse/typeorm",
+  "name": "@workhorse-js/typeorm",
   "version": "0.1.0",
   "description": "TypeORM provider for Workhorse",
   "homepage": "https://workhorse.run",
@@ -35,12 +35,12 @@
   },
   "devDependencies": {
     "@types/pg": "^8.15.5",
-    "@workhorse/core": "workspace:*",
+    "@workhorse-js/core": "workspace:*",
     "pg": "^8.16.3",
     "typeorm": "0.3.31"
   },
   "peerDependencies": {
-    "@workhorse/core": ">=0.1.0 <1",
+    "@workhorse-js/core": ">=0.1.0 <1",
     "typeorm": ">=0.3 <2"
   },
   "engines": {

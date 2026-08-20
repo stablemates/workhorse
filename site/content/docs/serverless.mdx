@@ -10,7 +10,7 @@ can pass the database rule and still be unable to run a worker.
    renews leases, sends heartbeats, and drains after a termination signal. A request or event
    invocation does not own that lifecycle, so it cannot host the worker loop.
 2. **Database connectivity:** An enqueue producer needs a supported Workhorse client and a
-   PostgreSQL session. Node.js functions can use `@workhorse/core` and `pg` normally. An edge
+   PostgreSQL session. Node.js functions can use `@workhorse-js/core` and `pg` normally. An edge
    runtime may need a platform transport, and transport support alone does not make the published
    Node.js package compatible with that runtime.
 
@@ -19,10 +19,10 @@ can pass the database rule and still be unable to run a worker.
 | Platform              | Runtime                | Can enqueue?                  | Can host a worker?               | What it needs                                                      |
 | --------------------- | ---------------------- | ----------------------------- | -------------------------------- | ------------------------------------------------------------------ |
 | Cloudflare Workers    | Workers isolate        | Not with the published client | No — lifetime and client support | Use a Node.js producer; Hyperdrive only provides the database path |
-| Vercel Functions      | Node.js                | Yes, transactionally          | No — function lifetime           | `@workhorse/core`, `pg`, and ordinary database network access      |
+| Vercel Functions      | Node.js                | Yes, transactionally          | No — function lifetime           | `@workhorse-js/core`, `pg`, and ordinary database network access      |
 | Vercel Functions      | Edge                   | Not with the published client | No — lifetime and connectivity   | Move the route to the Node.js runtime                              |
-| AWS Lambda            | Node.js                | Yes, transactionally          | No — function lifetime           | `@workhorse/core`, `pg`, and a reachable PostgreSQL endpoint       |
-| Cloud Run service     | Node.js, request-based | Yes, transactionally          | No — request lifecycle           | `@workhorse/core`, `pg`, and ordinary database network access      |
+| AWS Lambda            | Node.js                | Yes, transactionally          | No — function lifetime           | `@workhorse-js/core`, `pg`, and a reachable PostgreSQL endpoint       |
+| Cloud Run service     | Node.js, request-based | Yes, transactionally          | No — request lifecycle           | `@workhorse-js/core`, `pg`, and ordinary database network access      |
 | Cloud Run worker pool | Node.js container      | Yes                           | Yes                              | Run the dedicated Workhorse process as a persistent instance       |
 
 "Enqueue" means using a package that this repository publishes today. An HTTP database driver may
@@ -64,7 +64,7 @@ the Hyperdrive binding. Cloudflare's
 [TCP documentation](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/) confirms
 that Hyperdrive carries the PostgreSQL wire protocol and manages connection pooling.
 
-That verifies the database path, but `@workhorse/core` still supports Node.js rather than the
+That verifies the database path, but `@workhorse-js/core` still supports Node.js rather than the
 Workers runtime. Workhorse therefore does not publish a Cloudflare enqueue client today.
 
 Cloudflare also ties execution to an invocation. Its

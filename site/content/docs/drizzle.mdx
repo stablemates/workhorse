@@ -5,7 +5,7 @@ description: Adapt a node-postgres Drizzle database and enqueue jobs inside call
 
 Your application already writes through Drizzle. When a request inserts an account and enqueues a
 follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
-and a committed row with no job is a silent gap. `@workhorse/drizzle` closes that gap: it converts
+and a committed row with no job is a silent gap. `@workhorse-js/drizzle` closes that gap: it converts
 Drizzle's database and transaction objects into the core `Queryable` protocol, so `Queue.enqueue`
 runs inside the same transaction as your Drizzle writes.
 
@@ -17,13 +17,13 @@ owns your tables; Workhorse owns its versioned SQL functions.
 Install the integration beside the Drizzle and node-postgres packages your application uses.
 
 ```bash
-pnpm add @workhorse/drizzle drizzle-orm pg
+pnpm add @workhorse-js/drizzle drizzle-orm pg
 ```
 
 Pass the Drizzle database to `createDrizzleAdapter`.
 
 ```ts
-import { createDrizzleAdapter } from "@workhorse/drizzle";
+import { createDrizzleAdapter } from "@workhorse-js/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 

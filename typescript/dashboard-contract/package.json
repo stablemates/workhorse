@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse/dashboard-contract",
+  "name": "@workhorse-js/dashboard-contract",
   "version": "0.1.0",
   "description": "Compile-time contract between the Workhorse CLI and dashboard package",
   "homepage": "https://workhorse.run",

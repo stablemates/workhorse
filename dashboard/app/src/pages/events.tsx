@@ -3,7 +3,7 @@ import type {
   DashboardEventRow,
   DashboardEventsPage,
   DashboardEventsWindow,
-} from "@workhorse/dashboard-server/wire";
+} from "@workhorse-js/dashboard-server/wire";
 import { isEventTypeFilter, type EventsLocationState } from "../events-location.js";
 import { dashboardAttemptOutcomes, dashboardJobEventTypes } from "../presentation.js";
 import {

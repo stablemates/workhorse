@@ -3,7 +3,7 @@ import {
   dashboardTaskSorts,
   type DashboardTaskFilter,
   type DashboardTaskSort,
-} from "@workhorse/dashboard-server/wire";
+} from "@workhorse-js/dashboard-server/wire";
 
 export const taskPageSizes = [25, 50, 100] as const;
 export type TaskPageSize = (typeof taskPageSizes)[number];

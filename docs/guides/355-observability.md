@@ -21,7 +21,7 @@ capacity are current database state. `WorkhorseMetricsObserver` reads that state
 Run the observer alongside a long-lived service that owns a PostgreSQL pool:
 
 ```ts
-import { WorkhorseMetricsObserver } from "@workhorse/core";
+import { WorkhorseMetricsObserver } from "@workhorse-js/core";
 
 const observer = new WorkhorseMetricsObserver(pool, {
   onError: (error) => logger.error({ error }, "Workhorse metrics collection failed"),
@@ -38,7 +38,7 @@ multiple observers would export duplicate gauges and add unnecessary queries.
 concurrency, dependencies, child jobs, and rate limits alongside queue depth and age:
 
 ```ts
-import { registerQueueMetrics } from "@workhorse/core";
+import { registerQueueMetrics } from "@workhorse-js/core";
 
 const unregisterQueueMetrics = registerQueueMetrics(adapter.queue);
 

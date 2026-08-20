@@ -2,7 +2,7 @@ import { logs, type LogRecord, type LoggerProvider } from "@opentelemetry/api-lo
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import type { Queryable } from "@workhorse/core";
+import type { Queryable } from "@workhorse-js/core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
 import type { DashboardRouter } from "../src/server/router.js";

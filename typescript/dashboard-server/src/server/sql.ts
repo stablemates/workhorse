@@ -1,4 +1,4 @@
-import type { Queryable } from "@workhorse/core";
+import type { Queryable } from "@workhorse-js/core";
 
 export interface DashboardSql {
   readonly text: string;

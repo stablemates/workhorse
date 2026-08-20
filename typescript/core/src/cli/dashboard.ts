@@ -3,10 +3,10 @@ import type {
   DashboardStandaloneModule,
   DashboardStandaloneTarget,
   RunningDashboard,
-} from "@workhorse/dashboard-contract";
+} from "@workhorse-js/dashboard-contract";
 import type { Pool } from "pg";
 
-const dashboardModuleSpecifier: string = "@workhorse/dashboard/standalone";
+const dashboardModuleSpecifier: string = "@workhorse-js/dashboard/standalone";
 
 function isDashboardStandaloneModule<Database>(
   value: unknown,
@@ -29,7 +29,7 @@ async function loadDashboard(): Promise<DashboardStandaloneModule<Pool>> {
     return module;
   } catch (error) {
     throw new Error(
-      "The dashboard command requires @workhorse/dashboard. Install it alongside @workhorse/core.",
+      "The dashboard command requires @workhorse-js/dashboard. Install it alongside @workhorse-js/core.",
       { cause: error },
     );
   }

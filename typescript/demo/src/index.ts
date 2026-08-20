@@ -1,5 +1,5 @@
 import { getRequestListener } from "@hono/node-server";
-import { assertSchemaCompatible, installSchema } from "@workhorse/core";
+import { assertSchemaCompatible, installSchema } from "@workhorse-js/core";
 import { createServer } from "node:http";
 import { Pool } from "pg";
 import {
@@ -15,7 +15,7 @@ import {
   syncDemoSchedules,
 } from "./app.js";
 import { createDemoDatabase } from "./database.js";
-import { createDashboardDevServer } from "@workhorse/dashboard/dev";
+import { createDashboardDevServer } from "@workhorse-js/dashboard/dev";
 import { resolveDemoDatabaseUrl } from "./environment.js";
 import { startDemoMetricsObserver } from "./telemetry.js";
 import { demoLogger } from "./logger.js";
@@ -29,7 +29,7 @@ import { prepareApplicationSchema } from "./schema-preparation.js";
  * dashboard shows is therefore read from PostgreSQL on a bounded polling interval, which is the
  * same constraint a real deployment operates under.
  *
- * It serves the dashboard from `@workhorse/dashboard`, exactly as any consumer would. In
+ * It serves the dashboard from `@workhorse-js/dashboard`, exactly as any consumer would. In
  * development it additionally runs that package's Vite middleware, so the same origin serves the
  * live-compiled UI with hot reload while the HTML still goes through the packaged host. There is no
  * second server and no second URL.

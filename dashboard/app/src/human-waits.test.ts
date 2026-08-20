@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DashboardHumanWaitRow } from "@workhorse/dashboard-server/wire";
+import type { DashboardHumanWaitRow } from "@workhorse-js/dashboard-server/wire";
 import {
   filterExternalWaits,
   humanWaitResultsDirty,

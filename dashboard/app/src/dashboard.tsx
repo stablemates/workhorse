@@ -2,7 +2,7 @@ import type {
   DashboardClient,
   DashboardDemoTools,
   DashboardWorkspaceLink,
-} from "@workhorse/dashboard-server";
+} from "@workhorse-js/dashboard-server";
 import { RefreshBlockerProvider } from "./refresh-blockers.js";
 import { DropdownActivityProvider } from "./dropdown-activity.js";
 import { DashboardClientContext, normalizeBasePath } from "./core.js";

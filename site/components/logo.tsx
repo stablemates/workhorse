@@ -1,5 +1,5 @@
 /**
- * Canonical Workhorse brand assets, copied from `@workhorse/dashboard` so the
+ * Canonical Workhorse brand assets, copied from `@workhorse-js/dashboard` so the
  * site, the operator dashboard, and the demo all present one identity.
  *
  * The source wordmark artwork is light-on-transparent. The dashboard darkens it

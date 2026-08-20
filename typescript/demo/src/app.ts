@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { createDrizzleAdapter } from "@workhorse/drizzle";
+import { createDrizzleAdapter } from "@workhorse-js/drizzle";
 import {
   createDashboardHost,
   createDashboardOperatorControllers,
   normalizeDashboardPublicOrigin,
   type DashboardOperatorAction,
   type DashboardSingleAdminOptions,
-} from "@workhorse/dashboard/server";
+} from "@workhorse-js/dashboard/server";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {
@@ -20,7 +20,7 @@ import {
   type RetentionPolicyDefinition,
   type RetentionPolicySetting,
   isMissingDatabaseRelationError,
-} from "@workhorse/core";
+} from "@workhorse-js/core";
 import type { Pool } from "pg";
 import {
   DURABLE_DEMO_JOB_TYPE,

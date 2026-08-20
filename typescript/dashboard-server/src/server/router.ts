@@ -1,5 +1,5 @@
 import { isProcedure, ORPCError, os } from "@orpc/server";
-import { MAX_JOB_PRIORITY, type Queue } from "@workhorse/core";
+import { MAX_JOB_PRIORITY, type Queue } from "@workhorse-js/core";
 import type {
   CompleteDashboardOptions,
   DashboardDemoFeature,

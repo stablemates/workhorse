@@ -1,9 +1,9 @@
-# `@workhorse/kysely`
+# `@workhorse-js/kysely`
 
 Kysely provider for Workhorse's PostgreSQL protocol.
 
 ```ts
-import { createKyselyAdapter } from "@workhorse/kysely";
+import { createKyselyAdapter } from "@workhorse-js/kysely";
 
 const workhorse = createKyselyAdapter(database, {
   notificationPool: pool,

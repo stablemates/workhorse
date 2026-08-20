@@ -1,5 +1,5 @@
-import { defineWorkerProcess } from "@workhorse/core";
-import { createDrizzleAdapter } from "@workhorse/drizzle";
+import { defineWorkerProcess } from "@workhorse-js/core";
+import { createDrizzleAdapter } from "@workhorse-js/drizzle";
 import { Pool } from "pg";
 import {
   DEMO_QUEUE,

@@ -1,4 +1,4 @@
-import { WorkhorseMetricsObserver, type Queryable } from "@workhorse/core";
+import { WorkhorseMetricsObserver, type Queryable } from "@workhorse-js/core";
 import { demoLogger } from "./logger.js";
 
 /** Start database-wide metric observations only for the OpenTelemetry demo command. */

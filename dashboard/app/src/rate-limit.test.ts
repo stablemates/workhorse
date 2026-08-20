@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DashboardRateLimitPolicySummary } from "@workhorse/dashboard-server/wire";
+import type { DashboardRateLimitPolicySummary } from "@workhorse-js/dashboard-server/wire";
 import { describeRateLimit, describeRateThrottle } from "./rate-limit.js";
 
 const policy: DashboardRateLimitPolicySummary = {

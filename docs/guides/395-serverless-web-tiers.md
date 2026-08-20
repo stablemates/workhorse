@@ -15,9 +15,9 @@ Two independent rules decide what each runtime can do.
 | Platform              | Runtime                 | Enqueue                      | Host a worker | Requirement or boundary                                                                 |
 | --------------------- | ----------------------- | ---------------------------- | ------------- | --------------------------------------------------------------------------------------- |
 | Cloudflare Workers    | Workers isolate         | No with the published client | No            | Hyperdrive provides a PostgreSQL path, but Workhorse does not publish a Workers client. |
-| Vercel Functions      | Node.js                 | Yes, transactionally         | No            | Use `@workhorse/core` and `pg` with ordinary database access.                           |
+| Vercel Functions      | Node.js                 | Yes, transactionally         | No            | Use `@workhorse-js/core` and `pg` with ordinary database access.                           |
 | Vercel Functions      | Edge                    | No with the published client | No            | Move the route to the Node.js runtime.                                                  |
-| AWS Lambda            | Node.js                 | Yes, transactionally         | No            | Use `@workhorse/core` and `pg` with a reachable database.                               |
+| AWS Lambda            | Node.js                 | Yes, transactionally         | No            | Use `@workhorse-js/core` and `pg` with a reachable database.                               |
 | Cloud Run service     | Node.js in request mode | Yes, transactionally         | No            | Keep the worker outside the request lifecycle.                                          |
 | Cloud Run worker pool | Node.js container       | Yes                          | Yes           | Run the dedicated Workhorse process as a persistent instance.                           |
 
@@ -53,7 +53,7 @@ not change the transaction boundary.
 Cloudflare Hyperdrive lets a Workers isolate connect to PostgreSQL through `pg`. It solves the
 transport problem and manages connections on the Cloudflare side.
 
-The published `@workhorse/core` package still supports Node.js rather than the Workers runtime.
+The published `@workhorse-js/core` package still supports Node.js rather than the Workers runtime.
 Hyperdrive therefore does not turn Cloudflare Workers into a supported producer or worker host.
 
 ## Where does the worker run?

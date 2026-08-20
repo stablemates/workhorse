@@ -5,7 +5,7 @@ description: Adapt a TypeORM data source and enqueue jobs through transactional 
 
 Your application already writes through TypeORM. When a request saves an entity and enqueues a
 follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
-and a committed row with no job is a silent gap. `@workhorse/typeorm` closes that gap: it converts
+and a committed row with no job is a silent gap. `@workhorse-js/typeorm` closes that gap: it converts
 TypeORM data sources and transactional entity managers into the core `Queryable` protocol, so
 `Queue.enqueue` runs inside the same transaction as your entity writes.
 
@@ -17,14 +17,14 @@ Workhorse owns its versioned SQL functions.
 Install the integration beside TypeORM.
 
 ```bash
-pnpm add @workhorse/typeorm typeorm
+pnpm add @workhorse-js/typeorm typeorm
 ```
 
 Pass an initialized data source to `createTypeOrmAdapter`. The close callback is optional because
 the adapter does not destroy caller-owned data sources by default.
 
 ```ts
-import { createTypeOrmAdapter } from "@workhorse/typeorm";
+import { createTypeOrmAdapter } from "@workhorse-js/typeorm";
 
 const workhorse = createTypeOrmAdapter(dataSource, {
   close: () => dataSource.destroy(),

@@ -1,9 +1,9 @@
-import type { DashboardSettingsPage } from "@workhorse/dashboard-server/wire";
+import type { DashboardSettingsPage } from "@workhorse-js/dashboard-server/wire";
 import type {
   MaintenancePolicyDefinition,
   MaintenancePolicySetting,
   RetentionPolicySetting,
-} from "@workhorse/core";
+} from "@workhorse-js/core";
 import {
   Accordion,
   Alert,

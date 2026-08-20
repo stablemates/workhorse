@@ -1,10 +1,10 @@
 import { createRequire } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createDrizzleAdapter, DrizzleQueryError } from "@workhorse/drizzle";
-import { createKyselyAdapter, KyselyQueryError } from "@workhorse/kysely";
-import { createPrismaAdapter, PrismaQueryError, type PrismaExecutor } from "@workhorse/prisma";
-import { createTypeOrmAdapter, TypeOrmQueryError } from "@workhorse/typeorm";
-import type { Queue, WorkhorseAdapter } from "@workhorse/core";
+import { createDrizzleAdapter, DrizzleQueryError } from "@workhorse-js/drizzle";
+import { createKyselyAdapter, KyselyQueryError } from "@workhorse-js/kysely";
+import { createPrismaAdapter, PrismaQueryError, type PrismaExecutor } from "@workhorse-js/prisma";
+import { createTypeOrmAdapter, TypeOrmQueryError } from "@workhorse-js/typeorm";
+import type { Queue, WorkhorseAdapter } from "@workhorse-js/core";
 import { sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Kysely, PostgresDialect, sql as kyselySql } from "kysely";

@@ -1,4 +1,4 @@
-import type { DashboardDemoTools, DashboardWorkspaceLink } from "@workhorse/dashboard-server";
+import type { DashboardDemoTools, DashboardWorkspaceLink } from "@workhorse-js/dashboard-server";
 import { Menu, useDropdownActivity } from "../dropdown-activity.js";
 import {
   AppShell,

@@ -48,7 +48,7 @@ are restored, each declared Python version must run this lane before publication
 Node.js is the only supported runtime. Bun and Deno sit in a deliberately weaker tier declared by
 `SMOKE_TESTED_JS_RUNTIMES` in `typescript/core/src/support.ts`: the `runtime-smoke` CI lane runs
 `typescript/core/test/runtime-smoke.ts` — `installSchema`, then an enqueue, claim, and complete
-round-trip through the built `@workhorse/core` entry point — against the newest supported
+round-trip through the built `@workhorse-js/core` entry point — against the newest supported
 PostgreSQL, under the latest release of each runtime. A green lane proves the driver connects, the
 schema installs, and one job completes there. It proves nothing else: the full vitest suites run
 under Node.js only, so this tier carries no correctness claim beyond the round-trip.
@@ -78,11 +78,11 @@ connectivity does not turn a request-scoped function into a worker host.
 
 | Platform              | Runtime                | Enqueue with the published client | Host a worker | Requirement or boundary                                                                                                                                        |
 | --------------------- | ---------------------- | --------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cloudflare Workers    | Workers isolate        | No                                | No            | Hyperdrive provides verified `pg` connectivity under `nodejs_compat`, but `@workhorse/core` supports Node.js, not the Workers runtime. Use a Node.js producer. |
-| Vercel Functions      | Node.js                | Yes                               | No            | Use `@workhorse/core` and `pg` normally. The caller can pass its open `pg` transaction to `Queue.enqueue`.                                                     |
-| Vercel Functions      | Edge                   | No                                | No            | The Edge runtime omits the Node.js APIs required by `pg` and `@workhorse/core`. Move the route to the Node.js runtime.                                         |
-| AWS Lambda            | Node.js                | Yes                               | No            | Use `@workhorse/core` and `pg` over a network path to PostgreSQL. Lambda owns the execution environment lifetime.                                              |
-| Cloud Run service     | Node.js, request-based | Yes                               | No            | Use `@workhorse/core` and `pg` in the request. Request-based CPU allocation and instance scaling cannot own a continuous worker loop.                          |
+| Cloudflare Workers    | Workers isolate        | No                                | No            | Hyperdrive provides verified `pg` connectivity under `nodejs_compat`, but `@workhorse-js/core` supports Node.js, not the Workers runtime. Use a Node.js producer. |
+| Vercel Functions      | Node.js                | Yes                               | No            | Use `@workhorse-js/core` and `pg` normally. The caller can pass its open `pg` transaction to `Queue.enqueue`.                                                     |
+| Vercel Functions      | Edge                   | No                                | No            | The Edge runtime omits the Node.js APIs required by `pg` and `@workhorse-js/core`. Move the route to the Node.js runtime.                                         |
+| AWS Lambda            | Node.js                | Yes                               | No            | Use `@workhorse-js/core` and `pg` over a network path to PostgreSQL. Lambda owns the execution environment lifetime.                                              |
+| Cloud Run service     | Node.js, request-based | Yes                               | No            | Use `@workhorse-js/core` and `pg` in the request. Request-based CPU allocation and instance scaling cannot own a continuous worker loop.                          |
 | Cloud Run worker pool | Node.js container      | Yes                               | Yes           | Run the dedicated Workhorse worker process with at least one worker-pool instance.                                                                             |
 
 We verified these claims on 2026-08-18. A Wrangler 4.124 local Worker used `nodejs_compat`, the
@@ -98,19 +98,19 @@ and explains where to deploy workers when the web tier is serverless.
 
 ## Packages and versioning
 
-Nine packages ship from this repository. `@workhorse/core` is the TypeScript durable queue;
+Nine packages ship from this repository. `@workhorse-js/core` is the TypeScript durable queue;
 `workhorse-pg` is the Python enqueue client; the rest are optional TypeScript packages.
 
 | Package                         | Purpose                                           | Peer requirements                                  |
 | ------------------------------- | ------------------------------------------------- | -------------------------------------------------- |
-| `@workhorse/core`               | Queue, worker, schema, CLI                        | `pg` >= 8.13                                       |
-| `@workhorse/drizzle`            | Drizzle ORM provider                              | `@workhorse/core`, `drizzle-orm` >= 0.45, `pg`     |
-| `@workhorse/prisma`             | Prisma ORM provider                               | `@workhorse/core`, `@prisma/client` >= 6 and < 7   |
-| `@workhorse/typeorm`            | TypeORM provider                                  | `@workhorse/core`, `typeorm` >= 0.3 and < 2        |
-| `@workhorse/kysely`             | Kysely provider                                   | `@workhorse/core`, `kysely` >= 0.29 and < 0.30     |
-| `@workhorse/dashboard`          | Operator dashboard and its framework-neutral host | `@workhorse/core` >= 0.1 and < 0.2, React 19       |
-| `@workhorse/dashboard-server`   | Authenticated standalone dashboard server         | `@workhorse/dashboard-contract`                    |
-| `@workhorse/dashboard-contract` | Type-only dashboard server boundary               | None                                               |
+| `@workhorse-js/core`               | Queue, worker, schema, CLI                        | `pg` >= 8.13                                       |
+| `@workhorse-js/drizzle`            | Drizzle ORM provider                              | `@workhorse-js/core`, `drizzle-orm` >= 0.45, `pg`     |
+| `@workhorse-js/prisma`             | Prisma ORM provider                               | `@workhorse-js/core`, `@prisma/client` >= 6 and < 7   |
+| `@workhorse-js/typeorm`            | TypeORM provider                                  | `@workhorse-js/core`, `typeorm` >= 0.3 and < 2        |
+| `@workhorse-js/kysely`             | Kysely provider                                   | `@workhorse-js/core`, `kysely` >= 0.29 and < 0.30     |
+| `@workhorse-js/dashboard`          | Operator dashboard and its framework-neutral host | `@workhorse-js/core` >= 0.1 and < 0.2, React 19       |
+| `@workhorse-js/dashboard-server`   | Authenticated standalone dashboard server         | `@workhorse-js/dashboard-contract`                    |
+| `@workhorse-js/dashboard-contract` | Type-only dashboard server boundary               | None                                               |
 | `workhorse-pg`                  | Python transactional enqueue client               | Psycopg >= 3.3 and < 4, or asyncpg >= 0.31 and < 1 |
 
 The eight TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
@@ -146,7 +146,7 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
 - **Job payloads are caller-owned JSON.** Workhorse stores and returns them unchanged. Trace context
   and other Workhorse metadata are kept beside the payload, never merged into it.
 - **The dashboard's oRPC transport is private.** It is an implementation detail between
-  `@workhorse/dashboard` and its own client, and it changes without a schema version bump. Do not
+  `@workhorse-js/dashboard` and its own client, and it changes without a schema version bump. Do not
   build against it; the supported operator surface is the `Queue` query API.
 
 The TypeScript client and worker and the Python enqueue client implement this protocol. Python runs
@@ -164,7 +164,7 @@ Every release is a tag, and every tag runs the full check suite before anything 
    if `CHANGELOG.md` has no entry for it.
 3. `pnpm check` runs — format, lint, types, unit and integration tests, the packed-package install
    test, the site smoke test, and the demo smoke test.
-4. Each package is packed and published with `npm publish --provenance`. `@workhorse/core` is
+4. Each package is packed and published with `npm publish --provenance`. `@workhorse-js/core` is
    published first, because the other five declare it as a peer.
 
 **Provenance.** Every published tarball carries an npm provenance attestation linking it to this

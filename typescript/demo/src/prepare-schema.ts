@@ -1,4 +1,4 @@
-import { installSchema, migrateSchema, readSchemaVersion } from "@workhorse/core";
+import { installSchema, migrateSchema, readSchemaVersion } from "@workhorse-js/core";
 import { Pool } from "pg";
 import { installDemoSchema } from "./app.js";
 import { createDemoDatabase } from "./database.js";

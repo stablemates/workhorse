@@ -83,7 +83,7 @@ jobs:
           done
           ls -l dist-tarballs
 
-      # @workhorse/core first: the other packages declare it as a peer, so a failed core publish must
+      # @workhorse-js/core first: the other packages declare it as a peer, so a failed core publish must
       # not leave dependents pointing at a version that does not exist.
       - name: Publish with provenance
         if: startsWith(github.ref, 'refs/tags/v') && inputs.dry-run != true
@@ -91,9 +91,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          npm publish --provenance --access public "dist-tarballs/workhorse-core-$version.tgz"
+          npm publish --provenance --access public "dist-tarballs/workhorse-js-core-$version.tgz"
           for package in $(pnpm --silent exec tsx scripts/packages.ts); do
-            npm publish --provenance --access public "dist-tarballs/workhorse-$package-$version.tgz"
+            npm publish --provenance --access public "dist-tarballs/workhorse-js-$package-$version.tgz"
           done
 
       - uses: actions/upload-artifact@v4

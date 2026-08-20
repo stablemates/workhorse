@@ -8,7 +8,7 @@ import {
   discardBackgroundRefresh,
   type DashboardRefreshIntervalValue,
 } from "../refresh-policy.js";
-import type { DashboardDemoTools } from "@workhorse/dashboard-server";
+import type { DashboardDemoTools } from "@workhorse-js/dashboard-server";
 import {
   dashboardRefreshBlockers,
   useRefreshBlocker,
@@ -31,7 +31,7 @@ import type {
   DashboardJobDetail,
   DashboardSystemWindow,
   DashboardTaskCounts,
-} from "@workhorse/dashboard-server/wire";
+} from "@workhorse-js/dashboard-server/wire";
 import {
   cancelResultAppliesTo,
   clearPendingCancel,
@@ -46,7 +46,7 @@ import {
 } from "../events-location.js";
 import { taskDetailNavigation, taskListingKey } from "../task-location.js";
 import { notifyCancel, notifyDashboard, notifyFailure } from "../notifications.js";
-import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@workhorse/core";
+import type { MaintenancePolicyDefinition, MaintenancePolicySetting } from "@workhorse-js/core";
 import { requestRunNow, type RunNowFeedback } from "../run-now.js";
 import { Button, Center, Loader, Stack, Text } from "@mantine/core";
 import { WarningCircle } from "@phosphor-icons/react";

@@ -6,9 +6,9 @@ import type {
   MaintenancePolicySetting,
   RetentionPolicyDefinition,
   RetentionPolicySetting,
-} from "@workhorse/core";
-import type { SendSignalStatus } from "@workhorse/core";
-import type { CompleteHumanWaitStatus } from "@workhorse/core";
+} from "@workhorse-js/core";
+import type { SendSignalStatus } from "@workhorse-js/core";
+import type { CompleteHumanWaitStatus } from "@workhorse-js/core";
 import type {
   DashboardDemoFeature,
   DashboardDemoJobKind,

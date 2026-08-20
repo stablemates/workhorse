@@ -8,7 +8,7 @@ rebuild the report. The moment that work moves to a separate broker, you have tw
 disagree — an order row without its job, or a job for an order that rolled back.
 
 Workhorse removes the second system. It is a durable job queue built from PostgreSQL tables and
-versioned SQL functions, driven by the `@workhorse/core` TypeScript library. There is no broker, no
+versioned SQL functions, driven by the `@workhorse-js/core` TypeScript library. There is no broker, no
 Redis, and no PostgreSQL extension — one database owns your business data, your queued work, your
 execution state, and the evidence of what happened.
 
@@ -19,7 +19,7 @@ job exists; if it rolls back, PostgreSQL removes the business write and the job 
 
 ```ts
 import { Pool } from "pg";
-import { Queue } from "@workhorse/core";
+import { Queue } from "@workhorse-js/core";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const queue = new Queue(pool);
@@ -44,7 +44,7 @@ after a crash. Named checkpoints make that safe. If a handler restarts, `ctx.che
 each completed stage's stored result instead of running it again.
 
 ```ts
-import { Worker } from "@workhorse/core";
+import { Worker } from "@workhorse-js/core";
 
 const worker = new Worker(queue).handle("order.fulfill", async (payload, ctx) => {
   const charge = await ctx.checkpoint("charge", () => chargeCard(payload.orderId));
@@ -72,14 +72,14 @@ independently of your database, a dedicated broker remains the right tool.
 
 ## Which package do I need?
 
-- `@workhorse/core` provides `Queue`, `Worker`, schema tools, process orchestration, and the CLI.
-- `@workhorse/dashboard` provides the operator interface and its framework-neutral server host.
-- `@workhorse/drizzle` adapts Drizzle databases and transactions to the core `Queryable` protocol.
-- `@workhorse/prisma` adapts Prisma clients and interactive transactions.
-- `@workhorse/typeorm` adapts TypeORM data sources and transactional entity managers.
-- `@workhorse/kysely` adapts Kysely databases and transactions.
+- `@workhorse-js/core` provides `Queue`, `Worker`, schema tools, process orchestration, and the CLI.
+- `@workhorse-js/dashboard` provides the operator interface and its framework-neutral server host.
+- `@workhorse-js/drizzle` adapts Drizzle databases and transactions to the core `Queryable` protocol.
+- `@workhorse-js/prisma` adapts Prisma clients and interactive transactions.
+- `@workhorse-js/typeorm` adapts TypeORM data sources and transactional entity managers.
+- `@workhorse-js/kysely` adapts Kysely databases and transactions.
 
-Most applications start with `@workhorse/core` plus the `pg` driver. Add an adapter only when you
+Most applications start with `@workhorse-js/core` plus the `pg` driver. Add an adapter only when you
 want to enqueue inside your ORM's transactions.
 
 ## Next

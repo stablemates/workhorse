@@ -1,7 +1,7 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import type { Queryable } from "@workhorse/core";
+import type { Queryable } from "@workhorse-js/core";
 import { describe, expect, it } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
 import {

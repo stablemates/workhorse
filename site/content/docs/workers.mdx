@@ -14,7 +14,7 @@ serve many types. Each handler receives the payload and a `HandlerContext`, and 
 result that becomes the job's durable outcome.
 
 ```ts
-import { Worker } from "@workhorse/core";
+import { Worker } from "@workhorse-js/core";
 
 const worker = new Worker(queue, { queues: ["email", "billing"], concurrency: 5 })
   .handle("email.send", async (payload: { to: string }, ctx) => {
@@ -97,7 +97,7 @@ their own process. `defineWorkerProcess` describes the adapter and workers; the
 `workhorse worker` CLI loads the compiled definition and adds signal handling and supervision.
 
 ```ts
-import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse/core";
+import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse-js/core";
 
 export default defineWorkerProcess({
   adapter: () => createWorkhorseAdapter(adapterOptions),

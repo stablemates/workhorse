@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse/dashboard-server",
+  "name": "@workhorse-js/dashboard-server",
   "version": "0.1.0",
   "description": "Node.js backend for the Workhorse operator dashboard",
   "homepage": "https://workhorse.run",
@@ -58,15 +58,15 @@
     "@opentelemetry/api-logs": "0.221.0",
     "@orpc/client": "^1.14.8",
     "@orpc/server": "^1.14.8",
-    "@workhorse/dashboard-contract": "workspace:*",
+    "@workhorse-js/dashboard-contract": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@workhorse/core": "workspace:*",
+    "@workhorse-js/core": "workspace:*",
     "typescript": "^5.8.3"
   },
   "peerDependencies": {
-    "@workhorse/core": ">=0.1.0 <0.2.0"
+    "@workhorse-js/core": ">=0.1.0 <0.2.0"
   },
   "engines": {
     "node": ">=22"

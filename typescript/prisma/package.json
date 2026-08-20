@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse/prisma",
+  "name": "@workhorse-js/prisma",
   "version": "0.1.0",
   "description": "Prisma ORM provider for Workhorse",
   "homepage": "https://workhorse.run",
@@ -36,13 +36,13 @@
   "devDependencies": {
     "@prisma/client": "6.19.3",
     "@types/pg": "^8.15.5",
-    "@workhorse/core": "workspace:*",
+    "@workhorse-js/core": "workspace:*",
     "pg": "^8.16.3",
     "prisma": "6.19.3"
   },
   "peerDependencies": {
     "@prisma/client": ">=6 <7",
-    "@workhorse/core": ">=0.1.0 <1"
+    "@workhorse-js/core": ">=0.1.0 <1"
   },
   "engines": {
     "node": ">=22"

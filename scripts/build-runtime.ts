@@ -56,16 +56,16 @@ const packageAt = (name: string) => {
   if (!entry) throw new Error(`Missing workspace package ${name}`);
   return entry;
 };
-const dashboardContract = packageAt("@workhorse/dashboard-contract");
-const dashboardServer = packageAt("@workhorse/dashboard-server");
+const dashboardContract = packageAt("@workhorse-js/dashboard-contract");
+const dashboardServer = packageAt("@workhorse-js/dashboard-server");
 const compatibilityFacades = packages.filter(
-  (entry) => manifests.get(entry.location)?.dependencies?.["@workhorse/dashboard-server"],
+  (entry) => manifests.get(entry.location)?.dependencies?.["@workhorse-js/dashboard-server"],
 );
 const adapters = packages.filter((entry) => {
   const manifest = manifests.get(entry.location);
   return (
-    manifest?.peerDependencies?.["@workhorse/core"] !== undefined &&
-    manifest.dependencies?.["@workhorse/dashboard-contract"] === undefined &&
+    manifest?.peerDependencies?.["@workhorse-js/core"] !== undefined &&
+    manifest.dependencies?.["@workhorse-js/dashboard-contract"] === undefined &&
     !compatibilityFacades.includes(entry)
   );
 });

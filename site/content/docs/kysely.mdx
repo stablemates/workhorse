@@ -5,7 +5,7 @@ description: Adapt a Kysely database and enqueue jobs inside caller-owned transa
 
 Your application already writes through Kysely. When a request inserts a row and enqueues a
 follow-up job, those two writes must commit together — a job for a row that rolled back is a bug,
-and a committed row with no job is a silent gap. `@workhorse/kysely` closes that gap: it converts
+and a committed row with no job is a silent gap. `@workhorse-js/kysely` closes that gap: it converts
 Kysely databases and transactions into the core `Queryable` protocol, so `Queue.enqueue` runs
 inside the same transaction as your Kysely writes.
 
@@ -17,7 +17,7 @@ owns its versioned SQL functions.
 Install the integration beside Kysely and node-postgres.
 
 ```bash
-pnpm add @workhorse/kysely kysely pg
+pnpm add @workhorse-js/kysely kysely pg
 ```
 
 Pass the database to `createKyselyAdapter`. Kysely's `PostgresDialect` already holds a
@@ -25,7 +25,7 @@ node-postgres pool, so if the same process runs workers, pass that pool as `noti
 workers then reserve a connection for `LISTEN/NOTIFY` and pick up new jobs immediately.
 
 ```ts
-import { createKyselyAdapter } from "@workhorse/kysely";
+import { createKyselyAdapter } from "@workhorse-js/kysely";
 import { Kysely, PostgresDialect } from "kysely";
 import { Pool } from "pg";
 

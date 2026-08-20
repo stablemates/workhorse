@@ -1,4 +1,4 @@
-import type { Json, RetryPolicy } from "@workhorse/core";
+import type { Json, RetryPolicy } from "@workhorse-js/core";
 import type {
   DashboardCancellationRequest,
   DashboardCancelStatus,
@@ -10,11 +10,11 @@ import type {
   DashboardRunNowStatus,
   CompleteDashboardOptions,
   IdempotencyEvidence,
-} from "@workhorse/dashboard-server/wire";
+} from "@workhorse-js/dashboard-server/wire";
 import {
   dashboardAttemptOutcomes as wireAttemptOutcomes,
   dashboardJobEventTypes as wireJobEventTypes,
-} from "@workhorse/dashboard-server/wire";
+} from "@workhorse-js/dashboard-server/wire";
 
 export const dashboardJobEventTypes = wireJobEventTypes;
 export const dashboardAttemptOutcomes = wireAttemptOutcomes;

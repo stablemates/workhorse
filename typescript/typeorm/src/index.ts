@@ -6,7 +6,7 @@ import {
   type ProviderAdapterOptions,
   type Queryable,
   type WorkhorseAdapter,
-} from "@workhorse/core";
+} from "@workhorse-js/core";
 import type { QueryResultRow } from "pg";
 
 /** Public subset shared by TypeORM DataSource and transactional EntityManager objects. */

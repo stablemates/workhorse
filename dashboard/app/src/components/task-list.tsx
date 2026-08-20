@@ -4,7 +4,7 @@ import type {
   DashboardTaskFacets,
   DashboardTaskFilter,
   DashboardTasksPage,
-} from "@workhorse/dashboard-server/wire";
+} from "@workhorse-js/dashboard-server/wire";
 import {
   ActionIcon,
   Badge,

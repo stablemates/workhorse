@@ -1,4 +1,4 @@
-import type { MaintenancePolicy, QueueHealth, RetentionPolicy } from "@workhorse/core";
+import type { MaintenancePolicy, QueueHealth, RetentionPolicy } from "@workhorse-js/core";
 import { describe, expect, it } from "vitest";
 import { deriveSettingsRecommendations } from "./settings-recommendations.js";
 

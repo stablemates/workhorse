@@ -1,5 +1,5 @@
-import { expectOneRow } from "@workhorse/core";
-import type { Queue, RetryPolicy } from "@workhorse/core";
+import { expectOneRow } from "@workhorse-js/core";
+import type { Queue, RetryPolicy } from "@workhorse-js/core";
 import {
   DashboardActivityBucket,
   DashboardActivityGroupBy,
@@ -1440,7 +1440,7 @@ function dashboardRetention(health: QueueHealthSnapshot): DashboardSystemRetenti
  * Project core health reasons into operator-facing English.
  *
  * Which conditions degrade and which are critical is decided by `evaluateQueueHealth` in
- * `@workhorse/core`, with its budgets; this function only words the result. Retention-lag reasons
+ * `@workhorse-js/core`, with its budgets; this function only words the result. Retention-lag reasons
  * arrive one per late category and are folded into a single sentence.
  */
 export function healthCheckMessages(health: Pick<QueueHealthSnapshot, "status">): {

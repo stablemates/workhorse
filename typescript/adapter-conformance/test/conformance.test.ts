@@ -4,25 +4,25 @@ import {
   DrizzleQueryError,
   drizzleQueryable,
   type DrizzleExecutor,
-} from "@workhorse/drizzle";
+} from "@workhorse-js/drizzle";
 import {
   createKyselyAdapter,
   KyselyQueryError,
   kyselyQueryable,
   type KyselyExecutor,
-} from "@workhorse/kysely";
+} from "@workhorse-js/kysely";
 import {
   createPrismaAdapter,
   PrismaQueryError,
   prismaQueryable,
   type PrismaExecutor,
-} from "@workhorse/prisma";
+} from "@workhorse-js/prisma";
 import {
   createTypeOrmAdapter,
   TypeOrmQueryError,
   typeOrmQueryable,
   type TypeOrmExecutor,
-} from "@workhorse/typeorm";
+} from "@workhorse-js/typeorm";
 import {
   type AdapterNotificationPool,
   EnqueueIdempotencyConflictError,
@@ -31,7 +31,7 @@ import {
   type Queryable,
   type Queue,
   type WorkhorseAdapter,
-} from "@workhorse/core";
+} from "@workhorse-js/core";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Kysely, PostgresDialect, sql as kyselySql } from "kysely";

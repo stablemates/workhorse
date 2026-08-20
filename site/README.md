@@ -1,4 +1,4 @@
-# @workhorse/site
+# @workhorse-js/site
 
 The documentation site: a TanStack Start app serving the landing page at `/`
 and the Fumadocs-rendered product documentation under `/docs`. Content rules

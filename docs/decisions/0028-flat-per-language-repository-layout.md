@@ -19,7 +19,7 @@ and it already exists here.
 
 The TypeScript package also occupied the repository root, where its `package.json` served three
 roles at once: pnpm workspace root, script catalogue, and npm publish manifest for
-`@workhorse/core`.
+`@workhorse-js/core`.
 
 ## Decision
 
@@ -30,7 +30,7 @@ implements only orchestration around them.
 The repository adopts one top-level directory per language beside language-neutral roots:
 
 - `typescript/` — all JavaScript/TypeScript code: `typescript/core` (published as
-  `@workhorse/core`; the npm name does not change), the dashboard server, the ORM adapter
+  `@workhorse-js/core`; the npm name does not change), the dashboard server, the ORM adapter
   packages, the demo, and the examples. The directory is named for the language, not `node/`,
   because the runtime support matrix (Node, Bun, Deno) is wider than one runtime.
 - `python/`, `go/`, and later `rust/` — one directory per SDK, each self-contained with its own
@@ -69,4 +69,4 @@ repository.
 - The most-edited code gains a path prefix, and documentation that names `typescript/core/src/` paths needs a
   one-time mechanical sweep.
 - Contributors clone every toolchain, and continuous integration must filter lanes by path.
-- npm consumers see no change; `@workhorse/core` keeps its name and contents.
+- npm consumers see no change; `@workhorse-js/core` keeps its name and contents.

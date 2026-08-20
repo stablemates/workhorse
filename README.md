@@ -74,7 +74,7 @@ Workhorse is available under the [MIT License](LICENSE).
 - a durable worker registry that discovers the live fleet, reports declared concurrency, slot use,
   and draining, and carries cooperative operator pause to workers in any process;
 - separate Drizzle, Prisma, TypeORM, and Kysely integration packages;
-- a separately packaged `@workhorse/dashboard` React operator dashboard with a framework-neutral
+- a separately packaged `@workhorse-js/dashboard` React operator dashboard with a framework-neutral
   request host, a Connect-style Node bridge, an injected transport-neutral client boundary,
   package-owned styles/assets, and audited local controls;
 - `workhorse init` project scaffolding, `workhorse schema install`/`status`, and a standalone
@@ -552,7 +552,7 @@ so existing development databases must be reset before version 40 processes star
 
 ```ts
 import { Pool } from "pg";
-import { installSchema, Queue, Worker } from "@workhorse/core";
+import { installSchema, Queue, Worker } from "@workhorse-js/core";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 await installSchema(pool);
@@ -670,11 +670,11 @@ one-second maintenance cadence makes sub-second durable waits inefficient. Use
 
 ### Database provider packages
 
-`@workhorse/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
+`@workhorse-js/drizzle` adapts node-postgres Drizzle databases and caller-owned transactions without
 adding Drizzle to the core package:
 
 ```ts
-import { createDrizzleAdapter } from "@workhorse/drizzle";
+import { createDrizzleAdapter } from "@workhorse-js/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 const db = drizzle({ client: pool });
@@ -686,13 +686,13 @@ await db.transaction(async (tx) => {
 });
 ```
 
-`@workhorse/prisma`, `@workhorse/typeorm`, and `@workhorse/kysely` expose the same transaction
+`@workhorse-js/prisma`, `@workhorse-js/typeorm`, and `@workhorse-js/kysely` expose the same transaction
 boundary through each provider's transaction object. Their workers can use an explicitly supplied
 node-postgres pool for notification-assisted dispatch, or poll when no pool is available.
 
 ### Mounting the dashboard on any framework
 
-Dashboard behavior lives in a framework-neutral host in `@workhorse/dashboard/server` that takes a
+Dashboard behavior lives in a framework-neutral host in `@workhorse-js/dashboard/server` that takes a
 `Request` and returns a `Response`, or `null` when the request is not its own. Fetch-native hosts
 (Hono, Next.js route handlers, SvelteKit, Nitro) call `host.handle(request)` directly;
 Connect-style hosts (Express, Connect, Fastify via `@fastify/middie`) use `dashboardNodeMiddleware`.

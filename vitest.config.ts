@@ -20,7 +20,7 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        find: "@workhorse/core/version",
+        find: "@workhorse-js/core/version",
         replacement: fileURLToPath(new URL("./typescript/core/src/version.ts", import.meta.url)),
       },
       {

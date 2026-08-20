@@ -1,4 +1,4 @@
-import type { DashboardWorkersPage } from "@workhorse/dashboard-server/wire";
+import type { DashboardWorkersPage } from "@workhorse-js/dashboard-server/wire";
 import {
   Alert,
   Badge,

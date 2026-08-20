@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { taskRowActionGroups, type TaskRowAction } from "./presentation.js";
-import type { DashboardJobRow } from "@workhorse/dashboard-server/wire";
+import type { DashboardJobRow } from "@workhorse-js/dashboard-server/wire";
 
 function row(overrides: Partial<DashboardJobRow> = {}): DashboardJobRow {
   return {

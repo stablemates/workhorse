@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Queryable } from "@workhorse/core";
+import type { Queryable } from "@workhorse-js/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDashboardServer } from "../src/server/standalone.js";
 

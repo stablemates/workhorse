@@ -1,5 +1,5 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import type { DashboardSingleAdminOptions } from "@workhorse/dashboard-contract";
+import type { DashboardSingleAdminOptions } from "@workhorse-js/dashboard-contract";
 
 const SESSION_COOKIE = "__Host-workhorse-dashboard-session";
 const DEFAULT_SESSION_TTL_SECONDS = 8 * 60 * 60;

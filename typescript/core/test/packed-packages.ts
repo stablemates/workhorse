@@ -94,9 +94,9 @@ try {
     if (!entry) throw new Error(`${name} is not a published package`);
     return path.join(tarballs, entry.tarball);
   };
-  const coreTarball = tarballFor("@workhorse/core");
-  const dashboardTarball = tarballFor("@workhorse/dashboard");
-  const dashboardServerTarball = tarballFor("@workhorse/dashboard-server");
+  const coreTarball = tarballFor("@workhorse-js/core");
+  const dashboardTarball = tarballFor("@workhorse-js/dashboard");
+  const dashboardServerTarball = tarballFor("@workhorse-js/dashboard-server");
   const dashboardContainer = await readFile(path.join(repository, "Dockerfile.dashboard"), "utf8");
   for (const artifact of [
     "workhorse-core.tgz",
@@ -243,18 +243,18 @@ try {
   );
   await writeFile(
     path.join(consumer, "type-smoke.ts"),
-    `import { createDrizzleAdapter } from "@workhorse/drizzle";
-import { createPrismaAdapter } from "@workhorse/prisma";
-import { createTypeOrmAdapter } from "@workhorse/typeorm";
-import { createKyselyAdapter } from "@workhorse/kysely";
-import { defineWorkerProcess } from "@workhorse/core";
-import type { DashboardClient, DashboardProps } from "@workhorse/dashboard";
-import { createDashboardHost, dashboardNodeMiddleware } from "@workhorse/dashboard/server";
-import type { DashboardNodeMiddleware } from "@workhorse/dashboard/server";
-import { startDashboardServer as startStandaloneDashboard } from "@workhorse/dashboard/standalone";
-import type { DashboardCommandOptions, DashboardStandaloneModule } from "@workhorse/dashboard-contract";
-import type { DashboardTaskCounts } from "@workhorse/dashboard/wire";
-import { describeRetryPolicy } from "@workhorse/dashboard/presentation";
+    `import { createDrizzleAdapter } from "@workhorse-js/drizzle";
+import { createPrismaAdapter } from "@workhorse-js/prisma";
+import { createTypeOrmAdapter } from "@workhorse-js/typeorm";
+import { createKyselyAdapter } from "@workhorse-js/kysely";
+import { defineWorkerProcess } from "@workhorse-js/core";
+import type { DashboardClient, DashboardProps } from "@workhorse-js/dashboard";
+import { createDashboardHost, dashboardNodeMiddleware } from "@workhorse-js/dashboard/server";
+import type { DashboardNodeMiddleware } from "@workhorse-js/dashboard/server";
+import { startDashboardServer as startStandaloneDashboard } from "@workhorse-js/dashboard/standalone";
+import type { DashboardCommandOptions, DashboardStandaloneModule } from "@workhorse-js/dashboard-contract";
+import type { DashboardTaskCounts } from "@workhorse-js/dashboard/wire";
+import { describeRetryPolicy } from "@workhorse-js/dashboard/presentation";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import type { DataSource, EntityManager } from "typeorm";
@@ -336,11 +336,11 @@ datasource db {
     path.join(consumer, "dashboard-auth.mjs"),
     `import assert from "node:assert/strict";
 import { scryptSync } from "node:crypto";
-import { createDashboardClient } from "@workhorse/dashboard/client";
-import { createDashboardHost } from "@workhorse/dashboard/server";
+import { createDashboardClient } from "@workhorse-js/dashboard/client";
+import { createDashboardHost } from "@workhorse-js/dashboard/server";
 
 globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
-const { Dashboard } = await import("@workhorse/dashboard");
+const { Dashboard } = await import("@workhorse-js/dashboard");
 assert.equal(typeof Dashboard, "function");
 const salt = Buffer.from("packed-dashboard-auth-salt");
 const passwordHash = \`scrypt-v1$\${salt.toString("base64url")}$\${scryptSync("correct horse", salt, 32).toString("base64url")}\`;
@@ -440,7 +440,7 @@ assert.equal(loggedOut.status, 302);
   await writeFile(
     path.join(consumer, "dashboard-development.mjs"),
     `import assert from "node:assert/strict";
-import { createDashboardDevServer } from "@workhorse/dashboard/dev";
+import { createDashboardDevServer } from "@workhorse-js/dashboard/dev";
 
 const development = await createDashboardDevServer();
 try {
@@ -473,7 +473,7 @@ await new Promise((resolve) => portServer.close(resolve));
 const salt = Buffer.from("packed-standalone-auth-salt");
 const passwordHash = \`scrypt-v1$\${salt.toString("base64url")}$\${scryptSync("correct horse", salt, 32).toString("base64url")}\`;
 const child = spawn(process.execPath, [
-  "node_modules/@workhorse/core/dist/src/cli/workhorse.js",
+  "node_modules/@workhorse-js/core/dist/src/cli/workhorse.js",
   "dashboard",
   "--database-url",
   "postgres://unused:unused@127.0.0.1:1/unused",
@@ -524,7 +524,7 @@ try {
   await run("pnpm", ["exec", "tsc", "-p", "tsconfig.json"], consumer);
   const cliHelp = await run(
     "node",
-    ["node_modules/@workhorse/core/dist/src/cli/workhorse.js", "--help"],
+    ["node_modules/@workhorse-js/core/dist/src/cli/workhorse.js", "--help"],
     consumer,
   );
   if (!cliHelp.includes("worker") || !cliHelp.includes("health") || !cliHelp.includes("bench")) {

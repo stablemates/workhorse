@@ -9,7 +9,7 @@ import {
   idempotencyEventDetailKeys,
   readIdempotencyEvidence,
   type IdempotencyEvidence,
-} from "@workhorse/dashboard-server/wire";
+} from "@workhorse-js/dashboard-server/wire";
 
 const rawKey = "order-9f3a-super-secret-caller-key";
 

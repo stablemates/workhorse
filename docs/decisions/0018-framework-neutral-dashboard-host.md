@@ -7,7 +7,7 @@
 
 ## Context
 
-The mountable dashboard lived in `@workhorse/hono` as roughly 200 lines, of which only about 40 were Hono-specific route registrations. Asset serving, HTML templating, runtime-configuration injection, oRPC prefixing, and the SSE stream were already written against Web `Request`/`Response` but were reachable only through Hono.
+The mountable dashboard lived in `@workhorse-js/hono` as roughly 200 lines, of which only about 40 were Hono-specific route registrations. Asset serving, HTML templating, runtime-configuration injection, oRPC prefixing, and the SSE stream were already written against Web `Request`/`Response` but were reachable only through Hono.
 
 The mount also required a `HonoWorkhorse` — a worker-lifecycle object — purely to reach a database connection and a `Queue`. Mounting an admin page therefore meant constructing a worker runtime, which contradicted the topology in ADR 0012.
 
@@ -15,15 +15,15 @@ Separately, the demo's development mode reimplemented the HTML contract in its o
 
 ## Decision
 
-Dashboard behavior lives in `createDashboardHost` in `@workhorse/dashboard/server`. It takes a `Request` and returns a `Response`, or `null` when the request does not belong to its mount path, so a host falls through to its own routing untouched.
+Dashboard behavior lives in `createDashboardHost` in `@workhorse-js/dashboard/server`. It takes a `Request` and returns a `Response`, or `null` when the request does not belong to its mount path, so a host falls through to its own routing untouched.
 
-`@workhorse/hono` becomes a thin binding that maps the host's mount path onto Hono routes, and drops its `@orpc/server` dependency.
+`@workhorse-js/hono` becomes a thin binding that maps the host's mount path onto Hono routes, and drops its `@orpc/server` dependency.
 
 Three further consequences follow from making the host the single owner:
 
 - **`dashboardNodeMiddleware`** adapts the host to Connect-style hosts, so Express, Connect, and Fastify integrate without new packages. Fetch-native hosts — Hono, Next.js route handlers, SvelteKit, Nitro — call `handle` directly.
 - **`renderDashboardHtml`** is the one implementation of the HTML contract. The request host and any development server share it, so adding a runtime field reaches every caller rather than silently applying to one.
-- **`createDashboardDevServer`** in `@workhorse/dashboard/dev` runs Vite in middleware mode against this package's own browser entry. A host mounts its middlewares and passes it as `dev`, and one origin then serves the live-compiled UI with hot reload while the page is still assembled by the same host a production consumer runs. `vite` is an optional peer, loaded on demand.
+- **`createDashboardDevServer`** in `@workhorse-js/dashboard/dev` runs Vite in middleware mode against this package's own browser entry. A host mounts its middlewares and passes it as `dev`, and one origin then serves the live-compiled UI with hot reload while the page is still assembled by the same host a production consumer runs. `vite` is an optional peer, loaded on demand.
 
 ### The mount takes a connection, not a connection string
 
@@ -39,7 +39,7 @@ The standalone `workhorse dashboard` CLI is the deliberate exception: it owns it
 - Adding a framework means writing route registration, not reimplementing the dashboard. Lifecycle integration — transactional enqueue, startup, graceful shutdown — remains the real per-framework work.
 - The demo is a plain consumer: no Vite config, no browser entry, no React dependency, and no path a real application could not copy.
 - Development and production differ only in where modules come from. The HTML is assembled by the same code in both.
-- `@workhorse/core` gained a `dashboard` command without installing `@workhorse/dashboard` for worker-only users. The type-only `@workhorse/dashboard-contract` package now defines the standalone entry point without depending on either package. Core loads the optional `@workhorse/dashboard/standalone` entry, while dashboard implements the shared contract, so package checks replace the former runtime-built specifier and copied structural types.
+- `@workhorse-js/core` gained a `dashboard` command without installing `@workhorse-js/dashboard` for worker-only users. The type-only `@workhorse-js/dashboard-contract` package now defines the standalone entry point without depending on either package. Core loads the optional `@workhorse-js/dashboard/standalone` entry, while dashboard implements the shared contract, so package checks replace the former runtime-built specifier and copied structural types.
 
 ## Non-goals
 

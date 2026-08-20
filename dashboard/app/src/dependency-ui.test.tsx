@@ -2,7 +2,7 @@ import { MantineProvider } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { DashboardJobDetail } from "@workhorse/dashboard-server/wire";
+import type { DashboardJobDetail } from "@workhorse-js/dashboard-server/wire";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },

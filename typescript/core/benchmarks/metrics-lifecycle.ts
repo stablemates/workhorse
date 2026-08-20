@@ -24,7 +24,7 @@ import {
 } from "@opentelemetry/sdk-metrics";
 import { summarizeNumbers, type NumericSummary } from "./statistics.js";
 
-const INSTRUMENTATION_NAME = "@workhorse/benchmark.metrics-lifecycle";
+const INSTRUMENTATION_NAME = "@workhorse-js/benchmark.metrics-lifecycle";
 
 export type MetricsLifecycleName = "eager" | "lazy";
 export type MetricsProviderState = "off" | "on";

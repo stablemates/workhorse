@@ -6,7 +6,7 @@ import {
   type ProviderAdapterOptions,
   type Queryable,
   type WorkhorseAdapter,
-} from "@workhorse/core";
+} from "@workhorse-js/core";
 import type { SQL } from "drizzle-orm";
 import { executeDrizzle } from "./query.js";
 

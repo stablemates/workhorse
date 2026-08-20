@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse/kysely",
+  "name": "@workhorse-js/kysely",
   "version": "0.1.0",
   "description": "Kysely provider for Workhorse",
   "homepage": "https://workhorse.run",
@@ -35,12 +35,12 @@
   },
   "devDependencies": {
     "@types/pg": "^8.15.5",
-    "@workhorse/core": "workspace:*",
+    "@workhorse-js/core": "workspace:*",
     "kysely": "0.29.5",
     "pg": "^8.16.3"
   },
   "peerDependencies": {
-    "@workhorse/core": ">=0.1.0 <1",
+    "@workhorse-js/core": ">=0.1.0 <1",
     "kysely": ">=0.29 <0.30"
   },
   "engines": {

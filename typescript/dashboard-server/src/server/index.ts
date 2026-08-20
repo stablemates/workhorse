@@ -16,7 +16,7 @@ export type {
   DashboardPrincipal,
   DashboardWorkspaceOptions,
 } from "./host.js";
-export type { DashboardSingleAdminOptions } from "@workhorse/dashboard-contract";
+export type { DashboardSingleAdminOptions } from "@workhorse-js/dashboard-contract";
 export { dashboardNodeMiddleware, normalizeDashboardPublicOrigin } from "./node.js";
 export type { DashboardNodeMiddlewareOptions } from "./node.js";
 export type { DashboardNodeMiddleware } from "./node.js";

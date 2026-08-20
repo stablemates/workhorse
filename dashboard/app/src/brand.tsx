@@ -1,5 +1,5 @@
 import { Box, Group, Text, type BoxProps } from "@mantine/core";
-import { WORKHORSE_VERSION } from "@workhorse/core/version";
+import { WORKHORSE_VERSION } from "@workhorse-js/core/version";
 const workhorseMarkUrl = new URL("./assets/workhorse-mark.svg", import.meta.url).href;
 const workhorseWordmarkUrl = new URL("./assets/workhorse-wordmark.svg", import.meta.url).href;
 

@@ -42,7 +42,7 @@ Two boundaries keep this matrix small:
 | Compatibility refusal before mutation      | Supported  | Supported | Planned |
 | SQL protocol conformance fixtures executed | Supported  | Supported | Planned |
 
-The TypeScript client is `@workhorse/core` (`Queue`); the Python client is `workhorse-pg`
+The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `workhorse-pg`
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg). The Go module has executor adapters and a
 compatibility gate, but its enqueue API remains Planned under [WH-228].
 Python can define and synchronize recurring schedules, but only a worker fires them. A

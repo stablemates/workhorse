@@ -1,4 +1,4 @@
-import type { DashboardQueuesPage } from "@workhorse/dashboard-server/wire";
+import type { DashboardQueuesPage } from "@workhorse-js/dashboard-server/wire";
 import { Button, Code, Group, Paper, ScrollArea, Stack, Switch, Table, Text } from "@mantine/core";
 import {
   concurrencyCappedFootnote,

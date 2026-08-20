@@ -8,8 +8,8 @@ RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
 WORKDIR /workhorse
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm build:runtime && pnpm --filter @workhorse/demo build
-RUN pnpm --filter @workhorse/demo deploy --prod --legacy /opt/workhorse-demo
+RUN pnpm build:runtime && pnpm --filter @workhorse-js/demo build
+RUN pnpm --filter @workhorse-js/demo deploy --prod --legacy /opt/workhorse-demo
 
 FROM node:24-alpine AS runtime
 

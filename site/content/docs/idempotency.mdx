@@ -67,7 +67,7 @@ reused for materially different work — a mistake, not a duplicate — so `queu
 silently win.
 
 ```ts
-import { EnqueueIdempotencyConflictError } from "@workhorse/core";
+import { EnqueueIdempotencyConflictError } from "@workhorse-js/core";
 
 try {
   await queue.enqueue("invoice.capture", { invoiceId, amount }, { idempotency: { key } });

@@ -13,7 +13,7 @@
  */
 export const landingSnippets = {
   hero: `import { Pool } from "pg";
-import { installSchema, Queue, Worker } from "@workhorse/core";
+import { installSchema, Queue, Worker } from "@workhorse-js/core";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 await installSchema(pool);
@@ -257,7 +257,7 @@ for (const failure of page.items) {
   });
 }`,
 
-  operateDashboard: `import { createDashboardHost } from "@workhorse/dashboard/server";
+  operateDashboard: `import { createDashboardHost } from "@workhorse-js/dashboard/server";
 
 const host = createDashboardHost({
   path: "/workhorse",
@@ -296,7 +296,7 @@ const live = await queue.listJobs({
   });
 }`,
 
-  ormDrizzle: `import { createDrizzleAdapter } from "@workhorse/drizzle";
+  ormDrizzle: `import { createDrizzleAdapter } from "@workhorse-js/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 const db = drizzle({ client: pool });
@@ -310,7 +310,7 @@ await db.transaction(async (tx) => {
 });`,
 
   ormPrisma: `import { PrismaClient } from "@prisma/client";
-import { createPrismaAdapter } from "@workhorse/prisma";
+import { createPrismaAdapter } from "@workhorse-js/prisma";
 
 const prisma = new PrismaClient();
 const workhorse = createPrismaAdapter(prisma);
@@ -322,7 +322,7 @@ await prisma.$transaction(async (tx) => {
   });
 });`,
 
-  ormTypeorm: `import { createTypeOrmAdapter } from "@workhorse/typeorm";
+  ormTypeorm: `import { createTypeOrmAdapter } from "@workhorse-js/typeorm";
 
 const workhorse = createTypeOrmAdapter(dataSource);
 
@@ -333,7 +333,7 @@ await dataSource.transaction(async (manager) => {
   });
 });`,
 
-  ormKysely: `import { createKyselyAdapter } from "@workhorse/kysely";
+  ormKysely: `import { createKyselyAdapter } from "@workhorse-js/kysely";
 
 const workhorse = createKyselyAdapter(database);
 
@@ -350,7 +350,7 @@ await database.transaction().execute(async (tx) => {
 });`,
 
   deploy: `// workhorse.worker.ts — run with: workhorse worker --config ./dist/worker.js
-import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse/core";
+import { createWorkhorseAdapter, defineWorkerProcess } from "@workhorse-js/core";
 import { Pool } from "pg";
 import { generateReport, sendEmail } from "./jobs.js";
 

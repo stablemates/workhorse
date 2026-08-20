@@ -1,4 +1,4 @@
-import type { Queue, WorkerProcessWorkerDefinition } from "@workhorse/core";
+import type { Queue, WorkerProcessWorkerDefinition } from "@workhorse-js/core";
 import {
   DEMO_BATCH_MAX_SIZE,
   DEMO_MAINTENANCE_INTERVAL_MS,

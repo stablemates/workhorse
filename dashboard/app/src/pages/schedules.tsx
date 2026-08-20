@@ -1,4 +1,4 @@
-import type { DashboardCronPage } from "@workhorse/dashboard-server/wire";
+import type { DashboardCronPage } from "@workhorse-js/dashboard-server/wire";
 import { Code, Paper, ScrollArea, Stack, Switch, Table, Text } from "@mantine/core";
 import { StatusBadge } from "../status-badge.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";

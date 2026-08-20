@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "@workhorse/drizzle";
+import { createDrizzleAdapter, DrizzleQueryError, drizzleQueryable } from "@workhorse-js/drizzle";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
-import { installSchema, startWorkerProcess, Worker } from "@workhorse/core";
+import { installSchema, startWorkerProcess, Worker } from "@workhorse-js/core";
 import { Pool } from "pg";
 
 const databaseUrl =

@@ -1,5 +1,5 @@
 {
-  "name": "@workhorse/dashboard-app",
+  "name": "@workhorse-js/dashboard-app",
   "private": true,
   "description": "Shared operator dashboard application for Workhorse",
   "homepage": "https://workhorse.run",
@@ -62,7 +62,7 @@
     "@mantine/hooks": "^8.3.14",
     "@mantine/notifications": "^8.3.18",
     "@phosphor-icons/react": "^2.1.10",
-    "@workhorse/dashboard-server": "workspace:*",
+    "@workhorse-js/dashboard-server": "workspace:*",
     "recharts": "^3.10.1"
   },
   "devDependencies": {
@@ -71,7 +71,7 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.7.0",
-    "@workhorse/core": "workspace:*",
+    "@workhorse-js/core": "workspace:*",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-grab": "^0.1.50",
@@ -80,7 +80,7 @@
     "vitest": "^3.2.4"
   },
   "peerDependencies": {
-    "@workhorse/core": ">=0.1.0 <0.2.0",
+    "@workhorse-js/core": ">=0.1.0 <0.2.0",
     "react": ">=19 <20",
     "react-dom": ">=19 <20",
     "vite": ">=6 <9"

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { MantineProvider } from "@mantine/core";
-import { WORKHORSE_VERSION } from "@workhorse/core/version";
+import { WORKHORSE_VERSION } from "@workhorse-js/core/version";
 import { WorkhorseBrand, WorkhorseVersion } from "./brand.js";
 
 describe("WorkhorseBrand", () => {

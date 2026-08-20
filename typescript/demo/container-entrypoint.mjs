@@ -24,7 +24,7 @@ if (process.exitCode) process.exit();
 const workerArguments = [
   "--require",
   "./telemetry.cjs",
-  "node_modules/@workhorse/core/dist/src/cli/workhorse.js",
+  "node_modules/@workhorse-js/core/dist/src/cli/workhorse.js",
   "worker",
   "--config",
   "dist/worker.js",
