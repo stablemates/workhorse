@@ -53,6 +53,9 @@
   --wh-rule: color-mix(in oklab, var(--color-ink-900) 12%, transparent);
   --wh-surface: var(--color-ink-50);
   --wh-panel: #fff;
+  --wh-docs-code-border: color-mix(in oklab, var(--color-ink-900) 20%, transparent);
+  --wh-docs-code-surface: color-mix(in oklab, var(--color-ink-100) 78%, white);
+  --wh-docs-inline-code: color-mix(in oklab, var(--color-ink-100) 86%, white);
 
   --color-fd-primary: var(--color-signal-600);
   --color-fd-ring: var(--color-signal-500);
@@ -64,6 +67,9 @@
   --wh-rule: color-mix(in oklab, var(--color-ink-50) 14%, transparent);
   --wh-surface: var(--color-ink-950);
   --wh-panel: color-mix(in oklab, var(--color-ink-900) 88%, black);
+  --wh-docs-code-border: color-mix(in oklab, var(--color-ink-50) 20%, transparent);
+  --wh-docs-code-surface: color-mix(in oklab, var(--color-ink-900) 88%, black);
+  --wh-docs-inline-code: color-mix(in oklab, var(--color-ink-800) 82%, black);
 
   --color-fd-primary: var(--color-signal-400);
   --color-fd-ring: var(--color-signal-400);
@@ -202,6 +208,103 @@ body {
 
 .dark .wh-code-surface {
   background-color: var(--shiki-dark-bg);
+}
+
+/* ---------- Documentation typography ----------
+ *
+ * API pages carry far more identifiers than ordinary prose. Stronger section
+ * boundaries and separate inline/block code surfaces keep those identifiers
+ * scannable without changing the content hierarchy emitted by Fumadocs.
+ */
+.wh-docs-title {
+  color: var(--color-fd-foreground);
+  letter-spacing: -0.035em;
+  line-height: 1.12;
+}
+
+.wh-docs-description {
+  max-width: 48rem;
+  margin-bottom: 2.25rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--wh-rule);
+  line-height: 1.65;
+}
+
+.wh-docs-body {
+  --tw-prose-body: color-mix(in oklab, var(--color-fd-foreground) 90%, transparent);
+  --tw-prose-headings: var(--color-fd-foreground);
+  font-size: 0.975rem;
+  line-height: 1.75;
+}
+
+.wh-docs-body > h2 {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--wh-rule);
+  font-size: 1.4rem;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+
+.wh-docs-body > h3 {
+  margin-top: 2.25rem;
+  font-size: 1.1rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.wh-docs-body strong {
+  color: var(--color-fd-foreground);
+  font-weight: 650;
+}
+
+.wh-docs-body :where(p, li, td, th, h2, h3) code {
+  padding: 0.1em 0.34em;
+  border: 1px solid var(--wh-docs-code-border);
+  border-radius: 0.3rem;
+  background-color: var(--wh-docs-inline-code);
+  box-decoration-break: clone;
+  color: var(--color-fd-foreground);
+  font-size: 0.88em;
+  font-weight: 520;
+  overflow-wrap: anywhere;
+}
+
+.wh-docs-body :where(ul, ol) > li::marker {
+  color: var(--wh-accent);
+  font-weight: 650;
+}
+
+.wh-docs-body figure.shiki {
+  margin-block: 1.75rem;
+  border-color: var(--wh-docs-code-border);
+  border-radius: 0.75rem;
+  background-color: var(--wh-docs-code-surface);
+  box-shadow:
+    inset 3px 0 0 color-mix(in oklab, var(--wh-accent) 72%, transparent),
+    0 12px 30px -24px color-mix(in oklab, var(--color-ink-950) 45%, transparent);
+}
+
+.wh-docs-body figure.shiki > div[role="region"] {
+  padding-block: 1rem;
+  line-height: 1.65;
+}
+
+.wh-docs-body figure.shiki pre {
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  tab-size: 2;
+}
+
+.wh-docs-body figure.shiki > div[class~="flex"] {
+  height: 2.5rem;
+  border-color: var(--wh-docs-code-border);
+  background-color: color-mix(in oklab, var(--wh-docs-code-surface) 82%, var(--wh-panel));
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 /* ---------- CSS-only tab group ----------

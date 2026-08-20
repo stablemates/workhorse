@@ -28,9 +28,9 @@ export const clientLoader = browserCollections.docs.createClientLoader<Record<st
         full={full ?? false}
         tableOfContent={{ style: "clerk", single: false }}
       >
-        <DocsTitle>{title}</DocsTitle>
-        <DocsDescription>{description}</DocsDescription>
-        <DocsBody>
+        <DocsTitle className="wh-docs-title">{title}</DocsTitle>
+        <DocsDescription className="wh-docs-description">{description}</DocsDescription>
+        <DocsBody className="wh-docs-body">
           <MDX components={getMDXComponents()} />
         </DocsBody>
       </DocsPage>
