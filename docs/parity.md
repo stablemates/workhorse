@@ -44,8 +44,9 @@ Two boundaries keep this matrix small:
 
 The TypeScript client is `@workhorse/core` (`Queue`); the Python client is `workhorse-pg`
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg); the Go module is reserved at `go/README.md`.
-Python can define and synchronize recurring schedules, but only a worker fires them, so a
-deployment enqueueing from Python still needs a TypeScript worker until [WH-214] ships.
+Python can define and synchronize recurring schedules, but only a worker fires them. A
+deployment enqueueing from Python needs a TypeScript worker to run jobs until [WH-214] ships,
+and to fire schedules until [WH-309] ships.
 
 ## Worker runtime
 
@@ -66,7 +67,7 @@ telemetry, and graceful shutdown.
 | Linked child fan-out and result join         | Supported  | Planned | Planned |
 | Latest-value progress reporting              | Supported  | Absent  | Absent  |
 | Batch handler delivery                       | Supported  | Planned | Planned |
-| Schedule firing (in-process cron)            | Supported  | Absent  | Absent  |
+| Schedule firing (in-process cron)            | Supported  | Planned | Absent  |
 | Worker fleet registration and remote pause   | Supported  | Absent  | Absent  |
 | Graceful stop and signal drain               | Supported  | Planned | Planned |
 | Retention maintenance participation          | Supported  | Absent  | Absent  |
@@ -74,7 +75,8 @@ telemetry, and graceful shutdown.
 
 The Planned worker columns reflect the acceptance criteria in [WH-214], [WH-221], and [WH-236].
 Those work items cover individual and batch handlers, durable primitives, concurrency, heartbeats,
-cancellation, telemetry, and graceful drain. A row starts Planned only when a Plane work item
+cancellation, telemetry, and graceful drain. Schedule firing is Planned under [WH-309],
+deliberately outside the [WH-214] scope. A row starts Planned only when a Plane work item
 commits to it. A cell claiming more than the work item scope is a bug in this document.
 
 ## Roadmap progress
@@ -83,6 +85,7 @@ commits to it. A cell claiming more than the work item scope is a bug in this do
 | ------------------------------- | --------------- | ------- |
 | Synchronous Python worker       | [WH-214]        | Backlog |
 | Asynchronous Python worker      | [WH-221]        | Backlog |
+| Python schedule firing          | [WH-309]        | Backlog |
 | Go transactional enqueue client | [WH-228]        | Backlog |
 | Go worker and module examples   | [WH-236]        | Backlog |
 
@@ -120,3 +123,4 @@ exactly as behaviour changes must update the guide that describes them.
 [WH-221]: https://app.plane.so/techprogress/browse/WH-221/
 [WH-228]: https://app.plane.so/techprogress/browse/WH-228/
 [WH-236]: https://app.plane.so/techprogress/browse/WH-236/
+[WH-309]: https://app.plane.so/techprogress/browse/WH-309/
