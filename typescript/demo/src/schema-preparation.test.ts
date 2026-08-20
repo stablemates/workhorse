@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { prepareSchema, type SchemaPreparationOperations } from "./schema-preparation.js";
+import {
+  prepareApplicationSchema,
+  prepareSchema,
+  type ApplicationSchemaOperations,
+  type SchemaPreparationOperations,
+} from "./schema-preparation.js";
 
 function operations(
   overrides: Partial<SchemaPreparationOperations> = {},
@@ -13,7 +18,42 @@ function operations(
   };
 }
 
+function applicationOperations(calls: string[]): ApplicationSchemaOperations {
+  return {
+    assertCompatible: vi.fn<ApplicationSchemaOperations["assertCompatible"]>(async () => {
+      calls.push("assert-core");
+    }),
+    assertDemoCompatible: vi.fn<ApplicationSchemaOperations["assertDemoCompatible"]>(async () => {
+      calls.push("assert-demo");
+    }),
+    install: vi.fn<ApplicationSchemaOperations["install"]>(async () => {
+      calls.push("install-core");
+    }),
+    installDemo: vi.fn<ApplicationSchemaOperations["installDemo"]>(async () => {
+      calls.push("install-demo");
+    }),
+  };
+}
+
 describe("demo schema preparation", () => {
+  it("validates production schemas without running installers", async () => {
+    const calls: string[] = [];
+    const subject = applicationOperations(calls);
+
+    await prepareApplicationSchema("production", subject);
+
+    expect(calls).toEqual(["assert-core", "assert-demo"]);
+  });
+
+  it("installs application schemas during development", async () => {
+    const calls: string[] = [];
+    const subject = applicationOperations(calls);
+
+    await prepareApplicationSchema("development", subject);
+
+    expect(calls).toEqual(["install-core", "install-demo"]);
+  });
+
   it.each(["3F000", "42P01"])(
     "installs a fresh database after PostgreSQL error %s",
     async (code) => {

@@ -8,6 +8,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { assertLocalDatabasePurpose, localDatabaseUrl } from "../../core/src/local-database.js";
 import {
+  assertDemoSchemaCompatible,
   createDemoApplication,
   createDemoDatabase,
   createLocalOperatorControllers,
@@ -272,6 +273,7 @@ afterAll(async () => {
   await pool.query("DROP TABLE IF EXISTS public.workhorse_demo_order");
   await pool.query("DROP TABLE IF EXISTS public.workhorse_demo_seed");
   await pool.query("DROP TABLE IF EXISTS public.workhorse_demo_audit");
+  await pool.query("DROP TABLE IF EXISTS public.workhorse_demo_schema_version");
   await pool.end();
 });
 
@@ -476,6 +478,21 @@ const waitForJobState = (queue: Queue, jobId: string, state: string) =>
   );
 
 describe("Workhorse demo", () => {
+  it("accepts the prepared demo schema without changing it", async () => {
+    await expect(assertDemoSchemaCompatible(database)).resolves.toBeUndefined();
+  });
+
+  it("rejects an incompatible demo schema version", async () => {
+    await pool.query("UPDATE public.workhorse_demo_schema_version SET version = 0");
+    try {
+      await expect(assertDemoSchemaCompatible(database)).rejects.toThrow(
+        "Demo schema version 0 is incompatible with runtime version 1",
+      );
+    } finally {
+      await installDemoSchema(database);
+    }
+  });
+
   it("migrates legacy showcase jobs to their family task types", async () => {
     const queue = new Queue(pool, { defaultQueue: DEMO_QUEUE });
     const jobIds = await Promise.all(

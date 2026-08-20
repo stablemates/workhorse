@@ -1,8 +1,9 @@
 import { getRequestListener } from "@hono/node-server";
-import { installSchema } from "@workhorse/core";
+import { assertSchemaCompatible, installSchema } from "@workhorse/core";
 import { createServer } from "node:http";
 import { Pool } from "pg";
 import {
+  assertDemoSchemaCompatible,
   createDemoApplication,
   createLocalOperator,
   createLocalOperatorControllers,
@@ -18,6 +19,7 @@ import { createDashboardDevServer } from "@workhorse/dashboard/dev";
 import { resolveDemoDatabaseUrl } from "./environment.js";
 import { startDemoMetricsObserver } from "./telemetry.js";
 import { demoLogger } from "./logger.js";
+import { prepareApplicationSchema } from "./schema-preparation.js";
 
 /**
  * The demo's web tier.
@@ -66,11 +68,19 @@ const database = createDemoDatabase(pool);
 const stagingDatabase = stagingPool ? createDemoDatabase(stagingPool) : undefined;
 const localOperatorControllers = createLocalOperatorControllers(database);
 
-await installSchema(pool);
-await installDemoSchema(database);
+await prepareApplicationSchema(mode, {
+  assertCompatible: () => assertSchemaCompatible(pool),
+  assertDemoCompatible: () => assertDemoSchemaCompatible(database),
+  install: () => installSchema(pool),
+  installDemo: () => installDemoSchema(database),
+});
 if (stagingPool && stagingDatabase) {
-  await installSchema(stagingPool);
-  await installDemoSchema(stagingDatabase);
+  await prepareApplicationSchema(mode, {
+    assertCompatible: () => assertSchemaCompatible(stagingPool),
+    assertDemoCompatible: () => assertDemoSchemaCompatible(stagingDatabase),
+    install: () => installSchema(stagingPool),
+    installDemo: () => installDemoSchema(stagingDatabase),
+  });
 }
 await syncDemoSchedules(pool);
 await syncDemoConcurrencyPolicies(pool);

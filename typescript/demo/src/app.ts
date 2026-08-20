@@ -19,6 +19,7 @@ import {
   type MaintenancePolicySetting,
   type RetentionPolicyDefinition,
   type RetentionPolicySetting,
+  isMissingDatabaseRelationError,
 } from "@workhorse/core";
 import type { Pool } from "pg";
 import {
@@ -534,6 +535,57 @@ async function migrateLegacyFeatureShowcaseJobTypes(database: DemoDatabase): Pro
   `);
 }
 
+const DEMO_SCHEMA_VERSION = 1;
+
+/** Check the demo-owned tables without changing schema state in a long-running process. */
+export async function assertDemoSchemaCompatible(database: DemoDatabase): Promise<void> {
+  let version: number | undefined;
+  try {
+    const result = await database.execute<{ version: number }>(sql`
+      SELECT version
+        FROM public.workhorse_demo_schema_version
+       WHERE singleton = true
+    `);
+    version = result.rows[0]?.version;
+    await database.execute(sql`
+      SELECT demo_order.id,
+             demo_order.customer_email,
+             demo_order.description,
+             demo_order.status,
+             demo_order.created_at,
+             demo_order.processed_at,
+             demo_seed.name,
+             demo_seed.created_at,
+             demo_audit.id,
+             demo_audit.actor,
+             demo_audit.reason,
+             demo_audit.request_id,
+             demo_audit.occurred_at,
+             demo_audit.action,
+             demo_audit.target,
+             demo_audit.before,
+             demo_audit.after,
+             demo_audit.status
+        FROM public.workhorse_demo_order AS demo_order
+        CROSS JOIN public.workhorse_demo_seed AS demo_seed
+        CROSS JOIN public.workhorse_demo_audit AS demo_audit
+       WHERE false
+    `);
+  } catch (error) {
+    throw new Error(
+      isMissingDatabaseRelationError(error)
+        ? "The demo schema is not installed. Run the demo schema preparation step before starting the application."
+        : "Unable to verify demo schema compatibility because the database query failed.",
+      { cause: error },
+    );
+  }
+  if (version !== DEMO_SCHEMA_VERSION) {
+    throw new Error(
+      `Demo schema version ${String(version)} is incompatible with runtime version ${DEMO_SCHEMA_VERSION}`,
+    );
+  }
+}
+
 export async function installDemoSchema(database: DemoDatabase): Promise<void> {
   await database.execute(sql`
     CREATE TABLE IF NOT EXISTS public.workhorse_demo_order (
@@ -584,6 +636,17 @@ export async function installDemoSchema(database: DemoDatabase): Promise<void> {
     ON public.workhorse_demo_audit (request_id)
   `);
   await migrateLegacyFeatureShowcaseJobTypes(database);
+  await database.execute(sql`
+    CREATE TABLE IF NOT EXISTS public.workhorse_demo_schema_version (
+      singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+      version integer NOT NULL
+    )
+  `);
+  await database.execute(sql`
+    INSERT INTO public.workhorse_demo_schema_version (singleton, version)
+    VALUES (true, ${DEMO_SCHEMA_VERSION})
+    ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version
+  `);
 }
 
 export async function syncDemoSchedules(database: Pool): Promise<void> {
