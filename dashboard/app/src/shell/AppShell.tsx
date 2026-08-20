@@ -18,6 +18,7 @@ import {
 } from "@mantine/core";
 import {
   ArrowClockwise,
+  BookOpenText,
   Buildings,
   CalendarDots,
   CheckCircle,
@@ -436,6 +437,13 @@ export function DashboardContent({
           </Stack>
         </AppShell.Section>
         <AppShell.Section>
+          <NavLink
+            component="a"
+            href="https://workhorse.run/docs"
+            label="Documentation"
+            leftSection={<BookOpenText size={18} />}
+            variant="light"
+          />
           <WorkhorseVersion />
         </AppShell.Section>
       </AppShell.Navbar>
