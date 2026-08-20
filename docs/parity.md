@@ -29,14 +29,14 @@ Two boundaries keep this matrix small:
 | Atomic batch enqueue                       | Supported  | Supported | Planned |
 | Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Planned |
 | Priority                                   | Supported  | Supported | Planned |
-| Tags and max attempts                      | Supported  | Supported | Absent  |
-| Persisted retry policies                   | Supported  | Supported | Absent  |
-| Absolute deadlines and execution timeouts  | Supported  | Supported | Absent  |
+| Tags and max attempts                      | Supported  | Supported | Planned |
+| Persisted retry policies                   | Supported  | Supported | Planned |
+| Absolute deadlines and execution timeouts  | Supported  | Supported | Planned |
 | Enqueue idempotency                        | Supported  | Supported | Planned |
 | Keyed debounce                             | Supported  | Supported | Planned |
 | Keyed throttle                             | Supported  | Supported | Planned |
 | Job dependencies with terminal policies    | Supported  | Supported | Planned |
-| Concurrency keys                           | Supported  | Supported | Absent  |
+| Concurrency keys                           | Supported  | Supported | Planned |
 | Recurring schedule definition sync         | Supported  | Supported | Planned |
 | Payload and result contracts               | Supported  | Absent    | Absent  |
 | Compatibility refusal before mutation      | Supported  | Supported | Planned |
@@ -46,7 +46,10 @@ The TypeScript client is `@workhorse/core` (`Queue`); the Python client is `work
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg); the Go module is reserved at `go/README.md`.
 Python can define and synchronize recurring schedules, but only a worker fires them. A
 deployment enqueueing from Python needs a TypeScript worker to run jobs until [WH-214] ships,
-and to fire schedules until [WH-309] ships.
+and to fire schedules until [WH-309] ships. The Planned Go client column reflects the
+acceptance criteria of the [WH-228] sub-items; [WH-318] commits to the option set, including
+the four rows that were Absent before it existed. A deployment enqueueing from Go needs a
+TypeScript worker to run jobs until [WH-236] ships, and to fire schedules until [WH-332] ships.
 
 ## Worker runtime
 
@@ -67,7 +70,7 @@ telemetry, and graceful shutdown.
 | Linked child fan-out and result join         | Supported  | Planned | Planned |
 | Latest-value progress reporting              | Supported  | Absent  | Absent  |
 | Batch handler delivery                       | Supported  | Planned | Planned |
-| Schedule firing (in-process cron)            | Supported  | Planned | Absent  |
+| Schedule firing (in-process cron)            | Supported  | Planned | Planned |
 | Worker fleet registration and remote pause   | Supported  | Absent  | Absent  |
 | Graceful stop and signal drain               | Supported  | Planned | Planned |
 | Retention maintenance participation          | Supported  | Absent  | Absent  |
@@ -75,9 +78,10 @@ telemetry, and graceful shutdown.
 
 The Planned worker columns reflect the acceptance criteria in [WH-214], [WH-221], and [WH-236].
 Those work items cover individual and batch handlers, durable primitives, concurrency, heartbeats,
-cancellation, telemetry, and graceful drain. Schedule firing is Planned under [WH-309],
-deliberately outside the [WH-214] scope. A row starts Planned only when a Plane work item
-commits to it. A cell claiming more than the work item scope is a bug in this document.
+cancellation, telemetry, and graceful drain. Schedule firing is Planned under [WH-309] for
+Python and [WH-332] for Go, deliberately outside the [WH-214] and [WH-236] scopes. A row starts
+Planned only when a Plane work item commits to it. A cell claiming more than the work item scope
+is a bug in this document.
 
 ## Roadmap progress
 
@@ -88,6 +92,7 @@ commits to it. A cell claiming more than the work item scope is a bug in this do
 | Python schedule firing          | [WH-309]        | Backlog |
 | Go transactional enqueue client | [WH-228]        | Backlog |
 | Go worker and module examples   | [WH-236]        | Backlog |
+| Go schedule firing              | [WH-332]        | Backlog |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.
@@ -124,3 +129,5 @@ exactly as behaviour changes must update the guide that describes them.
 [WH-228]: https://app.plane.so/techprogress/browse/WH-228/
 [WH-236]: https://app.plane.so/techprogress/browse/WH-236/
 [WH-309]: https://app.plane.so/techprogress/browse/WH-309/
+[WH-318]: https://app.plane.so/techprogress/browse/WH-318/
+[WH-332]: https://app.plane.so/techprogress/browse/WH-332/
