@@ -8,9 +8,8 @@ document never restates them.
 Statuses:
 
 - **Supported.** Shipped in that language and covered by tests in this repository.
-- **Planned.** Deliberately sequenced work with a Linear issue. The Python worker SDK is
-  WOR-76 and WOR-77; the Go client and worker SDKs are WOR-78 and WOR-79. All four are
-  postponed behind the launch polish backlog (WOR-254).
+- **Planned.** Deliberately sequenced work with an open Plane work item. The work item owns the
+  acceptance criteria; this matrix records the resulting language support.
 - **Absent.** Not shipped and not scheduled. An Absent cell is a fact, not a commitment.
 
 Two boundaries keep this matrix small:
@@ -29,14 +28,15 @@ Two boundaries keep this matrix small:
 | Transactional enqueue in a caller-owned tx | Supported  | Supported | Planned |
 | Atomic batch enqueue                       | Supported  | Supported | Planned |
 | Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Planned |
-| Priority, tags, max attempts               | Supported  | Supported | Planned |
-| Persisted retry policies                   | Supported  | Supported | Planned |
-| Absolute deadlines and execution timeouts  | Supported  | Supported | Planned |
+| Priority                                   | Supported  | Supported | Planned |
+| Tags and max attempts                      | Supported  | Supported | Absent  |
+| Persisted retry policies                   | Supported  | Supported | Absent  |
+| Absolute deadlines and execution timeouts  | Supported  | Supported | Absent  |
 | Enqueue idempotency                        | Supported  | Supported | Planned |
 | Keyed debounce                             | Supported  | Supported | Planned |
 | Keyed throttle                             | Supported  | Supported | Planned |
 | Job dependencies with terminal policies    | Supported  | Supported | Planned |
-| Concurrency keys                           | Supported  | Supported | Planned |
+| Concurrency keys                           | Supported  | Supported | Absent  |
 | Recurring schedule definition sync         | Supported  | Supported | Planned |
 | Payload and result contracts               | Supported  | Absent    | Absent  |
 | Compatibility refusal before mutation      | Supported  | Supported | Planned |
@@ -45,7 +45,7 @@ Two boundaries keep this matrix small:
 The TypeScript client is `@workhorse/core` (`Queue`); the Python client is `workhorse-pg`
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg); the Go module is reserved at `go/README.md`.
 Python can define and synchronize recurring schedules, but only a worker fires them, so a
-deployment enqueueing from Python still needs a TypeScript worker until WOR-76 ships.
+deployment enqueueing from Python still needs a TypeScript worker until [WH-214] ships.
 
 ## Worker runtime
 
@@ -53,29 +53,41 @@ Every worker row is the runtime's own responsibility above the SQL protocol: loc
 handler dispatch, concurrency, heartbeats, polling or notifications, cancellation delivery,
 telemetry, and graceful shutdown.
 
-| Capability                                      | TypeScript | Python  | Go      |
-| ----------------------------------------------- | ---------- | ------- | ------- |
-| Claiming and handler execution                  | Supported  | Planned | Planned |
-| Bounded worker concurrency                      | Supported  | Planned | Planned |
-| Heartbeats and fenced ownership                 | Supported  | Planned | Planned |
-| Cooperative cancellation delivery               | Supported  | Planned | Planned |
-| Notification-assisted dispatch with polling     | Supported  | Planned | Planned |
-| Durable checkpoints (handler context)           | Supported  | Planned | Planned |
-| Durable timers (`sleep` / `sleepUntil`)         | Supported  | Planned | Planned |
-| Signal and human-decision waits                 | Supported  | Planned | Planned |
-| Linked child fan-out and result join            | Supported  | Planned | Planned |
-| Latest-value progress reporting                 | Supported  | Planned | Planned |
-| Batch handler delivery                          | Supported  | Absent  | Absent  |
-| Schedule firing (in-process cron)               | Supported  | Planned | Planned |
-| Worker fleet registration and remote pause      | Supported  | Planned | Planned |
-| Graceful stop and signal drain                  | Supported  | Planned | Planned |
-| Maintenance participation (recovery, retention) | Supported  | Planned | Planned |
-| OpenTelemetry tracing and metrics               | Supported  | Planned | Planned |
+| Capability                                   | TypeScript | Python  | Go      |
+| -------------------------------------------- | ---------- | ------- | ------- |
+| Claiming and handler execution               | Supported  | Planned | Planned |
+| Bounded worker concurrency                   | Supported  | Planned | Planned |
+| Heartbeats, lease recovery, fenced ownership | Supported  | Planned | Planned |
+| Cooperative cancellation delivery            | Supported  | Planned | Planned |
+| Notification-assisted dispatch with polling  | Supported  | Planned | Planned |
+| Durable checkpoints (handler context)        | Supported  | Planned | Planned |
+| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Planned | Planned |
+| Signal and human-decision waits              | Supported  | Planned | Planned |
+| Linked child fan-out and result join         | Supported  | Planned | Planned |
+| Latest-value progress reporting              | Supported  | Absent  | Absent  |
+| Batch handler delivery                       | Supported  | Planned | Planned |
+| Schedule firing (in-process cron)            | Supported  | Absent  | Absent  |
+| Worker fleet registration and remote pause   | Supported  | Absent  | Absent  |
+| Graceful stop and signal drain               | Supported  | Planned | Planned |
+| Retention maintenance participation          | Supported  | Absent  | Absent  |
+| OpenTelemetry tracing and metrics            | Supported  | Planned | Planned |
 
-The Planned worker columns describe the scope features.md records for WOR-76 through WOR-79:
-handler execution, bounded concurrency, heartbeats, cancellation, telemetry, and graceful drain.
-Rows beyond that scope start Planned only when their issue says so; until then a cell claiming
-more than the issue scope is a bug in this document.
+The Planned worker columns reflect the acceptance criteria in [WH-214], [WH-221], and [WH-236].
+Those work items cover individual and batch handlers, durable primitives, concurrency, heartbeats,
+cancellation, telemetry, and graceful drain. A row starts Planned only when a Plane work item
+commits to it. A cell claiming more than the work item scope is a bug in this document.
+
+## Roadmap progress
+
+| Deliverable                     | Plane work item | State   |
+| ------------------------------- | --------------- | ------- |
+| Synchronous Python worker       | [WH-214]        | Backlog |
+| Asynchronous Python worker      | [WH-221]        | Backlog |
+| Go transactional enqueue client | [WH-228]        | Backlog |
+| Go worker and module examples   | [WH-236]        | Backlog |
+
+The Plane work items own sequencing, blockers, and completion. Update this table when their state
+changes, and update the capability matrices only when repository tests prove the new support.
 
 ## Operator reads and controls
 
@@ -91,7 +103,7 @@ more than the issue scope is a bug in this document.
 These Absent cells are deliberate, not backlog: the standalone dashboard and the `workhorse` CLI
 already provide every read and control here against any database, whatever language enqueued the
 work. A language SDK grows one of these APIs only when an application needs it programmatically;
-that need should arrive as its own Linear issue.
+that need should arrive as its own Plane work item.
 
 ## Keeping this document honest
 
@@ -103,3 +115,8 @@ them through `python/tests/test_protocol_conformance.py`. A generated check in t
 the package `engines` fields disagree — does not exist for this matrix yet. Until it does, any
 change that ships or removes a language capability must update this file in the same commit,
 exactly as behaviour changes must update the guide that describes them.
+
+[WH-214]: https://app.plane.so/techprogress/browse/WH-214/
+[WH-221]: https://app.plane.so/techprogress/browse/WH-221/
+[WH-228]: https://app.plane.so/techprogress/browse/WH-228/
+[WH-236]: https://app.plane.so/techprogress/browse/WH-236/
