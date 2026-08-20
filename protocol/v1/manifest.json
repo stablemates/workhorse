@@ -25,6 +25,13 @@
     "worker-slot-release",
     "single-attempt-replay",
     "checkpoint-replay",
+    "cooperative-cancellation-delivery",
+    "deadline-settlement",
+    "execution-timeout-settlement",
+    "database-authoritative-expiration",
+    "lease-loss-fencing",
+    "non-overlapping-heartbeats",
+    "graceful-drain",
     "coalescing",
     "dependencies",
     "children",
@@ -36,7 +43,14 @@
     "durable-wait-suspension",
     "worker-slot-release",
     "single-attempt-replay",
-    "checkpoint-replay"
+    "checkpoint-replay",
+    "cooperative-cancellation-delivery",
+    "deadline-settlement",
+    "execution-timeout-settlement",
+    "database-authoritative-expiration",
+    "lease-loss-fencing",
+    "non-overlapping-heartbeats",
+    "graceful-drain"
   ],
   "functions": [
     {

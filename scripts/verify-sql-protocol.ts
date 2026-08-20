@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Queryable } from "../typescript/core/src/types.js";
+import type { JobAttemptOutcome, JobState, Queryable } from "../typescript/core/src/types.js";
 
 type JsonScalar = boolean | number | string | null;
 export type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue };
@@ -61,6 +61,27 @@ interface RuntimeFixtureBase {
   jobType: string;
 }
 
+type RuntimeAbortReason =
+  | "CancellationRequestedError"
+  | "DeadlineExceededError"
+  | "ExecutionTimeoutError";
+
+export type RuntimeWriteOperation =
+  | "setProgress"
+  | "checkpoint"
+  | "sleep"
+  | "sleepUntil"
+  | "waitForSignal"
+  | "waitForHuman"
+  | "runChild"
+  | "runChildren";
+
+interface ExpectedRuntimeState {
+  state: JobState;
+  attempt: number;
+  errorName?: "DeadlineExceeded" | "ExecutionTimeout";
+}
+
 export interface BatchRuntimeFixture extends RuntimeFixtureBase {
   kind: "batch";
   concurrency: number;
@@ -87,7 +108,68 @@ export interface SuspensionReplayRuntimeFixture extends RuntimeFixtureBase {
   expectedAttemptsAfterReplay: number;
 }
 
-export type RuntimeFixture = BatchRuntimeFixture | SuspensionReplayRuntimeFixture;
+export interface CooperativeCancellationRuntimeFixture extends RuntimeFixtureBase {
+  kind: "cooperative-cancellation";
+  leaseMs: number;
+  heartbeatMs: number;
+  cancelReason: string;
+  expectedAbortReason: RuntimeAbortReason;
+  expectedState: ExpectedRuntimeState;
+  expectedAttemptOutcome: JobAttemptOutcome;
+}
+
+export interface ExpirationRuntimeFixture extends RuntimeFixtureBase {
+  kind: "expiration";
+  mode: "deadline" | "execution-timeout";
+  durationMs: number;
+  localClockLeadMs: number;
+  leaseMs: number;
+  heartbeatMs: number;
+  maxAttempts: number;
+  expectedAbortReasons: RuntimeAbortReason[];
+  expectedAfterRuns: ExpectedRuntimeState[];
+  expectedAttemptOutcomes: JobAttemptOutcome[];
+}
+
+export interface LeaseLossRuntimeFixture extends RuntimeFixtureBase {
+  kind: "lease-loss";
+  leaseMs: number;
+  heartbeatMs: number;
+  maxAttempts: number;
+  expectedAbortMessage: string;
+  expectedRejectedWrites: RuntimeWriteOperation[];
+  expectedRejectedWriteError: string;
+  expectedState: ExpectedRuntimeState;
+  expectedAttemptOutcome: JobAttemptOutcome;
+}
+
+export interface HeartbeatCadenceRuntimeFixture extends RuntimeFixtureBase {
+  kind: "heartbeat-cadence";
+  leaseMs: number;
+  heartbeatMs: number;
+  expectedCallsWhileBlocked: number;
+  expectedMinimumCallsBeforeSettlement: number;
+  expectedMaximumOverlap: number;
+}
+
+export interface GracefulDrainRuntimeFixture extends RuntimeFixtureBase {
+  kind: "graceful-drain";
+  concurrency: number;
+  jobCount: number;
+  settleCheckMs: number;
+  expectedActiveAtStop: number;
+  expectedSucceeded: number;
+  expectedReady: number;
+}
+
+export type RuntimeFixture =
+  | BatchRuntimeFixture
+  | SuspensionReplayRuntimeFixture
+  | CooperativeCancellationRuntimeFixture
+  | ExpirationRuntimeFixture
+  | LeaseLossRuntimeFixture
+  | HeartbeatCadenceRuntimeFixture
+  | GracefulDrainRuntimeFixture;
 
 export interface RequestFixture {
   id: string;

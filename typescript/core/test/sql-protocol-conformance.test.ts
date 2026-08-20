@@ -3,7 +3,13 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { ClaimedJob, EnqueueRequest, Json, Queryable } from "../src/index.js";
+import type {
+  ClaimedJob,
+  EnqueueRequest,
+  JobAttemptOutcome,
+  Json,
+  Queryable,
+} from "../src/index.js";
 import {
   loadSqlProtocolFixtures,
   assertSqlProtocolCompatible,
@@ -11,6 +17,12 @@ import {
 } from "../../../scripts/verify-sql-protocol.js";
 import type {
   BatchRuntimeFixture,
+  CooperativeCancellationRuntimeFixture,
+  ExpirationRuntimeFixture,
+  GracefulDrainRuntimeFixture,
+  HeartbeatCadenceRuntimeFixture,
+  LeaseLossRuntimeFixture,
+  RuntimeWriteOperation,
   SuspensionReplayRuntimeFixture,
 } from "../../../scripts/verify-sql-protocol.js";
 import { Queue, Worker, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
@@ -49,6 +61,43 @@ async function expectAttemptCount(
     [jobId],
   );
   expect(attempts.rows).toEqual([{ count: expected }]);
+}
+
+async function expectAttemptOutcome(
+  database: Queryable,
+  jobId: string,
+  expected: JobAttemptOutcome | JobAttemptOutcome[],
+): Promise<void> {
+  const attempts = await database.query<{ outcome: JobAttemptOutcome }>(
+    "SELECT outcome FROM workhorse.attempt_history WHERE job_id = $1 ORDER BY attempt",
+    [jobId],
+  );
+  const outcomes = Array.isArray(expected) ? expected : [expected];
+  expect(attempts.rows).toEqual(outcomes.map((outcome) => ({ outcome })));
+}
+
+function deferred<T = void>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+async function waitForCondition(condition: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await sleep(5);
+  }
+}
+
+function waitForAbort(signal: AbortSignal): Promise<unknown> {
+  return new Promise((resolve) => {
+    const onAbort = () => resolve(signal.reason);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 async function executeBatchRuntimeFixture(
@@ -152,6 +201,288 @@ async function executeSuspensionReplayRuntimeFixture(
   expect(checkpointOperations).toBe(fixture.expectedCheckpointOperations);
 }
 
+async function executeCooperativeCancellationRuntimeFixture(
+  queue: Queue,
+  database: Queryable,
+  fixture: CooperativeCancellationRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(fixture.jobType, {}, { queue: queueName });
+  const started = deferred();
+  let abortReason: unknown;
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    heartbeatMs: fixture.heartbeatMs,
+  }).handle(fixture.jobType, async (_payload, context) => {
+    started.resolve();
+    abortReason = await waitForAbort(context.signal);
+    throw abortReason;
+  });
+
+  const execution = worker.runOnce();
+  await started.promise;
+  await expect(queue.cancel(id, { reason: fixture.cancelReason })).resolves.toMatchObject({
+    status: "cancel_requested",
+  });
+  await expect(execution).resolves.toBe(true);
+  expect(abortReason).toMatchObject({ name: fixture.expectedAbortReason });
+  await expect(queue.getJob(id)).resolves.toMatchObject({
+    state: fixture.expectedState.state,
+    currentAttempt: fixture.expectedState.attempt,
+  });
+  await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
+}
+
+async function executeExpirationRuntimeFixture(
+  queue: Queue,
+  database: Queryable,
+  fixture: ExpirationRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const earlyTimerQueue = new Proxy(queue, {
+    get(target, property, receiver) {
+      if (property !== "claim") return Reflect.get(target, property, receiver);
+      return async (...args: Parameters<Queue["claim"]>) => {
+        const claimed = await target.claim(...args);
+        if (claimed && fixture.mode === "deadline" && claimed.deadlineAt) {
+          claimed.deadlineAt = new Date(claimed.deadlineAt.getTime() - fixture.localClockLeadMs);
+        }
+        if (claimed && fixture.mode === "execution-timeout" && claimed.attemptTimeoutAt) {
+          claimed.attemptTimeoutAt = new Date(
+            claimed.attemptTimeoutAt.getTime() - fixture.localClockLeadMs,
+          );
+        }
+        return claimed;
+      };
+    },
+  });
+  const expiration = new Date(Date.now() + fixture.durationMs);
+  const id = await queue.enqueue(
+    fixture.jobType,
+    {},
+    fixture.mode === "deadline"
+      ? { queue: queueName, deadline: expiration, maxAttempts: fixture.maxAttempts }
+      : {
+          queue: queueName,
+          executionTimeoutMs: fixture.durationMs,
+          maxAttempts: fixture.maxAttempts,
+        },
+  );
+  const abortReasons: unknown[] = [];
+  const worker = new Worker(earlyTimerQueue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    heartbeatMs: fixture.heartbeatMs,
+  }).handle(fixture.jobType, async (_payload, context) => {
+    const reason = await waitForAbort(context.signal);
+    abortReasons.push(reason);
+    throw reason;
+  });
+
+  for (const expected of fixture.expectedAfterRuns) {
+    await expect(worker.runOnce()).resolves.toBe(true);
+    await expect(queue.getJob(id)).resolves.toMatchObject({
+      state: expected.state,
+      currentAttempt: expected.attempt,
+      ...(expected.errorName === undefined ? {} : { error: { name: expected.errorName } }),
+    });
+  }
+  expect(abortReasons).toEqual(
+    fixture.expectedAbortReasons.map((name) => expect.objectContaining({ name })),
+  );
+  await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcomes);
+}
+
+async function executeLeaseLossRuntimeFixture(
+  queue: Queue,
+  database: Queryable,
+  fixture: LeaseLossRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const id = await queue.enqueue(
+    fixture.jobType,
+    {},
+    {
+      queue: queueName,
+      maxAttempts: fixture.maxAttempts,
+    },
+  );
+  const started = deferred();
+  let abortMessage: string | undefined;
+  const rejectedWrites = new Map<string, string>();
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    heartbeatMs: fixture.heartbeatMs,
+  }).handle(fixture.jobType, async (_payload, context) => {
+    started.resolve();
+    const reason = await waitForAbort(context.signal);
+    abortMessage = reason instanceof Error ? reason.message : String(reason);
+    const writes: Array<[RuntimeWriteOperation, () => Promise<unknown>]> = [
+      ["setProgress", () => context.setProgress({ tooLate: true })],
+      ["checkpoint", () => context.checkpoint("too-late", () => ({ tooLate: true }))],
+      ["sleep", () => context.sleep("too-late", 1)],
+      ["sleepUntil", () => context.sleepUntil("too-late-until", new Date())],
+      ["waitForSignal", () => context.waitForSignal("too-late")],
+      ["waitForHuman", () => context.waitForHuman("too-late", { prompt: "too late" })],
+      ["runChild", () => context.runChild("too-late", "protocol.child", {})],
+      [
+        "runChildren",
+        () => context.runChildren([{ name: "too-late", type: "protocol.child", payload: {} }]),
+      ],
+    ];
+    for (const [name, write] of writes) {
+      try {
+        await write();
+      } catch (error) {
+        rejectedWrites.set(name, error instanceof Error ? error.message : String(error));
+      }
+    }
+    return { tooLate: true };
+  });
+
+  const execution = worker.runOnce();
+  await started.promise;
+  await database.query(
+    "UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1",
+    [id],
+  );
+  await expect(queue.recoverExpired(100, 0)).resolves.toBe(1);
+  await expect(execution).resolves.toBe(true);
+  expect(abortMessage).toBe(fixture.expectedAbortMessage);
+  expect([...rejectedWrites.keys()]).toEqual(fixture.expectedRejectedWrites);
+  expect(new Set(rejectedWrites.values())).toEqual(new Set([fixture.expectedRejectedWriteError]));
+  await expect(queue.getJob(id)).resolves.toMatchObject({
+    state: fixture.expectedState.state,
+    currentAttempt: fixture.expectedState.attempt,
+    result: null,
+  });
+  await expectAttemptOutcome(database, id, fixture.expectedAttemptOutcome);
+}
+
+async function executeHeartbeatCadenceRuntimeFixture(
+  queue: Queue,
+  fixture: HeartbeatCadenceRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  await queue.enqueue(fixture.jobType, {}, { queue: queueName });
+  const handlerStarted = deferred();
+  const releaseHandler = deferred();
+  const firstHeartbeatStarted = deferred();
+  const releaseFirstHeartbeat = deferred();
+  let heartbeatCalls = 0;
+  let activeHeartbeats = 0;
+  let maximumOverlap = 0;
+  const delayedHeartbeatQueue = new Proxy(queue, {
+    get(target, property, receiver) {
+      if (property !== "heartbeatStatus") return Reflect.get(target, property, receiver);
+      return async (...args: Parameters<Queue["heartbeatStatus"]>) => {
+        heartbeatCalls += 1;
+        activeHeartbeats += 1;
+        maximumOverlap = Math.max(maximumOverlap, activeHeartbeats);
+        try {
+          if (heartbeatCalls === 1) {
+            firstHeartbeatStarted.resolve();
+            await releaseFirstHeartbeat.promise;
+          }
+          return await target.heartbeatStatus(...args);
+        } finally {
+          activeHeartbeats -= 1;
+        }
+      };
+    },
+  });
+  const worker = new Worker(delayedHeartbeatQueue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    leaseMs: fixture.leaseMs,
+    heartbeatMs: fixture.heartbeatMs,
+  }).handle(fixture.jobType, async () => {
+    handlerStarted.resolve();
+    await releaseHandler.promise;
+    return null;
+  });
+
+  const execution = worker.runOnce();
+  try {
+    await handlerStarted.promise;
+    await firstHeartbeatStarted.promise;
+    await sleep(fixture.heartbeatMs * 3);
+    expect(heartbeatCalls).toBe(fixture.expectedCallsWhileBlocked);
+    releaseFirstHeartbeat.resolve();
+    await waitForCondition(
+      () => heartbeatCalls >= fixture.expectedMinimumCallsBeforeSettlement,
+      `${fixture.id} did not schedule the next heartbeat after the first settled`,
+    );
+    expect(maximumOverlap).toBe(fixture.expectedMaximumOverlap);
+    releaseHandler.resolve();
+    await expect(execution).resolves.toBe(true);
+    const callsAtSettlement = heartbeatCalls;
+    await sleep(fixture.heartbeatMs * 3);
+    expect(heartbeatCalls).toBe(callsAtSettlement);
+  } finally {
+    releaseFirstHeartbeat.resolve();
+    releaseHandler.resolve();
+    await execution.catch(() => undefined);
+  }
+}
+
+async function executeGracefulDrainRuntimeFixture(
+  queue: Queue,
+  fixture: GracefulDrainRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const ids = await Promise.all(
+    Array.from({ length: fixture.jobCount }, (_, sequence) =>
+      queue.enqueue(fixture.jobType, { sequence }, { queue: queueName }),
+    ),
+  );
+  const releaseHandlers = deferred();
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    concurrency: fixture.concurrency,
+    pollMs: 0,
+    registryIntervalMs: 0,
+  }).handle(fixture.jobType, async () => {
+    await releaseHandlers.promise;
+    return null;
+  });
+
+  const running = worker.run();
+  try {
+    await waitForCondition(
+      () => worker.runtimeState().activeSlots === fixture.expectedActiveAtStop,
+      `${fixture.id} did not fill its active slots`,
+    );
+    worker.stop();
+    expect(worker.runtimeState()).toMatchObject({
+      activeSlots: fixture.expectedActiveAtStop,
+      draining: true,
+    });
+    let settled = false;
+    void running.then(() => {
+      settled = true;
+    });
+    await sleep(fixture.settleCheckMs);
+    expect(settled).toBe(false);
+    releaseHandlers.resolve();
+    await expect(running).resolves.toBeUndefined();
+    expect(worker.runtimeState()).toMatchObject({ activeSlots: 0, draining: false });
+    const states = await Promise.all(ids.map(async (id) => (await queue.getJob(id))?.state));
+    expect(states.filter((state) => state === "succeeded")).toHaveLength(fixture.expectedSucceeded);
+    expect(states.filter((state) => state === "ready")).toHaveLength(fixture.expectedReady);
+  } finally {
+    worker.stop();
+    releaseHandlers.resolve();
+    await running.catch(() => undefined);
+  }
+}
+
 async function exerciseQueue<TResult>(
   rows: unknown[],
   operation: (queue: Queue) => Promise<TResult>,
@@ -221,6 +552,13 @@ describe("SQL protocol conformance fixtures", () => {
         "worker-slot-release",
         "single-attempt-replay",
         "checkpoint-replay",
+        "cooperative-cancellation-delivery",
+        "deadline-settlement",
+        "execution-timeout-settlement",
+        "database-authoritative-expiration",
+        "lease-loss-fencing",
+        "non-overlapping-heartbeats",
+        "graceful-drain",
         "coalescing",
         "dependencies",
         "children",
@@ -293,10 +631,31 @@ describe("SQL protocol conformance fixtures", () => {
       const coverage = new Set<string>();
       for (const fixture of fixtures.runtime) {
         fixture.covers.forEach((capability) => coverage.add(capability));
-        if (fixture.kind === "batch") {
-          await executeBatchRuntimeFixture(queue, fixture);
-        } else {
-          await executeSuspensionReplayRuntimeFixture(queue, runtimeDatabase.pool, fixture);
+        switch (fixture.kind) {
+          case "batch":
+            await executeBatchRuntimeFixture(queue, fixture);
+            break;
+          case "suspension-replay":
+            await executeSuspensionReplayRuntimeFixture(queue, runtimeDatabase.pool, fixture);
+            break;
+          case "cooperative-cancellation":
+            await executeCooperativeCancellationRuntimeFixture(
+              queue,
+              runtimeDatabase.pool,
+              fixture,
+            );
+            break;
+          case "expiration":
+            await executeExpirationRuntimeFixture(queue, runtimeDatabase.pool, fixture);
+            break;
+          case "lease-loss":
+            await executeLeaseLossRuntimeFixture(queue, runtimeDatabase.pool, fixture);
+            break;
+          case "heartbeat-cadence":
+            await executeHeartbeatCadenceRuntimeFixture(queue, fixture);
+            break;
+          case "graceful-drain":
+            await executeGracefulDrainRuntimeFixture(queue, fixture);
         }
       }
       expect(coverage).toEqual(new Set(fixtures.manifest.runtimeCoverage));

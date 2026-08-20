@@ -54,5 +54,96 @@
     "expectedCheckpointOperations": 1,
     "expectedAttemptsAfterSuspension": 0,
     "expectedAttemptsAfterReplay": 1
+  },
+  {
+    "id": "cooperative-cancellation-reaches-handler",
+    "kind": "cooperative-cancellation",
+    "covers": ["cooperative-cancellation-delivery"],
+    "jobType": "protocol.cooperative-cancellation",
+    "leaseMs": 5000,
+    "heartbeatMs": 20,
+    "cancelReason": "runtime fixture cancellation",
+    "expectedAbortReason": "CancellationRequestedError",
+    "expectedState": { "state": "canceled", "attempt": 1 },
+    "expectedAttemptOutcome": "canceled"
+  },
+  {
+    "id": "deadline-settles-after-early-local-timer",
+    "kind": "expiration",
+    "covers": ["deadline-settlement", "database-authoritative-expiration"],
+    "jobType": "protocol.deadline",
+    "mode": "deadline",
+    "durationMs": 200,
+    "localClockLeadMs": 100,
+    "leaseMs": 5000,
+    "heartbeatMs": 20,
+    "maxAttempts": 2,
+    "expectedAbortReasons": ["DeadlineExceededError"],
+    "expectedAfterRuns": [{ "state": "failed", "attempt": 1, "errorName": "DeadlineExceeded" }],
+    "expectedAttemptOutcomes": ["deadline_exceeded"]
+  },
+  {
+    "id": "execution-timeout-settles-after-early-local-timer",
+    "kind": "expiration",
+    "covers": ["execution-timeout-settlement", "database-authoritative-expiration"],
+    "jobType": "protocol.execution-timeout",
+    "mode": "execution-timeout",
+    "durationMs": 200,
+    "localClockLeadMs": 100,
+    "leaseMs": 5000,
+    "heartbeatMs": 20,
+    "maxAttempts": 2,
+    "expectedAbortReasons": ["ExecutionTimeoutError", "ExecutionTimeoutError"],
+    "expectedAfterRuns": [
+      { "state": "ready", "attempt": 2 },
+      { "state": "failed", "attempt": 2, "errorName": "ExecutionTimeout" }
+    ],
+    "expectedAttemptOutcomes": ["timeout", "timeout"]
+  },
+  {
+    "id": "lease-loss-fences-handler-writes",
+    "kind": "lease-loss",
+    "covers": ["lease-loss-fencing"],
+    "jobType": "protocol.lease-loss",
+    "leaseMs": 500,
+    "heartbeatMs": 20,
+    "maxAttempts": 2,
+    "expectedAbortMessage": "Job lease was lost",
+    "expectedRejectedWrites": [
+      "setProgress",
+      "checkpoint",
+      "sleep",
+      "sleepUntil",
+      "waitForSignal",
+      "waitForHuman",
+      "runChild",
+      "runChildren"
+    ],
+    "expectedRejectedWriteError": "Job lease was lost",
+    "expectedState": { "state": "ready", "attempt": 2 },
+    "expectedAttemptOutcome": "lease_expired"
+  },
+  {
+    "id": "heartbeats-never-overlap",
+    "kind": "heartbeat-cadence",
+    "covers": ["non-overlapping-heartbeats"],
+    "jobType": "protocol.heartbeat-cadence",
+    "leaseMs": 500,
+    "heartbeatMs": 10,
+    "expectedCallsWhileBlocked": 1,
+    "expectedMinimumCallsBeforeSettlement": 2,
+    "expectedMaximumOverlap": 1
+  },
+  {
+    "id": "stop-drains-active-slots-without-new-claims",
+    "kind": "graceful-drain",
+    "covers": ["graceful-drain"],
+    "jobType": "protocol.graceful-drain",
+    "concurrency": 2,
+    "jobCount": 3,
+    "settleCheckMs": 20,
+    "expectedActiveAtStop": 2,
+    "expectedSucceeded": 2,
+    "expectedReady": 1
   }
 ]
