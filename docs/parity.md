@@ -43,7 +43,8 @@ Two boundaries keep this matrix small:
 | SQL protocol conformance fixtures executed | Supported  | Supported | Planned |
 
 The TypeScript client is `@workhorse/core` (`Queue`); the Python client is `workhorse-pg`
-(`Queue`/`AsyncQueue` over Psycopg and asyncpg); the Go module is reserved at `go/README.md`.
+(`Queue`/`AsyncQueue` over Psycopg and asyncpg). The Go module has executor adapters and a
+compatibility gate, but its enqueue API remains Planned under [WH-228].
 Python can define and synchronize recurring schedules, but only a worker fires them. A
 deployment enqueueing from Python needs a TypeScript worker to run jobs until [WH-214] ships,
 and to fire schedules until [WH-309] ships. The Planned Go client column reflects the
