@@ -16,6 +16,20 @@ its own final write, so they don't interfere with each other.
 Concurrency here is per worker. More workers add more process slots. Use a
 [concurrency policy](240-concurrency-policies.md) when the fleet must share one durable budget.
 
+## Choosing queues
+
+A worker can serve several queues under one identity and one slot budget. It rotates across the
+configured names, so work waiting in one queue does not disappear behind a continuously busy sibling.
+
+```ts
+const worker = new Worker(queue, {
+  queues: ["email", "billing"],
+});
+```
+
+Use `queue` for one name or `queues` for several. If you omit both, the worker uses the queue
+client's default. A batch callback still receives jobs from only one queue at a time.
+
 ## Waiting without constant polling
 
 An idle worker listens for `workhorse_jobs`, so a committed enqueue can wake it immediately.
@@ -52,7 +66,7 @@ A few consequences worth knowing:
 
 ## The worker registry
 
-Each worker periodically writes a row saying it exists: its id, queue, concurrency, and how
+Each worker periodically writes a row saying it exists: its id, queues, concurrency, and how
 many slots are busy. That's how a dashboard can show a fleet it doesn't host — process
 memory can't answer "which workers are alive" once workers are deployed separately.
 

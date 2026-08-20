@@ -4766,6 +4766,12 @@
               "queue": {
                 "type": "string"
               },
+              "queues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "concurrency": {
                 "type": "number"
               },
@@ -4836,6 +4842,7 @@
             "required": [
               "id",
               "queue",
+              "queues",
               "concurrency",
               "leaseMs",
               "heartbeatMs",
@@ -6171,6 +6178,12 @@
         "id": {
           "type": "string"
         },
+        "queues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "hostname": {
           "anyOf": [
             {
@@ -6270,6 +6283,7 @@
       },
       "required": [
         "id",
+        "queues",
         "hostname",
         "pid",
         "activeJobs",

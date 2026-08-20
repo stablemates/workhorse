@@ -7,6 +7,33 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { deferred, pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("batch handlers", () => {
+  it("keeps batches within one queue when a worker serves several queues", async () => {
+    const firstQueue = `batch-multi-first-${randomUUID()}`;
+    const secondQueue = `batch-multi-second-${randomUUID()}`;
+    for (const queueName of [firstQueue, secondQueue]) {
+      await queue.enqueue("batch-multi-queue", null, { queue: queueName });
+      await queue.enqueue("batch-multi-queue", null, { queue: queueName });
+    }
+    const seen: string[][] = [];
+    const worker = new Worker(queue, {
+      workerId: "batch-multi-queue-worker",
+      queues: [firstQueue, secondQueue],
+      concurrency: 4,
+    }).handleBatch("batch-multi-queue", { maxSize: 2, lingerMs: 100 }, (items) => {
+      seen.push(items.map(({ context }) => context.job.queue));
+      return items.map(() => ({ status: "succeeded" as const, result: null }));
+    });
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+
+    expect(seen).toEqual(
+      expect.arrayContaining([
+        [firstQueue, firstQueue],
+        [secondQueue, secondQueue],
+      ]),
+    );
+  });
+
   it("keeps suspension APIs out of batch-handler contexts", () => {
     type SuspensionMethod =
       | "sleep"

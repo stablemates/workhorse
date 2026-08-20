@@ -39,19 +39,19 @@ const processes = [
     },
   },
   {
-    name: "default worker",
+    name: "worker one",
     arguments: workerArguments,
     environment: {
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-one",
-      WORKHORSE_DEMO_WORKER_PROFILE: "default",
+      WORKHORSE_DEMO_WORKER_PROFILE: "one",
     },
   },
   {
-    name: "partner API worker",
+    name: "worker two",
     arguments: workerArguments,
     environment: {
-      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-partner-api",
-      WORKHORSE_DEMO_WORKER_PROFILE: "partner-api",
+      WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-two",
+      WORKHORSE_DEMO_WORKER_PROFILE: "two",
     },
   },
 ];

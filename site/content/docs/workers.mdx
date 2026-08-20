@@ -16,7 +16,7 @@ result that becomes the job's durable outcome.
 ```ts
 import { Worker } from "@workhorse/core";
 
-const worker = new Worker(queue, { queue: "email", concurrency: 5 })
+const worker = new Worker(queue, { queues: ["email", "billing"], concurrency: 5 })
   .handle("email.send", async (payload: { to: string }, ctx) => {
     await mailer.send(payload.to, { signal: ctx.signal });
     return { deliveredTo: payload.to };
@@ -40,7 +40,7 @@ accidentally write as a stale owner after the job moves on.
 
 ```ts
 const worker = new Worker(queue, {
-  queue: "email", // queue to claim from
+  queues: ["email", "billing"], // queues to claim from
   concurrency: 5, // simultaneous handler slots, default 1
   leaseMs: 30_000, // ownership granted per claim and heartbeat (the default)
   workerId: "email-worker-1", // defaults to <hostname>-<pid>-<random>
@@ -63,8 +63,11 @@ const worker = new Worker(queue, {
 - **`scheduleNamespaces`** and **`scheduleCatchupLimit`** opt this worker into evaluating
   [recurring schedules](/docs/schedules).
 
-Group handlers that share a queue and operational policy into one multi-slot worker. Add a
-second worker when work needs a different queue, lease, retry override, or schedule namespace.
+- **`queues`** lets one worker rotate across several queues under the same identity and
+  concurrency budget. Use `queue` for one queue; omit both options to use the client default.
+
+Group queues that share handlers and operational policy into one multi-slot worker. Add a second
+worker when work needs a different lease, retry override, schedule namespace, or handler registry.
 
 ## Process jobs in batches
 
@@ -100,7 +103,7 @@ export default defineWorkerProcess({
   adapter: () => createWorkhorseAdapter(adapterOptions),
   workers: [
     {
-      options: { queue: "email", concurrency: 5 },
+      options: { queues: ["email", "billing"], concurrency: 5 },
       configure(worker) {
         worker.handle("email.send", sendEmail);
       },

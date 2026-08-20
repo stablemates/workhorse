@@ -1277,7 +1277,7 @@ export class OperatorReadsModule extends QueueModule {
          UNION SELECT queue_name FROM workhorse.queue_control
          UNION SELECT queue_name FROM workhorse.concurrency_policy
          UNION SELECT queue_name FROM workhorse.rate_limit_policy
-         UNION SELECT queue_name FROM workhorse.worker_registry
+         UNION SELECT unnest(queue_names) FROM workhorse.worker_registry
          UNION SELECT query.queue_name FROM workhorse.job_query query
           JOIN workhorse.job_outcome outcome ON outcome.job_id = query.job_id
          WHERE outcome.state = 'failed' AND outcome.error->>'name' = 'DependencyFailed'

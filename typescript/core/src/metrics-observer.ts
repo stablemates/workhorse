@@ -214,7 +214,7 @@ export class WorkhorseMetricsObserver {
         [rejectedSince],
       ),
       this.database.query<WorkerObservationRow>(`
-        SELECT queue_name,
+        SELECT served.queue_name,
                CASE WHEN last_heartbeat_at < clock_timestamp() - interval '30 seconds'
                       THEN 'offline'
                     WHEN draining THEN 'draining'
@@ -223,9 +223,10 @@ export class WorkhorseMetricsObserver {
                count(*)::text AS workers,
                sum(concurrency)::text AS capacity,
                sum(active_slots)::text AS active_slots
-          FROM workhorse.worker_registry
-         GROUP BY queue_name, state
-         ORDER BY queue_name, state`),
+          FROM workhorse.worker_registry registry
+          CROSS JOIN LATERAL unnest(registry.queue_names) served(queue_name)
+         GROUP BY served.queue_name, state
+         ORDER BY served.queue_name, state`),
     ]);
 
     for (const row of queues.rows) {

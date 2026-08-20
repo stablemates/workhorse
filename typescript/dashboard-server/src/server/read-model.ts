@@ -135,7 +135,7 @@ export async function readDashboardSettings(
     `),
     database.execute<{
       worker_id: string;
-      queue_name: string;
+      queue_names: string[];
       concurrency: number;
       lease_ms: number;
       heartbeat_ms: number;
@@ -145,7 +145,7 @@ export async function readDashboardSettings(
       registry_interval_ms: number;
       last_heartbeat_at: Date | string;
     }>(sql`
-      SELECT worker_id, queue_name, concurrency, lease_ms, heartbeat_ms, poll_ms,
+      SELECT worker_id, queue_names, concurrency, lease_ms, heartbeat_ms, poll_ms,
              maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
              last_heartbeat_at
         FROM workhorse.dashboard_worker_registry_v1
@@ -168,7 +168,8 @@ export async function readDashboardSettings(
     }),
     workers: workers.rows.map((worker) => ({
       id: worker.worker_id,
-      queue: worker.queue_name,
+      queue: worker.queue_names[0]!,
+      queues: worker.queue_names,
       concurrency: Number(worker.concurrency),
       leaseMs: Number(worker.lease_ms),
       heartbeatMs: Number(worker.heartbeat_ms),
@@ -1912,6 +1913,7 @@ export async function readDashboardWorkers(
     registered: boolean;
     hostname: string | null;
     pid: number | null;
+    queue_names: string[] | null;
     concurrency: number | null;
     active_slots: number | null;
     draining: boolean | null;
@@ -1951,7 +1953,7 @@ export async function readDashboardWorkers(
     )
     SELECT f.id,
            r.worker_id IS NOT NULL AS registered,
-           r.hostname, r.pid,
+           r.hostname, r.pid, r.queue_names,
            r.concurrency, r.active_slots, r.draining, r.paused, r.started_at, r.last_heartbeat_at,
            COALESCE(a.active_jobs, 0)::integer AS active_jobs,
            COALESCE(h.completed_attempts, 0)::integer AS completed_attempts,
@@ -1976,6 +1978,7 @@ export async function readDashboardWorkers(
         heartbeatAt.getTime() >= now.getTime() - WORKER_REGISTRATION_STALE_MS;
       return {
         id: row.id,
+        queues: row.queue_names ?? [],
         hostname: row.hostname,
         pid: row.pid,
         activeJobs: row.active_jobs,
@@ -2110,6 +2113,7 @@ export async function readDashboardSnapshot(
         registered: boolean;
         hostname: string | null;
         pid: number | null;
+        queue_names: string[] | null;
         concurrency: number | null;
         active_slots: number | null;
         draining: boolean | null;
@@ -2141,7 +2145,7 @@ export async function readDashboardSnapshot(
         )
         SELECT f.id,
                r.worker_id IS NOT NULL AS registered,
-               r.hostname, r.pid,
+               r.hostname, r.pid, r.queue_names,
                r.concurrency, r.active_slots, r.draining, r.paused, r.started_at,
                r.last_heartbeat_at,
                COALESCE(sum(o.active_jobs), 0)::integer AS active_jobs,
@@ -2150,8 +2154,8 @@ export async function readDashboardSnapshot(
           FROM fleet f
           LEFT JOIN workhorse.dashboard_worker_registry_v1 r ON r.worker_id = f.id
           LEFT JOIN observed o ON o.id = f.id
-         GROUP BY f.id, r.worker_id, r.hostname, r.pid, r.concurrency, r.active_slots, r.draining,
-                  r.paused, r.started_at, r.last_heartbeat_at
+         GROUP BY f.id, r.worker_id, r.hostname, r.pid, r.queue_names, r.concurrency,
+                  r.active_slots, r.draining, r.paused, r.started_at, r.last_heartbeat_at
          ORDER BY f.id
       `),
       database.execute<{
@@ -2300,6 +2304,7 @@ export async function readDashboardSnapshot(
         heartbeatAt.getTime() >= now.getTime() - WORKER_REGISTRATION_STALE_MS;
       return {
         id: row.id,
+        queues: row.queue_names ?? [],
         hostname: row.hostname,
         pid: row.pid,
         activeJobs: row.active_jobs,

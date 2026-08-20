@@ -46,7 +46,7 @@ def test_serializes_the_shared_request_fixture_and_returns_the_canonical_result(
     fixture = json.loads((REPOSITORY / "protocol/v1/requests.json").read_text())[0]
     connection = Connection(
         [
-            [{"version": 46}],
+            [{"version": 47}],
             [
                 {
                     "ordinal": 1,
@@ -99,7 +99,7 @@ def test_empty_batch_does_not_open_a_transaction_or_query_postgres() -> None:
 def test_batch_preserves_result_order() -> None:
     connection = Connection(
         [
-            [{"version": 46}],
+            [{"version": 47}],
             [
                 {"ordinal": 1, "job_id": "one", "outcome": "accepted", "reason": None},
                 {"ordinal": 2, "job_id": "two", "outcome": "replayed", "reason": None},

@@ -12,10 +12,15 @@ const repository = path.resolve(import.meta.dirname, "../../..");
 const scratchRoot = process.env.JCODE_SCRATCH_DIR ?? tmpdir();
 const scratch = await mkdtemp(path.join(scratchRoot, "workhorse-packed-"));
 
-async function run(command: string, args: string[], cwd = repository): Promise<string> {
+async function run(
+  command: string,
+  args: string[],
+  cwd = repository,
+  environment: NodeJS.ProcessEnv = {},
+): Promise<string> {
   const { stdout, stderr } = await exec(command, args, {
     cwd,
-    env: { ...process.env, CI: "1" },
+    env: { ...process.env, ...environment, CI: "1" },
     maxBuffer: 20 * 1024 * 1024,
   });
   if (stderr.trim()) process.stderr.write(stderr);
@@ -527,7 +532,11 @@ try {
   }
   await run("node", ["integration.mjs"], consumer);
   await run("node", ["dashboard-development.mjs"], consumer);
-  const agenticFlow = JSON.parse(await run("node", ["agentic-flow.mjs"], consumer)) as {
+  const agenticFlow = JSON.parse(
+    await run("node", ["agentic-flow.mjs"], consumer, {
+      DATABASE_URL: process.env.WORKHORSE_TEST_DATABASE_URL,
+    }),
+  ) as {
     result?: { status?: string };
     progress?: { stage?: string };
   };

@@ -1201,8 +1201,10 @@ export interface WorkerRegistration {
   hostname: string;
   /** Operating-system process id of this worker. */
   pid: number;
-  /** Queue this worker claims from. Defaults to the queue's own default. */
+  /** Queue this worker claims from. Deprecated in favor of `queues`. */
   queue?: string;
+  /** Queues this worker claims from. Defaults to the queue's own default. */
+  queues?: readonly string[];
   concurrency: number;
   leaseMs?: number;
   heartbeatMs?: number;
@@ -1231,6 +1233,8 @@ export interface WorkerRegistryEntry extends WorkerPauseResult {
   instanceId: string;
   hostname: string;
   pid: number;
+  queues: string[];
+  /** First configured queue, retained for source compatibility. */
   queue: string;
   concurrency: number;
   activeSlots: number;

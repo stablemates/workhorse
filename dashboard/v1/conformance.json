@@ -4004,6 +4004,9 @@
                 "workers": [
                   {
                     "id": "conformance-worker",
+                    "queues": [
+                      "conformance"
+                    ],
                     "hostname": "conformance-host",
                     "pid": 4242,
                     "activeJobs": 0,
@@ -4156,6 +4159,9 @@
                   {
                     "id": "conformance-worker",
                     "queue": "conformance",
+                    "queues": [
+                      "conformance"
+                    ],
                     "concurrency": 2,
                     "leaseMs": 30000,
                     "heartbeatMs": 10000,
@@ -5658,6 +5664,9 @@
                 "workers": [
                   {
                     "id": "conformance-worker",
+                    "queues": [
+                      "conformance"
+                    ],
                     "hostname": "conformance-host",
                     "pid": 4242,
                     "activeJobs": 0,
@@ -5811,6 +5820,9 @@
                   {
                     "id": "conformance-worker",
                     "queue": "conformance",
+                    "queues": [
+                      "conformance"
+                    ],
                     "concurrency": 2,
                     "leaseMs": 30000,
                     "heartbeatMs": 10000,

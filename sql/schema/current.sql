@@ -326,6 +326,7 @@ CREATE TABLE IF NOT EXISTS workhorse.worker_registry (
   -- process it lives on, which is the first thing an operator asks about a busy worker.
   hostname text NOT NULL CHECK (hostname <> ''),
   pid integer NOT NULL CHECK (pid > 0),
+  -- The first queue remains materialized for callers of the version 1 registration contract.
   queue_name text NOT NULL CHECK (queue_name <> ''),
   concurrency integer NOT NULL CHECK (concurrency BETWEEN 1 AND 100),
   lease_ms integer NOT NULL CHECK (lease_ms > 0),
@@ -341,7 +342,12 @@ CREATE TABLE IF NOT EXISTS workhorse.worker_registry (
   paused_reason text CHECK (paused_reason IS NULL OR paused_reason <> ''),
   paused_at timestamptz,
   started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-  last_heartbeat_at timestamptz NOT NULL DEFAULT clock_timestamp()
+  last_heartbeat_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  queue_names text[] NOT NULL CHECK (
+    cardinality(queue_names) >= 1
+    AND array_position(queue_names, NULL) IS NULL
+    AND array_position(queue_names, '') IS NULL
+  )
 );
 
 CREATE INDEX IF NOT EXISTS worker_registry_heartbeat_idx
@@ -4303,12 +4309,12 @@ $$;
 -- always comes back running. The durable lever for "stop processing this work" is queue pause,
 -- which is keyed by queue name and unaffected by worker lifecycles. Keeping the two distinct means
 -- a pause can never become a forgotten flag that silently idles a worker after a later deployment.
-CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
+CREATE OR REPLACE FUNCTION workhorse.register_worker_v2(
   p_worker_id text,
   p_instance_id uuid,
   p_hostname text,
   p_pid integer,
-  p_queue_name text,
+  p_queue_names text[],
   p_concurrency integer,
   p_lease_ms integer,
   p_heartbeat_ms integer,
@@ -4331,8 +4337,10 @@ BEGIN
   IF p_instance_id IS NULL THEN
     RAISE EXCEPTION 'instance_id must not be null';
   END IF;
-  IF p_queue_name IS NULL OR p_queue_name = '' THEN
-    RAISE EXCEPTION 'queue_name must not be empty';
+  IF p_queue_names IS NULL OR cardinality(p_queue_names) = 0
+     OR EXISTS (SELECT 1 FROM unnest(p_queue_names) queue_name WHERE queue_name IS NULL OR queue_name = '')
+     OR cardinality(p_queue_names) <> (SELECT count(DISTINCT queue_name) FROM unnest(p_queue_names) queue_name) THEN
+    RAISE EXCEPTION 'queue_names must contain distinct non-empty names';
   END IF;
   IF p_hostname IS NULL OR p_hostname = '' THEN
     RAISE EXCEPTION 'hostname must not be empty';
@@ -4342,10 +4350,10 @@ BEGIN
   END IF;
 
   INSERT INTO workhorse.worker_registry AS registry
-    (worker_id, instance_id, hostname, pid, queue_name, concurrency, lease_ms, heartbeat_ms,
+    (worker_id, instance_id, hostname, pid, queue_names, queue_name, concurrency, lease_ms, heartbeat_ms,
      poll_ms, maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms,
      active_slots, draining)
-  VALUES (p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_name, p_concurrency,
+  VALUES (p_worker_id, p_instance_id, p_hostname, p_pid, p_queue_names, p_queue_names[1], p_concurrency,
           p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
           p_maintenance_task_poll_ms, p_registry_interval_ms,
           COALESCE(p_active_slots, 0), COALESCE(p_draining, false))
@@ -4353,6 +4361,7 @@ BEGIN
     SET instance_id = EXCLUDED.instance_id,
         hostname = EXCLUDED.hostname,
         pid = EXCLUDED.pid,
+        queue_names = EXCLUDED.queue_names,
         queue_name = EXCLUDED.queue_name,
         concurrency = EXCLUDED.concurrency,
         lease_ms = EXCLUDED.lease_ms,
@@ -4390,6 +4399,33 @@ BEGIN
 
   RETURN v_paused;
 END;
+$$;
+
+-- Preserve the version 1 SQL contract for single-queue callers.
+CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
+  p_worker_id text,
+  p_instance_id uuid,
+  p_hostname text,
+  p_pid integer,
+  p_queue_name text,
+  p_concurrency integer,
+  p_lease_ms integer,
+  p_heartbeat_ms integer,
+  p_poll_ms integer,
+  p_maintenance_interval_ms integer,
+  p_maintenance_task_poll_ms integer,
+  p_registry_interval_ms integer,
+  p_active_slots integer,
+  p_draining boolean
+)
+RETURNS boolean
+LANGUAGE sql
+AS $$
+  SELECT workhorse.register_worker_v2(
+    p_worker_id, p_instance_id, p_hostname, p_pid, ARRAY[p_queue_name], p_concurrency,
+    p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
+    p_maintenance_task_poll_ms, p_registry_interval_ms, p_active_slots, p_draining
+  )
 $$;
 
 -- Remove one worker registration during graceful shutdown. A worker that is killed instead simply
@@ -9497,7 +9533,7 @@ CREATE OR REPLACE VIEW workhorse.dashboard_schedule_occurrence_v1 AS
 CREATE OR REPLACE VIEW workhorse.dashboard_worker_registry_v1 AS
   SELECT worker_id, hostname, pid, queue_name, concurrency, lease_ms, heartbeat_ms, poll_ms,
          maintenance_interval_ms, maintenance_task_poll_ms, registry_interval_ms, active_slots,
-         draining, paused, started_at, last_heartbeat_at FROM workhorse.worker_registry;
+         draining, paused, started_at, last_heartbeat_at, queue_names FROM workhorse.worker_registry;
 
 CREATE OR REPLACE FUNCTION workhorse.dashboard_job_estimate_v1()
 RETURNS TABLE (estimate bigint)
@@ -9512,9 +9548,10 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (43, 'pre-release baseline'),
   (44, 'protocol version registry'),
   (45, 'statistics maintenance policy'),
-  (46, 'long-horizon statistics tiers')
+  (46, 'long-horizon statistics tiers'),
+  (47, 'multi-queue workers')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (46) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (47) ON CONFLICT DO NOTHING;
 INSERT INTO workhorse.protocol_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date

@@ -17,6 +17,7 @@ export interface DemoWorkerDefinitionOptions extends Omit<
 > {
   concurrency: number;
   queue?: string;
+  queues?: readonly string[];
   scheduleNamespaces?: readonly string[];
   pollMs?: number;
   registryIntervalMs?: number;
@@ -33,7 +34,7 @@ export function createDemoWorkerDefinition(
 ): WorkerProcessWorkerDefinition {
   return {
     options: {
-      queue: options.queue ?? DEMO_QUEUE,
+      ...(options.queues ? { queues: options.queues } : { queue: options.queue ?? DEMO_QUEUE }),
       scheduleNamespaces: options.scheduleNamespaces ?? [DEMO_SCHEDULE_NAMESPACE],
       pollMs: options.pollMs ?? DEMO_WORKER_POLL_MS,
       concurrency: options.concurrency,

@@ -10,7 +10,7 @@ function operations(
   overrides: Partial<SchemaPreparationOperations> = {},
 ): SchemaPreparationOperations {
   return {
-    readVersion: vi.fn<SchemaPreparationOperations["readVersion"]>().mockResolvedValue(46),
+    readVersion: vi.fn<SchemaPreparationOperations["readVersion"]>().mockResolvedValue(47),
     install: vi.fn<SchemaPreparationOperations["install"]>().mockResolvedValue(undefined),
     migrate: vi.fn<SchemaPreparationOperations["migrate"]>().mockResolvedValue(undefined),
     installDemo: vi.fn<SchemaPreparationOperations["installDemo"]>().mockResolvedValue(undefined),

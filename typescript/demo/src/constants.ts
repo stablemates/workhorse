@@ -33,7 +33,7 @@ export const DEMO_SIGNAL_SENDER_DELAY_MS = 3_000;
  */
 export const DEMO_RECURRING_WAIT_TIMEOUT_MS = 10 * 60_000;
 /**
- * The declared batch ceiling for `demo.batch-digest`. The default-queue worker clamps it to its
+ * The declared batch ceiling for `demo.batch-digest`. Each demo worker clamps it to its
  * declared job concurrency and groups up to three compatible members per invocation.
  */
 export const DEMO_BATCH_MAX_SIZE = 3;
@@ -45,7 +45,7 @@ export const HISTORICAL_SEED_NAME = "historical-dashboard-v1";
 export const HISTORICAL_JOB_COUNT = 362;
 export const DEMO_WORKER_POLL_MS = 15_000;
 /**
- * Declared execution slots for the demo's default-queue worker.
+ * Declared execution slots for the demo workers.
  *
  * The worker overlaps handlers so the dashboard shows active slot use. Concurrency is
  * configuration, not a runtime control, so nothing mutates it.
@@ -55,7 +55,7 @@ export const DEMO_WORKER_POLL_MS = 15_000;
  * of what an operator actually sees: a fleet discovered from PostgreSQL rather than a list the web
  * tier was told about in advance.
  */
-export const DEMO_WORKER_CONCURRENCY = [3] as const;
+export const DEMO_WORKER_CONCURRENCY = [3, 3] as const;
 /**
  * Worker identities attached to the seeded historical attempts.
  *

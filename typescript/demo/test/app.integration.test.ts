@@ -84,7 +84,7 @@ import { createDemoWorkerDefinition } from "../src/worker-definition.js";
  * drops the demo's own tables. Pointed at the demo database that is destructive to a demo someone
  * is watching: its data disappears mid-session and its tables are gone when the run ends. Worse in
  * the other direction, a running demo registers two workers of its own, and any assertion about the
- * fleet then sees extra workers beyond the one default-queue worker the test started.
+ * fleet then sees extra workers beyond the demo workers the test started.
  */
 const databaseUrl = localDatabaseUrl("test");
 assertLocalDatabasePurpose(databaseUrl, "test");
@@ -442,7 +442,7 @@ async function waitForWorker(
 }
 
 /**
- * Wait for the demo's default-queue worker to announce itself.
+ * Wait for the demo workers to announce themselves and return one of them.
  *
  * The demo does not name its workers, exactly as a real deployment usually does not, so tests have
  * to discover the fleet from the registry rather than assume an identity.
@@ -1675,9 +1675,16 @@ describe("Workhorse demo", () => {
         jobs: [{ id: accepted.jobId, state: "succeeded", attempt: 2 }],
         counts: { all: 1, retried: 1, completed: 1 },
       });
-      expect(await client.dashboard.workers()).toMatchObject({
-        workers: [{ id: expect.stringMatching(GENERATED_WORKER_ID), registered: true }],
-      });
+      const workers = await client.dashboard.workers();
+      expect(workers.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
+      expect(workers.workers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: expect.stringMatching(GENERATED_WORKER_ID),
+            registered: true,
+          }),
+        ]),
+      );
       expect(await client.dashboard.system({ window: "1h" })).toMatchObject({
         window: "1h",
         kpis: { retry: { backoff: 0 }, errorRate: { current: expect.any(Number) } },
@@ -2736,7 +2743,7 @@ describe("Workhorse demo", () => {
   });
 
   it("declares deterministic demo worker concurrency and projects it through RPC", async () => {
-    expect(DEMO_WORKER_CONCURRENCY).toEqual([3]);
+    expect(DEMO_WORKER_CONCURRENCY).toEqual([3, 3]);
 
     const { app, workhorse } = createTestApplication({ operator: createLocalOperator(database) });
     const client = dashboardClient(app);
@@ -2770,32 +2777,34 @@ describe("Workhorse demo", () => {
     workhorse.start();
 
     try {
-      // Wait for the unnamed worker to announce itself before enqueueing work against its slots.
-      const defaultQueueWorker = await waitForRegisteredWorker(client);
+      // Wait for both unnamed workers before enqueueing enough work to fill either worker's slots.
+      await waitForRegisteredWorker(client);
 
-      const enqueued = await Promise.all([
-        client.dashboard.enqueueTest({
-          kind: "long-running",
-          audit: { actor: "operator", reason: "fill slots", requestId: "slots-one" },
-        }),
-        client.dashboard.enqueueTest({
-          kind: "long-running",
-          audit: { actor: "operator", reason: "fill slots", requestId: "slots-two" },
-        }),
-      ]);
-
-      const overlapped = await waitForWorker(
-        client,
-        defaultQueueWorker.id,
-        (worker) => worker.activeSlots === 2,
+      const enqueued = await Promise.all(
+        Array.from({ length: 6 }, (_, index) =>
+          client.dashboard.enqueueTest({
+            kind: "long-running",
+            audit: {
+              actor: "operator",
+              reason: "fill slots",
+              requestId: `slots-${index + 1}`,
+            },
+          }),
+        ),
       );
-      expect(overlapped).toMatchObject({ concurrency: 3, activeSlots: 2, paused: false });
+
+      const busyFleet = await waitFor(
+        () => client.dashboard.workers(),
+        (page) => page.workers.some((worker) => worker.activeSlots === 3),
+      );
+      const overlapped = busyFleet.workers.find((worker) => worker.activeSlots === 3)!;
+      expect(overlapped).toMatchObject({ concurrency: 3, activeSlots: 3, paused: false });
       // SQL-observed active jobs and in-process slots describe the same overlap from two sources.
-      expect(overlapped.activeJobs).toBe(2);
+      expect(overlapped.activeJobs).toBe(3);
 
       await expect(
         client.dashboard.setWorkerPaused({
-          workerId: defaultQueueWorker.id,
+          workerId: overlapped.id,
           paused: true,
           audit: { actor: "operator", reason: "pause while busy", requestId: "slots-pause" },
         }),
@@ -2803,9 +2812,9 @@ describe("Workhorse demo", () => {
 
       // Pause stops new claims only, so both in-flight handlers keep their slots.
       const paused = (await client.dashboard.workers()).workers.find(
-        (worker) => worker.id === defaultQueueWorker.id,
+        (worker) => worker.id === overlapped.id,
       );
-      expect(paused).toMatchObject({ paused: true, activeSlots: 2, concurrency: 3 });
+      expect(paused).toMatchObject({ paused: true, activeSlots: 3, concurrency: 3 });
 
       for (const { jobId } of enqueued) {
         const detail = await waitFor(
@@ -2817,7 +2826,7 @@ describe("Workhorse demo", () => {
 
       const drained = await waitForWorker(
         client,
-        defaultQueueWorker.id,
+        overlapped.id,
         (worker) => worker.activeSlots === 0,
       );
       expect(drained).toMatchObject({ paused: true, activeSlots: 0, draining: false });
@@ -2831,7 +2840,7 @@ describe("Workhorse demo", () => {
         ).rows,
       ).toEqual([
         {
-          target: `worker:${defaultQueueWorker.id}`,
+          target: `worker:${overlapped.id}`,
           before: { paused: false },
           after: { paused: true },
         },
@@ -2903,7 +2912,7 @@ describe("Workhorse demo", () => {
         1,
       );
       expect(snapshot.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
-      expect(snapshot.workers.map((worker) => worker.concurrency)).toEqual([3]);
+      expect(snapshot.workers.map((worker) => worker.concurrency)).toEqual([3, 3]);
       for (const worker of snapshot.workers) {
         expect(worker).toMatchObject({ registered: true, draining: false });
         expect(worker.activeSlots).not.toBeNull();

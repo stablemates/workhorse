@@ -8,6 +8,65 @@ import { createIntegrationTestContext } from "./support/integration.js";
 const { databaseUrl, deferred, pool, queue } = createIntegrationTestContext(import.meta.url);
 
 describe("worker registry", () => {
+  it("claims configured queues through one worker identity and shared slot budget", async () => {
+    const firstQueue = `multi-queue-first-${randomUUID()}`;
+    const secondQueue = `multi-queue-second-${randomUUID()}`;
+    const handled: string[] = [];
+    await queue.enqueue("multi-queue", null, { queue: firstQueue });
+    await queue.enqueue("multi-queue", null, { queue: secondQueue });
+
+    const worker = new Worker(queue, {
+      workerId: "multi-queue-worker",
+      queues: [firstQueue, secondQueue],
+      concurrency: 2,
+      pollMs: 0,
+    }).handle("multi-queue", (_payload, { job }) => {
+      handled.push(job.queue);
+      return null;
+    });
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+    expect(handled.toSorted()).toEqual([firstQueue, secondQueue].toSorted());
+  });
+
+  it("registers every queue served by one worker", async () => {
+    const worker = new Worker(queue, {
+      workerId: "multi-queue-registration",
+      queues: ["mail", "billing"],
+      registryIntervalMs: 100,
+    });
+
+    await worker.runOnce();
+
+    await expect(
+      queue
+        .listWorkers()
+        .then((workers) => workers.find((entry) => entry.workerId === "multi-queue-registration")),
+    ).resolves.toMatchObject({ queues: ["mail", "billing"] });
+  });
+
+  it("subscribes to notifications for every configured queue", async () => {
+    const close = vi.fn<() => Promise<void>>(async () => undefined);
+    const subscribe = vi.spyOn(queue, "subscribeToJobNotifications").mockResolvedValue({ close });
+    const worker = new Worker(queue, {
+      workerId: "multi-queue-notifications",
+      queues: ["mail", "billing"],
+      pollMs: 10,
+      registryIntervalMs: 0,
+    });
+
+    try {
+      const running = worker.run();
+      await vi.waitFor(() => expect(subscribe).toHaveBeenCalledTimes(2));
+      expect(subscribe.mock.calls.map(([queueName]) => queueName)).toEqual(["mail", "billing"]);
+      worker.stop();
+      await running;
+      expect(close).toHaveBeenCalledTimes(2);
+    } finally {
+      subscribe.mockRestore();
+    }
+  });
+
   it("registers a running worker durably and deregisters it once its loop stops", async () => {
     const worker = new Worker(queue, {
       workerId: "registry-lifecycle",

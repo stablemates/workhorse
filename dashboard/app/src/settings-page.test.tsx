@@ -81,7 +81,7 @@ const data: DashboardSettingsPage = {
   workers: [
     {
       id: "worker-1",
-      queue: "default",
+      queues: ["default", "mail"],
       concurrency: 4,
       leaseMs: 30_000,
       heartbeatMs: 10_000,

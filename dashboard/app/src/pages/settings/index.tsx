@@ -494,7 +494,7 @@ export function SettingsPage({
                 <Table.Thead>
                   <Table.Tr>
                     <Table.Th>Worker</Table.Th>
-                    <Table.Th>Queue</Table.Th>
+                    <Table.Th>Queues</Table.Th>
                     <Table.Th>Concurrency</Table.Th>
                     <Table.Th>Lease</Table.Th>
                     <Table.Th>Heartbeat</Table.Th>
@@ -508,7 +508,7 @@ export function SettingsPage({
                   {data.workers.map((worker) => (
                     <Table.Tr key={worker.id}>
                       <Table.Td>{worker.id}</Table.Td>
-                      <Table.Td>{worker.queue}</Table.Td>
+                      <Table.Td>{worker.queues.join(", ")}</Table.Td>
                       <Table.Td>{worker.concurrency}</Table.Td>
                       <Table.Td>{formatDuration(worker.leaseMs)} lease</Table.Td>
                       <Table.Td>{formatDuration(worker.heartbeatMs)}</Table.Td>

@@ -330,6 +330,8 @@ export class ExecutionTimeoutError extends WorkhorseError {
 export interface WorkerOptions {
   /** Queue name used for claims. */
   queue?: string;
+  /** Queue names used for claims. The worker rotates across them under one concurrency budget. */
+  queues?: readonly string[];
   /**
    * Durable lease owner identity. It must be unique among simultaneously running workers.
    *
@@ -429,7 +431,11 @@ export interface WorkerRuntimeState {
 export class Worker {
   private readonly handlers = new Map<string, Handler>();
   private readonly workerId: string;
-  private readonly queueName: string;
+  private readonly queueNames: readonly string[];
+  private nextQueueIndex = 0;
+  private get workerQueueAttributes(): { "workhorse.worker.queues": string[] } {
+    return { "workhorse.worker.queues": [...this.queueNames] };
+  }
   private readonly leaseMs: number;
   private readonly heartbeatMs: number;
   private readonly pollMs: number;
@@ -478,7 +484,17 @@ export class Worker {
     private readonly options: WorkerOptions = {},
   ) {
     this.workerId = options.workerId ?? defaultWorkerId();
-    this.queueName = options.queue ?? queue.defaultQueue;
+    if (options.queue !== undefined && options.queues !== undefined) {
+      throw new Error("queue and queues cannot be configured together");
+    }
+    const configuredQueues = options.queues ?? [options.queue ?? queue.defaultQueue];
+    this.queueNames = [...new Set(configuredQueues)];
+    if (
+      this.queueNames.length === 0 ||
+      this.queueNames.some((queueName) => typeof queueName !== "string" || queueName.length === 0)
+    ) {
+      throw new Error("queues must contain at least one non-empty queue name");
+    }
     this.concurrency = options.concurrency ?? 1;
     this.leaseMs = options.leaseMs ?? 30_000;
     this.heartbeatMs = options.heartbeatMs ?? Math.max(100, Math.floor(this.leaseMs / 3));
@@ -546,18 +562,22 @@ export class Worker {
       resolve: (result: TResult) => void;
       reject: (error: unknown) => void;
     };
-    let pending: PendingItem[] = [];
-    let lingerTimer: ReturnType<typeof setTimeout> | undefined;
+    type PendingQueue = {
+      items: PendingItem[];
+      lingerTimer: ReturnType<typeof setTimeout> | undefined;
+    };
+    const pendingQueues = new Map<string, PendingQueue>();
     let nextArrival = 0;
 
-    const dispatch = (): void => {
-      if (pending.length === 0) return;
-      if (lingerTimer !== undefined) {
-        clearTimeout(lingerTimer);
-        lingerTimer = undefined;
+    const dispatch = (queueName: string): void => {
+      const pending = pendingQueues.get(queueName);
+      if (!pending || pending.items.length === 0) return;
+      if (pending.lingerTimer !== undefined) {
+        clearTimeout(pending.lingerTimer);
+        pending.lingerTimer = undefined;
       }
       const batch: PendingItem[] = [];
-      for (const member of pending.splice(0, maxSize)) {
+      for (const member of pending.items.splice(0, maxSize)) {
         const insertionIndex = batch.findIndex(
           (candidate) =>
             candidate.priority < member.priority ||
@@ -572,7 +592,7 @@ export class Worker {
       const firstArrivedAt = Math.min(...batch.map((member) => member.arrivedAt));
       const actualLingerMs = Math.max(0, performance.now() - firstArrivedAt);
       const attributes = {
-        "workhorse.queue.name": this.queueName,
+        "workhorse.queue.name": queueName,
         "workhorse.job.type": type,
         "workhorse.handler.batch.full": full,
       };
@@ -676,7 +696,10 @@ export class Worker {
 
     const adapter: Handler<TPayload, TResult> = (payload, context) =>
       new Promise<TResult>((resolve, reject) => {
-        pending.push({
+        const queueName = context.job.queue;
+        const pending = pendingQueues.get(queueName) ?? { items: [], lingerTimer: undefined };
+        pendingQueues.set(queueName, pending);
+        pending.items.push({
           arrivalOrder: nextArrival,
           arrivedAt: performance.now(),
           priority: context.job.priority,
@@ -685,10 +708,10 @@ export class Worker {
           reject,
         });
         nextArrival += 1;
-        if (pending.length >= maxSize || lingerMs === 0) {
-          dispatch();
-        } else if (lingerTimer === undefined) {
-          lingerTimer = setTimeout(dispatch, lingerMs);
+        if (pending.items.length >= maxSize || lingerMs === 0) {
+          dispatch(queueName);
+        } else if (pending.lingerTimer === undefined) {
+          pending.lingerTimer = setTimeout(() => dispatch(queueName), lingerMs);
         }
       });
 
@@ -715,7 +738,7 @@ export class Worker {
       void pendingRefresh.catch(() => undefined);
     }
     logInfo("workhorse.worker.stop_requested", "Worker stop requested", {
-      "workhorse.queue.name": this.queueName,
+      ...this.workerQueueAttributes,
       "workhorse.worker.id": this.workerId,
       "workhorse.worker.active_slots": this.activeSlots,
     });
@@ -736,7 +759,7 @@ export class Worker {
   pause(): void {
     this.locallyPaused = true;
     logInfo("workhorse.worker.paused", "Worker paused locally", {
-      "workhorse.queue.name": this.queueName,
+      ...this.workerQueueAttributes,
       "workhorse.worker.id": this.workerId,
     });
     this.wakeLoops();
@@ -748,7 +771,7 @@ export class Worker {
     this.previousPassWorked = false;
     this.lastClaimAt = Number.NEGATIVE_INFINITY;
     logInfo("workhorse.worker.resumed", "Worker resumed locally", {
-      "workhorse.queue.name": this.queueName,
+      ...this.workerQueueAttributes,
       "workhorse.worker.id": this.workerId,
     });
     this.wakeLoops();
@@ -789,6 +812,19 @@ export class Worker {
     return this.withExclusiveExecution(() => this.runBatch(true));
   }
 
+  private async claimNext(): Promise<ClaimedJob | null> {
+    for (let checked = 0; checked < this.queueNames.length; checked += 1) {
+      const queueName = this.queueNames[this.nextQueueIndex]!;
+      this.nextQueueIndex = (this.nextQueueIndex + 1) % this.queueNames.length;
+      const job = await this.queue.claim(this.workerId, {
+        queue: queueName,
+        leaseMs: this.leaseMs,
+      });
+      if (job) return job;
+    }
+    return null;
+  }
+
   private async runBatch(
     includeMaintenance: boolean,
     shouldStop: () => boolean = () => this.stopping,
@@ -807,10 +843,7 @@ export class Worker {
       if (shouldStop() || this.paused) break;
       let job: ClaimedJob | null;
       try {
-        job = await this.queue.claim(this.workerId, {
-          queue: this.queueName,
-          leaseMs: this.leaseMs,
-        });
+        job = await this.claimNext();
       } catch (error) {
         claimError = error;
         claimFailed = true;
@@ -853,13 +886,13 @@ export class Worker {
     return withSpan(
       "workhorse.handler",
       {
-        "workhorse.queue.name": this.queueName,
+        "workhorse.queue.name": job.queue,
         ...jobSpanAttributes(job),
       },
       async (span) => {
         logDebug("workhorse.handler.started", "Job handler started", {
           ...jobSpanAttributes(job),
-          "workhorse.queue.name": this.queueName,
+          "workhorse.queue.name": job.queue,
           "workhorse.worker.id": this.workerId,
         });
         try {
@@ -874,7 +907,7 @@ export class Worker {
           telemetryMetrics.handlerRuntime.add(durationMs, attributes);
           logDebug("workhorse.handler.finished", "Job handler finished", {
             ...jobSpanAttributes(job),
-            "workhorse.queue.name": this.queueName,
+            "workhorse.queue.name": job.queue,
             "workhorse.worker.id": this.workerId,
             "workhorse.handler.duration_ms": durationMs,
           });
@@ -895,10 +928,10 @@ export class Worker {
     const recordExecution = (outcome: JobExecutionOutcome): void => {
       if (activation.outcome !== "unknown") return;
       activation.outcome = outcome;
-      recordHandlerExecution(this.queueName, job.type, outcome);
+      recordHandlerExecution(job.queue, job.type, outcome);
       logInfo("workhorse.job.execution_finished", "Job execution finished", {
         ...jobSpanAttributes(job),
-        "workhorse.queue.name": this.queueName,
+        "workhorse.queue.name": job.queue,
         "workhorse.worker.id": this.workerId,
         "workhorse.handler.outcome": outcome,
       });
@@ -1313,7 +1346,7 @@ export class Worker {
       if (arbiter.isSuspended()) {
         logWarn("workhorse.handler.signal_swallowed", "Job handler swallowed its abort signal", {
           ...jobSpanAttributes(job),
-          "workhorse.queue.name": this.queueName,
+          "workhorse.queue.name": job.queue,
           "workhorse.worker.id": this.workerId,
           "workhorse.handler.outcome": "suspended",
         });
@@ -1449,7 +1482,7 @@ export class Worker {
         instanceId: this.instanceId,
         hostname: workerHostname(),
         pid: process.pid,
-        queue: this.queueName,
+        queues: this.queueNames,
         concurrency: this.concurrency,
         leaseMs: this.leaseMs,
         heartbeatMs: this.heartbeatMs,
@@ -1463,7 +1496,7 @@ export class Worker {
     } catch (error) {
       // Keep the last known pause decision rather than silently resuming a paused worker.
       logInfo("workhorse.worker.registration_failed", "Worker registration failed", {
-        "workhorse.queue.name": this.queueName,
+        ...this.workerQueueAttributes,
         "workhorse.worker.id": this.workerId,
       });
       this.options.onRegistrationError?.(error);
@@ -1477,7 +1510,7 @@ export class Worker {
       this.loggedRegistrationState.paused !== registrationState.paused
     ) {
       logDebug("workhorse.worker.registered", "Worker registration changed", {
-        "workhorse.queue.name": this.queueName,
+        ...this.workerQueueAttributes,
         "workhorse.worker.id": this.workerId,
         "workhorse.worker.concurrency": this.concurrency,
         "workhorse.worker.active_slots": registrationState.activeSlots,
@@ -1498,7 +1531,7 @@ export class Worker {
         paused ? "workhorse.worker.paused" : "workhorse.worker.resumed",
         paused ? "Worker paused remotely" : "Worker resumed remotely",
         {
-          "workhorse.queue.name": this.queueName,
+          ...this.workerQueueAttributes,
           "workhorse.worker.id": this.workerId,
         },
       );
@@ -1619,7 +1652,7 @@ export class Worker {
     this.draining = false;
     this.running = true;
     logInfo("workhorse.worker.started", "Worker started", {
-      "workhorse.queue.name": this.queueName,
+      ...this.workerQueueAttributes,
       "workhorse.worker.id": this.workerId,
       "workhorse.worker.concurrency": this.concurrency,
     });
@@ -1632,9 +1665,7 @@ export class Worker {
       this.wakeLoops();
     };
 
-    const notificationState: { notificationSubscription: JobNotificationSubscription | null } = {
-      notificationSubscription: null,
-    };
+    const notificationSubscriptions: JobNotificationSubscription[] = [];
     const runFailure = await (async () => {
       if (shouldStop()) return;
       await this.runMaintenance();
@@ -1642,12 +1673,15 @@ export class Worker {
 
       const subscribeToJobNotifications = this.queue.subscribeToJobNotifications;
       if (typeof subscribeToJobNotifications === "function") {
-        notificationState.notificationSubscription = await subscribeToJobNotifications.call(
-          this.queue,
-          this.queueName,
-          () => this.wakeLoops(),
-          (error) => this.options.onNotificationError?.(error),
-        );
+        for (const queueName of this.queueNames) {
+          const subscription = await subscribeToJobNotifications.call(
+            this.queue,
+            queueName,
+            () => this.wakeLoops(),
+            (error) => this.options.onNotificationError?.(error),
+          );
+          if (subscription) notificationSubscriptions.push(subscription);
+        }
       }
 
       const maintenance = this.maintenanceLoop(shouldStop, signal).catch(fail);
@@ -1664,10 +1698,12 @@ export class Worker {
     this.draining = this.activeSlots > 0;
     const failures: unknown[] = [];
     if (runFailure) failures.push(runFailure.error);
-    try {
-      await notificationState.notificationSubscription?.close();
-    } catch (error) {
-      failures.push(error);
+    for (const subscription of notificationSubscriptions) {
+      try {
+        await subscription.close();
+      } catch (error) {
+        failures.push(error);
+      }
     }
     try {
       await this.deregister();
@@ -1677,7 +1713,7 @@ export class Worker {
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, "Worker shutdown failed");
     logInfo("workhorse.worker.stopped", "Worker stopped", {
-      "workhorse.queue.name": this.queueName,
+      ...this.workerQueueAttributes,
       "workhorse.worker.id": this.workerId,
       "workhorse.worker.active_slots": this.activeSlots,
     });
@@ -1771,10 +1807,7 @@ export class Worker {
         const claimWakeVersion = this.wakeVersion;
         let job: ClaimedJob | null;
         try {
-          job = await this.queue.claim(this.workerId, {
-            queue: this.queueName,
-            leaseMs: this.leaseMs,
-          });
+          job = await this.claimNext();
         } catch (error) {
           claimError = error;
           break;

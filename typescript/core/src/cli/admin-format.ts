@@ -156,7 +156,7 @@ export function workersTableRows(workers: readonly WorkerRegistryEntry[]): strin
     worker.workerId,
     truncate(worker.hostname, 24),
     String(worker.pid),
-    worker.queue,
+    worker.queues.join(", "),
     `${worker.activeSlots}/${worker.concurrency}`,
     worker.paused ? `yes${worker.pausedBy ? ` (${worker.pausedBy})` : ""}` : "no",
     worker.draining ? "yes" : "no",

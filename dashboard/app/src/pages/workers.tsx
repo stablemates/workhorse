@@ -50,6 +50,7 @@ export function WorkersPage({
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Worker</Table.Th>
+                  <Table.Th>Queues</Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th>Claims</Table.Th>
                   <Table.Th ta="right">Busy slots</Table.Th>
@@ -84,6 +85,7 @@ export function WorkersPage({
                         ) : null}
                       </Stack>
                     </Table.Td>
+                    <Table.Td>{worker.queues.length > 0 ? worker.queues.join(", ") : "—"}</Table.Td>
                     <Table.Td>
                       <Group gap={6} wrap="nowrap">
                         <StatusBadge state={worker.status} />

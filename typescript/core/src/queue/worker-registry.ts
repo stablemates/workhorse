@@ -7,8 +7,8 @@ import { QueueModule } from "./module-context.js";
 export class WorkerRegistryModule extends QueueModule {
   async registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }> {
     const result = await this.context.database.query<{ paused: boolean }>(
-      `SELECT workhorse.register_worker_v1(
-         $1::text, $2::uuid, $3::text, $4::integer, $5::text, $6::integer,
+      `SELECT workhorse.register_worker_v2(
+         $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::integer,
          $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
          $12::integer, $13::integer, $14::boolean
        ) AS paused`,
@@ -17,7 +17,7 @@ export class WorkerRegistryModule extends QueueModule {
         registration.instanceId,
         registration.hostname,
         registration.pid,
-        registration.queue ?? this.context.defaultQueue,
+        registration.queues ?? [registration.queue ?? this.context.defaultQueue],
         registration.concurrency,
         registration.leaseMs ?? 30_000,
         registration.heartbeatMs ?? 10_000,
@@ -29,7 +29,7 @@ export class WorkerRegistryModule extends QueueModule {
         registration.draining,
       ],
     );
-    const paused = expectOneRow(result, "workhorse.register_worker_v1").paused;
+    const paused = expectOneRow(result, "workhorse.register_worker_v2").paused;
     return { paused };
   }
 
@@ -87,6 +87,7 @@ export class WorkerRegistryModule extends QueueModule {
       instance_id: string;
       hostname: string;
       pid: number;
+      queue_names: string[];
       queue_name: string;
       concurrency: number;
       active_slots: number;
@@ -98,7 +99,7 @@ export class WorkerRegistryModule extends QueueModule {
       started_at: Date;
       last_heartbeat_at: Date;
     }>(
-      `SELECT worker_id, instance_id, hostname, pid, queue_name, concurrency, active_slots, draining, paused, paused_by,
+      `SELECT worker_id, instance_id, hostname, pid, queue_names, queue_name, concurrency, active_slots, draining, paused, paused_by,
               paused_reason, paused_at, started_at, last_heartbeat_at
          FROM workhorse.worker_registry
         ORDER BY last_heartbeat_at DESC, worker_id`,
@@ -108,6 +109,7 @@ export class WorkerRegistryModule extends QueueModule {
       instanceId: row.instance_id,
       hostname: row.hostname,
       pid: row.pid,
+      queues: row.queue_names,
       queue: row.queue_name,
       concurrency: row.concurrency,
       activeSlots: row.active_slots,

@@ -31,7 +31,7 @@ Shutdown defaults to a 25-second deadline. A second signal hard-exits with the c
 
 An optional status-only HTTP server provides liveness and readiness endpoints. It is not application ingress. Readiness becomes unavailable during drain while liveness remains available until resource shutdown completes.
 
-Within one process, the default topology is one multi-slot Worker per materially distinct queue or policy group. Operators scale process replicas for availability and aggregate capacity rather than creating one Worker per slot.
+Within one process, the default topology is one multi-slot Worker per materially distinct handler and operational-policy group. One Worker may rotate across several queues when they share those settings. Operators scale process replicas for availability and aggregate capacity rather than creating one Worker per slot.
 
 ## Consequences
 

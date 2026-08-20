@@ -48,7 +48,9 @@ export interface DashboardSettingsPage {
   recommendations: DashboardSettingsRecommendation[];
   workers: Array<{
     id: string;
+    /** First configured queue, retained for dashboard v1 compatibility. */
     queue: string;
+    queues: string[];
     concurrency: number;
     leaseMs: number | null;
     heartbeatMs: number | null;
@@ -390,6 +392,8 @@ export interface MaintenanceLoopCadences {
 
 export interface DashboardWorkerRow {
   id: string;
+  /** Queues this worker can claim from, or an empty list before it registers. */
+  queues: string[];
   /**
    * Where the worker runs, reported independently of its name.
    *

@@ -16,7 +16,7 @@ import type { Queryable } from "./types.js";
 export const WORKHORSE_SCHEMA_BASELINE_VERSION = 43;
 
 /** Canonical schema version for the current line. */
-export const WORKHORSE_SCHEMA_VERSION = 46;
+export const WORKHORSE_SCHEMA_VERSION = 47;
 
 const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
   {
@@ -36,6 +36,12 @@ const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     toVersion: 46,
     file: "0046-statistics-tiers.sql",
     description: "long-horizon statistics tiers",
+  },
+  {
+    fromVersion: 46,
+    toVersion: 47,
+    file: "0047-multi-queue-workers.sql",
+    description: "multi-queue workers",
   },
 ];
 

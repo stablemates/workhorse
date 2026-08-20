@@ -85,7 +85,7 @@ describe("structured logging", () => {
     let registrations = 0;
     const database = {
       async query(sql: string) {
-        if (sql.includes("register_worker_v1")) {
+        if (sql.includes("register_worker_v2")) {
           registrations += 1;
           return { rows: [{ paused: false }] };
         }
@@ -106,6 +106,7 @@ describe("structured logging", () => {
     } as unknown as Queryable;
     const worker = new Worker(new Queue(database, "mail"), {
       workerId: "worker-registration-log",
+      queues: ["mail", "billing"],
       pollMs: 1_000,
       registryIntervalMs: 100,
       maintenanceIntervalMs: 60_000,
@@ -122,6 +123,7 @@ describe("structured logging", () => {
           attributes: expect.objectContaining({
             "workhorse.worker.id": "worker-registration-log",
             "workhorse.worker.active_slots": 0,
+            "workhorse.worker.queues": ["mail", "billing"],
           }),
         }),
       ]);

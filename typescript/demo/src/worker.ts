@@ -22,24 +22,27 @@ import { createDemoWorkerDefinition } from "./worker-definition.js";
  * PostgreSQL. Run it with `workhorse worker --config <compiled module>`.
  *
  * The launcher starts this definition once per profile, so every worker owns a separate process
- * and pool. One profile serves the default queue, while the other drains the rate-limited partner
- * queue.
+ * and pool. Both profiles serve the ordinary and rate-limited queues so the fleet demonstrates
+ * queue rotation and claim distribution under shared PostgreSQL policies.
  */
 const databaseUrl = resolveDemoDatabaseUrl();
 const workerPollMs = process.env.WORKHORSE_WORKER_POLL_MS
   ? Number(process.env.WORKHORSE_WORKER_POLL_MS)
   : DEMO_WORKER_POLL_MS;
 const profiles = {
-  default: {
-    queue: DEMO_QUEUE,
+  one: {
+    queues: [DEMO_QUEUE, DEMO_RATE_LIMIT_QUEUE],
     concurrency: DEMO_WORKER_CONCURRENCY[0],
     scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
   },
-  "partner-api": { queue: DEMO_RATE_LIMIT_QUEUE, concurrency: 1, scheduleNamespaces: [] },
+  two: {
+    queues: [DEMO_QUEUE, DEMO_RATE_LIMIT_QUEUE],
+    concurrency: DEMO_WORKER_CONCURRENCY[1],
+    scheduleNamespaces: [DEMO_SCHEDULE_NAMESPACE],
+  },
 } as const;
 const profileName = process.env.WORKHORSE_DEMO_WORKER_PROFILE;
-const profile =
-  profileName === "default" || profileName === "partner-api" ? profiles[profileName] : undefined;
+const profile = profileName === "one" || profileName === "two" ? profiles[profileName] : undefined;
 if (!profile) {
   throw new Error("WORKHORSE_DEMO_WORKER_PROFILE must select a configured worker profile");
 }
@@ -56,7 +59,7 @@ export default defineWorkerProcess({
   adapter: () => adapter,
   workers: [
     createDemoWorkerDefinition(database, adapter.queue, {
-      queue: profile.queue,
+      queues: profile.queues,
       concurrency: profile.concurrency,
       scheduleNamespaces: profile.scheduleNamespaces,
       pollMs: workerPollMs,
