@@ -1146,6 +1146,17 @@ export function createDemoApplication(
   });
   const app = new Hono();
 
+  app.use("*", async (context, next) => {
+    await next();
+    context.res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
+  });
+
+  app.get("/robots.txt", (context) => context.text("User-agent: *\nDisallow: /\n"));
+
+  // Kamal keeps the previous container on traffic until this process has prepared its schema and
+  // opened the HTTP listener. Keep the probe outside dashboard authentication and database reads.
+  app.get("/up", (context) => context.json({ status: "ok" }));
+
   if (options.dashboard !== false) {
     const production = {
       database: adapter.database,

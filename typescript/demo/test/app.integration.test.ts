@@ -301,6 +301,31 @@ function dashboardClient(
   );
 }
 
+it("reports readiness outside the dashboard route space", async () => {
+  const { app } = createTestApplication({ workers: false });
+
+  const response = await app.request("/up");
+
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toEqual({ status: "ok" });
+});
+
+it("disallows crawler indexing across the public demo", async () => {
+  const { app } = createTestApplication({ workers: false });
+
+  const readiness = await app.request("/up");
+  expect(readiness.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
+
+  const robots = await app.request("/robots.txt");
+  expect(robots.status).toBe(200);
+  expect(robots.headers.get("content-type")).toContain("text/plain");
+  expect(robots.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
+  await expect(robots.text()).resolves.toBe("User-agent: *\nDisallow: /\n");
+
+  const dashboard = await app.request("/");
+  expect(dashboard.headers.get("x-robots-tag")).toBe("noindex, nofollow, noarchive");
+});
+
 it("loads the settings dashboard route and its read model", async () => {
   const { app } = createTestApplication({
     workers: false,

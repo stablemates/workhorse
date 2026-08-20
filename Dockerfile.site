@@ -13,7 +13,6 @@ RUN pnpm build:core && pnpm docs:build
 FROM nginx:1.29-alpine AS runtime
 
 COPY deployment/site.conf /etc/nginx/conf.d/default.conf
-COPY deployment/cloudflare-allowlist.conf /etc/nginx/conf.d/cloudflare-allowlist.conf
 COPY --from=build /workhorse/site/dist/client/ /usr/share/nginx/html/
 
 EXPOSE 8080

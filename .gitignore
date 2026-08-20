@@ -15,6 +15,7 @@ coverage/
 .env.*
 !.env.example
 !**/.env.example
+deployment/kamal/secrets.env
 *.tgz
 benchmark*.json
 benchmark-artifacts/

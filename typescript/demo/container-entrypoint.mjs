@@ -1,5 +1,26 @@
 import { spawn } from "node:child_process";
 
+async function prepareSchema() {
+  const child = spawn(process.execPath, ["dist/prepare-schema.js"], {
+    env: process.env,
+    stdio: "inherit",
+  });
+  const code = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (exitCode, signal) => resolve(exitCode ?? (signal ? 1 : 0)));
+  });
+  if (code !== 0) throw new Error(`Demo schema preparation exited with code ${code}`);
+}
+
+try {
+  await prepareSchema();
+} catch (error) {
+  console.error("Could not prepare the demo schema", error);
+  process.exitCode = 1;
+}
+
+if (process.exitCode) process.exit();
+
 const workerArguments = [
   "--require",
   "./telemetry.cjs",
@@ -46,6 +67,10 @@ const children = processes.map(({ name, arguments: arguments_, environment }) =>
 let stopping = false;
 let shutdownRequested = false;
 let forceKillTimer;
+const shutdownGraceMs = Number(process.env.WORKHORSE_DEMO_SHUTDOWN_GRACE_MS ?? 30_000);
+if (!Number.isFinite(shutdownGraceMs) || shutdownGraceMs < 0) {
+  throw new Error("WORKHORSE_DEMO_SHUTDOWN_GRACE_MS must be a non-negative number");
+}
 
 function stop(signal) {
   if (stopping) return;
@@ -57,7 +82,7 @@ function stop(signal) {
     for (const { child } of children) {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
-  }, 5_000);
+  }, shutdownGraceMs);
   forceKillTimer.unref();
 }
 
