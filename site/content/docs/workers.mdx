@@ -135,8 +135,9 @@ reads the durable registry that every worker refreshes on an interval. Registry 
 recent observations, not synchronous views of another event loop — treat them as a moment-ago
 snapshot.
 
-A worker that dies stops refreshing and goes stale in the registry. Its jobs are not lost: their
-leases expire and recovery makes them claimable again.
+A worker that dies stops refreshing and goes stale in the registry. Automatic maintenance makes
+that row eligible for removal after one minute. Its jobs are not lost: their leases expire and
+recovery makes them claimable again.
 
 ## Next
 

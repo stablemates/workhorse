@@ -337,7 +337,7 @@ export class Queue {
   }
 
   /** Drop registrations whose process stopped heartbeating longer ago than the given window. */
-  async pruneWorkerRegistry(maxAgeMs = 24 * 60 * 60 * 1_000): Promise<number> {
+  async pruneWorkerRegistry(maxAgeMs = 60_000): Promise<number> {
     return this.modules.workerRegistry.pruneWorkerRegistry(maxAgeMs);
   }
 

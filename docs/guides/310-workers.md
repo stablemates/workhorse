@@ -58,8 +58,9 @@ memory can't answer "which workers are alive" once workers are deployed separate
 
 This registry is never read when claiming jobs, so it can't slow dispatch down.
 
-A worker that's killed stops refreshing, is reported offline once its row goes stale, and is
-eventually cleaned up. Slot counts are therefore a moment-ago snapshot, not a live read.
+A worker that's killed stops refreshing and is reported offline once its row goes stale. Automatic
+maintenance eventually cleans up that row. Slot counts are therefore a moment-ago snapshot, not a
+live read.
 
 ## Pausing
 

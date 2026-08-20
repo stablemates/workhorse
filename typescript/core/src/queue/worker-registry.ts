@@ -121,7 +121,7 @@ export class WorkerRegistryModule extends QueueModule {
     }));
   }
 
-  async pruneWorkerRegistry(maxAgeMs = 24 * 60 * 60 * 1_000): Promise<number> {
+  async pruneWorkerRegistry(maxAgeMs: number): Promise<number> {
     const result = await this.context.database.query<{ count: number }>(
       "SELECT workhorse.prune_worker_registry_v1(make_interval(secs => $1::double precision)) AS count",
       [maxAgeMs / 1_000],

@@ -227,6 +227,29 @@ describe("worker registry", () => {
     ).resolves.not.toContain("registry-prune");
   });
 
+  it("prunes stale worker registrations during automatic maintenance", async () => {
+    await queue.registerWorker({
+      workerId: "registry-automatic-prune",
+      instanceId: randomUUID(),
+      hostname: "test-host",
+      pid: 4321,
+      queue: "default",
+      concurrency: 1,
+      activeSlots: 0,
+      draining: false,
+    });
+    await pool.query(
+      "UPDATE workhorse.worker_registry SET last_heartbeat_at = clock_timestamp() - interval '10 minutes'",
+    );
+
+    const worker = new Worker(queue, { workerId: "registry-maintenance-runner" });
+    await worker.runOnce();
+
+    await expect(
+      queue.listWorkers().then((entries) => entries.map((entry) => entry.workerId)),
+    ).resolves.not.toContain("registry-automatic-prune");
+  });
+
   it("bounds overlap, claims only free slots, and breaks the claim loop on the first null", async () => {
     const release = deferred();
     let active = 0;
