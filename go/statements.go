@@ -8,14 +8,19 @@ const (
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
 	promoteStatementName                 = "promote_v1"
 	claimStatementName                   = "claim_v3"
+	heartbeatStatementName               = "heartbeat_v2"
+	expireOwnedStatementName             = "expire_owned_telemetry_v1"
+	recoverExpiredStatementName          = "recover_expired_telemetry_v1"
 	completeStatementName                = "complete_v1"
 	failStatementName                    = "fail_v1"
+	acknowledgeCancelStatementName       = "acknowledge_cancel_v1"
 	rowOrdinalField                      = "ordinal"
 	rowJobIDField                        = "job_id"
 	rowOutcomeField                      = "outcome"
 	rowReasonField                       = "reason"
 	rowAcceptedField                     = "accepted"
 	rowStateField                        = "state"
+	rowStatusField                       = "status"
 	rowJobTypeField                      = "job_type"
 	rowPriorityField                     = "priority"
 	rowPayloadField                      = "payload"
@@ -40,25 +45,34 @@ const (
 	enqueueNonReplaceableValue = "non_replaceable"
 	enqueueCoalescedValue      = "coalesced"
 
-	reasonIncompatibleKeyModeValue = "incompatible_key_mode"
-	reasonNotPendingValue          = "not_pending"
-	reasonWindowElapsedValue       = "window_elapsed_pending"
-	debounceResetValue             = "reset"
-	debouncePreserveValue          = "preserve"
-	dependencyReleaseValue         = "release"
-	dependencyCancelValue          = "cancel"
-	dependencyFailValue            = "fail"
-	defaultScopeValue              = "default"
-	workerFailureReady             = "ready"
-	workerFailureScheduled         = "scheduled"
-	workerFailureFailed            = "failed"
-	workerFailureStale             = "stale"
-	timestampLayout                = "2006-01-02T15:04:05.000Z"
-	defaultWorkerQueueValue        = "default"
-	defaultWorkerName              = "go-worker"
-	redactedHandlerErrorNameValue  = "RedactedJobError"
-	redactedHandlerErrorTextValue  = "Job handler failed; details redacted"
-	genericHandlerErrorName        = "Error"
+	reasonIncompatibleKeyModeValue                 = "incompatible_key_mode"
+	reasonNotPendingValue                          = "not_pending"
+	reasonWindowElapsedValue                       = "window_elapsed_pending"
+	debounceResetValue                             = "reset"
+	debouncePreserveValue                          = "preserve"
+	dependencyReleaseValue                         = "release"
+	dependencyCancelValue                          = "cancel"
+	dependencyFailValue                            = "fail"
+	defaultScopeValue                              = "default"
+	workerFailureReady                             = "ready"
+	workerFailureScheduled                         = "scheduled"
+	workerFailureFailed                            = "failed"
+	workerFailureStale                             = "stale"
+	workerFailureCancelRequested                   = "cancel_requested"
+	workerFailureDeadline                          = "deadline_exceeded"
+	workerFailureTimeout                           = "timeout_exceeded"
+	workerOwnershipAccepted        ownershipStatus = "accepted"
+	workerOwnershipCancelRequested ownershipStatus = "cancel_requested"
+	workerOwnershipDeadline        ownershipStatus = "deadline_exceeded"
+	workerOwnershipTimeout         ownershipStatus = "timeout_exceeded"
+	workerOwnershipStale           ownershipStatus = "stale"
+	workerOwnershipNotDue          ownershipStatus = "not_due"
+	timestampLayout                                = "2006-01-02T15:04:05.000Z"
+	defaultWorkerQueueValue                        = "default"
+	defaultWorkerName                              = "go-worker"
+	redactedHandlerErrorNameValue                  = "RedactedJobError"
+	redactedHandlerErrorTextValue                  = "Job handler failed; details redacted"
+	genericHandlerErrorName                        = "Error"
 
 	enqueueBatchTooLargeMessage        = "enqueue batch exceeds the shared limit"
 	invalidEnqueueResultMessage        = "PostgreSQL returned an invalid enqueue result"
@@ -89,6 +103,18 @@ const (
 	nilWorkerPoolMessage               = "worker pool must not be nil"
 	workerLeaseRangeMessage            = "worker lease duration must be a whole number of milliseconds between %s and %s"
 	negativeWorkerPollMessage          = "worker poll interval must not be negative"
+	workerHeartbeatRangeMessage        = "worker heartbeat interval must be a whole number of milliseconds greater than zero and shorter than the lease duration"
+	workerMaintenanceRangeMessage      = "worker maintenance interval must be a positive whole number of milliseconds"
+	leaseLostMessage                   = "job lease was lost"
+	cancellationRequestedMessage       = "job cancellation was requested"
+	deadlineExceededMessage            = "job deadline was exceeded"
+	executionTimeoutMessage            = "job execution timeout was exceeded"
+	jobLifecycleErrorFormat            = "%s for job %s"
+	attemptLifecycleErrorFormat        = "%s for job %s attempt %d"
+	invalidOwnershipResultMessage      = "PostgreSQL returned an invalid ownership result"
+	unknownOwnershipStatusFormat       = "PostgreSQL returned unknown ownership status %s"
+	invalidCancelAcknowledgeMessage    = "PostgreSQL returned an invalid cancellation acknowledgement"
+	expirationNotDueMessage            = "PostgreSQL did not accept ownership expiration before the retry budget elapsed"
 	emptyWorkerJobTypeMessage          = "worker job type must not be empty"
 	nilWorkerHandlerMessage            = "worker handler must not be nil"
 	invalidClaimResultMessage          = "PostgreSQL returned an invalid claim result"
@@ -111,13 +137,13 @@ var protocolStatementRegistry = map[string]string{
 	claimStatementName:             `SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)`,
 	"record_batch_dispatch_v1":     `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	"record_batch_failure_v1":      `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
-	"heartbeat_v2":                 `SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
-	"expire_owned_telemetry_v1":    `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
-	"recover_expired_telemetry_v1": `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
+	heartbeatStatementName:         `SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
+	expireOwnedStatementName:       `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
+	recoverExpiredStatementName:    `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
 	completeStatementName:          `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
 	failStatementName:              `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
 	"cancel_v1":                    `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
-	"acknowledge_cancel_v1":        `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
+	acknowledgeCancelStatementName: `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
 	"save_checkpoint_v1":           `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
 	"update_progress_v1":           `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
 	"schedule_wait_v1":             `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,

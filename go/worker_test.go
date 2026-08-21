@@ -4,12 +4,117 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
 )
+
+type workerRuntimeFixture struct {
+	ID                                   string `json:"id"`
+	JobType                              string `json:"jobType"`
+	LeaseMS                              int    `json:"leaseMs"`
+	HeartbeatMS                          int    `json:"heartbeatMs"`
+	DurationMS                           int    `json:"durationMs"`
+	MaxAttempts                          int    `json:"maxAttempts"`
+	CancelReason                         string `json:"cancelReason"`
+	ExpectedCallsWhileBlocked            int    `json:"expectedCallsWhileBlocked"`
+	ExpectedMinimumCallsBeforeSettlement int    `json:"expectedMinimumCallsBeforeSettlement"`
+	ExpectedMaximumOverlap               int    `json:"expectedMaximumOverlap"`
+}
+
+type heartbeatQueryContextKey struct{}
+
+type heartbeatQueryTracer struct {
+	mu         sync.Mutex
+	delay      time.Duration
+	calls      int
+	active     int
+	maxOverlap int
+	started    chan struct{}
+}
+
+func newHeartbeatQueryTracer(delay time.Duration) *heartbeatQueryTracer {
+	return &heartbeatQueryTracer{delay: delay, started: make(chan struct{}, 16)}
+}
+
+func (tracer *heartbeatQueryTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if !strings.Contains(data.SQL, "heartbeat_v2") {
+		return ctx
+	}
+	tracer.mu.Lock()
+	tracer.calls++
+	tracer.active++
+	tracer.maxOverlap = max(tracer.maxOverlap, tracer.active)
+	tracer.mu.Unlock()
+	tracer.started <- struct{}{}
+	time.Sleep(tracer.delay)
+	return context.WithValue(ctx, heartbeatQueryContextKey{}, true)
+}
+
+func (tracer *heartbeatQueryTracer) TraceQueryEnd(
+	ctx context.Context,
+	_ *pgx.Conn,
+	_ pgx.TraceQueryEndData,
+) {
+	if ctx.Value(heartbeatQueryContextKey{}) != true {
+		return
+	}
+	tracer.mu.Lock()
+	tracer.active--
+	tracer.mu.Unlock()
+}
+
+func (tracer *heartbeatQueryTracer) snapshot() (calls int, maxOverlap int) {
+	tracer.mu.Lock()
+	defer tracer.mu.Unlock()
+	return tracer.calls, tracer.maxOverlap
+}
+
+func (tracer *heartbeatQueryTracer) waitForCalls(t *testing.T, expected int) {
+	t.Helper()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		calls, _ := tracer.snapshot()
+		if calls >= expected {
+			return
+		}
+		select {
+		case <-tracer.started:
+		case <-deadline.C:
+			t.Fatalf("expected %d heartbeat calls, received %d", expected, calls)
+		}
+	}
+}
+
+func loadWorkerRuntimeFixture(t *testing.T, id string) workerRuntimeFixture {
+	t.Helper()
+	contents, err := os.ReadFile("../protocol/v1/runtime.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures []workerRuntimeFixture
+	if err := json.Unmarshal(contents, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range fixtures {
+		if fixture.ID == id {
+			return fixture
+		}
+	}
+	t.Fatalf("runtime fixture %s was not found", id)
+	return workerRuntimeFixture{}
+}
 
 func TestWorkerClaimsHandlesAndCompletesAJob(t *testing.T) {
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-complete")
@@ -256,5 +361,604 @@ func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
 	var stale *workhorse.StaleLeaseError
 	if !errors.As(err, &stale) || stale.JobID != jobID {
 		t.Fatalf("expected typed stale lease for %s, received %#v", jobID, err)
+	}
+}
+
+func TestWorkerHeartbeatsKeepALongRunningAttemptOwned(t *testing.T) {
+	fixture := loadWorkerRuntimeFixture(t, "heartbeats-never-overlap")
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-heartbeat")
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracer := newHeartbeatQueryTracer(3 * time.Duration(fixture.HeartbeatMS) * time.Millisecond)
+	config.ConnConfig.Tracer = tracer
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-worker-heartbeat")
+	jobID, err := queue.Enqueue(ctx, fixture.JobType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:             "go-worker-heartbeat",
+		WorkerID:          "go-worker-heartbeat",
+		LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
+		HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	worker.Handle(fixture.JobType, func(_ context.Context, _ any) (any, error) {
+		close(started)
+		<-release
+		return nil, nil
+	})
+
+	type workerRunResult struct {
+		processed bool
+		err       error
+	}
+	workerResult := make(chan workerRunResult, 1)
+	go func() {
+		processed, err := worker.RunOnce(ctx)
+		workerResult <- workerRunResult{processed: processed, err: err}
+	}()
+	<-started
+	tracer.waitForCalls(t, 1)
+	time.Sleep(2 * time.Duration(fixture.HeartbeatMS) * time.Millisecond)
+	calls, _ := tracer.snapshot()
+	if calls != fixture.ExpectedCallsWhileBlocked {
+		t.Fatalf(
+			"expected %d blocked heartbeat call, received %d",
+			fixture.ExpectedCallsWhileBlocked,
+			calls,
+		)
+	}
+	tracer.waitForCalls(t, fixture.ExpectedMinimumCallsBeforeSettlement)
+	close(release)
+	result := <-workerResult
+	processed, err := result.processed, result.err
+	if err != nil || !processed {
+		t.Fatalf("long-running attempt: processed=%t err=%v", processed, err)
+	}
+	calls, maxOverlap := tracer.snapshot()
+	if calls < fixture.ExpectedMinimumCallsBeforeSettlement || maxOverlap != fixture.ExpectedMaximumOverlap {
+		t.Fatalf(
+			"unexpected heartbeat cadence: calls=%d minimum=%d maxOverlap=%d expectedOverlap=%d",
+			calls,
+			fixture.ExpectedMinimumCallsBeforeSettlement,
+			maxOverlap,
+			fixture.ExpectedMaximumOverlap,
+		)
+	}
+	var state string
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid",
+		jobID,
+	).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "succeeded" {
+		t.Fatalf("expected heartbeated attempt to succeed, received %s", state)
+	}
+}
+
+func TestWorkerDeliversTypedCancellationAndAcknowledgesIt(t *testing.T) {
+	fixture := loadWorkerRuntimeFixture(t, "cooperative-cancellation-reaches-handler")
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-cancel")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "go-worker-cancel")
+	jobID, err := queue.Enqueue(ctx, fixture.JobType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:             "go-worker-cancel",
+		WorkerID:          "go-worker-cancel",
+		LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
+		HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	cause := make(chan error, 1)
+	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any) (any, error) {
+		close(started)
+		<-handlerContext.Done()
+		cause <- context.Cause(handlerContext)
+		return nil, nil
+	})
+	workerResult := make(chan error, 1)
+	go func() {
+		_, err := worker.RunOnce(ctx)
+		workerResult <- err
+	}()
+	<-started
+	if _, err := pool.Exec(
+		ctx,
+		"SELECT * FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)",
+		jobID,
+		"go-test",
+		fixture.CancelReason,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := <-workerResult; err != nil {
+		t.Fatal(err)
+	}
+	observed := <-cause
+	if !errors.Is(observed, workhorse.ErrCancellationRequested) {
+		t.Fatalf("expected typed cancellation cause, received %v", observed)
+	}
+	var cancellation *workhorse.CancellationRequestedError
+	if !errors.As(observed, &cancellation) || cancellation.JobID != jobID {
+		t.Fatalf("expected cancellation cause for %s, received %#v", jobID, observed)
+	}
+	var state string
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state FROM workhorse.job_outcome WHERE job_id = $1::uuid",
+		jobID,
+	).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "canceled" {
+		t.Fatalf("expected cancellation acknowledgement, received %s", state)
+	}
+}
+
+func TestWorkerDeliversDistinctDeadlineAndExecutionTimeoutCauses(t *testing.T) {
+	tests := []struct {
+		name       string
+		fixtureID  string
+		options    func(time.Time) workhorse.EnqueueOptions
+		matches    error
+		assertType func(*testing.T, string, error)
+	}{
+		{
+			name:      "deadline",
+			fixtureID: "deadline-settles-after-early-local-timer",
+			options: func(now time.Time) workhorse.EnqueueOptions {
+				deadline := now.Add(150 * time.Millisecond)
+				return workhorse.EnqueueOptions{Deadline: &deadline, MaxAttempts: 2}
+			},
+			matches: workhorse.ErrDeadlineExceeded,
+			assertType: func(t *testing.T, jobID string, cause error) {
+				var typed *workhorse.DeadlineExceededError
+				if !errors.As(cause, &typed) || typed.JobID != jobID {
+					t.Fatalf("expected deadline cause for %s, received %#v", jobID, cause)
+				}
+			},
+		},
+		{
+			name:      "execution-timeout",
+			fixtureID: "execution-timeout-settles-after-early-local-timer",
+			options: func(_ time.Time) workhorse.EnqueueOptions {
+				return workhorse.EnqueueOptions{ExecutionTimeoutMS: 150, MaxAttempts: 1}
+			},
+			matches: workhorse.ErrExecutionTimeout,
+			assertType: func(t *testing.T, jobID string, cause error) {
+				var typed *workhorse.ExecutionTimeoutError
+				if !errors.As(cause, &typed) || typed.JobID != jobID || typed.Attempt != 1 {
+					t.Fatalf("expected execution-timeout cause for %s, received %#v", jobID, cause)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := loadWorkerRuntimeFixture(t, test.fixtureID)
+			databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-"+test.name)
+			ctx := context.Background()
+			pool, err := pgxpool.New(ctx, databaseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			queueName := "go-worker-" + test.name
+			queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+			options := test.options(time.Now().UTC())
+			if test.name == "deadline" {
+				deadline := time.Now().UTC().Add(time.Duration(fixture.DurationMS) * time.Millisecond)
+				options.Deadline = &deadline
+			} else {
+				options.ExecutionTimeoutMS = fixture.DurationMS
+				options.RetryPolicy = map[string]any{"type": "fixed", "delayMs": 0}
+			}
+			options.MaxAttempts = fixture.MaxAttempts
+			jobID, err := queue.Enqueue(ctx, fixture.JobType, nil, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+				Queue:             queueName,
+				WorkerID:          queueName,
+				LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
+				HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cause := make(chan error, 1)
+			hasDeadline := make(chan bool, 1)
+			worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any) (any, error) {
+				_, ok := handlerContext.Deadline()
+				hasDeadline <- ok
+				<-handlerContext.Done()
+				cause <- context.Cause(handlerContext)
+				return nil, nil
+			})
+			processed, err := worker.RunOnce(ctx)
+			if err != nil || !processed {
+				t.Fatalf("expiration attempt: processed=%t err=%v", processed, err)
+			}
+			if !<-hasDeadline {
+				t.Fatal("expected expiration to be exposed as a context deadline")
+			}
+			observed := <-cause
+			if !errors.Is(observed, test.matches) {
+				t.Fatalf("expected %v, received %v", test.matches, observed)
+			}
+			test.assertType(t, jobID, observed)
+			if test.name == "deadline" {
+				var state string
+				var attempt int
+				if err := pool.QueryRow(
+					ctx,
+					"SELECT state, current_attempt FROM workhorse.job_outcome WHERE job_id = $1::uuid",
+					jobID,
+				).Scan(&state, &attempt); err != nil {
+					t.Fatal(err)
+				}
+				if state != "failed" || attempt != 1 {
+					t.Fatalf("expected deadline settlement, received state=%s attempt=%d", state, attempt)
+				}
+			} else {
+				var state string
+				var attempt int
+				if err := pool.QueryRow(
+					ctx,
+					"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1::uuid",
+					jobID,
+				).Scan(&state, &attempt); err != nil {
+					t.Fatal(err)
+				}
+				if state != "ready" || attempt != 2 {
+					t.Fatalf("expected timeout retry settlement, received state=%s attempt=%d", state, attempt)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkerCancelsHandlerWithLeaseLossAfterFenceRecovery(t *testing.T) {
+	fixture := loadWorkerRuntimeFixture(t, "lease-loss-fences-handler-writes")
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-lease-loss")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-lease-loss"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	jobID, err := queue.Enqueue(ctx, fixture.JobType, nil, workhorse.EnqueueOptions{
+		MaxAttempts: fixture.MaxAttempts,
+		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:             queueName,
+		WorkerID:          "lease-loss-worker",
+		LeaseDuration:     time.Duration(fixture.LeaseMS) * time.Millisecond,
+		HeartbeatInterval: time.Duration(fixture.HeartbeatMS) * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	cause := make(chan error, 1)
+	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any) (any, error) {
+		close(started)
+		<-handlerContext.Done()
+		cause <- context.Cause(handlerContext)
+		return map[string]any{"mustNotSettle": true}, nil
+	})
+	workerResult := make(chan error, 1)
+	go func() {
+		_, err := worker.RunOnce(ctx)
+		workerResult <- err
+	}()
+	<-started
+	var staleFence int64
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT fence_token FROM workhorse.job_runtime WHERE job_id = $1::uuid",
+		jobID,
+	).Scan(&staleFence); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(
+		ctx,
+		"UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1::uuid",
+		jobID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(
+		ctx,
+		"SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)",
+		100,
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	err = <-workerResult
+	if !errors.Is(err, workhorse.ErrStaleLease) {
+		t.Fatalf("expected stale settlement refusal, received %v", err)
+	}
+	observed := <-cause
+	if !errors.Is(observed, workhorse.ErrLeaseLost) {
+		t.Fatalf("expected lease-loss cancellation cause, received %v", observed)
+	}
+	var leaseLoss *workhorse.LeaseLostError
+	if !errors.As(observed, &leaseLoss) || leaseLoss.JobID != jobID {
+		t.Fatalf("expected lease-loss cause for %s, received %#v", jobID, observed)
+	}
+	var state string
+	var attempt int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1::uuid",
+		jobID,
+	).Scan(&state, &attempt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "ready" || attempt != 2 {
+		t.Fatalf("expected recovered fence on attempt two, received state=%s attempt=%d", state, attempt)
+	}
+	var accepted bool
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)",
+		jobID,
+		"lease-loss-worker",
+		staleFence,
+		[]byte(`{"stale":true}`),
+	).Scan(&accepted); err != nil {
+		t.Fatal(err)
+	}
+	if accepted {
+		t.Fatal("PostgreSQL accepted settlement under the recovered stale fence")
+	}
+}
+
+func TestWorkerMaintenanceRecoversAnExpiredPeerLease(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-recovery")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-recovery"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	jobID, err := queue.Enqueue(ctx, "recovered", nil, workhorse.EnqueueOptions{
+		MaxAttempts: 2,
+		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(
+		ctx,
+		"SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+		queueName,
+		"crashed-peer",
+		100,
+	); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(125 * time.Millisecond)
+
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:             queueName,
+		WorkerID:          "recovery-worker",
+		LeaseDuration:     time.Second,
+		HeartbeatInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle("recovered", func(_ context.Context, _ any) (any, error) { return nil, nil })
+	processed, err := worker.RunOnce(ctx)
+	if err != nil || !processed {
+		t.Fatalf("recovered attempt: processed=%t err=%v", processed, err)
+	}
+	var state string
+	var attempt int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state, current_attempt FROM workhorse.job_outcome WHERE job_id = $1::uuid",
+		jobID,
+	).Scan(&state, &attempt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "succeeded" || attempt != 2 {
+		t.Fatalf("expected recovered second attempt, received state=%s attempt=%d", state, attempt)
+	}
+}
+
+func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-maintenance-cadence")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-maintenance-cadence"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	peerJobID, err := queue.Enqueue(ctx, "peer", nil, workhorse.EnqueueOptions{
+		MaxAttempts: 2,
+		RetryPolicy: map[string]any{"type": "fixed", "delayMs": 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(
+		ctx,
+		"SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+		queueName,
+		"blocked-peer",
+		5000,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.Enqueue(ctx, "long-handler", nil, workhorse.EnqueueOptions{Priority: 100}); err != nil {
+		t.Fatal(err)
+	}
+
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "maintenance-worker",
+		LeaseDuration:       time.Second,
+		HeartbeatInterval:   20 * time.Millisecond,
+		PollInterval:        5 * time.Millisecond,
+		MaintenanceInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	worker.Handle("long-handler", func(handlerContext context.Context, _ any) (any, error) {
+		close(started)
+		<-handlerContext.Done()
+		return nil, context.Cause(handlerContext)
+	})
+	runContext, stop := context.WithCancel(ctx)
+	workerResult := make(chan error, 1)
+	go func() { workerResult <- worker.Run(runContext) }()
+	<-started
+	if _, err := pool.Exec(
+		ctx,
+		"UPDATE workhorse.job_runtime SET expires_at = clock_timestamp() - interval '1 millisecond' WHERE job_id = $1::uuid",
+		peerJobID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.NewTimer(time.Second)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	recovered := false
+	for !recovered {
+		select {
+		case <-deadline.C:
+			t.Fatal("maintenance did not recover the peer while the handler was running")
+		case <-ticker.C:
+			var state string
+			var attempt int
+			if err := pool.QueryRow(
+				ctx,
+				"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1::uuid",
+				peerJobID,
+			).Scan(&state, &attempt); err != nil {
+				t.Fatal(err)
+			}
+			recovered = state == "ready" && attempt == 2
+		}
+	}
+	deadline.Stop()
+	ticker.Stop()
+	stop()
+	if err := <-workerResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled worker after recovery assertion, received %v", err)
+	}
+}
+
+func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-single-connection")
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-single-connection"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	jobID, err := queue.Enqueue(ctx, "single-connection", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "single-connection-worker",
+		LeaseDuration:       100 * time.Millisecond,
+		HeartbeatInterval:   20 * time.Millisecond,
+		PollInterval:        5 * time.Millisecond,
+		MaintenanceInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle("single-connection", func(_ context.Context, _ any) (any, error) {
+		time.Sleep(250 * time.Millisecond)
+		return map[string]any{"settled": true}, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	workerResult := make(chan error, 1)
+	go func() { workerResult <- worker.Run(runContext) }()
+
+	deadline := time.NewTimer(time.Second)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	settled := false
+	for !settled {
+		select {
+		case <-deadline.C:
+			t.Fatal("single-connection worker did not settle the heartbeated job")
+		case <-ticker.C:
+			if err := pool.QueryRow(
+				ctx,
+				"SELECT EXISTS (SELECT 1 FROM workhorse.job_outcome WHERE job_id = $1::uuid)",
+				jobID,
+			).Scan(&settled); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	deadline.Stop()
+	ticker.Stop()
+	stop()
+	if err := <-workerResult; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }
