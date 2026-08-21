@@ -1,6 +1,8 @@
 # How do I process several jobs together?
 
-Use `Worker.handleBatch`, or Python's `Worker.handle_batch`, when one application call can process several jobs of the same type more efficiently. Each job keeps its own lease and durable identity while it waits for the shared invocation.
+Use `Worker.handleBatch` when one application call can process several jobs of the same type more efficiently.
+Go names this method `Worker.HandleBatch`, while Python names it `Worker.handle_batch`.
+Each job keeps its own lease and durable identity while it waits for the shared invocation.
 
 `BatchHandlerOptions.maxSize` caps the group. `BatchHandlerOptions.lingerMs` lets a partial group wait briefly for peers, then dispatches it even when no notification arrives.
 
@@ -16,6 +18,9 @@ Return one `BatchHandlerOutcome` for each item in the same order. A successful o
 
 Python handlers return the same statuses as mappings. They register `max_size` and `linger_ms` as
 keyword arguments, and receive `BatchHandlerItem` values with a `BatchHandlerContext`.
+
+Go handlers return `BatchSucceeded` or `BatchFailed` values. They register `MaxSize` and `Linger`
+through `BatchHandlerOptions`, and each item's context exposes cancellation and checkpoints.
 
 If the handler itself throws or returns an invalid outcome list, Workhorse submits the failure for every member. Each member still uses its own fence and retry budget.
 
