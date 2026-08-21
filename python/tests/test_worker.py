@@ -1,22 +1,246 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import Any
 
 import psycopg
+import pytest
 
 from workhorse import (
     CancellationRequestedError,
+    CheckpointConflictError,
+    CheckpointLeaseLostError,
     DeadlineExceededError,
     EnqueueOptions,
     ExecutionTimeoutError,
     HandlerContext,
     Queue,
     StaleLeaseError,
+    WaitConflictError,
     Worker,
 )
+
+
+def test_checkpoint_replays_the_saved_value_without_repeating_the_operation(
+    database_url: str,
+) -> None:
+    operation_calls = 0
+    handler_calls = 0
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue(
+            "checkpoint.replay",
+            {},
+            EnqueueOptions(max_attempts=2, retry_policy={"type": "fixed", "delayMs": 1}),
+        )
+        enqueue_connection.commit()
+
+        def handle(_payload: object, context: HandlerContext) -> dict[str, object]:
+            nonlocal handler_calls, operation_calls
+            handler_calls += 1
+
+            def prepare() -> dict[str, int]:
+                nonlocal operation_calls
+                operation_calls += 1
+                return {"prepared": operation_calls}
+
+            prepared = context.checkpoint("prepare", prepare)
+            if handler_calls == 1:
+                raise RuntimeError("retry after the durable boundary")
+            return {"prepared": prepared}
+
+        worker = Worker(worker_connection, worker_id="python-checkpoint-worker").handle(
+            "checkpoint.replay", handle
+        )
+
+        assert worker.run_once() is True
+
+        outcome = worker_connection.execute(
+            "SELECT state, current_attempt, result FROM workhorse.job_outcome WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+        assert outcome == ("succeeded", 2, {"prepared": {"prepared": 1}})
+        assert handler_calls == 2
+        assert operation_calls == 1
+
+
+def test_durable_sleeps_release_ownership_and_survive_a_swallowed_sentinel(
+    database_url: str,
+) -> None:
+    handler_calls = 0
+    conflicts: list[WaitConflictError] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue("wait.replay", {})
+        enqueue_connection.commit()
+
+        def handle(_payload: object, context: HandlerContext) -> dict[str, int]:
+            nonlocal handler_calls
+            handler_calls += 1
+            with suppress(BaseException):
+                context.sleep("relative", 40)
+            if handler_calls >= 2:
+                try:
+                    context.sleep_until(
+                        "relative", datetime.now(timezone.utc) - timedelta(seconds=1)
+                    )
+                except WaitConflictError as error:
+                    conflicts.append(error)
+                context.sleep_until("absolute", datetime.now(timezone.utc) - timedelta(seconds=1))
+            return {"handlerCalls": handler_calls}
+
+        worker = Worker(worker_connection, worker_id="python-wait-worker").handle(
+            "wait.replay", handle
+        )
+
+        assert worker.run_once() is True
+        suspended = worker_connection.execute(
+            "SELECT state, current_attempt, worker_id, fence_token FROM workhorse.job_runtime "
+            "WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+        assert suspended == ("scheduled", 1, None, 0)
+        assert worker_connection.execute(
+            "SELECT count(*) FROM workhorse.attempt_history WHERE job_id = %s", (job_id,)
+        ).fetchone() == (0,)
+
+        sleep(0.06)
+        assert worker.run_once() is True
+        outcome = worker_connection.execute(
+            "SELECT state, current_attempt, result FROM workhorse.job_outcome WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+        assert outcome == ("succeeded", 1, {"handlerCalls": 2})
+        assert len(conflicts) == 1
+        assert conflicts[0].job_id == job_id
+
+
+def test_checkpoint_conflict_is_typed_at_the_handler_context(database_url: str) -> None:
+    conflicts: list[CheckpointConflictError] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as competing_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue("checkpoint.conflict", {})
+        enqueue_connection.commit()
+
+        def handle(_payload: object, context: HandlerContext) -> dict[str, bool]:
+            assert context.get_checkpoint("prepare") is None
+            saved = competing_connection.execute(
+                "SELECT status FROM workhorse.save_checkpoint_v1(%s, %s, %s, %s, %s)",
+                (job_id, "python-conflict-worker", context.job.fence_token, "prepare", '{"v":1}'),
+            ).fetchone()
+            assert saved == ("saved",)
+            try:
+                context.checkpoint("prepare", lambda: {"v": 2})
+            except CheckpointConflictError as error:
+                conflicts.append(error)
+            return {"conflict": True}
+
+        worker = Worker(worker_connection, worker_id="python-conflict-worker").handle(
+            "checkpoint.conflict", handle
+        )
+        assert worker.run_once() is True
+        assert len(conflicts) == 1
+        assert conflicts[0].job_id == job_id
+        assert conflicts[0].checkpoint_name == "prepare"
+
+
+def test_concurrent_same_name_checkpoints_share_one_operation(database_url: str) -> None:
+    operation_started = Event()
+    release_operation = Event()
+    operation_calls = 0
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue("checkpoint.concurrent", {})
+        enqueue_connection.commit()
+
+        def handle(_payload: object, context: HandlerContext) -> dict[str, object]:
+            nonlocal operation_calls
+            values: list[object] = []
+            errors: list[BaseException] = []
+
+            def operation() -> dict[str, int]:
+                nonlocal operation_calls
+                operation_calls += 1
+                operation_started.set()
+                assert release_operation.wait(timeout=5)
+                return {"call": operation_calls}
+
+            def run_checkpoint() -> None:
+                try:
+                    values.append(context.checkpoint("shared", operation))
+                except BaseException as error:
+                    errors.append(error)
+
+            first = Thread(target=run_checkpoint)
+            second = Thread(target=run_checkpoint)
+            first.start()
+            assert operation_started.wait(timeout=5)
+            second.start()
+            sleep(0.02)
+            release_operation.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
+            assert errors == []
+            return {"values": values}
+
+        worker = Worker(worker_connection, worker_id="python-coalesce-worker").handle(
+            "checkpoint.concurrent", handle
+        )
+        assert worker.run_once() is True
+        assert operation_calls == 1
+        outcome = worker_connection.execute(
+            "SELECT result FROM workhorse.job_outcome WHERE job_id = %s", (job_id,)
+        ).fetchone()
+        assert outcome == ({"values": [{"call": 1}, {"call": 1}]},)
+
+
+def test_checkpoint_rejects_a_stale_fence_with_its_specific_error(database_url: str) -> None:
+    observed: list[CheckpointLeaseLostError] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as competing_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue("checkpoint.stale", {})
+        enqueue_connection.commit()
+
+        def handle(_payload: object, context: HandlerContext) -> dict[str, bool]:
+            completed = competing_connection.execute(
+                "SELECT workhorse.complete_v1(%s, %s, %s, %s)",
+                (job_id, "python-stale-checkpoint-worker", context.job.fence_token, "{}"),
+            ).fetchone()
+            assert completed == (True,)
+            try:
+                context.checkpoint("too-late", lambda: {"saved": False})
+            except CheckpointLeaseLostError as error:
+                observed.append(error)
+            return {"ignored": True}
+
+        worker = Worker(worker_connection, worker_id="python-stale-checkpoint-worker").handle(
+            "checkpoint.stale", handle
+        )
+        with pytest.raises(StaleLeaseError):
+            worker.run_once()
+        assert len(observed) == 1
+        assert observed[0].job_id == job_id
+        assert observed[0].checkpoint_name == "too-late"
 
 
 def test_registered_handler_claims_exclusively_and_records_its_result(database_url: str) -> None:

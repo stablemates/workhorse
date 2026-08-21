@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Event, Lock
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, TypeVar, cast
 
 Json: TypeAlias = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
 RetryPolicy: TypeAlias = Mapping[str, Json]
@@ -15,6 +15,7 @@ NonReplaceableReason: TypeAlias = Literal[
     "incompatible_key_mode", "not_pending", "window_elapsed_pending"
 ]
 TerminalPolicy: TypeAlias = Literal["release", "cancel", "fail"]
+TJson = TypeVar("TJson", bound=Json)
 
 
 @dataclass(frozen=True)
@@ -135,9 +136,54 @@ class CancellationToken:
 
 
 @dataclass(frozen=True)
+class JobCheckpoint:
+    job_id: str
+    name: str
+    value: Json
+    attempt: int
+    fence_token: int
+    worker_id: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class JobWait:
+    job_id: str
+    name: str
+    mode: Literal["relative", "absolute"]
+    duration_ms: int | None
+    requested_wake_at: datetime | None
+    wake_at: datetime
+    attempt: int
+    fence_token: int
+    worker_id: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class HandlerContext:
     job: ClaimedJob
     cancellation: CancellationToken
+    _get_checkpoint: Callable[[str], JobCheckpoint | None] = field(repr=False)
+    _get_wait: Callable[[str], JobWait | None] = field(repr=False)
+    _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
+    _sleep: Callable[[str, int], None] = field(repr=False)
+    _sleep_until: Callable[[str, datetime], None] = field(repr=False)
+
+    def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+        return self._get_checkpoint(name)
+
+    def get_wait(self, name: str) -> JobWait | None:
+        return self._get_wait(name)
+
+    def checkpoint(self, name: str, operation: Callable[[], TJson]) -> TJson:
+        return cast(TJson, self._checkpoint(name, operation))
+
+    def sleep(self, name: str, duration_ms: int) -> None:
+        self._sleep(name, duration_ms)
+
+    def sleep_until(self, name: str, wake_at: datetime) -> None:
+        self._sleep_until(name, wake_at)
 
 
 @dataclass(frozen=True)

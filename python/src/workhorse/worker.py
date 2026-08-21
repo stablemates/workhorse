@@ -5,6 +5,7 @@ import os
 import socket
 import traceback
 from collections.abc import Callable, Sequence
+from concurrent.futures import Future
 from datetime import datetime, timezone
 from threading import Event, Lock, Thread, current_thread
 from time import monotonic
@@ -16,11 +17,16 @@ from ._drivers import PsycopgConnection, Row, SyncExecutor
 from ._statements import STATEMENTS
 from .errors import (
     CancellationRequestedError,
+    CheckpointConflictError,
+    CheckpointLeaseLostError,
     DeadlineExceededError,
     ExecutionTimeoutError,
     StaleLeaseError,
+    WaitConflictError,
+    WaitLeaseLostError,
+    WaitLimitExceededError,
 )
-from .types import CancellationToken, ClaimedJob, HandlerContext, Json
+from .types import CancellationToken, ClaimedJob, HandlerContext, JobCheckpoint, JobWait, Json
 
 if TYPE_CHECKING:
     import psycopg
@@ -40,6 +46,7 @@ AttemptOutcome = Literal[
     "deadline_exceeded",
     "attempt_timeout",
     "cancelled",
+    "suspended_for_wait",
 ]
 _STATUS_OUTCOMES: dict[str, AttemptOutcome] = {
     "cancel_requested": "cancelled",
@@ -65,6 +72,217 @@ class _AttemptOutcomeArbiter:
                 return False
             self._outcome = outcome
             return True
+
+
+class _DurableWaitSuspension(BaseException):
+    pass
+
+
+_DURABLE_WAIT_SUSPENSION = _DurableWaitSuspension()
+_MAX_WAIT_DURATION_MS = 31_536_000_000
+
+
+class _HandlerDurability:
+    def __init__(
+        self,
+        executor: SyncExecutor,
+        job: ClaimedJob,
+        worker_id: str,
+        cancellation: CancellationToken,
+        arbiter: _AttemptOutcomeArbiter,
+    ) -> None:
+        self._executor = executor
+        self._job = job
+        self._worker_id = worker_id
+        self._cancellation = cancellation
+        self._arbiter = arbiter
+        self._lock = Lock()
+        self._checkpoints: dict[str, JobCheckpoint] | None = None
+        self._checkpoints_load_error: BaseException | None = None
+        self._checkpoints_load_attempted = False
+        self._waits: dict[str, JobWait] | None = None
+        self._waits_load_error: BaseException | None = None
+        self._waits_load_attempted = False
+        self._checkpoint_calls: dict[str, Future[Json]] = {}
+        self._wait_calls: dict[str, Future[None]] = {}
+
+    def context(self) -> HandlerContext:
+        return HandlerContext(
+            self._job,
+            self._cancellation,
+            self.get_checkpoint,
+            self.get_wait,
+            self.checkpoint,
+            self.sleep,
+            self.sleep_until,
+        )
+
+    def _load_checkpoints(self) -> dict[str, JobCheckpoint]:
+        with self._lock:
+            if not self._checkpoints_load_attempted:
+                self._checkpoints_load_attempted = True
+                try:
+                    rows = self._executor.rows(STATEMENTS.list_checkpoints, (self._job.id,))
+                    self._checkpoints = {
+                        str(row["checkpoint_name"]): _checkpoint_record(self._job.id, row)
+                        for row in rows
+                    }
+                except BaseException as error:
+                    self._checkpoints_load_error = error
+            if self._checkpoints_load_error is not None:
+                raise self._checkpoints_load_error
+            assert self._checkpoints is not None
+            return self._checkpoints
+
+    def _load_waits(self) -> dict[str, JobWait]:
+        with self._lock:
+            if not self._waits_load_attempted:
+                self._waits_load_attempted = True
+                try:
+                    rows = self._executor.rows(STATEMENTS.list_waits, (self._job.id,))
+                    self._waits = {
+                        str(row["wait_name"]): _wait_record(self._job.id, row) for row in rows
+                    }
+                except BaseException as error:
+                    self._waits_load_error = error
+            if self._waits_load_error is not None:
+                raise self._waits_load_error
+            assert self._waits is not None
+            return self._waits
+
+    def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+        return self._load_checkpoints().get(name)
+
+    def get_wait(self, name: str) -> JobWait | None:
+        return self._load_waits().get(name)
+
+    def checkpoint(self, name: str, operation: Callable[[], Json]) -> Json:
+        with self._lock:
+            pending = self._checkpoint_calls.get(name)
+            if pending is None:
+                pending = Future()
+                self._checkpoint_calls[name] = pending
+                owns_call = True
+            else:
+                owns_call = False
+        if not owns_call:
+            return pending.result()
+        try:
+            existing = self._load_checkpoints().get(name)
+            if existing is not None:
+                result = existing.value
+            else:
+                self._cancellation.raise_if_cancelled()
+                value = operation()
+                encoded = json.dumps(value, separators=(",", ":"), allow_nan=False)
+                row = _require_lifecycle_row(
+                    self._executor.rows(
+                        STATEMENTS.save_checkpoint,
+                        (
+                            self._job.id,
+                            self._worker_id,
+                            self._job.fence_token,
+                            name,
+                            encoded,
+                        ),
+                    )
+                )
+                status = row["status"]
+                if status == "stale":
+                    raise CheckpointLeaseLostError(self._job.id, name)
+                if status == "conflict":
+                    raise CheckpointConflictError(self._job.id, name)
+                if status not in {"saved", "existing"}:
+                    raise RuntimeError(f"Unexpected checkpoint status: {status}")
+                saved = _checkpoint_record(self._job.id, row, name=name)
+                with self._lock:
+                    assert self._checkpoints is not None
+                    self._checkpoints[name] = saved
+                result = saved.value
+            pending.set_result(result)
+            return result
+        except BaseException as error:
+            pending.set_exception(error)
+            raise
+        finally:
+            with self._lock:
+                if self._checkpoint_calls.get(name) is pending:
+                    del self._checkpoint_calls[name]
+
+    def sleep(self, name: str, duration_ms: int) -> None:
+        if isinstance(duration_ms, bool) or not isinstance(duration_ms, int):
+            raise TypeError("Wait duration_ms must be an integer number of milliseconds")
+        if not 1 <= duration_ms <= _MAX_WAIT_DURATION_MS:
+            raise ValueError(f"Wait duration_ms must be between 1 and {_MAX_WAIT_DURATION_MS}")
+        self._schedule_wait(name, duration_ms=duration_ms, wake_at=None)
+
+    def sleep_until(self, name: str, wake_at: datetime) -> None:
+        if (
+            not isinstance(wake_at, datetime)
+            or wake_at.tzinfo is None
+            or wake_at.utcoffset() is None
+        ):
+            raise TypeError("Wait wake_at must be a timezone-aware datetime")
+        if (wake_at - datetime.now(timezone.utc)).total_seconds() * 1000 > _MAX_WAIT_DURATION_MS:
+            raise ValueError("Wait wake_at must be no more than 365 days in the future")
+        self._schedule_wait(name, duration_ms=None, wake_at=wake_at)
+
+    def _schedule_wait(
+        self,
+        name: str,
+        *,
+        duration_ms: int | None,
+        wake_at: datetime | None,
+    ) -> None:
+        with self._lock:
+            pending = self._wait_calls.get(name)
+            if pending is None:
+                pending = Future()
+                self._wait_calls[name] = pending
+                owns_call = True
+            else:
+                owns_call = False
+        if not owns_call:
+            return pending.result()
+        try:
+            self._cancellation.raise_if_cancelled()
+            row = _require_lifecycle_row(
+                self._executor.rows(
+                    STATEMENTS.schedule_wait,
+                    (
+                        self._job.id,
+                        self._worker_id,
+                        self._job.fence_token,
+                        name,
+                        duration_ms,
+                        wake_at,
+                    ),
+                )
+            )
+            status = row["status"]
+            if status == "stale":
+                raise WaitLeaseLostError(self._job.id, name)
+            if status == "conflict":
+                raise WaitConflictError(self._job.id, name)
+            if status == "limit_exceeded":
+                raise WaitLimitExceededError(self._job.id)
+            if status not in {"scheduled", "elapsed"}:
+                raise RuntimeError(f"Unexpected wait status: {status}")
+            wait = _wait_record(self._job.id, row, name=name)
+            with self._lock:
+                if self._waits is not None:
+                    self._waits[name] = wait
+            if status == "scheduled" and self._arbiter.submit("suspended_for_wait"):
+                self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
+                raise _DURABLE_WAIT_SUSPENSION
+            pending.set_result(None)
+        except BaseException as error:
+            pending.set_exception(error)
+            raise
+        finally:
+            with self._lock:
+                if self._wait_calls.get(name) is pending:
+                    del self._wait_calls[name]
 
 
 class Worker:
@@ -206,6 +424,7 @@ class Worker:
                     self._wake.wait(self.poll_ms / 1000)
                     continue
 
+                _require_lifecycle_row(self._executor.rows(STATEMENTS.promote, (100,)))
                 _require_lifecycle_row(self._executor.rows(STATEMENTS.recover_expired, (100, None)))
                 empty_attempts = 0
                 while empty_attempts < len(self.queues):
@@ -349,6 +568,13 @@ class Worker:
 
         heartbeat_thread = Thread(target=heartbeat, name=f"workhorse-heartbeat-{job.id}")
         heartbeat_thread.start()
+        durability = _HandlerDurability(
+            self._executor,
+            job,
+            self.worker_id,
+            cancellation,
+            arbiter,
+        )
 
         def finish_ownership_lifecycle(cause: Exception | None = None) -> bool:
             heartbeat_stop.set()
@@ -362,8 +588,12 @@ class Worker:
             return False
 
         try:
-            result = handler(job.payload, HandlerContext(job, cancellation))
+            result = handler(job.payload, durability.context())
             encoded_result = json.dumps(result, separators=(",", ":"))
+        except _DurableWaitSuspension:
+            if finish_ownership_lifecycle():
+                return
+            raise RuntimeError("Durable wait suspension was not accepted by the arbiter") from None
         except Exception as error:
             if finish_ownership_lifecycle(error):
                 return
@@ -386,6 +616,8 @@ class Worker:
         arbiter.submit("completed")
 
     def _finish_lifecycle_outcome(self, job: ClaimedJob, outcome: AttemptOutcome | None) -> bool:
+        if outcome == "suspended_for_wait":
+            return True
         if outcome == "cancelled":
             if not self._acknowledge_cancel(job):
                 raise StaleLeaseError(job.id)
@@ -453,6 +685,38 @@ def _claimed_job(row: Row, queue: str) -> ClaimedJob:
         attempt_timeout_at=cast(Any, row["attempt_timeout_at"]),
         fence_token=int(cast(int, row["fence_token"])),
         lease_expires_at=cast(Any, row["lease_expires_at"]),
+    )
+
+
+def _checkpoint_record(job_id: str, row: Row, *, name: str | None = None) -> JobCheckpoint:
+    return JobCheckpoint(
+        job_id=job_id,
+        name=name or str(row["checkpoint_name"]),
+        value=cast(Json, row["checkpoint_value"]),
+        attempt=int(cast(int, row["attempt"])),
+        fence_token=int(cast(int, row["fence_token"])),
+        worker_id=str(row["worker_id"]),
+        created_at=cast(datetime, row["created_at"]),
+    )
+
+
+def _wait_record(job_id: str, row: Row, *, name: str | None = None) -> JobWait:
+    mode = str(row["mode"])
+    if mode not in {"relative", "absolute"}:
+        raise RuntimeError(f"Unexpected durable wait mode: {mode}")
+    return JobWait(
+        job_id=job_id,
+        name=name or str(row["wait_name"]),
+        mode=cast(Literal["relative", "absolute"], mode),
+        duration_ms=(
+            None if row["duration_ms"] is None else int(cast(int | str, row["duration_ms"]))
+        ),
+        requested_wake_at=cast(datetime | None, row["requested_wake_at"]),
+        wake_at=cast(datetime, row["wake_at"]),
+        attempt=int(cast(int, row["attempt"])),
+        fence_token=int(cast(int | str, row["fence_token"])),
+        worker_id=str(row["worker_id"]),
+        created_at=cast(datetime, row["created_at"]),
     )
 
 

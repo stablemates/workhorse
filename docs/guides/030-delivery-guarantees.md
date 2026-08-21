@@ -50,6 +50,9 @@ const handler = async (payload, ctx) => {
 If this fails while rendering the invoice, the retry reuses the saved `charge` result
 instead of charging the card again.
 
+The synchronous Python worker exposes the same boundary as `context.checkpoint`. Its operation is
+a regular callable, and replay returns the stored JSON value without calling it again.
+
 ## The honest limit of checkpoints
 
 A checkpoint saves its value in a database transaction _after_ your code has run. If the

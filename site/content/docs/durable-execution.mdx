@@ -43,6 +43,9 @@ checkpoint makes repeats rare; the provider key makes them harmless.
 Reusing a checkpoint name with a different value raises `CheckpointConflictError` instead of
 silently changing durable evidence.
 
+The synchronous Python worker uses the same `context.checkpoint(name, operation)` shape with a
+regular callable. Replay returns its stored JSON value without invoking the callable again.
+
 ## Release the worker slot with a durable wait
 
 Some jobs need to pause — an hour before a reminder, until tomorrow morning. Sleeping inside
@@ -50,6 +53,9 @@ the handler wastes a worker slot for the whole wait. A durable wait releases the
 
 - `HandlerContext.sleep(name, durationMs)` stores a named relative timer.
 - `HandlerContext.sleepUntil(name, wakeAt)` stores a named absolute target.
+
+Python names the absolute form `context.sleep_until(name, wake_at)`; its relative form remains
+`context.sleep(name, duration_ms)`.
 
 The wait drops the lease, frees the worker slot, and places the job in `scheduled`. It does
 **not** consume an attempt — waiting is normal work, not failure. A job that sleeps five

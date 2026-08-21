@@ -15,6 +15,9 @@ Later, the job becomes ready again, some worker claims it, and it carries on. No
 sitting idle in between. You could wait a month this way and consume no worker capacity at
 all.
 
+The synchronous Python worker uses `context.sleep` for a duration and `context.sleep_until` for a
+wake time. Both release the slot and replay the handler without consuming the attempt.
+
 ## The catch: your handler restarts from the top
 
 This is the part that surprises people, so get it clear.

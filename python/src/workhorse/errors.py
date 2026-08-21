@@ -46,6 +46,44 @@ class ExecutionTimeoutError(WorkhorseError):
         super().__init__(f"Execution timeout was exceeded for job {job_id} attempt {attempt}")
 
 
+class CheckpointLeaseLostError(LifecycleError):
+    def __init__(self, job_id: str, checkpoint_name: str) -> None:
+        self.job_id = job_id
+        self.checkpoint_name = checkpoint_name
+        super().__init__(
+            f"Cannot save checkpoint {checkpoint_name} for job {job_id} under a stale lease"
+        )
+
+
+class CheckpointConflictError(WorkhorseError):
+    def __init__(self, job_id: str, checkpoint_name: str) -> None:
+        self.job_id = job_id
+        self.checkpoint_name = checkpoint_name
+        super().__init__(
+            f"Checkpoint {checkpoint_name} for job {job_id} already has a different value"
+        )
+
+
+class WaitLeaseLostError(LifecycleError):
+    def __init__(self, job_id: str, wait_name: str) -> None:
+        self.job_id = job_id
+        self.wait_name = wait_name
+        super().__init__(f"Cannot schedule wait {wait_name} for job {job_id} under a stale lease")
+
+
+class WaitConflictError(WorkhorseError):
+    def __init__(self, job_id: str, wait_name: str) -> None:
+        self.job_id = job_id
+        self.wait_name = wait_name
+        super().__init__(f"Wait {wait_name} for job {job_id} has a conflicting target")
+
+
+class WaitLimitExceededError(WorkhorseError):
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        super().__init__(f"Job {job_id} already has the maximum number of durable waits")
+
+
 class ProtocolCompatibilityError(WorkhorseError):
     def __init__(self, code: CompatibilityCode) -> None:
         self.code = code

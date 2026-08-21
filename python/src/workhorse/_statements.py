@@ -22,6 +22,7 @@ class StatementRegistry:
     compatibility: DriverStatement
     enqueue_many: DriverStatement
     sync_schedules: DriverStatement
+    promote: DriverStatement
     recover_expired: DriverStatement
     claim: DriverStatement
     heartbeat: DriverStatement
@@ -29,6 +30,10 @@ class StatementRegistry:
     acknowledge_cancel: DriverStatement
     complete: DriverStatement
     fail: DriverStatement
+    list_checkpoints: DriverStatement
+    save_checkpoint: DriverStatement
+    list_waits: DriverStatement
+    schedule_wait: DriverStatement
 
 
 STATEMENTS = StatementRegistry(
@@ -49,6 +54,10 @@ STATEMENTS = StatementRegistry(
     sync_schedules=DriverStatement(
         psycopg=("SELECT workhorse.sync_schedule_definitions_v1(%s::text, %s::jsonb, %s::boolean)"),
         asyncpg=("SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)"),
+    ),
+    promote=DriverStatement(
+        psycopg="SELECT workhorse.promote_v1(%s::integer) AS promoted",
+        asyncpg="SELECT workhorse.promote_v1($1::integer) AS promoted",
     ),
     recover_expired=DriverStatement(
         psycopg=("SELECT * FROM workhorse.recover_expired_telemetry_v1(%s::integer, %s::integer)"),
@@ -94,6 +103,54 @@ STATEMENTS = StatementRegistry(
         asyncpg=(
             "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, "
             "$5::integer) AS state"
+        ),
+    ),
+    list_checkpoints=DriverStatement(
+        psycopg=(
+            "SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text, "
+            "worker_id, created_at FROM workhorse.job_checkpoint "
+            "WHERE job_id = %s::uuid ORDER BY created_at, checkpoint_name"
+        ),
+        asyncpg=(
+            "SELECT checkpoint_name, checkpoint_value, attempt, fence_token::text, "
+            "worker_id, created_at FROM workhorse.job_checkpoint "
+            "WHERE job_id = $1::uuid ORDER BY created_at, checkpoint_name"
+        ),
+    ),
+    save_checkpoint=DriverStatement(
+        psycopg=(
+            "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at "
+            "FROM workhorse.save_checkpoint_v1(%s::uuid, %s::text, %s::bigint, %s::text, %s::jsonb)"
+        ),
+        asyncpg=(
+            "SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at "
+            "FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
+        ),
+    ),
+    list_waits=DriverStatement(
+        psycopg=(
+            "SELECT wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, "
+            "fence_token::text, worker_id, created_at FROM workhorse.job_wait "
+            "WHERE job_id = %s::uuid ORDER BY created_at, wait_name"
+        ),
+        asyncpg=(
+            "SELECT wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, "
+            "fence_token::text, worker_id, created_at FROM workhorse.job_wait "
+            "WHERE job_id = $1::uuid ORDER BY created_at, wait_name"
+        ),
+    ),
+    schedule_wait=DriverStatement(
+        psycopg=(
+            "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, "
+            "attempt, fence_token::text, worker_id, created_at "
+            "FROM workhorse.schedule_wait_v1(%s::uuid, %s::text, %s::bigint, %s::text, "
+            "%s::bigint, %s::timestamptz)"
+        ),
+        asyncpg=(
+            "SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, "
+            "attempt, fence_token::text, worker_id, created_at "
+            "FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, "
+            "$5::bigint, $6::timestamptz)"
         ),
     ),
 )

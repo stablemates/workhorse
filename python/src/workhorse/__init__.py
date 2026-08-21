@@ -1,6 +1,8 @@
 from .client import AsyncQueue, Queue
 from .errors import (
     CancellationRequestedError,
+    CheckpointConflictError,
+    CheckpointLeaseLostError,
     DeadlineExceededError,
     DependencyCycleError,
     DependencyLimitExceededError,
@@ -9,6 +11,9 @@ from .errors import (
     LifecycleError,
     ProtocolCompatibilityError,
     StaleLeaseError,
+    WaitConflictError,
+    WaitLeaseLostError,
+    WaitLimitExceededError,
     WorkhorseError,
 )
 from .types import (
@@ -21,6 +26,8 @@ from .types import (
     EnqueueResult,
     HandlerContext,
     Idempotency,
+    JobCheckpoint,
+    JobWait,
     Json,
     RetryPolicy,
     ScheduleDefinition,
@@ -33,6 +40,8 @@ __all__ = [
     "AsyncQueue",
     "CancellationRequestedError",
     "CancellationToken",
+    "CheckpointConflictError",
+    "CheckpointLeaseLostError",
     "ClaimedJob",
     "DeadlineExceededError",
     "Debounce",
@@ -46,6 +55,8 @@ __all__ = [
     "ExecutionTimeoutError",
     "HandlerContext",
     "Idempotency",
+    "JobCheckpoint",
+    "JobWait",
     "Json",
     "LifecycleError",
     "ProtocolCompatibilityError",
@@ -55,6 +66,9 @@ __all__ = [
     "ScheduledJob",
     "StaleLeaseError",
     "Throttle",
+    "WaitConflictError",
+    "WaitLeaseLostError",
+    "WaitLimitExceededError",
     "Worker",
     "WorkhorseError",
 ]

@@ -19,7 +19,8 @@ def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
 def sync_worker(connection: psycopg.Connection[Any]) -> bool:
     def handle(payload: Json, context: HandlerContext) -> Json:
         context.cancellation.raise_if_cancelled()
-        return {"jobId": context.job.id, "payload": payload}
+        prepared = context.checkpoint("prepare", lambda: {"payload": payload})
+        return {"jobId": context.job.id, "prepared": prepared}
 
     return Worker(connection, heartbeat_ms=1_000).handle("email.send", handle).run_once()
 

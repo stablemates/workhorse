@@ -47,10 +47,11 @@ The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `w
 single and batch enqueue over pgx and `database/sql`, including every stable enqueue option except
 payload and result contracts. Go and Python can define and synchronize recurring schedules through
 caller-owned executors. Python's synchronous worker provides bounded
-concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, and graceful drain,
+concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable checkpoints,
+durable timers, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
-lifecycle support. Only a TypeScript worker fires schedules until [WH-309] ships. The remaining
-A deployment enqueueing from Go needs a
+lifecycle support. Only a TypeScript worker fires schedules until [WH-309] ships. A deployment
+enqueueing from Go needs a
 TypeScript worker to run jobs until [WH-236] ships, and to fire schedules until [WH-332] ships.
 
 ## Worker runtime
@@ -66,8 +67,8 @@ telemetry, and graceful shutdown.
 | Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Planned |
 | Cooperative cancellation delivery            | Supported  | Supported | Planned |
 | Notification-assisted dispatch with polling  | Supported  | Planned   | Planned |
-| Durable checkpoints (handler context)        | Supported  | Planned   | Planned |
-| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Planned   | Planned |
+| Durable checkpoints (handler context)        | Supported  | Supported | Planned |
+| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Planned |
 | Signal and human-decision waits              | Supported  | Planned   | Planned |
 | Linked child fan-out and result join         | Supported  | Planned   | Planned |
 | Latest-value progress reporting              | Supported  | Absent    | Absent  |
