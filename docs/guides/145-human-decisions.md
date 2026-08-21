@@ -12,6 +12,9 @@ logical attempt, so the worker can claim other work while the decision is pendin
 The handler restarts from its entry point after completion. When replay reaches the same name and
 context, `waitForHuman` returns the retained result.
 
+Go handlers call `HandlerContext.WaitForHuman` with the stable name and JSON context. They can pass
+`ExternalWaitOptions` when the decision needs a shorter lifetime.
+
 ```ts
 const review = await ctx.waitForHuman<{ accountId: string; prompt: string }, { approved: boolean }>(
   "account-review",
@@ -49,6 +52,9 @@ Applications can complete the same decision through `Queue.completeHumanWait`. T
 their own authorization before passing the stable job identity, token name, result, idempotency key,
 and trusted actor as `requestedBy`.
 The response exposes the accepted decision as `payload`, matching `Queue.sendSignal`.
+
+Go applications use `Queue.CompleteHumanWait` with `ExternalWaitDelivery`. The result retains the
+accepted decision and actor, while a changed retained key returns a typed conflict error.
 
 The first accepted completion resumes the job. An equal retry returns the retained result, while a
 competing completion returns the accepted winner without overwriting its audit evidence.

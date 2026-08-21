@@ -17,6 +17,10 @@ const (
 	listCheckpointStatementName          = "list_checkpoint"
 	saveCheckpointStatementName          = "save_checkpoint_v1"
 	scheduleWaitStatementName            = "schedule_wait_v1"
+	waitForSignalStatementName           = "wait_for_signal_v1"
+	sendSignalStatementName              = "send_signal_v1"
+	waitForHumanStatementName            = "wait_for_human_v1"
+	completeHumanWaitStatementName       = "complete_human_wait_v1"
 	recordBatchDispatchStatementName     = "record_batch_dispatch_v1"
 	recordBatchFailureStatementName      = "record_batch_failure_v1"
 	rowOrdinalField                      = "ordinal"
@@ -29,6 +33,11 @@ const (
 	rowJobTypeField                      = "job_type"
 	rowPriorityField                     = "priority"
 	rowPayloadField                      = "payload"
+	rowResultField                       = "result"
+	rowDeliveredAtField                  = "delivered_at"
+	rowDeliveredByField                  = "delivered_by"
+	rowCompletedAtField                  = "completed_at"
+	rowCompletedByField                  = "completed_by"
 	rowContractVersionField              = "contract_version"
 	rowResultMaxBytesField               = "result_max_bytes"
 	rowRedactErrorDetailsField           = "redact_error_details"
@@ -94,6 +103,20 @@ const (
 	durableElapsedValue                            = "elapsed"
 	durableScheduledValue                          = "scheduled"
 	durableLimitExceededValue                      = "limit_exceeded"
+	externalWaitingValue                           = "waiting"
+	externalDeliveredValue                         = "delivered"
+	externalAlreadyWaitingValue                    = "already_waiting"
+	externalDuplicateValue                         = "duplicate"
+	externalNotWaitingValue                        = "not_waiting"
+	externalAlreadyDeliveredValue                  = "already_delivered"
+	externalCompletedValue                         = "completed"
+	externalAlreadyCompletedValue                  = "already_completed"
+	externalNotFoundValue                          = "not_found"
+	signalLabelValue                               = "signal"
+	signalPayloadLabelValue                        = "signal payload"
+	humanWaitLabelValue                            = "human wait"
+	humanWaitContextLabelValue                     = "human wait context"
+	humanWaitResultLabelValue                      = "human wait result"
 
 	enqueueBatchTooLargeMessage        = "enqueue batch exceeds the shared limit"
 	invalidEnqueueResultMessage        = "PostgreSQL returned an invalid enqueue result"
@@ -263,6 +286,32 @@ const (
 	rowRowsAffectedField  = "rows_affected"
 )
 
+const (
+	invalidSignalWaitResultMessage      = "PostgreSQL returned an invalid signal wait result"
+	unknownSignalWaitStatusFormat       = "PostgreSQL returned unknown signal wait status %q"
+	invalidSignalDeliveryResultMessage  = "PostgreSQL returned an invalid signal delivery result"
+	unknownSignalDeliveryStatusFormat   = "PostgreSQL returned unknown signal delivery status %q"
+	externalWaitOptionsCountMessage     = "external wait accepts at most one ExternalWaitOptions value"
+	externalWaitTimeoutRangeMessage     = "external wait timeout must be a whole number of milliseconds between %s and %s"
+	externalWaitNameRangeFormat         = "%s name must contain between 1 and 200 characters without surrounding whitespace"
+	externalWaitValueSizeFormat         = "%s must be at most 65536 bytes of JSON"
+	externalWaitDeliveryKeyRangeFormat  = "%s idempotency key must contain between 1 and 512 UTF-8 bytes"
+	externalWaitActorRangeFormat        = "%s requested by must contain between 1 and 200 characters"
+	signalWaitLeaseLostErrorFormat      = "signal wait %s for job %s cannot be recorded because the lease is stale or expired"
+	signalWaitConflictErrorFormat       = "signal wait %s for job %s is already waiting for delivery"
+	signalWaitLimitExceededErrorFormat  = "job %s already has the maximum number of signal waits"
+	signalIdempotencyConflictFormat     = "signal %s for job %s received a different request for a retained idempotency key"
+	invalidHumanWaitResultMessage       = "PostgreSQL returned an invalid human wait result"
+	unknownHumanWaitStatusFormat        = "PostgreSQL returned unknown human wait status %q"
+	invalidHumanCompletionResultMessage = "PostgreSQL returned an invalid human wait completion result"
+	unknownHumanCompletionStatusFormat  = "PostgreSQL returned unknown human wait completion status %q"
+	humanWaitLeaseLostErrorFormat       = "human wait %s for job %s cannot be recorded because the lease is stale or expired"
+	humanWaitAlreadyWaitingErrorFormat  = "human wait %s for job %s is already waiting for completion"
+	humanWaitLimitExceededErrorFormat   = "job %s already has the maximum number of human waits"
+	humanWaitConflictErrorFormat        = "human wait %s for job %s was replayed with different context"
+	humanWaitIdempotencyConflictFormat  = "human wait %s for job %s received a different completion for a retained idempotency key"
+)
+
 var internalStatementRegistry = map[string]string{
 	schemaVersionStatement:               `SELECT version FROM workhorse.schema_version ORDER BY version`,
 	syncScheduleDefinitionsStatementName: `SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)`,
@@ -287,10 +336,10 @@ var protocolStatementRegistry = map[string]string{
 	scheduleWaitStatementName:        `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
 	"create_children_v1":             `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
 	"create_child_v1":                `SELECT status, child_job_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
-	"wait_for_signal_v1":             `SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)`,
-	"send_signal_v1":                 `SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
-	"wait_for_human_v1":              `SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)`,
-	"complete_human_wait_v1":         `SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
+	waitForSignalStatementName:       `SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)`,
+	sendSignalStatementName:          `SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
+	waitForHumanStatementName:        `SELECT status, result FROM workhorse.wait_for_human_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)`,
+	completeHumanWaitStatementName:   `SELECT status, result, completed_at, completed_by FROM workhorse.complete_human_wait_v1($1::uuid, $2::text, $3::jsonb, $4::text, $5::text)`,
 	"dashboard_signal_wait_v1":       `SELECT job_id, queue_name, job_type, signal_name AS wait_name, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_signal_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, signal_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, signal_name LIMIT $1::integer`,
 	"dashboard_human_wait_v1":        `SELECT job_id, queue_name, job_type, token_name AS wait_name, context, attempt, created_at, deadline_at, created_at::text AS cursor_created_at FROM workhorse.dashboard_human_wait_v1 WHERE ($2::timestamptz IS NULL OR (created_at, job_id, token_name) > ($2::timestamptz, $3::uuid, $4::text)) ORDER BY created_at, job_id, token_name LIMIT $1::integer`,
 }

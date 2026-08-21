@@ -15,6 +15,9 @@ if (approval.approved) await publishOrder();
 Checkpoint earlier effects because replay starts from the top. When replay reaches the same name,
 `waitForSignal` returns the retained payload.
 
+Go handlers use `HandlerContext.WaitForSignal`. They can pass `ExternalWaitOptions` when the
+boundary needs a shorter lifetime.
+
 ## Deliver once, retry safely
 
 Applications call `Queue.sendSignal(jobId, name, payload, request)` with an idempotency key and a
@@ -27,6 +30,9 @@ cancellation closes the boundary, so replay cannot continue with an invented pay
 
 `Queue.listSignalWaits()` provides the actionable operator projection. The dashboard uses the same
 public method, but its server replaces browser-supplied attribution with the authenticated actor.
+
+Go applications deliver through `Queue.SendSignal` with `ExternalWaitDelivery`. The returned
+`SignalDeliveryResult` contains the database status and retained payload.
 
 ## Next
 

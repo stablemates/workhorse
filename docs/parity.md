@@ -51,7 +51,7 @@ also runs a worker from a separate module that imports the public package. Compi
 exercise signal drain and lease recovery after a kill. The Go worker provides
 bounded concurrency, fair multi-queue claiming, notification-assisted dispatch with polling
 fallback, ownership heartbeats, cancellation, durable checkpoints, durable timers, OpenTelemetry
-tracing and metrics, structured logs, and graceful drain. Python's synchronous and asynchronous
+tracing and metrics, structured logs, signal and human-decision waits, and graceful drain. Python's synchronous and asynchronous
 workers provide bounded concurrency, fair multi-queue
 claiming, ownership heartbeats, cancellation, durable checkpoints, durable timers, signal and
 human-decision waits, schedule firing, telemetry, and graceful drain through one lifecycle core.
@@ -74,7 +74,7 @@ telemetry, and graceful shutdown.
 | Notification-assisted dispatch with polling  | Supported  | Supported | Supported |
 | Durable checkpoints (handler context)        | Supported  | Supported | Supported |
 | Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Supported |
-| Signal and human-decision waits              | Supported  | Supported | Planned   |
+| Signal and human-decision waits              | Supported  | Supported | Supported |
 | Linked child fan-out and result join         | Supported  | Supported | Planned   |
 | Latest-value progress reporting              | Supported  | Absent    | Absent    |
 | Batch handler delivery                       | Supported  | Supported | Supported |

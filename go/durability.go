@@ -94,6 +94,10 @@ type HandlerContext struct {
 	checkpoints map[string]*checkpointCall
 	wait        sync.Mutex
 	waits       map[string]*waitCall
+	signal      sync.Mutex
+	signals     map[string]*externalWaitCall
+	human       sync.Mutex
+	humanWaits  map[string]*humanWaitCall
 	suspended   atomic.Bool
 }
 
