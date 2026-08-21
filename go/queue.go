@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -14,9 +15,13 @@ import (
 // MaxEnqueueBatchSize is PostgreSQL's atomic enqueue batch limit.
 const MaxEnqueueBatchSize = 1000
 
+// MaxJobDependencies is PostgreSQL's prerequisite fan-in limit for one job.
+const MaxJobDependencies = 100
+
 const (
 	defaultJobValueMaxBytes = 1_048_576
 	defaultMaxAttempts      = 25
+	defaultIdempotencyTTLMS = 86_400_000
 )
 
 // ErrEnqueueBatchTooLarge reports a batch that exceeds MaxEnqueueBatchSize.
@@ -24,6 +29,9 @@ var ErrEnqueueBatchTooLarge = errors.New(enqueueBatchTooLargeMessage)
 
 // ErrInvalidEnqueueResult reports a result set that violates the SQL protocol contract.
 var ErrInvalidEnqueueResult = errors.New(invalidEnqueueResultMessage)
+
+// ErrInvalidEnqueueOptions reports an option combination rejected before PostgreSQL is queried.
+var ErrInvalidEnqueueOptions = errors.New(invalidEnqueueOptionsMessage)
 
 // EnqueueOutcome is PostgreSQL's durable disposition for one request.
 type EnqueueOutcome string
@@ -45,10 +53,76 @@ const (
 	WindowElapsedPending EnqueueNonReplaceableReason = reasonWindowElapsedValue
 )
 
+// DebounceSchedule controls whether a replacement resets or preserves the original window.
+type DebounceSchedule string
+
+const (
+	DebounceReset    DebounceSchedule = debounceResetValue
+	DebouncePreserve DebounceSchedule = debouncePreserveValue
+)
+
+// DependencyTerminalPolicy controls what a dependent does after a prerequisite settles.
+type DependencyTerminalPolicy string
+
+const (
+	DependencyRelease DependencyTerminalPolicy = dependencyReleaseValue
+	DependencyCancel  DependencyTerminalPolicy = dependencyCancelValue
+	DependencyFail    DependencyTerminalPolicy = dependencyFailValue
+)
+
+// Idempotency retains one canonical request under a scoped key.
+type Idempotency struct {
+	Key   string `json:"key"`
+	Scope string `json:"scope"`
+	TTLMS int    `json:"ttlMs"`
+}
+
+// Debounce replaces a pending keyed job during a PostgreSQL-owned window.
+type Debounce struct {
+	Key      string           `json:"key"`
+	Scope    string           `json:"scope"`
+	WindowMS int              `json:"windowMs"`
+	Schedule DebounceSchedule `json:"schedule"`
+}
+
+// Throttle accepts at most one equivalent keyed job during a PostgreSQL-owned window.
+type Throttle struct {
+	Key      string `json:"key"`
+	Scope    string `json:"scope"`
+	WindowMS int    `json:"windowMs"`
+}
+
+// Dependencies declares prerequisite jobs and the terminal outcomes accepted from each.
+type Dependencies struct {
+	PrerequisiteJobIDs []string                 `json:"prerequisiteJobIds"`
+	OnSuccess          DependencyTerminalPolicy `json:"onSuccess"`
+	OnFailure          DependencyTerminalPolicy `json:"onFailure"`
+	OnCancellation     DependencyTerminalPolicy `json:"onCancellation"`
+}
+
+// EnqueueOptions controls a job's initial dispatch and durable acceptance behavior.
+// Zero values select PostgreSQL-compatible client defaults or omit optional values.
+type EnqueueOptions struct {
+	Queue              string
+	Priority           int
+	ConcurrencyKey     string
+	RunAt              *time.Time
+	Deadline           *time.Time
+	ExecutionTimeoutMS int
+	MaxAttempts        int
+	RetryPolicy        map[string]any
+	Tags               []string
+	Idempotency        *Idempotency
+	Debounce           *Debounce
+	Throttle           *Throttle
+	Dependencies       *Dependencies
+}
+
 // EnqueueRequest is one job submitted through an atomic enqueue batch.
 type EnqueueRequest struct {
 	Type    string
 	Payload any
+	Options EnqueueOptions
 }
 
 // EnqueueResult contains a job's stable identity and durable enqueue disposition.
@@ -70,8 +144,13 @@ func NewQueue(executor Executor, defaultQueue string) *Queue {
 }
 
 // Enqueue submits one job and returns its stable identifier.
-func (queue *Queue) Enqueue(ctx context.Context, jobType string, payload any) (string, error) {
-	result, err := queue.EnqueueWithResult(ctx, jobType, payload)
+func (queue *Queue) Enqueue(
+	ctx context.Context,
+	jobType string,
+	payload any,
+	options ...EnqueueOptions,
+) (string, error) {
+	result, err := queue.EnqueueWithResult(ctx, jobType, payload, options...)
 	if err != nil {
 		return emptyString, err
 	}
@@ -83,8 +162,16 @@ func (queue *Queue) EnqueueWithResult(
 	ctx context.Context,
 	jobType string,
 	payload any,
+	options ...EnqueueOptions,
 ) (EnqueueResult, error) {
-	results, err := queue.EnqueueManyWithResults(ctx, []EnqueueRequest{{Type: jobType, Payload: payload}})
+	if len(options) > 1 {
+		return EnqueueResult{}, fmt.Errorf(tooManyEnqueueOptionsMessage, ErrInvalidEnqueueOptions)
+	}
+	request := EnqueueRequest{Type: jobType, Payload: payload}
+	if len(options) == 1 {
+		request.Options = options[0]
+	}
+	results, err := queue.EnqueueManyWithResults(ctx, []EnqueueRequest{request})
 	if err != nil {
 		return EnqueueResult{}, err
 	}
@@ -115,47 +202,11 @@ func (queue *Queue) EnqueueManyWithResults(
 	if len(requests) > MaxEnqueueBatchSize {
 		return nil, ErrEnqueueBatchTooLarge
 	}
-	if err := AssertCompatible(ctx, queue.executor); err != nil {
+	payload, err := serializeEnqueueRequests(requests, queue.defaultQueue, time.Now().UTC())
+	if err != nil {
 		return nil, err
 	}
-
-	type enqueueInput struct {
-		Queue                string   `json:"queue"`
-		Type                 string   `json:"type"`
-		Payload              any      `json:"payload"`
-		Priority             int      `json:"priority"`
-		ContractVersion      any      `json:"contractVersion"`
-		PayloadMaxBytes      int      `json:"payloadMaxBytes"`
-		ResultMaxBytes       int      `json:"resultMaxBytes"`
-		SensitivePayloadKeys []string `json:"sensitivePayloadKeys"`
-		SensitiveResultKeys  []string `json:"sensitiveResultKeys"`
-		RunAt                string   `json:"runAt"`
-		Deadline             any      `json:"deadline"`
-		ConcurrencyKey       any      `json:"concurrencyKey"`
-		ExecutionTimeoutMS   any      `json:"executionTimeoutMs"`
-		MaxAttempts          int      `json:"maxAttempts"`
-		RetryPolicy          any      `json:"retryPolicy"`
-		PrerequisiteJobID    any      `json:"prerequisiteJobId"`
-		Dependencies         any      `json:"dependencies"`
-		Tags                 []string `json:"tags"`
-	}
-	input := make([]enqueueInput, len(requests))
-	for index, request := range requests {
-		input[index] = enqueueInput{
-			Queue:                queue.defaultQueue,
-			Type:                 request.Type,
-			Payload:              request.Payload,
-			PayloadMaxBytes:      defaultJobValueMaxBytes,
-			ResultMaxBytes:       defaultJobValueMaxBytes,
-			SensitivePayloadKeys: []string{},
-			SensitiveResultKeys:  []string{},
-			RunAt:                time.Now().UTC().Format(time.RFC3339Nano),
-			MaxAttempts:          defaultMaxAttempts,
-			Tags:                 []string{},
-		}
-	}
-	payload, err := json.Marshal(input)
-	if err != nil {
+	if err := AssertCompatible(ctx, queue.executor); err != nil {
 		return nil, err
 	}
 	rows, err := queue.executor.Query(ctx, protocolStatementRegistry[enqueueManyStatementName], payload)
@@ -181,6 +232,176 @@ func (queue *Queue) EnqueueManyWithResults(
 		seen[ordinal-1] = true
 	}
 	return results, nil
+}
+
+type enqueueInput struct {
+	Queue                string        `json:"queue"`
+	Type                 string        `json:"type"`
+	Payload              any           `json:"payload"`
+	Priority             int           `json:"priority"`
+	ContractVersion      any           `json:"contractVersion"`
+	PayloadMaxBytes      int           `json:"payloadMaxBytes"`
+	ResultMaxBytes       int           `json:"resultMaxBytes"`
+	SensitivePayloadKeys []string      `json:"sensitivePayloadKeys"`
+	SensitiveResultKeys  []string      `json:"sensitiveResultKeys"`
+	RunAt                *string       `json:"runAt,omitempty"`
+	Deadline             *string       `json:"deadline"`
+	ConcurrencyKey       any           `json:"concurrencyKey"`
+	ExecutionTimeoutMS   any           `json:"executionTimeoutMs"`
+	MaxAttempts          int           `json:"maxAttempts"`
+	RetryPolicy          any           `json:"retryPolicy"`
+	PrerequisiteJobID    any           `json:"prerequisiteJobId"`
+	Dependencies         *Dependencies `json:"dependencies"`
+	Tags                 []string      `json:"tags"`
+	Idempotency          *Idempotency  `json:"idempotency,omitempty"`
+	Debounce             *Debounce     `json:"debounce,omitempty"`
+	Throttle             *Throttle     `json:"throttle,omitempty"`
+}
+
+func serializeEnqueueRequests(requests []EnqueueRequest, defaultQueue string, now time.Time) ([]byte, error) {
+	input := make([]enqueueInput, len(requests))
+	for index, request := range requests {
+		value, err := serializeEnqueueRequest(request, defaultQueue, now)
+		if err != nil {
+			return nil, fmt.Errorf(enqueueRequestErrorFormat, index+1, err)
+		}
+		input[index] = value
+	}
+	return json.Marshal(input)
+}
+
+func serializeEnqueueRequest(request EnqueueRequest, defaultQueue string, now time.Time) (enqueueInput, error) {
+	options := request.Options
+	if err := validateEnqueueOptions(options); err != nil {
+		return enqueueInput{}, err
+	}
+	queueName := options.Queue
+	if queueName == emptyString {
+		queueName = defaultQueue
+	}
+	maxAttempts := options.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+	tags := append([]string{}, options.Tags...)
+	value := enqueueInput{
+		Queue:                queueName,
+		Type:                 request.Type,
+		Payload:              request.Payload,
+		Priority:             options.Priority,
+		PayloadMaxBytes:      defaultJobValueMaxBytes,
+		ResultMaxBytes:       defaultJobValueMaxBytes,
+		SensitivePayloadKeys: []string{},
+		SensitiveResultKeys:  []string{},
+		ConcurrencyKey:       nilIfEmpty(options.ConcurrencyKey),
+		ExecutionTimeoutMS:   nilIfZero(options.ExecutionTimeoutMS),
+		MaxAttempts:          maxAttempts,
+		RetryPolicy:          options.RetryPolicy,
+		Tags:                 tags,
+	}
+	if options.Deadline != nil {
+		formatted := formatTimestamp(*options.Deadline)
+		value.Deadline = &formatted
+	}
+	if options.Dependencies != nil {
+		jobIDs := append([]string{}, options.Dependencies.PrerequisiteJobIDs...)
+		slices.Sort(jobIDs)
+		dependencies := *options.Dependencies
+		dependencies.PrerequisiteJobIDs = jobIDs
+		value.Dependencies = &dependencies
+	}
+	keyed := options.Idempotency != nil || options.Debounce != nil || options.Throttle != nil
+	if options.RunAt != nil || !keyed {
+		runAt := now
+		if options.RunAt != nil {
+			runAt = *options.RunAt
+		}
+		formatted := formatTimestamp(runAt)
+		value.RunAt = &formatted
+	}
+	if options.Idempotency != nil {
+		ttlMS := options.Idempotency.TTLMS
+		if ttlMS == 0 {
+			ttlMS = defaultIdempotencyTTLMS
+		}
+		idempotency := *options.Idempotency
+		idempotency.Scope = defaultScope(idempotency.Scope)
+		idempotency.TTLMS = ttlMS
+		value.Idempotency = &idempotency
+	}
+	if options.Debounce != nil {
+		debounce := *options.Debounce
+		debounce.Scope = defaultScope(debounce.Scope)
+		value.Debounce = &debounce
+	}
+	if options.Throttle != nil {
+		throttle := *options.Throttle
+		throttle.Scope = defaultScope(throttle.Scope)
+		value.Throttle = &throttle
+	}
+	return value, nil
+}
+
+func validateEnqueueOptions(options EnqueueOptions) error {
+	modes := 0
+	for _, present := range []bool{options.Idempotency != nil, options.Debounce != nil, options.Throttle != nil} {
+		if present {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return fmt.Errorf(keyedModesCombinedMessage, ErrInvalidEnqueueOptions)
+	}
+	if options.Priority < 0 || options.Priority > 100 {
+		return fmt.Errorf(priorityRangeMessage, ErrInvalidEnqueueOptions)
+	}
+	if options.MaxAttempts < 0 {
+		return fmt.Errorf(maxAttemptsMessage, ErrInvalidEnqueueOptions)
+	}
+	if options.Debounce != nil && options.RunAt != nil {
+		return fmt.Errorf(debounceRunAtMessage, ErrInvalidEnqueueOptions)
+	}
+	if (options.Debounce != nil || options.Throttle != nil) && options.Dependencies != nil {
+		return fmt.Errorf(keyedDependenciesMessage, ErrInvalidEnqueueOptions)
+	}
+	if options.Dependencies != nil {
+		seen := make(map[string]struct{}, len(options.Dependencies.PrerequisiteJobIDs))
+		for _, jobID := range options.Dependencies.PrerequisiteJobIDs {
+			seen[jobID] = struct{}{}
+		}
+		if len(seen) == 0 || len(seen) != len(options.Dependencies.PrerequisiteJobIDs) {
+			return fmt.Errorf(uniqueDependenciesMessage, ErrInvalidEnqueueOptions)
+		}
+		if len(seen) > MaxJobDependencies {
+			return fmt.Errorf(dependencyCountMessage, ErrInvalidEnqueueOptions, MaxJobDependencies)
+		}
+	}
+	return nil
+}
+
+func defaultScope(scope string) string {
+	if scope == emptyString {
+		return defaultScopeValue
+	}
+	return scope
+}
+
+func nilIfEmpty(value string) any {
+	if value == emptyString {
+		return nil
+	}
+	return value
+}
+
+func nilIfZero(value int) any {
+	if value == 0 {
+		return nil
+	}
+	return value
+}
+
+func formatTimestamp(value time.Time) string {
+	return value.UTC().Truncate(time.Millisecond).Format(timestampLayout)
 }
 
 func enqueueResult(row Row) (EnqueueResult, error) {

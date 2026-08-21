@@ -27,16 +27,16 @@ Two boundaries keep this matrix small:
 | ------------------------------------------ | ---------- | --------- | --------- |
 | Transactional enqueue in a caller-owned tx | Supported  | Supported | Supported |
 | Atomic batch enqueue                       | Supported  | Supported | Supported |
-| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Planned   |
-| Priority                                   | Supported  | Supported | Planned   |
-| Tags and max attempts                      | Supported  | Supported | Planned   |
-| Persisted retry policies                   | Supported  | Supported | Planned   |
-| Absolute deadlines and execution timeouts  | Supported  | Supported | Planned   |
-| Enqueue idempotency                        | Supported  | Supported | Planned   |
-| Keyed debounce                             | Supported  | Supported | Planned   |
-| Keyed throttle                             | Supported  | Supported | Planned   |
-| Job dependencies with terminal policies    | Supported  | Supported | Planned   |
-| Concurrency keys                           | Supported  | Supported | Planned   |
+| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Supported |
+| Priority                                   | Supported  | Supported | Supported |
+| Tags and max attempts                      | Supported  | Supported | Supported |
+| Persisted retry policies                   | Supported  | Supported | Supported |
+| Absolute deadlines and execution timeouts  | Supported  | Supported | Supported |
+| Enqueue idempotency                        | Supported  | Supported | Supported |
+| Keyed debounce                             | Supported  | Supported | Supported |
+| Keyed throttle                             | Supported  | Supported | Supported |
+| Job dependencies with terminal policies    | Supported  | Supported | Supported |
+| Concurrency keys                           | Supported  | Supported | Supported |
 | Recurring schedule definition sync         | Supported  | Supported | Planned   |
 | Payload and result contracts               | Supported  | Absent    | Absent    |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported |
@@ -44,15 +44,14 @@ Two boundaries keep this matrix small:
 
 The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `workhorse-pg`
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg). The Go module's `Queue` supports transactional
-single and batch enqueue over pgx and `database/sql`. Its option set remains Planned under
-[WH-228].
+single and batch enqueue over pgx and `database/sql`, including every stable enqueue option except
+payload and result contracts. Recurring schedule definition sync remains Planned under [WH-228].
 Python can define and synchronize recurring schedules. Its synchronous worker provides bounded
 concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
-lifecycle support. Only a TypeScript worker fires schedules until [WH-309]
-ships. The Planned Go client column reflects the
-acceptance criteria of the [WH-228] sub-items; [WH-318] commits to the option set, including
-the four rows that were Absent before it existed. A deployment enqueueing from Go needs a
+lifecycle support. Only a TypeScript worker fires schedules until [WH-309] ships. The remaining
+Planned Go client cell reflects the acceptance criteria of the [WH-228] schedule-sync sub-item.
+A deployment enqueueing from Go needs a
 TypeScript worker to run jobs until [WH-236] ships, and to fire schedules until [WH-332] ships.
 
 ## Worker runtime

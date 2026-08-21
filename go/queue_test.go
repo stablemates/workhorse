@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -94,12 +97,7 @@ func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 		Postgres map[string]any `json:"postgres"`
 	}
 
-	exercised := 0
 	for _, fixture := range readFixture[[]requestFixture](t, "requests.json") {
-		if len(fixture.Application.Options) != 0 {
-			continue
-		}
-		exercised++
 		t.Run(fixture.ID, func(t *testing.T) {
 			executor := &queueExecutor{responses: [][]workhorse.Row{
 				{{"version": int64(47)}},
@@ -110,11 +108,13 @@ func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 				t.Fatalf("fixture queue is %T", fixture.Postgres["queue"])
 			}
 			queue := workhorse.NewQueue(executor, queueName)
+			options := goOptions(t, fixture.Application.Options)
 
 			if _, err := queue.EnqueueWithResult(
 				context.Background(),
 				fixture.Application.Type,
 				fixture.Application.Payload,
+				options,
 			); err != nil {
 				t.Fatal(err)
 			}
@@ -136,8 +136,206 @@ func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 			}
 		})
 	}
-	if exercised == 0 {
-		t.Fatal("protocol/v1/requests.json has no request within the current Go option scope")
+}
+
+func goOptions(t *testing.T, input map[string]any) workhorse.EnqueueOptions {
+	t.Helper()
+	options := workhorse.EnqueueOptions{}
+	for name, value := range input {
+		switch name {
+		case "queue":
+			options.Queue = value.(string)
+		case "priority":
+			options.Priority = fixtureInteger(t, value)
+		case "concurrencyKey":
+			options.ConcurrencyKey = value.(string)
+		case "runAt":
+			parsed, err := time.Parse(time.RFC3339Nano, value.(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			options.RunAt = &parsed
+		case "deadline":
+			parsed, err := time.Parse(time.RFC3339Nano, value.(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			options.Deadline = &parsed
+		case "executionTimeoutMs":
+			options.ExecutionTimeoutMS = fixtureInteger(t, value)
+		case "maxAttempts":
+			options.MaxAttempts = fixtureInteger(t, value)
+		case "retryPolicy":
+			options.RetryPolicy = value.(map[string]any)
+		case "tags":
+			for _, tag := range value.([]any) {
+				options.Tags = append(options.Tags, tag.(string))
+			}
+		case "idempotency":
+			mode := value.(map[string]any)
+			options.Idempotency = &workhorse.Idempotency{
+				Key: mode["key"].(string), Scope: mode["scope"].(string), TTLMS: fixtureInteger(t, mode["ttlMs"]),
+			}
+		case "debounce":
+			mode := value.(map[string]any)
+			options.Debounce = &workhorse.Debounce{
+				Key: mode["key"].(string), Scope: mode["scope"].(string),
+				WindowMS: fixtureInteger(t, mode["windowMs"]), Schedule: workhorse.DebounceSchedule(mode["schedule"].(string)),
+			}
+		case "throttle":
+			mode := value.(map[string]any)
+			options.Throttle = &workhorse.Throttle{
+				Key: mode["key"].(string), Scope: mode["scope"].(string), WindowMS: fixtureInteger(t, mode["windowMs"]),
+			}
+		case "dependencies":
+			dependency := value.(map[string]any)
+			options.Dependencies = &workhorse.Dependencies{}
+			for _, jobID := range dependency["prerequisiteJobIds"].([]any) {
+				options.Dependencies.PrerequisiteJobIDs = append(options.Dependencies.PrerequisiteJobIDs, jobID.(string))
+			}
+			options.Dependencies.OnSuccess = workhorse.DependencyTerminalPolicy(dependency["onSuccess"].(string))
+			options.Dependencies.OnFailure = workhorse.DependencyTerminalPolicy(dependency["onFailure"].(string))
+			options.Dependencies.OnCancellation = workhorse.DependencyTerminalPolicy(dependency["onCancellation"].(string))
+		default:
+			t.Fatalf("request fixture option %q has no Go mapping", name)
+		}
+	}
+	return options
+}
+
+func TestQueueSerializesDelayedAndDurableOptions(t *testing.T) {
+	runAt := time.Date(2026, time.August, 22, 1, 2, 3, 456_789_000, time.FixedZone("EDT", -4*60*60))
+	deadline := runAt.Add(2 * time.Hour)
+	executor := &queueExecutor{responses: [][]workhorse.Row{
+		{{"version": int64(47)}},
+		{
+			{"ordinal": int32(1), "job_id": "delayed", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(2), "job_id": "debounced", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(3), "job_id": "throttled", "outcome": "accepted", "reason": nil},
+			{"ordinal": int32(4), "job_id": "dependent", "outcome": "accepted", "reason": nil},
+		},
+	}}
+	queue := workhorse.NewQueue(executor, "default")
+
+	_, err := queue.EnqueueManyWithResults(context.Background(), []workhorse.EnqueueRequest{
+		{
+			Type: "delayed", Payload: nil,
+			Options: workhorse.EnqueueOptions{
+				Queue: "scheduled", RunAt: &runAt, Deadline: &deadline, ExecutionTimeoutMS: 1500,
+			},
+		},
+		{
+			Type: "debounced", Payload: nil,
+			Options: workhorse.EnqueueOptions{Debounce: &workhorse.Debounce{
+				Key: "typing", WindowMS: 1000, Schedule: workhorse.DebounceReset,
+			}},
+		},
+		{
+			Type: "throttled", Payload: nil,
+			Options: workhorse.EnqueueOptions{Throttle: &workhorse.Throttle{Key: "rate", WindowMS: 2000}},
+		},
+		{
+			Type: "dependent", Payload: nil,
+			Options: workhorse.EnqueueOptions{Dependencies: &workhorse.Dependencies{
+				PrerequisiteJobIDs: []string{"second", "first"},
+				OnSuccess:          workhorse.DependencyRelease, OnFailure: workhorse.DependencyCancel,
+				OnCancellation: workhorse.DependencyFail,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request []map[string]any
+	if err := decodeJSON(executor.calls[1].arguments[0].([]byte), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request[0]["queue"] != "scheduled" || request[0]["runAt"] != "2026-08-22T05:02:03.456Z" ||
+		request[0]["deadline"] != "2026-08-22T07:02:03.456Z" || request[0]["executionTimeoutMs"] != json.Number("1500") {
+		t.Fatalf("delayed options were not serialized canonically: %#v", request[0])
+	}
+	if _, present := request[1]["runAt"]; present || request[1]["debounce"] == nil {
+		t.Fatalf("debounce must omit runAt and carry its keyed window: %#v", request[1])
+	}
+	if _, present := request[2]["runAt"]; present || request[2]["throttle"] == nil {
+		t.Fatalf("throttle must omit runAt and carry its keyed window: %#v", request[2])
+	}
+	dependencies := request[3]["dependencies"].(map[string]any)
+	if fmt.Sprint(dependencies["prerequisiteJobIds"]) != "[first second]" ||
+		dependencies["onSuccess"] != "release" || dependencies["onFailure"] != "cancel" ||
+		dependencies["onCancellation"] != "fail" {
+		t.Fatalf("dependencies were not serialized canonically: %#v", dependencies)
+	}
+}
+
+func fixtureInteger(t *testing.T, value any) int {
+	t.Helper()
+	parsed, err := strconv.Atoi(fmt.Sprint(value))
+	if err != nil {
+		t.Fatalf("fixture value %v is not an integer: %v", value, err)
+	}
+	return parsed
+}
+
+func TestQueueRejectsInvalidOptionCombinationsBeforeQuery(t *testing.T) {
+	now := time.Now()
+	tooManyDependencies := make([]string, workhorse.MaxJobDependencies+1)
+	for index := range tooManyDependencies {
+		tooManyDependencies[index] = fmt.Sprintf("job-%d", index)
+	}
+	tests := []struct {
+		name    string
+		options workhorse.EnqueueOptions
+	}{
+		{
+			name: "multiple keyed modes",
+			options: workhorse.EnqueueOptions{
+				Idempotency: &workhorse.Idempotency{Key: "same"},
+				Throttle:    &workhorse.Throttle{Key: "same", WindowMS: 1},
+			},
+		},
+		{name: "priority outside range", options: workhorse.EnqueueOptions{Priority: 101}},
+		{name: "negative max attempts", options: workhorse.EnqueueOptions{MaxAttempts: -1}},
+		{
+			name:    "debounce with run at",
+			options: workhorse.EnqueueOptions{RunAt: &now, Debounce: &workhorse.Debounce{Key: "same", WindowMS: 1}},
+		},
+		{
+			name: "throttle with dependencies",
+			options: workhorse.EnqueueOptions{
+				Throttle: &workhorse.Throttle{Key: "same", WindowMS: 1},
+				Dependencies: &workhorse.Dependencies{
+					PrerequisiteJobIDs: []string{"00000000-0000-4000-8000-000000000001"},
+				},
+			},
+		},
+		{name: "empty dependencies", options: workhorse.EnqueueOptions{Dependencies: &workhorse.Dependencies{}}},
+		{
+			name: "duplicate dependencies",
+			options: workhorse.EnqueueOptions{Dependencies: &workhorse.Dependencies{
+				PrerequisiteJobIDs: []string{"same", "same"},
+			}},
+		},
+		{
+			name: "too many dependencies",
+			options: workhorse.EnqueueOptions{Dependencies: &workhorse.Dependencies{
+				PrerequisiteJobIDs: tooManyDependencies,
+			}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			executor := &queueExecutor{}
+			queue := workhorse.NewQueue(executor, "default")
+			_, err := queue.Enqueue(context.Background(), "email.send", nil, test.options)
+			if !errors.Is(err, workhorse.ErrInvalidEnqueueOptions) {
+				t.Fatalf("expected invalid options error, received %v", err)
+			}
+			if len(executor.calls) != 0 {
+				t.Fatalf("invalid options queried PostgreSQL: %s", fmt.Sprint(executor.calls))
+			}
+		})
 	}
 }
 
@@ -383,6 +581,72 @@ func TestQueueBatchFailureIsAtomic(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("failed batch inserted %d jobs", count)
+	}
+}
+
+func TestQueueReturnsCanonicalKeyedAndDependencyOutcomes(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "queue-option-outcomes")
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "option-outcomes")
+
+	prerequisite, err := queue.Enqueue(ctx, "prerequisite", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idempotency := workhorse.EnqueueOptions{Idempotency: &workhorse.Idempotency{Key: "same"}}
+	first, err := queue.EnqueueWithResult(ctx, "idempotent", nil, idempotency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := queue.EnqueueWithResult(ctx, "idempotent", nil, idempotency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	debounce := workhorse.EnqueueOptions{Debounce: &workhorse.Debounce{
+		Key: "typing", WindowMS: 1000, Schedule: workhorse.DebounceReset,
+	}}
+	debounced, err := queue.EnqueueWithResult(ctx, "debounce", nil, debounce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced, err := queue.EnqueueWithResult(ctx, "debounce", nil, debounce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	throttle := workhorse.EnqueueOptions{Throttle: &workhorse.Throttle{Key: "rate", WindowMS: 1000}}
+	throttled, err := queue.EnqueueWithResult(ctx, "throttle", nil, throttle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coalesced, err := queue.EnqueueWithResult(ctx, "throttle", nil, throttle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependent, err := queue.EnqueueWithResult(ctx, "dependent", nil, workhorse.EnqueueOptions{
+		Dependencies: &workhorse.Dependencies{
+			PrerequisiteJobIDs: []string{prerequisite},
+			OnSuccess:          workhorse.DependencyRelease, OnFailure: workhorse.DependencyCancel,
+			OnCancellation: workhorse.DependencyFail,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first.Outcome != workhorse.EnqueueAccepted || replayed.Outcome != workhorse.EnqueueReplayed ||
+		debounced.Outcome != workhorse.EnqueueAccepted || replaced.Outcome != workhorse.EnqueueReplaced ||
+		throttled.Outcome != workhorse.EnqueueAccepted || coalesced.Outcome != workhorse.EnqueueCoalesced ||
+		dependent.Outcome != workhorse.EnqueueAccepted {
+		t.Fatalf(
+			"unexpected outcomes: %s %s %s %s %s %s %s",
+			first.Outcome, replayed.Outcome, debounced.Outcome, replaced.Outcome,
+			throttled.Outcome, coalesced.Outcome, dependent.Outcome,
+		)
 	}
 }
 
