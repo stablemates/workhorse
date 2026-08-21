@@ -23,24 +23,24 @@ Two boundaries keep this matrix small:
 
 ## Client (enqueue side)
 
-| Capability                                 | TypeScript | Python    | Go      |
-| ------------------------------------------ | ---------- | --------- | ------- |
-| Transactional enqueue in a caller-owned tx | Supported  | Supported | Planned |
-| Atomic batch enqueue                       | Supported  | Supported | Planned |
-| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Planned |
-| Priority                                   | Supported  | Supported | Planned |
-| Tags and max attempts                      | Supported  | Supported | Planned |
-| Persisted retry policies                   | Supported  | Supported | Planned |
-| Absolute deadlines and execution timeouts  | Supported  | Supported | Planned |
-| Enqueue idempotency                        | Supported  | Supported | Planned |
-| Keyed debounce                             | Supported  | Supported | Planned |
-| Keyed throttle                             | Supported  | Supported | Planned |
-| Job dependencies with terminal policies    | Supported  | Supported | Planned |
-| Concurrency keys                           | Supported  | Supported | Planned |
-| Recurring schedule definition sync         | Supported  | Supported | Planned |
-| Payload and result contracts               | Supported  | Absent    | Absent  |
-| Compatibility refusal before mutation      | Supported  | Supported | Planned |
-| SQL protocol conformance fixtures executed | Supported  | Supported | Planned |
+| Capability                                 | TypeScript | Python    | Go        |
+| ------------------------------------------ | ---------- | --------- | --------- |
+| Transactional enqueue in a caller-owned tx | Supported  | Supported | Planned   |
+| Atomic batch enqueue                       | Supported  | Supported | Planned   |
+| Delayed enqueue (`runAt` / `run_at`)       | Supported  | Supported | Planned   |
+| Priority                                   | Supported  | Supported | Planned   |
+| Tags and max attempts                      | Supported  | Supported | Planned   |
+| Persisted retry policies                   | Supported  | Supported | Planned   |
+| Absolute deadlines and execution timeouts  | Supported  | Supported | Planned   |
+| Enqueue idempotency                        | Supported  | Supported | Planned   |
+| Keyed debounce                             | Supported  | Supported | Planned   |
+| Keyed throttle                             | Supported  | Supported | Planned   |
+| Job dependencies with terminal policies    | Supported  | Supported | Planned   |
+| Concurrency keys                           | Supported  | Supported | Planned   |
+| Recurring schedule definition sync         | Supported  | Supported | Planned   |
+| Payload and result contracts               | Supported  | Absent    | Absent    |
+| Compatibility refusal before mutation      | Supported  | Supported | Planned   |
+| SQL protocol conformance fixtures executed | Supported  | Supported | Supported |
 
 The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `workhorse-pg`
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg). The Go module has executor adapters and a
