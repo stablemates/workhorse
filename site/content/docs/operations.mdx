@@ -26,6 +26,16 @@ requested horizon. Queue-wait percentiles merge a logarithmic sketch across thos
 long-window reads stay bounded without keeping every sample. Worker and tag breakdowns remain live
 queries because their data-controlled cardinality would make aggregate storage unbounded.
 
+## OpenTelemetry
+
+TypeScript and Python workers emit the same worker span, metric, and structured event names, so one
+set of dashboards can cover a mixed-language fleet. The Python package exposes this through its
+optional `telemetry` extra, which installs the API without choosing an SDK or exporter. If the host
+does not configure an SDK, telemetry stays inert and worker behavior is unchanged.
+
+Worker metrics use queue, job type, and a closed outcome vocabulary. Job IDs remain on sampled
+spans and structured events, while payloads, results, and error messages never enter telemetry.
+
 ## Fleet controls
 
 Every worker registers itself in PostgreSQL on its `registryIntervalMs` cadence — 5 seconds by

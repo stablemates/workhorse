@@ -147,8 +147,12 @@ STATEMENTS = StatementRegistry(
         ),
     ),
     expire_owned=DriverStatement(
-        psycopg=("SELECT workhorse.expire_owned_v1(%s::uuid, %s::text, %s::bigint) AS status"),
-        asyncpg=("SELECT workhorse.expire_owned_v1($1::uuid, $2::text, $3::bigint) AS status"),
+        psycopg=(
+            "SELECT * FROM workhorse.expire_owned_telemetry_v1(%s::uuid, %s::text, %s::bigint)"
+        ),
+        asyncpg=(
+            "SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)"
+        ),
     ),
     acknowledge_cancel=DriverStatement(
         psycopg=(

@@ -81,7 +81,7 @@ telemetry, and graceful shutdown.
 | Worker fleet registration and remote pause   | Supported  | Absent    | Absent    |
 | Graceful stop and signal drain               | Supported  | Supported | Supported |
 | Retention maintenance participation          | Supported  | Absent    | Absent    |
-| OpenTelemetry tracing and metrics            | Supported  | Planned   | Planned   |
+| OpenTelemetry tracing and metrics            | Supported  | Supported | Planned   |
 | Shared runtime fixtures executed             | Supported  | Supported | Planned   |
 
 The Planned worker columns reflect the acceptance criteria in [WH-214], [WH-221], and [WH-236].
@@ -141,6 +141,7 @@ exactly as behaviour changes must update the guide that describes them.
 [WH-236]: https://app.plane.so/techprogress/browse/WH-236/
 [WH-309]: https://app.plane.so/techprogress/browse/WH-309/
 [WH-310]: https://app.plane.so/techprogress/browse/WH-310/
+[WH-311]: https://app.plane.so/techprogress/browse/WH-311/
 [WH-318]: https://app.plane.so/techprogress/browse/WH-318/
 [WH-331]: https://app.plane.so/techprogress/browse/WH-331/
 [WH-332]: https://app.plane.so/techprogress/browse/WH-332/

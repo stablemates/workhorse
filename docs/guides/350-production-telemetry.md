@@ -1,7 +1,8 @@
 # How do I see what workers are doing in production?
 
-Workhorse emits OpenTelemetry traces, logs, and metrics through the standard JavaScript APIs. Your
-application chooses the SDK and backend, so telemetry does not affect queue correctness.
+Workhorse emits OpenTelemetry traces, logs, and metrics through the standard language APIs. Your
+application chooses the SDK and backend, so telemetry does not affect queue correctness. Python
+workers use the optional `telemetry` package extra and stay inert without a configured SDK.
 
 ## Follow a job from enqueue to execution
 
@@ -12,6 +13,9 @@ handler receives.
 When a worker claims the job, `Worker` restores the stored parent before it creates the handler
 span. The enqueue and handler can run in different processes or at very different times while
 remaining part of one trace.
+
+The TypeScript queue creates the enqueue span and stores its context. The Python worker restores
+that same context and uses the same worker span names, so mixed-language deployments share traces.
 
 Workhorse does not persist baggage. Baggage often contains user-controlled or sensitive values,
 and durable storage would make those values difficult to bound and redact.

@@ -28,6 +28,26 @@ from ._notifications import (
 )
 from ._protocol import serialize_child_request
 from ._statements import STATEMENTS, DriverStatement
+from ._telemetry import (
+    JobExecutionOutcome,
+    current_context,
+    emit_log,
+    job_span_attributes,
+    record_claim,
+    record_completion,
+    record_failure,
+    record_handler_execution,
+    record_heartbeat_failure,
+    record_maintenance,
+    record_recovery,
+    record_retry,
+    record_schedule_fired,
+    record_span_error,
+    start_span,
+)
+from ._telemetry import (
+    record_batch as record_batch_metrics,
+)
 from .errors import (
     CancellationRequestedError,
     CheckpointConflictError,
@@ -87,6 +107,7 @@ _REDACTED_ERROR_MESSAGE = "Job handler failed; details redacted"
 AttemptOutcome = Literal[
     "completed",
     "failed",
+    "retry",
     "lease_expired",
     "deadline_exceeded",
     "attempt_timeout",
@@ -248,6 +269,17 @@ class _HandlerDurability:
                     raise CheckpointConflictError(self._job.id, name)
                 if status not in {"saved", "existing"}:
                     raise RuntimeError(f"Unexpected checkpoint status: {status}")
+                emit_log(
+                    "DEBUG",
+                    "workhorse.job.checkpoint_saved",
+                    "Job checkpoint persisted",
+                    {
+                        **job_span_attributes(self._job),
+                        "workhorse.checkpoint.name": name,
+                        "workhorse.checkpoint.status": str(status),
+                        "workhorse.worker.id": self._worker_id,
+                    },
+                )
                 saved = _checkpoint_record(self._job.id, row, name=name)
                 with self._lock:
                     assert self._checkpoints is not None
@@ -322,6 +354,17 @@ class _HandlerDurability:
                 raise WaitLimitExceededError(self._job.id)
             if status not in {"scheduled", "elapsed"}:
                 raise RuntimeError(f"Unexpected wait status: {status}")
+            emit_log(
+                "INFO",
+                "workhorse.job.wait_processed",
+                "Durable job wait processed",
+                {
+                    **job_span_attributes(self._job),
+                    "workhorse.wait.name": name,
+                    "workhorse.wait.status": str(status),
+                    "workhorse.worker.id": self._worker_id,
+                },
+            )
             wait = _wait_record(self._job.id, row, name=name)
             with self._lock:
                 if self._waits is not None:
@@ -487,6 +530,18 @@ class _HandlerDurability:
                 raise ChildConflictError(self._job.id, name)
             if status == "limit_exceeded":
                 raise ChildLimitExceededError(self._job.id)
+            if status in {"created", "completed"}:
+                emit_log(
+                    "INFO",
+                    "workhorse.job.child_processed",
+                    "Child job processed",
+                    {
+                        "workhorse.job.id": self._job.id,
+                        "workhorse.child.name": name,
+                        "workhorse.child.status": str(status),
+                        "workhorse.worker.id": self._worker_id,
+                    },
+                )
             if status == "created":
                 if self._arbiter.submit("suspended_for_child"):
                     self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
@@ -566,6 +621,18 @@ class _HandlerDurability:
                     self._job.id,
                     int(cast(int, row["result_bytes"] or 0)),
                     int(cast(int, row["result_limit_bytes"] or 0)),
+                )
+            if status in {"created", "completed"}:
+                emit_log(
+                    "INFO",
+                    "workhorse.job.child_processed",
+                    "Child set processed",
+                    {
+                        "workhorse.job.id": self._job.id,
+                        "workhorse.child.count": len(children),
+                        "workhorse.child.status": str(status),
+                        "workhorse.worker.id": self._worker_id,
+                    },
                 )
             if status == "created":
                 if self._arbiter.submit("suspended_for_child"):
@@ -678,6 +745,12 @@ class Worker:
 
     def handle(self, type: str, handler: Handler) -> Worker:
         self._handlers[type] = handler
+        emit_log(
+            "DEBUG",
+            "workhorse.handler.registered",
+            "Job handler registered",
+            {"workhorse.job.type": type, "workhorse.worker.id": self.worker_id},
+        )
         return self
 
     def handle_batch(
@@ -736,11 +809,48 @@ class Worker:
                 )
                 if int(cast(int, row["recorded"])) != len(batch):
                     raise RuntimeError("PostgreSQL did not record every batch member")
-            except Exception:
+            except Exception as error:
+                jobs = [member.item.context.job for member in batch]
+                emit_log(
+                    "WARN",
+                    "workhorse.handler.batch_evidence_failed",
+                    "Batch execution evidence could not be persisted",
+                    {
+                        "workhorse.queue.name": jobs[0].queue,
+                        "workhorse.job.type": type,
+                        "workhorse.handler.batch.full": len(batch) == max_size,
+                        "workhorse.handler.batch.size": len(batch),
+                        "workhorse.handler.batch.evidence_phase": (
+                            "dispatch"
+                            if statement is STATEMENTS.record_batch_dispatch
+                            else "failure"
+                        ),
+                        "workhorse.worker.id": self.worker_id,
+                        "error.type": error.__class__.__name__,
+                    },
+                )
                 return
 
         def dispatch(batch: Sequence[_PendingBatchMember]) -> None:
             batch_id = str(uuid4())
+            first_arrived_at = min(member.arrived_at for member in batch)
+            actual_linger_ms = max(0.0, (monotonic() - first_arrived_at) * 1_000)
+            queue_name = batch[0].item.context.job.queue
+            full = len(batch) == max_size
+            record_batch_metrics(queue_name, type, len(batch), actual_linger_ms, full)
+            emit_log(
+                "INFO",
+                "workhorse.handler.batch_dispatched",
+                "Job batch dispatched",
+                {
+                    "workhorse.queue.name": queue_name,
+                    "workhorse.job.type": type,
+                    "workhorse.handler.batch.full": full,
+                    "workhorse.handler.batch.size": len(batch),
+                    "workhorse.handler.batch.linger_ms": actual_linger_ms,
+                    "workhorse.worker.id": self.worker_id,
+                },
+            )
             record_batch(STATEMENTS.record_batch_dispatch, batch_id, batch)
             try:
                 outcomes = handler(tuple(member.item for member in batch))
@@ -797,6 +907,17 @@ class Worker:
             return member.result.result()
 
         self._handlers[type] = batch_member_handler
+        emit_log(
+            "DEBUG",
+            "workhorse.handler.registered",
+            "Batch job handler registered",
+            {
+                "workhorse.job.type": type,
+                "workhorse.handler.batch.max_size": max_size,
+                "workhorse.handler.batch.linger_ms": linger_ms,
+                "workhorse.worker.id": self.worker_id,
+            },
+        )
         return self
 
     def run_once(self) -> bool:
@@ -824,12 +945,24 @@ class Worker:
         """Stop new claims without interrupting running handlers."""
         with self._state_lock:
             self._paused = True
+        emit_log(
+            "INFO",
+            "workhorse.worker.paused",
+            "Worker paused locally",
+            {"workhorse.worker.id": self.worker_id, "workhorse.worker.queues": self.queues},
+        )
         self._wake.set()
 
     def resume(self) -> None:
         """Allow claims and wake an idle run loop immediately."""
         with self._state_lock:
             self._paused = False
+        emit_log(
+            "INFO",
+            "workhorse.worker.resumed",
+            "Worker resumed locally",
+            {"workhorse.worker.id": self.worker_id, "workhorse.worker.queues": self.queues},
+        )
         self._wake.set()
 
     def is_paused(self) -> bool:
@@ -841,6 +974,17 @@ class Worker:
         with self._state_lock:
             self._stop_version += 1
             self._stopping = True
+            active_slots = len(self._active_threads)
+        emit_log(
+            "INFO",
+            "workhorse.worker.stop_requested",
+            "Worker stop requested",
+            {
+                "workhorse.worker.id": self.worker_id,
+                "workhorse.worker.active_slots": active_slots,
+                "workhorse.worker.queues": self.queues,
+            },
+        )
         self._wake.set()
 
     def _stop_version_snapshot(self) -> int:
@@ -864,6 +1008,16 @@ class Worker:
             self._run_errors.clear()
         claimed_any = False
         listener = self._start_notification_listener() if continuous else None
+        emit_log(
+            "INFO",
+            "workhorse.worker.started",
+            "Worker started",
+            {
+                "workhorse.worker.id": self.worker_id,
+                "workhorse.worker.concurrency": self.concurrency,
+                "workhorse.worker.queues": self.queues,
+            },
+        )
         try:
             while True:
                 # Clear before the sweep. A completion or state change that arrives while a claim
@@ -884,9 +1038,7 @@ class Worker:
                 maintenance_was_due = self._run_maintenance_if_due()
                 if not maintenance_was_due:
                     _require_lifecycle_row(self._executor.rows(STATEMENTS.promote, (100,)))
-                    _require_lifecycle_row(
-                        self._executor.rows(STATEMENTS.recover_expired, (100, None))
-                    )
+                    self._recover_expired()
                 empty_attempts = 0
                 while empty_attempts < len(self.queues):
                     if self._dispatch_state() != "ready":
@@ -894,16 +1046,41 @@ class Worker:
                     with self._state_lock:
                         queue_name = self.queues[self._next_queue_index]
                         self._next_queue_index = (self._next_queue_index + 1) % len(self.queues)
-                    rows = self._executor.rows(
-                        STATEMENTS.claim,
-                        (queue_name, self.worker_id, self.lease_ms),
-                    )
+                    claim_started_at = monotonic()
+                    with start_span(
+                        "workhorse.claim",
+                        {"workhorse.queue.name": queue_name},
+                    ) as claim_span:
+                        rows = self._executor.rows(
+                            STATEMENTS.claim,
+                            (queue_name, self.worker_id, self.lease_ms),
+                        )
+                        job = _claimed_job(rows[0], queue_name) if rows else None
+                        record_claim(
+                            queue_name,
+                            (monotonic() - claim_started_at) * 1_000,
+                            job,
+                        )
+                        if job is not None:
+                            for key, value in job_span_attributes(job).items():
+                                claim_span.set_attribute(key, value)
                     if not rows:
                         empty_attempts += 1
                         continue
                     empty_attempts = 0
                     claimed_any = True
-                    self._start_claimed_job(_claimed_job(rows[0], queue_name))
+                    assert job is not None
+                    emit_log(
+                        "DEBUG",
+                        "workhorse.job.claimed",
+                        "Job claimed",
+                        {
+                            **job_span_attributes(job),
+                            "workhorse.queue.name": queue_name,
+                            "workhorse.worker.id": self.worker_id,
+                        },
+                    )
+                    self._start_claimed_job(job)
 
                 state = self._dispatch_state()
                 if state == "stopping":
@@ -925,6 +1102,17 @@ class Worker:
                 self._stopping = False
                 errors = list(self._run_errors)
                 self._run_errors.clear()
+                active_slots = len(self._active_threads)
+            emit_log(
+                "INFO",
+                "workhorse.worker.stopped",
+                "Worker stopped",
+                {
+                    "workhorse.worker.id": self.worker_id,
+                    "workhorse.worker.active_slots": active_slots,
+                    "workhorse.worker.queues": self.queues,
+                },
+            )
         if errors:
             raise errors[0]
         return claimed_any
@@ -933,7 +1121,75 @@ class Worker:
         now_monotonic = monotonic()
         if now_monotonic - self._last_maintenance_at < self.maintenance_interval_ms / 1000:
             return False
-        tick = self._executor.rows(STATEMENTS.tick, (100, 100))
+        with (
+            start_span(
+                "workhorse.maintenance",
+                {"workhorse.maintenance.operation": "tick"},
+            ) as maintenance_span,
+            start_span("workhorse.recovery", {}) as recovery_span,
+        ):
+            tick = self._executor.rows(STATEMENTS.tick, (100, 100))
+            total_rows = 0
+            for row in tick:
+                phase = str(row["phase"])
+                rows_affected = int(cast(int, row["rows_affected"]))
+                duration_ms = float(cast(int | float, row["duration_ms"]))
+                skipped_lock = row["skipped_lock"] is True
+                has_error = row["error"] is not None
+                total_rows += rows_affected
+                record_maintenance(
+                    phase,
+                    rows_affected,
+                    duration_ms,
+                    skipped_lock,
+                    has_error,
+                )
+                if phase == "recover":
+                    recovery_span.set_attribute("workhorse.recovery.skipped", skipped_lock)
+                    if not skipped_lock and not has_error:
+                        expired_leases = int(cast(int, row["expired_leases"]))
+                        retried = int(cast(int, row["retried"]))
+                        recovery_span.set_attribute(
+                            "workhorse.recovery.rows_affected", rows_affected
+                        )
+                        recovery_span.set_attribute(
+                            "workhorse.recovery.expired_leases", expired_leases
+                        )
+                        recovery_span.set_attribute("workhorse.recovery.retried", retried)
+                        record_recovery(
+                            expired_leases,
+                            retried,
+                            row["retry_dimensions"],
+                        )
+                    if rows_affected > 0:
+                        emit_log(
+                            "INFO",
+                            "workhorse.leases.recovered",
+                            "Expired leases recovered",
+                            {
+                                "workhorse.recovery.rows_affected": rows_affected,
+                                "workhorse.recovery.expired_leases": int(
+                                    cast(int, row["expired_leases"])
+                                ),
+                                "workhorse.recovery.retried": int(cast(int, row["retried"])),
+                            },
+                        )
+                if rows_affected > 0 or has_error:
+                    attributes: dict[str, str | bool | int | float] = {
+                        "workhorse.maintenance.operation": "tick",
+                        "workhorse.maintenance.phase": phase,
+                        "workhorse.maintenance.rows_affected": rows_affected,
+                        "workhorse.maintenance.skipped_lock": skipped_lock,
+                    }
+                    if has_error:
+                        attributes["error.type"] = "PostgreSQLError"
+                    emit_log(
+                        "INFO",
+                        "workhorse.maintenance.completed",
+                        "Maintenance phase completed",
+                        attributes,
+                    )
+            maintenance_span.set_attribute("workhorse.maintenance.rows_affected", total_rows)
         self._last_maintenance_at = now_monotonic
         owns_tick = bool(tick) and all(row["skipped_lock"] is not True for row in tick)
         if not owns_tick or not self.schedule_namespaces:
@@ -950,7 +1206,7 @@ class Worker:
                 now,
                 self.schedule_catchup_limit,
             ):
-                self._executor.rows(
+                fired = self._executor.rows(
                     STATEMENTS.fire_schedule,
                     (
                         schedule["namespace"],
@@ -959,7 +1215,55 @@ class Worker:
                         occurrence,
                     ),
                 )
+                job_id = fired[0]["job_id"] if fired else None
+                schedule_attributes = {
+                    "workhorse.schedule.namespace": str(schedule["namespace"]),
+                    "workhorse.schedule.name": str(schedule["schedule_name"]),
+                }
+                if job_id is None:
+                    emit_log(
+                        "DEBUG",
+                        "workhorse.schedule.fire_replayed",
+                        "Recurring schedule occurrence replayed",
+                        schedule_attributes,
+                    )
+                else:
+                    record_schedule_fired(
+                        str(schedule["namespace"]),
+                        str(schedule["schedule_name"]),
+                        (now - occurrence).total_seconds(),
+                    )
+                    emit_log(
+                        "INFO",
+                        "workhorse.schedule.fired",
+                        "Recurring schedule fired",
+                        {**schedule_attributes, "workhorse.job.id": str(job_id)},
+                    )
         return True
+
+    def _recover_expired(self) -> None:
+        with start_span("workhorse.recovery", {}) as recovery_span:
+            recovery = _require_lifecycle_row(
+                self._executor.rows(STATEMENTS.recover_expired, (100, None))
+            )
+            rows_affected = int(cast(int, recovery["rows_affected"]))
+            expired_leases = int(cast(int, recovery["expired_leases"]))
+            retried = int(cast(int, recovery["retried"]))
+            recovery_span.set_attribute("workhorse.recovery.rows_affected", rows_affected)
+            recovery_span.set_attribute("workhorse.recovery.expired_leases", expired_leases)
+            recovery_span.set_attribute("workhorse.recovery.retried", retried)
+            record_recovery(expired_leases, retried, recovery["retry_dimensions"])
+            if rows_affected > 0:
+                emit_log(
+                    "INFO",
+                    "workhorse.leases.recovered",
+                    "Expired leases recovered",
+                    {
+                        "workhorse.recovery.rows_affected": rows_affected,
+                        "workhorse.recovery.expired_leases": expired_leases,
+                        "workhorse.recovery.retried": retried,
+                    },
+                )
 
     def _dispatch_wait_seconds(self, listener: JobNotificationListener | None) -> float:
         wait_ms = (
@@ -1015,14 +1319,81 @@ class Worker:
 
     def _execute_claimed_job(self, job: ClaimedJob) -> None:
         arbiter = _AttemptOutcomeArbiter()
+        span_outcome = {"value": "unknown"}
+        span_errors: list[str] = []
+        started_at = monotonic()
+        attributes = {"workhorse.queue.name": job.queue, **job_span_attributes(job)}
+        with start_span(
+            "workhorse.handler",
+            attributes,
+            trace_context=job.trace_context,
+            consumer=True,
+        ) as handler_span:
+            emit_log(
+                "DEBUG",
+                "workhorse.handler.started",
+                "Job handler started",
+                {**attributes, "workhorse.worker.id": self.worker_id},
+            )
+            try:
+                self._execute_claimed_job_within_span(job, arbiter, span_outcome, span_errors)
+            except BaseException as error:
+                record_span_error(handler_span, error.__class__.__name__)
+                raise
+            finally:
+                duration_ms = (monotonic() - started_at) * 1_000
+                outcome = _telemetry_outcome(arbiter.outcome)
+                handler_span.set_attribute(
+                    "workhorse.handler.outcome",
+                    span_outcome["value"]
+                    if span_outcome["value"] != "unknown"
+                    else _handler_span_outcome(arbiter.outcome),
+                )
+                if span_errors:
+                    record_span_error(handler_span, span_errors[0])
+                record_handler_execution(job, outcome, duration_ms)
+                emit_log(
+                    "DEBUG",
+                    "workhorse.handler.finished",
+                    "Job handler finished",
+                    {
+                        **attributes,
+                        "workhorse.worker.id": self.worker_id,
+                        "workhorse.handler.duration_ms": duration_ms,
+                    },
+                )
+                emit_log(
+                    "INFO",
+                    "workhorse.job.execution_finished",
+                    "Job execution finished",
+                    {
+                        **attributes,
+                        "workhorse.worker.id": self.worker_id,
+                        "workhorse.handler.outcome": outcome,
+                    },
+                )
+
+    def _execute_claimed_job_within_span(
+        self,
+        job: ClaimedJob,
+        arbiter: _AttemptOutcomeArbiter,
+        span_outcome: dict[str, str],
+        span_errors: list[str],
+    ) -> None:
         handler = self._handlers.get(job.type)
         if handler is None:
             error = RuntimeError(f"No handler registered for {job.type}")
-            arbiter.submit(self._settle_failure(job, error))
+            failure_outcome, failure_state = self._settle_failure(job, error)
+            span_outcome["value"] = failure_state
+            span_errors.append(
+                _REDACTED_ERROR_NAME if job.redact_error_details else type(error).__name__
+            )
+            arbiter.submit(failure_outcome)
             return
         heartbeat_stop = Event()
         heartbeat_error: list[BaseException] = []
         cancellation = CancellationToken()
+        handler_parent_context = current_context()
 
         def deliver_status(status: object) -> bool:
             outcome = _outcome_for_status(status, neutral=frozenset({"accepted"}))
@@ -1057,23 +1428,74 @@ class Worker:
                 try:
                     expiration_is_due = expiration_delay is not None and expiration_delay <= 0
                     if expiration_is_due:
-                        status = _require_lifecycle_row(
+                        expiration = _require_lifecycle_row(
                             self._executor.rows(
                                 STATEMENTS.expire_owned,
                                 (job.id, self.worker_id, job.fence_token),
                             )
-                        )["status"]
+                        )
+                        status = expiration["status"]
                         if status == "not_due":
                             expiration_retry_at = monotonic() + 0.005
                             continue
+                        retry_state = expiration["retry_state"]
+                        if retry_state is not None:
+                            with start_span(
+                                "workhorse.retry",
+                                job_span_attributes(job),
+                                parent_context=handler_parent_context,
+                            ) as retry_span:
+                                retry_span.set_attribute(
+                                    "workhorse.retry.outcome", str(retry_state)
+                                )
+                                record_retry(job)
+                        emit_log(
+                            "INFO",
+                            "workhorse.job.ownership_expired",
+                            "Owned job lease expired",
+                            {
+                                **job_span_attributes(job),
+                                "workhorse.expiration.status": str(status),
+                                "workhorse.worker.id": self.worker_id,
+                            },
+                        )
                         deliver_status(status)
                         return
-                    status = _require_lifecycle_row(
-                        self._executor.rows(
-                            STATEMENTS.heartbeat,
-                            (job.id, self.worker_id, job.fence_token, self.lease_ms),
-                        )
-                    )["status"]
+                    with start_span(
+                        "workhorse.heartbeat",
+                        job_span_attributes(job),
+                        parent_context=handler_parent_context,
+                    ) as heartbeat_span:
+                        status = _require_lifecycle_row(
+                            self._executor.rows(
+                                STATEMENTS.heartbeat,
+                                (job.id, self.worker_id, job.fence_token, self.lease_ms),
+                            )
+                        )["status"]
+                        status_text = str(status)
+                        heartbeat_span.set_attribute("workhorse.heartbeat.status", status_text)
+                        if status_text == "accepted":
+                            emit_log(
+                                "DEBUG",
+                                "workhorse.job.heartbeat_accepted",
+                                "Job heartbeat accepted",
+                                {
+                                    **job_span_attributes(job),
+                                    "workhorse.worker.id": self.worker_id,
+                                },
+                            )
+                        else:
+                            record_heartbeat_failure(status_text)
+                            emit_log(
+                                "INFO",
+                                "workhorse.job.heartbeat_rejected",
+                                "Job heartbeat rejected",
+                                {
+                                    **job_span_attributes(job),
+                                    "workhorse.heartbeat.status": status_text,
+                                    "workhorse.worker.id": self.worker_id,
+                                },
+                            )
                     if deliver_status(status):
                         return
                     next_heartbeat_at = monotonic() + self.heartbeat_ms / 1000
@@ -1113,22 +1535,54 @@ class Worker:
         except Exception as error:
             if finish_ownership_lifecycle(error):
                 return
-            arbiter.submit(self._settle_failure(job, error))
+            failure_outcome, failure_state = self._settle_failure(job, error)
+            span_outcome["value"] = failure_state
+            span_errors.append(
+                _REDACTED_ERROR_NAME if job.redact_error_details else type(error).__name__
+            )
+            arbiter.submit(failure_outcome)
             return
         if finish_ownership_lifecycle():
+            if arbiter.outcome in {"suspended_for_wait", "suspended_for_child"}:
+                emit_log(
+                    "WARN",
+                    "workhorse.handler.signal_swallowed",
+                    "Job handler swallowed its suspension signal",
+                    {
+                        **job_span_attributes(job),
+                        "workhorse.queue.name": job.queue,
+                        "workhorse.worker.id": self.worker_id,
+                        "workhorse.handler.outcome": "suspended",
+                    },
+                )
             return
-        accepted = _require_lifecycle_row(
-            self._executor.rows(
-                STATEMENTS.complete,
-                (job.id, self.worker_id, job.fence_token, encoded_result),
+        with start_span("workhorse.complete", job_span_attributes(job)) as completion_span:
+            accepted = _require_lifecycle_row(
+                self._executor.rows(
+                    STATEMENTS.complete,
+                    (job.id, self.worker_id, job.fence_token, encoded_result),
+                )
+            )["accepted"]
+            completion_span.set_attribute("workhorse.complete.accepted", accepted is True)
+            emit_log(
+                "INFO",
+                "workhorse.job.completed"
+                if accepted is True
+                else "workhorse.job.completion_rejected",
+                "Job completed" if accepted is True else "Stale job completion rejected",
+                {
+                    **job_span_attributes(job),
+                    "workhorse.complete.accepted": accepted is True,
+                    "workhorse.worker.id": self.worker_id,
+                },
             )
-        )["accepted"]
         if accepted is not True:
             if self._acknowledge_cancel(job):
                 arbiter.submit("cancelled")
                 return
             arbiter.submit("lease_expired")
             raise StaleLeaseError(job.id)
+        record_completion(job)
         arbiter.submit("completed")
 
     def _finish_lifecycle_outcome(self, job: ClaimedJob, outcome: AttemptOutcome | None) -> bool:
@@ -1145,7 +1599,7 @@ class Worker:
         return False
 
     def _acknowledge_cancel(self, job: ClaimedJob) -> bool:
-        return (
+        accepted = (
             _require_lifecycle_row(
                 self._executor.rows(
                     STATEMENTS.acknowledge_cancel,
@@ -1154,28 +1608,55 @@ class Worker:
             )["accepted"]
             is True
         )
+        emit_log(
+            "INFO",
+            "workhorse.job.cancellation_acknowledged",
+            "Job cancellation acknowledged",
+            {
+                **job_span_attributes(job),
+                "workhorse.cancel.accepted": accepted,
+                "workhorse.worker.id": self.worker_id,
+            },
+        )
+        return accepted
 
-    def _settle_failure(self, job: ClaimedJob, error: Exception) -> AttemptOutcome:
+    def _settle_failure(self, job: ClaimedJob, error: Exception) -> tuple[AttemptOutcome, str]:
         envelope = _error_envelope(error, job.redact_error_details)
-        state = _require_lifecycle_row(
-            self._executor.rows(
-                STATEMENTS.fail,
-                (job.id, self.worker_id, job.fence_token, json.dumps(envelope), None),
+        with start_span("workhorse.retry", job_span_attributes(job)) as retry_span:
+            state = _require_lifecycle_row(
+                self._executor.rows(
+                    STATEMENTS.fail,
+                    (job.id, self.worker_id, job.fence_token, json.dumps(envelope), None),
+                )
+            )["state"]
+            state_text = str(state)
+            retry_span.set_attribute("workhorse.retry.outcome", state_text)
+            record_failure(job, state_text)
+            emit_log(
+                "INFO",
+                "workhorse.job.failure_processed",
+                "Job attempt failure processed",
+                {
+                    **job_span_attributes(job),
+                    "workhorse.attempt.outcome": state_text,
+                    "workhorse.worker.id": self.worker_id,
+                },
             )
-        )["state"]
+        if state in {"ready", "scheduled"}:
+            return "retry", state_text
         outcome = _outcome_for_status(
             state,
             neutral=frozenset({"ready", "scheduled", "failed"}),
         )
         if outcome is None:
-            return "failed"
+            return "failed", state_text
         if outcome == "cancelled":
             if not self._acknowledge_cancel(job):
                 raise StaleLeaseError(job.id) from error
-            return "cancelled"
+            return "cancelled", state_text
         if outcome == "lease_expired":
             raise StaleLeaseError(job.id) from error
-        return outcome
+        return outcome, state_text
 
 
 def _claimed_job(row: Row, queue: str) -> ClaimedJob:
@@ -1387,6 +1868,40 @@ def _outcome_for_status(status: object, *, neutral: frozenset[str]) -> AttemptOu
         return _STATUS_OUTCOMES[status]
     except KeyError as error:
         raise RuntimeError(f"PostgreSQL returned unknown lifecycle status {status!r}") from error
+
+
+def _telemetry_outcome(
+    outcome: AttemptOutcome | None,
+) -> JobExecutionOutcome:
+    outcomes: dict[AttemptOutcome | None, JobExecutionOutcome] = {
+        "completed": "succeeded",
+        "failed": "failed",
+        "retry": "retry",
+        "lease_expired": "lease_lost",
+        "deadline_exceeded": "deadline_exceeded",
+        "attempt_timeout": "timeout",
+        "cancelled": "canceled",
+        "suspended_for_wait": "suspended",
+        "suspended_for_child": "suspended",
+        None: "unknown",
+    }
+    return outcomes[outcome]
+
+
+def _handler_span_outcome(outcome: AttemptOutcome | None) -> str:
+    outcomes: dict[AttemptOutcome | None, str] = {
+        "completed": "succeeded",
+        "failed": "failed",
+        "retry": "retry",
+        "lease_expired": "stale",
+        "deadline_exceeded": "deadline_exceeded",
+        "attempt_timeout": "timeout_exceeded",
+        "cancelled": "canceled",
+        "suspended_for_wait": "suspended",
+        "suspended_for_child": "suspended",
+        None: "unknown",
+    }
+    return outcomes[outcome]
 
 
 def _earliest_expiration(job: ClaimedJob) -> datetime | None:

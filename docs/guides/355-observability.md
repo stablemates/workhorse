@@ -8,6 +8,8 @@ activity and shared PostgreSQL state. This guide explains how to collect and int
 Workhorse records metrics when it enqueues, claims, executes, cancels, recovers, or performs redrive
 operations. It also records schedule firing and maintenance.
 
+The Python worker records the same bounded runtime metrics across the same execution stages.
+
 Execution metrics use queue, job type, and outcome as attributes. They never use a job ID, payload,
 worker ID, or error message. Those values grow without a stable bound, so putting them in metric
 attributes would make the monitoring backend create an ever-growing set of time series. Use traces
