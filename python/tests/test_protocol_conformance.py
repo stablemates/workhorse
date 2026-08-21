@@ -33,12 +33,38 @@ def test_python_compatibility_matches_the_shared_fixtures() -> None:
 
 
 def test_psycopg_satisfies_every_shared_sql_scenario(database_url: str) -> None:
+    manifest = read_json("protocol/v1/manifest.json")
     scenarios = read_json("protocol/v1/scenarios.json")
+    coverage: set[str] = set()
     with psycopg.connect(database_url, row_factory=dict_row, autocommit=True) as connection:
         for scenario in scenarios:
             references: dict[str, Any] = {}
             for step in scenario["steps"]:
                 execute_step(connection, scenario["id"], step, references)
+                coverage.update(step.get("covers", []))
+    assert_manifest_coverage(manifest, coverage)
+
+
+@pytest.mark.parametrize(
+    ("kind", "actual"),
+    [
+        ("any", None),
+        ("any", {"nested": [True, 1, "value"]}),
+        ("number", 1),
+        ("number", 1.5),
+        ("boolean", True),
+        ("boolean", False),
+    ],
+)
+def test_python_value_matcher_supports_shared_types(kind: str, actual: Any) -> None:
+    assert_matcher(kind, actual, "fixture")
+
+
+def test_python_conformance_rejects_missing_manifest_coverage() -> None:
+    manifest = {"coverage": ["enqueue", "claim"], "runtimeCoverage": []}
+
+    with pytest.raises(AssertionError, match="SQL protocol fixtures lack coverage: claim"):
+        assert_manifest_coverage(manifest, {"enqueue"})
 
 
 def execute_step(
@@ -121,12 +147,25 @@ def assert_value(expected: Any, actual: Any, references: Mapping[str, Any], loca
 
 def assert_matcher(kind: str, actual: Any, location: str) -> None:
     accepted = (
-        (kind == "uuid" and isinstance(actual, str) and _is_uuid(actual))
+        kind == "any"
+        or (kind == "uuid" and isinstance(actual, str) and _is_uuid(actual))
         or (kind == "timestamp" and isinstance(actual, str) and _is_timestamp(actual))
         or (kind == "string" and isinstance(actual, str))
-        or (kind == "integer" and isinstance(actual, int))
+        or (kind == "integer" and isinstance(actual, int) and not isinstance(actual, bool))
+        or (kind == "number" and isinstance(actual, (int, float)) and not isinstance(actual, bool))
+        or (kind == "boolean" and isinstance(actual, bool))
     )
     assert accepted, f"{location} expected {kind}, received {actual!r}"
+
+
+def assert_manifest_coverage(manifest: Mapping[str, Any], coverage: set[str]) -> None:
+    runtime_coverage = set(manifest["runtimeCoverage"])
+    missing = [
+        capability
+        for capability in manifest["coverage"]
+        if capability not in runtime_coverage and capability not in coverage
+    ]
+    assert not missing, f"SQL protocol fixtures lack coverage: {', '.join(missing)}"
 
 
 def assert_database_error(
