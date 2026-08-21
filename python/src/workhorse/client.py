@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
+from ._compatibility import assert_async_compatible, assert_sync_compatible
 from ._drivers import (
     AsyncpgConnection,
     AsyncpgExecutor,
@@ -12,8 +13,9 @@ from ._drivers import (
     Row,
     SyncExecutor,
 )
-from ._protocol import assert_compatible, serialize_requests, serialize_schedules
-from .errors import ProtocolCompatibilityError, translate_database_error
+from ._protocol import serialize_requests, serialize_schedules
+from ._statements import STATEMENTS
+from .errors import translate_database_error
 from .types import EnqueueOptions, EnqueueRequest, EnqueueResult, Json, ScheduleDefinition
 
 if TYPE_CHECKING:
@@ -24,13 +26,6 @@ if TYPE_CHECKING:
 else:
     SyncConnection = PsycopgConnection
     AsyncPsycopgConnectionInput = AsyncPsycopgConnection
-
-COMPATIBILITY_SQL = "SELECT version FROM workhorse.schema_version ORDER BY version"
-ENQUEUE_SQL = (
-    "SELECT ordinal, job_id, outcome, reason "
-    "FROM workhorse.enqueue_many_v2(%s::jsonb) ORDER BY ordinal"
-)
-SCHEDULES_SQL = "SELECT workhorse.sync_schedule_definitions_v1(%s::text, %s::jsonb, %s::boolean)"
 
 
 class Queue:
@@ -56,10 +51,10 @@ class Queue:
     def enqueue_many_with_results(self, requests: Sequence[EnqueueRequest]) -> list[EnqueueResult]:
         if not requests:
             return []
-        _assert_sync_compatible(self._executor)
+        assert_sync_compatible(self._executor)
         payload = serialize_requests(requests, self.default_queue)
         try:
-            return _results(self._executor.rows(ENQUEUE_SQL, (payload,)))
+            return _results(self._executor.rows(STATEMENTS.enqueue_many, (payload,)))
         except Exception as error:
             _raise_translated(error)
 
@@ -70,9 +65,9 @@ class Queue:
         *,
         prune: bool = True,
     ) -> None:
-        _assert_sync_compatible(self._executor)
+        assert_sync_compatible(self._executor)
         payload = serialize_schedules(definitions, self.default_queue)
-        self._executor.rows(SCHEDULES_SQL, (namespace, payload, prune))
+        self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
 
 
 class AsyncQueue:
@@ -118,11 +113,10 @@ class AsyncQueue:
     ) -> list[EnqueueResult]:
         if not requests:
             return []
-        await _assert_async_compatible(self._executor)
+        await assert_async_compatible(self._executor)
         payload = serialize_requests(requests, self.default_queue)
-        sql = ENQUEUE_SQL.replace("%s", self._executor.placeholder)
         try:
-            return _results(await self._executor.rows(sql, (payload,)))
+            return _results(await self._executor.rows(STATEMENTS.enqueue_many, (payload,)))
         except Exception as error:
             _raise_translated(error)
 
@@ -133,39 +127,9 @@ class AsyncQueue:
         *,
         prune: bool = True,
     ) -> None:
-        await _assert_async_compatible(self._executor)
+        await assert_async_compatible(self._executor)
         payload = serialize_schedules(definitions, self.default_queue)
-        if self._executor.placeholder == "$1":
-            sql = SCHEDULES_SQL.replace("%s", "$1", 1)
-            sql = sql.replace("%s", "$2", 1).replace("%s", "$3", 1)
-        else:
-            sql = SCHEDULES_SQL
-        await self._executor.rows(sql, (namespace, payload, prune))
-
-
-def _assert_sync_compatible(executor: SyncExecutor) -> None:
-    try:
-        rows = executor.rows(COMPATIBILITY_SQL)
-    except Exception as error:
-        if _is_missing_schema(error):
-            raise ProtocolCompatibilityError("schema-not-installed") from error
-        raise
-    assert_compatible(rows)
-
-
-async def _assert_async_compatible(executor: AsyncPsycopgExecutor | AsyncpgExecutor) -> None:
-    try:
-        rows = await executor.rows(COMPATIBILITY_SQL)
-    except Exception as error:
-        if _is_missing_schema(error):
-            raise ProtocolCompatibilityError("schema-not-installed") from error
-        raise
-    assert_compatible(rows)
-
-
-def _is_missing_schema(error: Exception) -> bool:
-    sqlstate = getattr(error, "sqlstate", None) or getattr(error, "code", None)
-    return sqlstate in {"42P01", "3F000"}
+        await self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
 
 
 def _raise_translated(error: Exception) -> NoReturn:

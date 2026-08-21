@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, cast
 
+from ._statements import DriverDialect, DriverStatement
+
 Row = Mapping[str, object]
 
 
@@ -43,37 +45,41 @@ class AsyncpgConnection(Protocol):
 
 
 class SyncExecutor:
-    placeholder = "%s"
+    dialect: DriverDialect = "psycopg"
 
     def __init__(self, connection: PsycopgConnection) -> None:
         self.connection = connection
 
-    def rows(self, sql: str, parameters: Sequence[object] = ()) -> list[Row]:
+    def rows(self, statement: DriverStatement, parameters: Sequence[object] = ()) -> list[Row]:
         with self.connection.cursor() as cursor:
-            cursor.execute(sql, parameters)
+            cursor.execute(statement.for_dialect(self.dialect), parameters)
             return _mapping_rows(cursor.description, cursor.fetchall())
 
 
 class AsyncPsycopgExecutor:
-    placeholder = "%s"
+    dialect: DriverDialect = "psycopg"
 
     def __init__(self, connection: AsyncPsycopgConnection) -> None:
         self.connection = connection
 
-    async def rows(self, sql: str, parameters: Sequence[object] = ()) -> list[Row]:
+    async def rows(
+        self, statement: DriverStatement, parameters: Sequence[object] = ()
+    ) -> list[Row]:
         async with self.connection.cursor() as cursor:
-            await cursor.execute(sql, parameters)
+            await cursor.execute(statement.for_dialect(self.dialect), parameters)
             return _mapping_rows(cursor.description, await cursor.fetchall())
 
 
 class AsyncpgExecutor:
-    placeholder = "$1"
+    dialect: DriverDialect = "asyncpg"
 
     def __init__(self, connection: AsyncpgConnection) -> None:
         self.connection = connection
 
-    async def rows(self, sql: str, parameters: Sequence[object] = ()) -> list[Row]:
-        records = await self.connection.fetch(sql, *parameters)
+    async def rows(
+        self, statement: DriverStatement, parameters: Sequence[object] = ()
+    ) -> list[Row]:
+        records = await self.connection.fetch(statement.for_dialect(self.dialect), *parameters)
         return [dict(record) for record in records]
 
 

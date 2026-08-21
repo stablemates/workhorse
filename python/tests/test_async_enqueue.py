@@ -79,3 +79,13 @@ async def test_async_psycopg_uses_native_parameters() -> None:
     assert result == "psycopg"
     assert "%s::jsonb" in connection.calls[1][0]
     assert len(connection.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_asyncpg_schedule_sync_uses_numbered_parameters() -> None:
+    connection = AsyncpgConnection()
+
+    await AsyncQueue.from_asyncpg(connection).sync_schedules("billing", [])
+
+    assert "$1::text, $2::jsonb, $3::boolean" in connection.calls[1][0]
+    assert len(connection.calls) == 2
