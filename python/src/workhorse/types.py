@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Event, Lock
@@ -149,6 +149,39 @@ class CancellationToken:
             return True
 
 
+class AsyncCancellationToken:
+    """Async view of the worker's cooperative cancellation signal."""
+
+    def __init__(self, token: CancellationToken) -> None:
+        self._token = token
+
+    @property
+    def cancelled(self) -> bool:
+        return self._token.cancelled
+
+    @property
+    def reason(self) -> BaseException:
+        return self._token.reason
+
+    async def wait(self, timeout: float | None = None) -> bool:
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+        while not self.cancelled:
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return False
+                await asyncio.sleep(min(0.01, remaining))
+            else:
+                await asyncio.sleep(0.01)
+        return True
+
+    def raise_if_cancelled(self) -> None:
+        self._token.raise_if_cancelled()
+
+
 @dataclass(frozen=True)
 class JobCheckpoint:
     job_id: str
@@ -251,6 +284,60 @@ class HandlerContext:
 
 
 @dataclass(frozen=True)
+class AsyncHandlerContext:
+    """Async handler access to one claimed job's durable primitives."""
+
+    job: ClaimedJob
+    cancellation: AsyncCancellationToken
+    _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]] = field(repr=False)
+    _get_wait: Callable[[str], Awaitable[JobWait | None]] = field(repr=False)
+    _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]] = field(repr=False)
+    _sleep: Callable[[str, int], Awaitable[None]] = field(repr=False)
+    _sleep_until: Callable[[str, datetime], Awaitable[None]] = field(repr=False)
+    _wait_for_signal: Callable[[str, int | None], Awaitable[Json]] = field(repr=False)
+    _wait_for_human: Callable[[str, Json, int | None], Awaitable[Json]] = field(repr=False)
+    _run_child: Callable[[str, str, Json, EnqueueOptions], Awaitable[Json]] = field(repr=False)
+    _run_children: Callable[[Sequence[ChildJobRequest]], Awaitable[dict[str, Json]]] = field(
+        repr=False
+    )
+
+    async def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+        return await self._get_checkpoint(name)
+
+    async def get_wait(self, name: str) -> JobWait | None:
+        return await self._get_wait(name)
+
+    async def checkpoint(self, name: str, operation: Callable[[], Awaitable[TJson]]) -> TJson:
+        return cast(TJson, await self._checkpoint(name, operation))
+
+    async def sleep(self, name: str, duration_ms: int) -> None:
+        await self._sleep(name, duration_ms)
+
+    async def sleep_until(self, name: str, wake_at: datetime) -> None:
+        await self._sleep_until(name, wake_at)
+
+    async def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json:
+        return await self._wait_for_signal(name, timeout_ms)
+
+    async def wait_for_human(
+        self, name: str, context: Json, *, timeout_ms: int | None = None
+    ) -> Json:
+        return await self._wait_for_human(name, context, timeout_ms)
+
+    async def run_child(
+        self,
+        name: str,
+        type: str,
+        payload: Json,
+        options: EnqueueOptions | None = None,
+    ) -> Json:
+        return await self._run_child(name, type, payload, options or EnqueueOptions())
+
+    async def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+        return await self._run_children(children)
+
+
+@dataclass(frozen=True)
 class BatchHandlerContext:
     """Per-job batch context without APIs that suspend one shared invocation."""
 
@@ -270,6 +357,28 @@ class BatchHandlerContext:
 class BatchHandlerItem:
     payload: Json
     context: BatchHandlerContext
+
+
+@dataclass(frozen=True)
+class AsyncBatchHandlerContext:
+    """Async per-job batch context without suspending primitives."""
+
+    job: ClaimedJob
+    cancellation: AsyncCancellationToken
+    _get_checkpoint: Callable[[str], Awaitable[JobCheckpoint | None]] = field(repr=False)
+    _checkpoint: Callable[[str, Callable[[], Awaitable[Json]]], Awaitable[Json]] = field(repr=False)
+
+    async def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+        return await self._get_checkpoint(name)
+
+    async def checkpoint(self, name: str, operation: Callable[[], Awaitable[TJson]]) -> TJson:
+        return cast(TJson, await self._checkpoint(name, operation))
+
+
+@dataclass(frozen=True)
+class AsyncBatchHandlerItem:
+    payload: Json
+    context: AsyncBatchHandlerContext
 
 
 class BatchSucceeded(TypedDict):

@@ -19,7 +19,7 @@ from uuid import uuid4
 from croniter import croniter
 from dateutil.tz import enfold, resolve_imaginary, tzlocal
 
-from ._compatibility import CachedCompatibilityCheck
+from ._compatibility import CachedCompatibilityCheck, SyncRowExecutor
 from ._drivers import PsycopgConnection, Row, SyncExecutor
 from ._external_waits import encode_wait_value, validate_wait_name, validate_wait_timeout
 from ._notifications import (
@@ -152,7 +152,7 @@ _MAX_WAIT_DURATION_MS = 31_536_000_000
 class _HandlerDurability:
     def __init__(
         self,
-        executor: SyncExecutor,
+        executor: SyncRowExecutor,
         job: ClaimedJob,
         worker_id: str,
         cancellation: CancellationToken,
@@ -672,8 +672,9 @@ class Worker:
         schedule_catchup_limit: int = 100,
         notification_connection_factory: NotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
+        _executor: SyncRowExecutor | None = None,
     ) -> None:
-        if getattr(connection, "autocommit", False) is not True:
+        if _executor is None and getattr(connection, "autocommit", False) is not True:
             raise ValueError("Worker requires a dedicated Psycopg connection in autocommit mode")
         if queue is not None and queues is not None:
             raise ValueError("queue and queues cannot be configured together")
@@ -696,7 +697,7 @@ class Worker:
             or resolved_poll_ms < 1
         ):
             raise ValueError("poll_ms must be a positive integer")
-        self._executor = SyncExecutor(cast(PsycopgConnection, connection))
+        self._executor = _executor or SyncExecutor(cast(PsycopgConnection, connection))
         self._compatibility = CachedCompatibilityCheck(self._executor)
         self._handlers: dict[str, Handler] = {}
         self.queues = unique_queues
@@ -990,6 +991,9 @@ class Worker:
     def _stop_version_snapshot(self) -> int:
         with self._state_lock:
             return self._stop_version
+
+    def _wake_dispatcher(self) -> None:
+        self._wake.set()
 
     def _dispatch_state(self) -> Literal["stopping", "paused", "full", "ready"]:
         with self._state_lock:

@@ -157,12 +157,11 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   `@workhorse-js/dashboard` and its own client, and it changes without a schema version bump. Do not
   build against it; the supported operator surface is the `Queue` query API.
 
-The TypeScript client and worker and the Python and Go enqueue clients implement this protocol. Python runs
-the same canonical SQL fixtures and request mapping through Psycopg, plus transaction integration
-through Psycopg async and asyncpg. The synchronous Python worker supports single-job claiming,
-handler execution, fenced completion, and database-scheduled failure through Psycopg. Its broader
-runtime remains unsupported until the driver, PostgreSQL, packed-artifact, and compatibility
-matrices exist. The Go worker supports bounded multi-queue dispatch, fenced ownership, cooperative
+The TypeScript client and worker and the Python and Go enqueue clients implement this protocol.
+Python runs the same canonical SQL fixtures and request mapping through Psycopg, plus transaction
+integration through Psycopg async and asyncpg. Its synchronous and asynchronous workers share one
+lifecycle core; the asynchronous surface uses native Psycopg or asyncpg query and notification
+connections. The Go worker supports bounded multi-queue dispatch, fenced ownership, cooperative
 cancellation, durable checkpoints, durable timers, and graceful drain. Its release remains
 unsupported until the runtime and worker module-consumer matrices exist.
 

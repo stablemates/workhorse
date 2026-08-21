@@ -3,14 +3,25 @@
 A worker is a loop. Ask the database for a job, run the handler, record the result, repeat.
 Everything else in this guide is detail on top of that.
 
-The synchronous Python `Worker` supplies the same core loop through `handle`, `run`, and
-`run_once`. It rotates across queues, bounds concurrent slots, and drains active work after
-`stop`. Each heartbeat thread renews one claimed job's lease and delivers ownership signals through
-`HandlerContext.cancellation`. The Python worker can open a dedicated notification connection,
-evaluate recurring definitions selected by `schedule_namespaces`, and bound catch-up with
-`schedule_catchup_limit`. The TypeScript worker also participates in the worker registry.
+Python supplies the same core loop through synchronous `Worker` and asynchronous `AsyncWorker`.
+Both rotate across queues, bound concurrent slots, and drain active work after `stop`. Each claimed
+job renews its lease and delivers ownership signals through its context cancellation token.
+Both workers can open a dedicated notification connection and evaluate recurring definitions.
+`AsyncWorker` uses native Psycopg or asyncpg connections, while its handlers and durable context
+methods are awaitable. The TypeScript worker also participates in the worker registry.
 Python's `handle_batch` follows the grouping contract in
 [315-batch-handlers.md](315-batch-handlers.md).
+
+```python
+worker = AsyncWorker.from_asyncpg(connection, queues=("email", "billing"))
+
+async def deliver(payload, context):
+    prepared = await context.checkpoint("prepare", prepare_delivery)
+    return await send_message(payload, prepared)
+
+worker.handle("email.send", deliver)
+await worker.run()
+```
 
 ## Slots and concurrency
 

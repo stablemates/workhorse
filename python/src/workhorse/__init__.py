@@ -1,4 +1,5 @@
 from ._telemetry import METRIC_ATTRIBUTE_CARDINALITY_LIMIT, TRACE_ATTRIBUTE_COUNT_LIMIT
+from .async_worker import AsyncBatchHandler, AsyncHandler, AsyncWorker
 from .client import AsyncQueue, Queue
 from .errors import (
     CancellationRequestedError,
@@ -31,6 +32,10 @@ from .errors import (
     WorkhorseError,
 )
 from .types import (
+    AsyncBatchHandlerContext,
+    AsyncBatchHandlerItem,
+    AsyncCancellationToken,
+    AsyncHandlerContext,
     BatchFailed,
     BatchHandlerContext,
     BatchHandlerItem,
@@ -62,7 +67,14 @@ from .worker_process import run_worker_process
 __all__ = [
     "METRIC_ATTRIBUTE_CARDINALITY_LIMIT",
     "TRACE_ATTRIBUTE_COUNT_LIMIT",
+    "AsyncBatchHandler",
+    "AsyncBatchHandlerContext",
+    "AsyncBatchHandlerItem",
+    "AsyncCancellationToken",
+    "AsyncHandler",
+    "AsyncHandlerContext",
     "AsyncQueue",
+    "AsyncWorker",
     "BatchFailed",
     "BatchHandler",
     "BatchHandlerContext",

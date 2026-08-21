@@ -7,7 +7,10 @@ import asyncpg  # type: ignore[import-untyped]
 import psycopg
 
 from workhorse import (
+    AsyncBatchHandlerItem,
+    AsyncHandlerContext,
     AsyncQueue,
+    AsyncWorker,
     BatchHandlerItem,
     BatchHandlerOutcome,
     ChildJobRequest,
@@ -102,7 +105,33 @@ async def asyncpg_enqueue(connection: asyncpg.Connection) -> str:
     return job_id
 
 
+async def async_psycopg_worker(connection: psycopg.AsyncConnection[Any]) -> bool:
+    async def handle(payload: Json, context: AsyncHandlerContext) -> Json:
+        prepared = await context.checkpoint("prepare", lambda: async_value(payload))
+        await context.sleep("delay", 1)
+        return {"prepared": prepared}
+
+    return await AsyncWorker.from_psycopg(connection).handle("email.send", handle).run_once()
+
+
+async def asyncpg_batch_worker(connection: asyncpg.Connection) -> bool:
+    async def handle(items: Sequence[AsyncBatchHandlerItem]) -> list[BatchHandlerOutcome]:
+        return [{"status": "succeeded", "result": {"jobId": item.context.job.id}} for item in items]
+
+    return await (
+        AsyncWorker.from_asyncpg(connection, concurrency=2)
+        .handle_batch("email.batch", handle, max_size=2, linger_ms=50)
+        .run_once()
+    )
+
+
+async def async_value(value: Json) -> Json:
+    return value
+
+
 def unsupported_connections_are_rejected() -> None:
     Queue(object())  # type: ignore[arg-type]
     AsyncQueue.from_psycopg(object())  # type: ignore[arg-type]
     AsyncQueue.from_asyncpg(object())  # type: ignore[arg-type]
+    AsyncWorker.from_psycopg(object())  # type: ignore[arg-type]
+    AsyncWorker.from_asyncpg(object())  # type: ignore[arg-type]

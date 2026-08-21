@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, cast
 
@@ -37,11 +38,15 @@ class AsyncPsycopgCursor(Protocol):
 
 
 class AsyncPsycopgConnection(Protocol):
+    autocommit: bool
+
     def cursor(self) -> AsyncPsycopgCursor: ...
 
 
 class AsyncpgConnection(Protocol):
     async def fetch(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
+
+    def is_in_transaction(self) -> bool: ...
 
 
 class SyncExecutor:
@@ -80,7 +85,29 @@ class AsyncpgExecutor:
         self, statement: DriverStatement, parameters: Sequence[object] = ()
     ) -> list[Row]:
         records = await self.connection.fetch(statement.for_dialect(self.dialect), *parameters)
-        return [dict(record) for record in records]
+        return [
+            {key: _decode_asyncpg_json(key, value) for key, value in dict(record).items()}
+            for record in records
+        ]
+
+
+_JSON_COLUMNS = frozenset(
+    {
+        "checkpoint_value",
+        "payload",
+        "result",
+        "results",
+        "retry_dimensions",
+        "retry_policy",
+        "trace_context",
+    }
+)
+
+
+def _decode_asyncpg_json(column: str, value: object) -> object:
+    if column in _JSON_COLUMNS and isinstance(value, str):
+        return json.loads(value)
+    return value
 
 
 def _mapping_rows(

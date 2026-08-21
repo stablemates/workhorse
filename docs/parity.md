@@ -51,11 +51,11 @@ also runs a worker from a separate module that imports the public package. Compi
 exercise signal drain and lease recovery after a kill. The Go worker provides
 bounded concurrency, fair multi-queue claiming, notification-assisted dispatch with polling
 fallback, ownership heartbeats, cancellation, durable checkpoints, durable timers, OpenTelemetry
-tracing and metrics, structured logs, and graceful drain. Python's synchronous worker
-provides bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable
-checkpoints, durable timers, signal and human-decision waits, schedule firing, and graceful drain,
-but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
-lifecycle support. A deployment using Go needs a TypeScript worker for lifecycle capabilities that
+tracing and metrics, structured logs, and graceful drain. Python's synchronous and asynchronous
+workers provide bounded concurrency, fair multi-queue
+claiming, ownership heartbeats, cancellation, durable checkpoints, durable timers, signal and
+human-decision waits, schedule firing, telemetry, and graceful drain through one lifecycle core.
+A deployment using Go needs a TypeScript worker for lifecycle capabilities that
 remain Planned under [WH-236]. It also needs a TypeScript or Python worker to fire schedules until
 [WH-332] ships.
 
@@ -90,15 +90,17 @@ Those work items cover individual and batch handlers, durable primitives, concur
 cancellation, telemetry, and graceful drain. Schedule firing is Planned under [WH-309] for
 Python and [WH-332] for Go, deliberately outside the [WH-214] and [WH-236] scopes. A row starts
 Planned only when a Plane work item commits to it. A cell claiming more than the work item scope
-is a bug in this document. Python executes every shared worker fixture under [WH-310], while Go
-keeps that row Planned under [WH-331].
+is a bug in this document. Python executes every shared worker fixture against the lifecycle core
+under [WH-310]. `python/tests/test_async_worker.py` separately proves both async driver bridges,
+async handlers, durable context replay, batch adaptation, native listeners, and drain through that
+same core. Go keeps the shared-fixture row Planned under [WH-331].
 
 ## Roadmap progress
 
 | Deliverable                     | Plane work item | State     |
 | ------------------------------- | --------------- | --------- |
 | Synchronous Python worker       | [WH-214]        | Backlog   |
-| Asynchronous Python worker      | [WH-221]        | Backlog   |
+| Asynchronous Python worker      | [WH-312]        | In Review |
 | Python schedule firing          | [WH-309]        | In Review |
 | Go transactional enqueue client | [WH-228]        | In Review |
 | Go worker and module examples   | [WH-236]        | Backlog   |
@@ -143,6 +145,7 @@ exactly as behaviour changes must update the guide that describes them.
 [WH-309]: https://app.plane.so/techprogress/browse/WH-309/
 [WH-310]: https://app.plane.so/techprogress/browse/WH-310/
 [WH-311]: https://app.plane.so/techprogress/browse/WH-311/
+[WH-312]: https://app.plane.so/techprogress/browse/WH-312/
 [WH-318]: https://app.plane.so/techprogress/browse/WH-318/
 [WH-331]: https://app.plane.so/techprogress/browse/WH-331/
 [WH-332]: https://app.plane.so/techprogress/browse/WH-332/
