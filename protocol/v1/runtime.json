@@ -119,6 +119,15 @@
       "runChild",
       "runChildren"
     ],
+    "portableRejectedWrites": [
+      "checkpoint",
+      "sleep",
+      "sleepUntil",
+      "waitForSignal",
+      "waitForHuman",
+      "runChild",
+      "runChildren"
+    ],
     "expectedRejectedWriteError": "Job lease was lost",
     "expectedState": { "state": "ready", "attempt": 2 },
     "expectedAttemptOutcome": "lease_expired"

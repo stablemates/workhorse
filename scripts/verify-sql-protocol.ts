@@ -138,6 +138,7 @@ export interface LeaseLossRuntimeFixture extends RuntimeFixtureBase {
   maxAttempts: number;
   expectedAbortMessage: string;
   expectedRejectedWrites: RuntimeWriteOperation[];
+  portableRejectedWrites: RuntimeWriteOperation[];
   expectedRejectedWriteError: string;
   expectedState: ExpectedRuntimeState;
   expectedAttemptOutcome: JobAttemptOutcome;

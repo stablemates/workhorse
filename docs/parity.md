@@ -82,13 +82,15 @@ telemetry, and graceful shutdown.
 | Graceful stop and signal drain               | Supported  | Supported | Supported |
 | Retention maintenance participation          | Supported  | Absent    | Absent    |
 | OpenTelemetry tracing and metrics            | Supported  | Planned   | Planned   |
+| Shared runtime fixtures executed             | Supported  | Supported | Planned   |
 
 The Planned worker columns reflect the acceptance criteria in [WH-214], [WH-221], and [WH-236].
 Those work items cover individual and batch handlers, durable primitives, concurrency, heartbeats,
 cancellation, telemetry, and graceful drain. Schedule firing is Planned under [WH-309] for
 Python and [WH-332] for Go, deliberately outside the [WH-214] and [WH-236] scopes. A row starts
 Planned only when a Plane work item commits to it. A cell claiming more than the work item scope
-is a bug in this document.
+is a bug in this document. Python executes every shared worker fixture under [WH-310], while Go
+keeps that row Planned under [WH-331].
 
 ## Roadmap progress
 
@@ -122,10 +124,12 @@ that need should arrive as its own Plane work item.
 
 ## Keeping this document honest
 
-If a cell says Supported, tests in this repository must exercise that capability in that
-language. The conformance fixtures under `protocol/v1/` are the intended enforcement point: the
-TypeScript suite runs them through `scripts/verify-sql-protocol.ts`, and the Python suite runs
-them through `python/tests/test_protocol_conformance.py`. A generated check in the style of
+If a cell says Supported, tests in this repository must exercise that capability in that language.
+The conformance fixtures under `protocol/v1/` are the intended enforcement point. The TypeScript
+suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the runtime fixtures through
+`Worker`. The Python suite runs the SQL fixtures through `python/tests/test_protocol_conformance.py`
+and every runtime fixture through `python/tests/test_worker_runtime_conformance.py`. A generated
+check in the style of
 `typescript/core/test/support-matrix.test.ts` — which fails when `docs/compatibility.md`, CI, and
 the package `engines` fields disagree — does not exist for this matrix yet. Until it does, any
 change that ships or removes a language capability must update this file in the same commit,
@@ -136,5 +140,7 @@ exactly as behaviour changes must update the guide that describes them.
 [WH-228]: https://app.plane.so/techprogress/browse/WH-228/
 [WH-236]: https://app.plane.so/techprogress/browse/WH-236/
 [WH-309]: https://app.plane.so/techprogress/browse/WH-309/
+[WH-310]: https://app.plane.so/techprogress/browse/WH-310/
 [WH-318]: https://app.plane.so/techprogress/browse/WH-318/
+[WH-331]: https://app.plane.so/techprogress/browse/WH-331/
 [WH-332]: https://app.plane.so/techprogress/browse/WH-332/

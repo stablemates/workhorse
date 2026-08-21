@@ -24,7 +24,7 @@ class LifecycleError(WorkhorseError):
 class StaleLeaseError(LifecycleError):
     def __init__(self, job_id: str) -> None:
         self.job_id = job_id
-        super().__init__(f"PostgreSQL rejected settlement under a stale lease for job {job_id}")
+        super().__init__("Job lease was lost")
 
 
 class CancellationRequestedError(WorkhorseError):

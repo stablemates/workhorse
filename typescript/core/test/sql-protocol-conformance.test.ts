@@ -357,6 +357,9 @@ async function executeLeaseLossRuntimeFixture(
   await expect(execution).resolves.toBe(true);
   expect(abortMessage).toBe(fixture.expectedAbortMessage);
   expect([...rejectedWrites.keys()]).toEqual(fixture.expectedRejectedWrites);
+  expect(fixture.expectedRejectedWrites).toEqual(
+    expect.arrayContaining(fixture.portableRejectedWrites),
+  );
   expect(new Set(rejectedWrites.values())).toEqual(new Set([fixture.expectedRejectedWriteError]));
   await expect(queue.getJob(id)).resolves.toMatchObject({
     state: fixture.expectedState.state,
