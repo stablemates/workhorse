@@ -27,6 +27,7 @@ This boundary is about correctness only. It is not a performance claim; see
 | ---------- | -------------- | ------- | ------------------------------------------------------- |
 | Node.js    | 22, 24         | 22      | Even-numbered releases only. `engines.node` is `>=22`.  |
 | Python     | 3.10–3.14      | 3.10    | `workhorse-pg` ships one `py3-none-any` wheel.          |
+| Go         | 1.23 and newer | 1.23    | The module pins pgx v5.7.6.                             |
 | PostgreSQL | 15, 16, 17, 18 | 15      | No extension beyond the default `plpgsql` is installed. |
 
 The TypeScript suite, including PostgreSQL integration, runs against every combination of the Node
@@ -42,6 +43,13 @@ major or asyncpg 0.31 through the next major. Its package lane builds the source
 universal wheel, checks inline types, runs both real drivers, and executes every shared SQL
 scenario. GitHub Actions remain intentionally disabled while the repository is private; when they
 are restored, each declared Python version must run this lane before publication.
+
+The Go module declares Go 1.23 or newer and supports its pinned pgx 5.7.6 release. Its repository
+lane exercises enqueue through pgx transactions, pgx pools, and `database/sql` with pgx stdlib. It
+also compiles and runs a separate module through a local `replace` directive. That consumer test
+proves the public module surface without depending on repository-only imports. The Go tests run
+against every PostgreSQL major supplied to the lane; GitHub Actions wiring waits for the CI
+unfreeze.
 
 ## JS runtime smoke tier
 
@@ -149,12 +157,13 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   `@workhorse-js/dashboard` and its own client, and it changes without a schema version bump. Do not
   build against it; the supported operator surface is the `Queue` query API.
 
-The TypeScript client and worker and the Python enqueue client implement this protocol. Python runs
+The TypeScript client and worker and the Python and Go enqueue clients implement this protocol. Python runs
 the same canonical SQL fixtures and request mapping through Psycopg, plus transaction integration
 through Psycopg async and asyncpg. The synchronous Python worker supports single-job claiming,
 handler execution, fenced completion, and database-scheduled failure through Psycopg. Its broader
 runtime remains unsupported until the driver, PostgreSQL, packed-artifact, and compatibility
-matrices exist. Both Go packages remain unsupported until their corresponding matrices exist.
+matrices exist. The Go worker remains unsupported until its runtime and module-consumer matrices
+exist.
 
 ## Release process
 

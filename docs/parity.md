@@ -46,9 +46,10 @@ The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `w
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg). The Go module's `Queue` supports transactional
 single and batch enqueue over pgx and `database/sql`, including every stable enqueue option except
 payload and result contracts. Go and Python can define and synchronize recurring schedules through
-caller-owned executors. Python's synchronous worker provides bounded
-concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable checkpoints,
-durable timers, and graceful drain,
+caller-owned executors. The Go test lane enqueues through each documented executor. Its release test
+also enqueues through a separate module that imports the public package. Python's synchronous worker
+provides bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable
+checkpoints, durable timers, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
 lifecycle support. Only a TypeScript worker fires schedules until [WH-309] ships. A deployment
 enqueueing from Go needs a
@@ -88,14 +89,14 @@ is a bug in this document.
 
 ## Roadmap progress
 
-| Deliverable                     | Plane work item | State   |
-| ------------------------------- | --------------- | ------- |
-| Synchronous Python worker       | [WH-214]        | Backlog |
-| Asynchronous Python worker      | [WH-221]        | Backlog |
-| Python schedule firing          | [WH-309]        | Backlog |
-| Go transactional enqueue client | [WH-228]        | Backlog |
-| Go worker and module examples   | [WH-236]        | Backlog |
-| Go schedule firing              | [WH-332]        | Backlog |
+| Deliverable                     | Plane work item | State     |
+| ------------------------------- | --------------- | --------- |
+| Synchronous Python worker       | [WH-214]        | Backlog   |
+| Asynchronous Python worker      | [WH-221]        | Backlog   |
+| Python schedule firing          | [WH-309]        | Backlog   |
+| Go transactional enqueue client | [WH-228]        | In Review |
+| Go worker and module examples   | [WH-236]        | Backlog   |
+| Go schedule firing              | [WH-332]        | Backlog   |
 
 The Plane work items own sequencing, blockers, and completion. Update this table when their state
 changes, and update the capability matrices only when repository tests prove the new support.
