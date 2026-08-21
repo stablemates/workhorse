@@ -35,6 +35,23 @@
   --color-safety-500: oklch(0.7 0.16 150);
   --color-safety-600: oklch(0.58 0.14 152);
 
+  /*
+   * Corporate navy. The landing page's enterprise identity color. Docs pages
+   * never reference these tokens, so declaring them here changes nothing for
+   * them; the landing scope activates them in `.wh-landing`.
+   */
+  --color-brand-50: oklch(0.97 0.008 255);
+  --color-brand-100: oklch(0.94 0.018 255);
+  --color-brand-200: oklch(0.89 0.032 255);
+  --color-brand-300: oklch(0.8 0.055 255);
+  --color-brand-400: oklch(0.68 0.08 255);
+  --color-brand-500: oklch(0.58 0.09 255);
+  --color-brand-600: oklch(0.49 0.09 256);
+  --color-brand-700: oklch(0.41 0.078 257);
+  --color-brand-800: oklch(0.33 0.062 257);
+  --color-brand-900: oklch(0.26 0.048 257);
+  --color-brand-950: oklch(0.185 0.038 258);
+
   --color-ink-50: oklch(0.985 0.002 250);
   --color-ink-100: oklch(0.965 0.003 250);
   --color-ink-200: oklch(0.922 0.004 250);
@@ -429,4 +446,68 @@ body {
 
 .wh-pip[data-state="none"] {
   background-color: color-mix(in oklab, var(--color-fd-muted-foreground) 55%, transparent);
+}
+
+/* ---------- Landing enterprise theme ----------
+ *
+ * Everything below is scoped to `.wh-landing`, the wrapper class on the
+ * landing route. Tailwind v4 utilities compile to `var(--color-*)`
+ * references, so overriding those custom properties here restyles every
+ * descendant utility without touching the components. Docs pages never enter
+ * this scope and keep the original identity.
+ */
+
+.wh-landing {
+  /* Corporate navy replaces signal orange as the landing accent. */
+  --color-signal-50: oklch(0.97 0.01 255);
+  --color-signal-100: oklch(0.95 0.02 255);
+  --color-signal-200: oklch(0.9 0.032 255);
+  --color-signal-300: oklch(0.83 0.05 255);
+  --color-signal-400: oklch(0.7 0.08 255);
+  --color-signal-500: oklch(0.58 0.09 255);
+  --color-signal-600: oklch(0.5 0.09 256);
+  --color-signal-700: oklch(0.42 0.078 257);
+  --color-signal-800: oklch(0.34 0.062 257);
+  --color-signal-900: oklch(0.27 0.05 257);
+
+  --wh-accent: var(--color-brand-600);
+  --wh-rule: color-mix(in oklab, var(--color-ink-900) 14%, transparent);
+  --wh-panel: #fff;
+  --wh-grid-line: color-mix(in oklab, var(--color-ink-900) 5%, transparent);
+}
+
+.dark .wh-landing {
+  --wh-accent: var(--color-brand-400);
+  --wh-rule: color-mix(in oklab, var(--color-ink-50) 16%, transparent);
+  --wh-panel: color-mix(in oklab, var(--color-ink-900) 88%, black);
+  --wh-grid-line: color-mix(in oklab, var(--color-ink-50) 6%, transparent);
+}
+
+/* Blueprint grid behind the hero. Static by design, so no motion preference branch. */
+.wh-hero-grid {
+  background-image:
+    linear-gradient(to right, var(--wh-grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--wh-grid-line) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(to bottom, black, transparent 82%);
+}
+
+.wh-band-grid {
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 0.055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.055) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.wh-landing .wh-frame {
+  border-radius: 0.375rem;
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--color-ink-950) 7%, transparent);
+}
+
+.wh-landing .wh-frame-bar {
+  background-color: color-mix(in oklab, var(--color-ink-900) 3.5%, var(--wh-panel));
+}
+
+.dark .wh-landing .wh-frame-bar {
+  background-color: color-mix(in oklab, var(--wh-panel) 92%, var(--color-ink-500));
 }
