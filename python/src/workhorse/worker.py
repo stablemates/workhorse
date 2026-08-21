@@ -4,8 +4,10 @@ import json
 import os
 import socket
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Event, Lock, Thread, current_thread
 from time import monotonic
@@ -18,7 +20,7 @@ from ._notifications import (
     JobNotificationListener,
     NotificationConnectionFactory,
 )
-from ._statements import STATEMENTS
+from ._statements import STATEMENTS, DriverStatement
 from .errors import (
     CancellationRequestedError,
     CheckpointConflictError,
@@ -30,7 +32,16 @@ from .errors import (
     WaitLeaseLostError,
     WaitLimitExceededError,
 )
-from .types import CancellationToken, ClaimedJob, HandlerContext, JobCheckpoint, JobWait, Json
+from .types import (
+    BatchHandlerItem,
+    BatchHandlerOutcome,
+    CancellationToken,
+    ClaimedJob,
+    HandlerContext,
+    JobCheckpoint,
+    JobWait,
+    Json,
+)
 
 if TYPE_CHECKING:
     import psycopg
@@ -40,6 +51,16 @@ else:
     SyncConnection = PsycopgConnection
 
 Handler = Callable[[Any, HandlerContext], Json]
+BatchHandler = Callable[[Sequence[BatchHandlerItem]], Sequence[BatchHandlerOutcome]]
+
+
+@dataclass
+class _PendingBatchMember:
+    arrival_order: int
+    arrived_at: float
+    item: BatchHandlerItem
+    result: Future[Json]
+
 
 _REDACTED_ERROR_NAME = "RedactedJobError"
 _REDACTED_ERROR_MESSAGE = "Job handler failed; details redacted"
@@ -359,6 +380,125 @@ class Worker:
 
     def handle(self, type: str, handler: Handler) -> Worker:
         self._handlers[type] = handler
+        return self
+
+    def handle_batch(
+        self,
+        type: str,
+        handler: BatchHandler,
+        *,
+        max_size: int,
+        linger_ms: int,
+    ) -> Worker:
+        if isinstance(max_size, bool) or not isinstance(max_size, int) or not 1 <= max_size <= 100:
+            raise ValueError("max_size must be an integer between 1 and 100")
+        if max_size > self.concurrency:
+            raise ValueError("max_size must not exceed worker concurrency")
+        if (
+            isinstance(linger_ms, bool)
+            or not isinstance(linger_ms, int)
+            or not 0 <= linger_ms <= 60_000
+        ):
+            raise ValueError("linger_ms must be an integer between 0 and 60000")
+
+        pending_lock = Lock()
+        pending_queues: dict[str, list[_PendingBatchMember]] = {}
+        next_arrival = 0
+
+        def take_batch(queue_name: str) -> list[_PendingBatchMember]:
+            pending = pending_queues.get(queue_name)
+            if not pending:
+                return []
+            batch = pending[:max_size]
+            del pending[:max_size]
+            if not pending:
+                del pending_queues[queue_name]
+            return sorted(
+                batch, key=lambda member: (-member.item.context.job.priority, member.arrival_order)
+            )
+
+        def record_batch(
+            statement: DriverStatement,
+            batch_id: str,
+            batch: Sequence[_PendingBatchMember],
+        ) -> None:
+            jobs = [member.item.context.job for member in batch]
+            try:
+                row = _require_lifecycle_row(
+                    self._executor.rows(
+                        statement,
+                        (
+                            batch_id,
+                            [job.id for job in jobs],
+                            [job.attempt for job in jobs],
+                            [job.fence_token for job in jobs],
+                            self.worker_id,
+                        ),
+                    )
+                )
+                if int(cast(int, row["recorded"])) != len(batch):
+                    raise RuntimeError("PostgreSQL did not record every batch member")
+            except Exception:
+                return
+
+        def dispatch(batch: Sequence[_PendingBatchMember]) -> None:
+            batch_id = str(uuid4())
+            record_batch(STATEMENTS.record_batch_dispatch, batch_id, batch)
+            try:
+                outcomes = handler(tuple(member.item for member in batch))
+                validated = _validate_batch_outcomes(type, outcomes, len(batch))
+            except BaseException as cause:
+                error = (
+                    cause
+                    if isinstance(cause, Exception)
+                    else RuntimeError(
+                        f"Batch handler for {type} raised {cause.__class__.__name__}: {cause}"
+                    )
+                )
+                record_batch(STATEMENTS.record_batch_failure, batch_id, batch)
+                for member in batch:
+                    member.result.set_exception(error)
+                return
+            for member, outcome in zip(batch, validated, strict=True):
+                if outcome["status"] == "succeeded":
+                    member.result.set_result(outcome["result"])
+                else:
+                    member.result.set_exception(outcome["error"])
+
+        def batch_member_handler(payload: Any, context: HandlerContext) -> Json:
+            nonlocal next_arrival
+            member = _PendingBatchMember(
+                arrival_order=0,
+                arrived_at=monotonic(),
+                item=BatchHandlerItem(cast(Json, payload), context._as_batch_context()),
+                result=Future(),
+            )
+            with pending_lock:
+                member.arrival_order = next_arrival
+                next_arrival += 1
+                pending = pending_queues.setdefault(context.job.queue, [])
+                pending.append(member)
+                batch = take_batch(context.job.queue) if len(pending) >= max_size else []
+                first_arrived_at = pending[0].arrived_at if pending else member.arrived_at
+            if batch:
+                dispatch(batch)
+            elif linger_ms == 0:
+                with pending_lock:
+                    batch = take_batch(context.job.queue)
+                if batch:
+                    dispatch(batch)
+            else:
+                remaining = max(0.0, first_arrived_at + linger_ms / 1000 - monotonic())
+                try:
+                    return member.result.result(timeout=remaining)
+                except FutureTimeoutError:
+                    with pending_lock:
+                        batch = take_batch(context.job.queue)
+                    if batch:
+                        dispatch(batch)
+            return member.result.result()
+
+        self._handlers[type] = batch_member_handler
         return self
 
     def run_once(self) -> bool:
@@ -725,6 +865,37 @@ def _claimed_job(row: Row, queue: str) -> ClaimedJob:
         fence_token=int(cast(int, row["fence_token"])),
         lease_expires_at=cast(Any, row["lease_expires_at"]),
     )
+
+
+def _validate_batch_outcomes(
+    type: str,
+    outcomes: object,
+    expected: int,
+) -> list[BatchHandlerOutcome]:
+    if isinstance(outcomes, (str, bytes)) or not isinstance(outcomes, Sequence):
+        raise RuntimeError(f"Batch handler for {type} returned a non-sequence outcome value")
+    if len(outcomes) != expected:
+        raise RuntimeError(
+            f"Batch handler for {type} returned {len(outcomes)} outcomes for {expected} jobs"
+        )
+    validated: list[BatchHandlerOutcome] = []
+    for index, outcome in enumerate(outcomes):
+        if not isinstance(outcome, Mapping):
+            raise RuntimeError(
+                f"Batch handler for {type} returned an invalid outcome at index {index}"
+            )
+        if outcome.get("status") == "succeeded" and "result" in outcome:
+            validated.append(cast(BatchHandlerOutcome, outcome))
+            continue
+        if (
+            outcome.get("status") == "failed"
+            and "error" in outcome
+            and isinstance(outcome["error"], Exception)
+        ):
+            validated.append(cast(BatchHandlerOutcome, outcome))
+            continue
+        raise RuntimeError(f"Batch handler for {type} returned an invalid outcome at index {index}")
+    return validated
 
 
 def _checkpoint_record(job_id: str, row: Row, *, name: str | None = None) -> JobCheckpoint:

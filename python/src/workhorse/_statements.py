@@ -25,6 +25,8 @@ class StatementRegistry:
     promote: DriverStatement
     recover_expired: DriverStatement
     claim: DriverStatement
+    record_batch_dispatch: DriverStatement
+    record_batch_failure: DriverStatement
     heartbeat: DriverStatement
     expire_owned: DriverStatement
     acknowledge_cancel: DriverStatement
@@ -66,6 +68,26 @@ STATEMENTS = StatementRegistry(
     claim=DriverStatement(
         psycopg="SELECT * FROM workhorse.claim_v3(%s::text, %s::text, %s::integer)",
         asyncpg="SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+    ),
+    record_batch_dispatch=DriverStatement(
+        psycopg=(
+            "SELECT workhorse.record_batch_dispatch_v1(%s::uuid, %s::uuid[], %s::integer[], "
+            "%s::bigint[], %s::text) AS recorded"
+        ),
+        asyncpg=(
+            "SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], "
+            "$4::bigint[], $5::text) AS recorded"
+        ),
+    ),
+    record_batch_failure=DriverStatement(
+        psycopg=(
+            "SELECT workhorse.record_batch_failure_v1(%s::uuid, %s::uuid[], %s::integer[], "
+            "%s::bigint[], %s::text) AS recorded"
+        ),
+        asyncpg=(
+            "SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], "
+            "$4::bigint[], $5::text) AS recorded"
+        ),
     ),
     heartbeat=DriverStatement(
         psycopg=(

@@ -358,6 +358,342 @@ def test_run_once_refills_a_bounded_concurrency_slot(database_url: str) -> None:
         assert outcomes == sorted((job_id, "succeeded") for job_id in job_ids)
 
 
+def test_batch_handler_orders_members_and_settles_each_outcome(database_url: str) -> None:
+    delivered: list[tuple[int, str]] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        jobs = [
+            queue.enqueue(
+                "email.batch",
+                {"priority": priority},
+                EnqueueOptions(priority=priority, max_attempts=1),
+            )
+            for priority in (10, 90, 50)
+        ]
+        enqueue_connection.commit()
+
+        def handle_batch(items: Any) -> list[dict[str, object]]:
+            delivered.extend((item.payload["priority"], item.context.job.queue) for item in items)
+            assert all(not hasattr(item.context, "sleep") for item in items)
+            return [
+                {"status": "succeeded", "result": {"position": 0}},
+                {"status": "failed", "error": RuntimeError("provider rejected member")},
+                {"status": "succeeded", "result": {"position": 2}},
+            ]
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-batch-worker",
+            concurrency=3,
+        ).handle_batch("email.batch", max_size=3, linger_ms=100, handler=handle_batch)
+
+        assert worker.run_once() is True
+        assert delivered == [(90, "default"), (50, "default"), (10, "default")]
+
+        outcomes = worker_connection.execute(
+            "SELECT job_id::text, state, result, error->>'message' "
+            "FROM workhorse.job_outcome WHERE job_id = ANY(%s::uuid[])",
+            (jobs,),
+        ).fetchall()
+        by_job = {row[0]: row[1:] for row in outcomes}
+        assert by_job[jobs[1]] == ("succeeded", {"position": 0}, None)
+        assert by_job[jobs[2]] == ("failed", None, "provider rejected member")
+        assert by_job[jobs[0]] == ("succeeded", {"position": 2}, None)
+
+        evidence = worker_connection.execute(
+            "SELECT event_type, count(*) FROM workhorse.job_event "
+            "WHERE job_id = ANY(%s::uuid[]) AND event_type = 'batch_dispatched' "
+            "GROUP BY event_type",
+            (jobs,),
+        ).fetchall()
+        assert evidence == [("batch_dispatched", 3)]
+
+
+def test_batch_handler_keeps_queues_separate_until_linger_expires(database_url: str) -> None:
+    batches: list[list[tuple[str, int]]] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        for queue_name, value in (("email", 1), ("billing", 2)):
+            queue.enqueue(
+                "provider.batch",
+                {"value": value},
+                EnqueueOptions(queue=queue_name),
+            )
+        enqueue_connection.commit()
+
+        started_at = monotonic()
+
+        def handle_batch(items: Any) -> list[dict[str, object]]:
+            assert monotonic() - started_at >= 0.05
+            batches.append([(item.context.job.queue, item.payload["value"]) for item in items])
+            return [{"status": "succeeded", "result": None} for _item in items]
+
+        worker = Worker(
+            worker_connection,
+            queues=("email", "billing"),
+            worker_id="python-partial-batch-worker",
+            concurrency=2,
+        ).handle_batch("provider.batch", max_size=2, linger_ms=80, handler=handle_batch)
+
+        assert worker.run_once() is True
+        assert sorted(batches) == [[("billing", 2)], [("email", 1)]]
+
+
+def test_batch_handler_failure_shapes_fail_every_member(database_url: str) -> None:
+    class BatchAbort(BaseException):
+        pass
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        jobs_by_type = {
+            job_type: [
+                queue.enqueue(job_type, {"value": value}, EnqueueOptions(max_attempts=1))
+                for value in (1, 2)
+            ]
+            for job_type in ("batch.thrown", "batch.arity", "batch.invalid", "batch.abort")
+        }
+        enqueue_connection.commit()
+
+        def thrown(_items: Any) -> list[dict[str, object]]:
+            raise RuntimeError("provider batch failed")
+
+        def aborted(_items: Any) -> list[dict[str, object]]:
+            raise BatchAbort("provider aborted batch")
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-invalid-batch-worker",
+            concurrency=6,
+        )
+        worker.handle_batch("batch.thrown", max_size=2, linger_ms=100, handler=thrown)
+        worker.handle_batch(
+            "batch.arity",
+            max_size=2,
+            linger_ms=100,
+            handler=lambda _items: [{"status": "succeeded", "result": None}],
+        )
+        worker.handle_batch(
+            "batch.invalid",
+            max_size=2,
+            linger_ms=100,
+            handler=lambda _items: [
+                {"status": "unknown", "result": None},
+                {"status": "succeeded", "result": None},
+            ],
+        )
+        worker.handle_batch("batch.abort", max_size=2, linger_ms=100, handler=aborted)
+
+        assert worker.run_once() is True
+        all_jobs = [job_id for jobs in jobs_by_type.values() for job_id in jobs]
+        outcomes = worker_connection.execute(
+            "SELECT job_id::text, state, error->>'message' FROM workhorse.job_outcome "
+            "WHERE job_id = ANY(%s::uuid[])",
+            (all_jobs,),
+        ).fetchall()
+        assert {row[1] for row in outcomes} == {"failed"}
+        messages = {row[0]: row[2] for row in outcomes}
+        assert {messages[job_id] for job_id in jobs_by_type["batch.thrown"]} == {
+            "provider batch failed"
+        }
+        assert all(
+            "returned 1 outcomes for 2 jobs" in messages[job_id]
+            for job_id in jobs_by_type["batch.arity"]
+        )
+        assert all(
+            "invalid outcome at index 0" in messages[job_id]
+            for job_id in jobs_by_type["batch.invalid"]
+        )
+        assert all(
+            "raised BatchAbort: provider aborted batch" in messages[job_id]
+            for job_id in jobs_by_type["batch.abort"]
+        )
+
+        evidence_count = worker_connection.execute(
+            "SELECT count(*) FROM workhorse.job_event "
+            "WHERE job_id = ANY(%s::uuid[]) AND event_type = 'batch_failed'",
+            (all_jobs,),
+        ).fetchone()
+        assert evidence_count == (8,)
+
+
+def test_batch_evidence_failure_does_not_change_settlement(database_url: str) -> None:
+    class EvidenceFailingCursor:
+        def __init__(self, cursor: object) -> None:
+            self.cursor = cursor
+
+        @property
+        def description(self) -> object:
+            return self.cursor.description  # type: ignore[union-attr]
+
+        def __enter__(self) -> EvidenceFailingCursor:
+            self.cursor.__enter__()  # type: ignore[union-attr]
+            return self
+
+        def __exit__(self, *args: object) -> object:
+            return self.cursor.__exit__(*args)  # type: ignore[union-attr]
+
+        def execute(self, query: str, parameters: object = ()) -> object:
+            if "record_batch_dispatch_v1" in query:
+                raise RuntimeError("evidence store unavailable")
+            return self.cursor.execute(query, parameters)  # type: ignore[union-attr]
+
+        def fetchall(self) -> object:
+            return self.cursor.fetchall()  # type: ignore[union-attr]
+
+    class EvidenceFailingConnection:
+        autocommit = True
+
+        def __init__(self, connection: object) -> None:
+            self.connection = connection
+
+        def cursor(self) -> EvidenceFailingCursor:
+            return EvidenceFailingCursor(self.connection.cursor())  # type: ignore[union-attr]
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        jobs = [queue.enqueue("batch.no-evidence", {"value": value}) for value in (1, 2)]
+        enqueue_connection.commit()
+
+        worker = Worker(
+            EvidenceFailingConnection(worker_connection),  # type: ignore[arg-type]
+            worker_id="python-evidence-failure-worker",
+            concurrency=2,
+        ).handle_batch(
+            "batch.no-evidence",
+            max_size=2,
+            linger_ms=100,
+            handler=lambda items: [
+                {"status": "succeeded", "result": item.payload} for item in items
+            ],
+        )
+
+        assert worker.run_once() is True
+        outcomes = worker_connection.execute(
+            "SELECT state, result FROM workhorse.job_outcome "
+            "WHERE job_id = ANY(%s::uuid[]) ORDER BY result->>'value'",
+            (jobs,),
+        ).fetchall()
+        assert outcomes == [("succeeded", {"value": 1}), ("succeeded", {"value": 2})]
+
+
+def test_batch_member_cancellation_does_not_disturb_its_peer(database_url: str) -> None:
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as operator_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        canceled_job = queue.enqueue("batch.cancel", {"cancel": True})
+        completed_job = queue.enqueue("batch.cancel", {"cancel": False})
+        enqueue_connection.commit()
+
+        def handle_batch(items: Any) -> list[dict[str, object]]:
+            canceled = next(item for item in items if item.payload["cancel"] is True)
+            status = operator_connection.execute(
+                "SELECT status FROM workhorse.cancel_v1(%s::uuid, %s::text, %s::text)",
+                (canceled.context.job.id, "batch-test", "member canceled"),
+            ).fetchone()
+            assert status == ("cancel_requested",)
+            assert canceled.context.cancellation.wait(timeout=5)
+            return [
+                {"status": "succeeded", "result": {"cancel": item.payload["cancel"]}}
+                for item in items
+            ]
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-batch-cancellation-worker",
+            concurrency=2,
+            lease_ms=500,
+            heartbeat_ms=40,
+        ).handle_batch("batch.cancel", max_size=2, linger_ms=100, handler=handle_batch)
+
+        assert worker.run_once() is True
+        outcomes = worker_connection.execute(
+            "SELECT job_id::text, state, result, error->>'reason' "
+            "FROM workhorse.job_outcome WHERE job_id = ANY(%s::uuid[])",
+            ([canceled_job, completed_job],),
+        ).fetchall()
+        by_job = {row[0]: row[1:] for row in outcomes}
+        assert by_job[canceled_job] == ("canceled", None, "member canceled")
+        assert by_job[completed_job] == ("succeeded", {"cancel": False}, None)
+
+
+def test_batch_member_timeout_does_not_disturb_its_peer(database_url: str) -> None:
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        timed_job = queue.enqueue(
+            "batch.timeout",
+            {"timed": True},
+            EnqueueOptions(execution_timeout_ms=180, max_attempts=1),
+        )
+        completed_job = queue.enqueue(
+            "batch.timeout",
+            {"timed": False},
+            EnqueueOptions(max_attempts=1),
+        )
+        enqueue_connection.commit()
+
+        def handle_batch(items: Any) -> list[dict[str, object]]:
+            timed = next(item for item in items if item.payload["timed"] is True)
+            assert timed.context.cancellation.wait(timeout=5)
+            assert isinstance(timed.context.cancellation.reason, ExecutionTimeoutError)
+            return [
+                {"status": "succeeded", "result": {"timed": item.payload["timed"]}}
+                for item in items
+            ]
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-batch-timeout-worker",
+            concurrency=2,
+            lease_ms=500,
+            heartbeat_ms=400,
+        ).handle_batch("batch.timeout", max_size=2, linger_ms=100, handler=handle_batch)
+
+        assert worker.run_once() is True
+        outcomes = worker_connection.execute(
+            "SELECT job_id::text, state, result, error->>'name' "
+            "FROM workhorse.job_outcome WHERE job_id = ANY(%s::uuid[])",
+            ([timed_job, completed_job],),
+        ).fetchall()
+        by_job = {row[0]: row[1:] for row in outcomes}
+        assert by_job[timed_job] == ("failed", None, "ExecutionTimeout")
+        assert by_job[completed_job] == ("succeeded", {"timed": False}, None)
+
+
+def test_batch_registration_validates_capacity_and_linger(database_url: str) -> None:
+    with psycopg.connect(database_url, autocommit=True) as worker_connection:
+        worker = Worker(worker_connection, concurrency=2)
+
+        def handler(_items: object) -> list[object]:
+            return []
+
+        with pytest.raises(ValueError, match="max_size must be an integer"):
+            worker.handle_batch("invalid", handler, max_size=0, linger_ms=1)
+        with pytest.raises(ValueError, match="must not exceed worker concurrency"):
+            worker.handle_batch("invalid", handler, max_size=3, linger_ms=1)
+        with pytest.raises(ValueError, match="linger_ms must be an integer"):
+            worker.handle_batch("invalid", handler, max_size=2, linger_ms=-1)
+
+
 def test_run_once_rotates_claims_across_queues(database_url: str) -> None:
     handled_queues: list[str] = []
 

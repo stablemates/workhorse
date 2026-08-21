@@ -73,7 +73,7 @@ telemetry, and graceful shutdown.
 | Signal and human-decision waits              | Supported  | Planned   | Planned |
 | Linked child fan-out and result join         | Supported  | Planned   | Planned |
 | Latest-value progress reporting              | Supported  | Absent    | Absent  |
-| Batch handler delivery                       | Supported  | Planned   | Planned |
+| Batch handler delivery                       | Supported  | Supported | Planned |
 | Schedule firing (in-process cron)            | Supported  | Planned   | Planned |
 | Worker fleet registration and remote pause   | Supported  | Absent    | Absent  |
 | Graceful stop and signal drain               | Supported  | Planned   | Planned |

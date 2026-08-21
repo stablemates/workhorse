@@ -3,8 +3,9 @@ title: Batch handlers
 description: Process several jobs of one type through a shared application call while preserving per-job outcomes.
 ---
 
-Use `Worker.handleBatch` when one application call can process several jobs more efficiently. Each
-member keeps its own durable identity, lease, fence, retry budget, progress, and cancellation.
+Use TypeScript's `Worker.handleBatch`, or Python's `Worker.handle_batch`, when one application call
+can process several jobs more efficiently. Each member keeps its own durable identity, lease,
+fence, retry budget, checkpoints, and cancellation.
 
 ```ts
 new Worker(queue, { concurrency: workerCapacity }).handleBatch(
@@ -27,6 +28,9 @@ remain partial until its linger ends.
 
 The callback returns one ordered outcome per member. If it throws or returns an invalid list,
 Workhorse submits the failure for every member, then each job applies its own retry policy.
+
+Python passes `max_size` and `linger_ms` as keyword arguments. Its callback returns mappings with
+the same `succeeded` and `failed` statuses, and each item carries a `BatchHandlerContext`.
 
 Workhorse records each shared invocation before the callback starts. The task drawer shows the
 batch size and links the other members. If the shared callback fails, the drawer identifies that

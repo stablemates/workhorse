@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Event, Lock
-from typing import Literal, TypeAlias, TypeVar, cast
+from typing import Literal, TypeAlias, TypedDict, TypeVar, cast
 
 Json: TypeAlias = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
 RetryPolicy: TypeAlias = Mapping[str, Json]
@@ -184,6 +184,49 @@ class HandlerContext:
 
     def sleep_until(self, name: str, wake_at: datetime) -> None:
         self._sleep_until(name, wake_at)
+
+    def _as_batch_context(self) -> BatchHandlerContext:
+        return BatchHandlerContext(
+            self.job,
+            self.cancellation,
+            self._get_checkpoint,
+            self._checkpoint,
+        )
+
+
+@dataclass(frozen=True)
+class BatchHandlerContext:
+    """Per-job batch context without APIs that suspend one shared invocation."""
+
+    job: ClaimedJob
+    cancellation: CancellationToken
+    _get_checkpoint: Callable[[str], JobCheckpoint | None] = field(repr=False)
+    _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
+
+    def get_checkpoint(self, name: str) -> JobCheckpoint | None:
+        return self._get_checkpoint(name)
+
+    def checkpoint(self, name: str, operation: Callable[[], TJson]) -> TJson:
+        return cast(TJson, self._checkpoint(name, operation))
+
+
+@dataclass(frozen=True)
+class BatchHandlerItem:
+    payload: Json
+    context: BatchHandlerContext
+
+
+class BatchSucceeded(TypedDict):
+    status: Literal["succeeded"]
+    result: Json
+
+
+class BatchFailed(TypedDict):
+    status: Literal["failed"]
+    error: Exception
+
+
+BatchHandlerOutcome: TypeAlias = BatchSucceeded | BatchFailed
 
 
 @dataclass(frozen=True)

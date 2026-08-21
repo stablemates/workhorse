@@ -39,6 +39,8 @@ handler code outside the claim transaction, while one background heartbeat per s
 ownership and delivers cancellation, deadlines, timeouts, and lease loss through
 `HandlerContext.cancellation`. The Python worker can open a dedicated notification connection,
 while the TypeScript worker also participates in the worker registry.
+Python's `handle_batch` follows the same grouping contract described in
+[Batch handlers](/docs/batch-handlers).
 
 The `HandlerContext` carries the claimed job, its `AbortSignal`, checkpoints, durable waits,
 and progress. Every context method writes under the current fence, so handler code cannot

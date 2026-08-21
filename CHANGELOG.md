@@ -62,6 +62,8 @@ First published line. Requires **schema v46**, Node.js **22 or 24**, PostgreSQL 
 - `@workhorse-js/core`: `Worker.handleBatch` for compatible full and linger-bounded partial batches,
   with explicit per-job success or failure outcomes, independent retries, leases, contexts, fencing,
   cancellation, timeout handling, policy accounting, priority order, and bounded batch telemetry.
+- `workhorse-pg`: synchronous `Worker.handle_batch` delivery with queue-isolated full and partial
+  groups, explicit per-member outcomes, independent fences and retries, and durable batch evidence.
 - `@workhorse-js/core`: transactionally consistent `Queue.health()` snapshots — one SQL statement
   for every correctness-sensitive value, size-capped history scans with explicit lower-bound
   flags, PostgreSQL estimates separated under `observations`, and caller-overridable health

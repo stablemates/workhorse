@@ -17,6 +17,11 @@ from .errors import (
     WorkhorseError,
 )
 from .types import (
+    BatchFailed,
+    BatchHandlerContext,
+    BatchHandlerItem,
+    BatchHandlerOutcome,
+    BatchSucceeded,
     CancellationToken,
     ClaimedJob,
     Debounce,
@@ -34,10 +39,16 @@ from .types import (
     ScheduledJob,
     Throttle,
 )
-from .worker import Worker
+from .worker import BatchHandler, Worker
 
 __all__ = [
     "AsyncQueue",
+    "BatchFailed",
+    "BatchHandler",
+    "BatchHandlerContext",
+    "BatchHandlerItem",
+    "BatchHandlerOutcome",
+    "BatchSucceeded",
     "CancellationRequestedError",
     "CancellationToken",
     "CheckpointConflictError",

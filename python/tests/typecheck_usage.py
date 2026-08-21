@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import asyncpg  # type: ignore[import-untyped]
 import psycopg
 
-from workhorse import AsyncQueue, EnqueueOptions, HandlerContext, Idempotency, Json, Queue, Worker
+from workhorse import (
+    AsyncQueue,
+    BatchHandlerItem,
+    BatchHandlerOutcome,
+    EnqueueOptions,
+    HandlerContext,
+    Idempotency,
+    Json,
+    Queue,
+    Worker,
+)
 
 
 def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
@@ -33,6 +44,17 @@ def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
             on_notification_error=lambda error: print(error),
         )
         .handle("email.send", handle)
+        .run_once()
+    )
+
+
+def sync_batch_worker(connection: psycopg.Connection[Any]) -> bool:
+    def handle(items: Sequence[BatchHandlerItem]) -> list[BatchHandlerOutcome]:
+        return [{"status": "succeeded", "result": {"jobId": item.context.job.id}} for item in items]
+
+    return (
+        Worker(connection, concurrency=2)
+        .handle_batch("email.batch", handle, max_size=2, linger_ms=50)
         .run_once()
     )
 

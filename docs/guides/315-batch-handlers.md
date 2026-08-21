@@ -1,6 +1,6 @@
 # How do I process several jobs together?
 
-Use `Worker.handleBatch` when one application call can process several jobs of the same type more efficiently. Each job keeps its own lease and durable identity while it waits for the shared invocation.
+Use `Worker.handleBatch`, or Python's `Worker.handle_batch`, when one application call can process several jobs of the same type more efficiently. Each job keeps its own lease and durable identity while it waits for the shared invocation.
 
 `BatchHandlerOptions.maxSize` caps the group. `BatchHandlerOptions.lingerMs` lets a partial group wait briefly for peers, then dispatches it even when no notification arrives.
 
@@ -13,6 +13,9 @@ The handler receives `BatchHandlerItem` values. Each item includes the original 
 A batch callback must return one outcome for every member, so one member cannot suspend and replay independently. `BatchHandlerContext` therefore omits timer waits, signals, human decisions, and child joins. Use an ordinary `Handler` when a job needs those boundaries.
 
 Return one `BatchHandlerOutcome` for each item in the same order. A successful outcome carries that job's result. A failed outcome carries the error for that job's retry policy.
+
+Python handlers return the same statuses as mappings. They register `max_size` and `linger_ms` as
+keyword arguments, and receive `BatchHandlerItem` values with a `BatchHandlerContext`.
 
 If the handler itself throws or returns an invalid outcome list, Workhorse submits the failure for every member. Each member still uses its own fence and retry budget.
 
