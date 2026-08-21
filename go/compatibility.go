@@ -16,8 +16,6 @@ const (
 	maximumSchemaVersion   = 47
 )
 
-const compatibilityStatement = "SELECT version FROM workhorse.schema_version ORDER BY version"
-
 // CompatibilityCode identifies why a client must refuse a mutation.
 type CompatibilityCode string
 
@@ -60,7 +58,7 @@ func CheckCompatibility(installedSchemaVersion *int, clientProtocolVersion int) 
 
 // AssertCompatible reads the installed schema on every call.
 func AssertCompatible(ctx context.Context, executor Executor) error {
-	rows, err := executor.Query(ctx, compatibilityStatement)
+	rows, err := executor.Query(ctx, internalStatementRegistry[schemaVersionStatement])
 	if err != nil {
 		if hasSQLState(err, "42P01", "3F000") {
 			return &CompatibilityError{Code: SchemaNotInstalled}
