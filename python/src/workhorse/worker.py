@@ -14,6 +14,10 @@ from uuid import uuid4
 
 from ._compatibility import CachedCompatibilityCheck
 from ._drivers import PsycopgConnection, Row, SyncExecutor
+from ._notifications import (
+    JobNotificationListener,
+    NotificationConnectionFactory,
+)
 from ._statements import STATEMENTS
 from .errors import (
     CancellationRequestedError,
@@ -296,9 +300,11 @@ class Worker:
         queues: Sequence[str] | None = None,
         worker_id: str | None = None,
         concurrency: int = 1,
-        poll_ms: int = 250,
+        poll_ms: int | None = None,
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
+        notification_connection_factory: NotificationConnectionFactory | None = None,
+        on_notification_error: Callable[[BaseException], None] | None = None,
     ) -> None:
         if getattr(connection, "autocommit", False) is not True:
             raise ValueError("Worker requires a dedicated Psycopg connection in autocommit mode")
@@ -316,7 +322,12 @@ class Worker:
             or not 1 <= concurrency <= 100
         ):
             raise ValueError("concurrency must be an integer between 1 and 100")
-        if isinstance(poll_ms, bool) or not isinstance(poll_ms, int) or poll_ms < 1:
+        resolved_poll_ms = poll_ms if poll_ms is not None else 250
+        if (
+            isinstance(resolved_poll_ms, bool)
+            or not isinstance(resolved_poll_ms, int)
+            or resolved_poll_ms < 1
+        ):
             raise ValueError("poll_ms must be a positive integer")
         self._executor = SyncExecutor(cast(PsycopgConnection, connection))
         self._compatibility = CachedCompatibilityCheck(self._executor)
@@ -325,7 +336,11 @@ class Worker:
         self.queue = unique_queues[0]
         self.worker_id = worker_id or _default_worker_id()
         self.concurrency = concurrency
-        self.poll_ms = poll_ms
+        self.poll_ms = resolved_poll_ms
+        self._notification_poll_ms = poll_ms if poll_ms is not None else 5_000
+        self._query_connection = connection
+        self._notification_connection_factory = notification_connection_factory
+        self._on_notification_error = on_notification_error
         if not 100 <= lease_ms <= 86_400_000:
             raise ValueError("lease_ms must be between 100 and 86400000")
         self.lease_ms = lease_ms
@@ -407,6 +422,7 @@ class Worker:
             self._stopping = self._stop_version != requested_stop_version
             self._run_errors.clear()
         claimed_any = False
+        listener = self._start_notification_listener() if continuous else None
         try:
             while True:
                 # Clear before the sweep. A completion or state change that arrives while a claim
@@ -418,10 +434,10 @@ class Worker:
                 if state == "paused":
                     if not continuous:
                         break
-                    self._wake.wait(self.poll_ms / 1000)
+                    self._wake.wait(self._dispatch_wait_seconds(listener))
                     continue
                 if state == "full":
-                    self._wake.wait(self.poll_ms / 1000)
+                    self._wake.wait(self._dispatch_wait_seconds(listener))
                     continue
 
                 _require_lifecycle_row(self._executor.rows(STATEMENTS.promote, (100,)))
@@ -452,11 +468,13 @@ class Worker:
                 if empty_attempts >= len(self.queues):
                     if not continuous:
                         break
-                    self._wake.wait(self.poll_ms / 1000)
+                    self._wake.wait(self._dispatch_wait_seconds(listener))
                     continue
                 if state == "full":
-                    self._wake.wait(self.poll_ms / 1000)
+                    self._wake.wait(self._dispatch_wait_seconds(listener))
         finally:
+            if listener is not None:
+                listener.close()
             self._drain_active_threads()
             with self._state_lock:
                 self._stopping = False
@@ -465,6 +483,27 @@ class Worker:
         if errors:
             raise errors[0]
         return claimed_any
+
+    def _dispatch_wait_seconds(self, listener: JobNotificationListener | None) -> float:
+        wait_ms = (
+            self._notification_poll_ms
+            if listener is not None and listener.is_listening()
+            else self.poll_ms
+        )
+        return wait_ms / 1000
+
+    def _start_notification_listener(self) -> JobNotificationListener | None:
+        if self._notification_connection_factory is None:
+            return None
+        listener = JobNotificationListener(
+            self._notification_connection_factory,
+            self.queues,
+            self._wake.set,
+            self._on_notification_error,
+            self._query_connection,
+        )
+        listener.start()
+        return listener
 
     def _start_claimed_job(self, job: ClaimedJob) -> None:
         thread = Thread(

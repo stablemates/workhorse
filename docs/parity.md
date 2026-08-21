@@ -67,7 +67,7 @@ telemetry, and graceful shutdown.
 | Bounded worker concurrency                   | Supported  | Supported | Planned |
 | Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Planned |
 | Cooperative cancellation delivery            | Supported  | Supported | Planned |
-| Notification-assisted dispatch with polling  | Supported  | Planned   | Planned |
+| Notification-assisted dispatch with polling  | Supported  | Supported | Planned |
 | Durable checkpoints (handler context)        | Supported  | Supported | Planned |
 | Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Planned |
 | Signal and human-decision waits              | Supported  | Planned   | Planned |

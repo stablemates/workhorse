@@ -16,13 +16,25 @@ def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
     )
 
 
-def sync_worker(connection: psycopg.Connection[Any]) -> bool:
+def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
     def handle(payload: Json, context: HandlerContext) -> Json:
         context.cancellation.raise_if_cancelled()
         prepared = context.checkpoint("prepare", lambda: {"payload": payload})
         return {"jobId": context.job.id, "prepared": prepared}
 
-    return Worker(connection, heartbeat_ms=1_000).handle("email.send", handle).run_once()
+    return (
+        Worker(
+            connection,
+            heartbeat_ms=1_000,
+            notification_connection_factory=lambda: psycopg.connect(
+                database_url,
+                autocommit=True,
+            ),
+            on_notification_error=lambda error: print(error),
+        )
+        .handle("email.send", handle)
+        .run_once()
+    )
 
 
 async def async_psycopg_enqueue(connection: psycopg.AsyncConnection[Any]) -> str:

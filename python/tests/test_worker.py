@@ -509,6 +509,137 @@ def test_stop_reaches_a_run_waiting_behind_an_active_pass(database_url: str) -> 
         assert worker_error == []
 
 
+def test_run_wakes_from_a_dedicated_notification_connection(database_url: str) -> None:
+    listener_ready = Event()
+    empty_claim_finished = Event()
+    release_empty_claim = Event()
+    handled = Event()
+    worker_errors: list[BaseException] = []
+
+    class DelayedCursor:
+        def __init__(self, cursor: object) -> None:
+            self.cursor = cursor
+
+        @property
+        def description(self) -> object:
+            return self.cursor.description  # type: ignore[union-attr]
+
+        def __enter__(self) -> DelayedCursor:
+            self.cursor.__enter__()  # type: ignore[union-attr]
+            return self
+
+        def __exit__(self, *args: object) -> object:
+            return self.cursor.__exit__(*args)  # type: ignore[union-attr]
+
+        def execute(self, query: str, parameters: object = ()) -> object:
+            result = self.cursor.execute(query, parameters)  # type: ignore[union-attr]
+            if "workhorse.claim_v3" in query and not empty_claim_finished.is_set():
+                empty_claim_finished.set()
+                assert release_empty_claim.wait(timeout=5)
+            return result
+
+        def fetchall(self) -> object:
+            return self.cursor.fetchall()  # type: ignore[union-attr]
+
+    class DelayedConnection:
+        autocommit = True
+
+        def __init__(self, connection: object) -> None:
+            self.connection = connection
+
+        def cursor(self) -> DelayedCursor:
+            return DelayedCursor(self.connection.cursor())  # type: ignore[union-attr]
+
+    class ListeningConnection:
+        autocommit = True
+
+        def __init__(self) -> None:
+            self.connection = psycopg.connect(database_url, autocommit=True)
+
+        def execute(self, query: str) -> object:
+            result = self.connection.execute(query)
+            listener_ready.set()
+            return result
+
+        def notifies(self, *, timeout: float, stop_after: int | None = None) -> object:
+            return self.connection.notifies(timeout=timeout, stop_after=stop_after)
+
+        def close(self) -> None:
+            self.connection.close()
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        worker = Worker(
+            DelayedConnection(worker_connection),  # type: ignore[arg-type]
+            queue="notification-target",
+            poll_ms=5_000,
+            notification_connection_factory=ListeningConnection,
+        ).handle("notification.wake", lambda _payload, _context: handled.set())
+
+        def run_worker() -> None:
+            try:
+                worker.run()
+            except BaseException as error:
+                worker_errors.append(error)
+
+        thread = Thread(target=run_worker)
+        thread.start()
+        assert listener_ready.wait(timeout=5)
+        assert empty_claim_finished.wait(timeout=5)
+
+        Queue(enqueue_connection, default_queue="notification-target").enqueue(
+            "notification.wake", {}
+        )
+        enqueue_connection.commit()
+        release_empty_claim.set()
+
+        assert handled.wait(timeout=1)
+        worker.stop()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert worker_errors == []
+
+
+def test_run_keeps_polling_when_notification_connections_fail(database_url: str) -> None:
+    handled = Event()
+    notification_error = Event()
+    worker_errors: list[BaseException] = []
+
+    def unavailable_listener() -> object:
+        raise RuntimeError("listener capacity unavailable")
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        worker = Worker(
+            worker_connection,
+            notification_connection_factory=unavailable_listener,
+            on_notification_error=lambda _error: notification_error.set(),
+        ).handle("notification.fallback", lambda _payload, _context: handled.set())
+
+        def run_worker() -> None:
+            try:
+                worker.run()
+            except BaseException as error:
+                worker_errors.append(error)
+
+        thread = Thread(target=run_worker)
+        thread.start()
+        assert notification_error.wait(timeout=1)
+
+        Queue(enqueue_connection).enqueue("notification.fallback", {})
+        enqueue_connection.commit()
+
+        assert handled.wait(timeout=1)
+        worker.stop()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert worker_errors == []
+
+
 def test_worker_renews_ownership_while_handler_runs(database_url: str) -> None:
     with (
         psycopg.connect(database_url) as enqueue_connection,

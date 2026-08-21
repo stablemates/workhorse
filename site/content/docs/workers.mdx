@@ -37,8 +37,8 @@ The synchronous Python package exposes this lifecycle through `Worker.handle`, `
 and drains active handlers before `run` returns. A dedicated autocommit Psycopg connection keeps
 handler code outside the claim transaction, while one background heartbeat per slot renews
 ownership and delivers cancellation, deadlines, timeouts, and lease loss through
-`HandlerContext.cancellation`. Use the TypeScript worker when you need notifications or the worker
-registry.
+`HandlerContext.cancellation`. The Python worker can open a dedicated notification connection,
+while the TypeScript worker also participates in the worker registry.
 
 The `HandlerContext` carries the claimed job, its `AbortSignal`, checkpoints, durable waits,
 and progress. Every context method writes under the current fence, so handler code cannot

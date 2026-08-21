@@ -6,8 +6,8 @@ Everything else in this guide is detail on top of that.
 The synchronous Python `Worker` supplies the same core loop through `handle`, `run`, and
 `run_once`. It rotates across queues, bounds concurrent slots, and drains active work after
 `stop`. Each heartbeat thread renews one claimed job's lease and delivers ownership signals through
-`HandlerContext.cancellation`. Use the TypeScript worker when you need notifications or the worker
-registry.
+`HandlerContext.cancellation`. The Python worker can open a dedicated notification connection,
+while the TypeScript worker also participates in the worker registry.
 
 ## Slots and concurrency
 
