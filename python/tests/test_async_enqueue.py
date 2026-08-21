@@ -15,6 +15,24 @@ class AsyncpgConnection:
         self.calls.append((sql, parameters))
         if "schema_version" in sql:
             return [{"version": 47}]
+        if "send_signal_v1" in sql:
+            return [
+                {
+                    "status": "delivered",
+                    "payload": {"approved": True},
+                    "delivered_at": None,
+                    "delivered_by": "service",
+                }
+            ]
+        if "complete_human_wait_v1" in sql:
+            return [
+                {
+                    "status": "completed",
+                    "result": {"approved": True},
+                    "completed_at": None,
+                    "completed_by": "reviewer",
+                }
+            ]
         return [{"ordinal": 1, "job_id": "asyncpg", "outcome": "accepted", "reason": None}]
 
     async def commit(self) -> None:
@@ -89,3 +107,29 @@ async def test_asyncpg_schedule_sync_uses_numbered_parameters() -> None:
 
     assert "$1::text, $2::jsonb, $3::boolean" in connection.calls[1][0]
     assert len(connection.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_asyncpg_delivers_external_wait_results() -> None:
+    connection = AsyncpgConnection()
+    queue = AsyncQueue.from_asyncpg(connection)
+
+    signal = await queue.send_signal(
+        "00000000-0000-4000-8000-000000000001",
+        "approval",
+        {"approved": True},
+        idempotency_key="signal-key",
+        requested_by="service",
+    )
+    decision = await queue.complete_human_wait(
+        "00000000-0000-4000-8000-000000000001",
+        "review",
+        {"approved": True},
+        idempotency_key="review-key",
+        requested_by="reviewer",
+    )
+
+    assert signal.status == "delivered"
+    assert decision.status == "completed"
+    assert "$1::uuid" in connection.calls[1][0]
+    assert "$1::uuid" in connection.calls[3][0]

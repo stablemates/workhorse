@@ -15,6 +15,12 @@ NonReplaceableReason: TypeAlias = Literal[
     "incompatible_key_mode", "not_pending", "window_elapsed_pending"
 ]
 TerminalPolicy: TypeAlias = Literal["release", "cancel", "fail"]
+SignalDeliveryStatus: TypeAlias = Literal[
+    "delivered", "duplicate", "not_waiting", "already_delivered", "stale", "not_found"
+]
+HumanWaitCompletionStatus: TypeAlias = Literal[
+    "completed", "duplicate", "not_waiting", "already_completed", "stale", "not_found"
+]
 TJson = TypeVar("TJson", bound=Json)
 
 
@@ -161,6 +167,26 @@ class JobWait:
 
 
 @dataclass(frozen=True)
+class SignalDeliveryResult:
+    status: SignalDeliveryStatus
+    job_id: str
+    name: str
+    payload: Json
+    delivered_at: datetime | None
+    delivered_by: str | None
+
+
+@dataclass(frozen=True)
+class HumanWaitCompletionResult:
+    status: HumanWaitCompletionStatus
+    job_id: str
+    name: str
+    payload: Json
+    completed_at: datetime | None
+    completed_by: str | None
+
+
+@dataclass(frozen=True)
 class HandlerContext:
     job: ClaimedJob
     cancellation: CancellationToken
@@ -169,6 +195,8 @@ class HandlerContext:
     _checkpoint: Callable[[str, Callable[[], Json]], Json] = field(repr=False)
     _sleep: Callable[[str, int], None] = field(repr=False)
     _sleep_until: Callable[[str, datetime], None] = field(repr=False)
+    _wait_for_signal: Callable[[str, int | None], Json] = field(repr=False)
+    _wait_for_human: Callable[[str, Json, int | None], Json] = field(repr=False)
 
     def get_checkpoint(self, name: str) -> JobCheckpoint | None:
         return self._get_checkpoint(name)
@@ -184,6 +212,12 @@ class HandlerContext:
 
     def sleep_until(self, name: str, wake_at: datetime) -> None:
         self._sleep_until(name, wake_at)
+
+    def wait_for_signal(self, name: str, *, timeout_ms: int | None = None) -> Json:
+        return self._wait_for_signal(name, timeout_ms)
+
+    def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json:
+        return self._wait_for_human(name, context, timeout_ms)
 
     def _as_batch_context(self) -> BatchHandlerContext:
         return BatchHandlerContext(

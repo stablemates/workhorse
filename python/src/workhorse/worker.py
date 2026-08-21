@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from ._compatibility import CachedCompatibilityCheck
 from ._drivers import PsycopgConnection, Row, SyncExecutor
+from ._external_waits import encode_wait_value, validate_wait_name, validate_wait_timeout
 from ._notifications import (
     JobNotificationListener,
     NotificationConnectionFactory,
@@ -27,6 +28,13 @@ from .errors import (
     CheckpointLeaseLostError,
     DeadlineExceededError,
     ExecutionTimeoutError,
+    HumanWaitAlreadyWaitingError,
+    HumanWaitConflictError,
+    HumanWaitLeaseLostError,
+    HumanWaitLimitExceededError,
+    SignalWaitConflictError,
+    SignalWaitLeaseLostError,
+    SignalWaitLimitExceededError,
     StaleLeaseError,
     WaitConflictError,
     WaitLeaseLostError,
@@ -130,6 +138,8 @@ class _HandlerDurability:
         self._waits_load_attempted = False
         self._checkpoint_calls: dict[str, Future[Json]] = {}
         self._wait_calls: dict[str, Future[None]] = {}
+        self._signal_calls: dict[str, Future[Json]] = {}
+        self._human_calls: dict[str, tuple[str, Future[Json]]] = {}
 
     def context(self) -> HandlerContext:
         return HandlerContext(
@@ -140,6 +150,8 @@ class _HandlerDurability:
             self.checkpoint,
             self.sleep,
             self.sleep_until,
+            self.wait_for_signal,
+            self.wait_for_human,
         )
 
     def _load_checkpoints(self) -> dict[str, JobCheckpoint]:
@@ -308,6 +320,116 @@ class _HandlerDurability:
             with self._lock:
                 if self._wait_calls.get(name) is pending:
                     del self._wait_calls[name]
+
+    def wait_for_signal(self, name: str, timeout_ms: int | None = None) -> Json:
+        validate_wait_name(name, "Signal")
+        validate_wait_timeout(timeout_ms, "Signal")
+        with self._lock:
+            pending = self._signal_calls.get(name)
+            if pending is None:
+                pending = Future()
+                self._signal_calls[name] = pending
+                owns_call = True
+            else:
+                owns_call = False
+        if not owns_call:
+            return pending.result()
+        try:
+            self._cancellation.raise_if_cancelled()
+            row = _require_lifecycle_row(
+                self._executor.rows(
+                    STATEMENTS.wait_for_signal,
+                    (
+                        self._job.id,
+                        self._worker_id,
+                        self._job.fence_token,
+                        name,
+                        timeout_ms,
+                    ),
+                )
+            )
+            status = row["status"]
+            if status == "stale":
+                raise SignalWaitLeaseLostError(self._job.id, name)
+            if status == "already_waiting":
+                raise SignalWaitConflictError(self._job.id, name)
+            if status == "limit_exceeded":
+                raise SignalWaitLimitExceededError(self._job.id)
+            if status == "waiting":
+                if self._arbiter.submit("suspended_for_wait"):
+                    self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
+                raise _DURABLE_WAIT_SUSPENSION
+            if status != "delivered":
+                raise RuntimeError(f"Unexpected signal wait status: {status}")
+            result = cast(Json, row["payload"])
+            pending.set_result(result)
+            return result
+        except BaseException as error:
+            pending.set_exception(error)
+            raise
+        finally:
+            with self._lock:
+                if self._signal_calls.get(name) is pending:
+                    del self._signal_calls[name]
+
+    def wait_for_human(self, name: str, context: Json, timeout_ms: int | None = None) -> Json:
+        validate_wait_name(name, "Human wait")
+        validate_wait_timeout(timeout_ms, "Human wait")
+        encoded_context = encode_wait_value(context, "Human wait context")
+        with self._lock:
+            current = self._human_calls.get(name)
+            if current is None:
+                pending: Future[Json] = Future()
+                self._human_calls[name] = (encoded_context, pending)
+                owns_call = True
+            else:
+                pending_context, pending = current
+                if pending_context != encoded_context:
+                    raise HumanWaitConflictError(self._job.id, name)
+                owns_call = False
+        if not owns_call:
+            return pending.result()
+        try:
+            self._cancellation.raise_if_cancelled()
+            row = _require_lifecycle_row(
+                self._executor.rows(
+                    STATEMENTS.wait_for_human,
+                    (
+                        self._job.id,
+                        self._worker_id,
+                        self._job.fence_token,
+                        name,
+                        encoded_context,
+                        timeout_ms,
+                    ),
+                )
+            )
+            status = row["status"]
+            if status == "stale":
+                raise HumanWaitLeaseLostError(self._job.id, name)
+            if status == "already_waiting":
+                raise HumanWaitAlreadyWaitingError(self._job.id, name)
+            if status == "limit_exceeded":
+                raise HumanWaitLimitExceededError(self._job.id)
+            if status == "conflict":
+                raise HumanWaitConflictError(self._job.id, name)
+            if status == "waiting":
+                if self._arbiter.submit("suspended_for_wait"):
+                    self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
+                raise _DURABLE_WAIT_SUSPENSION
+            if status != "completed":
+                raise RuntimeError(f"Unexpected human wait status: {status}")
+            result = cast(Json, row["result"])
+            pending.set_result(result)
+            return result
+        except BaseException as error:
+            pending.set_exception(error)
+            raise
+        finally:
+            with self._lock:
+                current = self._human_calls.get(name)
+                if current is not None and current[1] is pending:
+                    del self._human_calls[name]
 
 
 class Worker:

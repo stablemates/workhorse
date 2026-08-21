@@ -36,6 +36,10 @@ class StatementRegistry:
     save_checkpoint: DriverStatement
     list_waits: DriverStatement
     schedule_wait: DriverStatement
+    wait_for_signal: DriverStatement
+    send_signal: DriverStatement
+    wait_for_human: DriverStatement
+    complete_human_wait: DriverStatement
 
 
 STATEMENTS = StatementRegistry(
@@ -173,6 +177,48 @@ STATEMENTS = StatementRegistry(
             "attempt, fence_token::text, worker_id, created_at "
             "FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, "
             "$5::bigint, $6::timestamptz)"
+        ),
+    ),
+    wait_for_signal=DriverStatement(
+        psycopg=(
+            "SELECT status, payload FROM workhorse.wait_for_signal_v1("
+            "%s::uuid, %s::text, %s::bigint, %s::text, %s::bigint)"
+        ),
+        asyncpg=(
+            "SELECT status, payload FROM workhorse.wait_for_signal_v1("
+            "$1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)"
+        ),
+    ),
+    send_signal=DriverStatement(
+        psycopg=(
+            "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1("
+            "%s::uuid, %s::text, %s::jsonb, %s::text, %s::text)"
+        ),
+        asyncpg=(
+            "SELECT status, payload, delivered_at, delivered_by FROM workhorse.send_signal_v1("
+            "$1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"
+        ),
+    ),
+    wait_for_human=DriverStatement(
+        psycopg=(
+            "SELECT status, result FROM workhorse.wait_for_human_v1("
+            "%s::uuid, %s::text, %s::bigint, %s::text, %s::jsonb, %s::bigint)"
+        ),
+        asyncpg=(
+            "SELECT status, result FROM workhorse.wait_for_human_v1("
+            "$1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb, $6::bigint)"
+        ),
+    ),
+    complete_human_wait=DriverStatement(
+        psycopg=(
+            "SELECT status, result, completed_at, completed_by "
+            "FROM workhorse.complete_human_wait_v1("
+            "%s::uuid, %s::text, %s::jsonb, %s::text, %s::text)"
+        ),
+        asyncpg=(
+            "SELECT status, result, completed_at, completed_by "
+            "FROM workhorse.complete_human_wait_v1("
+            "$1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"
         ),
     ),
 )

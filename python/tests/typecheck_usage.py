@@ -32,7 +32,9 @@ def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
     def handle(payload: Json, context: HandlerContext) -> Json:
         context.cancellation.raise_if_cancelled()
         prepared = context.checkpoint("prepare", lambda: {"payload": payload})
-        return {"jobId": context.job.id, "prepared": prepared}
+        signal = context.wait_for_signal("approval", timeout_ms=60_000)
+        decision = context.wait_for_human("review", {"signal": signal})
+        return {"jobId": context.job.id, "prepared": prepared, "decision": decision}
 
     return (
         Worker(
@@ -65,11 +67,29 @@ def sync_batch_worker(connection: psycopg.Connection[Any]) -> bool:
 
 
 async def async_psycopg_enqueue(connection: psycopg.AsyncConnection[Any]) -> str:
-    return await AsyncQueue.from_psycopg(connection).enqueue("email.send", {"message": "hello"})
+    queue = AsyncQueue.from_psycopg(connection)
+    job_id = await queue.enqueue("email.send", {"message": "hello"})
+    await queue.send_signal(
+        job_id,
+        "approval",
+        {"approved": True},
+        idempotency_key="approval",
+        requested_by="service",
+    )
+    return job_id
 
 
 async def asyncpg_enqueue(connection: asyncpg.Connection) -> str:
-    return await AsyncQueue.from_asyncpg(connection).enqueue("email.send", {"message": "hello"})
+    queue = AsyncQueue.from_asyncpg(connection)
+    job_id = await queue.enqueue("email.send", {"message": "hello"})
+    await queue.complete_human_wait(
+        job_id,
+        "review",
+        {"approved": True},
+        idempotency_key="review",
+        requested_by="reviewer",
+    )
+    return job_id
 
 
 def unsupported_connections_are_rejected() -> None:

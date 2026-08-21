@@ -19,6 +19,10 @@ First published line. Requires **schema v46**, Node.js **22 or 24**, PostgreSQL 
 
 ### Added
 
+- `workhorse-pg`: synchronous handlers can suspend through named signal and human-decision waits,
+  then replay the retained external value in the same logical attempt. Synchronous and asynchronous
+  queue clients deliver attributed values with idempotency and typed conflict errors.
+
 - `workhorse-pg`: `run_worker_process` adds bounded `SIGINT` and `SIGTERM` drain handling for the
   synchronous worker. A second signal exits with its conventional code, while an expired deadline
   exits with failure so PostgreSQL can recover active leases.

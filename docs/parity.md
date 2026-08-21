@@ -50,7 +50,7 @@ caller-owned executors. The Go test lane enqueues through each documented execut
 also enqueues through a separate module that imports the public package. The Go worker claims and
 settles one job at a time through a polling loop. Python's synchronous worker
 provides bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable
-checkpoints, durable timers, and graceful drain,
+checkpoints, durable timers, signal and human-decision waits, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
 lifecycle support. Only a TypeScript worker fires schedules until [WH-309] ships. A deployment
 using Go needs a TypeScript worker for lifecycle capabilities that remain Planned under [WH-236],
@@ -71,7 +71,7 @@ telemetry, and graceful shutdown.
 | Notification-assisted dispatch with polling  | Supported  | Supported | Planned   |
 | Durable checkpoints (handler context)        | Supported  | Supported | Planned   |
 | Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Planned   |
-| Signal and human-decision waits              | Supported  | Planned   | Planned   |
+| Signal and human-decision waits              | Supported  | Supported | Planned   |
 | Linked child fan-out and result join         | Supported  | Planned   | Planned   |
 | Latest-value progress reporting              | Supported  | Absent    | Absent    |
 | Batch handler delivery                       | Supported  | Supported | Planned   |

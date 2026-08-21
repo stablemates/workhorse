@@ -84,6 +84,75 @@ class WaitLimitExceededError(WorkhorseError):
         super().__init__(f"Job {job_id} already has the maximum number of durable waits")
 
 
+class SignalWaitLeaseLostError(LifecycleError):
+    def __init__(self, job_id: str, wait_name: str) -> None:
+        self.job_id = job_id
+        self.wait_name = wait_name
+        super().__init__(
+            f"Signal wait {wait_name} for job {job_id} cannot be recorded under a stale lease"
+        )
+
+
+class SignalWaitConflictError(WorkhorseError):
+    def __init__(self, job_id: str, wait_name: str) -> None:
+        self.job_id = job_id
+        self.wait_name = wait_name
+        super().__init__(f"Signal wait {wait_name} for job {job_id} is already waiting")
+
+
+class SignalWaitLimitExceededError(WorkhorseError):
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        super().__init__(f"Job {job_id} already has the maximum number of signal waits")
+
+
+class SignalIdempotencyConflictError(WorkhorseError):
+    def __init__(self, job_id: str, wait_name: str) -> None:
+        self.job_id = job_id
+        self.wait_name = wait_name
+        super().__init__(
+            f"Signal {wait_name} for job {job_id} received a different idempotent request"
+        )
+
+
+class HumanWaitLeaseLostError(LifecycleError):
+    def __init__(self, job_id: str, wait_name: str) -> None:
+        self.job_id = job_id
+        self.wait_name = wait_name
+        super().__init__(
+            f"Human wait {wait_name} for job {job_id} cannot be recorded under a stale lease"
+        )
+
+
+class HumanWaitAlreadyWaitingError(WorkhorseError):
+    def __init__(self, job_id: str, wait_name: str) -> None:
+        self.job_id = job_id
+        self.wait_name = wait_name
+        super().__init__(f"Human wait {wait_name} for job {job_id} is already waiting")
+
+
+class HumanWaitLimitExceededError(WorkhorseError):
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        super().__init__(f"Job {job_id} already has the maximum number of human waits")
+
+
+class HumanWaitConflictError(WorkhorseError):
+    def __init__(self, job_id: str, wait_name: str) -> None:
+        self.job_id = job_id
+        self.wait_name = wait_name
+        super().__init__(f"Human wait {wait_name} for job {job_id} has different context")
+
+
+class HumanWaitIdempotencyConflictError(WorkhorseError):
+    def __init__(self, job_id: str, wait_name: str) -> None:
+        self.job_id = job_id
+        self.wait_name = wait_name
+        super().__init__(
+            f"Human wait {wait_name} for job {job_id} received a different idempotent completion"
+        )
+
+
 class ProtocolCompatibilityError(WorkhorseError):
     def __init__(self, code: CompatibilityCode) -> None:
         self.code = code

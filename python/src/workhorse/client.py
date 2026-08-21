@@ -13,10 +13,28 @@ from ._drivers import (
     Row,
     SyncExecutor,
 )
+from ._external_waits import (
+    encode_wait_value,
+    validate_idempotency_key,
+    validate_requested_by,
+    validate_wait_name,
+)
 from ._protocol import serialize_requests, serialize_schedules
 from ._statements import STATEMENTS
-from .errors import translate_database_error
-from .types import EnqueueOptions, EnqueueRequest, EnqueueResult, Json, ScheduleDefinition
+from .errors import (
+    HumanWaitIdempotencyConflictError,
+    SignalIdempotencyConflictError,
+    translate_database_error,
+)
+from .types import (
+    EnqueueOptions,
+    EnqueueRequest,
+    EnqueueResult,
+    HumanWaitCompletionResult,
+    Json,
+    ScheduleDefinition,
+    SignalDeliveryResult,
+)
 
 if TYPE_CHECKING:
     import psycopg
@@ -68,6 +86,44 @@ class Queue:
         assert_sync_compatible(self._executor)
         payload = serialize_schedules(definitions, self.default_queue)
         self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
+
+    def send_signal(
+        self,
+        job_id: str,
+        name: str,
+        payload: Json,
+        *,
+        idempotency_key: str,
+        requested_by: str,
+    ) -> SignalDeliveryResult:
+        assert_sync_compatible(self._executor)
+        row = _one_row(
+            self._executor.rows(
+                STATEMENTS.send_signal,
+                _signal_parameters(job_id, name, payload, idempotency_key, requested_by),
+            ),
+            "workhorse.send_signal_v1",
+        )
+        return _signal_result(row, job_id, name)
+
+    def complete_human_wait(
+        self,
+        job_id: str,
+        name: str,
+        result: Json,
+        *,
+        idempotency_key: str,
+        requested_by: str,
+    ) -> HumanWaitCompletionResult:
+        assert_sync_compatible(self._executor)
+        row = _one_row(
+            self._executor.rows(
+                STATEMENTS.complete_human_wait,
+                _human_parameters(job_id, name, result, idempotency_key, requested_by),
+            ),
+            "workhorse.complete_human_wait_v1",
+        )
+        return _human_result(row, job_id, name)
 
 
 class AsyncQueue:
@@ -131,6 +187,44 @@ class AsyncQueue:
         payload = serialize_schedules(definitions, self.default_queue)
         await self._executor.rows(STATEMENTS.sync_schedules, (namespace, payload, prune))
 
+    async def send_signal(
+        self,
+        job_id: str,
+        name: str,
+        payload: Json,
+        *,
+        idempotency_key: str,
+        requested_by: str,
+    ) -> SignalDeliveryResult:
+        await assert_async_compatible(self._executor)
+        row = _one_row(
+            await self._executor.rows(
+                STATEMENTS.send_signal,
+                _signal_parameters(job_id, name, payload, idempotency_key, requested_by),
+            ),
+            "workhorse.send_signal_v1",
+        )
+        return _signal_result(row, job_id, name)
+
+    async def complete_human_wait(
+        self,
+        job_id: str,
+        name: str,
+        result: Json,
+        *,
+        idempotency_key: str,
+        requested_by: str,
+    ) -> HumanWaitCompletionResult:
+        await assert_async_compatible(self._executor)
+        row = _one_row(
+            await self._executor.rows(
+                STATEMENTS.complete_human_wait,
+                _human_parameters(job_id, name, result, idempotency_key, requested_by),
+            ),
+            "workhorse.complete_human_wait_v1",
+        )
+        return _human_result(row, job_id, name)
+
 
 def _raise_translated(error: Exception) -> NoReturn:
     translated = translate_database_error(error)
@@ -165,3 +259,67 @@ def _results(rows: Sequence[Row]) -> list[EnqueueResult]:
             )
         )
     return results
+
+
+def _one_row(rows: Sequence[Row], operation: str) -> Row:
+    if len(rows) != 1:
+        raise RuntimeError(f"{operation} returned {len(rows)} rows; expected one")
+    return rows[0]
+
+
+def _signal_parameters(
+    job_id: str,
+    name: str,
+    payload: Json,
+    idempotency_key: str,
+    requested_by: str,
+) -> tuple[object, ...]:
+    return (
+        job_id,
+        validate_wait_name(name, "Signal"),
+        encode_wait_value(payload, "Signal payload"),
+        validate_idempotency_key(idempotency_key, "Signal idempotency_key"),
+        validate_requested_by(requested_by, "Signal requested_by"),
+    )
+
+
+def _signal_result(row: Row, job_id: str, name: str) -> SignalDeliveryResult:
+    if row["status"] == "conflict":
+        raise SignalIdempotencyConflictError(job_id, name)
+    return SignalDeliveryResult(
+        status=cast(Any, row["status"]),
+        job_id=job_id,
+        name=name,
+        payload=cast(Json, row["payload"]),
+        delivered_at=cast(Any, row["delivered_at"]),
+        delivered_by=cast(str | None, row["delivered_by"]),
+    )
+
+
+def _human_parameters(
+    job_id: str,
+    name: str,
+    result: Json,
+    idempotency_key: str,
+    requested_by: str,
+) -> tuple[object, ...]:
+    return (
+        job_id,
+        validate_wait_name(name, "Human wait"),
+        encode_wait_value(result, "Human wait result"),
+        validate_idempotency_key(idempotency_key, "Human wait idempotency_key"),
+        validate_requested_by(requested_by, "Human wait requested_by"),
+    )
+
+
+def _human_result(row: Row, job_id: str, name: str) -> HumanWaitCompletionResult:
+    if row["status"] == "conflict":
+        raise HumanWaitIdempotencyConflictError(job_id, name)
+    return HumanWaitCompletionResult(
+        status=cast(Any, row["status"]),
+        job_id=job_id,
+        name=name,
+        payload=cast(Json, row["result"]),
+        completed_at=cast(Any, row["completed_at"]),
+        completed_by=cast(str | None, row["completed_by"]),
+    )
