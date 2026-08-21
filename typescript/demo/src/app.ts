@@ -91,6 +91,23 @@ import { orders } from "./schema.js";
 
 export * from "./constants.js";
 
+const GOOGLE_ANALYTICS_TAG = `<script async src="https://www.googletagmanager.com/gtag/js?id=G-9NC8FKZPVB"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-9NC8FKZPVB');
+</script>`;
+
+async function addGoogleAnalytics(response: Response): Promise<Response> {
+  if (!response.headers.get("content-type")?.startsWith("text/html")) return response;
+
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  const html = (await response.text()).replace("</head>", `${GOOGLE_ANALYTICS_TAG}\n</head>`);
+  return new Response(html, { status: response.status, statusText: response.statusText, headers });
+}
+
 interface DemoIdempotency {
   key: string;
   scope: string;
@@ -1208,7 +1225,8 @@ export function createDemoApplication(
             request,
           )
         : request;
-      return (await dashboard.handle(dashboardRequest)) ?? context.notFound();
+      const response = await dashboard.handle(dashboardRequest);
+      return response ? addGoogleAnalytics(response) : context.notFound();
     });
   }
 

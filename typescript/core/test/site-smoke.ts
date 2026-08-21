@@ -53,7 +53,7 @@ try {
   // `/` is the landing page; every documentation destination lives in the
   // docs sidebar.
   const expectations = [
-    ["/", ["Workhorse", "Postgres", "quickstart"]],
+    ["/", ["Workhorse", "Postgres", "quickstart", "G-9NC8FKZPVB"]],
     ["/docs", ["Workhorse", "PostgreSQL"]],
     ["/docs/api", ["API overview", `Workhorse version ${WORKHORSE_VERSION}`]],
     ["/docs/quickstart", ["quickstart", "worker"]],

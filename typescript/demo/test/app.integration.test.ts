@@ -334,7 +334,10 @@ it("loads the settings dashboard route and its read model", async () => {
 
   const page = await app.request("/settings");
   expect(page.status).toBe(200);
-  expect(await page.text()).toContain('<div id="root"></div>');
+  const html = await page.text();
+  expect(html).toContain('<div id="root"></div>');
+  expect(html).toContain("https://www.googletagmanager.com/gtag/js?id=G-9NC8FKZPVB");
+  expect(html).toContain("gtag('config', 'G-9NC8FKZPVB')");
   await expect(dashboardClient(app).dashboard.settings()).resolves.toMatchObject({
     editable: true,
     maintenance: { timezone: "UTC" },

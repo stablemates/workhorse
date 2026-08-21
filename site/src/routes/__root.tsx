@@ -62,6 +62,15 @@ function RootDocument() {
     <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
+        <script async src="https://www.googletagmanager.com/gtag/js?id=G-9NC8FKZPVB" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-9NC8FKZPVB');`,
+          }}
+        />
       </head>
       <body className="flex min-h-screen flex-col bg-fd-background font-sans antialiased">
         <RootProvider search={{ SearchDialog: StaticSearchDialog }}>
