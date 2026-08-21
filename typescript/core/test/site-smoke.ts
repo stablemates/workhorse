@@ -7,6 +7,12 @@ const repositoryRoot = resolve(import.meta.dirname, "../../..");
 const port = 32_000 + Math.floor(Math.random() * 1_000);
 const baseUrl = `http://127.0.0.1:${port}`;
 
+function assertIncludesTokens(body: string, page: string, tokens: readonly string[]): void {
+  for (const token of tokens) {
+    if (!body.includes(token)) throw new Error(`${page} omitted SEO token ${token}`);
+  }
+}
+
 const site = spawn("pnpm", ["--filter", "@workhorse/site", "start"], {
   cwd: repositoryRoot,
   env: {
@@ -70,6 +76,30 @@ try {
         throw new Error(`${path} omitted required token ${token}`);
       }
     }
+  }
+
+  const landingHtml = await (await fetch(`${baseUrl}/`)).text();
+  assertIncludesTokens(landingHtml, "The landing page", [
+    '<link rel="canonical" href="https://workhorse.run"',
+    'property="og:image" content="https://workhorse.run/brand/workhorse-mark.png"',
+    'type="application/ld+json"',
+    '"@type":"SoftwareApplication"',
+  ]);
+
+  const quickstartHtml = await (await fetch(`${baseUrl}/docs/quickstart`)).text();
+  assertIncludesTokens(quickstartHtml, "The quickstart page", [
+    '<link rel="canonical" href="https://workhorse.run/docs/quickstart"',
+    '<link rel="alternate" type="text/markdown" href="https://workhorse.run/docs/quickstart.md"',
+    'name="twitter:title" content="Quickstart — Workhorse"',
+    '"@type":"TechArticle"',
+  ]);
+
+  const sitemap = await (await fetch(`${baseUrl}/sitemap.xml`)).text();
+  if (!sitemap.includes("<loc>https://workhorse.run/</loc>")) {
+    throw new Error("The sitemap omitted the landing page");
+  }
+  if (sitemap.includes("<lastmod>")) {
+    throw new Error("The sitemap claims a modification date that the source does not track");
   }
 
   // Static search ships one prerendered index that the browser downloads and

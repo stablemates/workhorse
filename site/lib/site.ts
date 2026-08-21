@@ -1,9 +1,12 @@
+const siteUrl = (import.meta.env?.VITE_SITE_URL ?? "https://workhorse.run").replace(/\/$/, "");
+
 export const siteConfig = {
   name: "Workhorse",
   tagline: "A PostgreSQL-native durable execution protocol",
   description:
-    "Workhorse is a PostgreSQL-native durable job queue and execution protocol: transactional enqueue, fenced ownership, cooperative cancellation, database-owned deadlines, immutable attempt history, and audited dead-letter redrive.",
-  url: import.meta.env?.VITE_SITE_URL ?? "https://workhorse.run",
+    "Workhorse is a PostgreSQL-native durable job queue for TypeScript with transactional enqueue, crash-safe execution, durable waits, and no separate broker.",
+  url: siteUrl,
+  socialImage: `${siteUrl}/brand/workhorse-mark.png`,
   github: "https://github.com/stablemates/workhorse",
   npm: "https://www.npmjs.com/package/@workhorse/core",
 } as const;

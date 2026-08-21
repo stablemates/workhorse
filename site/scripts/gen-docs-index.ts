@@ -185,6 +185,7 @@ await writeFile(
 );
 
 const routes = [
+  "/",
   "/docs",
   ...[...pages.values()]
     .map((page) => page.url)
@@ -194,11 +195,10 @@ const routes = [
 
 await writeFile(
   new URL("prerender.json", outDir),
-  `${JSON.stringify(["/", ...routes, "/api/search"], null, 2)}\n`,
+  `${JSON.stringify([...routes, "/api/search"], null, 2)}\n`,
 );
 
-const base = siteConfig.url.replace(/\/$/, "");
-const lastmod = new Date().toISOString();
+const base = siteConfig.url;
 
 await writeFile(
   new URL("../public/sitemap.xml", import.meta.url),
@@ -207,8 +207,8 @@ await writeFile(
 ${routes
   .map(
     (route) =>
-      `  <url><loc>${base}${route}</loc><lastmod>${lastmod}</lastmod><changefreq>weekly</changefreq><priority>${
-        route === "/docs" ? 1 : 0.7
+      `  <url><loc>${base}${route}</loc><changefreq>weekly</changefreq><priority>${
+        route === "/" ? 1 : route === "/docs" ? 0.9 : 0.7
       }</priority></url>`,
   )
   .join("\n")}

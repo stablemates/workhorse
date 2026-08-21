@@ -2,7 +2,7 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 
 import docsIndex from "@/.source/docs-index.json";
 import { clientLoader } from "@/lib/mdx-loader";
-import { siteConfig } from "@/lib/site";
+import { documentationHead } from "@/lib/seo";
 
 interface PageRecord {
   readonly slug: string;
@@ -31,20 +31,7 @@ export const Route = createFileRoute("/docs/$")({
   },
   head: ({ loaderData }) => {
     if (!loaderData) return {};
-
-    const canonical = `${siteConfig.url}${loaderData.url}`;
-
-    return {
-      meta: [
-        { title: `${loaderData.title} — ${siteConfig.name}` },
-        { name: "description", content: loaderData.description },
-        { property: "og:type", content: "article" },
-        { property: "og:url", content: canonical },
-        { property: "og:title", content: loaderData.title },
-        { property: "og:description", content: loaderData.description },
-      ],
-      links: [{ rel: "canonical", href: canonical }],
-    };
+    return documentationHead(loaderData);
   },
   component: Page,
 });
