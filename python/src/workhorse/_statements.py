@@ -22,6 +22,9 @@ class StatementRegistry:
     compatibility: DriverStatement
     enqueue_many: DriverStatement
     sync_schedules: DriverStatement
+    claim: DriverStatement
+    complete: DriverStatement
+    fail: DriverStatement
 
 
 STATEMENTS = StatementRegistry(
@@ -42,5 +45,27 @@ STATEMENTS = StatementRegistry(
     sync_schedules=DriverStatement(
         psycopg=("SELECT workhorse.sync_schedule_definitions_v1(%s::text, %s::jsonb, %s::boolean)"),
         asyncpg=("SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)"),
+    ),
+    claim=DriverStatement(
+        psycopg="SELECT * FROM workhorse.claim_v3(%s::text, %s::text, %s::integer)",
+        asyncpg="SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+    ),
+    complete=DriverStatement(
+        psycopg=(
+            "SELECT workhorse.complete_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb) AS accepted"
+        ),
+        asyncpg=(
+            "SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted"
+        ),
+    ),
+    fail=DriverStatement(
+        psycopg=(
+            "SELECT workhorse.fail_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb, "
+            "%s::integer) AS state"
+        ),
+        asyncpg=(
+            "SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, "
+            "$5::integer) AS state"
+        ),
     ),
 )

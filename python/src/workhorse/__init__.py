@@ -3,15 +3,19 @@ from .errors import (
     DependencyCycleError,
     DependencyLimitExceededError,
     EnqueueIdempotencyConflictError,
+    LifecycleError,
     ProtocolCompatibilityError,
+    StaleLeaseError,
     WorkhorseError,
 )
 from .types import (
+    ClaimedJob,
     Debounce,
     Dependencies,
     EnqueueOptions,
     EnqueueRequest,
     EnqueueResult,
+    HandlerContext,
     Idempotency,
     Json,
     RetryPolicy,
@@ -19,9 +23,11 @@ from .types import (
     ScheduledJob,
     Throttle,
 )
+from .worker import Worker
 
 __all__ = [
     "AsyncQueue",
+    "ClaimedJob",
     "Debounce",
     "Dependencies",
     "DependencyCycleError",
@@ -30,13 +36,17 @@ __all__ = [
     "EnqueueOptions",
     "EnqueueRequest",
     "EnqueueResult",
+    "HandlerContext",
     "Idempotency",
     "Json",
+    "LifecycleError",
     "ProtocolCompatibilityError",
     "Queue",
     "RetryPolicy",
     "ScheduleDefinition",
     "ScheduledJob",
+    "StaleLeaseError",
     "Throttle",
+    "Worker",
     "WorkhorseError",
 ]

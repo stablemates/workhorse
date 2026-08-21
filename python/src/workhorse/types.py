@@ -78,6 +78,32 @@ class EnqueueResult:
 
 
 @dataclass(frozen=True)
+class ClaimedJob:
+    id: str
+    queue: str
+    type: str
+    priority: int
+    payload: Json
+    contract_version: str | None
+    result_max_bytes: int
+    redact_error_details: bool
+    trace_context: Json
+    attempt: int
+    max_attempts: int
+    retry_policy: RetryPolicy | None
+    deadline_at: datetime | None
+    execution_timeout_ms: int | None
+    attempt_timeout_at: datetime | None
+    fence_token: int
+    lease_expires_at: datetime
+
+
+@dataclass(frozen=True)
+class HandlerContext:
+    job: ClaimedJob
+
+
+@dataclass(frozen=True)
 class ScheduledJob:
     type: str
     payload: Json

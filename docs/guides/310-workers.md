@@ -3,6 +3,10 @@
 A worker is a loop. Ask the database for a job, run the handler, record the result, repeat.
 Everything else in this guide is detail on top of that.
 
+The synchronous Python `Worker` currently supplies the smallest form of this loop through
+`handle` and `run_once`. It claims and settles one job under a fence. Use the TypeScript worker
+when you need concurrent slots, heartbeats, cancellation delivery, notifications, or drain.
+
 ## Slots and concurrency
 
 A worker has a fixed number of slots, set by `concurrency`. One slot runs one job. The

@@ -17,6 +17,16 @@ class WorkhorseError(Exception):
     """Base class for failures translated by the Workhorse client."""
 
 
+class LifecycleError(WorkhorseError):
+    """Base class for a worker lifecycle transition rejected by PostgreSQL."""
+
+
+class StaleLeaseError(LifecycleError):
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        super().__init__(f"PostgreSQL rejected settlement under a stale lease for job {job_id}")
+
+
 class ProtocolCompatibilityError(WorkhorseError):
     def __init__(self, code: CompatibilityCode) -> None:
         self.code = code

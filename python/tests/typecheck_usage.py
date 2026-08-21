@@ -5,7 +5,7 @@ from typing import Any
 import asyncpg  # type: ignore[import-untyped]
 import psycopg
 
-from workhorse import AsyncQueue, EnqueueOptions, Idempotency, Queue
+from workhorse import AsyncQueue, EnqueueOptions, HandlerContext, Idempotency, Json, Queue, Worker
 
 
 def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
@@ -14,6 +14,13 @@ def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
         {"message": "hello"},
         EnqueueOptions(idempotency=Idempotency("message")),
     )
+
+
+def sync_worker(connection: psycopg.Connection[Any]) -> bool:
+    def handle(payload: Json, context: HandlerContext) -> Json:
+        return {"jobId": context.job.id, "payload": payload}
+
+    return Worker(connection).handle("email.send", handle).run_once()
 
 
 async def async_psycopg_enqueue(connection: psycopg.AsyncConnection[Any]) -> str:
