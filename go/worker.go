@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"time"
@@ -115,7 +116,7 @@ type ClaimedJob struct {
 // Handler processes one claimed payload outside a database transaction.
 type Handler func(context.Context, any) (any, error)
 
-// WorkerOptions configures a bounded polling worker.
+// WorkerOptions configures a bounded worker with notification-assisted polling.
 type WorkerOptions struct {
 	Queue               string
 	Queues              []string
@@ -126,6 +127,8 @@ type WorkerOptions struct {
 	PollInterval        time.Duration
 	MaintenanceInterval time.Duration
 	ShutdownGracePeriod time.Duration
+	PollingOnly         bool
+	Logger              *slog.Logger
 }
 
 // Worker claims and settles jobs through a caller-owned pool.
@@ -140,6 +143,8 @@ type Worker struct {
 	pollInterval        time.Duration
 	maintenanceInterval time.Duration
 	shutdownGracePeriod time.Duration
+	pollingOnly         bool
+	logger              *slog.Logger
 	runPermit           chan struct{}
 	handlerSlots        chan struct{}
 	handlers            map[string]Handler
@@ -233,6 +238,10 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if shutdownGracePeriod < time.Millisecond || shutdownGracePeriod%time.Millisecond != 0 {
 		return nil, errors.New(workerShutdownGraceRangeMessage)
 	}
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	runPermit := make(chan struct{}, 1)
 	runPermit <- struct{}{}
 	return &Worker{
@@ -245,6 +254,8 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		pollInterval:        pollInterval,
 		maintenanceInterval: maintenanceInterval,
 		shutdownGracePeriod: shutdownGracePeriod,
+		pollingOnly:         options.PollingOnly,
+		logger:              logger,
 		runPermit:           runPermit,
 		handlerSlots:        make(chan struct{}, concurrency),
 		handlers:            make(map[string]Handler),
@@ -264,7 +275,7 @@ func (worker *Worker) Handle(jobType string, handler Handler) *Worker {
 	return worker
 }
 
-// Run polls until the context is cancelled or an operational lifecycle error occurs, then drains.
+// Run listens and polls until the context is cancelled or an operational lifecycle error occurs, then drains.
 func (worker *Worker) Run(ctx context.Context) error {
 	releaseRun, err := worker.acquireRun(ctx)
 	if err != nil {
@@ -278,6 +289,24 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return err
 	}
 	executor := NewPGXExecutor(worker.pool)
+	notificationContext, stopNotifications := context.WithCancel(ctx)
+	notificationWake := make(chan struct{}, 1)
+	notificationDone := make(chan struct{})
+	go func() {
+		defer close(notificationDone)
+		listenForJobNotifications(
+			notificationContext,
+			worker.pool,
+			worker.queues,
+			worker.pollingOnly,
+			worker.logger,
+			notificationWake,
+		)
+	}()
+	defer func() {
+		stopNotifications()
+		<-notificationDone
+	}()
 	maintenanceContext, stopMaintenance := context.WithCancel(ctx)
 	maintenanceErrors := make(chan error, 1)
 	maintenanceDone := make(chan struct{})
@@ -292,12 +321,20 @@ func (worker *Worker) Run(ctx context.Context) error {
 	executionContext, cancelExecutions := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelExecutions()
 	executionResults := make(chan error, worker.concurrency)
+	pollTimer := time.NewTimer(worker.pollInterval)
+	defer func() {
+		if !pollTimer.Stop() {
+			select {
+			case <-pollTimer.C:
+			default:
+			}
+		}
+	}()
 	active := 0
 	stopping := false
 	var firstError error
 
 	for !stopping {
-		noWork := false
 	fillSlots:
 		for {
 			select {
@@ -325,7 +362,6 @@ func (worker *Worker) Run(ctx context.Context) error {
 			}
 			if job == nil {
 				<-worker.handlerSlots
-				noWork = true
 				break
 			}
 			active++
@@ -346,12 +382,6 @@ func (worker *Worker) Run(ctx context.Context) error {
 			break
 		}
 
-		var poll <-chan time.Time
-		var pollTimer *time.Timer
-		if noWork {
-			pollTimer = time.NewTimer(worker.pollInterval)
-			poll = pollTimer.C
-		}
 		select {
 		case <-ctx.Done():
 			stopping = true
@@ -368,13 +398,9 @@ func (worker *Worker) Run(ctx context.Context) error {
 				firstError = err
 				stopping = true
 			}
-		case <-poll:
-		}
-		if pollTimer != nil && !pollTimer.Stop() {
-			select {
-			case <-pollTimer.C:
-			default:
-			}
+		case <-pollTimer.C:
+			pollTimer.Reset(worker.pollInterval)
+		case <-notificationWake:
 		}
 	}
 

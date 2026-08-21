@@ -48,8 +48,8 @@ single and batch enqueue over pgx and `database/sql`, including every stable enq
 payload and result contracts. Go and Python can define and synchronize recurring schedules through
 caller-owned executors. The Go test lane enqueues through each documented executor. Its release test
 also enqueues through a separate module that imports the public package. The Go worker provides
-bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, and graceful
-drain through a polling loop. Python's synchronous worker
+bounded concurrency, fair multi-queue claiming, notification-assisted dispatch with polling
+fallback, ownership heartbeats, cancellation, and graceful drain. Python's synchronous worker
 provides bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable
 checkpoints, durable timers, signal and human-decision waits, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
@@ -69,7 +69,7 @@ telemetry, and graceful shutdown.
 | Bounded worker concurrency                   | Supported  | Supported | Supported |
 | Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported |
 | Cooperative cancellation delivery            | Supported  | Supported | Supported |
-| Notification-assisted dispatch with polling  | Supported  | Supported | Planned   |
+| Notification-assisted dispatch with polling  | Supported  | Supported | Supported |
 | Durable checkpoints (handler context)        | Supported  | Supported | Planned   |
 | Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Planned   |
 | Signal and human-decision waits              | Supported  | Supported | Planned   |

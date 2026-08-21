@@ -1,9 +1,11 @@
 package workhorse_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -30,6 +32,23 @@ type workerRuntimeFixture struct {
 }
 
 type heartbeatQueryContextKey struct{}
+
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (buffer *lockedBuffer) Write(contents []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.Write(contents)
+}
+
+func (buffer *lockedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.String()
+}
 
 type heartbeatQueryTracer struct {
 	mu         sync.Mutex
@@ -1174,5 +1193,265 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 	stop()
 	if err := <-workerResult; err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestWorkerNotificationsWakeClaimsAndReconnectAfterListenerLoss(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-notifications")
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-notifications"
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "notification-worker",
+		LeaseDuration:       time.Second,
+		HeartbeatInterval:   20 * time.Millisecond,
+		PollInterval:        5 * time.Second,
+		MaintenanceInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan string, 2)
+	worker.Handle("notified", func(_ context.Context, payload any) (any, error) {
+		value := payload.(map[string]any)["value"].(string)
+		handled <- value
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	workerResult := make(chan error, 1)
+	go func() { workerResult <- worker.Run(runContext) }()
+
+	listenerPID := waitForNotificationListener(t, ctx, pool, 0)
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	if _, err := queue.Enqueue(ctx, "notified", map[string]any{"value": "first"}); err != nil {
+		t.Fatal(err)
+	}
+	assertHandledBeforePoll(t, handled, "first")
+
+	if _, err := pool.Exec(ctx, "SELECT pg_terminate_backend($1)", listenerPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.Enqueue(ctx, "notified", map[string]any{"value": "during-reconnect"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForNotificationListener(t, ctx, pool, listenerPID)
+	assertHandledBeforePoll(t, handled, "during-reconnect")
+
+	stop()
+	if err := <-workerResult; err != nil {
+		t.Fatal(err)
+	}
+	connections := make([]*pgxpool.Conn, 0, config.MaxConns)
+	for range config.MaxConns {
+		connection, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		connections = append(connections, connection)
+	}
+	defer func() {
+		for _, connection := range connections {
+			connection.Release()
+		}
+	}()
+	for _, connection := range connections {
+		var listeningChannels int
+		if err := connection.QueryRow(ctx, "SELECT count(*) FROM pg_listening_channels()").Scan(&listeningChannels); err != nil {
+			t.Fatal(err)
+		}
+		if listeningChannels != 0 {
+			t.Fatal("worker returned a subscribed notification connection to the caller-owned pool")
+		}
+	}
+}
+
+func TestWorkerPollingOnlyFallbackLogsAndClaimsOnThePollInterval(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-polling-only")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	var logs lockedBuffer
+	queueName := "go-worker-polling-only"
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "polling-only-worker",
+		LeaseDuration:       time.Second,
+		HeartbeatInterval:   20 * time.Millisecond,
+		PollInterval:        50 * time.Millisecond,
+		MaintenanceInterval: 20 * time.Millisecond,
+		PollingOnly:         true,
+		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan string, 1)
+	worker.Handle("polled", func(_ context.Context, payload any) (any, error) {
+		handled <- payload.(map[string]any)["value"].(string)
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	workerResult := make(chan error, 1)
+	go func() { workerResult <- worker.Run(runContext) }()
+
+	waitForWorkerLog(t, &logs, "notification listener disabled")
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	if _, err := queue.Enqueue(ctx, "polled", map[string]any{"value": "fallback"}); err != nil {
+		t.Fatal(err)
+	}
+	assertHandledWithin(t, handled, "fallback", time.Second)
+
+	stop()
+	if err := <-workerResult; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-notification-backoff")
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	var logs lockedBuffer
+	queueName := "go-worker-notification-backoff"
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue:               queueName,
+		WorkerID:            "notification-backoff-worker",
+		LeaseDuration:       time.Second,
+		HeartbeatInterval:   20 * time.Millisecond,
+		PollInterval:        5 * time.Millisecond,
+		MaintenanceInterval: 20 * time.Millisecond,
+		Logger:              slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan string, 1)
+	worker.Handle("polled-during-backoff", func(_ context.Context, payload any) (any, error) {
+		handled <- payload.(map[string]any)["value"].(string)
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	workerResult := make(chan error, 1)
+	go func() { workerResult <- worker.Run(runContext) }()
+
+	listenerPID := waitForNotificationListener(t, ctx, pool, 0)
+	if _, err := pool.Exec(ctx, "SELECT pg_terminate_backend($1)", listenerPID); err != nil {
+		t.Fatal(err)
+	}
+	waitForWorkerLog(t, &logs, "notification listener unavailable")
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	if _, err := queue.Enqueue(ctx, "polled-during-backoff", map[string]any{"value": "backoff"}); err != nil {
+		t.Fatal(err)
+	}
+	assertHandledWithin(t, handled, "backoff", 75*time.Millisecond)
+	var replacementListeners int
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT count(*)
+		 FROM pg_stat_activity
+		 WHERE datname = current_database()
+		   AND query = 'LISTEN workhorse_jobs'
+		   AND pid <> $1`,
+		listenerPID,
+	).Scan(&replacementListeners); err != nil {
+		t.Fatal(err)
+	}
+	if replacementListeners != 0 {
+		t.Fatal("listener reconnected before polling covered the notification gap")
+	}
+	waitForNotificationListener(t, ctx, pool, listenerPID)
+	stop()
+	if err := <-workerResult; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForWorkerLog(t *testing.T, logs *lockedBuffer, message string) {
+	t.Helper()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for !strings.Contains(logs.String(), message) {
+		select {
+		case <-deadline.C:
+			t.Fatalf("worker did not log %q", message)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+func waitForNotificationListener(t *testing.T, ctx context.Context, pool *pgxpool.Pool, previousPID int32) int32 {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var pid int32
+		err := pool.QueryRow(
+			ctx,
+			`SELECT pid
+			 FROM pg_stat_activity
+			 WHERE datname = current_database()
+			   AND query = 'LISTEN workhorse_jobs'
+			   AND pid <> pg_backend_pid()
+			   AND pid <> $1
+			 ORDER BY backend_start DESC
+			 LIMIT 1`,
+			previousPID,
+		).Scan(&pid)
+		if err == nil {
+			return pid
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal(err)
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("worker did not establish its dedicated notification listener")
+		case <-ticker.C:
+		}
+	}
+}
+
+func assertHandledBeforePoll(t *testing.T, handled <-chan string, expected string) {
+	t.Helper()
+	assertHandledWithin(t, handled, expected, time.Second)
+}
+
+func assertHandledWithin(t *testing.T, handled <-chan string, expected string, timeout time.Duration) {
+	t.Helper()
+	select {
+	case actual := <-handled:
+		if actual != expected {
+			t.Fatalf("expected handler payload %q, received %q", expected, actual)
+		}
+	case <-time.After(timeout):
+		t.Fatalf("notification did not wake %q before the poll interval", expected)
 	}
 }
