@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from threading import Event, Lock
 from typing import Literal, TypeAlias
 
 Json: TypeAlias = bool | int | float | str | list["Json"] | dict[str, "Json"] | None
@@ -98,9 +99,45 @@ class ClaimedJob:
     lease_expires_at: datetime
 
 
+class CancellationToken:
+    """Cooperative stop signal delivered by the worker ownership lifecycle."""
+
+    def __init__(self) -> None:
+        self._event = Event()
+        self._lock = Lock()
+        self._reason: BaseException | None = None
+
+    @property
+    def cancelled(self) -> bool:
+        return self._event.is_set()
+
+    @property
+    def reason(self) -> BaseException:
+        with self._lock:
+            if self._reason is None:
+                raise RuntimeError("Cancellation has not been requested")
+            return self._reason
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._event.wait(timeout)
+
+    def raise_if_cancelled(self) -> None:
+        if self.cancelled:
+            raise self.reason
+
+    def _cancel(self, reason: BaseException) -> bool:
+        with self._lock:
+            if self._reason is not None:
+                return False
+            self._reason = reason
+            self._event.set()
+            return True
+
+
 @dataclass(frozen=True)
 class HandlerContext:
     job: ClaimedJob
+    cancellation: CancellationToken
 
 
 @dataclass(frozen=True)

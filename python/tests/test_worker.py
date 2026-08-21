@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from threading import Event, Thread
-from time import sleep
+from time import monotonic, sleep
 from typing import Any
 
 import psycopg
-import pytest
 
-from workhorse import EnqueueOptions, Queue, StaleLeaseError, Worker
+from workhorse import (
+    CancellationRequestedError,
+    DeadlineExceededError,
+    EnqueueOptions,
+    ExecutionTimeoutError,
+    HandlerContext,
+    Queue,
+    StaleLeaseError,
+    Worker,
+)
 
 
 def test_registered_handler_claims_exclusively_and_records_its_result(database_url: str) -> None:
@@ -65,27 +74,239 @@ def test_registered_handler_claims_exclusively_and_records_its_result(database_u
         assert outcome == ("succeeded", {"deliveredTo": "reader@example.com"})
 
 
-def test_stale_fence_is_a_typed_lifecycle_error(database_url: str) -> None:
+def test_worker_renews_ownership_while_handler_runs(database_url: str) -> None:
     with (
         psycopg.connect(database_url) as enqueue_connection,
         psycopg.connect(database_url, autocommit=True) as worker_connection,
     ):
+        job_id = Queue(enqueue_connection).enqueue("lease.renewed", {})
+        enqueue_connection.commit()
+
+        def outlive_original_lease(_payload: object, _context: object) -> dict[str, bool]:
+            sleep(0.35)
+            return {"renewed": True}
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-heartbeat-worker",
+            lease_ms=150,
+            heartbeat_ms=40,
+        ).handle("lease.renewed", outlive_original_lease)
+
+        assert worker.run_once() is True
+        outcome = worker_connection.execute(
+            "SELECT state, result FROM workhorse.job_outcome WHERE job_id = %s", (job_id,)
+        ).fetchone()
+        assert outcome == ("succeeded", {"renewed": True})
+
+
+def test_worker_delivers_and_acknowledges_cancellation(database_url: str) -> None:
+    handler_started = Event()
+    observed_reason: list[BaseException] = []
+    worker_error: list[BaseException] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url, autocommit=True) as operator_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue("cancel.active", {})
+        enqueue_connection.commit()
+
+        def wait_for_cancellation(_payload: object, context: HandlerContext) -> dict[str, bool]:
+            handler_started.set()
+            assert context.cancellation.wait(timeout=5)
+            observed_reason.append(context.cancellation.reason)
+            return {"ignoredCancellation": True}
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-cancellation-worker",
+            lease_ms=500,
+            heartbeat_ms=40,
+        ).handle("cancel.active", wait_for_cancellation)
+
+        def run_worker() -> None:
+            try:
+                assert worker.run_once() is True
+            except BaseException as error:
+                worker_error.append(error)
+
+        thread = Thread(target=run_worker)
+        thread.start()
+        assert handler_started.wait(timeout=5)
+
+        cancellation = operator_connection.execute(
+            "SELECT status FROM workhorse.cancel_v1(%s::uuid, %s::text, %s::text)",
+            (job_id, "operator", "deployment stopped"),
+        ).fetchone()
+        assert cancellation == ("cancel_requested",)
+
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert worker_error == []
+        assert len(observed_reason) == 1
+        assert isinstance(observed_reason[0], CancellationRequestedError)
+
+        outcome = operator_connection.execute(
+            "SELECT state, error->>'reason' FROM workhorse.job_outcome WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+        assert outcome == ("canceled", "deployment stopped")
+        attempt_count = operator_connection.execute(
+            "SELECT count(*) FROM workhorse.attempt_history WHERE job_id = %s", (job_id,)
+        ).fetchone()
+        assert attempt_count == (1,)
+
+
+def test_worker_classifies_an_absolute_deadline(database_url: str) -> None:
+    observed_reason: list[BaseException] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue(
+            "deadline.active",
+            {},
+            EnqueueOptions(deadline=datetime.now(timezone.utc) + timedelta(milliseconds=180)),
+        )
+        enqueue_connection.commit()
+
+        def wait_for_deadline(_payload: object, context: HandlerContext) -> None:
+            assert context.cancellation.wait(timeout=5)
+            observed_reason.append(context.cancellation.reason)
+            context.cancellation.raise_if_cancelled()
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-deadline-worker",
+            lease_ms=500,
+            heartbeat_ms=400,
+        ).handle("deadline.active", wait_for_deadline)
+
+        started_at = monotonic()
+        assert worker.run_once() is True
+        assert monotonic() - started_at < 0.32
+        assert len(observed_reason) == 1
+        assert isinstance(observed_reason[0], DeadlineExceededError)
+        outcome = worker_connection.execute(
+            "SELECT state, error->>'name' FROM workhorse.job_outcome WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+        assert outcome == ("failed", "DeadlineExceeded")
+
+
+def test_worker_classifies_an_execution_timeout(database_url: str) -> None:
+    observed_reason: list[BaseException] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue(
+            "timeout.active",
+            {},
+            EnqueueOptions(execution_timeout_ms=180, max_attempts=1),
+        )
+        enqueue_connection.commit()
+
+        def wait_for_timeout(_payload: object, context: HandlerContext) -> None:
+            assert context.cancellation.wait(timeout=5)
+            observed_reason.append(context.cancellation.reason)
+            context.cancellation.raise_if_cancelled()
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-timeout-worker",
+            lease_ms=500,
+            heartbeat_ms=400,
+        ).handle("timeout.active", wait_for_timeout)
+
+        assert worker.run_once() is True
+        assert len(observed_reason) == 1
+        assert isinstance(observed_reason[0], ExecutionTimeoutError)
+        outcome = worker_connection.execute(
+            "SELECT state, error->>'name' FROM workhorse.job_outcome WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+        assert outcome == ("failed", "ExecutionTimeout")
+
+
+def test_stale_fence_is_a_typed_lifecycle_error(database_url: str) -> None:
+    handler_started = Event()
+    worker_error: list[BaseException] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+        psycopg.connect(database_url) as blocking_connection,
+    ):
         job_id = Queue(enqueue_connection).enqueue("lease.expires", {})
         enqueue_connection.commit()
 
-        def outlive_lease(_payload: object, _context: object) -> None:
-            sleep(0.2)
+        def wait_for_lease_loss(_payload: object, context: HandlerContext) -> None:
+            handler_started.set()
+            assert context.cancellation.wait(timeout=5)
+            context.cancellation.raise_if_cancelled()
 
         worker = Worker(
             worker_connection,
             worker_id="python-stale-worker",
-            lease_ms=100,
-        ).handle("lease.expires", outlive_lease)
+            lease_ms=150,
+            heartbeat_ms=40,
+        ).handle("lease.expires", wait_for_lease_loss)
 
-        with pytest.raises(StaleLeaseError) as raised:
-            worker.run_once()
+        def run_worker() -> None:
+            try:
+                worker.run_once()
+            except BaseException as error:
+                worker_error.append(error)
 
-        assert raised.value.job_id == job_id
+        thread = Thread(target=run_worker)
+        thread.start()
+        assert handler_started.wait(timeout=5)
+
+        blocking_connection.execute(
+            "SELECT job_id FROM workhorse.job_runtime WHERE job_id = %s FOR UPDATE", (job_id,)
+        ).fetchone()
+        sleep(0.2)
+        blocking_connection.commit()
+
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert len(worker_error) == 1
+        assert isinstance(worker_error[0], StaleLeaseError)
+
+        assert worker_error[0].job_id == job_id
+
+
+def test_worker_recovers_an_expired_claim_before_dispatch(database_url: str) -> None:
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        job_id = Queue(enqueue_connection).enqueue("lease.recovered", {})
+        enqueue_connection.commit()
+        abandoned = worker_connection.execute(
+            "SELECT job_id FROM workhorse.claim_v3(%s::text, %s::text, %s::integer)",
+            ("default", "abandoned-python-worker", 100),
+        ).fetchone()
+        assert abandoned is not None
+        assert str(abandoned[0]) == job_id
+        sleep(0.12)
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-recovery-worker",
+        ).handle("lease.recovered", lambda _payload, _context: {"recovered": True})
+
+        assert worker.run_once() is True
+        outcome = worker_connection.execute(
+            "SELECT state, current_attempt, result FROM workhorse.job_outcome WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+        assert outcome == ("succeeded", 2, {"recovered": True})
 
 
 def test_handler_failure_retries_on_the_database_schedule(database_url: str) -> None:

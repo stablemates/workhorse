@@ -34,9 +34,10 @@ it found work — useful in tests and scripts.
 
 The synchronous Python package exposes the tracer-bullet form of this API: `Worker.handle`
 registers a handler and `Worker.run_once` claims and settles one job. It uses a dedicated
-autocommit Psycopg connection so handler code runs after the claim transaction closes. Use the
-TypeScript worker for concurrent slots, heartbeats, cancellation delivery, notifications, and
-graceful drain while the remaining Python runtime work lands.
+autocommit Psycopg connection so handler code runs after the claim transaction closes. A background
+heartbeat renews ownership and delivers cancellation, deadlines, timeouts, and lease loss through
+`HandlerContext.cancellation`. Use the TypeScript worker for concurrent slots, notifications, a
+continuous loop, and graceful drain while the remaining Python runtime work lands.
 
 The `HandlerContext` carries the claimed job, its `AbortSignal`, checkpoints, durable waits,
 and progress. Every context method writes under the current fence, so handler code cannot

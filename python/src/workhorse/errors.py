@@ -27,6 +27,25 @@ class StaleLeaseError(LifecycleError):
         super().__init__(f"PostgreSQL rejected settlement under a stale lease for job {job_id}")
 
 
+class CancellationRequestedError(WorkhorseError):
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        super().__init__(f"Cancellation was requested for job {job_id}")
+
+
+class DeadlineExceededError(WorkhorseError):
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        super().__init__(f"Deadline was exceeded for job {job_id}")
+
+
+class ExecutionTimeoutError(WorkhorseError):
+    def __init__(self, job_id: str, attempt: int) -> None:
+        self.job_id = job_id
+        self.attempt = attempt
+        super().__init__(f"Execution timeout was exceeded for job {job_id} attempt {attempt}")
+
+
 class ProtocolCompatibilityError(WorkhorseError):
     def __init__(self, code: CompatibilityCode) -> None:
         self.code = code

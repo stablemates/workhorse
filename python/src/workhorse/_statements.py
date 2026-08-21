@@ -22,7 +22,11 @@ class StatementRegistry:
     compatibility: DriverStatement
     enqueue_many: DriverStatement
     sync_schedules: DriverStatement
+    recover_expired: DriverStatement
     claim: DriverStatement
+    heartbeat: DriverStatement
+    expire_owned: DriverStatement
+    acknowledge_cancel: DriverStatement
     complete: DriverStatement
     fail: DriverStatement
 
@@ -46,9 +50,33 @@ STATEMENTS = StatementRegistry(
         psycopg=("SELECT workhorse.sync_schedule_definitions_v1(%s::text, %s::jsonb, %s::boolean)"),
         asyncpg=("SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)"),
     ),
+    recover_expired=DriverStatement(
+        psycopg=("SELECT * FROM workhorse.recover_expired_telemetry_v1(%s::integer, %s::integer)"),
+        asyncpg=("SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)"),
+    ),
     claim=DriverStatement(
         psycopg="SELECT * FROM workhorse.claim_v3(%s::text, %s::text, %s::integer)",
         asyncpg="SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+    ),
+    heartbeat=DriverStatement(
+        psycopg=(
+            "SELECT workhorse.heartbeat_v2(%s::uuid, %s::text, %s::bigint, %s::integer) AS status"
+        ),
+        asyncpg=(
+            "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
+        ),
+    ),
+    expire_owned=DriverStatement(
+        psycopg=("SELECT workhorse.expire_owned_v1(%s::uuid, %s::text, %s::bigint) AS status"),
+        asyncpg=("SELECT workhorse.expire_owned_v1($1::uuid, $2::text, $3::bigint) AS status"),
+    ),
+    acknowledge_cancel=DriverStatement(
+        psycopg=(
+            "SELECT workhorse.acknowledge_cancel_v1(%s::uuid, %s::text, %s::bigint) AS accepted"
+        ),
+        asyncpg=(
+            "SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted"
+        ),
     ),
     complete=DriverStatement(
         psycopg=(

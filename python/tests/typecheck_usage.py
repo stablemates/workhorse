@@ -18,9 +18,10 @@ def sync_enqueue(connection: psycopg.Connection[Any]) -> str:
 
 def sync_worker(connection: psycopg.Connection[Any]) -> bool:
     def handle(payload: Json, context: HandlerContext) -> Json:
+        context.cancellation.raise_if_cancelled()
         return {"jobId": context.job.id, "payload": payload}
 
-    return Worker(connection).handle("email.send", handle).run_once()
+    return Worker(connection, heartbeat_ms=1_000).handle("email.send", handle).run_once()
 
 
 async def async_psycopg_enqueue(connection: psycopg.AsyncConnection[Any]) -> str:

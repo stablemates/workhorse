@@ -1,14 +1,18 @@
 from .client import AsyncQueue, Queue
 from .errors import (
+    CancellationRequestedError,
+    DeadlineExceededError,
     DependencyCycleError,
     DependencyLimitExceededError,
     EnqueueIdempotencyConflictError,
+    ExecutionTimeoutError,
     LifecycleError,
     ProtocolCompatibilityError,
     StaleLeaseError,
     WorkhorseError,
 )
 from .types import (
+    CancellationToken,
     ClaimedJob,
     Debounce,
     Dependencies,
@@ -27,7 +31,10 @@ from .worker import Worker
 
 __all__ = [
     "AsyncQueue",
+    "CancellationRequestedError",
+    "CancellationToken",
     "ClaimedJob",
+    "DeadlineExceededError",
     "Debounce",
     "Dependencies",
     "DependencyCycleError",
@@ -36,6 +43,7 @@ __all__ = [
     "EnqueueOptions",
     "EnqueueRequest",
     "EnqueueResult",
+    "ExecutionTimeoutError",
     "HandlerContext",
     "Idempotency",
     "Json",
