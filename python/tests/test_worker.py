@@ -74,6 +74,217 @@ def test_registered_handler_claims_exclusively_and_records_its_result(database_u
         assert outcome == ("succeeded", {"deliveredTo": "reader@example.com"})
 
 
+def test_run_once_refills_a_bounded_concurrency_slot(database_url: str) -> None:
+    started: list[int] = []
+    releases = [Event(), Event(), Event()]
+    two_started = Event()
+    third_started = Event()
+    worker_error: list[BaseException] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        job_ids = [queue.enqueue("bounded", {"sequence": sequence}) for sequence in range(3)]
+        enqueue_connection.commit()
+
+        def handle(payload: Any, _context: object) -> dict[str, int]:
+            sequence = int(payload["sequence"])
+            started.append(sequence)
+            if len(started) == 2:
+                two_started.set()
+            if len(started) == 3:
+                third_started.set()
+            assert releases[sequence].wait(timeout=5)
+            return {"sequence": sequence}
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-bounded-worker",
+            concurrency=2,
+        ).handle("bounded", handle)
+
+        def run_worker() -> None:
+            try:
+                assert worker.run_once() is True
+            except BaseException as error:
+                worker_error.append(error)
+
+        thread = Thread(target=run_worker)
+        thread.start()
+        assert two_started.wait(timeout=5)
+        assert len(started) == 2
+
+        releases[started[0]].set()
+        assert third_started.wait(timeout=5)
+        assert len(started) == 3
+
+        for release in releases:
+            release.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert worker_error == []
+
+        outcomes = worker_connection.execute(
+            "SELECT job_id::text, state FROM workhorse.job_outcome "
+            "WHERE job_id = ANY(%s::uuid[]) ORDER BY job_id",
+            (job_ids,),
+        ).fetchall()
+        assert outcomes == sorted((job_id, "succeeded") for job_id in job_ids)
+
+
+def test_run_once_rotates_claims_across_queues(database_url: str) -> None:
+    handled_queues: list[str] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        for sequence in range(3):
+            queue.enqueue("rotated", {"sequence": sequence}, EnqueueOptions(queue="busy"))
+        queue.enqueue("rotated", {"sequence": 3}, EnqueueOptions(queue="quiet"))
+        enqueue_connection.commit()
+
+        def handle(_payload: object, context: HandlerContext) -> None:
+            handled_queues.append(context.job.queue)
+
+        worker = Worker(
+            worker_connection,
+            queues=("busy", "quiet"),
+            worker_id="python-rotation-worker",
+        ).handle("rotated", handle)
+
+        assert worker.run_once() is True
+        assert worker.run_once() is False
+
+        assert handled_queues == ["busy", "quiet", "busy", "busy"]
+
+
+def test_run_pauses_resumes_and_drains_active_slots(database_url: str) -> None:
+    started: list[int] = []
+    releases = [Event(), Event(), Event()]
+    two_started = Event()
+    third_started = Event()
+    run_finished = Event()
+    worker_error: list[BaseException] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        queue = Queue(enqueue_connection)
+        job_ids = [queue.enqueue("controlled", {"sequence": sequence}) for sequence in range(3)]
+        enqueue_connection.commit()
+
+        def handle(payload: Any, _context: object) -> None:
+            sequence = int(payload["sequence"])
+            started.append(sequence)
+            if len(started) == 2:
+                two_started.set()
+            if len(started) == 3:
+                third_started.set()
+            assert releases[sequence].wait(timeout=5)
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-controlled-worker",
+            concurrency=2,
+            poll_ms=5_000,
+        ).handle("controlled", handle)
+
+        def run_worker() -> None:
+            try:
+                worker.run()
+            except BaseException as error:
+                worker_error.append(error)
+            finally:
+                run_finished.set()
+
+        thread = Thread(target=run_worker)
+        thread.start()
+        assert two_started.wait(timeout=5)
+
+        worker.pause()
+        assert worker.is_paused() is True
+        for sequence in started:
+            releases[sequence].set()
+        assert not third_started.wait(timeout=0.2)
+
+        worker.resume()
+        assert worker.is_paused() is False
+        assert third_started.wait(timeout=1)
+
+        worker.stop()
+        assert not run_finished.wait(timeout=0.2)
+        releases[started[2]].set()
+        assert run_finished.wait(timeout=5)
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert worker_error == []
+
+        outcomes = worker_connection.execute(
+            "SELECT job_id::text, state FROM workhorse.job_outcome "
+            "WHERE job_id = ANY(%s::uuid[]) ORDER BY job_id",
+            (job_ids,),
+        ).fetchall()
+        assert outcomes == sorted((job_id, "succeeded") for job_id in job_ids)
+
+
+def test_stop_reaches_a_run_waiting_behind_an_active_pass(database_url: str) -> None:
+    handler_started = Event()
+    release_handler = Event()
+    queued_run_started = Event()
+    queued_run_finished = Event()
+    worker_error: list[BaseException] = []
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        Queue(enqueue_connection).enqueue("queued.stop", {})
+        enqueue_connection.commit()
+
+        def handle(_payload: object, _context: object) -> None:
+            handler_started.set()
+            assert release_handler.wait(timeout=5)
+
+        worker = Worker(
+            worker_connection,
+            worker_id="python-queued-stop-worker",
+            poll_ms=5_000,
+        ).handle("queued.stop", handle)
+
+        first_pass = Thread(target=worker.run_once)
+        first_pass.start()
+        assert handler_started.wait(timeout=5)
+
+        def run_worker() -> None:
+            queued_run_started.set()
+            try:
+                worker.run()
+            except BaseException as error:
+                worker_error.append(error)
+            finally:
+                queued_run_finished.set()
+
+        queued_run = Thread(target=run_worker)
+        queued_run.start()
+        assert queued_run_started.wait(timeout=5)
+        sleep(0.05)
+
+        worker.stop()
+        release_handler.set()
+
+        first_pass.join(timeout=5)
+        assert not first_pass.is_alive()
+        assert queued_run_finished.wait(timeout=1)
+        queued_run.join(timeout=5)
+        assert not queued_run.is_alive()
+        assert worker_error == []
+
+
 def test_worker_renews_ownership_while_handler_runs(database_url: str) -> None:
     with (
         psycopg.connect(database_url) as enqueue_connection,

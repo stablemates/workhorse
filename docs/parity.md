@@ -46,9 +46,10 @@ The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `w
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg). The Go module's `Queue` supports transactional
 single and batch enqueue over pgx and `database/sql`. Its option set remains Planned under
 [WH-228].
-Python can define and synchronize recurring schedules. Its synchronous worker can claim and run
-one job at a time, but a production deployment still needs a TypeScript worker until [WH-214]
-ships the remaining lifecycle support. Only a TypeScript worker fires schedules until [WH-309]
+Python can define and synchronize recurring schedules. Its synchronous worker provides bounded
+concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, and graceful drain,
+but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
+lifecycle support. Only a TypeScript worker fires schedules until [WH-309]
 ships. The Planned Go client column reflects the
 acceptance criteria of the [WH-228] sub-items; [WH-318] commits to the option set, including
 the four rows that were Absent before it existed. A deployment enqueueing from Go needs a
@@ -63,7 +64,7 @@ telemetry, and graceful shutdown.
 | Capability                                   | TypeScript | Python    | Go      |
 | -------------------------------------------- | ---------- | --------- | ------- |
 | Claiming and handler execution               | Supported  | Supported | Planned |
-| Bounded worker concurrency                   | Supported  | Planned   | Planned |
+| Bounded worker concurrency                   | Supported  | Supported | Planned |
 | Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Planned |
 | Cooperative cancellation delivery            | Supported  | Supported | Planned |
 | Notification-assisted dispatch with polling  | Supported  | Planned   | Planned |

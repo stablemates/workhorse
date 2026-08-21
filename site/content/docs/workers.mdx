@@ -32,12 +32,13 @@ await worker.run();
 lifetime to your process. `runOnce` performs a single claim-and-run pass and returns whether
 it found work — useful in tests and scripts.
 
-The synchronous Python package exposes the tracer-bullet form of this API: `Worker.handle`
-registers a handler and `Worker.run_once` claims and settles one job. It uses a dedicated
-autocommit Psycopg connection so handler code runs after the claim transaction closes. A background
-heartbeat renews ownership and delivers cancellation, deadlines, timeouts, and lease loss through
-`HandlerContext.cancellation`. Use the TypeScript worker for concurrent slots, notifications, a
-continuous loop, and graceful drain while the remaining Python runtime work lands.
+The synchronous Python package exposes this lifecycle through `Worker.handle`, `run`, `run_once`,
+`pause`, `resume`, and `stop`. It rotates across configured queues, fills a bounded set of slots,
+and drains active handlers before `run` returns. A dedicated autocommit Psycopg connection keeps
+handler code outside the claim transaction, while one background heartbeat per slot renews
+ownership and delivers cancellation, deadlines, timeouts, and lease loss through
+`HandlerContext.cancellation`. Use the TypeScript worker when you need notifications or the worker
+registry.
 
 The `HandlerContext` carries the claimed job, its `AbortSignal`, checkpoints, durable waits,
 and progress. Every context method writes under the current fence, so handler code cannot

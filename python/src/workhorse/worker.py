@@ -4,9 +4,9 @@ import json
 import os
 import socket
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
-from threading import Event, Lock, Thread
+from threading import Event, Lock, Thread, current_thread
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
@@ -68,52 +68,223 @@ class _AttemptOutcomeArbiter:
 
 
 class Worker:
-    """A synchronous, single-slot worker over a dedicated Psycopg connection."""
+    """A synchronous worker over a dedicated, thread-safe Psycopg connection."""
 
     def __init__(
         self,
         connection: SyncConnection,
         *,
-        queue: str = "default",
+        queue: str | None = None,
+        queues: Sequence[str] | None = None,
         worker_id: str | None = None,
+        concurrency: int = 1,
+        poll_ms: int = 250,
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
     ) -> None:
         if getattr(connection, "autocommit", False) is not True:
             raise ValueError("Worker requires a dedicated Psycopg connection in autocommit mode")
+        if queue is not None and queues is not None:
+            raise ValueError("queue and queues cannot be configured together")
+        configured_queues = queues if queues is not None else (queue or "default",)
+        unique_queues = tuple(dict.fromkeys(configured_queues))
+        if not unique_queues or any(
+            not isinstance(name, str) or not name for name in unique_queues
+        ):
+            raise ValueError("queues must contain at least one non-empty queue name")
+        if (
+            isinstance(concurrency, bool)
+            or not isinstance(concurrency, int)
+            or not 1 <= concurrency <= 100
+        ):
+            raise ValueError("concurrency must be an integer between 1 and 100")
+        if isinstance(poll_ms, bool) or not isinstance(poll_ms, int) or poll_ms < 1:
+            raise ValueError("poll_ms must be a positive integer")
         self._executor = SyncExecutor(cast(PsycopgConnection, connection))
         self._compatibility = CachedCompatibilityCheck(self._executor)
         self._handlers: dict[str, Handler] = {}
-        self.queue = queue
+        self.queues = unique_queues
+        self.queue = unique_queues[0]
         self.worker_id = worker_id or _default_worker_id()
+        self.concurrency = concurrency
+        self.poll_ms = poll_ms
         if not 100 <= lease_ms <= 86_400_000:
             raise ValueError("lease_ms must be between 100 and 86400000")
         self.lease_ms = lease_ms
         self.heartbeat_ms = heartbeat_ms if heartbeat_ms is not None else max(100, lease_ms // 3)
         if not 0 < self.heartbeat_ms < self.lease_ms:
             raise ValueError("heartbeat_ms must be positive and less than lease_ms")
+        self._next_queue_index = 0
+        self._state_lock = Lock()
+        self._execution_lock = Lock()
+        self._wake = Event()
+        self._active_threads: set[Thread] = set()
+        self._run_errors: list[BaseException] = []
+        self._paused = False
+        self._stopping = False
+        self._stop_version = 0
 
     def handle(self, type: str, handler: Handler) -> Worker:
         self._handlers[type] = handler
         return self
 
     def run_once(self) -> bool:
-        """Claim and settle at most one job, returning whether PostgreSQL granted a claim."""
+        """Fill available slots until one empty queue sweep, then drain the claimed jobs."""
+        requested_stop_version = self._stop_version_snapshot()
+        with self._execution_lock:
+            return self._run_loop(
+                continuous=False,
+                requested_stop_version=requested_stop_version,
+            )
+
+    def run(self) -> None:
+        """Run until stopped, then return after every claimed job has settled."""
+        requested_stop_version = self._stop_version_snapshot()
+        with self._execution_lock:
+            self._run_loop(
+                continuous=True,
+                requested_stop_version=requested_stop_version,
+            )
+
+    def pause(self) -> None:
+        """Stop new claims without interrupting running handlers."""
+        with self._state_lock:
+            self._paused = True
+        self._wake.set()
+
+    def resume(self) -> None:
+        """Allow claims and wake an idle run loop immediately."""
+        with self._state_lock:
+            self._paused = False
+        self._wake.set()
+
+    def is_paused(self) -> bool:
+        with self._state_lock:
+            return self._paused
+
+    def stop(self) -> None:
+        """Request a graceful stop; the active run call performs the drain."""
+        with self._state_lock:
+            self._stop_version += 1
+            self._stopping = True
+        self._wake.set()
+
+    def _stop_version_snapshot(self) -> int:
+        with self._state_lock:
+            return self._stop_version
+
+    def _dispatch_state(self) -> Literal["stopping", "paused", "full", "ready"]:
+        with self._state_lock:
+            if self._stopping:
+                return "stopping"
+            if self._paused:
+                return "paused"
+            if len(self._active_threads) >= self.concurrency:
+                return "full"
+            return "ready"
+
+    def _run_loop(self, *, continuous: bool, requested_stop_version: int) -> bool:
         self._compatibility.assert_compatible()
-        _require_lifecycle_row(self._executor.rows(STATEMENTS.recover_expired, (100, None)))
-        rows = self._executor.rows(
-            STATEMENTS.claim,
-            (self.queue, self.worker_id, self.lease_ms),
+        with self._state_lock:
+            self._stopping = self._stop_version != requested_stop_version
+            self._run_errors.clear()
+        claimed_any = False
+        try:
+            while True:
+                # Clear before the sweep. A completion or state change that arrives while a claim
+                # is in flight remains latched and prevents the following wait from sleeping.
+                self._wake.clear()
+                state = self._dispatch_state()
+                if state == "stopping":
+                    break
+                if state == "paused":
+                    if not continuous:
+                        break
+                    self._wake.wait(self.poll_ms / 1000)
+                    continue
+                if state == "full":
+                    self._wake.wait(self.poll_ms / 1000)
+                    continue
+
+                _require_lifecycle_row(self._executor.rows(STATEMENTS.recover_expired, (100, None)))
+                empty_attempts = 0
+                while empty_attempts < len(self.queues):
+                    if self._dispatch_state() != "ready":
+                        break
+                    with self._state_lock:
+                        queue_name = self.queues[self._next_queue_index]
+                        self._next_queue_index = (self._next_queue_index + 1) % len(self.queues)
+                    rows = self._executor.rows(
+                        STATEMENTS.claim,
+                        (queue_name, self.worker_id, self.lease_ms),
+                    )
+                    if not rows:
+                        empty_attempts += 1
+                        continue
+                    empty_attempts = 0
+                    claimed_any = True
+                    self._start_claimed_job(_claimed_job(rows[0], queue_name))
+
+                state = self._dispatch_state()
+                if state == "stopping":
+                    break
+                if state == "paused":
+                    continue
+                if empty_attempts >= len(self.queues):
+                    if not continuous:
+                        break
+                    self._wake.wait(self.poll_ms / 1000)
+                    continue
+                if state == "full":
+                    self._wake.wait(self.poll_ms / 1000)
+        finally:
+            self._drain_active_threads()
+            with self._state_lock:
+                self._stopping = False
+                errors = list(self._run_errors)
+                self._run_errors.clear()
+        if errors:
+            raise errors[0]
+        return claimed_any
+
+    def _start_claimed_job(self, job: ClaimedJob) -> None:
+        thread = Thread(
+            target=self._run_claimed_job,
+            args=(job,),
+            name=f"workhorse-handler-{job.id}",
         )
-        if not rows:
-            return False
-        job = _claimed_job(rows[0], self.queue)
+        with self._state_lock:
+            self._active_threads.add(thread)
+        thread.start()
+
+    def _run_claimed_job(self, job: ClaimedJob) -> None:
+        try:
+            self._execute_claimed_job(job)
+        except BaseException as error:
+            with self._state_lock:
+                self._run_errors.append(error)
+                self._stopping = True
+        finally:
+            with self._state_lock:
+                self._active_threads.discard(current_thread())
+            self._wake.set()
+
+    def _drain_active_threads(self) -> None:
+        while True:
+            with self._state_lock:
+                active = list(self._active_threads)
+            if not active:
+                return
+            for thread in active:
+                thread.join()
+
+    def _execute_claimed_job(self, job: ClaimedJob) -> None:
         arbiter = _AttemptOutcomeArbiter()
         handler = self._handlers.get(job.type)
         if handler is None:
             error = RuntimeError(f"No handler registered for {job.type}")
             arbiter.submit(self._settle_failure(job, error))
-            return True
+            return
         heartbeat_stop = Event()
         heartbeat_error: list[BaseException] = []
         cancellation = CancellationToken()
@@ -195,11 +366,11 @@ class Worker:
             encoded_result = json.dumps(result, separators=(",", ":"))
         except Exception as error:
             if finish_ownership_lifecycle(error):
-                return True
+                return
             arbiter.submit(self._settle_failure(job, error))
-            return True
+            return
         if finish_ownership_lifecycle():
-            return True
+            return
         accepted = _require_lifecycle_row(
             self._executor.rows(
                 STATEMENTS.complete,
@@ -209,11 +380,10 @@ class Worker:
         if accepted is not True:
             if self._acknowledge_cancel(job):
                 arbiter.submit("cancelled")
-                return True
+                return
             arbiter.submit("lease_expired")
             raise StaleLeaseError(job.id)
         arbiter.submit("completed")
-        return True
 
     def _finish_lifecycle_outcome(self, job: ClaimedJob, outcome: AttemptOutcome | None) -> bool:
         if outcome == "cancelled":

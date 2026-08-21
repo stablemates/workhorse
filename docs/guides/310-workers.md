@@ -3,10 +3,11 @@
 A worker is a loop. Ask the database for a job, run the handler, record the result, repeat.
 Everything else in this guide is detail on top of that.
 
-The synchronous Python `Worker` supplies a bounded claim-and-run pass through `handle` and
-`run_once`. It keeps the claimed job's lease alive and delivers cancellation, deadline, timeout,
-and lease-loss signals through `HandlerContext.cancellation`. Use the TypeScript worker when you
-need concurrent slots, notifications, a continuous loop, or drain.
+The synchronous Python `Worker` supplies the same core loop through `handle`, `run`, and
+`run_once`. It rotates across queues, bounds concurrent slots, and drains active work after
+`stop`. Each heartbeat thread renews one claimed job's lease and delivers ownership signals through
+`HandlerContext.cancellation`. Use the TypeScript worker when you need notifications or the worker
+registry.
 
 ## Slots and concurrency
 
