@@ -14,6 +14,9 @@ const (
 	completeStatementName                = "complete_v1"
 	failStatementName                    = "fail_v1"
 	acknowledgeCancelStatementName       = "acknowledge_cancel_v1"
+	listCheckpointStatementName          = "list_checkpoint"
+	saveCheckpointStatementName          = "save_checkpoint_v1"
+	scheduleWaitStatementName            = "schedule_wait_v1"
 	rowOrdinalField                      = "ordinal"
 	rowJobIDField                        = "job_id"
 	rowOutcomeField                      = "outcome"
@@ -36,6 +39,7 @@ const (
 	rowAttemptTimeoutAtField             = "attempt_timeout_at"
 	rowFenceTokenField                   = "fence_token"
 	rowLeaseExpiresAtField               = "lease_expires_at"
+	rowCheckpointValueField              = "checkpoint_value"
 	errorNameField                       = "name"
 	errorMessageField                    = "message"
 
@@ -78,6 +82,15 @@ const (
 	redactedHandlerErrorNameValue                  = "RedactedJobError"
 	redactedHandlerErrorTextValue                  = "Job handler failed; details redacted"
 	genericHandlerErrorName                        = "Error"
+	durableCheckpointKindValue                     = "checkpoint"
+	durableWaitKindValue                           = "wait"
+	durableSavedValue                              = "saved"
+	durableExistingValue                           = "existing"
+	durableStaleValue                              = "stale"
+	durableConflictValue                           = "conflict"
+	durableElapsedValue                            = "elapsed"
+	durableScheduledValue                          = "scheduled"
+	durableLimitExceededValue                      = "limit_exceeded"
 
 	enqueueBatchTooLargeMessage        = "enqueue batch exceeds the shared limit"
 	invalidEnqueueResultMessage        = "PostgreSQL returned an invalid enqueue result"
@@ -134,6 +147,20 @@ const (
 	invalidCompletionResultMessage     = "PostgreSQL returned an invalid completion result"
 	invalidFailureResultMessage        = "PostgreSQL returned an invalid failure result"
 	rejectedFailureStateFormat         = "PostgreSQL rejected failure settlement with state %s"
+	durableWaitSuspensionMessage       = "durable wait suspended the handler"
+	checkpointLeaseLostErrorFormat     = "cannot save checkpoint %s for job %s because the lease is stale or expired"
+	checkpointConflictErrorFormat      = "checkpoint %s for job %s already exists with a different value"
+	waitLeaseLostErrorFormat           = "cannot schedule wait %s for job %s because the lease is stale or expired"
+	waitConflictErrorFormat            = "wait %s for job %s has a conflicting target"
+	waitLimitExceededErrorFormat       = "job %s already has the maximum number of durable waits"
+	nilCheckpointOperationMessage      = "checkpoint operation must not be nil"
+	invalidCheckpointResultMessage     = "PostgreSQL returned an invalid checkpoint result"
+	unknownCheckpointStatusFormat      = "PostgreSQL returned unknown checkpoint status %q"
+	waitDurationRangeFormat            = "wait duration must be a whole number of milliseconds between %s and %s"
+	waitTargetRangeMessage             = "wait target must be a valid time no more than 365 days in the future"
+	invalidDurableWaitResultMessage    = "PostgreSQL returned an invalid durable wait result"
+	unknownDurableWaitStatusFormat     = "PostgreSQL returned unknown durable wait status %q"
+	durableNameRangeFormat             = "%s name must contain between 1 and 200 characters"
 	workerIDFallbackFormat             = "%s-%d"
 	workerIDFormat                     = "%s-%d-%s"
 )
@@ -142,6 +169,7 @@ var internalStatementRegistry = map[string]string{
 	schemaVersionStatement:               `SELECT version FROM workhorse.schema_version ORDER BY version`,
 	syncScheduleDefinitionsStatementName: `SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)`,
 	promoteStatementName:                 `SELECT workhorse.promote_v1($1::integer) AS promoted`,
+	listCheckpointStatementName:          `SELECT checkpoint_value FROM workhorse.job_checkpoint WHERE job_id = $1::uuid AND checkpoint_name = $2::text`,
 }
 
 var protocolStatementRegistry = map[string]string{
@@ -156,9 +184,9 @@ var protocolStatementRegistry = map[string]string{
 	failStatementName:              `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
 	"cancel_v1":                    `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
 	acknowledgeCancelStatementName: `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
-	"save_checkpoint_v1":           `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
+	saveCheckpointStatementName:    `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
 	"update_progress_v1":           `SELECT status, progress_value, revision::text, attempt, fence_token::text, worker_id, created_at, updated_at, retry_after_ms::text FROM workhorse.update_progress_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
-	"schedule_wait_v1":             `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
+	scheduleWaitStatementName:      `SELECT status, wait_name, mode, duration_ms::text, requested_wake_at, wake_at, attempt, fence_token::text, worker_id, created_at FROM workhorse.schedule_wait_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint, $6::timestamptz)`,
 	"create_children_v1":           `SELECT status, children, results, result_bytes, result_limit_bytes FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)`,
 	"create_child_v1":              `SELECT status, child_job_id, child_type, created_at, joined_at, result FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,
 	"wait_for_signal_v1":           `SELECT status, payload FROM workhorse.wait_for_signal_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::bigint)`,

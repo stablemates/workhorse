@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,16 +21,340 @@ import (
 )
 
 type workerRuntimeFixture struct {
-	ID                                   string `json:"id"`
-	JobType                              string `json:"jobType"`
-	LeaseMS                              int    `json:"leaseMs"`
-	HeartbeatMS                          int    `json:"heartbeatMs"`
-	DurationMS                           int    `json:"durationMs"`
-	MaxAttempts                          int    `json:"maxAttempts"`
-	CancelReason                         string `json:"cancelReason"`
-	ExpectedCallsWhileBlocked            int    `json:"expectedCallsWhileBlocked"`
-	ExpectedMinimumCallsBeforeSettlement int    `json:"expectedMinimumCallsBeforeSettlement"`
-	ExpectedMaximumOverlap               int    `json:"expectedMaximumOverlap"`
+	ID                                   string   `json:"id"`
+	JobType                              string   `json:"jobType"`
+	FollowingJobType                     string   `json:"followingJobType"`
+	CheckpointName                       string   `json:"checkpointName"`
+	WaitName                             string   `json:"waitName"`
+	WaitMS                               int      `json:"waitMs"`
+	ExpectedHandlerOrder                 []string `json:"expectedHandlerOrder"`
+	ExpectedHandlerRuns                  int      `json:"expectedHandlerRuns"`
+	ExpectedCheckpointOperations         int      `json:"expectedCheckpointOperations"`
+	ExpectedAttemptsAfterSuspension      int      `json:"expectedAttemptsAfterSuspension"`
+	ExpectedAttemptsAfterReplay          int      `json:"expectedAttemptsAfterReplay"`
+	LeaseMS                              int      `json:"leaseMs"`
+	HeartbeatMS                          int      `json:"heartbeatMs"`
+	DurationMS                           int      `json:"durationMs"`
+	MaxAttempts                          int      `json:"maxAttempts"`
+	CancelReason                         string   `json:"cancelReason"`
+	ExpectedCallsWhileBlocked            int      `json:"expectedCallsWhileBlocked"`
+	ExpectedMinimumCallsBeforeSettlement int      `json:"expectedMinimumCallsBeforeSettlement"`
+	ExpectedMaximumOverlap               int      `json:"expectedMaximumOverlap"`
+}
+
+func TestWorkerExecutesDurableWaitSuspensionAndCheckpointReplayFixture(t *testing.T) {
+	fixture := loadWorkerRuntimeFixture(t, "durable-wait-suspension-and-checkpoint-replay")
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-suspension-replay")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-suspension-replay"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	suspensionJobID, err := queue.Enqueue(ctx, fixture.JobType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	followingJobID, err := queue.Enqueue(ctx, fixture.FollowingJobType, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-suspension-replay", Concurrency: 1,
+		LeaseDuration: time.Second, PollInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	order := make([]string, 0, len(fixture.ExpectedHandlerOrder))
+	handlerRuns := 0
+	checkpointOperations := 0
+	followingStarted := make(chan struct{})
+	releaseFollowing := make(chan struct{})
+	worker.Handle(fixture.JobType, func(
+		_ context.Context,
+		_ any,
+		handlerContext *workhorse.HandlerContext,
+	) (any, error) {
+		mu.Lock()
+		handlerRuns++
+		order = append(order, "suspension:"+strconv.Itoa(handlerContext.Job.Attempt))
+		mu.Unlock()
+		prepared, err := handlerContext.Checkpoint(fixture.CheckpointName, func() (any, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			checkpointOperations++
+			return map[string]any{"operation": checkpointOperations}, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := handlerContext.Sleep(fixture.WaitName, time.Duration(fixture.WaitMS)*time.Millisecond); err != nil {
+			return nil, err
+		}
+		return prepared, nil
+	})
+	worker.Handle(fixture.FollowingJobType, func(
+		_ context.Context,
+		_ any,
+		handlerContext *workhorse.HandlerContext,
+	) (any, error) {
+		mu.Lock()
+		order = append(order, "following:"+strconv.Itoa(handlerContext.Job.Attempt))
+		mu.Unlock()
+		close(followingStarted)
+		<-releaseFollowing
+		return nil, nil
+	})
+
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	select {
+	case <-followingStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("following job did not acquire the released worker slot")
+	}
+	var suspendedState string
+	var suspendedAttempt int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1",
+		suspensionJobID,
+	).Scan(&suspendedState, &suspendedAttempt); err != nil {
+		t.Fatal(err)
+	}
+	if suspendedState != "scheduled" || suspendedAttempt != 1 {
+		t.Fatalf("unexpected suspended job state: state=%s attempt=%d", suspendedState, suspendedAttempt)
+	}
+	var attemptsAfterSuspension int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT count(*) FROM workhorse.attempt_history WHERE job_id = $1",
+		suspensionJobID,
+	).Scan(&attemptsAfterSuspension); err != nil {
+		t.Fatal(err)
+	}
+	if attemptsAfterSuspension != fixture.ExpectedAttemptsAfterSuspension {
+		t.Fatalf(
+			"expected %d attempts after suspension, received %d",
+			fixture.ExpectedAttemptsAfterSuspension,
+			attemptsAfterSuspension,
+		)
+	}
+	close(releaseFollowing)
+	deadline := time.Now().Add(3 * time.Second)
+	stateSQL := "SELECT state FROM (" +
+		"SELECT job_id, state FROM workhorse.job_runtime UNION ALL " +
+		"SELECT job_id, state FROM workhorse.job_outcome" +
+		") jobs WHERE job_id = $1"
+	for {
+		var followingState string
+		if err := pool.QueryRow(ctx, stateSQL, suspensionJobID).Scan(&suspendedState); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, stateSQL, followingJobID).Scan(&followingState); err != nil {
+			t.Fatal(err)
+		}
+		if suspendedState == "succeeded" && followingState == "succeeded" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("workers did not finish: suspension=%s following=%s", suspendedState, followingState)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	stop()
+	if err := <-runResult; err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(order, ",") != strings.Join(fixture.ExpectedHandlerOrder, ",") {
+		t.Fatalf("unexpected handler order: %v", order)
+	}
+	if handlerRuns != fixture.ExpectedHandlerRuns {
+		t.Fatalf("expected %d handler runs, received %d", fixture.ExpectedHandlerRuns, handlerRuns)
+	}
+	if checkpointOperations != fixture.ExpectedCheckpointOperations {
+		t.Fatalf("expected %d checkpoint operations, received %d", fixture.ExpectedCheckpointOperations, checkpointOperations)
+	}
+	var attempts int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM workhorse.attempt_history WHERE job_id = $1", suspensionJobID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != fixture.ExpectedAttemptsAfterReplay {
+		t.Fatalf("expected %d retained attempts, received %d", fixture.ExpectedAttemptsAfterReplay, attempts)
+	}
+}
+
+func TestHandlerContextReturnsTypedFenceErrorsForCheckpointAndWait(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-durability-stale")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-durability-stale"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	jobID, err := queue.Enqueue(ctx, "durability.stale", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-durability-stale", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checkpointError := make(chan error, 1)
+	waitError := make(chan error, 1)
+	worker.Handle("durability.stale", func(
+		_ context.Context,
+		_ any,
+		handlerContext *workhorse.HandlerContext,
+	) (any, error) {
+		var accepted bool
+		if err := pool.QueryRow(
+			ctx,
+			"SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, '{}'::jsonb)",
+			jobID,
+			"go-durability-stale",
+			handlerContext.Job.FenceToken,
+		).Scan(&accepted); err != nil {
+			return nil, err
+		}
+		if !accepted {
+			return nil, errors.New("competing settlement was rejected")
+		}
+		_, checkpointErr := handlerContext.Checkpoint("stale-checkpoint", func() (any, error) {
+			return map[string]any{"saved": false}, nil
+		})
+		checkpointError <- checkpointErr
+		waitError <- handlerContext.Sleep("stale-wait", time.Millisecond)
+		return nil, nil
+	})
+
+	processed, runError := worker.RunOnce(ctx)
+	if !processed || !errors.Is(runError, workhorse.ErrStaleLease) {
+		t.Fatalf("expected stale settlement after competing completion: processed=%t err=%v", processed, runError)
+	}
+	checkpointErr := <-checkpointError
+	var checkpointLeaseLost *workhorse.CheckpointLeaseLostError
+	if !errors.As(checkpointErr, &checkpointLeaseLost) || checkpointLeaseLost.JobID != jobID ||
+		checkpointLeaseLost.CheckpointName != "stale-checkpoint" ||
+		!errors.Is(checkpointErr, workhorse.ErrLeaseLost) {
+		t.Fatalf("unexpected checkpoint fence error: %#v", checkpointErr)
+	}
+	waitErr := <-waitError
+	var waitLeaseLost *workhorse.WaitLeaseLostError
+	if !errors.As(waitErr, &waitLeaseLost) || waitLeaseLost.JobID != jobID ||
+		waitLeaseLost.WaitName != "stale-wait" || !errors.Is(waitErr, workhorse.ErrLeaseLost) {
+		t.Fatalf("unexpected wait fence error: %#v", waitErr)
+	}
+}
+
+type scheduleWaitQueryTracer struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (tracer *scheduleWaitQueryTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
+	if !strings.Contains(data.SQL, "schedule_wait_v1") {
+		return ctx
+	}
+	tracer.once.Do(func() { close(tracer.started) })
+	<-tracer.release
+	return ctx
+}
+
+func (*scheduleWaitQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestHandlerContextCoalescesWaitsAndCancelsOnSuspension(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-wait-coalescing")
+	ctx := context.Background()
+	tracer := &scheduleWaitQueryTracer{started: make(chan struct{}), release: make(chan struct{})}
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.Tracer = tracer
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-wait-coalescing"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	jobID, err := queue.Enqueue(ctx, "wait.coalescing", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-wait-coalescing", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errorsSeen := make(chan error, 2)
+	causes := make(chan error, 1)
+	worker.Handle("wait.coalescing", func(
+		handlerContext context.Context,
+		_ any,
+		durability *workhorse.HandlerContext,
+	) (any, error) {
+		go func() { errorsSeen <- durability.Sleep("shared", time.Second) }()
+		<-tracer.started
+		go func() { errorsSeen <- durability.Sleep("shared", time.Second) }()
+		close(tracer.release)
+		first, second := <-errorsSeen, <-errorsSeen
+		if first != second {
+			return nil, fmt.Errorf("same-name waits returned distinct errors: %v and %v", first, second)
+		}
+		<-handlerContext.Done()
+		cause := context.Cause(handlerContext)
+		if cause != first {
+			return nil, fmt.Errorf("handler cancellation cause %v differs from wait error %v", cause, first)
+		}
+		causes <- cause
+		return nil, nil
+	})
+
+	processed, err := worker.RunOnce(ctx)
+	if err != nil || !processed {
+		t.Fatalf("coalesced wait: processed=%t err=%v", processed, err)
+	}
+	if cause := <-causes; cause == nil {
+		t.Fatal("scheduled wait did not cancel the handler context")
+	}
+	var state string
+	var attempt int
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT state, current_attempt FROM workhorse.job_runtime WHERE job_id = $1",
+		jobID,
+	).Scan(&state, &attempt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "scheduled" || attempt != 1 {
+		t.Fatalf("unexpected coalesced wait state: state=%s attempt=%d", state, attempt)
+	}
 }
 
 type heartbeatQueryContextKey struct{}
@@ -158,7 +484,7 @@ func TestWorkerClaimsHandlesAndCompletesAJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.Handle("report.generate", func(_ context.Context, payload any) (any, error) {
+	worker.Handle("report.generate", func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 		return map[string]any{"reportId": payload.(map[string]any)["reportId"], "status": "ready"}, nil
 	})
 
@@ -212,7 +538,7 @@ func TestWorkerRecordsFailureAndLetsPostgreSQLScheduleTheRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	invocations := 0
-	worker.Handle("delivery.retry", func(_ context.Context, _ any) (any, error) {
+	worker.Handle("delivery.retry", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		invocations++
 		if invocations == 1 {
 			return nil, errors.New("temporary delivery failure")
@@ -289,7 +615,7 @@ func TestWorkersCannotClaimTheSameJobConcurrently(t *testing.T) {
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
-	first.Handle("exclusive", func(_ context.Context, _ any) (any, error) {
+	first.Handle("exclusive", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-release
 		return nil, nil
@@ -346,7 +672,7 @@ func TestWorkerRunBoundsConcurrencyAndRefillsSlots(t *testing.T) {
 	var active int
 	var maximum int
 	var stateMu sync.Mutex
-	worker.Handle("bounded", func(_ context.Context, payload any) (any, error) {
+	worker.Handle("bounded", func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 		sequence := int(payload.(map[string]any)["sequence"].(float64))
 		stateMu.Lock()
 		active++
@@ -424,7 +750,7 @@ func TestWorkerRunRotatesClaimsAcrossQueues(t *testing.T) {
 	}
 
 	handled := make(chan string, 4)
-	worker.Handle("rotated", func(_ context.Context, payload any) (any, error) {
+	worker.Handle("rotated", func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 		handled <- payload.(map[string]any)["queue"].(string)
 		return nil, nil
 	})
@@ -478,7 +804,7 @@ func TestWorkerRunStopsClaimsAndDrainsWithinTheGracePeriod(t *testing.T) {
 	started := make(chan int, 3)
 	finished := make(chan int, 3)
 	releaseFirst := make(chan struct{})
-	worker.Handle("drain", func(handlerContext context.Context, payload any) (any, error) {
+	worker.Handle("drain", func(handlerContext context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 		sequence := int(payload.(map[string]any)["sequence"].(float64))
 		started <- sequence
 		if sequence == 0 {
@@ -551,7 +877,7 @@ func TestWorkerSurfacesRejectedSettlementAsTypedStaleLease(t *testing.T) {
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
-	worker.Handle("stale", func(_ context.Context, _ any) (any, error) {
+	worker.Handle("stale", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-release
 		return map[string]any{"source": "handler"}, nil
@@ -628,7 +954,7 @@ func TestWorkerHeartbeatsKeepALongRunningAttemptOwned(t *testing.T) {
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
-	worker.Handle(fixture.JobType, func(_ context.Context, _ any) (any, error) {
+	worker.Handle(fixture.JobType, func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-release
 		return nil, nil
@@ -710,7 +1036,7 @@ func TestWorkerDeliversTypedCancellationAndAcknowledgesIt(t *testing.T) {
 	}
 	started := make(chan struct{})
 	cause := make(chan error, 1)
-	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any) (any, error) {
+	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-handlerContext.Done()
 		cause <- context.Cause(handlerContext)
@@ -830,7 +1156,7 @@ func TestWorkerDeliversDistinctDeadlineAndExecutionTimeoutCauses(t *testing.T) {
 			}
 			cause := make(chan error, 1)
 			hasDeadline := make(chan bool, 1)
-			worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any) (any, error) {
+			worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 				_, ok := handlerContext.Deadline()
 				hasDeadline <- ok
 				<-handlerContext.Done()
@@ -910,7 +1236,7 @@ func TestWorkerCancelsHandlerWithLeaseLossAfterFenceRecovery(t *testing.T) {
 	}
 	started := make(chan struct{})
 	cause := make(chan error, 1)
-	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any) (any, error) {
+	worker.Handle(fixture.JobType, func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-handlerContext.Done()
 		cause <- context.Cause(handlerContext)
@@ -1024,7 +1350,7 @@ func TestWorkerMaintenanceRecoversAnExpiredPeerLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.Handle("recovered", func(_ context.Context, _ any) (any, error) { return nil, nil })
+	worker.Handle("recovered", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) { return nil, nil })
 	processed, err := worker.RunOnce(ctx)
 	if err != nil || !processed {
 		t.Fatalf("recovered attempt: processed=%t err=%v", processed, err)
@@ -1087,7 +1413,7 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
-	worker.Handle("long-handler", func(handlerContext context.Context, _ any) (any, error) {
+	worker.Handle("long-handler", func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		close(started)
 		<-handlerContext.Done()
 		return nil, context.Cause(handlerContext)
@@ -1163,7 +1489,7 @@ func TestWorkerOwnershipLifecycleSupportsASingleConnectionPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker.Handle("single-connection", func(_ context.Context, _ any) (any, error) {
+	worker.Handle("single-connection", func(_ context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
 		time.Sleep(250 * time.Millisecond)
 		return map[string]any{"settled": true}, nil
 	})
@@ -1223,7 +1549,7 @@ func TestWorkerNotificationsWakeClaimsAndReconnectAfterListenerLoss(t *testing.T
 		t.Fatal(err)
 	}
 	handled := make(chan string, 2)
-	worker.Handle("notified", func(_ context.Context, payload any) (any, error) {
+	worker.Handle("notified", func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 		value := payload.(map[string]any)["value"].(string)
 		handled <- value
 		return nil, nil
@@ -1301,7 +1627,7 @@ func TestWorkerPollingOnlyFallbackLogsAndClaimsOnThePollInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	handled := make(chan string, 1)
-	worker.Handle("polled", func(_ context.Context, payload any) (any, error) {
+	worker.Handle("polled", func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 		handled <- payload.(map[string]any)["value"].(string)
 		return nil, nil
 	})
@@ -1351,7 +1677,7 @@ func TestWorkerPollingContinuesDuringNotificationReconnectBackoff(t *testing.T) 
 		t.Fatal(err)
 	}
 	handled := make(chan string, 1)
-	worker.Handle("polled-during-backoff", func(_ context.Context, payload any) (any, error) {
+	worker.Handle("polled-during-backoff", func(_ context.Context, payload any, _ *workhorse.HandlerContext) (any, error) {
 		handled <- payload.(map[string]any)["value"].(string)
 		return nil, nil
 	})

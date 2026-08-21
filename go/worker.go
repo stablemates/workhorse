@@ -113,8 +113,8 @@ type ClaimedJob struct {
 	LeaseExpiresAt     time.Time
 }
 
-// Handler processes one claimed payload outside a database transaction.
-type Handler func(context.Context, any) (any, error)
+// Handler processes one claimed payload with fenced durable operations outside a transaction.
+type Handler func(context.Context, any, *HandlerContext) (any, error)
 
 // WorkerOptions configures a bounded worker with notification-assisted polling.
 type WorkerOptions struct {
@@ -549,7 +549,11 @@ func (worker *Worker) execute(
 	}
 	handlerContext, cancelHandler := context.WithCancelCause(handlerParent)
 	stopOwnership, ownershipDone := worker.superviseOwnership(ctx, job, cancelHandler)
-	result, handlerError := handler(handlerContext, job.Payload)
+	durability := &HandlerContext{
+		Job: job, context: handlerContext, cancel: cancelHandler, executor: executor,
+		workerID: worker.workerID,
+	}
+	result, handlerError := handler(handlerContext, job.Payload, durability)
 	stopOwnership()
 	ownership := <-ownershipDone
 	cause := context.Cause(handlerContext)
@@ -558,6 +562,9 @@ func (worker *Worker) execute(
 
 	if ownership.err != nil {
 		return ownership.err
+	}
+	if durability.suspended.Load() {
+		return nil
 	}
 	if ownership.status == workerOwnershipCancelRequested {
 		return worker.acknowledgeCancellation(ctx, executor, job)
