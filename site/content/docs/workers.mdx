@@ -125,6 +125,22 @@ export default defineWorkerProcess({
 The process owns its database resources, worker loops, optional probes, and shutdown. Compile
 the definition before the CLI imports it — the CLI does not install a TypeScript loader.
 
+Python keeps ownership explicit through its connection context and adds the same bounded signal
+drain around a configured worker:
+
+```python
+import psycopg
+
+from workhorse import Worker, run_worker_process
+
+with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+    worker = Worker(connection).handle("email.send", send_email)
+    run_worker_process(worker)
+```
+
+The first termination signal stops claims and drains active jobs. A second signal or an expired
+deadline exits immediately, leaving PostgreSQL to recover any active leases.
+
 ## Pause, stop, and drain
 
 Three verbs cover controlled slowdown, and each answers a different situation:

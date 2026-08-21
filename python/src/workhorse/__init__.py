@@ -40,6 +40,7 @@ from .types import (
     Throttle,
 )
 from .worker import BatchHandler, Worker
+from .worker_process import run_worker_process
 
 __all__ = [
     "AsyncQueue",
@@ -82,4 +83,5 @@ __all__ = [
     "WaitLimitExceededError",
     "Worker",
     "WorkhorseError",
+    "run_worker_process",
 ]

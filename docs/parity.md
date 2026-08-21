@@ -77,7 +77,7 @@ telemetry, and graceful shutdown.
 | Batch handler delivery                       | Supported  | Supported | Planned   |
 | Schedule firing (in-process cron)            | Supported  | Planned   | Planned   |
 | Worker fleet registration and remote pause   | Supported  | Absent    | Absent    |
-| Graceful stop and signal drain               | Supported  | Planned   | Planned   |
+| Graceful stop and signal drain               | Supported  | Supported | Planned   |
 | Retention maintenance participation          | Supported  | Absent    | Absent    |
 | OpenTelemetry tracing and metrics            | Supported  | Planned   | Planned   |
 

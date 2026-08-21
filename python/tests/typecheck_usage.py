@@ -16,6 +16,7 @@ from workhorse import (
     Json,
     Queue,
     Worker,
+    run_worker_process,
 )
 
 
@@ -46,6 +47,10 @@ def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
         .handle("email.send", handle)
         .run_once()
     )
+
+
+def sync_worker_process(connection: psycopg.Connection[Any]) -> None:
+    run_worker_process(Worker(connection), shutdown_timeout_ms=20_000)
 
 
 def sync_batch_worker(connection: psycopg.Connection[Any]) -> bool:

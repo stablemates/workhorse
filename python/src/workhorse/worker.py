@@ -513,6 +513,9 @@ class Worker:
     def run(self) -> None:
         """Run until stopped, then return after every claimed job has settled."""
         requested_stop_version = self._stop_version_snapshot()
+        self._run_continuously(requested_stop_version)
+
+    def _run_continuously(self, requested_stop_version: int) -> None:
         with self._execution_lock:
             self._run_loop(
                 continuous=True,

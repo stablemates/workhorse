@@ -62,6 +62,9 @@ number of processes. This also lets a worker restart without taking down web ing
 On `SIGINT` or `SIGTERM`, the process stops claiming new work immediately, then waits for
 the jobs already running to finish. Connections close after the last one settles.
 
+Python processes get the same boundary by passing their configured `Worker` to
+`run_worker_process`. Keep the connection context outside that call so it closes after the drain.
+
 A few consequences worth knowing:
 
 - A claim already in flight may still land after shutdown starts. That job gets drained

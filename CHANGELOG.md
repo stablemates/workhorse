@@ -19,6 +19,10 @@ First published line. Requires **schema v46**, Node.js **22 or 24**, PostgreSQL 
 
 ### Added
 
+- `workhorse-pg`: `run_worker_process` adds bounded `SIGINT` and `SIGTERM` drain handling for the
+  synchronous worker. A second signal exits with its conventional code, while an expired deadline
+  exits with failure so PostgreSQL can recover active leases.
+
 - `@workhorse-js/core`: ordered, transactional schema migrations replace clean-install-only schema
   management. `migrateSchema` and the new `workhorse schema migrate` command apply immutable steps
   forward from the frozen version 43 baseline; each step commits one version behind the
