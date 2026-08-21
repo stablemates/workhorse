@@ -7,7 +7,8 @@ The synchronous Python `Worker` supplies the same core loop through `handle`, `r
 `run_once`. It rotates across queues, bounds concurrent slots, and drains active work after
 `stop`. Each heartbeat thread renews one claimed job's lease and delivers ownership signals through
 `HandlerContext.cancellation`. The Python worker can open a dedicated notification connection,
-while the TypeScript worker also participates in the worker registry.
+evaluate recurring definitions selected by `schedule_namespaces`, and bound catch-up with
+`schedule_catchup_limit`. The TypeScript worker also participates in the worker registry.
 Python's `handle_batch` follows the grouping contract in
 [315-batch-handlers.md](315-batch-handlers.md).
 

@@ -51,11 +51,11 @@ also enqueues through a separate module that imports the public package. The Go 
 bounded concurrency, fair multi-queue claiming, notification-assisted dispatch with polling
 fallback, ownership heartbeats, cancellation, and graceful drain. Python's synchronous worker
 provides bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable
-checkpoints, durable timers, signal and human-decision waits, and graceful drain,
+checkpoints, durable timers, signal and human-decision waits, schedule firing, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
-lifecycle support. Only a TypeScript worker fires schedules until [WH-309] ships. A deployment
-using Go needs a TypeScript worker for lifecycle capabilities that remain Planned under [WH-236],
-and to fire schedules until [WH-332] ships.
+lifecycle support. A deployment using Go needs a TypeScript worker for lifecycle capabilities that
+remain Planned under [WH-236]. It also needs a TypeScript or Python worker to fire schedules until
+[WH-332] ships.
 
 ## Worker runtime
 
@@ -76,7 +76,7 @@ telemetry, and graceful shutdown.
 | Linked child fan-out and result join         | Supported  | Supported | Planned   |
 | Latest-value progress reporting              | Supported  | Absent    | Absent    |
 | Batch handler delivery                       | Supported  | Supported | Planned   |
-| Schedule firing (in-process cron)            | Supported  | Planned   | Planned   |
+| Schedule firing (in-process cron)            | Supported  | Supported | Planned   |
 | Worker fleet registration and remote pause   | Supported  | Absent    | Absent    |
 | Graceful stop and signal drain               | Supported  | Supported | Supported |
 | Retention maintenance participation          | Supported  | Absent    | Absent    |
@@ -95,7 +95,7 @@ is a bug in this document.
 | ------------------------------- | --------------- | --------- |
 | Synchronous Python worker       | [WH-214]        | Backlog   |
 | Asynchronous Python worker      | [WH-221]        | Backlog   |
-| Python schedule firing          | [WH-309]        | Backlog   |
+| Python schedule firing          | [WH-309]        | In Review |
 | Go transactional enqueue client | [WH-228]        | In Review |
 | Go worker and module examples   | [WH-236]        | Backlog   |
 | Go schedule firing              | [WH-332]        | Backlog   |

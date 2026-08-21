@@ -57,6 +57,10 @@ const worker = new Worker(queue, {
 A worker with an empty list fires nothing. Point at least one worker at each namespace you
 synchronize, or its schedules sit idle.
 
+The synchronous Python `Worker` provides the same participation through `schedule_namespaces` and
+`schedule_catchup_limit`. Both runtimes evaluate definitions only when PostgreSQL grants the
+maintenance tick, so one process does the cron work for each pass.
+
 ## Why competing workers create one job
 
 Ten workers all notice the 02:00 occurrence is due. Each firing writes a durable key built from
@@ -71,8 +75,10 @@ expression during a deploy.
 
 If the whole fleet is down, nothing fires. When workers return, catch-up is bounded rather than
 replaying every missed occurrence. Schedules provide durable recurring work, not hard real-time
-alarms; prefer UTC cron expressions, since daylight saving makes local-time schedules ambiguous
-twice a year.
+alarms; prefer UTC cron expressions. If local clocks skip a scheduled time, Workhorse fires after
+the clock advances. If clocks repeat a time, Workhorse fires its first occurrence only. Hashed `H`
+fields also choose a stable offset across Python and TypeScript workers, so either runtime fires
+the same occurrence.
 
 ## What happens after firing
 

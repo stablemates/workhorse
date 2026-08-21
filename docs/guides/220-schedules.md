@@ -44,6 +44,9 @@ others find it taken and receive no job id, because they didn't create the job.
 You don't have to elect a leader or run exactly one scheduler. Any number of workers can
 race and the outcome is one job.
 
+TypeScript workers select definitions with `scheduleNamespaces`. Python workers use
+`schedule_namespaces`. Both evaluate schedules only after PostgreSQL grants the maintenance tick.
+
 ## Deploys don't cause duplicates either
 
 Every definition carries a revision that increments when you change it. A worker that loaded
@@ -60,8 +63,11 @@ memory can't fire yesterday's schedule. It just becomes a no-op.
   replaying every missed occurrence.
 - **Precision is about a second**, and firing waits for the next maintenance tick. This is
   not a real-time scheduler.
-- **Use UTC** for cron expressions unless you have a specific reason not to. Daylight saving
-  makes local-time schedules ambiguous twice a year.
+- **Use UTC** for cron expressions unless you have a specific reason not to. If local clocks
+  skip a scheduled time, Workhorse fires after the clock advances. If clocks repeat a time,
+  Workhorse fires its first occurrence only.
+- **Hashed fields stay stable across worker languages.** An `H` field spreads schedules to a
+  repeatable offset, so a Python worker and a TypeScript worker agree on the same occurrence.
 - **Cancelling one fired job doesn't disable the schedule.** The definition and the jobs it
   creates have separate lifecycles — tomorrow's occurrence still runs.
 

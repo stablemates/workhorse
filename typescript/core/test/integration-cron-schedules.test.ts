@@ -238,6 +238,29 @@ describe("cron schedules", () => {
     ).toBe(1);
   });
 
+  it("uses the cross-runtime offset for hashed cron fields", async () => {
+    await queue.syncSchedules("integration", [
+      {
+        name: "hashed-minute",
+        schedule: "H * * * *",
+        job: { type: "cron-tick", payload: {} },
+      },
+    ]);
+    const worker = new Worker(queue, {
+      workerId: "hashed-schedule-worker",
+      scheduleNamespaces: ["integration"],
+    }).handle("cron-tick", () => null);
+
+    await worker.runOnce();
+
+    const occurrence = await pool.query<{ minute: number }>(
+      `SELECT extract(minute FROM occurrence_at)::integer AS minute
+         FROM workhorse.schedule_occurrence
+        WHERE namespace = 'integration' AND schedule_name = 'hashed-minute'`,
+    );
+    expect(occurrence.rows).toEqual([{ minute: 44 }]);
+  });
+
   it("rejects stale schedule revisions after a definition changes", async () => {
     await queue.syncSchedules("integration", [
       {

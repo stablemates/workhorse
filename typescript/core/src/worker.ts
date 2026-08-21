@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { CronExpressionParser } from "cron-parser";
@@ -1881,14 +1881,15 @@ function dueOccurrences(
   now: Date,
   limit: number,
 ): Date[] {
+  const normalizedExpression = expandHashedCronFields(expression);
   if (!lastOccurrenceAt) {
-    const cron = CronExpressionParser.parse(expression, {
+    const cron = CronExpressionParser.parse(normalizedExpression, {
       currentDate: new Date(now.getTime() + 1_000),
     });
     return [cron.prev().toDate()];
   }
 
-  const cron = CronExpressionParser.parse(expression, { currentDate: lastOccurrenceAt });
+  const cron = CronExpressionParser.parse(normalizedExpression, { currentDate: lastOccurrenceAt });
   const occurrences: Date[] = [];
   while (occurrences.length < limit) {
     const occurrence = cron.next().toDate();
@@ -1896,4 +1897,52 @@ function dueOccurrences(
     occurrences.push(occurrence);
   }
   return occurrences;
+}
+
+function expandHashedCronFields(expression: string): string {
+  const fields = expression.trim().split(/\s+/);
+  const domains =
+    fields.length === 6
+      ? ([
+          [0, 59],
+          [0, 59],
+          [0, 23],
+          [1, 31],
+          [1, 12],
+          [0, 6],
+        ] as const)
+      : ([
+          [0, 59],
+          [0, 23],
+          [1, 31],
+          [1, 12],
+          [0, 6],
+        ] as const);
+  if (fields.length !== domains.length) return expression;
+
+  for (const [fieldIndex, [minimum, maximum]] of domains.entries()) {
+    let tokenIndex = 0;
+    fields[fieldIndex] = fields[fieldIndex]!.replace(
+      /(?<![A-Za-z])H(?:\((\d+)-(\d+)\))?(?:\/(\d+))?(?![A-Za-z])/g,
+      (
+        _token,
+        rangeStart: string | undefined,
+        rangeEnd: string | undefined,
+        rawStep: string | undefined,
+      ) => {
+        const lower = rangeStart === undefined ? minimum : Number(rangeStart);
+        const upper = rangeEnd === undefined ? maximum : Number(rangeEnd);
+        const step = rawStep === undefined ? undefined : Number(rawStep);
+        const digest = createHash("sha256")
+          .update(`${expression}:${fieldIndex}:${tokenIndex}`)
+          .digest();
+        tokenIndex += 1;
+        const hashed = digest.readUInt32BE(0);
+        const width = Math.min(upper - lower + 1, step ?? Number.POSITIVE_INFINITY);
+        const chosen = lower + (hashed % width);
+        return step === undefined ? String(chosen) : `${chosen}-${upper}/${step}`;
+      },
+    );
+  }
+  return fields.join(" ");
 }

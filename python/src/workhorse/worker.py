@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
+from hashlib import sha256
 from threading import Event, Lock, Thread, current_thread
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
+
+from croniter import croniter
+from dateutil.tz import enfold, resolve_imaginary, tzlocal
 
 from ._compatibility import CachedCompatibilityCheck
 from ._drivers import PsycopgConnection, Row, SyncExecutor
@@ -595,6 +600,9 @@ class Worker:
         poll_ms: int | None = None,
         lease_ms: int = 30_000,
         heartbeat_ms: int | None = None,
+        maintenance_interval_ms: int = 1_000,
+        schedule_namespaces: Sequence[str] = (),
+        schedule_catchup_limit: int = 100,
         notification_connection_factory: NotificationConnectionFactory | None = None,
         on_notification_error: Callable[[BaseException], None] | None = None,
     ) -> None:
@@ -639,6 +647,25 @@ class Worker:
         self.heartbeat_ms = heartbeat_ms if heartbeat_ms is not None else max(100, lease_ms // 3)
         if not 0 < self.heartbeat_ms < self.lease_ms:
             raise ValueError("heartbeat_ms must be positive and less than lease_ms")
+        if (
+            isinstance(maintenance_interval_ms, bool)
+            or not isinstance(maintenance_interval_ms, int)
+            or maintenance_interval_ms < 100
+        ):
+            raise ValueError("maintenance_interval_ms must be an integer of at least 100")
+        if (
+            isinstance(schedule_catchup_limit, bool)
+            or not isinstance(schedule_catchup_limit, int)
+            or not 1 <= schedule_catchup_limit <= 10_000
+        ):
+            raise ValueError("schedule_catchup_limit must be an integer between 1 and 10000")
+        unique_namespaces = tuple(dict.fromkeys(schedule_namespaces))
+        if any(not isinstance(namespace, str) or not namespace for namespace in unique_namespaces):
+            raise ValueError("schedule_namespaces must contain non-empty namespace names")
+        self.maintenance_interval_ms = maintenance_interval_ms
+        self.schedule_namespaces = unique_namespaces
+        self.schedule_catchup_limit = schedule_catchup_limit
+        self._last_maintenance_at = float("-inf")
         self._next_queue_index = 0
         self._state_lock = Lock()
         self._execution_lock = Lock()
@@ -854,8 +881,12 @@ class Worker:
                     self._wake.wait(self._dispatch_wait_seconds(listener))
                     continue
 
-                _require_lifecycle_row(self._executor.rows(STATEMENTS.promote, (100,)))
-                _require_lifecycle_row(self._executor.rows(STATEMENTS.recover_expired, (100, None)))
+                maintenance_was_due = self._run_maintenance_if_due()
+                if not maintenance_was_due:
+                    _require_lifecycle_row(self._executor.rows(STATEMENTS.promote, (100,)))
+                    _require_lifecycle_row(
+                        self._executor.rows(STATEMENTS.recover_expired, (100, None))
+                    )
                 empty_attempts = 0
                 while empty_attempts < len(self.queues):
                     if self._dispatch_state() != "ready":
@@ -897,6 +928,38 @@ class Worker:
         if errors:
             raise errors[0]
         return claimed_any
+
+    def _run_maintenance_if_due(self) -> bool:
+        now_monotonic = monotonic()
+        if now_monotonic - self._last_maintenance_at < self.maintenance_interval_ms / 1000:
+            return False
+        tick = self._executor.rows(STATEMENTS.tick, (100, 100))
+        self._last_maintenance_at = now_monotonic
+        owns_tick = bool(tick) and all(row["skipped_lock"] is not True for row in tick)
+        if not owns_tick or not self.schedule_namespaces:
+            return True
+        now = datetime.now(timezone.utc)
+        schedules = self._executor.rows(
+            STATEMENTS.list_schedules, (list(self.schedule_namespaces),)
+        )
+        for schedule in schedules:
+            last_occurrence_at = cast(datetime | None, schedule["last_occurrence_at"])
+            for occurrence in _due_occurrences(
+                str(schedule["cron_expression"]),
+                last_occurrence_at,
+                now,
+                self.schedule_catchup_limit,
+            ):
+                self._executor.rows(
+                    STATEMENTS.fire_schedule,
+                    (
+                        schedule["namespace"],
+                        schedule["schedule_name"],
+                        schedule["revision"],
+                        occurrence,
+                    ),
+                )
+        return True
 
     def _dispatch_wait_seconds(self, listener: JobNotificationListener | None) -> float:
         wait_ms = (
@@ -1138,6 +1201,111 @@ def _claimed_job(row: Row, queue: str) -> ClaimedJob:
         attempt_timeout_at=cast(Any, row["attempt_timeout_at"]),
         fence_token=int(cast(int, row["fence_token"])),
         lease_expires_at=cast(Any, row["lease_expires_at"]),
+    )
+
+
+def _due_occurrences(
+    expression: str,
+    last_occurrence_at: datetime | None,
+    now: datetime,
+    limit: int,
+) -> list[datetime]:
+    local_timezone = tzlocal()
+    local_now = now.astimezone(local_timezone)
+    cron_expression = _croniter_expression(expression)
+    if last_occurrence_at is None:
+        schedule = croniter(
+            cron_expression,
+            local_now.replace(tzinfo=None) + timedelta(seconds=1),
+            second_at_beginning=True,
+        )
+        while True:
+            occurrence = _local_cron_occurrence(schedule.get_prev(datetime), local_timezone)
+            if occurrence.astimezone(timezone.utc) <= now.astimezone(timezone.utc):
+                return [occurrence]
+    assert last_occurrence_at is not None
+    schedule = croniter(
+        cron_expression,
+        last_occurrence_at.astimezone(local_timezone).replace(tzinfo=None),
+        second_at_beginning=True,
+    )
+    occurrences: list[datetime] = []
+    while len(occurrences) < limit:
+        occurrence = _local_cron_occurrence(schedule.get_next(datetime), local_timezone)
+        if occurrence.astimezone(timezone.utc) > now.astimezone(timezone.utc):
+            break
+        occurrences.append(occurrence)
+    return occurrences
+
+
+def _local_cron_occurrence(occurrence: datetime, local_timezone: tzinfo) -> datetime:
+    local = enfold(occurrence.replace(tzinfo=local_timezone), fold=0)
+    return resolve_imaginary(local)
+
+
+def _croniter_expression(expression: str) -> str:
+    fields = expression.split()
+    if len(fields) not in {5, 6}:
+        return expression
+    domains = (
+        [(0, 59), (0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
+        if len(fields) == 6
+        else [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
+    )
+
+    for field_index, (minimum, maximum) in enumerate(domains):
+        fields[field_index] = _expand_hashed_cron_field(
+            fields[field_index], expression, field_index, minimum, maximum
+        )
+    weekdays = {
+        "sun": "0",
+        "mon": "1",
+        "tue": "2",
+        "wed": "3",
+        "thu": "4",
+        "fri": "5",
+        "sat": "6",
+    }
+
+    def last_weekday(match: re.Match[str]) -> str:
+        weekday = match.group(1).lower()
+        return f"L{weekdays.get(weekday, weekday)}"
+
+    fields[-1] = re.sub(
+        r"(?i)(sun|mon|tue|wed|thu|fri|sat|[0-7])L",
+        last_weekday,
+        fields[-1],
+    )
+    return " ".join(fields)
+
+
+def _expand_hashed_cron_field(
+    field: str,
+    expression: str,
+    field_index: int,
+    minimum: int,
+    maximum: int,
+) -> str:
+    token_index = 0
+
+    def hashed_field(match: re.Match[str]) -> str:
+        nonlocal token_index
+        lower = minimum if match.group(1) is None else int(match.group(1))
+        upper = maximum if match.group(2) is None else int(match.group(2))
+        step = None if match.group(3) is None else int(match.group(3))
+        seed = f"{expression}:{field_index}:{token_index}".encode()
+        token_index += 1
+        hashed = int.from_bytes(sha256(seed).digest()[:4], "big")
+        choice_width = upper - lower + 1
+        if step is not None:
+            choice_width = min(choice_width, step)
+        chosen = lower + hashed % choice_width
+        return str(chosen) if step is None else f"{chosen}-{upper}/{step}"
+
+    return re.sub(
+        r"(?<![A-Za-z])H(?:\((\d+)-(\d+)\))?(?:/(\d+))?(?![A-Za-z])",
+        hashed_field,
+        field,
     )
 
 
