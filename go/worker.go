@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 )
 
 const (
@@ -145,6 +148,7 @@ type Worker struct {
 	shutdownGracePeriod time.Duration
 	pollingOnly         bool
 	logger              *slog.Logger
+	metrics             *workerMetrics
 	runPermit           chan struct{}
 	handlerSlots        chan struct{}
 	handlers            map[string]Handler
@@ -240,10 +244,14 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	}
 	logger := options.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = slog.New(discardLogHandler{})
 	}
 	runPermit := make(chan struct{}, 1)
 	runPermit <- struct{}{}
+	metrics, err := newWorkerMetrics()
+	if err != nil {
+		return nil, fmt.Errorf(workerMetricCreationErrorFormat, err)
+	}
 	return &Worker{
 		pool:                pool,
 		queues:              uniqueQueues,
@@ -256,6 +264,7 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 		shutdownGracePeriod: shutdownGracePeriod,
 		pollingOnly:         options.PollingOnly,
 		logger:              logger,
+		metrics:             metrics,
 		runPermit:           runPermit,
 		handlerSlots:        make(chan struct{}, concurrency),
 		handlers:            make(map[string]Handler),
@@ -472,13 +481,46 @@ func (worker *Worker) maintenanceLoop(ctx context.Context) error {
 }
 
 func (worker *Worker) runMaintenance(ctx context.Context) error {
-	_, err := NewPGXExecutor(worker.pool).Query(
+	rows, err := NewPGXExecutor(worker.pool).Query(
 		ctx,
 		protocolStatementRegistry[recoverExpiredStatementName],
 		workerRecoveryLimit,
 		nil,
 	)
-	return err
+	if err != nil || len(rows) != 1 {
+		return err
+	}
+	expired, expiredOK := integer(rows[0][rowExpiredLeasesField])
+	retried, retriedOK := integer(rows[0][rowRetriedField])
+	rowsAffected, rowsOK := integer(rows[0][rowRowsAffectedField])
+	if expiredOK && expired > 0 {
+		if worker.metrics.enabled {
+			worker.metrics.expiredLeases.Add(ctx, int64(expired))
+		}
+	}
+	if worker.metrics.enabled && retriedOK && retried > 0 {
+		worker.metrics.retried.Add(
+			ctx,
+			int64(retried),
+			metric.WithAttributes(
+				attribute.String(queueNameAttribute, telemetryUnknownValue),
+				attribute.String(jobTypeAttribute, telemetryUnknownValue),
+			),
+		)
+	}
+	if rowsOK && rowsAffected > 0 {
+		logWorkerEvent(
+			ctx,
+			worker.logger,
+			slog.LevelInfo,
+			leasesRecoveredEvent,
+			leasesRecoveredLogMessage,
+			slog.Int(recoveryRowsAffectedAttribute, rowsAffected),
+			slog.Int(recoveryExpiredLeasesAttribute, expired),
+			slog.Int(recoveryRetriedAttribute, retried),
+		)
+	}
+	return nil
 }
 
 func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, error) {
@@ -506,6 +548,7 @@ func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*Claime
 	for range worker.queues {
 		queue := worker.queues[worker.nextQueueIndex]
 		worker.nextQueueIndex = (worker.nextQueueIndex + 1) % len(worker.queues)
+		startedAt := time.Now()
 		rows, err := executor.Query(
 			ctx,
 			protocolStatementRegistry[claimStatementName],
@@ -516,6 +559,20 @@ func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*Claime
 		if err != nil {
 			return nil, err
 		}
+		claimResult := telemetryEmptyValue
+		if len(rows) > 0 {
+			claimResult = telemetryClaimedValue
+		}
+		if worker.metrics.enabled {
+			worker.metrics.claimDuration.Record(
+				ctx,
+				float64(time.Since(startedAt))/float64(time.Millisecond),
+				metric.WithAttributes(
+					attribute.String(queueNameAttribute, queue),
+					attribute.String(claimResultAttribute, claimResult),
+				),
+			)
+		}
 		if len(rows) == 0 {
 			continue
 		}
@@ -525,6 +582,17 @@ func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*Claime
 		job, err := claimedJob(rows[0], queue)
 		if err != nil {
 			return nil, err
+		}
+		logWorkerEvent(
+			ctx,
+			worker.logger,
+			slog.LevelDebug,
+			jobClaimedEvent,
+			jobClaimedLogMessage,
+			jobLogAttributes(job, worker.workerID)...,
+		)
+		if worker.metrics.enabled {
+			worker.metrics.claimed.Add(ctx, 1, jobMetricOptions(job))
 		}
 		return &job, nil
 	}
@@ -541,11 +609,45 @@ func (worker *Worker) execute(
 	executor Executor,
 	job ClaimedJob,
 	handler Handler,
-) error {
-	handlerParent := ctx
+) (resultError error) {
+	handlerParent, span := startHandlerSpan(ctx, job)
+	outcome := handlerOutcomeUnknown
+	startedAt := time.Now()
+	logWorkerEvent(
+		handlerParent,
+		worker.logger,
+		slog.LevelDebug,
+		handlerStartedEvent,
+		handlerStartedLogMessage,
+		jobLogAttributes(job, worker.workerID)...,
+	)
+	defer func() {
+		finishHandlerSpan(span, outcome, resultError)
+		worker.metrics.recordHandler(handlerParent, job, outcome, time.Since(startedAt))
+		attributes := append(
+			jobLogAttributes(job, worker.workerID),
+			slog.String(handlerOutcomeAttribute, string(outcome)),
+		)
+		logWorkerEvent(
+			handlerParent,
+			worker.logger,
+			slog.LevelInfo,
+			executionFinishedEvent,
+			executionFinishedLogMessage,
+			attributes...,
+		)
+		logWorkerEvent(
+			handlerParent,
+			worker.logger,
+			slog.LevelDebug,
+			handlerFinishedEvent,
+			handlerFinishedLogMessage,
+			attributes...,
+		)
+	}()
 	cancelDeadline := func() {}
 	if expiration, cause := ownershipExpiration(job); expiration != nil {
-		handlerParent, cancelDeadline = context.WithDeadlineCause(ctx, *expiration, cause)
+		handlerParent, cancelDeadline = context.WithDeadlineCause(handlerParent, *expiration, cause)
 	}
 	handlerContext, cancelHandler := context.WithCancelCause(handlerParent)
 	stopOwnership, ownershipDone := worker.superviseOwnership(ctx, job, cancelHandler)
@@ -564,36 +666,74 @@ func (worker *Worker) execute(
 		return ownership.err
 	}
 	if durability.suspended.Load() {
+		outcome = handlerOutcomeSuspended
 		return nil
 	}
 	if ownership.status == workerOwnershipCancelRequested {
+		outcome = handlerOutcomeCanceled
 		return worker.acknowledgeCancellation(ctx, executor, job)
 	}
-	if ownership.status == workerOwnershipDeadline || ownership.status == workerOwnershipTimeout {
+	if ownership.status == workerOwnershipDeadline {
+		outcome = handlerOutcomeDeadlineExceeded
+		return nil
+	}
+	if ownership.status == workerOwnershipTimeout {
+		outcome = handlerOutcomeTimeout
 		return nil
 	}
 	if ownership.status == workerOwnershipStale {
+		outcome = handlerOutcomeLeaseLost
 		return &StaleLeaseError{JobID: job.ID}
 	}
 	if ownership.status == workerOwnershipNotDue {
 		return errors.New(expirationNotDueMessage)
 	}
 	if errors.Is(cause, ErrCancellationRequested) {
+		outcome = handlerOutcomeCanceled
 		return worker.acknowledgeCancellation(ctx, executor, job)
 	}
-	if errors.Is(cause, ErrDeadlineExceeded) || errors.Is(cause, ErrExecutionTimeout) {
+	if errors.Is(cause, ErrDeadlineExceeded) {
+		outcome = handlerOutcomeDeadlineExceeded
+		return worker.settleExpiration(ctx, executor, job)
+	}
+	if errors.Is(cause, ErrExecutionTimeout) {
+		outcome = handlerOutcomeTimeout
 		return worker.settleExpiration(ctx, executor, job)
 	}
 	if errors.Is(cause, ErrLeaseLost) {
+		outcome = handlerOutcomeLeaseLost
 		return &StaleLeaseError{JobID: job.ID}
 	}
 	if ctx.Err() != nil {
+		outcome = handlerOutcomeCanceled
 		return ctx.Err()
 	}
 	if handlerError != nil {
-		return worker.fail(ctx, executor, job, handlerError)
+		span.RecordError(handlerTelemetryError(handlerError, job.RedactErrorDetails))
+		span.SetStatus(codes.Error, handlerFailedSpanStatusMessage)
+		state, err := worker.failWithState(ctx, executor, job, handlerError)
+		if err != nil {
+			return err
+		}
+		switch state {
+		case workerFailureReady, workerFailureScheduled:
+			outcome = handlerOutcomeRetry
+		case workerFailureFailed:
+			outcome = handlerOutcomeFailed
+		case workerFailureCancelRequested:
+			outcome = handlerOutcomeCanceled
+		case workerFailureDeadline:
+			outcome = handlerOutcomeDeadlineExceeded
+		case workerFailureTimeout:
+			outcome = handlerOutcomeTimeout
+		default:
+			outcome = handlerOutcomeLeaseLost
+		}
+		return nil
 	}
+	outcome = handlerOutcomeSucceeded
 	if err := worker.complete(ctx, executor, job, result); errors.Is(err, ErrStaleLease) {
+		outcome = handlerOutcomeLeaseLost
 		return worker.reconcileRejectedSettlement(ctx, executor, job, err)
 	} else {
 		return err
@@ -705,7 +845,25 @@ func (worker *Worker) refreshOwnership(ctx context.Context, job ClaimedJob) (own
 	if err != nil {
 		return emptyString, err
 	}
-	return parseOwnershipStatus(rows)
+	status, err := parseOwnershipStatus(rows)
+	if err == nil && status != workerOwnershipAccepted {
+		if worker.metrics.enabled {
+			worker.metrics.heartbeatFailures.Add(
+				ctx,
+				1,
+				metric.WithAttributes(attribute.String(heartbeatStatusAttribute, string(status))),
+			)
+		}
+		logWorkerEvent(
+			ctx,
+			worker.logger,
+			slog.LevelInfo,
+			heartbeatRejectedEvent,
+			heartbeatRejectedLogMessage,
+			append(jobLogAttributes(job, worker.workerID), slog.String(heartbeatStatusAttribute, string(status)))...,
+		)
+	}
+	return status, err
 }
 
 func (worker *Worker) expireOwnership(ctx context.Context, job ClaimedJob) (ownershipStatus, error) {
@@ -852,44 +1010,87 @@ func (worker *Worker) complete(ctx context.Context, executor Executor, job Claim
 	if !accepted {
 		return &StaleLeaseError{JobID: job.ID}
 	}
+	if worker.metrics.enabled {
+		worker.metrics.completed.Add(ctx, 1, jobMetricOptions(job))
+	}
+	logWorkerEvent(
+		ctx,
+		worker.logger,
+		slog.LevelInfo,
+		jobCompletedEvent,
+		jobCompletedLogMessage,
+		jobLogAttributes(job, worker.workerID)...,
+	)
 	return nil
 }
 
 func (worker *Worker) fail(ctx context.Context, executor Executor, job ClaimedJob, handlerError error) error {
+	_, err := worker.failWithState(ctx, executor, job, handlerError)
+	return err
+}
+
+func (worker *Worker) failWithState(
+	ctx context.Context,
+	executor Executor,
+	job ClaimedJob,
+	handlerError error,
+) (string, error) {
 	envelope := handlerErrorEnvelope(handlerError, job.RedactErrorDetails)
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
-		return err
+		return emptyString, err
 	}
 	lease := worker.fencedLease(job)
 	arguments := append(lease.parameters(), encoded, nil)
 	rows, err := executor.Query(ctx, protocolStatementRegistry[failStatementName], arguments...)
 	if err != nil {
-		return err
+		return emptyString, err
 	}
 	if len(rows) != 1 {
-		return errors.New(invalidFailureResultMessage)
+		return emptyString, errors.New(invalidFailureResultMessage)
 	}
 	state, ok := rows[0][rowStateField].(string)
 	if !ok {
-		return errors.New(invalidFailureResultMessage)
+		return emptyString, errors.New(invalidFailureResultMessage)
 	}
+	if worker.metrics.enabled {
+		worker.metrics.failed.Add(
+			ctx,
+			1,
+			metric.WithAttributes(
+				attribute.String(queueNameAttribute, job.Queue),
+				attribute.String(jobTypeAttribute, job.Type),
+				attribute.String(attemptOutcomeAttribute, state),
+			),
+		)
+		if state == workerFailureReady || state == workerFailureScheduled {
+			worker.metrics.retried.Add(ctx, 1, jobMetricOptions(job))
+		}
+	}
+	logWorkerEvent(
+		ctx,
+		worker.logger,
+		slog.LevelInfo,
+		jobFailureProcessedEvent,
+		jobFailureProcessedLogMessage,
+		append(jobLogAttributes(job, worker.workerID), slog.String(attemptOutcomeAttribute, state))...,
+	)
 	switch state {
 	case workerFailureReady, workerFailureScheduled, workerFailureFailed:
-		return nil
+		return state, nil
 	case workerFailureCancelRequested:
-		return worker.acknowledgeCancellation(ctx, executor, job)
+		return state, worker.acknowledgeCancellation(ctx, executor, job)
 	case workerFailureDeadline, workerFailureTimeout:
-		return nil
+		return state, nil
 	case workerFailureStale:
-		return worker.reconcileRejectedSettlement(
+		return state, worker.reconcileRejectedSettlement(
 			ctx,
 			executor,
 			job,
 			&StaleLeaseError{JobID: job.ID},
 		)
 	default:
-		return fmt.Errorf(rejectedFailureStateFormat, state)
+		return emptyString, fmt.Errorf(rejectedFailureStateFormat, state)
 	}
 }
 

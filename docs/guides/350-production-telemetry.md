@@ -1,8 +1,8 @@
 # How do I see what workers are doing in production?
 
 Workhorse emits OpenTelemetry traces, logs, and metrics through the standard language APIs. Your
-application chooses the SDK and backend, so telemetry does not affect queue correctness. Python
-workers use the optional `telemetry` package extra and stay inert without a configured SDK.
+application chooses the SDK, log handler, and backend, so telemetry does not affect queue correctness.
+Python workers use the optional `telemetry` package extra. The Go worker uses `log/slog` for logs.
 
 ## Follow a job from enqueue to execution
 
@@ -14,8 +14,9 @@ When a worker claims the job, `Worker` restores the stored parent before it crea
 span. The enqueue and handler can run in different processes or at very different times while
 remaining part of one trace.
 
-The TypeScript queue creates the enqueue span and stores its context. The Python worker restores
-that same context and uses the same worker span names, so mixed-language deployments share traces.
+The TypeScript queue creates the enqueue span and stores its context. Python and Go workers restore
+that context and use the same worker span names, so mixed-language deployments share traces. The Go
+host installs its W3C propagator and providers without adding an SDK or exporter to the library.
 
 Workhorse does not persist baggage. Baggage often contains user-controlled or sensitive values,
 and durable storage would make those values difficult to bound and redact.
@@ -33,6 +34,10 @@ phase rather than an idle poll.
 Logs carry stable event names and structured job, queue, worker, and schedule identifiers. They do
 not carry payloads, results, error messages, idempotency keys, or saved durable values. A shared
 backend therefore does not receive another copy of the application data with every record.
+
+Go applications pass an `*slog.Logger` through `WorkerOptions.Logger`. Handler boundaries, claims,
+settlements, rejected heartbeats, recovery, and batch dispatch then use the same event and attribute
+vocabulary as the JavaScript worker.
 
 The dashboard host also emits a structured log after each matched oRPC procedure returns.
 Successful requests use debug severity, slow requests use warning, and failed requests use error,

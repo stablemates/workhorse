@@ -4,9 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 const (
@@ -215,6 +219,39 @@ func (coordinator *batchCoordinator) remove(queue string, target *batchMember) {
 }
 
 func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
+	queue := batch[0].item.Context.Job.Queue
+	full := len(batch) == coordinator.options.MaxSize
+	linger := time.Since(batch[0].arrived)
+	if coordinator.worker.metrics.enabled {
+		attributes := metric.WithAttributes(
+			attribute.String(queueNameAttribute, queue),
+			attribute.String(jobTypeAttribute, coordinator.jobType),
+			attribute.Bool(batchFullAttribute, full),
+		)
+		coordinator.worker.metrics.batchSize.Record(
+			batch[0].item.Context.Context,
+			int64(len(batch)),
+			attributes,
+		)
+		coordinator.worker.metrics.batchLinger.Record(
+			batch[0].item.Context.Context,
+			float64(linger)/float64(time.Millisecond),
+			attributes,
+		)
+	}
+	logWorkerEvent(
+		batch[0].item.Context.Context,
+		coordinator.worker.logger,
+		slog.LevelDebug,
+		batchDispatchedEvent,
+		batchDispatchedLogMessage,
+		slog.String(queueNameAttribute, queue),
+		slog.String(jobTypeAttribute, coordinator.jobType),
+		slog.String(workerIDAttribute, coordinator.worker.workerID),
+		slog.Int(batchSizeAttribute, len(batch)),
+		slog.Float64(batchLingerAttribute, float64(linger)/float64(time.Millisecond)),
+		slog.Bool(batchFullAttribute, full),
+	)
 	batchID, hasBatchID := newBatchID()
 	if hasBatchID {
 		coordinator.record(batch[0].item.Context.Context, recordBatchDispatchStatementName, batchID, batch)

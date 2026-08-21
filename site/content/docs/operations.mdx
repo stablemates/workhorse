@@ -28,10 +28,14 @@ queries because their data-controlled cardinality would make aggregate storage u
 
 ## OpenTelemetry
 
-TypeScript and Python workers emit the same worker span, metric, and structured event names, so one
-set of dashboards can cover a mixed-language fleet. The Python package exposes this through its
-optional `telemetry` extra, which installs the API without choosing an SDK or exporter. If the host
-does not configure an SDK, telemetry stays inert and worker behavior is unchanged.
+TypeScript, Python, and Go workers emit the same worker span and metric names, so one set of
+dashboards can cover a mixed-language fleet. A Go worker restores the W3C context stored by a
+TypeScript enqueue, which keeps the handler in the enqueue trace across processes.
+
+The Python package exposes telemetry through its optional `telemetry` extra. Applications supply
+OpenTelemetry providers and exporters, while Go applications also pass an application-owned
+`log/slog` logger through `WorkerOptions.Logger`. Without a configured provider, telemetry stays
+inert and worker behavior is unchanged.
 
 Worker metrics use queue, job type, and a closed outcome vocabulary. Job IDs remain on sampled
 spans and structured events, while payloads, results, and error messages never enter telemetry.

@@ -49,8 +49,8 @@ payload and result contracts. Go and Python can define and synchronize recurring
 caller-owned executors. The Go test lane enqueues through each documented executor. Its release test
 also enqueues through a separate module that imports the public package. The Go worker provides
 bounded concurrency, fair multi-queue claiming, notification-assisted dispatch with polling
-fallback, ownership heartbeats, cancellation, durable checkpoints, durable timers, and graceful
-drain. Python's synchronous worker
+fallback, ownership heartbeats, cancellation, durable checkpoints, durable timers, OpenTelemetry
+tracing and metrics, structured logs, and graceful drain. Python's synchronous worker
 provides bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable
 checkpoints, durable timers, signal and human-decision waits, schedule firing, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
@@ -81,7 +81,7 @@ telemetry, and graceful shutdown.
 | Worker fleet registration and remote pause   | Supported  | Absent    | Absent    |
 | Graceful stop and signal drain               | Supported  | Supported | Supported |
 | Retention maintenance participation          | Supported  | Absent    | Absent    |
-| OpenTelemetry tracing and metrics            | Supported  | Supported | Planned   |
+| OpenTelemetry tracing and metrics            | Supported  | Supported | Supported |
 | Shared runtime fixtures executed             | Supported  | Supported | Planned   |
 
 The Planned worker columns reflect the acceptance criteria in [WH-214], [WH-221], and [WH-236].

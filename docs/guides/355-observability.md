@@ -9,6 +9,9 @@ Workhorse records metrics when it enqueues, claims, executes, cancels, recovers,
 operations. It also records schedule firing and maintenance.
 
 The Python worker records the same bounded runtime metrics across the same execution stages.
+The Go worker emits the worker-owned subset through the OpenTelemetry Go API. Claims, settlements,
+handler outcomes and timing, batch delivery, rejected heartbeats, and lease recovery use the same
+instrument names, units, and bounded attributes as the JavaScript runtime.
 
 Execution metrics use queue, job type, and outcome as attributes. They never use a job ID, payload,
 worker ID, or error message. Those values grow without a stable bound, so putting them in metric
