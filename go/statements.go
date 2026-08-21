@@ -6,10 +6,33 @@ const (
 	emptyString                          = ""
 	enqueueManyStatementName             = "enqueue_many_v2"
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
+	promoteStatementName                 = "promote_v1"
+	claimStatementName                   = "claim_v3"
+	completeStatementName                = "complete_v1"
+	failStatementName                    = "fail_v1"
 	rowOrdinalField                      = "ordinal"
 	rowJobIDField                        = "job_id"
 	rowOutcomeField                      = "outcome"
 	rowReasonField                       = "reason"
+	rowAcceptedField                     = "accepted"
+	rowStateField                        = "state"
+	rowJobTypeField                      = "job_type"
+	rowPriorityField                     = "priority"
+	rowPayloadField                      = "payload"
+	rowContractVersionField              = "contract_version"
+	rowResultMaxBytesField               = "result_max_bytes"
+	rowRedactErrorDetailsField           = "redact_error_details"
+	rowTraceContextField                 = "trace_context"
+	rowAttemptField                      = "attempt"
+	rowMaxAttemptsField                  = "max_attempts"
+	rowRetryPolicyField                  = "retry_policy"
+	rowDeadlineAtField                   = "deadline_at"
+	rowExecutionTimeoutMSField           = "execution_timeout_ms"
+	rowAttemptTimeoutAtField             = "attempt_timeout_at"
+	rowFenceTokenField                   = "fence_token"
+	rowLeaseExpiresAtField               = "lease_expires_at"
+	errorNameField                       = "name"
+	errorMessageField                    = "message"
 
 	enqueueAcceptedValue       = "accepted"
 	enqueueReplayedValue       = "replayed"
@@ -26,7 +49,16 @@ const (
 	dependencyCancelValue          = "cancel"
 	dependencyFailValue            = "fail"
 	defaultScopeValue              = "default"
+	workerFailureReady             = "ready"
+	workerFailureScheduled         = "scheduled"
+	workerFailureFailed            = "failed"
+	workerFailureStale             = "stale"
 	timestampLayout                = "2006-01-02T15:04:05.000Z"
+	defaultWorkerQueueValue        = "default"
+	defaultWorkerName              = "go-worker"
+	redactedHandlerErrorNameValue  = "RedactedJobError"
+	redactedHandlerErrorTextValue  = "Job handler failed; details redacted"
+	genericHandlerErrorName        = "Error"
 
 	enqueueBatchTooLargeMessage        = "enqueue batch exceeds the shared limit"
 	invalidEnqueueResultMessage        = "PostgreSQL returned an invalid enqueue result"
@@ -52,23 +84,38 @@ const (
 	dependencyLimitPrerequisites       = "prerequisites"
 	dependencyLimitDependents          = "dependents"
 	dependencyLimitUnresolved          = "unresolved_dependents"
+	staleLeaseMessage                  = "PostgreSQL rejected settlement under a stale lease"
+	staleLeaseErrorFormat              = "%s for job %s"
+	nilWorkerPoolMessage               = "worker pool must not be nil"
+	workerLeaseRangeMessage            = "worker lease duration must be a whole number of milliseconds between %s and %s"
+	negativeWorkerPollMessage          = "worker poll interval must not be negative"
+	emptyWorkerJobTypeMessage          = "worker job type must not be empty"
+	nilWorkerHandlerMessage            = "worker handler must not be nil"
+	invalidClaimResultMessage          = "PostgreSQL returned an invalid claim result"
+	missingWorkerHandlerFormat         = "no handler registered for %s"
+	invalidCompletionResultMessage     = "PostgreSQL returned an invalid completion result"
+	invalidFailureResultMessage        = "PostgreSQL returned an invalid failure result"
+	rejectedFailureStateFormat         = "PostgreSQL rejected failure settlement with state %s"
+	workerIDFallbackFormat             = "%s-%d"
+	workerIDFormat                     = "%s-%d-%s"
 )
 
 var internalStatementRegistry = map[string]string{
 	schemaVersionStatement:               `SELECT version FROM workhorse.schema_version ORDER BY version`,
 	syncScheduleDefinitionsStatementName: `SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)`,
+	promoteStatementName:                 `SELECT workhorse.promote_v1($1::integer) AS promoted`,
 }
 
 var protocolStatementRegistry = map[string]string{
 	enqueueManyStatementName:       `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal`,
-	"claim_v3":                     `SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)`,
+	claimStatementName:             `SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)`,
 	"record_batch_dispatch_v1":     `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	"record_batch_failure_v1":      `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	"heartbeat_v2":                 `SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
 	"expire_owned_telemetry_v1":    `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
 	"recover_expired_telemetry_v1": `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
-	"complete_v1":                  `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
-	"fail_v1":                      `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
+	completeStatementName:          `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,
+	failStatementName:              `SELECT workhorse.fail_v1($1::uuid, $2::text, $3::bigint, $4::jsonb, $5::integer) AS state`,
 	"cancel_v1":                    `SELECT status, state, current_attempt, requested_at, requested_by, reason, finished_at FROM workhorse.cancel_v1($1::uuid, $2::text, $3::text)`,
 	"acknowledge_cancel_v1":        `SELECT workhorse.acknowledge_cancel_v1($1::uuid, $2::text, $3::bigint) AS accepted`,
 	"save_checkpoint_v1":           `SELECT status, checkpoint_value, attempt, fence_token::text, worker_id, created_at FROM workhorse.save_checkpoint_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)`,

@@ -47,13 +47,14 @@ The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `w
 single and batch enqueue over pgx and `database/sql`, including every stable enqueue option except
 payload and result contracts. Go and Python can define and synchronize recurring schedules through
 caller-owned executors. The Go test lane enqueues through each documented executor. Its release test
-also enqueues through a separate module that imports the public package. Python's synchronous worker
+also enqueues through a separate module that imports the public package. The Go worker claims and
+settles one job at a time through a polling loop. Python's synchronous worker
 provides bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable
 checkpoints, durable timers, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
 lifecycle support. Only a TypeScript worker fires schedules until [WH-309] ships. A deployment
-enqueueing from Go needs a
-TypeScript worker to run jobs until [WH-236] ships, and to fire schedules until [WH-332] ships.
+using Go needs a TypeScript worker for lifecycle capabilities that remain Planned under [WH-236],
+and to fire schedules until [WH-332] ships.
 
 ## Worker runtime
 
@@ -61,24 +62,24 @@ Every worker row is the runtime's own responsibility above the SQL protocol: loc
 handler dispatch, concurrency, heartbeats, polling or notifications, cancellation delivery,
 telemetry, and graceful shutdown.
 
-| Capability                                   | TypeScript | Python    | Go      |
-| -------------------------------------------- | ---------- | --------- | ------- |
-| Claiming and handler execution               | Supported  | Supported | Planned |
-| Bounded worker concurrency                   | Supported  | Supported | Planned |
-| Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Planned |
-| Cooperative cancellation delivery            | Supported  | Supported | Planned |
-| Notification-assisted dispatch with polling  | Supported  | Supported | Planned |
-| Durable checkpoints (handler context)        | Supported  | Supported | Planned |
-| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Planned |
-| Signal and human-decision waits              | Supported  | Planned   | Planned |
-| Linked child fan-out and result join         | Supported  | Planned   | Planned |
-| Latest-value progress reporting              | Supported  | Absent    | Absent  |
-| Batch handler delivery                       | Supported  | Supported | Planned |
-| Schedule firing (in-process cron)            | Supported  | Planned   | Planned |
-| Worker fleet registration and remote pause   | Supported  | Absent    | Absent  |
-| Graceful stop and signal drain               | Supported  | Planned   | Planned |
-| Retention maintenance participation          | Supported  | Absent    | Absent  |
-| OpenTelemetry tracing and metrics            | Supported  | Planned   | Planned |
+| Capability                                   | TypeScript | Python    | Go        |
+| -------------------------------------------- | ---------- | --------- | --------- |
+| Claiming and handler execution               | Supported  | Supported | Supported |
+| Bounded worker concurrency                   | Supported  | Supported | Planned   |
+| Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Planned   |
+| Cooperative cancellation delivery            | Supported  | Supported | Planned   |
+| Notification-assisted dispatch with polling  | Supported  | Supported | Planned   |
+| Durable checkpoints (handler context)        | Supported  | Supported | Planned   |
+| Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Planned   |
+| Signal and human-decision waits              | Supported  | Planned   | Planned   |
+| Linked child fan-out and result join         | Supported  | Planned   | Planned   |
+| Latest-value progress reporting              | Supported  | Absent    | Absent    |
+| Batch handler delivery                       | Supported  | Supported | Planned   |
+| Schedule firing (in-process cron)            | Supported  | Planned   | Planned   |
+| Worker fleet registration and remote pause   | Supported  | Absent    | Absent    |
+| Graceful stop and signal drain               | Supported  | Planned   | Planned   |
+| Retention maintenance participation          | Supported  | Absent    | Absent    |
+| OpenTelemetry tracing and metrics            | Supported  | Planned   | Planned   |
 
 The Planned worker columns reflect the acceptance criteria in [WH-214], [WH-221], and [WH-236].
 Those work items cover individual and batch handlers, durable primitives, concurrency, heartbeats,
