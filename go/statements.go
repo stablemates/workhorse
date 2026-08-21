@@ -2,12 +2,43 @@ package workhorse
 
 const schemaVersionStatement = "schema_version"
 
+const (
+	emptyString              = ""
+	enqueueManyStatementName = "enqueue_many_v2"
+	rowOrdinalField          = "ordinal"
+	rowJobIDField            = "job_id"
+	rowOutcomeField          = "outcome"
+	rowReasonField           = "reason"
+
+	enqueueAcceptedValue       = "accepted"
+	enqueueReplayedValue       = "replayed"
+	enqueueReplacedValue       = "replaced"
+	enqueueNonReplaceableValue = "non_replaceable"
+	enqueueCoalescedValue      = "coalesced"
+
+	reasonIncompatibleKeyModeValue = "incompatible_key_mode"
+	reasonNotPendingValue          = "not_pending"
+	reasonWindowElapsedValue       = "window_elapsed_pending"
+
+	enqueueBatchTooLargeMessage     = "enqueue batch exceeds the shared limit"
+	invalidEnqueueResultMessage     = "PostgreSQL returned an invalid enqueue result"
+	idempotencyConflictMessage      = "PostgreSQL rejected a materially different idempotent enqueue"
+	dependencyCycleMessage          = "PostgreSQL rejected a cyclic job dependency"
+	dependencyLimitExceededMessage  = "PostgreSQL rejected a job dependency limit"
+	idempotencyConflictSQLState     = "P1001"
+	dependencyCycleSQLState         = "P1003"
+	dependencyLimitExceededSQLState = "P1005"
+	dependencyLimitPrerequisites    = "prerequisites"
+	dependencyLimitDependents       = "dependents"
+	dependencyLimitUnresolved       = "unresolved_dependents"
+)
+
 var internalStatementRegistry = map[string]string{
 	schemaVersionStatement: `SELECT version FROM workhorse.schema_version ORDER BY version`,
 }
 
 var protocolStatementRegistry = map[string]string{
-	"enqueue_many_v2":              `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal`,
+	enqueueManyStatementName:       `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal`,
 	"claim_v3":                     `SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)`,
 	"record_batch_dispatch_v1":     `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	"record_batch_failure_v1":      `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,

@@ -11,6 +11,7 @@ import type {
   Queryable,
 } from "../src/index.js";
 import {
+  assertFixtureValue,
   loadSqlProtocolFixtures,
   assertSqlProtocolCompatible,
   verifySqlProtocolFixtures,
@@ -21,6 +22,7 @@ import type {
   ExpirationRuntimeFixture,
   GracefulDrainRuntimeFixture,
   HeartbeatCadenceRuntimeFixture,
+  JsonValue,
   LeaseLossRuntimeFixture,
   RuntimeWriteOperation,
   SuspensionReplayRuntimeFixture,
@@ -751,7 +753,12 @@ describe("SQL protocol conformance fixtures", () => {
         };
         const queue = new Queue(transaction);
         await queue.enqueueMany([fixture.application as EnqueueRequest], transaction);
-        expect(serialized).toEqual([fixture.postgres]);
+        assertFixtureValue(
+          [fixture.postgres],
+          serialized as JsonValue,
+          `${fixture.id}.postgres`,
+          new Map(),
+        );
 
         const accepted = await requestDatabase.pool.query<{
           ordinal: number;

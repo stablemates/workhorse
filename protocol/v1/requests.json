@@ -34,5 +34,33 @@
       "tags": ["conformance"],
       "idempotency": { "scope": "protocol", "key": "serialize", "ttlMs": 60000 }
     }
+  },
+  {
+    "id": "minimal-enqueue-request",
+    "application": {
+      "type": "protocol.minimal",
+      "payload": { "message": "hello" },
+      "options": {}
+    },
+    "postgres": {
+      "queue": "default",
+      "type": "protocol.minimal",
+      "payload": { "message": "hello" },
+      "priority": 0,
+      "contractVersion": null,
+      "payloadMaxBytes": 1048576,
+      "resultMaxBytes": 1048576,
+      "sensitivePayloadKeys": [],
+      "sensitiveResultKeys": [],
+      "runAt": { "$type": "timestamp" },
+      "deadline": null,
+      "concurrencyKey": null,
+      "executionTimeoutMs": null,
+      "maxAttempts": 25,
+      "retryPolicy": null,
+      "prerequisiteJobId": null,
+      "dependencies": null,
+      "tags": []
+    }
   }
 ]

@@ -36,6 +36,12 @@ func (err *CompatibilityError) Error() string {
 	return fmt.Sprintf("SQL protocol compatibility check refused mutation: %s", err.Code)
 }
 
+// Is matches compatibility errors by refusal code.
+func (err *CompatibilityError) Is(target error) bool {
+	other, ok := target.(*CompatibilityError)
+	return ok && other != nil && err.Code == other.Code
+}
+
 // CheckCompatibility compares an installed schema and client protocol version.
 func CheckCompatibility(installedSchemaVersion *int, clientProtocolVersion int) error {
 	var code CompatibilityCode
