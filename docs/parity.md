@@ -72,7 +72,7 @@ telemetry, and graceful shutdown.
 | Durable checkpoints (handler context)        | Supported  | Supported | Planned   |
 | Durable timers (`sleep` / `sleepUntil`)      | Supported  | Supported | Planned   |
 | Signal and human-decision waits              | Supported  | Supported | Planned   |
-| Linked child fan-out and result join         | Supported  | Planned   | Planned   |
+| Linked child fan-out and result join         | Supported  | Supported | Planned   |
 | Latest-value progress reporting              | Supported  | Absent    | Absent    |
 | Batch handler delivery                       | Supported  | Supported | Planned   |
 | Schedule firing (in-process cron)            | Supported  | Planned   | Planned   |

@@ -10,6 +10,7 @@ from workhorse import (
     AsyncQueue,
     BatchHandlerItem,
     BatchHandlerOutcome,
+    ChildJobRequest,
     EnqueueOptions,
     HandlerContext,
     Idempotency,
@@ -34,7 +35,16 @@ def sync_worker(connection: psycopg.Connection[Any], database_url: str) -> bool:
         prepared = context.checkpoint("prepare", lambda: {"payload": payload})
         signal = context.wait_for_signal("approval", timeout_ms=60_000)
         decision = context.wait_for_human("review", {"signal": signal})
-        return {"jobId": context.job.id, "prepared": prepared, "decision": decision}
+        child = context.run_child("audit", "audit.write", {"decision": decision})
+        children = context.run_children(
+            (ChildJobRequest("notify", "notify.send", {"child": child}),)
+        )
+        return {
+            "jobId": context.job.id,
+            "prepared": prepared,
+            "decision": decision,
+            "children": children,
+        }
 
     return (
         Worker(

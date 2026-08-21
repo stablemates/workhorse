@@ -21,11 +21,16 @@ from ._notifications import (
     JobNotificationListener,
     NotificationConnectionFactory,
 )
+from ._protocol import serialize_child_request
 from ._statements import STATEMENTS, DriverStatement
 from .errors import (
     CancellationRequestedError,
     CheckpointConflictError,
     CheckpointLeaseLostError,
+    ChildConflictError,
+    ChildLeaseLostError,
+    ChildLimitExceededError,
+    ChildResultLimitExceededError,
     DeadlineExceededError,
     ExecutionTimeoutError,
     HumanWaitAlreadyWaitingError,
@@ -44,7 +49,9 @@ from .types import (
     BatchHandlerItem,
     BatchHandlerOutcome,
     CancellationToken,
+    ChildJobRequest,
     ClaimedJob,
+    EnqueueOptions,
     HandlerContext,
     JobCheckpoint,
     JobWait,
@@ -80,6 +87,7 @@ AttemptOutcome = Literal[
     "attempt_timeout",
     "cancelled",
     "suspended_for_wait",
+    "suspended_for_child",
 ]
 _STATUS_OUTCOMES: dict[str, AttemptOutcome] = {
     "cancel_requested": "cancelled",
@@ -140,6 +148,8 @@ class _HandlerDurability:
         self._wait_calls: dict[str, Future[None]] = {}
         self._signal_calls: dict[str, Future[Json]] = {}
         self._human_calls: dict[str, tuple[str, Future[Json]]] = {}
+        self._child_calls: dict[str, tuple[str, Future[Json]]] = {}
+        self._children_call: tuple[str, Future[dict[str, Json]]] | None = None
 
     def context(self) -> HandlerContext:
         return HandlerContext(
@@ -152,6 +162,8 @@ class _HandlerDurability:
             self.sleep_until,
             self.wait_for_signal,
             self.wait_for_human,
+            self.run_child,
+            self.run_children,
         )
 
     def _load_checkpoints(self) -> dict[str, JobCheckpoint]:
@@ -430,6 +442,143 @@ class _HandlerDurability:
                 current = self._human_calls.get(name)
                 if current is not None and current[1] is pending:
                     del self._human_calls[name]
+
+    def run_child(
+        self,
+        name: str,
+        type: str,
+        payload: Json,
+        options: EnqueueOptions,
+    ) -> Json:
+        if not isinstance(name, str) or not 1 <= len(name) <= 200:
+            raise ValueError("Child name must contain between 1 and 200 characters")
+        request = serialize_child_request(self._job, type, payload, options, "default")
+        encoded = json.dumps(request, separators=(",", ":"), allow_nan=False, sort_keys=True)
+        with self._lock:
+            current = self._child_calls.get(name)
+            if current is None:
+                pending: Future[Json] = Future()
+                self._child_calls[name] = (encoded, pending)
+                owns_call = True
+            else:
+                pending_request, pending = current
+                if pending_request != encoded:
+                    raise ChildConflictError(self._job.id, name)
+                owns_call = False
+        if not owns_call:
+            return pending.result()
+        try:
+            self._cancellation.raise_if_cancelled()
+            row = _require_lifecycle_row(
+                self._executor.rows(
+                    STATEMENTS.create_child,
+                    (self._job.id, self._worker_id, self._job.fence_token, name, encoded),
+                )
+            )
+            status = row["status"]
+            if status == "stale":
+                raise ChildLeaseLostError(self._job.id)
+            if status == "conflict":
+                raise ChildConflictError(self._job.id, name)
+            if status == "limit_exceeded":
+                raise ChildLimitExceededError(self._job.id)
+            if status == "created":
+                if self._arbiter.submit("suspended_for_child"):
+                    self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
+                raise _DURABLE_WAIT_SUSPENSION
+            if status != "completed":
+                raise RuntimeError(f"Unexpected child status: {status}")
+            result = cast(Json, row["result"])
+            pending.set_result(result)
+            return result
+        except BaseException as error:
+            pending.set_exception(error)
+            raise
+        finally:
+            with self._lock:
+                current = self._child_calls.get(name)
+                if current is not None and current[1] is pending:
+                    del self._child_calls[name]
+
+    def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+        if isinstance(children, (str, bytes)) or not isinstance(children, Sequence):
+            raise TypeError("Children must be a sequence")
+        if len(children) > 100:
+            raise ChildLimitExceededError(self._job.id)
+        names: set[str] = set()
+        requests: list[dict[str, Json]] = []
+        for child in children:
+            if not isinstance(child, ChildJobRequest):
+                raise TypeError("Each child must be a ChildJobRequest")
+            if not isinstance(child.name, str) or not 1 <= len(child.name) <= 200:
+                raise ValueError("Child name must contain between 1 and 200 characters")
+            if child.name in names:
+                raise ValueError("Child names must be unique")
+            names.add(child.name)
+            requests.append(
+                {
+                    "name": child.name,
+                    "request": serialize_child_request(
+                        self._job,
+                        child.type,
+                        child.payload,
+                        child.options,
+                        "default",
+                    ),
+                }
+            )
+        encoded = json.dumps(requests, separators=(",", ":"), allow_nan=False, sort_keys=True)
+        with self._lock:
+            current = self._children_call
+            if current is None:
+                pending: Future[dict[str, Json]] = Future()
+                self._children_call = (encoded, pending)
+                owns_call = True
+            else:
+                pending_request, pending = current
+                if pending_request != encoded:
+                    raise ChildConflictError(self._job.id, "child set")
+                owns_call = False
+        if not owns_call:
+            return pending.result()
+        try:
+            self._cancellation.raise_if_cancelled()
+            row = _require_lifecycle_row(
+                self._executor.rows(
+                    STATEMENTS.create_children,
+                    (self._job.id, self._worker_id, self._job.fence_token, encoded),
+                )
+            )
+            status = row["status"]
+            if status == "stale":
+                raise ChildLeaseLostError(self._job.id)
+            if status == "conflict":
+                raise ChildConflictError(self._job.id, "child set")
+            if status == "limit_exceeded":
+                raise ChildLimitExceededError(self._job.id)
+            if status == "result_too_large":
+                raise ChildResultLimitExceededError(
+                    self._job.id,
+                    int(cast(int, row["result_bytes"] or 0)),
+                    int(cast(int, row["result_limit_bytes"] or 0)),
+                )
+            if status == "created":
+                if self._arbiter.submit("suspended_for_child"):
+                    self._cancellation._cancel(_DURABLE_WAIT_SUSPENSION)
+                raise _DURABLE_WAIT_SUSPENSION
+            if status != "completed":
+                raise RuntimeError(f"Unexpected child-set status: {status}")
+            result = cast(dict[str, Json], row["results"] or {})
+            pending.set_result(result)
+            return result
+        except BaseException as error:
+            pending.set_exception(error)
+            raise
+        finally:
+            with self._lock:
+                current = self._children_call
+                if current is not None and current[1] is pending:
+                    self._children_call = None
 
 
 class Worker:
@@ -920,7 +1069,7 @@ class Worker:
         arbiter.submit("completed")
 
     def _finish_lifecycle_outcome(self, job: ClaimedJob, outcome: AttemptOutcome | None) -> bool:
-        if outcome == "suspended_for_wait":
+        if outcome in {"suspended_for_wait", "suspended_for_child"}:
             return True
         if outcome == "cancelled":
             if not self._acknowledge_cancel(job):

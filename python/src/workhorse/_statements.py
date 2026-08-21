@@ -40,6 +40,8 @@ class StatementRegistry:
     send_signal: DriverStatement
     wait_for_human: DriverStatement
     complete_human_wait: DriverStatement
+    create_child: DriverStatement
+    create_children: DriverStatement
 
 
 STATEMENTS = StatementRegistry(
@@ -219,6 +221,26 @@ STATEMENTS = StatementRegistry(
             "SELECT status, result, completed_at, completed_by "
             "FROM workhorse.complete_human_wait_v1("
             "$1::uuid, $2::text, $3::jsonb, $4::text, $5::text)"
+        ),
+    ),
+    create_child=DriverStatement(
+        psycopg=(
+            "SELECT status, child_job_id, child_type, created_at, joined_at, result "
+            "FROM workhorse.create_child_v1(%s::uuid, %s::text, %s::bigint, %s::text, %s::jsonb)"
+        ),
+        asyncpg=(
+            "SELECT status, child_job_id, child_type, created_at, joined_at, result "
+            "FROM workhorse.create_child_v1($1::uuid, $2::text, $3::bigint, $4::text, $5::jsonb)"
+        ),
+    ),
+    create_children=DriverStatement(
+        psycopg=(
+            "SELECT status, children, results, result_bytes, result_limit_bytes "
+            "FROM workhorse.create_children_v1(%s::uuid, %s::text, %s::bigint, %s::jsonb)"
+        ),
+        asyncpg=(
+            "SELECT status, children, results, result_bytes, result_limit_bytes "
+            "FROM workhorse.create_children_v1($1::uuid, $2::text, $3::bigint, $4::jsonb)"
         ),
     ),
 )

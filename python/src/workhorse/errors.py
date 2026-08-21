@@ -64,6 +64,39 @@ class CheckpointConflictError(WorkhorseError):
         )
 
 
+class ChildLeaseLostError(LifecycleError):
+    def __init__(self, parent_job_id: str) -> None:
+        self.parent_job_id = parent_job_id
+        super().__init__(
+            f"Cannot create a child for job {parent_job_id} because the lease is stale or expired"
+        )
+
+
+class ChildConflictError(WorkhorseError):
+    def __init__(self, parent_job_id: str, child_name: str) -> None:
+        self.parent_job_id = parent_job_id
+        self.child_name = child_name
+        super().__init__(
+            f"Child {child_name} for job {parent_job_id} already exists with a different request"
+        )
+
+
+class ChildLimitExceededError(WorkhorseError):
+    def __init__(self, parent_job_id: str) -> None:
+        self.parent_job_id = parent_job_id
+        super().__init__(f"Job {parent_job_id} exceeds the supported child limit")
+
+
+class ChildResultLimitExceededError(WorkhorseError):
+    def __init__(self, parent_job_id: str, result_bytes: int, result_limit_bytes: int) -> None:
+        self.parent_job_id = parent_job_id
+        self.result_bytes = result_bytes
+        self.result_limit_bytes = result_limit_bytes
+        super().__init__(
+            f"Joined child results for job {parent_job_id} exceed its configured size limit"
+        )
+
+
 class WaitLeaseLostError(LifecycleError):
     def __init__(self, job_id: str, wait_name: str) -> None:
         self.job_id = job_id

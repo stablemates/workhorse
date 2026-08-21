@@ -79,6 +79,14 @@ class EnqueueRequest:
 
 
 @dataclass(frozen=True)
+class ChildJobRequest:
+    name: str
+    type: str
+    payload: Json
+    options: EnqueueOptions = field(default_factory=EnqueueOptions)
+
+
+@dataclass(frozen=True)
 class EnqueueResult:
     job_id: str
     outcome: EnqueueOutcome
@@ -197,6 +205,8 @@ class HandlerContext:
     _sleep_until: Callable[[str, datetime], None] = field(repr=False)
     _wait_for_signal: Callable[[str, int | None], Json] = field(repr=False)
     _wait_for_human: Callable[[str, Json, int | None], Json] = field(repr=False)
+    _run_child: Callable[[str, str, Json, EnqueueOptions], Json] = field(repr=False)
+    _run_children: Callable[[Sequence[ChildJobRequest]], dict[str, Json]] = field(repr=False)
 
     def get_checkpoint(self, name: str) -> JobCheckpoint | None:
         return self._get_checkpoint(name)
@@ -218,6 +228,18 @@ class HandlerContext:
 
     def wait_for_human(self, name: str, context: Json, *, timeout_ms: int | None = None) -> Json:
         return self._wait_for_human(name, context, timeout_ms)
+
+    def run_child(
+        self,
+        name: str,
+        type: str,
+        payload: Json,
+        options: EnqueueOptions | None = None,
+    ) -> Json:
+        return self._run_child(name, type, payload, options or EnqueueOptions())
+
+    def run_children(self, children: Sequence[ChildJobRequest]) -> dict[str, Json]:
+        return self._run_children(children)
 
     def _as_batch_context(self) -> BatchHandlerContext:
         return BatchHandlerContext(

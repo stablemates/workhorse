@@ -7,6 +7,7 @@ from typing import cast
 
 from .errors import CompatibilityCode, ProtocolCompatibilityError
 from .types import (
+    ClaimedJob,
     Debounce,
     Dependencies,
     EnqueueOptions,
@@ -119,6 +120,42 @@ def serialize_request(request: EnqueueRequest, default_queue: str) -> dict[str, 
         value["debounce"] = _debounce(options.debounce)
     if options.throttle is not None:
         value["throttle"] = _throttle(options.throttle)
+    return value
+
+
+def serialize_child_request(
+    parent: ClaimedJob,
+    type: str,
+    payload: Json,
+    options: EnqueueOptions,
+    default_queue: str,
+) -> dict[str, Json]:
+    _validate_options(options)
+    if any((options.idempotency, options.debounce, options.throttle, options.dependencies)):
+        raise TypeError("Child jobs cannot use coalescing or dependency enqueue options")
+    value: dict[str, Json] = {
+        "queue": options.queue or default_queue,
+        "type": type,
+        "payload": payload,
+        "priority": options.priority,
+        "contractVersion": None,
+        "payloadMaxBytes": DEFAULT_VALUE_MAX_BYTES,
+        "resultMaxBytes": DEFAULT_VALUE_MAX_BYTES,
+        "sensitivePayloadKeys": [],
+        "sensitiveResultKeys": [],
+        "deadline": _timestamp(options.deadline),
+        "concurrencyKey": options.concurrency_key,
+        "executionTimeoutMs": options.execution_timeout_ms,
+        "maxAttempts": options.max_attempts,
+        "retryPolicy": dict(options.retry_policy) if options.retry_policy is not None else None,
+        "prerequisiteJobId": None,
+        "dependencies": None,
+        "tags": list(options.tags),
+    }
+    if parent.trace_context is not None:
+        value["traceContext"] = parent.trace_context
+    if options.run_at is not None:
+        value["runAt"] = _timestamp(options.run_at)
     return value
 
 
