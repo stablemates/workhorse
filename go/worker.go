@@ -655,7 +655,7 @@ func (worker *Worker) execute(
 		Job: job, context: handlerContext, cancel: cancelHandler, executor: executor,
 		workerID: worker.workerID,
 	}
-	result, handlerError := handler(handlerContext, job.Payload, durability)
+	result, handlerError := callHandler(job.Type, handler, handlerContext, job.Payload, durability)
 	stopOwnership()
 	ownership := <-ownershipDone
 	cause := context.Cause(handlerContext)
@@ -738,6 +738,21 @@ func (worker *Worker) execute(
 	} else {
 		return err
 	}
+}
+
+func callHandler(
+	jobType string,
+	handler Handler,
+	ctx context.Context,
+	payload any,
+	durability *HandlerContext,
+) (result any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf(workerHandlerPanicFormat, jobType, recovered)
+		}
+	}()
+	return handler(ctx, payload, durability)
 }
 
 func (worker *Worker) superviseOwnership(

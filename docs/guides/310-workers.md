@@ -66,6 +66,9 @@ the jobs already running to finish. Connections close after the last one settles
 Python processes get the same boundary by passing their configured `Worker` to
 `run_worker_process`. Keep the connection context outside that call so it closes after the drain.
 
+Go applications pass a context from `signal.NotifyContext` to `Worker.Run`. A handler panic fails
+that attempt, while the worker stays alive to serve later jobs.
+
 A few consequences worth knowing:
 
 - A claim already in flight may still land after shutdown starts. That job gets drained

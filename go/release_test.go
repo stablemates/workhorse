@@ -69,6 +69,24 @@ func main() {
 	if err := tx.Commit(ctx); err != nil {
 		panic(err)
 	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: "module-consumer",
+		WorkerID: "module-consumer",
+		PollingOnly: true,
+	})
+	if err != nil {
+		panic(err)
+	}
+	worker.Handle("consumer.enqueue", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return map[string]any{"externalWorker": true}, nil
+	})
+	processed, err := worker.RunOnce(ctx)
+	if err != nil {
+		panic(err)
+	}
+	if !processed {
+		panic("external worker did not process its job")
+	}
 	fmt.Print(jobID)
 }
 `
@@ -97,6 +115,15 @@ func main() {
 	}
 	t.Cleanup(pool.Close)
 	assertJobCount(t, pool, jobID, 1)
+	var state string
+	var externalWorker bool
+	if err := pool.QueryRow(context.Background(), `SELECT state, (result->>'externalWorker')::boolean
+		FROM workhorse.job_outcome WHERE job_id = $1::uuid`, jobID).Scan(&state, &externalWorker); err != nil {
+		t.Fatal(err)
+	}
+	if state != "succeeded" || !externalWorker {
+		t.Fatalf("external worker outcome: state=%s result=%t", state, externalWorker)
+	}
 }
 
 func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
@@ -129,6 +156,9 @@ func TestGoSupportContractMatchesRepositoryDeclarations(t *testing.T) {
 	packageManifest := readRepositoryFile(t, "package.json")
 	if !strings.Contains(packageManifest, `"go:test": "tsx scripts/with-env.ts go -C go test ./..."`) {
 		t.Fatal("package.json does not expose the Go support test lane through the worktree environment")
+	}
+	if !strings.Contains(packageManifest, `"go:test:race": "tsx scripts/with-env.ts go -C go test -race ./..."`) {
+		t.Fatal("package.json does not expose the Go race test lane through the worktree environment")
 	}
 
 	databaseURL := os.Getenv("WORKHORSE_TEST_DATABASE_URL")

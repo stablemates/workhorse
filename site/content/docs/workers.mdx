@@ -144,6 +144,10 @@ with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
 The first termination signal stops claims and drains active jobs. A second signal or an expired
 deadline exits immediately, leaving PostgreSQL to recover any active leases.
 
+Go applications create the same boundary with `signal.NotifyContext`, then pass that context to
+`Worker.Run`. A handler panic becomes a recorded attempt failure, so it does not terminate the
+worker process or prevent later jobs from running.
+
 ## Pause, stop, and drain
 
 Three verbs cover controlled slowdown, and each answers a different situation:

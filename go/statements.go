@@ -149,6 +149,7 @@ const (
 	batchSizeRangeFormat               = "batch maximum size must be between 1 and %d"
 	batchSizeConcurrencyMessage        = "batch maximum size must not exceed worker concurrency"
 	batchLingerRangeFormat             = "batch linger must be a whole number of milliseconds between zero and %s"
+	workerHandlerPanicFormat           = "handler for %s panicked: %v"
 	batchHandlerPanicFormat            = "batch handler for %s panicked: %v"
 	batchOutcomeCountFormat            = "batch handler for %s returned %d outcomes for %d jobs"
 	invalidBatchOutcomeFormat          = "batch handler for %s returned an invalid outcome at index %d"

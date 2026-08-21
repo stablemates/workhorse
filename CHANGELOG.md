@@ -19,6 +19,10 @@ First published line. Requires **schema v46**, Node.js **22 or 24**, PostgreSQL 
 
 ### Added
 
+- `github.com/stablemates/workhorse/go`: individual handler panics now become recorded attempt
+  failures without stopping the worker. Compiled process and external-module coverage verifies
+  graceful signal drain, crash recovery, and the public worker API under the race detector.
+
 - `workhorse-pg`: synchronous handlers can suspend through named signal and human-decision waits,
   then replay the retained external value in the same logical attempt. Synchronous and asynchronous
   queue clients deliver attributed values with idempotency and typed conflict errors.

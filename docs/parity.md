@@ -47,7 +47,8 @@ The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `w
 single and batch enqueue over pgx and `database/sql`, including every stable enqueue option except
 payload and result contracts. Go and Python can define and synchronize recurring schedules through
 caller-owned executors. The Go test lane enqueues through each documented executor. Its release test
-also enqueues through a separate module that imports the public package. The Go worker provides
+also runs a worker from a separate module that imports the public package. Compiled process tests
+exercise signal drain and lease recovery after a kill. The Go worker provides
 bounded concurrency, fair multi-queue claiming, notification-assisted dispatch with polling
 fallback, ownership heartbeats, cancellation, durable checkpoints, durable timers, OpenTelemetry
 tracing and metrics, structured logs, and graceful drain. Python's synchronous worker
