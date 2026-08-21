@@ -47,8 +47,9 @@ The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `w
 single and batch enqueue over pgx and `database/sql`, including every stable enqueue option except
 payload and result contracts. Go and Python can define and synchronize recurring schedules through
 caller-owned executors. The Go test lane enqueues through each documented executor. Its release test
-also enqueues through a separate module that imports the public package. The Go worker claims and
-settles one job at a time through a polling loop. Python's synchronous worker
+also enqueues through a separate module that imports the public package. The Go worker provides
+bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, and graceful
+drain through a polling loop. Python's synchronous worker
 provides bounded concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, durable
 checkpoints, durable timers, signal and human-decision waits, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
@@ -65,7 +66,7 @@ telemetry, and graceful shutdown.
 | Capability                                   | TypeScript | Python    | Go        |
 | -------------------------------------------- | ---------- | --------- | --------- |
 | Claiming and handler execution               | Supported  | Supported | Supported |
-| Bounded worker concurrency                   | Supported  | Supported | Planned   |
+| Bounded worker concurrency                   | Supported  | Supported | Supported |
 | Heartbeats, lease recovery, fenced ownership | Supported  | Supported | Supported |
 | Cooperative cancellation delivery            | Supported  | Supported | Supported |
 | Notification-assisted dispatch with polling  | Supported  | Supported | Planned   |
@@ -77,7 +78,7 @@ telemetry, and graceful shutdown.
 | Batch handler delivery                       | Supported  | Supported | Planned   |
 | Schedule firing (in-process cron)            | Supported  | Planned   | Planned   |
 | Worker fleet registration and remote pause   | Supported  | Absent    | Absent    |
-| Graceful stop and signal drain               | Supported  | Supported | Planned   |
+| Graceful stop and signal drain               | Supported  | Supported | Supported |
 | Retention maintenance participation          | Supported  | Absent    | Absent    |
 | OpenTelemetry tracing and metrics            | Supported  | Planned   | Planned   |
 

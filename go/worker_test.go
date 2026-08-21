@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
+	"go.uber.org/goleak"
 )
 
 type workerRuntimeFixture struct {
@@ -294,6 +295,218 @@ func TestWorkersCannotClaimTheSameJobConcurrently(t *testing.T) {
 	close(release)
 	if err := <-firstResult; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWorkerRunBoundsConcurrencyAndRefillsSlots(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-concurrency")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-concurrency"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	for sequence := range 3 {
+		if _, err := queue.Enqueue(ctx, "bounded", map[string]any{"sequence": sequence}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "bounded-worker", Concurrency: 2,
+		LeaseDuration: time.Second, PollInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan int, 3)
+	releases := []chan struct{}{make(chan struct{}), make(chan struct{}), make(chan struct{})}
+	var active int
+	var maximum int
+	var stateMu sync.Mutex
+	worker.Handle("bounded", func(_ context.Context, payload any) (any, error) {
+		sequence := int(payload.(map[string]any)["sequence"].(float64))
+		stateMu.Lock()
+		active++
+		maximum = max(maximum, active)
+		stateMu.Unlock()
+		started <- sequence
+		<-releases[sequence]
+		stateMu.Lock()
+		active--
+		stateMu.Unlock()
+		return map[string]any{"sequence": sequence}, nil
+	})
+
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	first := <-started
+	secondRunContext, stopSecondRun := context.WithCancel(ctx)
+	secondRunResult := make(chan error, 1)
+	go func() { secondRunResult <- worker.Run(secondRunContext) }()
+	second := <-started
+	select {
+	case sequence := <-started:
+		t.Fatalf("worker exceeded its concurrency bound by starting job %d", sequence)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releases[first])
+	third := <-started
+	for _, sequence := range []int{second, third} {
+		close(releases[sequence])
+	}
+	stopSecondRun()
+	if err := <-secondRunResult; err != nil {
+		t.Fatalf("concurrent Run did not stop while waiting for the worker: %v", err)
+	}
+	stop()
+	if err := <-runResult; err != nil {
+		t.Fatal(err)
+	}
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if maximum != 2 || active != 0 {
+		t.Fatalf("unexpected handler concurrency: maximum=%d active=%d", maximum, active)
+	}
+}
+
+func TestWorkerRunRotatesClaimsAcrossQueues(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-rotation")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "busy")
+	for sequence := range 3 {
+		if _, err := queue.Enqueue(ctx, "rotated", map[string]any{
+			"queue": "busy", "sequence": sequence,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := queue.Enqueue(ctx, "rotated", map[string]any{
+		"queue": "quiet", "sequence": 3,
+	}, workhorse.EnqueueOptions{Queue: "quiet"}); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queues: []string{"busy", "quiet"}, WorkerID: "rotation-worker", Concurrency: 1,
+		LeaseDuration: time.Second, PollInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handled := make(chan string, 4)
+	worker.Handle("rotated", func(_ context.Context, payload any) (any, error) {
+		handled <- payload.(map[string]any)["queue"].(string)
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	order := make([]string, 0, 4)
+	for range 4 {
+		select {
+		case queueName := <-handled:
+			order = append(order, queueName)
+		case <-time.After(time.Second):
+			t.Fatal("worker did not process every queued job")
+		}
+	}
+	stop()
+	if err := <-runResult; err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(order, ",") != "busy,quiet,busy,busy" {
+		t.Fatalf("unexpected queue rotation: %v", order)
+	}
+}
+
+func TestWorkerRunStopsClaimsAndDrainsWithinTheGracePeriod(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-drain")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	queueName := "go-worker-drain"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	for sequence := range 3 {
+		if _, err := queue.Enqueue(ctx, "drain", map[string]any{"sequence": sequence}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "drain-worker", Concurrency: 2,
+		LeaseDuration: time.Second, PollInterval: 5 * time.Millisecond,
+		ShutdownGracePeriod: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan int, 3)
+	finished := make(chan int, 3)
+	releaseFirst := make(chan struct{})
+	worker.Handle("drain", func(handlerContext context.Context, payload any) (any, error) {
+		sequence := int(payload.(map[string]any)["sequence"].(float64))
+		started <- sequence
+		if sequence == 0 {
+			<-releaseFirst
+		} else {
+			<-handlerContext.Done()
+		}
+		finished <- sequence
+		return nil, context.Cause(handlerContext)
+	})
+
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	first := <-started
+	second := <-started
+	stop()
+	select {
+	case sequence := <-finished:
+		t.Fatalf("handler %d was cancelled before the shutdown grace period elapsed", sequence)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseFirst)
+	select {
+	case sequence := <-started:
+		t.Fatalf("worker claimed job %d after shutdown started", sequence)
+	case <-time.After(150 * time.Millisecond):
+	}
+	select {
+	case err := <-runResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not return after cancelling the remaining handler")
+	}
+	completed := map[int]bool{}
+	for range 2 {
+		select {
+		case sequence := <-finished:
+			completed[sequence] = true
+		default:
+			t.Fatal("worker returned before every claimed handler goroutine exited")
+		}
+	}
+	if !completed[first] || !completed[second] {
+		t.Fatalf("unexpected drained handlers: %v", completed)
 	}
 }
 
@@ -849,6 +1062,7 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 		HeartbeatInterval:   20 * time.Millisecond,
 		PollInterval:        5 * time.Millisecond,
 		MaintenanceInterval: 20 * time.Millisecond,
+		ShutdownGracePeriod: 20 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -894,8 +1108,8 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 	deadline.Stop()
 	ticker.Stop()
 	stop()
-	if err := <-workerResult; !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected canceled worker after recovery assertion, received %v", err)
+	if err := <-workerResult; err != nil {
+		t.Fatalf("expected a clean drain after recovery assertion, received %v", err)
 	}
 }
 

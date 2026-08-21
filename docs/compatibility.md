@@ -162,8 +162,9 @@ the same canonical SQL fixtures and request mapping through Psycopg, plus transa
 through Psycopg async and asyncpg. The synchronous Python worker supports single-job claiming,
 handler execution, fenced completion, and database-scheduled failure through Psycopg. Its broader
 runtime remains unsupported until the driver, PostgreSQL, packed-artifact, and compatibility
-matrices exist. The Go worker remains unsupported until its runtime and module-consumer matrices
-exist.
+matrices exist. The Go worker supports bounded multi-queue dispatch, fenced ownership, cooperative
+cancellation, and graceful drain. Its release remains unsupported until the runtime and worker
+module-consumer matrices exist.
 
 ## Release process
 

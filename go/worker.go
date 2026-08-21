@@ -18,8 +18,10 @@ const (
 	defaultWorkerLease         = 30 * time.Second
 	defaultWorkerPollInterval  = time.Second
 	defaultMaintenanceInterval = time.Second
+	defaultShutdownGracePeriod = 30 * time.Second
 	minimumWorkerLease         = 100 * time.Millisecond
 	maximumWorkerLease         = 24 * time.Hour
+	maximumWorkerConcurrency   = 100
 	workerPromotionLimit       = 100
 	workerRecoveryLimit        = 100
 	expirationRetryInterval    = 5 * time.Millisecond
@@ -113,25 +115,33 @@ type ClaimedJob struct {
 // Handler processes one claimed payload outside a database transaction.
 type Handler func(context.Context, any) (any, error)
 
-// WorkerOptions configures the minimal single-queue polling worker.
+// WorkerOptions configures a bounded polling worker.
 type WorkerOptions struct {
 	Queue               string
+	Queues              []string
 	WorkerID            string
+	Concurrency         int
 	LeaseDuration       time.Duration
 	HeartbeatInterval   time.Duration
 	PollInterval        time.Duration
 	MaintenanceInterval time.Duration
+	ShutdownGracePeriod time.Duration
 }
 
-// Worker claims and settles one job at a time through a caller-owned pool.
+// Worker claims and settles jobs through a caller-owned pool.
 type Worker struct {
 	pool                *pgxpool.Pool
-	queue               string
+	queues              []string
+	nextQueueIndex      int
 	workerID            string
+	concurrency         int
 	leaseDuration       time.Duration
 	heartbeatInterval   time.Duration
 	pollInterval        time.Duration
 	maintenanceInterval time.Duration
+	shutdownGracePeriod time.Duration
+	runPermit           chan struct{}
+	handlerSlots        chan struct{}
 	handlers            map[string]Handler
 	compatibility       *CachedCompatibilityCheck
 }
@@ -146,14 +156,36 @@ func (lease fencedLease) parameters() []any {
 	return []any{lease.jobID, lease.workerID, lease.fenceToken}
 }
 
-// NewWorker constructs a single-queue worker over a caller-owned pool.
+// NewWorker constructs a bounded worker over a caller-owned pool.
 func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if pool == nil {
 		return nil, errors.New(nilWorkerPoolMessage)
 	}
-	queue := options.Queue
-	if queue == emptyString {
-		queue = defaultWorkerQueueValue
+	if options.Queue != emptyString && len(options.Queues) > 0 {
+		return nil, errors.New(workerQueueOptionsMessage)
+	}
+	queues := options.Queues
+	if len(queues) == 0 {
+		queue := options.Queue
+		if queue == emptyString {
+			queue = defaultWorkerQueueValue
+		}
+		queues = []string{queue}
+	}
+	uniqueQueues := make([]string, 0, len(queues))
+	seenQueues := make(map[string]struct{}, len(queues))
+	for _, queue := range queues {
+		if queue == emptyString {
+			return nil, errors.New(workerQueuesMessage)
+		}
+		if _, exists := seenQueues[queue]; exists {
+			continue
+		}
+		seenQueues[queue] = struct{}{}
+		uniqueQueues = append(uniqueQueues, queue)
+	}
+	if len(uniqueQueues) == 0 {
+		return nil, errors.New(workerQueuesMessage)
 	}
 	workerID := options.WorkerID
 	if workerID == emptyString {
@@ -187,14 +219,34 @@ func NewWorker(pool *pgxpool.Pool, options WorkerOptions) (*Worker, error) {
 	if maintenanceInterval < time.Millisecond || maintenanceInterval%time.Millisecond != 0 {
 		return nil, errors.New(workerMaintenanceRangeMessage)
 	}
+	concurrency := options.Concurrency
+	if concurrency == 0 {
+		concurrency = 1
+	}
+	if concurrency < 1 || concurrency > maximumWorkerConcurrency {
+		return nil, fmt.Errorf(workerConcurrencyRangeMessage, maximumWorkerConcurrency)
+	}
+	shutdownGracePeriod := options.ShutdownGracePeriod
+	if shutdownGracePeriod == 0 {
+		shutdownGracePeriod = defaultShutdownGracePeriod
+	}
+	if shutdownGracePeriod < time.Millisecond || shutdownGracePeriod%time.Millisecond != 0 {
+		return nil, errors.New(workerShutdownGraceRangeMessage)
+	}
+	runPermit := make(chan struct{}, 1)
+	runPermit <- struct{}{}
 	return &Worker{
 		pool:                pool,
-		queue:               queue,
+		queues:              uniqueQueues,
 		workerID:            workerID,
+		concurrency:         concurrency,
 		leaseDuration:       leaseDuration,
 		heartbeatInterval:   heartbeatInterval,
 		pollInterval:        pollInterval,
 		maintenanceInterval: maintenanceInterval,
+		shutdownGracePeriod: shutdownGracePeriod,
+		runPermit:           runPermit,
+		handlerSlots:        make(chan struct{}, concurrency),
 		handlers:            make(map[string]Handler),
 		compatibility:       NewCachedCompatibilityCheck(NewPGXExecutor(pool)),
 	}, nil
@@ -212,8 +264,16 @@ func (worker *Worker) Handle(jobType string, handler Handler) *Worker {
 	return worker
 }
 
-// Run polls until the context is cancelled or an operational lifecycle error occurs.
+// Run polls until the context is cancelled or an operational lifecycle error occurs, then drains.
 func (worker *Worker) Run(ctx context.Context) error {
+	releaseRun, err := worker.acquireRun(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	defer releaseRun()
 	if err := worker.compatibility.Assert(ctx); err != nil {
 		return err
 	}
@@ -229,40 +289,126 @@ func (worker *Worker) Run(ctx context.Context) error {
 		stopMaintenance()
 		<-maintenanceDone
 	}()
-	for {
-		select {
-		case err := <-maintenanceErrors:
-			if err != nil {
-				return err
+	executionContext, cancelExecutions := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelExecutions()
+	executionResults := make(chan error, worker.concurrency)
+	active := 0
+	stopping := false
+	var firstError error
+
+	for !stopping {
+		noWork := false
+	fillSlots:
+		for {
+			select {
+			case worker.handlerSlots <- struct{}{}:
+			default:
+				break fillSlots
 			}
-		default:
+			select {
+			case <-ctx.Done():
+				<-worker.handlerSlots
+				stopping = true
+			default:
+			}
+			if stopping {
+				break
+			}
+			job, err := worker.claimNext(ctx, executor)
+			if err != nil {
+				<-worker.handlerSlots
+				if ctx.Err() == nil {
+					firstError = err
+				}
+				stopping = true
+				break
+			}
+			if job == nil {
+				<-worker.handlerSlots
+				noWork = true
+				break
+			}
+			active++
+			go func(claimed ClaimedJob) {
+				handler := worker.handlers[claimed.Type]
+				var err error
+				if handler == nil {
+					err = fmt.Errorf(missingWorkerHandlerFormat, claimed.Type)
+					err = worker.fail(executionContext, executor, claimed, err)
+				} else {
+					err = worker.execute(executionContext, executor, claimed, handler)
+				}
+				<-worker.handlerSlots
+				executionResults <- err
+			}(*job)
 		}
-		processed, err := worker.runOnce(ctx, executor)
-		if err != nil {
-			return err
+		if stopping {
+			break
 		}
-		if processed || worker.pollInterval == 0 {
-			continue
+
+		var poll <-chan time.Time
+		var pollTimer *time.Timer
+		if noWork {
+			pollTimer = time.NewTimer(worker.pollInterval)
+			poll = pollTimer.C
 		}
-		timer := time.NewTimer(worker.pollInterval)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return nil
+			stopping = true
 		case err := <-maintenanceErrors:
-			if !timer.Stop() {
-				<-timer.C
+			if err != nil {
+				firstError = err
+				stopping = true
+			} else {
+				maintenanceErrors = nil
 			}
-			return err
-		case <-timer.C:
+		case err := <-executionResults:
+			active--
+			if err != nil {
+				firstError = err
+				stopping = true
+			}
+		case <-poll:
+		}
+		if pollTimer != nil && !pollTimer.Stop() {
+			select {
+			case <-pollTimer.C:
+			default:
+			}
 		}
 	}
+
+	stopMaintenance()
+	graceTimer := time.NewTimer(worker.shutdownGracePeriod)
+	forcedCancellation := false
+	for active > 0 {
+		select {
+		case err := <-executionResults:
+			active--
+			if err != nil && firstError == nil && !forcedCancellation {
+				firstError = err
+			}
+		case <-graceTimer.C:
+			cancelExecutions()
+			forcedCancellation = true
+		}
+	}
+	if !graceTimer.Stop() {
+		select {
+		case <-graceTimer.C:
+		default:
+		}
+	}
+	return firstError
 }
 
 // RunOnce claims and processes at most one job.
 func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
+	releaseRun, err := worker.acquireRun(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer releaseRun()
 	if err := worker.compatibility.Assert(ctx); err != nil {
 		return false, err
 	}
@@ -270,6 +416,15 @@ func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return worker.runOnce(ctx, NewPGXExecutor(worker.pool))
+}
+
+func (worker *Worker) acquireRun(ctx context.Context) (func(), error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-worker.runPermit:
+		return func() { worker.runPermit <- struct{}{} }, nil
+	}
 }
 
 func (worker *Worker) maintenanceLoop(ctx context.Context) error {
@@ -301,40 +456,53 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 }
 
 func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, error) {
-	if _, err := executor.Query(
-		ctx,
-		internalStatementRegistry[promoteStatementName],
-		workerPromotionLimit,
-	); err != nil {
-		return false, err
-	}
-	rows, err := executor.Query(
-		ctx,
-		protocolStatementRegistry[claimStatementName],
-		worker.queue,
-		worker.workerID,
-		int(worker.leaseDuration/time.Millisecond),
-	)
-	if err != nil {
-		return false, err
-	}
-	if len(rows) == 0 {
-		return false, nil
-	}
-	if len(rows) != 1 {
-		return false, errors.New(invalidClaimResultMessage)
-	}
-	job, err := claimedJob(rows[0], worker.queue)
-	if err != nil {
+	job, err := worker.claimNext(ctx, executor)
+	if err != nil || job == nil {
 		return false, err
 	}
 	handler := worker.handlers[job.Type]
 	if handler == nil {
 		err = fmt.Errorf(missingWorkerHandlerFormat, job.Type)
 	} else {
-		return true, worker.execute(ctx, executor, job, handler)
+		return true, worker.execute(ctx, executor, *job, handler)
 	}
-	return true, worker.fail(ctx, executor, job, err)
+	return true, worker.fail(ctx, executor, *job, err)
+}
+
+func (worker *Worker) claimNext(ctx context.Context, executor Executor) (*ClaimedJob, error) {
+	if _, err := executor.Query(
+		ctx,
+		internalStatementRegistry[promoteStatementName],
+		workerPromotionLimit,
+	); err != nil {
+		return nil, err
+	}
+	for range worker.queues {
+		queue := worker.queues[worker.nextQueueIndex]
+		worker.nextQueueIndex = (worker.nextQueueIndex + 1) % len(worker.queues)
+		rows, err := executor.Query(
+			ctx,
+			protocolStatementRegistry[claimStatementName],
+			queue,
+			worker.workerID,
+			int(worker.leaseDuration/time.Millisecond),
+		)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		if len(rows) != 1 {
+			return nil, errors.New(invalidClaimResultMessage)
+		}
+		job, err := claimedJob(rows[0], queue)
+		if err != nil {
+			return nil, err
+		}
+		return &job, nil
+	}
+	return nil, nil
 }
 
 type ownershipResult struct {
