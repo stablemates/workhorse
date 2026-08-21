@@ -138,6 +138,71 @@ func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 	}
 }
 
+func TestQueueSerializesSharedScheduleFixture(t *testing.T) {
+	type scheduleFixture struct {
+		Namespace    string `json:"namespace"`
+		DefaultQueue string `json:"defaultQueue"`
+		Prune        bool   `json:"prune"`
+		Application  []struct {
+			Name     string `json:"name"`
+			Schedule string `json:"schedule"`
+			Enabled  bool   `json:"enabled"`
+			Job      struct {
+				Type           string         `json:"type"`
+				Payload        any            `json:"payload"`
+				Queue          string         `json:"queue"`
+				Priority       int            `json:"priority"`
+				ConcurrencyKey string         `json:"concurrencyKey"`
+				MaxAttempts    int            `json:"maxAttempts"`
+				RetryPolicy    map[string]any `json:"retryPolicy"`
+			} `json:"job"`
+		} `json:"application"`
+		Postgres any `json:"postgres"`
+	}
+	fixture := readFixture[[]scheduleFixture](t, "schedules.json")[0]
+	executor := &queueExecutor{responses: [][]workhorse.Row{{{"version": int64(47)}}, {}}}
+	queue := workhorse.NewQueue(executor, fixture.DefaultQueue)
+	definitions := make([]workhorse.ScheduleDefinition, len(fixture.Application))
+	for index, definition := range fixture.Application {
+		enabled := definition.Enabled
+		definitions[index] = workhorse.ScheduleDefinition{
+			Name: definition.Name, Schedule: definition.Schedule, Enabled: &enabled,
+			Job: workhorse.ScheduledJob{
+				Type: definition.Job.Type, Payload: definition.Job.Payload, Queue: definition.Job.Queue,
+				Priority: definition.Job.Priority, ConcurrencyKey: definition.Job.ConcurrencyKey,
+				MaxAttempts: definition.Job.MaxAttempts, RetryPolicy: definition.Job.RetryPolicy,
+			},
+		}
+	}
+
+	err := queue.SyncSchedules(
+		context.Background(),
+		fixture.Namespace,
+		definitions,
+		workhorse.SyncSchedulesOptions{Prune: fixture.Prune},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.calls) != 2 {
+		t.Fatalf("expected compatibility and schedule calls, received %d", len(executor.calls))
+	}
+	if executor.calls[1].arguments[0] != fixture.Namespace || executor.calls[1].arguments[2] != fixture.Prune {
+		t.Fatalf("unexpected schedule arguments: %#v", executor.calls[1].arguments)
+	}
+	var actual any
+	if err := decodeJSON(executor.calls[1].arguments[1].([]byte), &actual); err != nil {
+		t.Fatal(err)
+	}
+	actual, err = normalizeProtocolValue(actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := matchFixtureValue(fixture.Postgres, actual, map[string]any{}, "schedules"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func goOptions(t *testing.T, input map[string]any) workhorse.EnqueueOptions {
 	t.Helper()
 	options := workhorse.EnqueueOptions{}
@@ -524,6 +589,75 @@ func TestQueueLeavesTransactionCommitAndRollbackWithCaller(t *testing.T) {
 	assertJobCount(t, pool, rolledBackID, 0)
 }
 
+func TestQueueSynchronizesSchedulesInsideCallerTransaction(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "queue-schedules")
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	transaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(transaction), "scheduled")
+	enabled := true
+	definitions := []workhorse.ScheduleDefinition{
+		{Name: "daily", Schedule: "0 6 * * *", Job: workhorse.ScheduledJob{Type: "report", Payload: nil}},
+		{Name: "cleanup", Schedule: "0 2 * * 0", Enabled: &enabled, Job: workhorse.ScheduledJob{Type: "cleanup", Payload: nil}},
+	}
+	if err := queue.SyncSchedules(ctx, "go-integration", definitions); err != nil {
+		t.Fatal(err)
+	}
+	assertScheduleCount(t, pool, "go-integration", 0)
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertScheduleCount(t, pool, "go-integration", 2)
+
+	queue = workhorse.NewQueue(workhorse.NewPGXExecutor(pool), "scheduled")
+	if err := queue.SyncSchedules(ctx, "go-integration", definitions); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.SyncSchedules(ctx, "go-integration", definitions[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.SyncSchedules(ctx, "go-integration", definitions[:1]); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := pool.Query(
+		ctx,
+		"SELECT schedule_name, enabled, revision FROM workhorse.schedule_definition WHERE namespace = $1 ORDER BY schedule_name",
+		"go-integration",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type scheduleState struct {
+		name     string
+		enabled  bool
+		revision int64
+	}
+	var states []scheduleState
+	for rows.Next() {
+		var state scheduleState
+		if err := rows.Scan(&state.name, &state.enabled, &state.revision); err != nil {
+			t.Fatal(err)
+		}
+		states = append(states, state)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 2 || states[0] != (scheduleState{name: "cleanup", enabled: false, revision: 2}) ||
+		states[1] != (scheduleState{name: "daily", enabled: true, revision: 1}) {
+		t.Fatalf("unexpected synchronized schedule state: %#v", states)
+	}
+}
+
 func TestDatabaseSQLQueueUsesCallerOwnedTransaction(t *testing.T) {
 	ctx := context.Background()
 	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "queue-database-sql")
@@ -662,5 +796,20 @@ func assertJobCount(t *testing.T, pool *pgxpool.Pool, jobID string, want int) {
 	}
 	if count != want {
 		t.Fatalf("job %s count: expected %d, received %d", jobID, want, count)
+	}
+}
+
+func assertScheduleCount(t *testing.T, pool *pgxpool.Pool, namespace string, want int) {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(
+		context.Background(),
+		"SELECT count(*)::integer FROM workhorse.schedule_definition WHERE namespace = $1",
+		namespace,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != want {
+		t.Fatalf("schedule count: expected %d, received %d", want, count)
 	}
 }

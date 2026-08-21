@@ -21,6 +21,10 @@ lease-loss fencing, serialized per-job heartbeats, and graceful drain without fu
 TypeScript suite executes these mappings through `Queue`, so serialization changes fail alongside
 SQL projection, cast, argument-order, and arity changes.
 
+`v1/schedules.json` maps recurring schedule definitions to the exact desired-state JSON sent to
+PostgreSQL. Python and Go execute the same mapping through their public queue clients, so their
+defaults and field names cannot drift apart.
+
 The TypeScript verifier lives in `scripts/verify-sql-protocol.ts`. It checks compatibility before
 calling versioned PostgreSQL functions, so another language can implement the same small
 interpreter without inheriting TypeScript behavior. The TypeScript suite separately runs the

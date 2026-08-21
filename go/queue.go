@@ -33,6 +33,9 @@ var ErrInvalidEnqueueResult = errors.New(invalidEnqueueResultMessage)
 // ErrInvalidEnqueueOptions reports an option combination rejected before PostgreSQL is queried.
 var ErrInvalidEnqueueOptions = errors.New(invalidEnqueueOptionsMessage)
 
+// ErrInvalidScheduleDefinition reports a recurring definition rejected before PostgreSQL is queried.
+var ErrInvalidScheduleDefinition = errors.New(invalidScheduleDefinitionMessage)
+
 // EnqueueOutcome is PostgreSQL's durable disposition for one request.
 type EnqueueOutcome string
 
@@ -123,6 +126,31 @@ type EnqueueRequest struct {
 	Type    string
 	Payload any
 	Options EnqueueOptions
+}
+
+// ScheduledJob describes the job created for each recurring occurrence.
+type ScheduledJob struct {
+	Type           string
+	Payload        any
+	Queue          string
+	Priority       int
+	ConcurrencyKey string
+	MaxAttempts    int
+	RetryPolicy    map[string]any
+}
+
+// ScheduleDefinition is one desired recurring schedule.
+// A nil Enabled value enables the definition by default.
+type ScheduleDefinition struct {
+	Name     string
+	Schedule string
+	Job      ScheduledJob
+	Enabled  *bool
+}
+
+// SyncSchedulesOptions controls desired-state reconciliation.
+type SyncSchedulesOptions struct {
+	Prune bool
 }
 
 // EnqueueResult contains a job's stable identity and durable enqueue disposition.
@@ -232,6 +260,91 @@ func (queue *Queue) EnqueueManyWithResults(
 		seen[ordinal-1] = true
 	}
 	return results, nil
+}
+
+// SyncSchedules atomically reconciles one namespace of recurring definitions.
+// Omitted definitions are disabled unless options explicitly set Prune to false.
+func (queue *Queue) SyncSchedules(
+	ctx context.Context,
+	namespace string,
+	definitions []ScheduleDefinition,
+	options ...SyncSchedulesOptions,
+) error {
+	if len(options) > 1 {
+		return fmt.Errorf(tooManySyncSchedulesOptionsMessage, ErrInvalidScheduleDefinition)
+	}
+	prune := true
+	if len(options) == 1 {
+		prune = options[0].Prune
+	}
+	payload, err := serializeScheduleDefinitions(definitions, queue.defaultQueue)
+	if err != nil {
+		return err
+	}
+	if err := AssertCompatible(ctx, queue.executor); err != nil {
+		return err
+	}
+	_, err = queue.executor.Query(
+		ctx,
+		internalStatementRegistry[syncScheduleDefinitionsStatementName],
+		namespace,
+		payload,
+		prune,
+	)
+	return err
+}
+
+type scheduleInput struct {
+	Name                 string   `json:"name"`
+	Schedule             string   `json:"schedule"`
+	Enabled              bool     `json:"enabled"`
+	Queue                string   `json:"queue"`
+	Priority             int      `json:"priority"`
+	ConcurrencyKey       any      `json:"concurrencyKey"`
+	Type                 string   `json:"type"`
+	Payload              any      `json:"payload"`
+	MaxAttempts          int      `json:"maxAttempts"`
+	RetryPolicy          any      `json:"retryPolicy"`
+	ContractVersion      any      `json:"contractVersion"`
+	PayloadMaxBytes      int      `json:"payloadMaxBytes"`
+	ResultMaxBytes       int      `json:"resultMaxBytes"`
+	SensitivePayloadKeys []string `json:"sensitivePayloadKeys"`
+	SensitiveResultKeys  []string `json:"sensitiveResultKeys"`
+}
+
+func serializeScheduleDefinitions(definitions []ScheduleDefinition, defaultQueue string) ([]byte, error) {
+	input := make([]scheduleInput, len(definitions))
+	for index, definition := range definitions {
+		if definition.Job.Priority < 0 || definition.Job.Priority > 100 {
+			return nil, fmt.Errorf(
+				scheduleDefinitionErrorFormat,
+				index+1,
+				fmt.Errorf(priorityRangeMessage, ErrInvalidScheduleDefinition),
+			)
+		}
+		queueName := definition.Job.Queue
+		if queueName == emptyString {
+			queueName = defaultQueue
+		}
+		maxAttempts := definition.Job.MaxAttempts
+		if maxAttempts == 0 {
+			maxAttempts = defaultMaxAttempts
+		}
+		enabled := true
+		if definition.Enabled != nil {
+			enabled = *definition.Enabled
+		}
+		input[index] = scheduleInput{
+			Name: definition.Name, Schedule: definition.Schedule, Enabled: enabled,
+			Queue: queueName, Priority: definition.Job.Priority,
+			ConcurrencyKey: nilIfEmpty(definition.Job.ConcurrencyKey), Type: definition.Job.Type,
+			Payload: definition.Job.Payload, MaxAttempts: maxAttempts,
+			RetryPolicy: definition.Job.RetryPolicy, PayloadMaxBytes: defaultJobValueMaxBytes,
+			ResultMaxBytes: defaultJobValueMaxBytes, SensitivePayloadKeys: []string{},
+			SensitiveResultKeys: []string{},
+		}
+	}
+	return json.Marshal(input)
 }
 
 type enqueueInput struct {

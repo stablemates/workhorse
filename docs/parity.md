@@ -37,7 +37,7 @@ Two boundaries keep this matrix small:
 | Keyed throttle                             | Supported  | Supported | Supported |
 | Job dependencies with terminal policies    | Supported  | Supported | Supported |
 | Concurrency keys                           | Supported  | Supported | Supported |
-| Recurring schedule definition sync         | Supported  | Supported | Planned   |
+| Recurring schedule definition sync         | Supported  | Supported | Supported |
 | Payload and result contracts               | Supported  | Absent    | Absent    |
 | Compatibility refusal before mutation      | Supported  | Supported | Supported |
 | SQL protocol conformance fixtures executed | Supported  | Supported | Supported |
@@ -45,12 +45,11 @@ Two boundaries keep this matrix small:
 The TypeScript client is `@workhorse-js/core` (`Queue`); the Python client is `workhorse-pg`
 (`Queue`/`AsyncQueue` over Psycopg and asyncpg). The Go module's `Queue` supports transactional
 single and batch enqueue over pgx and `database/sql`, including every stable enqueue option except
-payload and result contracts. Recurring schedule definition sync remains Planned under [WH-228].
-Python can define and synchronize recurring schedules. Its synchronous worker provides bounded
+payload and result contracts. Go and Python can define and synchronize recurring schedules through
+caller-owned executors. Python's synchronous worker provides bounded
 concurrency, fair multi-queue claiming, ownership heartbeats, cancellation, and graceful drain,
 but a production deployment still needs a TypeScript worker until [WH-214] ships the remaining
 lifecycle support. Only a TypeScript worker fires schedules until [WH-309] ships. The remaining
-Planned Go client cell reflects the acceptance criteria of the [WH-228] schedule-sync sub-item.
 A deployment enqueueing from Go needs a
 TypeScript worker to run jobs until [WH-236] ships, and to fire schedules until [WH-332] ships.
 

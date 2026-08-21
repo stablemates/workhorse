@@ -1,0 +1,82 @@
+[
+  {
+    "id": "recurring-schedule-definition",
+    "namespace": "billing",
+    "defaultQueue": "mail",
+    "prune": true,
+    "application": [
+      {
+        "name": "monthly-invoice",
+        "schedule": "0 0 1 * *",
+        "enabled": true,
+        "job": {
+          "type": "invoice.create",
+          "payload": {
+            "account": "acct-1"
+          },
+          "priority": 80,
+          "maxAttempts": 4,
+          "retryPolicy": {
+            "type": "fixed",
+            "delayMs": 250
+          }
+        }
+      },
+      {
+        "name": "disabled-cleanup",
+        "schedule": "0 2 * * 0",
+        "enabled": false,
+        "job": {
+          "type": "billing.cleanup",
+          "payload": null,
+          "queue": "maintenance",
+          "concurrencyKey": "billing",
+          "priority": 0,
+          "maxAttempts": 25,
+          "retryPolicy": null
+        }
+      }
+    ],
+    "postgres": [
+      {
+        "name": "monthly-invoice",
+        "schedule": "0 0 1 * *",
+        "enabled": true,
+        "queue": "mail",
+        "priority": 80,
+        "concurrencyKey": null,
+        "type": "invoice.create",
+        "payload": {
+          "account": "acct-1"
+        },
+        "maxAttempts": 4,
+        "retryPolicy": {
+          "type": "fixed",
+          "delayMs": 250
+        },
+        "contractVersion": null,
+        "payloadMaxBytes": 1048576,
+        "resultMaxBytes": 1048576,
+        "sensitivePayloadKeys": [],
+        "sensitiveResultKeys": []
+      },
+      {
+        "name": "disabled-cleanup",
+        "schedule": "0 2 * * 0",
+        "enabled": false,
+        "queue": "maintenance",
+        "priority": 0,
+        "concurrencyKey": "billing",
+        "type": "billing.cleanup",
+        "payload": null,
+        "maxAttempts": 25,
+        "retryPolicy": null,
+        "contractVersion": null,
+        "payloadMaxBytes": 1048576,
+        "resultMaxBytes": 1048576,
+        "sensitivePayloadKeys": [],
+        "sensitiveResultKeys": []
+      }
+    ]
+  }
+]

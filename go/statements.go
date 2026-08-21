@@ -3,12 +3,13 @@ package workhorse
 const schemaVersionStatement = "schema_version"
 
 const (
-	emptyString              = ""
-	enqueueManyStatementName = "enqueue_many_v2"
-	rowOrdinalField          = "ordinal"
-	rowJobIDField            = "job_id"
-	rowOutcomeField          = "outcome"
-	rowReasonField           = "reason"
+	emptyString                          = ""
+	enqueueManyStatementName             = "enqueue_many_v2"
+	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
+	rowOrdinalField                      = "ordinal"
+	rowJobIDField                        = "job_id"
+	rowOutcomeField                      = "outcome"
+	rowReasonField                       = "reason"
 
 	enqueueAcceptedValue       = "accepted"
 	enqueueReplayedValue       = "replayed"
@@ -27,31 +28,35 @@ const (
 	defaultScopeValue              = "default"
 	timestampLayout                = "2006-01-02T15:04:05.000Z"
 
-	enqueueBatchTooLargeMessage     = "enqueue batch exceeds the shared limit"
-	invalidEnqueueResultMessage     = "PostgreSQL returned an invalid enqueue result"
-	invalidEnqueueOptionsMessage    = "invalid enqueue options"
-	tooManyEnqueueOptionsMessage    = "%w: enqueue accepts at most one EnqueueOptions value"
-	enqueueRequestErrorFormat       = "enqueue request %d: %w"
-	keyedModesCombinedMessage       = "%w: cannot combine idempotency, debounce, or throttle"
-	priorityRangeMessage            = "%w: priority must be between 0 and 100"
-	maxAttemptsMessage              = "%w: max attempts must be positive"
-	debounceRunAtMessage            = "%w: debounced enqueue uses its PostgreSQL-owned window instead of run at"
-	keyedDependenciesMessage        = "%w: cannot combine debounce or throttle with dependencies"
-	uniqueDependenciesMessage       = "%w: dependencies must contain unique prerequisite job IDs"
-	dependencyCountMessage          = "%w: dependencies accepts at most %d prerequisite job IDs"
-	idempotencyConflictMessage      = "PostgreSQL rejected a materially different idempotent enqueue"
-	dependencyCycleMessage          = "PostgreSQL rejected a cyclic job dependency"
-	dependencyLimitExceededMessage  = "PostgreSQL rejected a job dependency limit"
-	idempotencyConflictSQLState     = "P1001"
-	dependencyCycleSQLState         = "P1003"
-	dependencyLimitExceededSQLState = "P1005"
-	dependencyLimitPrerequisites    = "prerequisites"
-	dependencyLimitDependents       = "dependents"
-	dependencyLimitUnresolved       = "unresolved_dependents"
+	enqueueBatchTooLargeMessage        = "enqueue batch exceeds the shared limit"
+	invalidEnqueueResultMessage        = "PostgreSQL returned an invalid enqueue result"
+	invalidEnqueueOptionsMessage       = "invalid enqueue options"
+	tooManyEnqueueOptionsMessage       = "%w: enqueue accepts at most one EnqueueOptions value"
+	tooManySyncSchedulesOptionsMessage = "%w: sync schedules accepts at most one SyncSchedulesOptions value"
+	invalidScheduleDefinitionMessage   = "invalid schedule definition"
+	scheduleDefinitionErrorFormat      = "schedule definition %d: %w"
+	enqueueRequestErrorFormat          = "enqueue request %d: %w"
+	keyedModesCombinedMessage          = "%w: cannot combine idempotency, debounce, or throttle"
+	priorityRangeMessage               = "%w: priority must be between 0 and 100"
+	maxAttemptsMessage                 = "%w: max attempts must be positive"
+	debounceRunAtMessage               = "%w: debounced enqueue uses its PostgreSQL-owned window instead of run at"
+	keyedDependenciesMessage           = "%w: cannot combine debounce or throttle with dependencies"
+	uniqueDependenciesMessage          = "%w: dependencies must contain unique prerequisite job IDs"
+	dependencyCountMessage             = "%w: dependencies accepts at most %d prerequisite job IDs"
+	idempotencyConflictMessage         = "PostgreSQL rejected a materially different idempotent enqueue"
+	dependencyCycleMessage             = "PostgreSQL rejected a cyclic job dependency"
+	dependencyLimitExceededMessage     = "PostgreSQL rejected a job dependency limit"
+	idempotencyConflictSQLState        = "P1001"
+	dependencyCycleSQLState            = "P1003"
+	dependencyLimitExceededSQLState    = "P1005"
+	dependencyLimitPrerequisites       = "prerequisites"
+	dependencyLimitDependents          = "dependents"
+	dependencyLimitUnresolved          = "unresolved_dependents"
 )
 
 var internalStatementRegistry = map[string]string{
-	schemaVersionStatement: `SELECT version FROM workhorse.schema_version ORDER BY version`,
+	schemaVersionStatement:               `SELECT version FROM workhorse.schema_version ORDER BY version`,
+	syncScheduleDefinitionsStatementName: `SELECT workhorse.sync_schedule_definitions_v1($1::text, $2::jsonb, $3::boolean)`,
 }
 
 var protocolStatementRegistry = map[string]string{
