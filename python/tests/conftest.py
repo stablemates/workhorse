@@ -37,27 +37,33 @@ def installed_distribution_interpreters(
         "sdist": next(distribution_directory.glob("*.tar.gz")),
     }
     interpreters: dict[str, Path] = {}
-    for name, artifact in artifacts.items():
-        environment_directory = scratch / f"{name}-environment"
-        subprocess.run(
-            ["uv", "venv", str(environment_directory), "--python", sys.executable],
-            check=True,
-            cwd=REPOSITORY,
+    for distribution, artifact in artifacts.items():
+        environments = (
+            (distribution, "psycopg,asyncpg"),
+            (f"{distribution}-psycopg", "psycopg"),
+            (f"{distribution}-asyncpg", "asyncpg"),
         )
-        installed_python = environment_directory / "bin" / "python"
-        subprocess.run(
-            [
-                "uv",
-                "pip",
-                "install",
-                "--python",
-                str(installed_python),
-                f"{artifact}[psycopg,asyncpg]",
-            ],
-            check=True,
-            cwd=REPOSITORY,
-        )
-        interpreters[name] = installed_python
+        for name, extras in environments:
+            environment_directory = scratch / f"{name}-environment"
+            subprocess.run(
+                ["uv", "venv", str(environment_directory), "--python", sys.executable],
+                check=True,
+                cwd=REPOSITORY,
+            )
+            installed_python = environment_directory / "bin" / "python"
+            subprocess.run(
+                [
+                    "uv",
+                    "pip",
+                    "install",
+                    "--python",
+                    str(installed_python),
+                    f"{artifact}[{extras}]",
+                ],
+                check=True,
+                cwd=REPOSITORY,
+            )
+            interpreters[name] = installed_python
     return interpreters
 
 

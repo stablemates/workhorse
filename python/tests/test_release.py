@@ -103,3 +103,25 @@ def test_built_distributions_run_the_documented_examples(
     )
     assert async_result.returncode == 0, async_result.stderr
     assert async_result.stdout.strip() == "Python async driver example completed"
+
+    for distribution in ("wheel", "sdist"):
+        for driver in ("psycopg", "asyncpg"):
+            interpreter = installed_distribution_interpreters[f"{distribution}-{driver}"]
+            worker_result = subprocess.run(
+                [
+                    str(interpreter),
+                    str(repository / "python" / "examples" / "async_worker.py"),
+                    database_url,
+                    driver,
+                ],
+                check=False,
+                cwd=tmp_path,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            assert worker_result.returncode == 0, worker_result.stderr
+            assert worker_result.stdout.strip() == (
+                f"Python {driver} async worker example completed"
+            )
