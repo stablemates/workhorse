@@ -86,19 +86,23 @@ type waitRequest struct {
 type HandlerContext struct {
 	Job ClaimedJob
 
-	context     context.Context
-	cancel      context.CancelCauseFunc
-	executor    Executor
-	workerID    string
-	checkpoint  sync.Mutex
-	checkpoints map[string]*checkpointCall
-	wait        sync.Mutex
-	waits       map[string]*waitCall
-	signal      sync.Mutex
-	signals     map[string]*externalWaitCall
-	human       sync.Mutex
-	humanWaits  map[string]*humanWaitCall
-	suspended   atomic.Bool
+	context      context.Context
+	cancel       context.CancelCauseFunc
+	executor     Executor
+	workerID     string
+	checkpoint   sync.Mutex
+	checkpoints  map[string]*checkpointCall
+	wait         sync.Mutex
+	waits        map[string]*waitCall
+	signal       sync.Mutex
+	signals      map[string]*externalWaitCall
+	human        sync.Mutex
+	humanWaits   map[string]*humanWaitCall
+	child        sync.Mutex
+	children     map[string]*childCall
+	childSet     sync.Mutex
+	childSetCall *childrenCall
+	suspended    atomic.Bool
 }
 
 // Checkpoint returns the stored value for name, or runs and immutably saves operation once.

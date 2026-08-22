@@ -42,6 +42,17 @@ const results = await ctx.runChildren<{
 ]);
 ```
 
+Go handlers use `CreateChild` for one child and `CreateChildren` for a stable set. The set method
+returns named `ChildResult` values in request order, so callers can preserve order without relying
+on map iteration.
+
+```go
+results, err := handler.CreateChildren([]workhorse.ChildJobRequest{
+	{Name: "fraud", Type: "orders.check-fraud", Payload: order},
+	{Name: "inventory", Type: "orders.reserve", Payload: order},
+})
+```
+
 An empty set returns immediately. A non-empty set suspends the parent once, and PostgreSQL releases
 it only after every child reaches a terminal state. The set joins only when every child succeeds.
 
