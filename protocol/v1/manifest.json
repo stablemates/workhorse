@@ -2,9 +2,9 @@
   "formatVersion": 1,
   "protocolVersion": 1,
   "schema": {
-    "installedVersion": 47,
-    "minimumVersion": 47,
-    "maximumVersion": 47
+    "installedVersion": 1,
+    "minimumVersion": 1,
+    "maximumVersion": 1
   },
   "supportedClientProtocol": {
     "minimumVersion": 1,
@@ -54,14 +54,14 @@
   ],
   "functions": [
     {
-      "name": "enqueue_many_v2",
+      "name": "enqueue_many_v1",
       "arity": 1,
-      "contract": "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal"
+      "contract": "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal"
     },
     {
-      "name": "claim_v3",
+      "name": "claim_v1",
       "arity": 3,
-      "contract": "SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)"
+      "contract": "SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)"
     },
     {
       "name": "record_batch_dispatch_v1",
@@ -74,9 +74,9 @@
       "contract": "SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded"
     },
     {
-      "name": "heartbeat_v2",
+      "name": "heartbeat_v1",
       "arity": 4,
-      "contract": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
+      "contract": "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
     },
     {
       "name": "expire_owned_telemetry_v1",

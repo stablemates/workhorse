@@ -128,14 +128,16 @@ Nine packages ship from this repository. `@workhorse-js/core` is the TypeScript 
 The eight TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
 The Python package version floats independently and declares compatibility through SQL protocol 1
-and schema version 47 instead of a TypeScript peer range.
+and schema version 1 instead of a TypeScript peer range.
 
 The dashboard and core may use different patch releases within the same minor line. The dashboard
 server reads `workhorse.dashboard_*_v1` views and versioned functions, so a core patch remains
 compatible when its migration preserves those contracts.
 
-While the line is `0.x`, any minor release may make a breaking change, including a schema version
-bump. Breaking changes are listed in [`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for
+While the line is `0.x`, any minor release may make a breaking change, including changing the
+schema. There is no upgrade path within `0.x`: the schema is edited in place, so moving between
+`0.x` releases means installing the new schema on a fresh database. Ordered migrations begin at
+1.0.0. Breaking changes are listed in [`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for
 that release.
 
 The Python package releases independently from a `python/vX.Y.Z` tag. Its version comes from
@@ -152,12 +154,13 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   single row in `workhorse.schema_version`. `assertSchemaCompatible` refuses anything else, and it
   refuses on both sides: an older runtime against a newer schema fails just as loudly as the
   reverse. A mixed fleet mid-deploy is not supported.
-- **Installation is clean-database only; migration owns upgrades.** `installSchema` refuses to
-  interpret an older or unversioned `workhorse` schema. `migrateSchema` applies ordered, immutable,
-  transactional migrations forward from the version 43 baseline; retired pre-release versions below
-  43 require a fresh schema. `docs/schema-lifecycle.md` records the execution contract, the
-  expand/contract rollout rules, and the backup and recovery guidance. The supported upgrade window
-  is deliberately undefined until real released versions require one.
+- **Installation is clean-database only; migration owns upgrades from 1.0.0.** `installSchema`
+  refuses to interpret an older or unversioned `workhorse` schema. While the line is `0.x` the
+  schema changes in place and the migration plan is empty, so a schema change means a fresh
+  database. `migrateSchema` applies ordered, immutable, transactional migrations forward from the
+  baseline once the first step ships. `docs/schema-lifecycle.md` records the execution contract,
+  the expand/contract rollout rules, and the backup and recovery guidance. The supported upgrade
+  window is deliberately undefined until real released versions require one.
 - **Correctness-sensitive transitions stay in versioned SQL functions.** Claim, completion, retry,
   cancellation, deadline, and maintenance transitions are owned by SQL. A client that speaks the
   same schema version speaks the same protocol, whatever language it is written in.

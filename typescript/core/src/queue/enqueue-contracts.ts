@@ -654,7 +654,7 @@ export class EnqueueContractsModule extends QueueModule {
             outcome: EnqueueOutcome;
             reason: string | null;
           }>(
-            "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal",
+            "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
             [JSON.stringify(input)],
           );
           const enqueueResults = result.rows.map((row): EnqueueResult => {

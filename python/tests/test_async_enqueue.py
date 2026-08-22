@@ -14,7 +14,7 @@ class AsyncpgConnection:
     async def fetch(self, sql: str, *parameters: object) -> Sequence[Mapping[str, object]]:
         self.calls.append((sql, parameters))
         if "schema_version" in sql:
-            return [{"version": 47}]
+            return [{"version": 1}]
         if "send_signal_v1" in sql:
             return [
                 {
@@ -65,7 +65,7 @@ class AsyncPsycopgCursor:
 
     async def fetchall(self) -> Sequence[Sequence[object]]:
         if "schema_version" in self.sql:
-            return [(47,)]
+            return [(1,)]
         return [(1, "psycopg", "accepted", None)]
 
 

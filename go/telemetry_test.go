@@ -183,7 +183,7 @@ func emitGoRecoveryMetrics(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	}
 	if _, err := pool.Exec(
 		ctx,
-		"SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+		"SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
 		queueName,
 		"go-catalog-crashed-peer",
 		100,

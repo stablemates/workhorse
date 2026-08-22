@@ -13,37 +13,14 @@ import { assertSupportedPostgres } from "./support.js";
 import type { Queryable } from "./types.js";
 
 /** Current pre-release baseline, and later the oldest version covered by migrations. */
-export const WORKHORSE_SCHEMA_BASELINE_VERSION = 43;
+export const WORKHORSE_SCHEMA_BASELINE_VERSION = 1;
 
 /** Canonical schema version for the current line. */
-export const WORKHORSE_SCHEMA_VERSION = 47;
+export const WORKHORSE_SCHEMA_VERSION = 1;
 
-const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
-  {
-    fromVersion: 43,
-    toVersion: 44,
-    file: "0044-protocol-version.sql",
-    description: "protocol version registry",
-  },
-  {
-    fromVersion: 44,
-    toVersion: 45,
-    file: "0045-statistics-maintenance-policy.sql",
-    description: "statistics maintenance policy",
-  },
-  {
-    fromVersion: 45,
-    toVersion: 46,
-    file: "0046-statistics-tiers.sql",
-    description: "long-horizon statistics tiers",
-  },
-  {
-    fromVersion: 46,
-    toVersion: 47,
-    file: "0047-multi-queue-workers.sql",
-    description: "multi-queue workers",
-  },
-];
+// Empty until the first public release. Version 1 is the permanent baseline, installed whole
+// from sql/schema.sql; every later version arrives as one ordered, immutable step here.
+const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [];
 
 function sqlAsset(relativePath: string): URL {
   const packaged = new URL(`../sql/${relativePath}`, import.meta.url);

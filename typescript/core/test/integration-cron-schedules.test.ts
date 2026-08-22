@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { Queue, Worker } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
 
@@ -42,7 +43,7 @@ describe("cron schedules", () => {
     await queue.cancel(canceledId);
     await queue.enqueue("health-ready", null);
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(47);
+    expect(health.schemaVersion).toBe(WORKHORSE_SCHEMA_VERSION);
     expect(health.counts).toEqual({
       blocked: 0,
       scheduled: 0,

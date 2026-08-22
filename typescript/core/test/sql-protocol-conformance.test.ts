@@ -590,7 +590,8 @@ describe("SQL protocol conformance fixtures", () => {
       const client = await compatibilityDatabase.pool.connect();
       try {
         await client.query("BEGIN");
-        await client.query("UPDATE workhorse.schema_version SET version = 37");
+        // Below the supported minimum, which is 1 now that the baseline was reset.
+        await client.query("UPDATE workhorse.schema_version SET version = 0");
         await expect(
           assertSqlProtocolCompatible(client, fixtures.manifest, 1),
         ).rejects.toMatchObject({
@@ -769,7 +770,7 @@ describe("SQL protocol conformance fixtures", () => {
           outcome: string;
           reason: string | null;
         }>(
-          "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal",
+          "SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
           [JSON.stringify(serialized)],
         );
         expect(accepted.rows).toEqual([

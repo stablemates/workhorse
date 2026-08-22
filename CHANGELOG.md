@@ -10,12 +10,14 @@ upgrade steps.
 The supported Node.js and PostgreSQL versions, the schema compatibility guarantees, and the release
 process are in [`docs/compatibility.md`](docs/compatibility.md).
 
-While the line is `0.x`, any minor release may break compatibility, including bumping the schema
-version. Breaking changes are always listed with upgrade steps.
+While the line is `0.x`, any minor release may break compatibility, including changing the schema.
+There is no upgrade path within `0.x`: the schema is edited in place and reinstalled, so moving
+between `0.x` releases means installing the new schema on a fresh database. Ordered, immutable
+migrations begin at 1.0.0. Breaking changes are always listed with upgrade steps.
 
 ## 0.1.0 — unreleased
 
-First published line. Requires **schema v46**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
+First published line. Requires **schema v1**, Node.js **22 or 24**, PostgreSQL **15 through 18**.
 
 ### Added
 
@@ -31,15 +33,14 @@ First published line. Requires **schema v46**, Node.js **22 or 24**, PostgreSQL 
   synchronous worker. A second signal exits with its conventional code, while an expired deadline
   exits with failure so PostgreSQL can recover active leases.
 
-- `@workhorse-js/core`: ordered, transactional schema migrations replace clean-install-only schema
-  management. `migrateSchema` and the new `workhorse schema migrate` command apply immutable steps
-  forward from the frozen version 43 baseline; each step commits one version behind the
-  `workhorse:schema-migration` advisory lock and rolls back atomically on failure. Migration 0044
-  adds `workhorse.protocol_version`, which records the served SQL protocol versions independently
-  of the `workhorse.schema_migration` history; `readProtocolVersions` and `workhorse schema status`
-  report it. Upgrade steps: run `workhorse schema migrate` (or `migrateSchema`) before starting
-  processes from this release; development schemas at retired versions below 43 still require
-  `pnpm worktree:setup`.
+- `@workhorse-js/core`: the schema ships as a single baseline at version 1. Nothing has been
+  published, so the pre-release migration history was squashed into `sql/schema/current.sql` rather
+  than carried as steps no deployment could ever have applied. `workhorse.protocol_version` records
+  the served SQL protocol versions independently of the `workhorse.schema_migration` history;
+  `readProtocolVersions` and `workhorse schema status` report it. The migration framework —
+  `migrateSchema`, `workhorse schema migrate`, the `workhorse:schema-migration` advisory lock, and
+  atomic per-step rollback — remains and has nothing to apply until the first ordered step ships at
+  1.0.0. Upgrade steps: recreate the database. Development worktrees run `pnpm worktree:setup`.
 
 - `@workhorse-js/core`: durable PostgreSQL job queue with at-least-once delivery, leases and fencing,
   cooperative cancellation, deadlines and execution timeouts, durable waits, progress and
@@ -149,10 +150,13 @@ name the retired instruments.
   and human decisions over a trailing 24-hour window. A partial event index bounds these polling
   reads to recent rejection evidence instead of scanning all retained event history.
 
-- `@workhorse-js/core`: schema versions 23 through 42 are replaced by the version 43 pre-release
-  baseline. No published deployment can consume that history. Version 43 became the permanent
-  migration baseline; later schema changes ship as ordered migrations. Existing development
-  worktrees must run `pnpm worktree:setup` once to recreate their dedicated databases.
+- **Breaking:** `@workhorse-js/core`: every SQL function is at version 1. `claim_v3`,
+  `heartbeat_v2`, `list_jobs_v2`, `list_job_timeline_v2`, `list_dead_letters_v2`, and
+  `register_worker_v2` lost suffixes that recorded compatibility windows nobody could have been
+  inside. `enqueue_many_v2` became `enqueue_many_v1`, and the internal batch function that held
+  that name became `enqueue_batch_v1`. The single-queue `register_worker_v1` shim is gone; the
+  multi-queue signature owns the name. Existing development worktrees must run
+  `pnpm worktree:setup` once to recreate their dedicated databases.
 
 - **Breaking:** `@workhorse-js/core`: the rolling-statistics cadence is maintenance policy rather
   than a worker option. `WorkerOptions.statisticsRollupIntervalMs` is removed; set
@@ -160,8 +164,8 @@ name the retired instruments.
   `statisticsRecomputeBuckets`, through `Queue.syncMaintenancePolicy` or an operator override.
   `rollup_stats_v1` now reads all three from `maintenance_policy`, gates itself on the interval
   (`Queue.rollupStatistics({ force: true })` bypasses the gate), and its signature is
-  `(p_force, p_now, p_max_buckets)`. Migration `0045-statistics-maintenance-policy.sql` takes the
-  schema to version 45, adding the three policy columns and their provenance. The dashboard
+  `(p_force, p_now, p_max_buckets)`. The baseline schema carries the three policy columns and their
+  provenance. The dashboard
   settings page shows the new settings and derives recommendations from measured state — arrival rate against the terminal-cleanup ceiling, retention lag, a stalled or
   opted-out rollup, and default-partition spill — in `DashboardSettingsPage.recommendations`.
 

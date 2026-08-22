@@ -269,6 +269,19 @@ function relation(surface: DashboardReadSurface, name: DashboardRelation): strin
   return `workhorse.${dashboardRelations[surface][name]}`;
 }
 
+/**
+ * The job payload as the dashboard actually receives it.
+ *
+ * `dashboard_job_v1` redacts the operator-declared sensitive keys (ADR 0035), so a direct-SQL arm
+ * that selected the raw column would be measuring a different query and would report a plan
+ * difference that is only the missing redaction. Both arms compute the same value.
+ */
+function payloadColumn(surface: DashboardReadSurface, alias: string): string {
+  return surface === "tables"
+    ? `workhorse.redact_top_level_keys_v1(${alias}.payload, ${alias}.payload_redact_keys) AS payload`
+    : `${alias}.payload`;
+}
+
 function jsonRows(innerSql: string): string {
   return `SELECT to_jsonb(result) AS result_row FROM (${innerSql}) result`;
 }
@@ -282,7 +295,8 @@ function taskPageSql(
       SELECT j.id, j.queue_name AS queue, j.job_type AS type,
              COALESCE(r.state, o.state) AS state,
              COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-             j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.payload, j.tags,
+             j.max_attempts, j.retry_policy, j.deadline_at, j.execution_timeout_ms,
+             ${payloadColumn(surface, "j")}, j.tags,
              COALESCE(r.run_at, o.run_at) AS run_at,
              r.worker_id AS current_worker_id,
              COALESCE(r.worker_id, durable_wait.worker_id, attempt_worker.worker_id) AS worker_id,

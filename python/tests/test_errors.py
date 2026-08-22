@@ -41,11 +41,11 @@ class Cursor:
 
     def execute(self, sql: str, _parameters: Sequence[object] = ()) -> None:
         self.sql = sql
-        if self.fail_compatibility or "enqueue_many_v2" in sql:
+        if self.fail_compatibility or "enqueue_many_v1" in sql:
             raise self.error
 
     def fetchall(self) -> list[tuple[int]]:
-        return [(47,)]
+        return [(1,)]
 
 
 class Connection:

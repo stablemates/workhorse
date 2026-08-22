@@ -151,7 +151,7 @@ func TestCreateChildrenReturnsTypedJoinedResultLimitError(t *testing.T) {
 	}
 	var parentID string
 	if err := pool.QueryRow(ctx,
-		"SELECT job_id FROM workhorse.enqueue_many_v2($1::jsonb)", request,
+		"SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb)", request,
 	).Scan(&parentID); err != nil {
 		t.Fatal(err)
 	}

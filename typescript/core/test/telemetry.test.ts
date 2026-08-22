@@ -70,7 +70,7 @@ describe("OpenTelemetry", () => {
     let acceptedRequest: Record<string, unknown> | undefined;
     const database = queryable(
       vi.fn(async (sql: string, values?: readonly unknown[]) => {
-        if (sql.includes("enqueue_many_v2")) {
+        if (sql.includes("enqueue_many_v1")) {
           acceptedRequest = JSON.parse(values?.[0] as string)[0] as Record<string, unknown>;
           return {
             rows: [
@@ -82,7 +82,7 @@ describe("OpenTelemetry", () => {
             ] as never[],
           };
         }
-        if (sql.includes("claim_v3")) {
+        if (sql.includes("claim_v1")) {
           return {
             rows: [
               {
@@ -190,7 +190,7 @@ describe("OpenTelemetry", () => {
         ) {
           return { rows: [] };
         }
-        if (sql.includes("claim_v3")) {
+        if (sql.includes("claim_v1")) {
           if (claimed) return { rows: [] };
           claimed = true;
           return {
@@ -278,7 +278,7 @@ describe("OpenTelemetry", () => {
     metricExporter.reset();
     const database = queryable(
       vi.fn(async (sql: string) => {
-        expect(sql).toContain("enqueue_many_v2");
+        expect(sql).toContain("enqueue_many_v1");
         return {
           rows: [
             {
@@ -331,7 +331,7 @@ describe("OpenTelemetry", () => {
         ) {
           return { rows: [] };
         }
-        if (sql.includes("claim_v3")) {
+        if (sql.includes("claim_v1")) {
           if (claimed) return { rows: [] };
           claimed = true;
           return {

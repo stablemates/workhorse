@@ -5,7 +5,11 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { verifySqlProtocolFixtures } from "../../../scripts/verify-sql-protocol.js";
-import { migrateSchema, WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
+import {
+  migrateSchema,
+  WORKHORSE_SCHEMA_BASELINE_VERSION,
+  WORKHORSE_SCHEMA_VERSION,
+} from "../src/index.js";
 import { applySchemaMigrationPlan } from "../src/schema-migrations.js";
 import { createDatabaseTestHarness } from "./support/db.js";
 
@@ -166,11 +170,11 @@ describe("schema migrations", () => {
     expect(state.rows).toEqual([{ version: 3, leaked: null }]);
   });
 
-  it("rejects retired pre-release schema versions", async () => {
-    await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 42");
+  it("rejects schema versions below the migration baseline", async () => {
+    await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 0");
     try {
       await expect(migrateSchema(fixtureDatabase.pool)).rejects.toThrow(
-        "Workhorse schema version 42 predates the supported migration baseline 43",
+        `predates the supported migration baseline ${WORKHORSE_SCHEMA_BASELINE_VERSION}`,
       );
     } finally {
       await fixtureDatabase.pool.query("UPDATE workhorse.schema_version SET version = 3");
@@ -178,11 +182,13 @@ describe("schema migrations", () => {
   });
 
   it("migrates every released schema version to a schema identical to a clean installation", async () => {
+    // `sql/releases/` is empty until the first public release: schema version 1 is a clean install
+    // with no upgrade source, so there is nothing to migrate from yet. The first frozen artifact
+    // lands there when a released version must survive an upgrade, and this loop starts running.
     const releases = (await readdir(path.join(repository, "sql", "releases")))
       .filter((file) => file.endsWith(".sql"))
       // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks Array.prototype.toSorted.
       .sort();
-    expect(releases.length).toBeGreaterThan(0);
 
     for (const release of releases) {
       const releasedVersion = Number.parseInt(release, 10);
@@ -212,53 +218,14 @@ describe("schema migrations", () => {
         "SELECT version FROM workhorse.schema_migration ORDER BY version",
       );
       // A clean installation records the full lineage from the baseline, and each migration
-      // appends its own row, so both paths agree on the complete 43..current range.
+      // appends its own row, so both paths agree on the complete baseline..current range.
       expect(migrations.rows.map((row) => row.version)).toEqual(
-        Array.from({ length: WORKHORSE_SCHEMA_VERSION - 43 + 1 }, (unused, index) => 43 + index),
+        Array.from(
+          { length: WORKHORSE_SCHEMA_VERSION - WORKHORSE_SCHEMA_BASELINE_VERSION + 1 },
+          (unused, index) => WORKHORSE_SCHEMA_BASELINE_VERSION + index,
+        ),
       );
     }
-  });
-
-  it("backfills retained minute statistics before v46 enables tier-aware reads", async () => {
-    await releaseDatabase.pool.query("DROP SCHEMA IF EXISTS workhorse CASCADE");
-    await releaseDatabase.pool.query(
-      await readFile(path.join(repository, "sql", "releases", "0043.sql"), "utf8"),
-    );
-    await releaseDatabase.pool.query(
-      `UPDATE workhorse.job_stat_state
-          SET rolled_up_through = date_bin(
-            '1 minute', clock_timestamp(), timestamp with time zone '2000-01-01'
-          );
-       INSERT INTO workhorse.job_stat_bucket(bucket_start, queue_name, job_type, enqueued)
-       VALUES (
-         date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01')
-           - interval '3 days' + interval '4 hours',
-         'migrated', 'retained', 7
-       )`,
-    );
-
-    await migrateSchema(releaseDatabase.pool);
-
-    const windows = await releaseDatabase.pool.query<{ tier: string; enqueued: string }>(
-      `SELECT 'hour' AS tier, sum(enqueued)::text AS enqueued
-         FROM workhorse.stat_buckets_v1(
-           date_bin('1 hour', clock_timestamp(), timestamp with time zone '2000-01-01')
-             - interval '30 days',
-           clock_timestamp()
-         )
-       UNION ALL
-       SELECT 'day', sum(enqueued)::text
-         FROM workhorse.stat_buckets_v1(
-           date_bin('1 day', clock_timestamp(), timestamp with time zone '2000-01-01')
-             - interval '90 days',
-           clock_timestamp()
-         )
-       ORDER BY tier`,
-    );
-    expect(windows.rows).toEqual([
-      { tier: "day", enqueued: "7" },
-      { tier: "hour", enqueued: "7" },
-    ]);
   });
 
   it("satisfies the SQL protocol fixtures on the pre-release baseline", async () => {
@@ -277,7 +244,10 @@ describe("schema migrations", () => {
       "SELECT version, applied_at FROM workhorse.schema_migration ORDER BY version",
     );
     expect(before.rows.map((row) => row.version)).toEqual(
-      Array.from({ length: WORKHORSE_SCHEMA_VERSION - 43 + 1 }, (unused, index) => 43 + index),
+      Array.from(
+        { length: WORKHORSE_SCHEMA_VERSION - WORKHORSE_SCHEMA_BASELINE_VERSION + 1 },
+        (unused, index) => WORKHORSE_SCHEMA_BASELINE_VERSION + index,
+      ),
     );
 
     await migrateSchema(cleanDatabase.pool);

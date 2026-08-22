@@ -47,7 +47,7 @@ func (executor *queueExecutor) Query(
 
 func TestQueueSerializesMinimalRequestsAndReturnsCanonicalResults(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"version": int64(47)}},
+		{{"version": int64(1)}},
 		{
 			{"ordinal": int32(1), "job_id": "first", "outcome": "accepted", "reason": nil},
 			{"ordinal": int32(2), "job_id": "second", "outcome": "replayed", "reason": nil},
@@ -100,7 +100,7 @@ func TestQueueSatisfiesSharedRequestFixturesWithinCurrentScope(t *testing.T) {
 	for _, fixture := range readFixture[[]requestFixture](t, "requests.json") {
 		t.Run(fixture.ID, func(t *testing.T) {
 			executor := &queueExecutor{responses: [][]workhorse.Row{
-				{{"version": int64(47)}},
+				{{"version": int64(1)}},
 				{{"ordinal": int32(1), "job_id": "fixture", "outcome": "accepted", "reason": nil}},
 			}}
 			queueName, ok := fixture.Postgres["queue"].(string)
@@ -160,7 +160,7 @@ func TestQueueSerializesSharedScheduleFixture(t *testing.T) {
 		Postgres any `json:"postgres"`
 	}
 	fixture := readFixture[[]scheduleFixture](t, "schedules.json")[0]
-	executor := &queueExecutor{responses: [][]workhorse.Row{{{"version": int64(47)}}, {}}}
+	executor := &queueExecutor{responses: [][]workhorse.Row{{{"version": int64(1)}}, {}}}
 	queue := workhorse.NewQueue(executor, fixture.DefaultQueue)
 	definitions := make([]workhorse.ScheduleDefinition, len(fixture.Application))
 	for index, definition := range fixture.Application {
@@ -272,7 +272,7 @@ func TestQueueSerializesDelayedAndDurableOptions(t *testing.T) {
 	runAt := time.Date(2026, time.August, 22, 1, 2, 3, 456_789_000, time.FixedZone("EDT", -4*60*60))
 	deadline := runAt.Add(2 * time.Hour)
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"version": int64(47)}},
+		{{"version": int64(1)}},
 		{
 			{"ordinal": int32(1), "job_id": "delayed", "outcome": "accepted", "reason": nil},
 			{"ordinal": int32(2), "job_id": "debounced", "outcome": "accepted", "reason": nil},
@@ -406,7 +406,7 @@ func TestQueueRejectsInvalidOptionCombinationsBeforeQuery(t *testing.T) {
 
 func TestQueuePlacesResultsByValidatedOrdinal(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"version": int64(47)}},
+		{{"version": int64(1)}},
 		{
 			{"ordinal": int32(2), "job_id": "second", "outcome": "accepted", "reason": nil},
 			{"ordinal": int32(1), "job_id": "first", "outcome": "accepted", "reason": nil},
@@ -428,7 +428,7 @@ func TestQueuePlacesResultsByValidatedOrdinal(t *testing.T) {
 
 func TestQueueRejectsIncompleteOrdinalResults(t *testing.T) {
 	executor := &queueExecutor{responses: [][]workhorse.Row{
-		{{"version": int64(47)}},
+		{{"version": int64(1)}},
 		{},
 	}}
 	queue := workhorse.NewQueue(executor, "default")
@@ -440,7 +440,7 @@ func TestQueueRejectsIncompleteOrdinalResults(t *testing.T) {
 }
 
 func TestQueueRefusesIncompatibleSchemaBeforeMutation(t *testing.T) {
-	executor := &queueExecutor{responses: [][]workhorse.Row{{{"version": int64(46)}}}}
+	executor := &queueExecutor{responses: [][]workhorse.Row{{{"version": int64(0)}}}}
 	queue := workhorse.NewQueue(executor, "default")
 
 	_, err := queue.Enqueue(context.Background(), "email.send", map[string]any{"message": "hello"})
@@ -505,7 +505,7 @@ func TestQueueTranslatesStructuredPostgreSQLErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			executor := &queueExecutor{
-				responses: [][]workhorse.Row{{{"version": int64(47)}}},
+				responses: [][]workhorse.Row{{{"version": int64(1)}}},
 				errors:    []error{nil, &pgconn.PgError{Code: test.code, Detail: test.detail}},
 			}
 			queue := workhorse.NewQueue(executor, "default")

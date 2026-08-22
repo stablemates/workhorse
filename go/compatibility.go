@@ -12,8 +12,8 @@ const (
 	ProtocolVersion        = 1
 	minimumProtocolVersion = 1
 	maximumProtocolVersion = 1
-	minimumSchemaVersion   = 47
-	maximumSchemaVersion   = 47
+	minimumSchemaVersion   = 1
+	maximumSchemaVersion   = 1
 )
 
 // CompatibilityCode identifies why a client must refuse a mutation.

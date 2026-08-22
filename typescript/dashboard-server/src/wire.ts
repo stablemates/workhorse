@@ -1087,39 +1087,6 @@ export interface DashboardJobDetail {
   }>;
 }
 
-export interface DashboardSnapshot {
-  capturedAt: string;
-  operatorPolicy: {
-    mode: "read-only" | "writable";
-    supportedMutations: Array<
-      | "enqueueTest"
-      | "setScheduleEnabled"
-      | "setQueuePaused"
-      | "purgeQueue"
-      | "setWorkerPaused"
-      | "cancelTask"
-      | "signalTask"
-      | "completeHumanWait"
-      | "overrideMaintenancePolicy"
-      | "revertMaintenancePolicy"
-      | "overrideRetentionPolicy"
-      | "revertRetentionPolicy"
-    >;
-    requiredAuditContext: readonly ["actor", "reason", "requestId", "occurredAt"];
-  };
-  queues: DashboardQueueRow[];
-  jobs: DashboardJobRow[];
-  schedules: DashboardScheduleRow[];
-  workers: DashboardWorkerRow[];
-  failures: DashboardFailureRow[];
-  metrics: {
-    windowSeconds: 7200;
-    bucketSeconds: 30;
-    buckets: DashboardMetricBucket[];
-  };
-  health: Awaited<ReturnType<Queue["health"]>>;
-}
-
 export interface DashboardHumanWaitRow {
   jobId: string;
   queue: string;

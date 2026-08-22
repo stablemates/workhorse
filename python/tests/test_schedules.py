@@ -12,7 +12,7 @@ REPOSITORY = Path(__file__).parents[2]
 
 def test_synchronizes_recurring_definitions_through_the_versioned_sql_function() -> None:
     fixture = json.loads((REPOSITORY / "protocol/v1/schedules.json").read_text())[0]
-    connection = Connection([[{"version": 47}], []])
+    connection = Connection([[{"version": 1}], []])
 
     Queue(connection, default_queue=fixture["defaultQueue"]).sync_schedules(
         fixture["namespace"],

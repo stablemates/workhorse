@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { WorkhorseMetricsObserver } from "../src/index.js";
 import { EXTERNAL_WAIT_REJECTION_WINDOW_MS } from "../src/types.js";
 import { createIntegrationTestContext } from "./support/integration.js";
+import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 
 const { defaultRetentionPolicy, pool, queue } = createIntegrationTestContext(import.meta.url);
 
@@ -289,7 +290,7 @@ describe("health snapshots", () => {
     await queue.enqueue("ready", {});
     await queue.enqueue("later", {}, { runAt: new Date(Date.now() + 60_000) });
     const health = await queue.health();
-    expect(health.schemaVersion).toBe(47);
+    expect(health.schemaVersion).toBe(WORKHORSE_SCHEMA_VERSION);
     expect(health.readyDepth).toBe(1);
     expect(health.scheduledDepth).toBe(2);
     expect(health.sleepingJobs).toBe(1);

@@ -57,7 +57,7 @@ func TestCompatibilityFixtures(t *testing.T) {
 }
 
 func TestAssertCompatibleChecksEveryCall(t *testing.T) {
-	executor := &recordingExecutor{rows: []workhorse.Row{{"version": int32(47)}}}
+	executor := &recordingExecutor{rows: []workhorse.Row{{"version": int32(1)}}}
 
 	for range 2 {
 		if err := workhorse.AssertCompatible(context.Background(), executor); err != nil {
@@ -71,7 +71,7 @@ func TestAssertCompatibleChecksEveryCall(t *testing.T) {
 }
 
 func TestCachedCompatibilityCheckQueriesOnce(t *testing.T) {
-	executor := &recordingExecutor{rows: []workhorse.Row{{"version": int64(47)}}}
+	executor := &recordingExecutor{rows: []workhorse.Row{{"version": int64(1)}}}
 	check := workhorse.NewCachedCompatibilityCheck(executor)
 
 	for range 2 {

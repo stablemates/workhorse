@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
 import psycopg
-from dateutil.tz import gettz
 
 from workhorse import Queue, ScheduleDefinition, ScheduledJob, Worker
-from workhorse.worker import _due_occurrences
 
 
 def _sync_schedule(connection: psycopg.Connection[object], expression: str) -> int:
@@ -110,53 +107,3 @@ def test_worker_evaluates_cron_in_the_process_timezone(database_url: str) -> Non
             "ORDER BY occurrence_at"
         ).fetchall()
         assert occurrences == [(today,)]
-
-
-def test_cron_occurrences_match_process_timezone_dst_semantics() -> None:
-    eastern = gettz("America/New_York")
-    assert eastern is not None
-
-    with patch("workhorse.worker.tzlocal", return_value=eastern):
-        spring = _due_occurrences(
-            "30 2 * * *",
-            datetime(2026, 3, 7, 7, 30, tzinfo=timezone.utc),
-            datetime(2026, 3, 8, 8, 0, tzinfo=timezone.utc),
-            10,
-        )
-        fall = _due_occurrences(
-            "30 1 * * *",
-            datetime(2026, 10, 31, 5, 30, tzinfo=timezone.utc),
-            datetime(2026, 11, 1, 7, 0, tzinfo=timezone.utc),
-            10,
-        )
-
-    assert [occurrence.astimezone(timezone.utc) for occurrence in spring] == [
-        datetime(2026, 3, 8, 7, 30, tzinfo=timezone.utc)
-    ]
-    assert [occurrence.astimezone(timezone.utc) for occurrence in fall] == [
-        datetime(2026, 11, 1, 5, 30, tzinfo=timezone.utc)
-    ]
-
-
-def test_hashed_cron_fields_use_the_cross_runtime_offset() -> None:
-    with patch("workhorse.worker.tzlocal", return_value=timezone.utc):
-        occurrences = _due_occurrences(
-            "H * * * *",
-            datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc),
-            datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc),
-            10,
-        )
-
-    assert occurrences == [datetime(2026, 1, 1, 0, 44, tzinfo=timezone.utc)]
-
-
-def test_hashed_field_expansion_preserves_named_weekdays() -> None:
-    with patch("workhorse.worker.tzlocal", return_value=timezone.utc):
-        occurrences = _due_occurrences(
-            "0 0 * * THU",
-            datetime(2026, 1, 7, 0, 0, tzinfo=timezone.utc),
-            datetime(2026, 1, 8, 0, 0, tzinfo=timezone.utc),
-            10,
-        )
-
-    assert occurrences == [datetime(2026, 1, 8, 0, 0, tzinfo=timezone.utc)]

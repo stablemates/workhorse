@@ -58,11 +58,7 @@ import {
 } from "../src/app.js";
 import type { CreateDemoApplicationOptions } from "../src/app.js";
 import type { DashboardRouter } from "@workhorse-js/dashboard/server";
-import {
-  dashboardDatabase,
-  readDashboardSnapshot,
-  readDashboardWorkers,
-} from "@workhorse-js/dashboard/server";
+import { dashboardDatabase, readDashboardWorkers } from "@workhorse-js/dashboard/server";
 import { DEMO_QUEUE_OPTIONS } from "../src/contracts.js";
 import { durableDemoScenarios } from "../src/durable-demo.js";
 import {
@@ -2901,22 +2897,15 @@ describe("Workhorse demo", () => {
         (page) => page.workers.some((worker) => worker.activeSlots === 1),
       );
 
-      // No declared fleet is passed: the snapshot discovers workers from the registry alone.
-      const snapshot = await readDashboardSnapshot(
-        dashboardDatabase(pool),
-        new Queue(pool, "demo"),
-        [],
-        createLocalOperator(database),
-      );
-      // The snapshot is a pure SQL projection with no process-local worker handle, yet it still
-      // reports declared capacity and slot use because workers publish both to the durable
-      // registry. SQL-observed active jobs remain a separate, independently sourced number.
-      expect(snapshot.workers.map((worker) => worker.activeJobs).reduce((a, b) => a + b, 0)).toBe(
-        1,
-      );
-      expect(snapshot.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
-      expect(snapshot.workers.map((worker) => worker.concurrency)).toEqual([3, 3]);
-      for (const worker of snapshot.workers) {
+      // No declared fleet is configured: the page discovers workers from the registry alone. The
+      // read is a pure SQL projection with no process-local worker handle, yet it still reports
+      // declared capacity and slot use because workers publish both to the durable registry.
+      // SQL-observed active jobs remain a separate, independently sourced number.
+      const page = await client.dashboard.workers();
+      expect(page.workers.map((worker) => worker.activeJobs).reduce((a, b) => a + b, 0)).toBe(1);
+      expect(page.workers).toHaveLength(DEMO_WORKER_CONCURRENCY.length);
+      expect(page.workers.map((worker) => worker.concurrency)).toEqual([3, 3]);
+      for (const worker of page.workers) {
         expect(worker).toMatchObject({ registered: true, draining: false });
         expect(worker.activeSlots).not.toBeNull();
       }

@@ -19,7 +19,6 @@ import {
   DashboardRetentionCategory,
   DashboardRetentionCategoryRow,
   DashboardScheduleRow,
-  DashboardSnapshot,
   DashboardStorageRelation,
   DashboardSystemPage,
   DashboardSystemRetention,
@@ -31,7 +30,6 @@ import {
   DashboardTaskFilter,
   DashboardTaskSort,
   DashboardTasksPage,
-  DashboardWorkerRow,
   DashboardWorkersPage,
   DashboardSettingsPage,
   MaintenanceLoopCadences,
@@ -48,7 +46,7 @@ import {
 } from "./rolling-stats.js";
 import { deriveSettingsRecommendations } from "./settings-recommendations.js";
 import { sql, type DashboardDatabase, type DashboardSql } from "./sql.js";
-import type { DashboardDurabilityProjector, DashboardOperator } from "./types.js";
+import type { DashboardDurabilityProjector } from "./types.js";
 
 function toIso(value: Date | string): string {
   return new Date(value).toISOString();
@@ -208,40 +206,6 @@ function errorMessageOrNull(error: unknown): string | null {
     if (typeof message === "string" && message.length > 0) return message;
   }
   return null;
-}
-
-function operatorPolicy(
-  operator: DashboardOperator | undefined,
-  canManageSettings: boolean,
-): DashboardSnapshot["operatorPolicy"] {
-  if (operator?.mode !== "writable") {
-    return {
-      mode: "read-only",
-      supportedMutations: [],
-      requiredAuditContext: ["actor", "reason", "requestId", "occurredAt"],
-    };
-  }
-  return {
-    mode: "writable",
-    supportedMutations: [
-      "enqueueTest",
-      "setScheduleEnabled",
-      "setQueuePaused",
-      "purgeQueue",
-      "setWorkerPaused",
-      "cancelTask",
-      "completeHumanWait",
-      ...(canManageSettings
-        ? ([
-            "overrideMaintenancePolicy",
-            "revertMaintenancePolicy",
-            "overrideRetentionPolicy",
-            "revertRetentionPolicy",
-          ] as const)
-        : []),
-    ],
-    requiredAuditContext: ["actor", "reason", "requestId", "occurredAt"],
-  };
 }
 
 function workerValues(workers: readonly string[]) {
@@ -2006,352 +1970,6 @@ export async function readDashboardWorkers(
   };
 }
 
-export async function readDashboardSnapshot(
-  database: DashboardDatabase,
-  queue: Queue,
-  configuredWorkers: readonly string[],
-  operator?: DashboardOperator,
-  canManageSettings = false,
-): Promise<DashboardSnapshot> {
-  const now = new Date();
-  const [queueRows, jobRows, scheduleRows, workerRows, failureRows, metricRows, health] =
-    await Promise.all([
-      database.execute<{
-        queue: string;
-        state: string;
-        count: number;
-        oldest_ms: number | null;
-      }>(sql`
-        SELECT queue_name AS queue, state, count(*)::integer AS count,
-               extract(epoch FROM clock_timestamp() - min(COALESCE(ready_at, run_at))) * 1000
-                 AS oldest_ms
-          FROM workhorse.dashboard_job_runtime_v1
-         GROUP BY queue_name, state
-         ORDER BY queue_name, state
-      `),
-      database.execute<{
-        id: string;
-        queue: string;
-        type: string;
-        priority: number;
-        state: string;
-        blocked_reason: "prerequisite_pending" | null;
-        prerequisite_job_ids: string[];
-        attempt: number;
-        max_attempts: number;
-        retry_policy: RetryPolicy | null;
-        payload: unknown;
-        run_at: Date | string | null;
-        worker_id: string | null;
-        finished_at: Date | string | null;
-        error: unknown;
-        created_at: Date | string;
-        updated_at: Date | string;
-        cancel_requested_at: Date | string | null;
-        cancel_requested_by: string | null;
-        cancel_reason: string | null;
-        enqueued_details: unknown;
-      }>(sql`
-        SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
-               COALESCE(r.state, o.state) AS state,
-               CASE WHEN r.state = 'blocked' THEN 'prerequisite_pending' END AS blocked_reason,
-               ARRAY(
-                 SELECT dependency.prerequisite_job_id
-                   FROM workhorse.dashboard_job_dependency_v1 dependency
-                  WHERE dependency.dependent_job_id = j.id
-                    AND dependency.released_at IS NULL
-                  ORDER BY dependency.prerequisite_job_id
-               ) AS prerequisite_job_ids,
-               COALESCE(r.current_attempt, o.current_attempt) AS attempt,
-               j.max_attempts, j.retry_policy, j.payload,
-               COALESCE(r.run_at, o.run_at) AS run_at,
-               r.worker_id, o.finished_at,
-               COALESCE(o.error, r.error) AS error,
-               j.created_at,
-               COALESCE(r.updated_at, o.updated_at, j.created_at) AS updated_at,
-               r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
-               enqueued_event.details AS enqueued_details
-          FROM workhorse.dashboard_job_v1 j
-          LEFT JOIN workhorse.dashboard_job_runtime_v1 r ON r.job_id = j.id
-          LEFT JOIN workhorse.dashboard_job_outcome_v1 o ON o.job_id = j.id
-          LEFT JOIN LATERAL (
-            SELECT event.details FROM workhorse.dashboard_job_event_v1 event
-             WHERE event.job_id = j.id AND event.event_type = 'enqueued'
-             ORDER BY event.occurred_at, event.event_id LIMIT 1
-          ) enqueued_event ON true
-         ORDER BY COALESCE(r.updated_at, o.updated_at, j.created_at) DESC, j.id DESC
-         LIMIT 50
-      `),
-      database.execute<{
-        namespace: string;
-        name: string;
-        cron: string;
-        queue: string;
-        type: string;
-        priority: number;
-        enabled: boolean;
-        revision: string;
-        updated_at: Date | string;
-        occurrence_count: number;
-        last_fired_at: Date | string | null;
-      }>(sql`
-        SELECT d.namespace, d.schedule_name AS name, d.cron_expression AS cron,
-               d.queue_name AS queue, d.job_type AS type, d.priority, d.enabled,
-               d.revision::text AS revision, d.updated_at,
-               count(o.occurrence_at)::integer AS occurrence_count,
-               max(o.fired_at) AS last_fired_at
-          FROM workhorse.dashboard_schedule_definition_v1 d
-          LEFT JOIN workhorse.dashboard_schedule_occurrence_v1 o
-            ON o.namespace = d.namespace AND o.schedule_name = d.schedule_name
-         GROUP BY d.namespace, d.schedule_name, d.cron_expression, d.queue_name, d.job_type, d.priority,
-                  d.enabled, d.revision, d.updated_at
-         ORDER BY d.namespace, d.schedule_name
-         LIMIT 50
-      `),
-      database.execute<{
-        id: string;
-        registered: boolean;
-        hostname: string | null;
-        pid: number | null;
-        queue_names: string[] | null;
-        concurrency: number | null;
-        active_slots: number | null;
-        draining: boolean | null;
-        paused: boolean | null;
-        started_at: Date | string | null;
-        last_heartbeat_at: Date | string | null;
-        active_jobs: number;
-        completed_attempts: number;
-        last_seen_at: Date | string | null;
-      }>(sql`
-        WITH declared AS (${declaredWorkerRows(configuredWorkers)}
-        ), fleet(id) AS (
-          SELECT worker_id FROM workhorse.dashboard_worker_registry_v1
-          UNION
-          SELECT id FROM declared
-        ), observed AS (
-          SELECT worker_id AS id, count(*)::integer AS active_jobs, 0::integer AS completed_attempts,
-                 max(heartbeat_at) AS last_seen_at
-            FROM workhorse.dashboard_job_runtime_v1
-           WHERE state = 'active' AND worker_id IN (SELECT id FROM fleet)
-           GROUP BY worker_id
-          UNION ALL
-          SELECT worker_id AS id, 0::integer AS active_jobs,
-                 count(*)::integer AS completed_attempts, max(finished_at) AS last_seen_at
-            FROM workhorse.dashboard_attempt_history_v1
-           WHERE occurred_at >= clock_timestamp() - interval '5 minutes'
-             AND worker_id IN (SELECT id FROM fleet)
-           GROUP BY worker_id
-        )
-        SELECT f.id,
-               r.worker_id IS NOT NULL AS registered,
-               r.hostname, r.pid, r.queue_names,
-               r.concurrency, r.active_slots, r.draining, r.paused, r.started_at,
-               r.last_heartbeat_at,
-               COALESCE(sum(o.active_jobs), 0)::integer AS active_jobs,
-               COALESCE(sum(o.completed_attempts), 0)::integer AS completed_attempts,
-               GREATEST(max(o.last_seen_at), r.last_heartbeat_at) AS last_seen_at
-          FROM fleet f
-          LEFT JOIN workhorse.dashboard_worker_registry_v1 r ON r.worker_id = f.id
-          LEFT JOIN observed o ON o.id = f.id
-         GROUP BY f.id, r.worker_id, r.hostname, r.pid, r.queue_names, r.concurrency,
-                  r.active_slots, r.draining, r.paused, r.started_at, r.last_heartbeat_at
-         ORDER BY f.id
-      `),
-      database.execute<{
-        id: string;
-        queue: string;
-        type: string;
-        attempt: number;
-        finished_at: Date | string;
-        error: unknown;
-      }>(sql`
-        SELECT j.id, j.queue_name AS queue, j.job_type AS type,
-               o.current_attempt AS attempt, o.finished_at, o.error
-          FROM workhorse.dashboard_job_outcome_v1 o
-          JOIN workhorse.dashboard_job_v1 j ON j.id = o.job_id
-         WHERE o.state = 'failed'
-         ORDER BY o.finished_at DESC, j.id DESC
-         LIMIT 50
-      `),
-      database.execute<{
-        bucket_start: Date | string;
-        enqueued: number;
-        succeeded: number;
-        failed: number;
-        retried: number;
-        active: number;
-        average_duration_ms: number | null;
-      }>(sql`
-        WITH buckets AS (
-          SELECT generate_series(
-            date_bin('30 seconds', clock_timestamp() - interval '2 hours', timestamp with time zone '2000-01-01'),
-            date_bin('30 seconds', clock_timestamp(), timestamp with time zone '2000-01-01'),
-            interval '30 seconds'
-          ) AS bucket_start
-        ), events AS (
-          SELECT date_bin('30 seconds', occurred_at, timestamp with time zone '2000-01-01') AS bucket_start,
-                 count(*) FILTER (WHERE event_type = 'enqueued')::integer AS enqueued
-            FROM workhorse.dashboard_job_event_v1
-           WHERE occurred_at >= clock_timestamp() - interval '2 hours'
-           GROUP BY 1
-        ), attempts AS (
-          SELECT date_bin('30 seconds', finished_at, timestamp with time zone '2000-01-01') AS bucket_start,
-                 count(*) FILTER (WHERE outcome = 'succeeded')::integer AS succeeded,
-                 count(*) FILTER (WHERE outcome = 'failed')::integer AS failed,
-                 count(*) FILTER (WHERE outcome = 'retry')::integer AS retried,
-                 avg(extract(epoch FROM finished_at - claimed_at) * 1000)::double precision AS average_duration_ms
-            FROM workhorse.dashboard_attempt_history_v1
-           WHERE finished_at >= clock_timestamp() - interval '2 hours'
-           GROUP BY 1
-        ), active AS (
-          SELECT date_bin('30 seconds', acquired_at, timestamp with time zone '2000-01-01') AS bucket_start,
-                 count(*)::integer AS active
-            FROM workhorse.dashboard_job_runtime_v1
-           WHERE state = 'active' AND acquired_at >= clock_timestamp() - interval '2 hours'
-           GROUP BY 1
-        )
-        SELECT b.bucket_start,
-               COALESCE(e.enqueued, 0)::integer AS enqueued,
-               COALESCE(a.succeeded, 0)::integer AS succeeded,
-               COALESCE(a.failed, 0)::integer AS failed,
-               COALESCE(a.retried, 0)::integer AS retried,
-               COALESCE(ac.active, 0)::integer AS active,
-               a.average_duration_ms
-          FROM buckets b
-          LEFT JOIN events e USING (bucket_start)
-          LEFT JOIN attempts a USING (bucket_start)
-          LEFT JOIN active ac USING (bucket_start)
-         ORDER BY b.bucket_start
-      `),
-      queue.health(),
-    ]);
-
-  return {
-    capturedAt: now.toISOString(),
-    operatorPolicy: operatorPolicy(operator, canManageSettings),
-    queues: queueRows.rows.map((row) => ({
-      queue: row.queue,
-      state: row.state,
-      count: row.count,
-      oldestMs: row.oldest_ms,
-    })),
-    jobs: jobRows.rows.map((row) => ({
-      id: row.id,
-      queue: row.queue,
-      type: row.type,
-      priority: row.priority,
-      state: row.state,
-      blockedReason: row.blocked_reason,
-      prerequisiteJobIds: row.prerequisite_job_ids,
-      attempt: row.attempt,
-      maxAttempts: row.max_attempts,
-      retryPolicy: row.retry_policy,
-      payload: row.payload,
-      tags: [],
-      // Derived from the same initial `enqueued` event the task list reads, so a keyed task is
-      // never reported as unkeyed just because it was observed through the snapshot instead.
-      keyed: readIdempotencyEvidence({ type: "enqueued", details: row.enqueued_details }) !== null,
-      // Read from the same runtime columns as the task list, so a pending cancellation is never
-      // reported differently depending on which projection an operator happened to open.
-      cancellation: cancellationRequest(
-        row.cancel_requested_at,
-        row.cancel_requested_by,
-        row.cancel_reason,
-      ),
-      runAt: toIsoOrNull(row.run_at),
-      workerId: row.worker_id,
-      lastWorkerId: row.worker_id,
-      finishedAt: toIsoOrNull(row.finished_at),
-      errorMessage: errorMessageOrNull(row.error),
-      createdAt: toIso(row.created_at),
-      updatedAt: toIso(row.updated_at),
-      durability: null,
-      waitName: null,
-      wakeAt: null,
-      wait: null,
-      signalWait: null,
-      humanWait: null,
-    })),
-    schedules: scheduleRows.rows.map((row) => {
-      return {
-        kind: "user" as const,
-        identity: { kind: "user" as const, namespace: row.namespace, name: row.name },
-        namespace: row.namespace,
-        name: row.name,
-        description: scheduleDescription(row.namespace, row.name),
-        cron: row.cron,
-        queue: row.queue,
-        type: row.type,
-        priority: row.priority,
-        enabled: row.enabled,
-        active: row.enabled,
-        revision: row.revision,
-        updatedAt: toIso(row.updated_at),
-        occurrenceCount: row.occurrence_count,
-        lastFiredAt: toIsoOrNull(row.last_fired_at),
-        lastRun: null,
-        maintenance: null,
-      };
-    }),
-    // Declared capacity, slot use, and pause state come from the durable worker registry, so this
-    // pure SQL projection reports the same fleet whether or not workers share the host process.
-    workers: workerRows.rows.map((row) => {
-      const heartbeatAt = row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : null;
-      const live =
-        row.registered &&
-        heartbeatAt !== null &&
-        heartbeatAt.getTime() >= now.getTime() - WORKER_REGISTRATION_STALE_MS;
-      return {
-        id: row.id,
-        queues: row.queue_names ?? [],
-        hostname: row.hostname,
-        pid: row.pid,
-        activeJobs: row.active_jobs,
-        concurrency: row.concurrency,
-        activeSlots: row.active_slots,
-        draining: row.draining ?? false,
-        completedAttempts: row.completed_attempts,
-        failedAttempts: 0,
-        averageExecutionMs: null,
-        lastSeenAt: toIsoOrNull(row.last_seen_at),
-        startedAt: toIsoOrNull(row.started_at),
-        registered: row.registered,
-        paused: row.paused ?? false,
-        status: (row.active_jobs > 0
-          ? "active"
-          : live
-            ? "idle"
-            : row.last_seen_at && new Date(row.last_seen_at).getTime() >= now.getTime() - 5 * 60_000
-              ? "recent"
-              : "offline") as DashboardWorkerRow["status"],
-      };
-    }),
-    failures: failureRows.rows.map((row) => ({
-      id: row.id,
-      queue: row.queue,
-      type: row.type,
-      attempt: row.attempt,
-      finishedAt: toIso(row.finished_at),
-      error: row.error,
-    })),
-    metrics: {
-      windowSeconds: 7200,
-      bucketSeconds: 30,
-      buckets: metricRows.rows.map((row) => ({
-        bucketStart: toIso(row.bucket_start),
-        enqueued: row.enqueued,
-        succeeded: row.succeeded,
-        failed: row.failed,
-        retried: row.retried,
-        active: row.active,
-        averageDurationMs: row.average_duration_ms,
-      })),
-    },
-    health,
-  };
-}
-
 export async function readDashboardJobDetail(
   database: DashboardDatabase,
   id: string,
@@ -2419,8 +2037,7 @@ export async function readDashboardJobDetail(
       signal_wait_deadline_at: Date | string | null;
     }>(sql`
       SELECT j.id, j.queue_name AS queue, j.job_type AS type, j.priority,
-             workhorse.redact_top_level_keys_v1(j.payload, j.payload_redact_keys) AS payload,
-             j.max_attempts,
+             j.payload, j.max_attempts,
              j.retry_policy, j.deadline_at, j.execution_timeout_ms, j.concurrency_key, j.created_at,
              dependency.prerequisite_job_id, dependency.prerequisite_job_ids,
              dependency.on_success AS dependency_on_success,
@@ -2433,8 +2050,7 @@ export async function readDashboardJobDetail(
              r.cancel_requested_at, r.cancel_requested_by, r.cancel_reason,
              r.error AS runtime_error,
              o.state AS outcome_state, o.current_attempt AS outcome_attempt, o.finished_at,
-             workhorse.redact_top_level_keys_v1(o.result, j.result_redact_keys) AS result,
-             o.error AS outcome_error,
+             workhorse.dashboard_job_result_v1(j.id) AS result, o.error AS outcome_error,
              p.progress_value, p.revision::text AS progress_revision,
              p.attempt AS progress_attempt, p.fence_token::text AS progress_fence_token,
              p.worker_id AS progress_worker_id, p.created_at AS progress_created_at,

@@ -6,7 +6,7 @@ Use a policy when downstream capacity belongs to the application rather than one
 
 ## A durable dispatch budget
 
-`Queue.syncConcurrencyPolicies` stores desired policies in PostgreSQL. Workers do not need matching in-memory configuration because `claim_v3` reads the policy during admission.
+`Queue.syncConcurrencyPolicies` stores desired policies in PostgreSQL. Workers do not need matching in-memory configuration because `claim_v1` reads the policy during admission.
 
 Each policy limits one queue. It can also limit jobs that share a `concurrencyKey` inside that queue. The same key text in another queue is independent.
 
@@ -44,7 +44,7 @@ When a job releases capacity normally, PostgreSQL wakes workers listening for th
 
 ## Avoiding a blocked queue
 
-If one key is full, `claim_v3` can admit later ready work for another key. It searches a bounded [priority-ordered window](150-priority.md), so admission cost cannot grow with an unlimited saturated prefix.
+If one key is full, `claim_v1` can admit later ready work for another key. It searches a bounded [priority-ordered window](150-priority.md), so admission cost cannot grow with an unlimited saturated prefix.
 
 `Queue.health()` reports bounded policy summaries, including active capacity, blocked ready work, and saturated-key counts. OpenTelemetry exports queue-level policy gauges without raw key values.
 

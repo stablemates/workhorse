@@ -4,14 +4,14 @@ const schemaVersionStatement = "schema_version"
 
 const (
 	emptyString                          = ""
-	enqueueManyStatementName             = "enqueue_many_v2"
+	enqueueManyStatementName             = "enqueue_many_v1"
 	syncScheduleDefinitionsStatementName = "sync_schedule_definitions_v1"
 	tickStatementName                    = "tick_v1"
 	listSchedulesStatementName           = "list_schedules_v1"
 	fireScheduleStatementName            = "fire_schedule_v1"
 	promoteStatementName                 = "promote_v1"
-	claimStatementName                   = "claim_v3"
-	heartbeatStatementName               = "heartbeat_v2"
+	claimStatementName                   = "claim_v1"
+	heartbeatStatementName               = "heartbeat_v1"
 	expireOwnedStatementName             = "expire_owned_telemetry_v1"
 	recoverExpiredStatementName          = "recover_expired_telemetry_v1"
 	completeStatementName                = "complete_v1"
@@ -390,11 +390,11 @@ var internalStatementRegistry = map[string]string{
 }
 
 var protocolStatementRegistry = map[string]string{
-	enqueueManyStatementName:         `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal`,
-	claimStatementName:               `SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)`,
+	enqueueManyStatementName:         `SELECT ordinal, job_id, outcome, reason FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal`,
+	claimStatementName:               `SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)`,
 	recordBatchDispatchStatementName: `SELECT workhorse.record_batch_dispatch_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
 	recordBatchFailureStatementName:  `SELECT workhorse.record_batch_failure_v1($1::uuid, $2::uuid[], $3::integer[], $4::bigint[], $5::text) AS recorded`,
-	heartbeatStatementName:           `SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
+	heartbeatStatementName:           `SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status`,
 	expireOwnedStatementName:         `SELECT * FROM workhorse.expire_owned_telemetry_v1($1::uuid, $2::text, $3::bigint)`,
 	recoverExpiredStatementName:      `SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)`,
 	completeStatementName:            `SELECT workhorse.complete_v1($1::uuid, $2::text, $3::bigint, $4::jsonb) AS accepted`,

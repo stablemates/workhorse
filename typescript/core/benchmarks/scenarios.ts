@@ -541,7 +541,7 @@ export const operationalScenarioContracts: readonly OperationalScenarioContract[
       "mixed outcomes settle independently without changing successful peers",
       "every admitted member consumes one slot and one policy admission per job",
       "lease recovery and stale fences isolate one lost member from its batch peers",
-      "serial and batched cohorts record claim cost through the same claim_v3 path over live ready-index work",
+      "serial and batched cohorts record claim cost through the same claim_v1 path over live ready-index work",
     ],
     metrics: [
       "jobsPerCohort",
@@ -828,7 +828,7 @@ class QueryPressureProbe implements Queryable {
     text: string,
     values?: readonly unknown[],
   ): Promise<QueryResult<R>> {
-    const claim = text.includes("workhorse.claim_v3");
+    const claim = text.includes("workhorse.claim_v1");
     const claimStartedAt = claim ? performance.now() : 0;
     this.queries += 1;
     this.activeQueries += 1;
@@ -841,7 +841,7 @@ class QueryPressureProbe implements Queryable {
         this.claimsWithoutFreeSlot += 1;
       }
     }
-    if (text.includes("workhorse.heartbeat_v1") || text.includes("workhorse.heartbeat_v2")) {
+    if (text.includes("workhorse.heartbeat_v1") || text.includes("workhorse.heartbeat_v1")) {
       this.heartbeatCalls += 1;
     }
     try {
@@ -1180,7 +1180,7 @@ async function claimPlan(
 ): Promise<ClaimPlanSummary> {
   const result = await pool.query<{ "QUERY PLAN": unknown }>(
     `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
-     SELECT * FROM workhorse.claim_v3($1::text, $2::text, 30000::integer)`,
+     SELECT * FROM workhorse.claim_v1($1::text, $2::text, 30000::integer)`,
     [targetQueueName, workerId],
   );
   return summarizeClaimPlan(result.rows[0]?.["QUERY PLAN"]);

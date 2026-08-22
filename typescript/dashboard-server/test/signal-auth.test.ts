@@ -6,9 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
 import type { DashboardRouter } from "../src/server/router.js";
 import type { DashboardTaskController } from "../src/server/types.js";
+import { WORKHORSE_SCHEMA_VERSION } from "@workhorse-js/core";
 
 const database = {
-  query: async () => ({ rows: [{ version: 47 }] }),
+  query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
 } as unknown as Queryable;
 
 describe("signal RPC authentication", () => {

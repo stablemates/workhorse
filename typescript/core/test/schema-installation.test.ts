@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { WORKHORSE_SCHEMA_VERSION } from "../src/index.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -89,12 +90,13 @@ describe("schema installation", () => {
         "details",
         "occurred_at",
       ],
+      // `result` is deliberately absent: it is served by dashboard_job_result_v1 so that readers
+      // which never want a result do not join workhorse.job for its redaction keys (ADR 0035).
       dashboard_job_outcome_v1: [
         "job_id",
         "state",
         "current_attempt",
         "run_at",
-        "result",
         "error",
         "finished_at",
         "updated_at",
@@ -237,34 +239,41 @@ describe("schema installation", () => {
     const schema = await readFile(path.join(repository, "sql", "schema.sql"), "utf8");
 
     expect(schema).not.toMatch(/^ALTER TABLE /m);
+    expect(schema).not.toMatch(/^ALTER FUNCTION /m);
     expect(schema).not.toMatch(/^DROP (?:FUNCTION|TRIGGER) IF EXISTS /m);
+    expect(schema).not.toMatch(/^DO \$migration\$/m);
   });
 
-  it("does not install retired functions", async () => {
-    const retiredFunctions = await pool.query<{ claim: string | null; heartbeat: string | null }>(
-      `SELECT
-         to_regprocedure('workhorse.claim_v1(text,text,integer)')::text AS claim,
-         to_regprocedure('workhorse.heartbeat_v1(uuid,text,bigint,integer)')::text AS heartbeat`,
+  it("carries no function or view version above v1", async () => {
+    // The baseline reset left one version of everything. A `_v2` in a clean install would mean a
+    // compatibility window nobody can be inside, because version 1 is the only version there has
+    // ever been.
+    const versioned = await pool.query<{ name: string }>(
+      `SELECT proname AS name
+         FROM pg_proc
+         JOIN pg_namespace ON pg_namespace.oid = pg_proc.pronamespace
+        WHERE nspname = 'workhorse' AND proname ~ '_v[0-9]+$' AND proname !~ '_v1$'
+        UNION ALL
+       SELECT relname AS name
+         FROM pg_class
+         JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
+        WHERE nspname = 'workhorse' AND relkind = 'v'
+          AND relname ~ '_v[0-9]+$' AND relname !~ '_v1$'
+        ORDER BY name`,
     );
-    expect(retiredFunctions.rows[0]).toEqual({ claim: null, heartbeat: null });
+    expect(versioned.rows).toEqual([]);
   });
 
-  it("installs schema v47 with database-owned settings, job contracts, and fenced progress", async () => {
+  it("installs schema v1 with database-owned settings, job contracts, and fenced progress", async () => {
     const version = await pool.query<{ version: number }>(
       "SELECT max(version)::integer AS version FROM workhorse.schema_version",
     );
-    expect(version.rows[0]?.version).toBe(47);
+    expect(version.rows[0]?.version).toBe(WORKHORSE_SCHEMA_VERSION);
 
     const migrations = await pool.query<{ version: number; description: string }>(
       "SELECT version, description FROM workhorse.schema_migration ORDER BY version",
     );
-    expect(migrations.rows).toEqual([
-      { version: 43, description: "pre-release baseline" },
-      { version: 44, description: "protocol version registry" },
-      { version: 45, description: "statistics maintenance policy" },
-      { version: 46, description: "long-horizon statistics tiers" },
-      { version: 47, description: "multi-queue workers" },
-    ]);
+    expect(migrations.rows).toEqual([{ version: 1, description: "baseline" }]);
 
     const protocols = await pool.query<{ version: number }>(
       "SELECT version FROM workhorse.protocol_version ORDER BY version",

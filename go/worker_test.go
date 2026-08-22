@@ -378,7 +378,7 @@ func (tracer *heartbeatQueryTracer) TraceQueryStart(
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
-	if !strings.Contains(data.SQL, "heartbeat_v2") {
+	if !strings.Contains(data.SQL, "heartbeat_v1") {
 		return ctx
 	}
 	tracer.mu.Lock()
@@ -1279,7 +1279,7 @@ func TestWorkerMaintenanceRecoversAnExpiredPeerLease(t *testing.T) {
 	}
 	if _, err := pool.Exec(
 		ctx,
-		"SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+		"SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
 		queueName,
 		"crashed-peer",
 		100,
@@ -1336,7 +1336,7 @@ func TestWorkerMaintenanceCadenceDoesNotWaitForAHandler(t *testing.T) {
 	}
 	if _, err := pool.Exec(
 		ctx,
-		"SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+		"SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
 		queueName,
 		"blocked-peer",
 		5000,

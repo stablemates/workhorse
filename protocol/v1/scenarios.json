@@ -5,7 +5,7 @@
       {
         "id": "enqueue-batch",
         "covers": ["enqueue"],
-        "sql": "SELECT jsonb_build_object('ordinal', ordinal, 'jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal",
+        "sql": "SELECT jsonb_build_object('ordinal', ordinal, 'jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal",
         "parameters": [
           [
             { "queue": "protocol-batch", "type": "protocol.first", "payload": { "index": 1 } },
@@ -26,7 +26,7 @@
       {
         "id": "claim",
         "covers": ["claim"],
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'jobType', job_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'jobType', job_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
         "parameters": ["protocol-batch", "protocol-success", 30000],
         "expect": {
           "rows": [
@@ -45,7 +45,7 @@
       },
       {
         "id": "claim-batch-peer",
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'jobType', job_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'jobType', job_type, 'payload', payload, 'attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
         "parameters": ["protocol-batch", "protocol-success", 30000],
         "expect": {
           "rows": [
@@ -89,7 +89,7 @@
       {
         "id": "heartbeat",
         "covers": ["heartbeat"],
-        "sql": "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
+        "sql": "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
         "parameters": [
           { "$ref": "successfulJob" },
           "protocol-success",
@@ -161,7 +161,7 @@
       },
       {
         "id": "completed-transition",
-        "sql": "SELECT jsonb_build_object('state', state, 'result', result, 'attempt', current_attempt) AS value FROM workhorse.dashboard_job_outcome_v1 WHERE job_id = $1::uuid",
+        "sql": "SELECT jsonb_build_object('state', state, 'result', workhorse.dashboard_job_result_v1(job_id), 'attempt', current_attempt) AS value FROM workhorse.dashboard_job_outcome_v1 WHERE job_id = $1::uuid",
         "parameters": [{ "$ref": "successfulJob" }],
         "expect": {
           "rows": [{ "value": { "attempt": 1, "result": { "ok": true }, "state": "succeeded" } }]
@@ -181,7 +181,7 @@
       },
       {
         "id": "claim-first",
-        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v3($1, $2, 30000)",
+        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
         "parameters": ["protocol-retry", "protocol-retry-worker"],
         "expect": { "rows": [{ "value": { "attempt": 1, "fenceToken": { "$type": "integer" } } }] },
         "capture": { "retryFenceOne": "0.value.fenceToken" }
@@ -200,7 +200,7 @@
       },
       {
         "id": "claim-second",
-        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v3($1, $2, 30000)",
+        "sql": "SELECT jsonb_build_object('attempt', attempt, 'fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
         "parameters": ["protocol-retry", "protocol-retry-worker"],
         "expect": { "rows": [{ "value": { "attempt": 2, "fenceToken": { "$type": "integer" } } }] },
         "capture": { "retryFenceTwo": "0.value.fenceToken" }
@@ -239,7 +239,7 @@
     "steps": [
       {
         "id": "enqueue-timeout",
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
         "parameters": [
           [
             {
@@ -258,7 +258,7 @@
       },
       {
         "id": "claim-timeout",
-        "sql": "SELECT jsonb_build_object('fenceToken', fence_token) AS value FROM workhorse.claim_v3($1, $2, 30000)",
+        "sql": "SELECT jsonb_build_object('fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 30000)",
         "parameters": ["protocol-expiration", "protocol-timeout-worker"],
         "expect": { "rows": [{ "value": { "fenceToken": { "$type": "integer" } } }] },
         "capture": { "timeoutFence": "0.value.fenceToken" }
@@ -284,7 +284,7 @@
       },
       {
         "id": "claim-recovery",
-        "sql": "SELECT jsonb_build_object('fenceToken', fence_token) AS value FROM workhorse.claim_v3($1, $2, 100)",
+        "sql": "SELECT jsonb_build_object('fenceToken', fence_token) AS value FROM workhorse.claim_v1($1, $2, 100)",
         "parameters": ["protocol-recovery", "protocol-recovery-worker"],
         "expect": { "rows": [{ "value": { "fenceToken": { "$type": "integer" } } }] }
       },
@@ -307,7 +307,7 @@
     "steps": [
       {
         "id": "enqueue-and-claim",
-        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
         "parameters": ["protocol-cancel", "protocol.cancel", "protocol-cancel-worker"],
         "expect": {
           "rows": [
@@ -368,7 +368,7 @@
     "steps": [
       {
         "id": "enqueue-and-claim",
-        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
         "parameters": ["protocol-timer", "protocol.timer", "protocol-timer-worker"],
         "expect": {
           "rows": [
@@ -417,7 +417,7 @@
       {
         "id": "debounce-accepted",
         "covers": ["coalescing"],
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
         "parameters": [
           [
             {
@@ -440,7 +440,7 @@
       },
       {
         "id": "debounce-replaced",
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
         "parameters": [
           [
             {
@@ -462,7 +462,7 @@
       },
       {
         "id": "debounce-refusal-accepted",
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
         "parameters": [
           [
             {
@@ -485,7 +485,7 @@
       },
       {
         "id": "debounce-refusal-reason",
-        "sql": "WITH paused AS MATERIALIZED (SELECT pg_sleep(0.01)) SELECT jsonb_build_object('jobId', result.job_id, 'outcome', result.outcome, 'reason', result.reason) AS value FROM paused CROSS JOIN LATERAL workhorse.enqueue_many_v2($1::jsonb) result",
+        "sql": "WITH paused AS MATERIALIZED (SELECT pg_sleep(0.01)) SELECT jsonb_build_object('jobId', result.job_id, 'outcome', result.outcome, 'reason', result.reason) AS value FROM paused CROSS JOIN LATERAL workhorse.enqueue_many_v1($1::jsonb) result",
         "parameters": [
           [
             {
@@ -515,7 +515,7 @@
       },
       {
         "id": "throttle-accepted",
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
         "parameters": [
           [
             {
@@ -533,7 +533,7 @@
       },
       {
         "id": "throttle-coalesced",
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
         "parameters": [
           [
             {
@@ -550,7 +550,7 @@
       },
       {
         "id": "idempotency-accepted",
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
         "parameters": [
           [
             {
@@ -568,7 +568,7 @@
       },
       {
         "id": "idempotency-conflict",
-        "sql": "SELECT * FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "sql": "SELECT * FROM workhorse.enqueue_many_v1($1::jsonb)",
         "parameters": [
           [
             {
@@ -610,7 +610,7 @@
       {
         "id": "enqueue-dependent",
         "covers": ["dependencies"],
-        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v2($1::jsonb)",
+        "sql": "SELECT jsonb_build_object('jobId', job_id, 'outcome', outcome) AS value FROM workhorse.enqueue_many_v1($1::jsonb)",
         "parameters": [
           [
             {
@@ -634,7 +634,7 @@
       },
       {
         "id": "complete-prerequisite",
-        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v3($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, '{}'::jsonb) AS accepted FROM claimed",
+        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v1($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, '{}'::jsonb) AS accepted FROM claimed",
         "parameters": ["protocol-dependency", "protocol-dependency-worker"],
         "expect": { "rows": [{ "accepted": true }] }
       },
@@ -651,7 +651,7 @@
     "steps": [
       {
         "id": "enqueue-and-claim-parent",
-        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
         "parameters": ["protocol-parent", "protocol.parent", "protocol-parent-worker"],
         "expect": {
           "rows": [
@@ -701,7 +701,7 @@
       },
       {
         "id": "complete-child",
-        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v3($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, $3::jsonb) AS accepted FROM claimed",
+        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v1($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, $3::jsonb) AS accepted FROM claimed",
         "parameters": ["protocol-child", "protocol-child-worker", { "value": 7 }],
         "expect": { "rows": [{ "accepted": true }] }
       },
@@ -713,7 +713,7 @@
       },
       {
         "id": "enqueue-and-claim-single-parent",
-        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
         "parameters": [
           "protocol-single-parent",
           "protocol.single-parent",
@@ -759,7 +759,7 @@
       },
       {
         "id": "complete-single-child",
-        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v3($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, $3::jsonb) AS accepted FROM claimed",
+        "sql": "WITH claimed AS (SELECT * FROM workhorse.claim_v1($1, $2, 30000)) SELECT workhorse.complete_v1(job_id, $2, fence_token, $3::jsonb) AS accepted FROM claimed",
         "parameters": ["protocol-single-child", "protocol-single-child-worker", { "value": 8 }],
         "expect": { "rows": [{ "accepted": true }] }
       },
@@ -776,7 +776,7 @@
     "steps": [
       {
         "id": "enqueue-and-claim",
-        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
         "parameters": ["protocol-signal", "protocol.signal", "protocol-signal-worker"],
         "expect": {
           "rows": [
@@ -851,7 +851,7 @@
     "steps": [
       {
         "id": "enqueue-and-claim",
-        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v3($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
+        "sql": "WITH enqueued AS (SELECT workhorse.enqueue_v1($1, $2, '{}'::jsonb) AS job_id), claimed AS (SELECT claim.* FROM enqueued CROSS JOIN LATERAL workhorse.claim_v1($1, $3, 30000) claim) SELECT jsonb_build_object('jobId', job_id, 'fenceToken', fence_token) AS value FROM claimed",
         "parameters": ["protocol-human", "protocol.human", "protocol-human-worker"],
         "expect": {
           "rows": [

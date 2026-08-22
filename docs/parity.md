@@ -1,7 +1,7 @@
 # Language feature parity
 
 This is the authoritative per-language support matrix for the Workhorse SDKs, anchored to schema
-version 47. It owns one question: which language can use which capability today. What each
+version 1. It owns one question: which language can use which capability today. What each
 capability does, and its exact limits, stay owned by [docs/features.md](features.md); this
 document never restates them.
 
@@ -90,9 +90,11 @@ telemetry, and graceful shutdown.
 Python executes every shared worker fixture against the lifecycle core under
 [WH-310]. `python/tests/test_async_worker.py` separately proves both async driver bridges, async
 handlers, durable context replay, batch adaptation, native listeners, and drain through that same
-core. Go executes every shared worker fixture against its public runtime under [WH-331]. Go and
-TypeScript also execute `protocol/v1/cron-occurrences.json`, which fixes their shared cron and time
-zone semantics.
+core. Go executes every shared worker fixture against its public runtime under [WH-331]. All three
+runtimes execute `protocol/v1/cron-occurrences.json`, which fixes their shared cron and time zone
+semantics. One row of that table, `new-every-second-definition`, is marked as a known divergence in
+the Python runner: TypeScript rounds a sub-second `now` up to the next occurrence, and [WH-353]
+owns the fix.
 
 ## Roadmap progress
 
@@ -131,12 +133,19 @@ If a cell says Supported, tests in this repository must exercise that capability
 The conformance fixtures under `protocol/v1/` are the intended enforcement point. The TypeScript
 suite runs the SQL fixtures through `scripts/verify-sql-protocol.ts` and the runtime fixtures through
 `Worker`. The Python suite runs the SQL fixtures through `python/tests/test_protocol_conformance.py`
-and every runtime fixture through `python/tests/test_worker_runtime_conformance.py`. A generated
-check in the style of
-`typescript/core/test/support-matrix.test.ts` — which fails when `docs/compatibility.md`, CI, and
-the package `engines` fields disagree — does not exist for this matrix yet. Until it does, any
-change that ships or removes a language capability must update this file in the same commit,
-exactly as behaviour changes must update the guide that describes them.
+and every runtime fixture through `python/tests/test_worker_runtime_conformance.py`.
+
+`typescript/core/test/parity-matrix.test.ts` holds this file to that promise. It parses the three
+tables above and compares them, cell for cell, against the registry in
+`typescript/core/test/support/parity-capabilities.ts`. Every Supported cell must name a test file
+in that language which exists and mentions the capability; every Absent cell must record why it is
+absent. Changing a status in one place and not the other fails the check, so a capability cannot
+ship, or quietly disappear, without this matrix moving with it.
+
+That check binds the document to declared evidence, not to a proof of behaviour — no static check
+can supply one. Naming a test file that never exercises the capability would satisfy it. The rule
+this document states still governs: a cell says Supported because tests prove it, and the generated
+check is what stops the two halves drifting apart between reviews.
 
 [WH-214]: https://app.plane.so/techprogress/browse/WH-214/
 [WH-221]: https://app.plane.so/techprogress/browse/WH-221/
@@ -150,3 +159,4 @@ exactly as behaviour changes must update the guide that describes them.
 [WH-318]: https://app.plane.so/techprogress/browse/WH-318/
 [WH-331]: https://app.plane.so/techprogress/browse/WH-331/
 [WH-332]: https://app.plane.so/techprogress/browse/WH-332/
+[WH-353]: https://app.plane.so/techprogress/browse/WH-353/

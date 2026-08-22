@@ -33,7 +33,7 @@ export async function readSchemaVersion(database: Queryable): Promise<number | n
   return result.rows.length === 1 ? (result.rows[0]?.version ?? null) : null;
 }
 
-/** SQL protocol versions the installed schema serves, or null before schema version 44. */
+/** SQL protocol versions the installed schema serves, or null when the relation is absent. */
 export async function readProtocolVersions(database: Queryable): Promise<number[] | null> {
   try {
     const result = await database.query<{ version: number }>(

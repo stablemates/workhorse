@@ -7,7 +7,7 @@ import { QueueModule } from "./module-context.js";
 export class WorkerRegistryModule extends QueueModule {
   async registerWorker(registration: WorkerRegistration): Promise<{ paused: boolean }> {
     const result = await this.context.database.query<{ paused: boolean }>(
-      `SELECT workhorse.register_worker_v2(
+      `SELECT workhorse.register_worker_v1(
          $1::text, $2::uuid, $3::text, $4::integer, $5::text[], $6::integer,
          $7::integer, $8::integer, $9::integer, $10::integer, $11::integer,
          $12::integer, $13::integer, $14::boolean
@@ -29,7 +29,7 @@ export class WorkerRegistryModule extends QueueModule {
         registration.draining,
       ],
     );
-    const paused = expectOneRow(result, "workhorse.register_worker_v2").paused;
+    const paused = expectOneRow(result, "workhorse.register_worker_v1").paused;
     return { paused };
   }
 

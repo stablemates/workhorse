@@ -6,6 +6,7 @@ import type { Queryable } from "@workhorse-js/core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDashboardHost } from "../src/server/host.js";
 import type { DashboardRouter } from "../src/server/router.js";
+import { WORKHORSE_SCHEMA_VERSION } from "@workhorse-js/core";
 
 const records: LogRecord[] = [];
 const provider: LoggerProvider = {
@@ -16,7 +17,7 @@ const provider: LoggerProvider = {
 };
 
 const database = {
-  query: async () => ({ rows: [{ version: 47 }] }),
+  query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
 } as unknown as Queryable;
 
 function dashboardClient(): RouterClient<DashboardRouter> {

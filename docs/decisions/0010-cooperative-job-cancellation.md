@@ -4,6 +4,11 @@
 
 Accepted for the schema version 11 validation protocol.
 
+> `heartbeat_v2` in this record is today's `heartbeat_v1`, and the boolean `heartbeat_v1` it
+> retained no longer exists. [ADR 0034](0034-reset-the-pre-release-schema-baseline.md) reset
+> every SQL function to version 1 before any release, so the compatibility window this record
+> opened was never entered.
+
 ## Context
 
 Operators and applications need to stop work that is no longer useful without weakening Workhorse's fenced ownership model. Queued work can terminate before a handler starts, but active JavaScript cannot be safely preempted by PostgreSQL. A process may also ignore a cooperative signal or disappear after cancellation is requested.

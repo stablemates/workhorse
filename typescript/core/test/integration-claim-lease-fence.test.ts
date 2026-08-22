@@ -502,14 +502,14 @@ describe("claim lease fence", () => {
     ).rejects.toMatchObject({ conflictingFields: ["deadline"] });
     await expect(
       pool.query(
-        `SELECT * FROM workhorse.enqueue_many_v1(
+        `SELECT * FROM workhorse.enqueue_batch_v1(
           '[{"queue":"default","type":"invalid-timeout","executionTimeoutMs":0}]'::jsonb
         )`,
       ),
     ).rejects.toThrow(/executionTimeoutMs must be an integer/);
     await expect(
       pool.query(
-        `SELECT * FROM workhorse.enqueue_many_v1(
+        `SELECT * FROM workhorse.enqueue_batch_v1(
           '[{"queue":"default","type":"invalid-deadline","deadline":"infinity"}]'::jsonb
         )`,
       ),
@@ -1046,7 +1046,7 @@ describe("claim lease fence", () => {
       },
       {
         name: "heartbeat",
-        query: "SELECT workhorse.heartbeat_v2($1, $2, $3, 5000) AS status",
+        query: "SELECT workhorse.heartbeat_v1($1, $2, $3, 5000) AS status",
         expected: { status: "cancel_requested" },
       },
       {
@@ -1197,7 +1197,7 @@ describe("claim lease fence", () => {
       await heartbeat.query("BEGIN");
       await expect(
         heartbeat.query<{ status: string }>(
-          "SELECT workhorse.heartbeat_v2($1, $2, $3, 1000) AS status",
+          "SELECT workhorse.heartbeat_v1($1, $2, $3, 1000) AS status",
           [held!.id, "heartbeat-holder", held!.fenceToken.toString()],
         ),
       ).resolves.toMatchObject({ rows: [{ status: "accepted" }] });
@@ -1597,7 +1597,7 @@ describe("claim lease fence", () => {
       tracestate: "vendor=value",
     };
     const enqueued = await pool.query<{ job_id: string }>(
-      "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb)",
+      "SELECT job_id FROM workhorse.enqueue_batch_v1($1::jsonb)",
       [JSON.stringify([{ queue: "default", type: "traced", payload: { value: 1 }, traceContext }])],
     );
 
@@ -1609,7 +1609,7 @@ describe("claim lease fence", () => {
     expect((await queue.claim("trace-worker"))?.traceContext).toEqual(traceContext);
 
     await expect(
-      pool.query("SELECT * FROM workhorse.enqueue_many_v1($1::jsonb)", [
+      pool.query("SELECT * FROM workhorse.enqueue_batch_v1($1::jsonb)", [
         JSON.stringify([
           {
             queue: "default",

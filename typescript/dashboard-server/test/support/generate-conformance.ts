@@ -118,7 +118,11 @@ function mergeExpected(
   coerce: Record<string, string>,
   pointer: string,
 ): JsonValue {
-  const forced = coercionFor(coerce, pointer);
+  // A coercion forces a matcher onto a measurement that is stable across two idle runs but not
+  // under load. Null is not such a measurement: it says the field has no value, and replacing it
+  // with a type matcher would both lose that meaning and reject the null on verification. Both
+  // runs agreeing on null is agreement, not luck.
+  const forced = first === null && second === null ? undefined : coercionFor(coerce, pointer);
   if (forced) return { $type: forced };
   const reference = referenceName(first, second, firstReferences, secondReferences);
   if (reference) return { $ref: reference };

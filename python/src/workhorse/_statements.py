@@ -55,11 +55,11 @@ STATEMENTS = StatementRegistry(
     enqueue_many=DriverStatement(
         psycopg=(
             "SELECT ordinal, job_id, outcome, reason "
-            "FROM workhorse.enqueue_many_v2(%s::jsonb) ORDER BY ordinal"
+            "FROM workhorse.enqueue_many_v1(%s::jsonb) ORDER BY ordinal"
         ),
         asyncpg=(
             "SELECT ordinal, job_id, outcome, reason "
-            "FROM workhorse.enqueue_many_v2($1::jsonb) ORDER BY ordinal"
+            "FROM workhorse.enqueue_many_v1($1::jsonb) ORDER BY ordinal"
         ),
     ),
     sync_schedules=DriverStatement(
@@ -115,8 +115,8 @@ STATEMENTS = StatementRegistry(
         asyncpg=("SELECT * FROM workhorse.recover_expired_telemetry_v1($1::integer, $2::integer)"),
     ),
     claim=DriverStatement(
-        psycopg="SELECT * FROM workhorse.claim_v3(%s::text, %s::text, %s::integer)",
-        asyncpg="SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+        psycopg="SELECT * FROM workhorse.claim_v1(%s::text, %s::text, %s::integer)",
+        asyncpg="SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
     ),
     record_batch_dispatch=DriverStatement(
         psycopg=(
@@ -140,10 +140,10 @@ STATEMENTS = StatementRegistry(
     ),
     heartbeat=DriverStatement(
         psycopg=(
-            "SELECT workhorse.heartbeat_v2(%s::uuid, %s::text, %s::bigint, %s::integer) AS status"
+            "SELECT workhorse.heartbeat_v1(%s::uuid, %s::text, %s::bigint, %s::integer) AS status"
         ),
         asyncpg=(
-            "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
+            "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status"
         ),
     ),
     expire_owned=DriverStatement(

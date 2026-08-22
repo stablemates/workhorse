@@ -5,8 +5,11 @@ import path from "node:path";
 import type { Queryable } from "@workhorse-js/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDashboardServer } from "../src/server/standalone.js";
+import { WORKHORSE_SCHEMA_VERSION } from "@workhorse-js/core";
 
-const database = { query: async () => ({ rows: [{ version: 47 }] }) } as Queryable;
+const database = {
+  query: async () => ({ rows: [{ version: WORKHORSE_SCHEMA_VERSION }] }),
+} as Queryable;
 const scratchRoots: string[] = [];
 
 afterEach(async () => {

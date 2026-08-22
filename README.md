@@ -92,7 +92,7 @@ changes the accepted payload, checkpoint outputs, or terminal result.
 
 Schema version 11 adds `Queue.cancel(jobId, { requestedBy?, reason? })`. Ready, future-scheduled,
 and durable-wait jobs become terminal `canceled` immediately. Active jobs retain their fenced lease
-and record one cancellation request. `heartbeat_v2` returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`;
+and record one cancellation request. `heartbeat_v1` returns `accepted`, `cancel_requested`, `deadline_exceeded`, `timeout_exceeded`, or `stale`;
 the worker converts `cancel_requested` into a `CancellationRequestedError` on the handler's
 `AbortSignal` and acknowledges only with the exact worker/fence generation. Boolean `heartbeat_v1`
 remains available and maps only `accepted` to `true`.

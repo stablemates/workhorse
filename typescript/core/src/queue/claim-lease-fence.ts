@@ -166,10 +166,10 @@ export class ClaimLeaseFenceModule extends QueueModule {
     const queueName = options.queue ?? this.context.defaultQueue;
     const startedAt = performance.now();
     return withSpan("workhorse.claim", { "workhorse.queue.name": queueName }, async (span) => {
-      // claim_v3 commits ownership before returning the payload. Handler code must run only after
+      // claim_v1 commits ownership before returning the payload. Handler code must run only after
       // this query resolves so no row lock or claim transaction spans user code.
       const result = await this.context.database.query<ClaimRow>(
-        "SELECT * FROM workhorse.claim_v3($1::text, $2::text, $3::integer)",
+        "SELECT * FROM workhorse.claim_v1($1::text, $2::text, $3::integer)",
         [queueName, workerId, options.leaseMs ?? 30_000],
       );
       const row = result.rows[0];
@@ -268,10 +268,10 @@ export class ClaimLeaseFenceModule extends QueueModule {
       // Cancellation and stale ownership both stop compatibility callers, while workers can use the
       // status API to deliver a distinct cooperative cancellation signal.
       const result = await this.context.database.query<{ status: HeartbeatStatus }>(
-        "SELECT workhorse.heartbeat_v2($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
+        "SELECT workhorse.heartbeat_v1($1::uuid, $2::text, $3::bigint, $4::integer) AS status",
         [...lease.sqlParameters, leaseMs],
       );
-      const status = expectOneRow(result, "workhorse.heartbeat_v2").status;
+      const status = expectOneRow(result, "workhorse.heartbeat_v1").status;
       span.setAttribute("workhorse.heartbeat.status", status);
       if (status !== "accepted") {
         recordHeartbeatFailure(status);

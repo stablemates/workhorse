@@ -46,7 +46,7 @@ def test_serializes_the_shared_request_fixture_and_returns_the_canonical_result(
     fixture = json.loads((REPOSITORY / "protocol/v1/requests.json").read_text())[0]
     connection = Connection(
         [
-            [{"version": 47}],
+            [{"version": 1}],
             [
                 {
                     "ordinal": 1,
@@ -76,11 +76,11 @@ def test_serializes_the_shared_request_fixture_and_returns_the_canonical_result(
     assert result.outcome == "accepted"
     assert json.loads(connection.calls[1][1][0]) == [fixture["postgres"]]
     assert connection.calls[0][0].startswith("SELECT version FROM workhorse.schema_version")
-    assert "workhorse.enqueue_many_v2" in connection.calls[1][0]
+    assert "workhorse.enqueue_many_v1" in connection.calls[1][0]
 
 
 def test_refuses_an_incompatible_schema_before_enqueueing() -> None:
-    connection = Connection([[{"version": 42}]])
+    connection = Connection([[{"version": 0}]])
 
     with pytest.raises(ProtocolCompatibilityError) as raised:
         Queue(connection).enqueue("email.send", {"message": "hello"})
@@ -99,7 +99,7 @@ def test_empty_batch_does_not_open_a_transaction_or_query_postgres() -> None:
 def test_batch_preserves_result_order() -> None:
     connection = Connection(
         [
-            [{"version": 47}],
+            [{"version": 1}],
             [
                 {"ordinal": 1, "job_id": "one", "outcome": "accepted", "reason": None},
                 {"ordinal": 2, "job_id": "two", "outcome": "replayed", "reason": None},

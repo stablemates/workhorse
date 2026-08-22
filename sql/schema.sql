@@ -2763,10 +2763,15 @@ BEGIN
 END;
 $$;
 
--- Accept up to 1,000 jobs atomically. Scoped idempotency keys are resolved in ordinal order through
--- their unique index before any durable job side effects. Exact replays return the original identity;
--- material mismatches abort the whole statement with SQLSTATE P1001.
-CREATE OR REPLACE FUNCTION workhorse.enqueue_many_v1(p_requests jsonb)
+-- The core batch insert path. Accept up to 1,000 jobs atomically. Scoped idempotency keys are
+-- resolved in ordinal order through their unique index before any durable job side effects. Exact
+-- replays return the original identity; material mismatches abort the whole statement with SQLSTATE
+-- P1001.
+--
+-- Clients call workhorse.enqueue_many_v1 instead. This function is the shared implementation
+-- underneath it, enqueue_v1, enqueue_debounce_v1, and enqueue_throttle_v1, and it reports plain
+-- acceptance rather than the coalescing outcomes those callers map.
+CREATE OR REPLACE FUNCTION workhorse.enqueue_batch_v1(p_requests jsonb)
 RETURNS TABLE (ordinal integer, job_id uuid, accepted boolean)
 LANGUAGE plpgsql
 AS $$
@@ -3317,7 +3322,7 @@ CREATE OR REPLACE FUNCTION workhorse.enqueue_v1(
 ) RETURNS uuid
 LANGUAGE sql
 AS $$
-  SELECT job_id FROM workhorse.enqueue_many_v1(jsonb_build_array(jsonb_build_object(
+  SELECT job_id FROM workhorse.enqueue_batch_v1(jsonb_build_array(jsonb_build_object(
     'queue', p_queue_name, 'type', p_job_type, 'payload', COALESCE(p_payload, 'null'::jsonb),
     'runAt', p_run_at, 'maxAttempts', p_max_attempts, 'tags', to_jsonb(COALESCE(p_tags, '{}')),
     'retryPolicy', p_retry_policy, 'contractVersion', p_contract_version,
@@ -3458,7 +3463,7 @@ BEGIN
 
     BEGIN
       SELECT * INTO v_validation
-        FROM workhorse.enqueue_many_v1(jsonb_build_array(v_normalized));
+        FROM workhorse.enqueue_batch_v1(jsonb_build_array(v_normalized));
     EXCEPTION WHEN SQLSTATE 'P1001' THEN
       NULL;
     END;
@@ -3589,7 +3594,7 @@ BEGIN
     'runAt', v_run_at,
     'idempotency', jsonb_build_object('key', v_key, 'scope', v_scope, 'ttlMs', v_window_ms)
   );
-  SELECT * INTO v_row FROM workhorse.enqueue_many_v1(jsonb_build_array(v_normalized));
+  SELECT * INTO v_row FROM workhorse.enqueue_batch_v1(jsonb_build_array(v_normalized));
   UPDATE workhorse.enqueue_idempotency SET coalescing_mode = 'debounce', expires_at = v_run_at
    WHERE idempotency_scope = v_scope AND idempotency_key_hash = v_key_hash;
   UPDATE workhorse.job_event event SET details = event.details || jsonb_build_object(
@@ -3675,7 +3680,7 @@ BEGIN
   v_normalized := (p_request - 'throttle') || jsonb_build_object(
     'idempotency', jsonb_build_object('key', v_key, 'scope', v_scope, 'ttlMs', v_window_ms)
   );
-  SELECT * INTO v_row FROM workhorse.enqueue_many_v1(jsonb_build_array(v_normalized));
+  SELECT * INTO v_row FROM workhorse.enqueue_batch_v1(jsonb_build_array(v_normalized));
   IF v_row.accepted THEN
     UPDATE workhorse.enqueue_idempotency SET coalescing_mode = 'throttle'
     WHERE idempotency_scope = v_scope AND idempotency_key_hash = v_key_hash;
@@ -3705,7 +3710,9 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.enqueue_many_v2(p_requests jsonb)
+-- The client batch entry point. Adds keyed debounce and throttle handling over
+-- workhorse.enqueue_batch_v1 and reports one coalescing outcome per member.
+CREATE OR REPLACE FUNCTION workhorse.enqueue_many_v1(p_requests jsonb)
 RETURNS TABLE (ordinal integer, job_id uuid, outcome text, reason text)
 LANGUAGE plpgsql
 AS $$
@@ -3806,7 +3813,7 @@ BEGIN
       SELECT result.ordinal, result.job_id,
              CASE WHEN result.accepted THEN 'accepted' ELSE 'replayed' END,
              NULL::text
-        FROM workhorse.enqueue_many_v1(p_requests) result ORDER BY result.ordinal;
+        FROM workhorse.enqueue_batch_v1(p_requests) result ORDER BY result.ordinal;
     RETURN;
   END IF;
 
@@ -3846,7 +3853,7 @@ BEGIN
       reason := NULL;
     ELSE
       BEGIN
-        SELECT * INTO v_row FROM workhorse.enqueue_many_v1(jsonb_build_array(v_request));
+        SELECT * INTO v_row FROM workhorse.enqueue_batch_v1(jsonb_build_array(v_request));
       EXCEPTION WHEN SQLSTATE 'P1001' THEN
         GET STACKED DIAGNOSTICS
           v_error_message = MESSAGE_TEXT,
@@ -3866,7 +3873,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.list_dead_letters_v2(
+CREATE OR REPLACE FUNCTION workhorse.list_dead_letters_v1(
   p_filter jsonb DEFAULT '{}'::jsonb,
   p_limit integer DEFAULT 100,
   p_cursor_finished_at timestamptz DEFAULT NULL,
@@ -4311,7 +4318,7 @@ $$;
 -- always comes back running. The durable lever for "stop processing this work" is queue pause,
 -- which is keyed by queue name and unaffected by worker lifecycles. Keeping the two distinct means
 -- a pause can never become a forgotten flag that silently idles a worker after a later deployment.
-CREATE OR REPLACE FUNCTION workhorse.register_worker_v2(
+CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
   p_worker_id text,
   p_instance_id uuid,
   p_hostname text,
@@ -4401,33 +4408,6 @@ BEGIN
 
   RETURN v_paused;
 END;
-$$;
-
--- Preserve the version 1 SQL contract for single-queue callers.
-CREATE OR REPLACE FUNCTION workhorse.register_worker_v1(
-  p_worker_id text,
-  p_instance_id uuid,
-  p_hostname text,
-  p_pid integer,
-  p_queue_name text,
-  p_concurrency integer,
-  p_lease_ms integer,
-  p_heartbeat_ms integer,
-  p_poll_ms integer,
-  p_maintenance_interval_ms integer,
-  p_maintenance_task_poll_ms integer,
-  p_registry_interval_ms integer,
-  p_active_slots integer,
-  p_draining boolean
-)
-RETURNS boolean
-LANGUAGE sql
-AS $$
-  SELECT workhorse.register_worker_v2(
-    p_worker_id, p_instance_id, p_hostname, p_pid, ARRAY[p_queue_name], p_concurrency,
-    p_lease_ms, p_heartbeat_ms, p_poll_ms, p_maintenance_interval_ms,
-    p_maintenance_task_poll_ms, p_registry_interval_ms, p_active_slots, p_draining
-  )
 $$;
 
 -- Remove one worker registration during graceful shutdown. A worker that is killed instead simply
@@ -4658,7 +4638,7 @@ $$;
 -- rows, count only unexpired active leases, refill durable rate tokens from PostgreSQL time, and
 -- inspect at most the highest-priority 100 ready rows. Concurrency remains a dispatch budget rather than a
 -- guarantee that expired handler code has stopped executing.
-CREATE OR REPLACE FUNCTION workhorse.claim_v3(
+CREATE OR REPLACE FUNCTION workhorse.claim_v1(
   p_queue_name text,
   p_worker_id text,
   p_lease_ms integer DEFAULT 30000
@@ -5245,7 +5225,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.heartbeat_v2(
+CREATE OR REPLACE FUNCTION workhorse.heartbeat_v1(
   p_job_id uuid, p_worker_id text, p_fence_token bigint, p_lease_ms integer DEFAULT 30000
 ) RETURNS text
 LANGUAGE plpgsql
@@ -6206,7 +6186,7 @@ $$;
 
 -- Create one child and suspend its exact active parent generation in the same transaction. A
 -- replay after the child succeeds returns its retained result and marks the join exactly once.
-CREATE OR REPLACE FUNCTION workhorse.create_child_v1(
+CREATE OR REPLACE FUNCTION workhorse.create_single_child_v1(
   p_parent_job_id uuid,
   p_worker_id text,
   p_fence_token bigint,
@@ -6322,7 +6302,7 @@ BEGIN
   END IF;
 
   BEGIN
-    SELECT * INTO v_enqueue FROM workhorse.enqueue_many_v2(jsonb_build_array(p_request));
+    SELECT * INTO v_enqueue FROM workhorse.enqueue_many_v1(jsonb_build_array(p_request));
     IF v_enqueue.outcome <> 'accepted' THEN
       RAISE EXCEPTION 'child enqueue must create one new job';
     END IF;
@@ -6388,15 +6368,6 @@ BEGIN
   END;
 END;
 $$;
-
-DO $migration$
-BEGIN
-  IF to_regprocedure('workhorse.create_single_child_v1(uuid,text,bigint,text,jsonb)') IS NULL THEN
-    ALTER FUNCTION workhorse.create_child_v1(uuid, text, bigint, text, jsonb)
-      RENAME TO create_single_child_v1;
-  END IF;
-END;
-$migration$;
 
 CREATE OR REPLACE FUNCTION workhorse.create_child_v1(
   p_parent_job_id uuid,
@@ -6607,7 +6578,7 @@ BEGIN
        ORDER BY ordinality
     LOOP
       SELECT * INTO v_enqueue
-        FROM workhorse.enqueue_many_v2(jsonb_build_array(v_item.item->'request'));
+        FROM workhorse.enqueue_many_v1(jsonb_build_array(v_item.item->'request'));
       IF v_enqueue.outcome <> 'accepted' THEN
         RAISE EXCEPTION 'child enqueue must create one new job';
       END IF;
@@ -8515,7 +8486,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.list_jobs_v2(
+CREATE OR REPLACE FUNCTION workhorse.list_jobs_v1(
   p_filter jsonb,
   p_limit integer,
   p_cursor_created_at timestamptz,
@@ -8771,7 +8742,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION workhorse.list_job_timeline_v2(
+CREATE OR REPLACE FUNCTION workhorse.list_job_timeline_v1(
   p_job_id uuid,
   p_limit integer,
   p_cursor_occurred_at timestamptz,
@@ -9495,9 +9466,28 @@ CREATE OR REPLACE VIEW workhorse.dashboard_job_redrive_v1 AS
     FROM workhorse.job_redrive;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_event_v1 AS
   SELECT event_id, job_id, attempt, event_type, details, occurred_at FROM workhorse.job_event;
+-- `result` is deliberately absent. Its redaction keys live on workhorse.job, so projecting it
+-- here would join every reader of this view to workhorse.job, including the task list and the
+-- activity chart, which never read a result. Measurement showed that join changing the loaded plan
+-- for both. The one caller that needs a result reads workhorse.dashboard_job_result_v1 instead,
+-- which ADR 0027 reserves for exactly this: a policy-bearing read a view cannot carry.
 CREATE OR REPLACE VIEW workhorse.dashboard_job_outcome_v1 AS
-  SELECT job_id, state, current_attempt, run_at, result, error, finished_at, updated_at
+  SELECT job_id, state, current_attempt, run_at, error, finished_at, updated_at
     FROM workhorse.job_outcome;
+
+-- The redacted terminal result for one job. Redaction is applied here, not by each dashboard
+-- backend, so a backend in any language cannot forget it (ADR 0015, ADR 0035).
+CREATE OR REPLACE FUNCTION workhorse.dashboard_job_result_v1(p_job_id uuid)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+PARALLEL SAFE
+AS $$
+  SELECT workhorse.redact_top_level_keys_v1(outcome.result, job.result_redact_keys)
+    FROM workhorse.job_outcome outcome
+    JOIN workhorse.job job ON job.id = outcome.job_id
+   WHERE outcome.job_id = p_job_id;
+$$;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_progress_v1 AS
   SELECT job_id, progress_value, revision, attempt, fence_token, worker_id, created_at, updated_at
     FROM workhorse.job_progress;
@@ -9506,8 +9496,13 @@ CREATE OR REPLACE VIEW workhorse.dashboard_job_runtime_v1 AS
          acquired_at, heartbeat_at, expires_at, attempt_timeout_at, wait_name, attempt_started_at,
          cancel_requested_at, cancel_requested_by, cancel_reason, error, updated_at
     FROM workhorse.job_runtime;
+-- `payload` is redacted here, not by each backend, for the reason recorded on
+-- dashboard_job_outcome_v1. The key arrays stay projected so the dashboard can report how many
+-- keys were withheld without ever receiving their values.
 CREATE OR REPLACE VIEW workhorse.dashboard_job_v1 AS
-  SELECT id, queue_name, job_type, concurrency_key, payload, payload_redact_keys,
+  SELECT id, queue_name, job_type, concurrency_key,
+         workhorse.redact_top_level_keys_v1(payload, payload_redact_keys) AS payload,
+         payload_redact_keys,
          result_redact_keys, tags, max_attempts, retry_policy, deadline_at, execution_timeout_ms,
          created_at, priority FROM workhorse.job;
 CREATE OR REPLACE VIEW workhorse.dashboard_job_wait_v1 AS
@@ -9547,13 +9542,9 @@ AS $$
 $$;
 
 INSERT INTO workhorse.schema_migration(version, description) VALUES
-  (43, 'pre-release baseline'),
-  (44, 'protocol version registry'),
-  (45, 'statistics maintenance policy'),
-  (46, 'long-horizon statistics tiers'),
-  (47, 'multi-queue workers')
+  (1, 'baseline')
 ON CONFLICT DO NOTHING;
-INSERT INTO workhorse.schema_version(version) VALUES (47) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 INSERT INTO workhorse.protocol_version(version) VALUES (1) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(
          ((clock_timestamp() AT TIME ZONE 'UTC')::date + day_offset)::date

@@ -869,7 +869,7 @@ def test_run_wakes_from_a_dedicated_notification_connection(database_url: str) -
 
         def execute(self, query: str, parameters: object = ()) -> object:
             result = self.cursor.execute(query, parameters)  # type: ignore[union-attr]
-            if "workhorse.claim_v3" in query and not empty_claim_finished.is_set():
+            if "workhorse.claim_v1" in query and not empty_claim_finished.is_set():
                 empty_claim_finished.set()
                 assert release_empty_claim.wait(timeout=5)
             return result
@@ -1191,7 +1191,7 @@ def test_worker_recovers_an_expired_claim_before_dispatch(database_url: str) -> 
         job_id = Queue(enqueue_connection).enqueue("lease.recovered", {})
         enqueue_connection.commit()
         abandoned = worker_connection.execute(
-            "SELECT job_id FROM workhorse.claim_v3(%s::text, %s::text, %s::integer)",
+            "SELECT job_id FROM workhorse.claim_v1(%s::text, %s::text, %s::integer)",
             ("default", "abandoned-python-worker", 100),
         ).fetchone()
         assert abandoned is not None

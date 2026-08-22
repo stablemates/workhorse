@@ -2,11 +2,21 @@
 
 ## Current policy
 
-Schema version 43 is the permanent migration baseline. Versions 1 through 42 were retired before
-any release; they have no derived migration history and no upgrade source. `migrateSchema` rejects
-them.
+Schema version 1 is the whole schema. `sql/schema/current.sql` is the hand-edited source,
+`sql/schema.sql` is the generated clean-install artifact, and `sql/migrations/` is empty.
 
-Every schema change after version 43 ships as an ordered, immutable migration:
+**While the published line is `0.x`, the schema changes in place.** A schema change is a reinstall,
+not an upgrade: edit `sql/schema/current.sql`, run `pnpm schema:generate`, and recreate the
+database. Function names may be renamed and `_vN` suffixes reused freely, because no compatibility
+window exists to protect.
+
+What licenses that is not the version number, it is the promise attached to it. `0.x` states, in
+`CHANGELOG.md` and `docs/compatibility.md`, that there is no upgrade path between releases. Nobody
+can be running a database this project has agreed to carry forward. The moment that promise
+changes, so does this policy.
+
+**The migration chain begins at 1.0.0.** From the first stable major release, every schema change
+ships as an ordered, immutable step:
 
 1. Add `sql/migrations/<NNNN>-<slug>.sql` containing only the schema change body. The runtime
    supplies the transaction, the advisory lock, the starting-version validation, and the version
@@ -15,21 +25,21 @@ Every schema change after version 43 ships as an ordered, immutable migration:
 2. Apply the same change to `sql/schema/current.sql`, increment `WORKHORSE_SCHEMA_VERSION`, and add
    the step to `SCHEMA_MIGRATIONS` in `typescript/core/src/schema.ts` with its description. Clean
    installation inserts one `workhorse.schema_migration` row per lineage version, so both paths
-   record the identical 43-to-current history.
+   record the identical baseline-to-current history.
 3. Run `pnpm schema:generate` to refresh the shipped clean-install artifact at `sql/schema.sql`,
    and advance the compatibility manifest (`protocol/v1/manifest.json`,
-   `protocol/v1/compatibility.json`) and the Python client bounds
-   (`python/src/workhorse/_protocol.py`) with the same schema version.
+   `protocol/v1/compatibility.json`) and the Python and Go client bounds
+   (`python/src/workhorse/_protocol.py`, `go/compatibility.go`) with the same schema version.
 4. When a version has shipped in a published release, freeze its clean-install artifact as
-   `sql/releases/<NNNN>.sql`. Released artifacts and released migrations are never edited.
-   `sql/releases/0043.sql` is the frozen baseline artifact and doubles as the pre-release upgrade
-   source for the migration test.
+   `sql/releases/<NNNN>.sql`. Released artifacts and released migrations are never edited, and a
+   released migration never renames a function or reinterprets its `_vN` suffix.
 
-`typescript/core/test/schema-migrations.test.ts` installs every artifact under `sql/releases/`,
-migrates it with `migrateSchema`, and requires the `pg_dump --schema-only` result to match a clean
-installation of the current artifact exactly. It also verifies the framework contract on a small
-synthetic fixture chain: bookkeeping rows, gap rejection, transaction-control rejection, and atomic
-rollback of a failing step.
+`sql/releases/` is empty until then. `typescript/core/test/schema-migrations.test.ts` iterates
+whatever it contains, so the released-artifact check starts running by itself when the first
+artifact lands. That test installs each released artifact, migrates it with `migrateSchema`, and
+requires the `pg_dump --schema-only` result to match a clean installation of the current artifact
+exactly. It also verifies the framework contract on a small synthetic fixture chain: bookkeeping
+rows, gap rejection, transaction-control rejection, and atomic rollback of a failing step.
 
 `installSchema(database)` is explicit. It installs a clean database and accepts an already-installed
 schema only when it exactly matches the current canonical version. It is not an upgrade mechanism.
@@ -39,7 +49,7 @@ objects.
 `migrateSchema(database)` is the explicit upgrade API. It rejects an uninstalled schema, versions
 below the baseline, versions newer than the runtime, mixed version rows, and gaps in the ordered
 plan. `workhorse schema migrate` exposes the same step from the CLI. An already-current schema is
-left unchanged.
+left unchanged, which is every schema while the plan is empty.
 
 ## Migration execution contract
 
@@ -67,13 +77,13 @@ change first needs it, together with its resume semantics.
 `workhorse.schema_migration` records the installed migration history. `workhorse.protocol_version`
 independently records which SQL protocol versions the installed schema serves, so a protocol
 revision is never inferred from a schema version. Schema versions and SQL function versions remain
-separate: a migration may add `claim_v3` while retaining `claim_v2` for a compatibility window, and
-never renames a function or reinterprets its `_vN` suffix.
+separate: after 1.0.0 a migration may add `claim_v2` while retaining `claim_v1` for a compatibility
+window.
 
 ## Expand and contract across deployments
 
-A change that spans application deployments rolls out in three releases, so every running process
-version always finds the schema shape it expects:
+This applies from 1.0.0. A change that spans application deployments rolls out in three releases,
+so every running process version always finds the schema shape it expects:
 
 1. **Expand.** A migration adds the new column, table, or function alongside the old one. New
    writes populate both shapes where needed. Old application versions keep working untouched.
@@ -112,9 +122,8 @@ versions, and PostgreSQL support at any point in this process.
 
 ## Supported upgrade window
 
-Deliberately undefined. Every released version currently migrates from the version 43 baseline, and
-a bounded window would be an invented number. The window is defined when real released versions
-make the full chain expensive to support, and it will be recorded here and in
+Deliberately undefined. There is nothing to upgrade from yet. The window is defined when real
+released versions make the full chain expensive to support, and it will be recorded here and in
 `docs/compatibility.md`.
 
 ## Application data

@@ -369,7 +369,7 @@ describe("enqueue contracts", () => {
         CREATE TABLE workhorse.schema_version (version integer PRIMARY KEY);
         INSERT INTO workhorse.schema_version(version) VALUES (1);
         CREATE TABLE workhorse.job_current (id uuid PRIMARY KEY)`);
-      await expect(installSchema(pool)).rejects.toThrow(/non-v47 or mixed workhorse schema/);
+      await expect(installSchema(pool)).rejects.toThrow(/non-v1 or mixed workhorse schema/);
       const version = await pool.query<{ version: number }>(
         "SELECT version FROM workhorse.schema_version",
       );
@@ -617,7 +617,7 @@ describe("enqueue contracts", () => {
     });
 
     const rawSqlError = await pool
-      .query("SELECT * FROM workhorse.enqueue_many_v1($1::jsonb)", [
+      .query("SELECT * FROM workhorse.enqueue_batch_v1($1::jsonb)", [
         JSON.stringify([
           {
             queue: "critical",
@@ -844,14 +844,14 @@ describe("enqueue contracts", () => {
     }
     await expect(
       pool.query(
-        `SELECT * FROM workhorse.enqueue_many_v1(
+        `SELECT * FROM workhorse.enqueue_batch_v1(
           '[{"queue":"default","type":"direct","idempotency":{"key":""}}]'::jsonb
         )`,
       ),
     ).rejects.toThrow(/1 and 512 UTF-8 bytes/);
     await expect(
       pool.query(
-        `SELECT * FROM workhorse.enqueue_many_v1(
+        `SELECT * FROM workhorse.enqueue_batch_v1(
           '[{"queue":"default","type":"direct","idempotency":{}}]'::jsonb
         )`,
       ),
@@ -1113,7 +1113,7 @@ describe("enqueue contracts", () => {
         await sleep(25);
         if (transition === "claim") {
           await transitionClient.query(
-            "SELECT job_id FROM workhorse.claim_v3('default', 'debounce-race-worker', 30000)",
+            "SELECT job_id FROM workhorse.claim_v1('default', 'debounce-race-worker', 30000)",
           );
         } else {
           await transitionClient.query(
@@ -1232,7 +1232,7 @@ describe("enqueue contracts", () => {
       );
 
       await expect(
-        pool.query("SELECT * FROM workhorse.enqueue_many_v2($1::jsonb)", [
+        pool.query("SELECT * FROM workhorse.enqueue_many_v1($1::jsonb)", [
           JSON.stringify([
             {
               queue: "default",
@@ -1540,7 +1540,7 @@ describe("enqueue contracts", () => {
       } as unknown as EnqueueOptions),
     ).rejects.toThrow(/cannot combine/);
     await expect(
-      pool.query("SELECT * FROM workhorse.enqueue_many_v2($1::jsonb)", [
+      pool.query("SELECT * FROM workhorse.enqueue_many_v1($1::jsonb)", [
         JSON.stringify([
           {
             debounce: { key: "direct-debounce", windowMs: 60_000, schedule: "reset" },
@@ -1893,7 +1893,7 @@ describe("enqueue contracts", () => {
       "SELECT workhorse.enqueue_v1('default', 'sql-default', '{}'::jsonb) AS job_id",
     );
     const batchResult = await pool.query<{ job_id: string }>(
-      "SELECT job_id FROM workhorse.enqueue_many_v1($1::jsonb)",
+      "SELECT job_id FROM workhorse.enqueue_batch_v1($1::jsonb)",
       [
         JSON.stringify([
           {

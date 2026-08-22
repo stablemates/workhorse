@@ -29,7 +29,6 @@ export type {
 export {
   readDashboardEventDetail,
   readDashboardEvents,
-  readDashboardSnapshot,
   readDashboardWorkers,
 } from "./read-model.js";
 export type { DashboardEventsQuery } from "./read-model.js";

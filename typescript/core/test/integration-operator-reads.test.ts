@@ -82,7 +82,7 @@ describe("operator reads", () => {
       error: { name: string };
       finished_at: Date;
       redrive_count: number;
-    }>(`SELECT * FROM workhorse.list_dead_letters_v2($1, 1, NULL, NULL)`, [
+    }>(`SELECT * FROM workhorse.list_dead_letters_v1($1, 1, NULL, NULL)`, [
       JSON.stringify({
         queue: "mail",
         type: "email",
@@ -102,12 +102,12 @@ describe("operator reads", () => {
       },
     ]);
     const second = await pool.query<{ job_id: string }>(
-      `SELECT job_id FROM workhorse.list_dead_letters_v2($1, 10, $2, $3)`,
+      `SELECT job_id FROM workhorse.list_dead_letters_v1($1, 10, $2, $3)`,
       [JSON.stringify({ queue: "mail", tags: ["urgent"] }), first.rows[0]!.finished_at, timeout],
     );
     expect(second.rows).toEqual([{ job_id: smtp }]);
     const errorFiltered = await pool.query<{ job_id: string }>(
-      "SELECT job_id FROM workhorse.list_dead_letters_v2($1, 10, NULL, NULL)",
+      "SELECT job_id FROM workhorse.list_dead_letters_v1($1, 10, NULL, NULL)",
       [JSON.stringify({ errorName: "SmtpError" })],
     );
     expect(new Set(errorFiltered.rows.map((row) => row.job_id))).toEqual(new Set([other, smtp]));
@@ -842,16 +842,16 @@ describe("operator reads", () => {
       projection_has_payload: boolean;
     }>(`SELECT
       to_regclass('workhorse.job_query')::text AS projection,
-      to_regprocedure('workhorse.list_jobs_v2(jsonb,integer,timestamp with time zone,uuid,text,jsonb)')::text AS list_jobs,
-      to_regprocedure('workhorse.list_job_timeline_v2(uuid,integer,timestamp with time zone,text,bigint)')::text AS timeline,
+      to_regprocedure('workhorse.list_jobs_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)')::text AS list_jobs,
+      to_regprocedure('workhorse.list_job_timeline_v1(uuid,integer,timestamp with time zone,text,bigint)')::text AS timeline,
       EXISTS (
         SELECT 1 FROM information_schema.columns
          WHERE table_schema = 'workhorse' AND table_name = 'job_query' AND column_name = 'payload'
       ) AS projection_has_payload`);
     expect(objects.rows[0]).toEqual({
       projection: "job_query",
-      list_jobs: "list_jobs_v2(jsonb,integer,timestamp with time zone,uuid,text,jsonb)",
-      timeline: "list_job_timeline_v2(uuid,integer,timestamp with time zone,text,bigint)",
+      list_jobs: "list_jobs_v1(jsonb,integer,timestamp with time zone,uuid,text,jsonb)",
+      timeline: "list_job_timeline_v1(uuid,integer,timestamp with time zone,text,bigint)",
       projection_has_payload: false,
     });
 
@@ -1067,7 +1067,7 @@ describe("operator reads", () => {
       }),
     ).rejects.toThrow(/cursor does not match/);
     await expect(
-      pool.query("SELECT * FROM workhorse.list_jobs_v2('{}', 1, now(), NULL, NULL, '{}')"),
+      pool.query("SELECT * FROM workhorse.list_jobs_v1('{}', 1, now(), NULL, NULL, '{}')"),
     ).rejects.toThrow(/provided together/);
 
     const client = await pool.connect();
@@ -1080,13 +1080,13 @@ describe("operator reads", () => {
         cursor_signature: string;
       }>(
         `SELECT job_id, cursor_created_at::text AS cursor_created_at, cursor_signature
-           FROM workhorse.list_jobs_v2($1, 1, NULL, NULL, NULL, '{}')`,
+           FROM workhorse.list_jobs_v1($1, 1, NULL, NULL, NULL, '{}')`,
         [JSON.stringify({ type: "bound-a", createdAfter: "2025-01-01T00:00:00Z" })],
       );
       await client.query("SET LOCAL TIME ZONE 'Pacific/Honolulu'");
       const timezoneSecond = await client.query(
         `SELECT job_id
-           FROM workhorse.list_jobs_v2($1, 1, $2, $3, $4, '{}')`,
+           FROM workhorse.list_jobs_v1($1, 1, $2, $3, $4, '{}')`,
         [
           JSON.stringify({ type: "bound-a", createdAfter: "2025-01-01T00:00:00Z" }),
           timezoneFirst.rows[0]!.cursor_created_at,
@@ -1204,7 +1204,7 @@ describe("operator reads", () => {
       [{ include: true, unknown: true }, /permits only/],
     ] as const) {
       await expect(
-        pool.query("SELECT * FROM workhorse.list_jobs_v2('{}', 1, NULL, NULL, NULL, $1)", [
+        pool.query("SELECT * FROM workhorse.list_jobs_v1('{}', 1, NULL, NULL, NULL, $1)", [
           JSON.stringify(projection),
         ]),
       ).rejects.toThrow(message);
@@ -1325,13 +1325,13 @@ describe("operator reads", () => {
     ).toBe(4);
 
     await expect(
-      pool.query("SELECT * FROM workhorse.list_job_timeline_v2($1, 10, $2, 'unknown', 1)", [
+      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, 'unknown', 1)", [
         jobId,
         sameTime,
       ]),
     ).rejects.toThrow(/event or attempt/);
     await expect(
-      pool.query("SELECT * FROM workhorse.list_job_timeline_v2($1, 10, $2, NULL, 1)", [
+      pool.query("SELECT * FROM workhorse.list_job_timeline_v1($1, 10, $2, NULL, 1)", [
         jobId,
         sameTime,
       ]),

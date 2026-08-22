@@ -36,7 +36,7 @@ describe("structured logging", () => {
     records.length = 0;
     const database = {
       async query(sql: string) {
-        if (sql.includes("enqueue_many_v2")) {
+        if (sql.includes("enqueue_many_v1")) {
           return {
             rows: [
               {
@@ -85,7 +85,7 @@ describe("structured logging", () => {
     let registrations = 0;
     const database = {
       async query(sql: string) {
-        if (sql.includes("register_worker_v2")) {
+        if (sql.includes("register_worker_v1")) {
           registrations += 1;
           return { rows: [{ paused: false }] };
         }
@@ -99,7 +99,7 @@ describe("structured logging", () => {
           return { rows: [] };
         }
         if (sql.includes("prune_worker_registry_v1")) return { rows: [{ count: 0 }] };
-        if (sql.includes("claim_v3")) return { rows: [] };
+        if (sql.includes("claim_v1")) return { rows: [] };
         if (sql.includes("deregister_worker_v1")) return { rows: [{ deregistered: true }] };
         throw new Error(`Unexpected query: ${sql}`);
       },

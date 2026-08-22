@@ -50,7 +50,7 @@ console.log(job?.state, job?.currentAttempt, job?.result);
 
 When a `Worker` has a free slot, it calls the `claim_v2` SQL function. PostgreSQL checks any queue
 policy, then records the worker ID, a lease expiry, and a fence token on `job_runtime`. The worker
-sends heartbeats through `heartbeat_v2` while the handler runs.
+sends heartbeats through `heartbeat_v1` while the handler runs.
 
 If heartbeats stop, recovery closes the old attempt and makes the job eligible again. Every
 semantic write carries the worker ID and fence token, so a stale worker cannot complete, fail, or

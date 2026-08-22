@@ -1,4 +1,4 @@
-# ADR 0030: Maintain site documentation as a guide consumer
+# ADR 0033: Maintain site documentation as a guide consumer
 
 - **Status:** Accepted
 - **Date:** 2026-08-16

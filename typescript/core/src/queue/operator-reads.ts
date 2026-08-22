@@ -382,7 +382,7 @@ function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
   };
   if (row.kind === "event") {
     if (row.event_type === null || row.details === null) {
-      throw new Error("list_job_timeline_v2 returned an incomplete event row");
+      throw new Error("list_job_timeline_v1 returned an incomplete event row");
     }
     return { ...base, kind: "event", eventType: row.event_type, details: row.details };
   }
@@ -395,7 +395,7 @@ function jobTimelineEntry(row: JobTimelineRow): JobTimelineEntry {
     row.claimed_at === null ||
     row.finished_at === null
   ) {
-    throw new Error("list_job_timeline_v2 returned an incomplete attempt row");
+    throw new Error("list_job_timeline_v1 returned an incomplete attempt row");
   }
   return {
     ...base,
@@ -622,7 +622,7 @@ export class OperatorReadsModule extends QueueModule {
               listed.cancel_reason, listed.created_at, listed.updated_at, listed.payload,
               listed.payload_status, listed.payload_bytes, listed.has_more,
               listed.cursor_created_at::text AS cursor_created_at, listed.cursor_signature
-         FROM workhorse.list_jobs_v2(
+         FROM workhorse.list_jobs_v1(
            $1::jsonb, $2::integer, $3::timestamptz, $4::uuid, $5::text, $6::jsonb
          ) listed
          LEFT JOIN LATERAL (
@@ -674,7 +674,7 @@ export class OperatorReadsModule extends QueueModule {
               fence_token::text AS fence_token, worker_id, outcome, started_at, claimed_at,
               finished_at, error, occurred_at, has_more,
               cursor_occurred_at::text AS cursor_occurred_at
-         FROM workhorse.list_job_timeline_v2(
+         FROM workhorse.list_job_timeline_v1(
            $1::uuid, $2::integer, $3::timestamptz, $4::text, $5::bigint
          )`,
       [jobId, limit, cursor?.occurredAt ?? null, cursor?.kind ?? null, cursor?.recordId ?? null],
@@ -703,7 +703,7 @@ export class OperatorReadsModule extends QueueModule {
       );
     }
     const result = await this.context.database.query<DeadLetterRow>(
-      "SELECT * FROM workhorse.list_dead_letters_v2($1::jsonb, $2::integer, $3::timestamptz, $4::uuid)",
+      "SELECT * FROM workhorse.list_dead_letters_v1($1::jsonb, $2::integer, $3::timestamptz, $4::uuid)",
       [
         JSON.stringify(deadLetterFilter(query)),
         limit,

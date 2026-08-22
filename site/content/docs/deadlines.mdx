@@ -66,7 +66,7 @@ thing at kickoff regardless of attempts left.
 ## Both clocks remain cooperative
 
 Neither clock can interrupt JavaScript. The worker learns about an expired deadline or
-exhausted budget from `heartbeat_v2`, then aborts the handler's signal — the same
+exhausted budget from `heartbeat_v1`, then aborts the handler's signal — the same
 [cooperative pattern as cancellation](/docs/cancellation), with a different reason class. A
 handler that ignores the signal keeps running until its lease expires and recovery cleans up.
 
